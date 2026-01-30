@@ -336,8 +336,9 @@ def fetch_paragraph_by_source(
 
 def register_tools(mcp: FastMCP) -> None:
     @mcp.tool()
-    def list_source_ids(limit: int = 50) -> List[str]:
+    def list_source_ids(limit = 50) -> List[str]:
         """List available source_id values from Neo4j (Paragraph nodes)."""
+        limit_val = int(limit)
         with get_neo4j().session() as session:
             result = session.run(
                 """
@@ -347,7 +348,7 @@ def register_tools(mcp: FastMCP) -> None:
                 ORDER BY source_id
                 LIMIT $limit
                 """,
-                limit=limit,
+                limit=limit_val,
             )
             return [r["source_id"] for r in result]
 
