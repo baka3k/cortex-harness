@@ -360,34 +360,53 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def query_graph_rag_langextract(
-        query: str,
-        top_k: int = 5,
-        source_id: Optional[str] = None,
-        collection: Optional[str] = None,
-        include_entities: bool = True,
-        include_relations: bool = True,
-        expand_related: bool = True,
-        related_k: int = 50,
-        graph_depth: int = 1,
-        entity_types: Optional[List[str]] = None,
-        max_passage_chars: Optional[int] = None,
-        min_score_to_expand: Optional[float] = None,
-        min_entity_occurrences: Optional[int] = None,
-        rerank: bool = False,
-        rerank_entity_weight: float = 0.05,
-        rerank_type_weight: float = 0.1,
-        rerank_confidence_weight: float = 0.3,
-        rerank_length_penalty: float = 0.0002,
-    ) -> Dict[str, Any]:
+        query,
+        top_k=5,
+        source_id=None,
+        collection=None,
+        include_entities=True,
+        include_relations=True,
+        expand_related=True,
+        related_k=50,
+        graph_depth=1,
+        entity_types=None,
+        max_passage_chars=None,
+        min_score_to_expand=None,
+        min_entity_occurrences=None,
+        rerank=False,
+        rerank_entity_weight=0.05,
+        rerank_type_weight=0.1,
+        rerank_confidence_weight=0.3,
+        rerank_length_penalty=0.0002,
+    ):
         """
         Query Qdrant for top-k passages with entity_ids payload, then fetch related
         entity context from Neo4j. Returns context only (no LLM generation).
         """
+        # Type coercion to handle n8n passing strings
+        query = str(query) if query else ""
+        top_k = int(top_k) if top_k is not None else 5
+        related_k = int(related_k) if related_k is not None else 50
+        graph_depth = int(graph_depth) if graph_depth is not None else 1
+        include_entities = bool(include_entities) if include_entities is not None else True
+        include_relations = bool(include_relations) if include_relations is not None else True
+        expand_related = bool(expand_related) if expand_related is not None else True
+        rerank = bool(rerank) if rerank is not None else False
+        rerank_entity_weight = float(rerank_entity_weight) if rerank_entity_weight is not None else 0.05
+        rerank_type_weight = float(rerank_type_weight) if rerank_type_weight is not None else 0.1
+        rerank_confidence_weight = float(rerank_confidence_weight) if rerank_confidence_weight is not None else 0.3
+        rerank_length_penalty = float(rerank_length_penalty) if rerank_length_penalty is not None else 0.0002
+        max_passage_chars = int(max_passage_chars) if max_passage_chars is not None else None
+        min_score_to_expand = float(min_score_to_expand) if min_score_to_expand is not None else None
+        min_entity_occurrences = int(min_entity_occurrences) if min_entity_occurrences is not None else None
+
         embedder = get_embedder()
         q_vec = embedder.encode([query])[0].tolist()
 
         if entity_types is None:
             entity_types = list(ENTITY_TYPES_DEFAULT)
+        elif isinstance(entity_types, str):
+            entity_types = [t.strip() for t in entity_types.split(",") if t.strip()]
 
         payloads = qdrant_search_entity_payload(
             q_vec, top_k=top_k, source_id=source_id, collection=collection
@@ -457,10 +476,14 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def get_paragraph_text(
-        source_id: str,
-        paragraph_id: int,
-    ) -> Dict[str, Any]:
+        source_id,
+        paragraph_id,
+    ):
         """Fetch a paragraph's text by source_id + paragraph_id from Neo4j."""
+        # Type coercion to handle n8n passing strings
+        source_id = str(source_id) if source_id else None
+        paragraph_id = int(paragraph_id) if paragraph_id is not None else 0
+        
         if not source_id:
             return {"warning": "source_id is required."}
         record = fetch_paragraph_by_source(source_id, paragraph_id)
