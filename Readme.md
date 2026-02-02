@@ -114,6 +114,7 @@ http://127.0.0.1:8789/mcp
 ## MCP tools
 
 - `query_graph_rag_langextract(query, top_k, source_id, collection, include_entities, include_relations, expand_related, related_k, graph_depth, entity_types, max_passage_chars, min_score_to_expand, min_entity_occurrences, rerank, rerank_entity_weight, rerank_type_weight, rerank_confidence_weight, rerank_length_penalty)`
+- `semantic_search(query, top_k, source_id, collection, max_passage_chars, include_entity_ids, include_entity_mentions)`
 - `list_source_ids(limit)`
 - `list_qdrant_collections()`
 - `get_paragraph_text(source_id, paragraph_id)`
@@ -131,7 +132,7 @@ This command:
   - **Qdrant**: passage + embedding (payload includes `source_id`, `paragraph_id`, `entity_ids`, `entity_mentions`).
   - **Neo4j**: `Document`, `Paragraph`, `Entity`, and their relationships (entities merge by normalized name+type). `HAS_ENTITY` includes confidence + span metadata when available.
 
-Result: after ingest, you can call `query_graph_rag_langextract` and use the `entity_ids` bridge to expand context via Neo4j.
+Result: after ingest, you can call `semantic_search` for vector-only retrieval, or `query_graph_rag_langextract` to expand context via Neo4j.
 
 Pipeline (ingest):
 
