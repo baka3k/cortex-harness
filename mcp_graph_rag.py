@@ -359,6 +359,58 @@ def register_tools(mcp: FastMCP) -> None:
         return [c.name for c in qdrant.get_collections().collections]
 
     @mcp.tool()
+    def semantic_search(
+        query,
+        top_k=5,
+        source_id=None,
+        collection=None,
+        max_passage_chars=None,
+        include_entity_ids=True,
+        include_entity_mentions=False,
+    ):
+        """Vector-only search in Qdrant. Returns passages without graph expansion."""
+        # Type coercion to handle n8n passing strings
+        query = str(query) if query else ""
+        top_k = int(top_k) if top_k is not None else 5
+        max_passage_chars = int(max_passage_chars) if max_passage_chars is not None else None
+        include_entity_ids = bool(include_entity_ids) if include_entity_ids is not None else True
+        include_entity_mentions = (
+            bool(include_entity_mentions) if include_entity_mentions is not None else False
+        )
+
+        embedder = get_embedder()
+        q_vec = embedder.encode([query])[0].tolist()
+
+        payloads = qdrant_search_entity_payload(
+            q_vec, top_k=top_k, source_id=source_id, collection=collection
+        )
+
+        passages = []
+        for row in payloads:
+            text = row.get("text") or ""
+            if max_passage_chars:
+                text = text[:max_passage_chars]
+            passage = {
+                "text": text,
+                "score": row.get("score"),
+                "source_id": row.get("source_id"),
+                "paragraph_id": row.get("paragraph_id"),
+            }
+            if include_entity_ids:
+                passage["entity_ids"] = row.get("entity_ids") or []
+            if include_entity_mentions:
+                passage["entity_mentions"] = row.get("entity_mentions") or []
+            passages.append(passage)
+
+        return {
+            "query": query,
+            "top_k": top_k,
+            "source_id": source_id,
+            "collection": collection or QDRANT_COLLECTION,
+            "passages": passages,
+        }
+
+    @mcp.tool()
     def query_graph_rag_langextract(
         query,
         top_k=5,
