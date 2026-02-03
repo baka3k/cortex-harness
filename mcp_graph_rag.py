@@ -360,7 +360,7 @@ def register_tools(mcp: FastMCP) -> None:
         qdrant = get_qdrant()
         return [c.name for c in qdrant.get_collections().collections]
 
-    @mcp.tool()
+    # @mcp.tool()
     def semantic_search(
         query,
         top_k=5,
