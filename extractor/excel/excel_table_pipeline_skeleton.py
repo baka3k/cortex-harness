@@ -5,11 +5,13 @@ Focus: accuracy-first parsing for numeric/date values, merged cells,
 and multi-header tables within one sheet.
 
 Usage:
-  python excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx
-  python excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --sheet "Sheet1"
-  python excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --key-columns "ID,Project Code"
-  python excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --max-row-gap 1 --max-col-gap 2
-  python excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --skip-footer-rows
+  python extractor/excel/excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx
+  python extractor/excel/excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --sheet "Sheet1"
+  python extractor/excel/excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --key-columns "ID,Project Code"
+  python extractor/excel/excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --max-row-gap 1 --max-col-gap 2
+  python extractor/excel/excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --skip-footer-rows
+  python extractor/excel/excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --entity-provider gliner
+  python extractor/excel/excel_table_pipeline_skeleton.py --xlsx /path/to/file.xlsx --entity-column-map "Department:ORG,Owner:PERSON"
 """
 
 from __future__ import annotations
@@ -265,7 +267,7 @@ def extract_table_matrix(
     for r in range(table.min_row, table.max_row + 1):
         row: List[CellPayload] = []
         for c in range(table.min_col, table.max_col + 1):
-            row.append(cells.get((r, c), CellPayload(None, "", None, None, False)))
+            row.append(cells.get((r, c), CellPayload(None, "", None, None, False, None)))
         matrix.append(row)
     return matrix
 
@@ -449,6 +451,138 @@ def _is_footer_row(values: Dict[str, str]) -> bool:
     return False
 
 
+def parse_entity_columns(raw: str) -> List[str]:
+    if not raw:
+        return []
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def parse_entity_column_map(raw: str) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    if not raw:
+        return mapping
+    items = [item.strip() for item in raw.split(",") if item.strip()]
+    for item in items:
+        if ":" in item:
+            col, etype = item.split(":", 1)
+        elif "=" in item:
+            col, etype = item.split("=", 1)
+        else:
+            col, etype = item, "COLUMN"
+        col = col.strip()
+        etype = etype.strip() or "COLUMN"
+        if col:
+            mapping[col] = etype
+    return mapping
+
+
+def build_column_entities(
+    values: Dict[str, str],
+    column_map: Dict[str, str],
+    column_list: Sequence[str],
+    default_type: str,
+) -> List[Dict[str, str]]:
+    entities: List[Dict[str, str]] = []
+    lower_values = {k.lower(): v for k, v in values.items()}
+    for col, etype in column_map.items():
+        value = lower_values.get(col.lower(), "")
+        if value:
+            entities.append({"name": value, "type": etype})
+    for col in column_list:
+        value = lower_values.get(col.lower(), "")
+        if value:
+            entities.append({"name": value, "type": default_type})
+    return entities
+
+
+def _dedup_entities(entities: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    seen = set()
+    unique: List[Dict[str, str]] = []
+    for ent in entities:
+        name = str(ent.get("name", "")).strip()
+        etype = str(ent.get("type", "")).strip()
+        if not name:
+            continue
+        key = (etype.lower(), name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append({"name": name, "type": etype or "UNKNOWN"})
+    return unique
+
+
+def extract_entities_for_rows(
+    rows: List[RowRecord],
+    provider: str,
+    batch_size: int,
+    gliner_labels: Optional[str],
+    gliner_threshold: float,
+    gliner_model: Optional[str],
+    spacy_model: Optional[str],
+    spacy_ruler: Optional[str],
+    column_map: Dict[str, str],
+    column_list: Sequence[str],
+    column_default_type: str,
+) -> List[List[Dict[str, str]]]:
+    base_entities = [
+        build_column_entities(row.values, column_map, column_list, column_default_type)
+        for row in rows
+    ]
+
+    if provider == "none":
+        return [_dedup_entities(items) for items in base_entities]
+
+    texts = [row.serialized for row in rows]
+    extracted: List[List[Dict[str, str]]] = [[] for _ in rows]
+
+    if provider == "gliner":
+        from entity_extractors import (
+            build_gliner_model,
+            extract_entities_gliner_batch,
+            parse_gliner_labels,
+        )
+
+        label_list = parse_gliner_labels(gliner_labels)
+        model_instance = build_gliner_model(gliner_model or "urchade/gliner_large-v2.1")
+        batch_size = max(1, batch_size)
+        for start in range(0, len(texts), batch_size):
+            batch_texts = texts[start : start + batch_size]
+            batch_entities = extract_entities_gliner_batch(
+                batch_texts,
+                labels=label_list,
+                threshold=gliner_threshold,
+                gliner_model=model_instance,
+            )
+            for idx, entities in enumerate(batch_entities, start=start):
+                extracted[idx] = entities
+    elif provider == "spacy":
+        from entity_extractors import extract_entities_spacy
+
+        model = spacy_model or "en_core_web_sm"
+        for idx, text in enumerate(texts):
+            entities, _ = extract_entities_spacy(text, model=model, ruler_json=spacy_ruler)
+            extracted[idx] = entities
+    elif provider == "gemini":
+        from entity_extractors import extract_entities_gemini
+
+        for idx, text in enumerate(texts):
+            entities, _ = extract_entities_gemini(text)
+            extracted[idx] = entities
+    elif provider == "langextract":
+        from entity_extractors import extract_entities_langextract
+
+        for idx, text in enumerate(texts):
+            entities, _ = extract_entities_langextract(text)
+            extracted[idx] = entities
+    else:
+        raise ValueError(f"Unknown entity provider: {provider}")
+
+    merged: List[List[Dict[str, str]]] = []
+    for base, extra in zip(base_entities, extracted, strict=True):
+        merged.append(_dedup_entities(base + extra))
+    return merged
+
+
 def run_pipeline(
     xlsx_path: Path,
     sheet_name: Optional[str],
@@ -461,6 +595,16 @@ def run_pipeline(
     min_text_ratio: float,
     max_numeric_ratio: float,
     skip_footer_rows: bool,
+    entity_provider: str,
+    entity_batch_size: int,
+    entity_columns: List[str],
+    entity_column_map: Dict[str, str],
+    entity_column_type: str,
+    gliner_labels: Optional[str],
+    gliner_threshold: float,
+    gliner_model: Optional[str],
+    spacy_model: Optional[str],
+    spacy_ruler: Optional[str],
 ):
     wb_values, wb_formula = load_workbooks(xlsx_path)
     sheets = (
@@ -489,19 +633,36 @@ def run_pipeline(
                 max_numeric_ratio=max_numeric_ratio,
             )
             headers = normalize_headers(matrix, header_rows)
-            row_count = 0
-            for _ in iter_data_rows(
-                matrix,
-                headers,
-                header_rows,
-                table.table_id,
-                key_columns=key_columns,
-                skip_footer_rows=skip_footer_rows,
-            ):
-                row_count += 1
+            rows = list(
+                iter_data_rows(
+                    matrix,
+                    headers,
+                    header_rows,
+                    table.table_id,
+                    key_columns=key_columns,
+                    skip_footer_rows=skip_footer_rows,
+                )
+            )
+            row_count = len(rows)
+            entity_count = 0
+            if rows and (entity_provider != "none" or entity_columns or entity_column_map):
+                entities_by_row = extract_entities_for_rows(
+                    rows,
+                    provider=entity_provider,
+                    batch_size=entity_batch_size,
+                    gliner_labels=gliner_labels,
+                    gliner_threshold=gliner_threshold,
+                    gliner_model=gliner_model,
+                    spacy_model=spacy_model,
+                    spacy_ruler=spacy_ruler,
+                    column_map=entity_column_map,
+                    column_list=entity_columns,
+                    column_default_type=entity_column_type,
+                )
+                entity_count = sum(len(items) for items in entities_by_row)
             print(
                 f"  {table.table_id} rows={row_count} "
-                f"header_rows={header_rows} cols={len(headers)}"
+                f"header_rows={header_rows} cols={len(headers)} entities={entity_count}"
             )
 
 
@@ -551,6 +712,59 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip rows that look like totals/subtotals",
     )
+    parser.add_argument(
+        "--entity-provider",
+        choices=["none", "gliner", "spacy", "gemini", "langextract"],
+        default="none",
+        help="Entity extraction provider",
+    )
+    parser.add_argument(
+        "--entity-batch-size",
+        type=int,
+        default=16,
+        help="Batch size for entity extraction (gliner only)",
+    )
+    parser.add_argument(
+        "--entity-columns",
+        default="",
+        help="Comma-separated column names to treat as entities (default type COLUMN)",
+    )
+    parser.add_argument(
+        "--entity-column-map",
+        default="",
+        help="Comma-separated column:type mapping, e.g. Department:ORG,Owner:PERSON",
+    )
+    parser.add_argument(
+        "--entity-column-type",
+        default="COLUMN",
+        help="Default entity type for --entity-columns",
+    )
+    parser.add_argument(
+        "--gliner-labels",
+        default=None,
+        help="Comma-separated labels or path to labels file",
+    )
+    parser.add_argument(
+        "--gliner-threshold",
+        type=float,
+        default=0.3,
+        help="GLiNER threshold",
+    )
+    parser.add_argument(
+        "--gliner-model",
+        default=None,
+        help="GLiNER model name or local path",
+    )
+    parser.add_argument(
+        "--spacy-model",
+        default=None,
+        help="spaCy model name (default: en_core_web_sm)",
+    )
+    parser.add_argument(
+        "--spacy-ruler",
+        default=None,
+        help="spaCy ruler JSON file/dir (optional)",
+    )
     return parser.parse_args()
 
 
@@ -560,6 +774,8 @@ def main() -> None:
     if not xlsx_path.exists():
         raise FileNotFoundError(xlsx_path)
     key_columns = [c.strip() for c in args.key_columns.split(",") if c.strip()]
+    entity_columns = parse_entity_columns(args.entity_columns)
+    entity_column_map = parse_entity_column_map(args.entity_column_map)
     run_pipeline(
         xlsx_path,
         args.sheet,
@@ -572,6 +788,16 @@ def main() -> None:
         min_text_ratio=args.min_text_ratio,
         max_numeric_ratio=args.max_numeric_ratio,
         skip_footer_rows=args.skip_footer_rows,
+        entity_provider=args.entity_provider,
+        entity_batch_size=args.entity_batch_size,
+        entity_columns=entity_columns,
+        entity_column_map=entity_column_map,
+        entity_column_type=args.entity_column_type,
+        gliner_labels=args.gliner_labels,
+        gliner_threshold=args.gliner_threshold,
+        gliner_model=args.gliner_model,
+        spacy_model=args.spacy_model,
+        spacy_ruler=args.spacy_ruler,
     )
 
 
