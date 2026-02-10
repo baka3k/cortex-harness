@@ -183,7 +183,6 @@ def main() -> None:
     _set_langextract_overrides(args.langextract_model_id, args.langextract_model_url)
 
     model_name, local_files_only = resolve_embedding_model(
-        # args.embedding_model, "sentence-transformers/all-MiniLM-L6-v2"
         args.embedding_model, "BAAI/bge-m3"
     )
     device = resolve_embedding_device(args.embedding_device)

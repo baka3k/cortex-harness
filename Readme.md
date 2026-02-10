@@ -38,7 +38,7 @@ GLINER_MODEL_NAME=urchade/gliner_large-v2.1
 If your environment blocks Hugging Face downloads, set a local path:
 
 ```bash
-export EMBEDDING_MODEL_PATH=/Users/youruser/tool/ai/all-MiniLM-L6-v2
+export EMBEDDING_MODEL_PATH=/Users/youruser/tool/ai/bge-m3-local
 ```
 
 When set, `mcp_graph_rag.py` will load embeddings from `EMBEDDING_MODEL_PATH`.
@@ -55,8 +55,8 @@ QDRANT_HOST=localhost
 QDRANT_PORT=6333
 QDRANT_COLLECTION_RAG=graph_rag_entities
 
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-EMBEDDING_MODEL_PATH=/Users/youruser/tool/ai/all-MiniLM-L6-v2
+EMBEDDING_MODEL=BAAI/bge-m3 # 1024
+EMBEDDING_MODEL_PATH=/Users/yourusername/tool/ai/bge-m3-local
 EMBEDDING_DEVICE=cpu # or cuda, mps
 GLINER_MODEL_NAME=urchade/gliner_large-v2.1
 GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_large-v2.1
