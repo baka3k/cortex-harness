@@ -245,7 +245,7 @@ def extract_entities_spacy(
 def extract_entities_gliner(
     text: str,
     labels: List[str] | None = None,
-    model: str = "urchade/gliner_mediumv2",
+    model: str = "urchade/gliner_large-v2.1",
     threshold: float = 0.3,
     gliner_model=None,
 ) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
@@ -285,7 +285,7 @@ def _gliner_predictions_to_entities(predictions: List[Dict[str, Any]] | None) ->
 def extract_entities_gliner_batch(
     texts: List[str],
     labels: List[str] | None = None,
-    model: str = "urchade/gliner_mediumv2",
+    model: str = "urchade/gliner_large-v2.1",
     threshold: float = 0.3,
     gliner_model=None,
 ) -> List[List[Dict[str, str]]]:

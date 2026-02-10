@@ -25,7 +25,7 @@ export GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_medium-v2.1
 - Or use model name (download from Hugging Face):
 
 ```
-GLINER_MODEL_NAME=urchade/gliner_mediumv2
+GLINER_MODEL_NAME=urchade/gliner_large-v2.1
 ```
 
 ### Quick comparison: GLiNER vs spaCy
@@ -58,7 +58,7 @@ QDRANT_COLLECTION_RAG=graph_rag_entities
 EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 EMBEDDING_MODEL_PATH=/Users/youruser/tool/ai/all-MiniLM-L6-v2
 EMBEDDING_DEVICE=cpu # or cuda, mps
-GLINER_MODEL_NAME=urchade/gliner_mediumv2
+GLINER_MODEL_NAME=urchade/gliner_large-v2.1
 GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_medium-v2.1
 EMBEDDING_LOCAL_ONLY=1
 GLINER_LOCAL_ONLY=1
@@ -172,7 +172,7 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 - `--entity-provider`: Entity extractor: `spacy`, `gliner`, `gemini`, or `langextract` (default: `gliner`).
 - `--spacy-model`: spaCy model name (default: `en_core_web_sm`).
 - `--ruler-json`: Path to spaCy `EntityRuler` JSON.
-- `--gliner-model-name`: GLiNER model name (default: `urchade/gliner_mediumv2`).
+- `--gliner-model-name`: GLiNER model name (default: `urchade/gliner_large-v2.1`).
 - `--gliner-model-path`: Local GLiNER model path (recommended for offline).
 - `--gliner-model`: Deprecated alias; use `--gliner-model-name` or `--gliner-model-path`.
 - `--gliner-labels`: Comma-separated labels or path to text file (one label per line).
@@ -220,7 +220,7 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 | Entity | `--entity-provider`       | `spacy`, `gliner`, `gemini`, `langextract`                                          | `gliner`                                           |
 | Entity | `--spacy-model`           | spaCy model name                                                                    | `en_core_web_sm`                                   |
 | Entity | `--ruler-json`            | spaCy EntityRuler JSON                                                              | `None`                                             |
-| Entity | `--gliner-model-name`     | GLiNER model name                                                                   | `urchade/gliner_mediumv2`                          |
+| Entity | `--gliner-model-name`     | GLiNER model name                                                                   | `urchade/gliner_large-v2.1`                        |
 | Entity | `--gliner-model-path`     | Local GLiNER model path                                                             | env `GLINER_MODEL_PATH`                            |
 | Entity | `--gliner-model`          | Deprecated alias                                                                    | `None`                                             |
 | Entity | `--gliner-labels`         | Labels (CSV or file path)                                                           | `PERSON,ORG,PRODUCT,GPE,DATE,TECH,CRYPTO,STANDARD` |
@@ -261,7 +261,7 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 - `--entity-provider`: Entity extractor: `spacy`, `gliner`, `gemini`, or `langextract` (default: `gliner`).
 - `--spacy-model`: spaCy model name (default: `en_core_web_sm`).
 - `--ruler-json`: Path to spaCy `EntityRuler` JSON.
-- `--gliner-model-name`: GLiNER model name (default: `urchade/gliner_mediumv2`).
+- `--gliner-model-name`: GLiNER model name (default: `urchade/gliner_large-v2.1`).
 - `--gliner-model-path`: Local GLiNER model path (recommended for offline).
 - `--gliner-model`: Deprecated alias; use `--gliner-model-name` or `--gliner-model-path`.
 - `--gliner-labels`: Comma-separated labels or path to text file (one label per line).
@@ -291,7 +291,7 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 python graphrag_ingest_langextract.py \
   --folder /path/to/folder \
   --entity-provider gliner \
-  --gliner-model-name urchade/gliner_mediumv2 \
+  --gliner-model-name urchade/gliner_large-v2.1 \
   --gliner-labels gliner/labels_digital_key.txt \
   --gliner-threshold 0.35 \
   --gliner-batch-size 1 \
@@ -303,7 +303,7 @@ python graphrag_ingest_langextract.py \
 python graphrag_ingest_langextract.py \
   --folder /path/to/folder \
   --entity-provider gliner \
-  --gliner-model-name urchade/gliner_mediumv2 \
+  --gliner-model-name urchade/gliner_large-v2.1 \
   --gliner-labels gliner/labels_digital_key.txt \
   --gliner-threshold 0.35 \
   --gliner-batch-size 1 \
