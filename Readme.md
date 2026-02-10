@@ -14,12 +14,12 @@ python -m spacy download en_core_web_sm
 
 ## Default entity model (GLiNER)
 
-The default entity model is `gliner_medium-v2.1`.
+The default entity model is `gliner_large-v2.1`.
 
 - Local/offline (recommended):
 
 ```bash
-export GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_medium-v2.1
+export GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_large-v2.1
 ```
 
 - Or use model name (download from Hugging Face):
@@ -59,7 +59,7 @@ EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
 EMBEDDING_MODEL_PATH=/Users/youruser/tool/ai/all-MiniLM-L6-v2
 EMBEDDING_DEVICE=cpu # or cuda, mps
 GLINER_MODEL_NAME=urchade/gliner_large-v2.1
-GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_medium-v2.1
+GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_large-v2.1
 EMBEDDING_LOCAL_ONLY=1
 GLINER_LOCAL_ONLY=1
 HF_HUB_OFFLINE=1
