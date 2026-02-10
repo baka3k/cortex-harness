@@ -290,9 +290,11 @@ def ingest_to_neo4j(
     paragraph_id: int,
     paragraph_text: str | None = None,
     is_short: bool = False,
+    paragraph_props: Dict[str, Any] | None = None,
 ) -> None:
     with driver.session() as session:
         if paragraph_text:
+            props = paragraph_props or {}
             session.run(
                 """
                 MERGE (d:Document {id: $doc_id})
@@ -300,6 +302,7 @@ def ingest_to_neo4j(
                 MERGE (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
                 SET p.text = $text,
                     p.short = $is_short
+                SET p += $props
                 MERGE (d)-[:HAS_PARAGRAPH]->(p)
                 """,
                 doc_id=source_id,
@@ -308,6 +311,7 @@ def ingest_to_neo4j(
                 paragraph_id=paragraph_id,
                 text=paragraph_text,
                 is_short=is_short,
+                props=props,
             )
         for node in nodes.values():
             session.run(
@@ -374,6 +378,7 @@ def ingest_to_neo4j_batch(driver, items: List[Dict[str, Any]]) -> None:
                     "paragraph_id": item["paragraph_id"],
                     "text": paragraph_text,
                     "is_short": item.get("is_short", False),
+                    "props": item.get("paragraph_props") or {},
                 }
             )
         for node in item.get("nodes", {}).values():
@@ -412,6 +417,7 @@ def ingest_to_neo4j_batch(driver, items: List[Dict[str, Any]]) -> None:
                 MERGE (p:Paragraph {source_id: row.source_id, paragraph_id: row.paragraph_id})
                 SET p.text = row.text,
                     p.short = row.is_short
+                SET p += row.props
                 MERGE (d)-[:HAS_PARAGRAPH]->(p)
                 """,
                 paragraphs=paragraphs,
@@ -477,6 +483,7 @@ def ingest_to_qdrant(
     embedder: SentenceTransformer,
     nodes: Dict[str, Dict[str, str]],
     source_id: str,
+    extra_payload: Dict[str, Any] | None = None,
 ) -> None:
     vector = embedder.encode([paragraph])[0]
     entity_ids = list({node["id"] for node in nodes.values()})
@@ -493,16 +500,19 @@ def ingest_to_qdrant(
                 "confidence": node.get("confidence"),
             }
     )
+    payload = {
+        "paragraph_id": paragraph_id,
+        "source_id": source_id,
+        "text": paragraph,
+        "entity_ids": entity_ids,
+        "entity_mentions": entity_mentions,
+    }
+    if extra_payload:
+        payload.update(extra_payload)
     point = qmodels.PointStruct(
         id=str(uuid.uuid4()),
         vector=vector.tolist(),
-        payload={
-            "paragraph_id": paragraph_id,
-            "source_id": source_id,
-            "text": paragraph,
-            "entity_ids": entity_ids,
-            "entity_mentions": entity_mentions,
-        },
+        payload=payload,
     )
     if collection not in _PRINTED_COLLECTIONS:
         print(f"Upserting into Qdrant collection: {collection}")
@@ -513,6 +523,16 @@ def ingest_to_qdrant(
 def _safe_source_id(base: Path, file_path: Path) -> str:
     rel = file_path.relative_to(base).as_posix()
     return rel.replace("/", "__").replace("\\", "__")
+
+
+def _stringify_values(values: Dict[str, Any]) -> Dict[str, Any]:
+    safe: Dict[str, Any] = {}
+    for key, value in values.items():
+        if value is None:
+            safe[key] = None
+        else:
+            safe[key] = str(value)
+    return safe
 
 
 def _iter_input_files(folder: Path) -> List[Path]:
@@ -684,6 +704,155 @@ def process_text(
     flush_neo4j_batch()
 
 
+def process_xlsx_structured(
+    xlsx_path: Path,
+    source_id: str,
+    args: argparse.Namespace,
+    driver,
+    qdrant: QdrantClient,
+    embedder: SentenceTransformer,
+) -> None:
+    from extractor.excel.excel_table_pipeline_skeleton import (
+        apply_merged_cell_fill,
+        build_cell_map,
+        detect_header_rows,
+        detect_tables,
+        extract_entities_for_rows,
+        extract_merged_ranges,
+        extract_table_matrix,
+        iter_data_rows,
+        load_workbooks,
+        normalize_headers,
+        parse_entity_column_map,
+        parse_entity_columns,
+    )
+
+    key_columns = [c.strip() for c in (args.xlsx_key_columns or "").split(",") if c.strip()]
+    entity_columns = parse_entity_columns(args.xlsx_entity_columns)
+    entity_column_map = parse_entity_column_map(args.xlsx_entity_column_map)
+    if args.xlsx_no_entities:
+        entity_provider = "none"
+    else:
+        entity_provider = args.xlsx_entity_provider or args.entity_provider
+    entity_batch_size = args.xlsx_entity_batch_size or args.gliner_batch_size
+
+    wb_values, wb_formula = load_workbooks(xlsx_path)
+    sheets = [wb_values[args.xlsx_sheet]] if args.xlsx_sheet else list(wb_values.worksheets)
+
+    neo4j_batch: List[Dict[str, Any]] = []
+
+    def flush_neo4j_batch() -> None:
+        if not neo4j_batch:
+            return
+        ingest_to_neo4j_batch(driver, neo4j_batch)
+        neo4j_batch.clear()
+
+    row_counter = 0
+    for sheet in sheets:
+        sheet_formula = wb_formula[sheet.title]
+        cells = build_cell_map(sheet, sheet_formula)
+        merged_ranges = extract_merged_ranges(sheet_formula)
+        apply_merged_cell_fill(cells, merged_ranges)
+        tables = detect_tables(
+            cells,
+            sheet.title,
+            min_rows=args.xlsx_min_rows,
+            min_cols=args.xlsx_min_cols,
+            max_row_gap=args.xlsx_max_row_gap,
+            max_col_gap=args.xlsx_max_col_gap,
+        )
+        print(f"Sheet: {sheet.title} -> tables: {len(tables)}")
+        for table in tables:
+            matrix = extract_table_matrix(cells, table)
+            header_rows = detect_header_rows(
+                matrix,
+                max_header_rows=args.xlsx_max_header_rows,
+                min_text_ratio=args.xlsx_min_text_ratio,
+                max_numeric_ratio=args.xlsx_max_numeric_ratio,
+            )
+            headers = normalize_headers(matrix, header_rows)
+            rows = list(
+                iter_data_rows(
+                    matrix,
+                    headers,
+                    header_rows,
+                    table.table_id,
+                    key_columns=key_columns,
+                    skip_footer_rows=args.xlsx_skip_footer_rows,
+                )
+            )
+            if not rows:
+                continue
+            if entity_provider != "none" or entity_columns or entity_column_map:
+                entities_by_row = extract_entities_for_rows(
+                    rows,
+                    provider=entity_provider,
+                    batch_size=entity_batch_size,
+                    gliner_labels=args.gliner_labels,
+                    gliner_threshold=args.gliner_threshold,
+                    gliner_model=args.gliner_model_resolved,
+                    spacy_model=args.spacy_model,
+                    spacy_ruler=args.ruler_json,
+                    column_map=entity_column_map,
+                    column_list=entity_columns,
+                    column_default_type=args.xlsx_entity_column_type,
+                )
+            else:
+                entities_by_row = [[] for _ in rows]
+
+            for row, entities in zip(rows, entities_by_row, strict=True):
+                nodes, relations = build_graph_components_from_entities(
+                    entities,
+                    [],
+                    merge_entities=not args.no_entity_merge,
+                    normalize_mode=args.entity_normalize_mode,
+                )
+                row_counter += 1
+                paragraph_text = row.serialized
+                paragraph_props = {
+                    "sheet_name": sheet.title,
+                    "table_id": table.table_id,
+                    "row_id": row.row_id,
+                    "row_hash": row.row_hash,
+                    "row_index": row.row_index,
+                    "is_footer": row.is_footer,
+                }
+                extra_payload = {
+                    "sheet_name": sheet.title,
+                    "table_id": table.table_id,
+                    "row_id": row.row_id,
+                    "row_hash": row.row_hash,
+                    "row_index": row.row_index,
+                    "is_footer": row.is_footer,
+                    "values": row.values,
+                    "raw_values": _stringify_values(row.raw_values),
+                }
+                ingest_to_qdrant(
+                    qdrant,
+                    args.collection,
+                    paragraph_text,
+                    row_counter,
+                    embedder,
+                    nodes,
+                    source_id,
+                    extra_payload=extra_payload,
+                )
+                neo4j_batch.append(
+                    {
+                        "source_id": source_id,
+                        "paragraph_id": row_counter,
+                        "paragraph_text": paragraph_text,
+                        "is_short": False,
+                        "nodes": nodes,
+                        "relations": relations,
+                        "paragraph_props": paragraph_props,
+                    }
+                )
+                if len(neo4j_batch) >= args.neo4j_batch_size:
+                    flush_neo4j_batch()
+    flush_neo4j_batch()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pdf", help="Path to PDF")
@@ -692,6 +861,57 @@ def main() -> None:
     parser.add_argument("--docx", help="Path to Word document (.docx)")
     parser.add_argument("--pptx", help="Path to PowerPoint file (.pptx)")
     parser.add_argument("--xlsx", help="Path to Excel file (.xlsx)")
+    parser.add_argument(
+        "--xlsx-structured",
+        action="store_true",
+        help="Use structured Excel ingestion (table/row aware).",
+    )
+    parser.add_argument("--xlsx-sheet", default=None, help="Sheet name for structured Excel")
+    parser.add_argument(
+        "--xlsx-key-columns",
+        default="",
+        help="Comma-separated key columns for stable row_id (structured Excel)",
+    )
+    parser.add_argument("--xlsx-min-rows", type=int, default=2)
+    parser.add_argument("--xlsx-min-cols", type=int, default=2)
+    parser.add_argument("--xlsx-max-row-gap", type=int, default=1)
+    parser.add_argument("--xlsx-max-col-gap", type=int, default=1)
+    parser.add_argument("--xlsx-max-header-rows", type=int, default=3)
+    parser.add_argument("--xlsx-min-text-ratio", type=float, default=0.5)
+    parser.add_argument("--xlsx-max-numeric-ratio", type=float, default=0.5)
+    parser.add_argument("--xlsx-skip-footer-rows", action="store_true")
+    parser.add_argument(
+        "--xlsx-entity-provider",
+        choices=["none", "spacy", "gliner", "gemini", "langextract"],
+        default=None,
+        help="Override entity provider for structured Excel (default: use --entity-provider).",
+    )
+    parser.add_argument(
+        "--xlsx-entity-batch-size",
+        type=int,
+        default=None,
+        help="Batch size for structured Excel entity extraction (gliner only).",
+    )
+    parser.add_argument(
+        "--xlsx-entity-columns",
+        default="",
+        help="Comma-separated column names to treat as entities (structured Excel).",
+    )
+    parser.add_argument(
+        "--xlsx-entity-column-map",
+        default="",
+        help="Comma-separated column:type mapping for entities (structured Excel).",
+    )
+    parser.add_argument(
+        "--xlsx-entity-column-type",
+        default="COLUMN",
+        help="Default entity type for --xlsx-entity-columns.",
+    )
+    parser.add_argument(
+        "--xlsx-no-entities",
+        action="store_true",
+        help="Disable entity extraction for structured Excel.",
+    )
     parser.add_argument("--raw-text", help="Raw text input")
     parser.add_argument(
         "--folder",
@@ -920,9 +1140,12 @@ def main() -> None:
         xlsx_path = Path(args.xlsx)
         if not xlsx_path.exists():
             raise FileNotFoundError(xlsx_path)
-        raw_text = read_xlsx_text(xlsx_path)
         source_id = args.source_id or xlsx_path.stem
-        process_text(raw_text, source_id, args, driver, qdrant, embedder)
+        if args.xlsx_structured:
+            process_xlsx_structured(xlsx_path, source_id, args, driver, qdrant, embedder)
+        else:
+            raw_text = read_xlsx_text(xlsx_path)
+            process_text(raw_text, source_id, args, driver, qdrant, embedder)
         return
 
     raw_text = args.raw_text.strip()

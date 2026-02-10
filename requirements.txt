@@ -16,3 +16,4 @@ fastmcp
 python-dotenv
 lxml
 gliner
+pandas

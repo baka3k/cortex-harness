@@ -37,3 +37,4 @@ dist/
 build/
 *.log
 .serena
+testdata1/
