@@ -727,7 +727,7 @@ def main() -> None:
     parser.add_argument("--ruler-json", default=None, help="Path to EntityRuler JSON patterns")
     parser.add_argument(
         "--gliner-model-name",
-        default=os.getenv("GLINER_MODEL_NAME", "urchade/gliner_mediumv2"),
+        default=os.getenv("GLINER_MODEL_NAME", "urchade/gliner_large-v2.1"),
         help="GLiNER model name (HuggingFace).",
     )
     parser.add_argument(
