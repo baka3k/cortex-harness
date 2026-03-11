@@ -56,7 +56,7 @@ QDRANT_PORT=6333
 QDRANT_COLLECTION_RAG=graph_rag_entities
 
 EMBEDDING_MODEL=BAAI/bge-m3 # 1024
-EMBEDDING_MODEL_PATH=/Users/yourusername/tool/ai/bge-m3-local
+EMBEDDING_MODEL_PATH=/Users/xxx.xxx/tool/ai/bge-m3-local
 EMBEDDING_DEVICE=cpu # or cuda, mps
 GLINER_MODEL_NAME=urchade/gliner_large-v2.1
 GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_large-v2.1
