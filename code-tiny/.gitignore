@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+# Packaging
+dist/
+eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+.serena/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+coverage/
+nose2-
+
+# Caches
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Trashes
+ehthumbs.db
+Thumbs.db
+# Temporary files
+*.tmp
+*.temp
+*.log
+.codex
+.github
+.serena
+.specify
+*.db
+output/
+temp/
+.env
+.env.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build artifacts
+dist/
+build/
+*.tsbuildinfo
+
+# OS
+.vagrant/
+
+
+cache/
+testtool/input/*.json

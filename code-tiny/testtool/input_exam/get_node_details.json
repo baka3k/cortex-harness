@@ -1,0 +1,9 @@
+{
+    "node_ids": [
+        "NODE_ID_1",
+        "NODE_ID_2"
+    ],
+    "db": "neo4j",
+    "content_mode": "summary",
+    "include_raw_fields": false
+}

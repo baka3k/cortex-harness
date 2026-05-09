@@ -1,0 +1,8 @@
+{
+    "class_names": [
+        "MyClass"
+    ],
+    "db": "neo4j",
+    "content_mode": "summary",
+    "include_raw_fields": false
+}

@@ -1,0 +1,7 @@
+{
+    "query": "MyClass|myFunction",
+    "db": "neo4j",
+    "top_k": 50,
+    "content_mode": "summary",
+    "include_raw_fields": false
+}
