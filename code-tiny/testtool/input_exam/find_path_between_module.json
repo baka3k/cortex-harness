@@ -1,0 +1,13 @@
+{
+    "source_modules": [
+        "Knio01"
+    ],
+    "target_modules": [
+        "SampleDatabase01"
+    ],
+    "db": "neo4j",
+    "max_depth": 8,
+    "direction": "both",
+    "content_mode": "summary",
+    "include_raw_fields": false
+}

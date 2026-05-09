@@ -1,0 +1,8 @@
+{
+    "start_id": "START_NODE_ID",
+    "db": "neo4j",
+    "direction": "out",
+    "max_depth": 6,
+    "content_mode": "summary",
+    "include_raw_fields": false
+}

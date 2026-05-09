@@ -1,0 +1,33 @@
+neo4j
+neo4j-graphrag
+# FastMCP dependencies
+fastmcp
+
+# New C/C++ analysis tools
+networkx
+
+# Additional dependencies for C++ analysis and web services
+pydantic
+fastapi
+uvicorn[standard]
+python-multipart
+requests
+gliner
+torch
+transformers
+
+# Existing dependencies
+tree-sitter
+tree-sitter-languages
+tree-sitter-kotlin
+tree-sitter-java
+tree-sitter-c
+tree-sitter-cpp
+tree-sitter-typescript
+tree-sitter-javascript
+tree-sitter-php
+tree-sitter-python
+tree-sitter-sql
+# Deep learning librariespip
+einops
+sentence-transformers

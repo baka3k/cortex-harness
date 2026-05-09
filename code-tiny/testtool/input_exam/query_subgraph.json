@@ -1,0 +1,8 @@
+{
+    "function_id": "YOUR_FUNCTION_ID",
+    "db": "neo4j",
+    "direction": "all",
+    "max_depth": 2,
+    "content_mode": "summary",
+    "include_raw_fields": false
+}

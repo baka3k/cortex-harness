@@ -1,0 +1,7 @@
+{
+    "query": "DataNormal|Ticket",
+    "db": "neo4j",
+    "top_k": 500,
+    "content_mode": "summary",
+    "include_raw_fields": false
+}
