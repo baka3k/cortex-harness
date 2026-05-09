@@ -172,7 +172,7 @@ python tools/kotlin/kotlin_analyzer.py \
   --root C:\\path\\to\\kotlin \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection kotlin_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -214,7 +214,7 @@ python tools/java/java_analyzer.py \
   --root C:\\path\\to\\java \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection java_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -258,7 +258,7 @@ python tools/ts/ts_analyzer.py \
   --root C:\\path\\to\\typescript \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection typescript_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -302,7 +302,7 @@ python tools/js/js_analyzer.py \
   --root C:\\path\\to\\javascript \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection javascript_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -346,7 +346,7 @@ python tools/php/php_analyzer.py \
   --root C:\\path\\to\\php \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection php_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -390,7 +390,7 @@ python tools/sql/sql_analyzer.py \
   --root C:\\path\\to\\sql \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection sql_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -434,7 +434,7 @@ python tools/plsql/plsql_analyzer.py \
   --root C:\\path\\to\\plsql \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection plsql_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -478,7 +478,7 @@ python tools/cplus/cplus_analyzer.py \
   --root C:\\path\\to\\cplus \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection cplus_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -529,7 +529,7 @@ python tools/cplus/cplus_analyzer.py \
   --root /path/to/project \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --call-stats-path /tmp/call_stats.json \
   --unresolved-calls-path /tmp/unresolved.jsonl \
   --possible-calls-path /tmp/possible_calls.json \
@@ -582,7 +582,7 @@ python tools/csharp/csharp_analyzer.py \
   --root C:\\path\\to\\csharp \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection csharp_functions \
   --embed-model jinaai/jina-embeddings-v3 \
@@ -624,7 +624,7 @@ Common tuning flags:
 - `--qdrant-retry-sleep` (seconds between retries)
 - `--neo4j-uri` (Neo4j Bolt URI, e.g., `bolt://localhost:7687`)
 - `--neo4j-user` (Neo4j username)
-- `--neo4j-password` (Neo4j password)
+- `--neo4j-pass` (Neo4j password)
 - `--neo4j-db` (Neo4j database name)
 - `--neo4j-batch-size`
 

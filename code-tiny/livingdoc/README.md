@@ -271,7 +271,7 @@ RETURN count(d) AS total, count(d.id) AS with_id;
 python livingdoc/living-doc-summarize.py \
     --neo4j-uri "bolt://localhost:7687" \
     --neo4j-user "neo4j" \
-    --neo4j-password "abcd1234" \
+    --neo4j-pass "abcd1234" \
     --llm-api-base "http://localhost:11434/v1" \
     --llm-api-key "local" \
     --llm-model "deepseek-coder-v2" \
@@ -286,7 +286,7 @@ python livingdoc/living-doc-summarize.py \
 python livingdoc/living-doc-vectorize.py \
   --neo4j-uri "bolt://localhost:7687" \
   --neo4j-user "neo4j" \
-  --neo4j-password "abcd1234" \
+  --neo4j-pass "abcd1234" \
   --cache-dir cache \
   --embed-model "BAAI/bge-m3" \
   --qdrant-url http://localhost:6333 \
@@ -305,7 +305,7 @@ python livingdoc/living-doc-vectorize.py \
 python livingdoc/living-doc-link.py \
   --neo4j-uri "bolt://localhost:7687" \
   --neo4j-user "neo4j" \
-  --neo4j-password "abcd1234" \
+  --neo4j-pass "abcd1234" \
   --cache-dir cache \
   --collection graph_rag_entities \
   --embed-model "BAAI/bge-m3" \
@@ -324,7 +324,7 @@ python livingdoc/living-doc-link.py \
 python livingdoc/living-doc-louvain.py \
 --neo4j-uri "bolt://localhost:7687" \
 --neo4j-user "neo4j" \
---neo4j-password "abcd1234" \
+--neo4j-pass "abcd1234" \
 --project-id digital_key_main \
 --graph-name functionGraph \
 --node-label Function \
@@ -347,7 +347,7 @@ python livingdoc/living-doc-louvain.py \
 python livingdoc/living-doc-summarize-infra.py \
   --neo4j-uri "bolt://localhost:7687" \
   --neo4j-user "neo4j" \
-  --neo4j-password "abcd1234" \
+  --neo4j-pass "abcd1234" \
   --project-id digital_key_main \
   --infra-label InfraNode \
   --belongs-rel BELONGS_TO \
@@ -369,7 +369,7 @@ python livingdoc/living-doc-summarize-infra.py \
 python livingdoc/living-doc-vectorize-infra.py \
   --neo4j-uri "bolt://localhost:7687" \
   --neo4j-user "neo4j" \
-  --neo4j-password "abcd1234" \
+  --neo4j-pass "abcd1234" \
   --project-id digital_key_main \
   --infra-label InfraNode \
   --done-status summarized \
@@ -387,7 +387,7 @@ python livingdoc/living-doc-vectorize-infra.py \
 
 ```
 python livingdoc/living-doc-pipeline.py \
- --neo4j-password abcd1234 \
+ --neo4j-pass abcd1234 \
  --project-id digital_key_main \
  --verbose
 ```

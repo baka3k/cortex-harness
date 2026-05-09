@@ -170,7 +170,7 @@ def main(argv):
      --root /path/to/kotlin/code \
      --neo4j-uri bolt://localhost:7687 \
      --neo4j-user neo4j \
-     --neo4j-password password \
+     --neo4j-pass password \
      --verbose
    ```
 

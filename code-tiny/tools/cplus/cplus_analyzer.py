@@ -3424,7 +3424,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--root", required=True, help="Root folder containing C/C++ sources")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASSWORD"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "cplus_functions"))

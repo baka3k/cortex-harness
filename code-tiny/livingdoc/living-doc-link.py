@@ -57,7 +57,7 @@ def parse_args():
 
     parser.add_argument("--neo4j-uri", default=get_env("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=get_env("NEO4J_USER"))
-    parser.add_argument("--neo4j-password", default=get_env("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASSWORD"))
     parser.add_argument("--project-id", default=get_env("PROJECT_ID"))
 
     parser.add_argument("--embed-model", default=get_env("EMBED_MODEL"))
@@ -119,7 +119,7 @@ def parse_args():
     if not args.neo4j_user:
         missing.append("NEO4J_USER/--neo4j-user")
     if not args.neo4j_password:
-        missing.append("NEO4J_PASSWORD/--neo4j-password")
+        missing.append("NEO4J_PASSWORD/--neo4j-pass")
     if not args.collection:
         missing.append("QDRANT_COLLECTION/--collection")
     if missing:
