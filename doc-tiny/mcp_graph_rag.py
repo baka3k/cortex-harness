@@ -15,7 +15,7 @@ from embedding_utils import resolve_embedding_device, resolve_embedding_model
 
 MCP_NAME = "graph_rag"
 
-# Load .env if present (for NEO4J_*/QDRANT_*/EMBEDDING_MODEL).
+# Load .env if present (for NEO4J_*/QDRANT_*/TEXT_EMBEDDING_MODEL).
 try:
     from dotenv import load_dotenv
 
@@ -27,14 +27,14 @@ except Exception:
 
 NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASS = os.getenv("NEO4J_PASS") or os.getenv("NEO4J_PASSWORD", "password")
+NEO4J_PASS = os.getenv("NEO4J_PASS") or os.getenv("NEO4J_PASS", "password")
 
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
-QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION_RAG", "pdf_chunks")
+QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION_DOC", "documents")
 
-DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
+DEFAULT_TEXT_EMBEDDING_MODEL = "BAAI/bge-m3"
 
 DEFAULT_ENTITY_TYPES = [
     "ORG",
@@ -82,7 +82,7 @@ def get_qdrant() -> QdrantClient:
 def get_embedder() -> SentenceTransformer:
     global _embedder
     if _embedder is None:
-        model_name, local_files_only = resolve_embedding_model(None, DEFAULT_EMBEDDING_MODEL)
+        model_name, local_files_only = resolve_embedding_model(None, DEFAULT_TEXT_EMBEDDING_MODEL)
         device = resolve_embedding_device(None)
         _embedder = SentenceTransformer(
             model_name, local_files_only=local_files_only, device=device

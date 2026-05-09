@@ -99,7 +99,7 @@ class GraphDriverFactory:
         Args:
             provider: The database provider type
             env_prefix: Prefix for environment variables
-                       (e.g., NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
+                       (e.g., NEO4J_URI, NEO4J_USER, NEO4J_PASS)
 
         Returns:
             GraphDriver instance

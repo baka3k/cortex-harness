@@ -393,7 +393,7 @@ async def _get_graph_driver() -> GraphDriver:
     config = {
         "uri": DEFAULT_NEO4J_URI,
         "user": DEFAULT_NEO4J_USER,
-        "password": DEFAULT_NEO4J_PASSWORD,
+        "password": DEFAULT_NEO4J_PASS,
     }
     _graph_driver = GraphDriverFactory.create_driver(GraphProvider.NEO4J, config)
     return _graph_driver
@@ -604,17 +604,17 @@ MCP Client (Claude/Cursor)
 # Neo4j Configuration
 NEO4J_URI=bolt://localhost:7687
 NEO4J_USER=neo4j
-NEO4J_PASSWORD=password
+NEO4J_PASS=password
 NEO4J_DB=neo4j
 
 # Qdrant Configuration
 QDRANT_URL=http://localhost:6333
-QDRANT_COLLECTION=kotlin_functions
+QDRANT_COLLECTION_CODE=kotlin_functions
 
 # Embedding Model
-EMBED_MODEL=jinaai/jina-embeddings-v3
+CODE_EMBEDDING_MODEL=jinaai/jina-embeddings-v3
 JINA_MODEL_PATH=/path/to/local/model
-EMBED_DEVICE=cpu
+EMBEDDING_DEVICE=cpu
 
 # MCP Configuration
 MCP_BACKEND_TIMEOUT=60

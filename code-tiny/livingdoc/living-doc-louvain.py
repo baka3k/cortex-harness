@@ -23,7 +23,7 @@ def parse_args():
     )
     parser.add_argument("--neo4j-uri", default=get_env("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=get_env("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
 
     parser.add_argument("--project-id", default=get_env("PROJECT_ID"))
     parser.add_argument("--graph-name", default=get_env("GDS_GRAPH_NAME", "functionGraph"))
@@ -56,8 +56,8 @@ def parse_args():
         missing.append("NEO4J_URI/--neo4j-uri")
     if not args.neo4j_user:
         missing.append("NEO4J_USER/--neo4j-user")
-    if not args.neo4j_password:
-        missing.append("NEO4J_PASSWORD/--neo4j-pass")
+    if not args.NEO4J_PASS:
+        missing.append("NEO4J_PASS/--neo4j-pass")
     if missing:
         print("Missing required options: " + ", ".join(missing), file=sys.stderr)
         sys.exit(2)
@@ -306,7 +306,7 @@ def main():
     drop_graph_flag = str(args.drop_graph) != "0"
     drop_after = str(args.drop_after) != "0"
 
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
+    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.NEO4J_PASS))
     try:
         with driver.session() as session:
             action = ensure_graph(

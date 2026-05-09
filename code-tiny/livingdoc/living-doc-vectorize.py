@@ -47,12 +47,12 @@ def parse_args():
 
     parser.add_argument("--neo4j-uri", default=get_env("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=get_env("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
     parser.add_argument("--project-id", default=get_env("PROJECT_ID"))
     parser.add_argument("--file-path-field", default=get_env("FILE_PATH_FIELD", "file_path"))
 
-    parser.add_argument("--embed-model", default=get_env("EMBED_MODEL"))
-    parser.add_argument("--embed-device", "--device", dest="embed_device", default=get_env("EMBED_DEVICE"))
+    parser.add_argument("--embed-model", default=get_env("CODE_EMBEDDING_MODEL"))
+    parser.add_argument("--embed-device", "--device", dest="embed_device", default=get_env("EMBEDDING_DEVICE"))
     parser.add_argument(
         "--embed-trust-remote-code",
         action="store_true",
@@ -67,7 +67,7 @@ def parse_args():
 
     parser.add_argument("--qdrant-url", default=get_env("QDRANT_URL", "http://localhost:6333"))
     parser.add_argument("--qdrant-api-key", default=get_env("QDRANT_API_KEY"))
-    parser.add_argument("--collection", default=get_env("QDRANT_COLLECTION"))
+    parser.add_argument("--collection", default=get_env("QDRANT_COLLECTION_CODE"))
     parser.add_argument("--qdrant-collection", dest="collection", help="Alias for --collection")
     parser.add_argument(
         "--qdrant-store-summary",
@@ -102,10 +102,10 @@ def parse_args():
         missing.append("NEO4J_URI/--neo4j-uri")
     if not args.neo4j_user:
         missing.append("NEO4J_USER/--neo4j-user")
-    if not args.neo4j_password:
-        missing.append("NEO4J_PASSWORD/--neo4j-pass")
+    if not args.NEO4J_PASS:
+        missing.append("NEO4J_PASS/--neo4j-pass")
     if not args.collection:
-        missing.append("QDRANT_COLLECTION/--collection")
+        missing.append("QDRANT_COLLECTION_CODE/--collection")
     if missing:
         print("Missing required options: " + ", ".join(missing), file=sys.stderr)
         sys.exit(2)
@@ -333,7 +333,7 @@ def main():
     if vectorized_ids:
         print(f"[vectorize] Already vectorized (local cache): {len(vectorized_ids)}")
 
-    driver = Neo4jDriver(args.neo4j_uri, args.neo4j_user, args.neo4j_password)
+    driver = Neo4jDriver(args.neo4j_uri, args.neo4j_user, args.NEO4J_PASS)
     try:
         with driver.session() as session:
             # Batch-fetch metadata for all indexed node_ids upfront (single query)

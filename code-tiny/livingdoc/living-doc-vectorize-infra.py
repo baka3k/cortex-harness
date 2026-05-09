@@ -55,7 +55,7 @@ def parse_args():
     )
     parser.add_argument("--neo4j-uri",      default=get_env("NEO4J_URI",      "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user",     default=get_env("NEO4J_USER",     "neo4j"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
     parser.add_argument("--neo4j-db",       default=get_env("NEO4J_DB"))
 
     parser.add_argument("--project-id",  default=get_env("PROJECT_ID"))
@@ -66,12 +66,12 @@ def parse_args():
         help="Only process InfraNodes with this status value.",
     )
 
-    parser.add_argument("--embed-model",  default=get_env("EMBED_MODEL",  "BAAI/bge-m3"))
-    parser.add_argument("--embed-device", default=get_env("EMBED_DEVICE", "mps"))
+    parser.add_argument("--embed-model",  default=get_env("CODE_EMBEDDING_MODEL",  "BAAI/bge-m3"))
+    parser.add_argument("--embed-device", default=get_env("EMBEDDING_DEVICE", "mps"))
     parser.add_argument("--embed-trust-remote-code", action="store_true")
 
     parser.add_argument("--qdrant-url",        default=get_env("QDRANT_URL",        "http://localhost:6333"))
-    parser.add_argument("--collection",        default=get_env("QDRANT_COLLECTION"))
+    parser.add_argument("--collection",        default=get_env("QDRANT_COLLECTION_CODE"))
     parser.add_argument("--qdrant-collection", dest="collection", help="Alias for --collection")
     parser.add_argument("--qdrant-api-key",    default=get_env("QDRANT_API_KEY"))
     parser.add_argument(
@@ -90,10 +90,10 @@ def parse_args():
 
     args = parser.parse_args()
     missing = []
-    if not args.neo4j_password:
-        missing.append("NEO4J_PASSWORD/--neo4j-pass")
+    if not args.NEO4J_PASS:
+        missing.append("NEO4J_PASS/--neo4j-pass")
     if not args.collection:
-        missing.append("QDRANT_COLLECTION/--collection")
+        missing.append("QDRANT_COLLECTION_CODE/--collection")
     if missing:
         print("Missing required options: " + ", ".join(missing), file=sys.stderr)
         sys.exit(2)
@@ -229,7 +229,7 @@ def main():
     if vectorized_ids and args.verbose:
         print(f"[vectorize-infra] Already vectorized (local cache): {len(vectorized_ids)}")
 
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
+    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.NEO4J_PASS))
     try:
         with driver.session(database=args.neo4j_db) as session:
             infra_nodes = fetch_infra_nodes(

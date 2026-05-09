@@ -85,7 +85,7 @@ def parse_args():
     )
     parser.add_argument("--neo4j-uri",      default=get_env("NEO4J_URI",      "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user",     default=get_env("NEO4J_USER",     "neo4j"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
     parser.add_argument("--neo4j-db",       default=get_env("NEO4J_DB"))
 
     parser.add_argument("--project-id",   default=get_env("PROJECT_ID"))
@@ -129,8 +129,8 @@ def parse_args():
 
     args = parser.parse_args()
     missing = []
-    if not args.neo4j_password:
-        missing.append("NEO4J_PASSWORD/--neo4j-pass")
+    if not args.NEO4J_PASS:
+        missing.append("NEO4J_PASS/--neo4j-pass")
     if missing:
         print("Missing required options: " + ", ".join(missing), file=sys.stderr)
         sys.exit(2)
@@ -260,7 +260,7 @@ def main():
     skip_existing = str(args.skip_existing) != "0"
 
     driver = GraphDatabase.driver(
-        args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password)
+        args.neo4j_uri, auth=(args.neo4j_user, args.NEO4J_PASS)
     )
     headers = {
         "Content-Type":  "application/json",

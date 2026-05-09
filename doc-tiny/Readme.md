@@ -53,9 +53,9 @@ NEO4J_USER=neo4j
 NEO4J_PASS=neo4j_pass
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
-QDRANT_COLLECTION_RAG=graph_rag_entities
+QDRANT_COLLECTION_DOC=graph_rag_entities
 
-EMBEDDING_MODEL=BAAI/bge-m3 # 1024
+TEXT_EMBEDDING_MODEL=BAAI/bge-m3 # 1024
 EMBEDDING_MODEL_PATH=/Users/xxx.xxx/tool/ai/bge-m3-local
 EMBEDDING_DEVICE=cpu # or cuda, mps
 GLINER_MODEL_NAME=urchade/gliner_large-v2.1

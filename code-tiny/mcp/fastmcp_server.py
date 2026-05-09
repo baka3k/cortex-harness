@@ -41,7 +41,7 @@ def _load_env_file(env_path: str) -> None:
             os.environ[key] = value
             loaded.append(key)
     if loaded:
-        shown = [key for key in loaded if key not in {"NEO4J_PASSWORD"}]
+        shown = [key for key in loaded if key not in {"NEO4J_PASS"}]
         if shown:
             summary = ", ".join(f"{key}={os.environ.get(key, '')}" for key in shown)
             print(f"[env] Loaded {summary} from {env_path}")
@@ -72,15 +72,15 @@ def _parse_transport_env(value: Optional[str]) -> List[str]:
 DEFAULT_TIMEOUT = float(os.environ.get("MCP_BACKEND_TIMEOUT", "60"))
 DEFAULT_TRANSPORTS = _parse_transport_env(os.environ.get("MCP_FASTMCP_TRANSPORT"))
 DEFAULT_MODEL = (
-    os.environ.get("EMBED_MODEL")
+    os.environ.get("CODE_EMBEDDING_MODEL")
     or os.environ.get("JINA_MODEL_PATH")
     or "jinaai/jina-embeddings-v3"
 )
 DEFAULT_QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
-DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "kotlin_functions")
+DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION_CODE", "kotlin_functions")
 DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
-DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD")
+DEFAULT_NEO4J_PASS = os.environ.get("NEO4J_PASS")
 DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "neo4j"
 
 
@@ -134,12 +134,12 @@ async def _get_graph_driver() -> GraphDriver:
     global _graph_driver
     if _graph_driver is not None:
         return _graph_driver
-    if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
-        raise RuntimeError("NEO4J_USER and NEO4J_PASSWORD must be set.")
+    if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASS:
+        raise RuntimeError("NEO4J_USER and NEO4J_PASS must be set.")
     config = {
         "uri": DEFAULT_NEO4J_URI,
         "user": DEFAULT_NEO4J_USER,
-        "password": DEFAULT_NEO4J_PASSWORD,
+        "password": DEFAULT_NEO4J_PASS,
     }
     _graph_driver = await GraphDriverFactory.create_driver(GraphProvider.NEO4J, config)
     return _graph_driver
@@ -415,7 +415,7 @@ def _get_embedder(model_name: str, device_name: Optional[str] = None) -> Tuple[A
     trust_remote_code = _should_trust_remote_code(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
     model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-    device = torch.device(device_name or os.environ.get("EMBED_DEVICE", "cpu"))
+    device = torch.device(device_name or os.environ.get("EMBEDDING_DEVICE", "cpu"))
     model.to(device)
     model.eval()
     _embedder_cache[model_name] = (tokenizer, model, device)
