@@ -1693,22 +1693,22 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--root", required=True, help="Root folder containing Python sources")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument(
         "--qdrant-collection",
-        default=os.environ.get("QDRANT_COLLECTION", "plsql_functions"),
+        default=os.environ.get("QDRANT_COLLECTION_CODE", "plsql_functions"),
     )
     parser.add_argument(
         "--embed-model",
-        default=os.environ.get("EMBED_MODEL")
+        default=os.environ.get("CODE_EMBEDDING_MODEL")
         or os.environ.get("JINA_MODEL_PATH")
         or "jinaai/jina-embeddings-v3",
     )
     parser.add_argument("--max-embed-chars", type=int, default=4000)
     parser.add_argument("--chunk-embed", action="store_true")
-    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "auto"))
+    parser.add_argument("--device", default=os.environ.get("EMBEDDING_DEVICE", "auto"))
     parser.add_argument("--batch-size", type=int, default=4)  # for embedding - 4 function 1 turn embedding
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
@@ -1752,12 +1752,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
+    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
         driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=args.neo4j_uri,
             user=args.neo4j_user,
-            password=args.neo4j_password,
+            password=args.NEO4J_PASS,
         )
         code_writer = LanguageCodeWriter(
             driver=driver,

@@ -920,7 +920,7 @@ def main() -> None:
     parser.add_argument("--source-id", default=None, help="Custom source identifier")
     parser.add_argument(
         "--collection",
-        default=os.getenv("QDRANT_COLLECTION_RAG", "graphrag_entities"),
+        default=os.getenv("QDRANT_COLLECTION_DOC", "graphrag_entities"),
     )
     parser.add_argument("--embedding-model", default=None)
     parser.add_argument("--embedding-device", default=None)

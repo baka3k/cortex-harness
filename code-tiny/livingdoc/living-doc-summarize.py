@@ -146,7 +146,7 @@ def parse_args():
     )
     parser.add_argument("--neo4j-uri", default=get_env("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=get_env("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=get_env("NEO4J_DB"))
     parser.add_argument("--project-id", default=get_env("PROJECT_ID"))
     parser.add_argument("--node-labels", default=get_env("NODE_LABELS"))
@@ -196,7 +196,7 @@ def parse_args():
 
     # Qdrant / optional settings (exposed so all config can be passed as params)
     parser.add_argument("--qdrant-url", default=get_env("QDRANT_URL"))
-    parser.add_argument("--qdrant-collection", default=get_env("QDRANT_COLLECTION", "livingdoc"))
+    parser.add_argument("--qdrant-collection", default=get_env("QDRANT_COLLECTION_CODE", "livingdoc"))
     parser.add_argument("--qdrant-api-key", default=get_env("QDRANT_API_KEY"))
 
     args = parser.parse_args()
@@ -205,8 +205,8 @@ def parse_args():
         missing.append("NEO4J_URI/--neo4j-uri")
     if not args.neo4j_user:
         missing.append("NEO4J_USER/--neo4j-user")
-    if not args.neo4j_password:
-        missing.append("NEO4J_PASSWORD/--neo4j-pass")
+    if not args.NEO4J_PASS:
+        missing.append("NEO4J_PASS/--neo4j-pass")
     if not args.llm_api_key:
         missing.append("LLM_API_KEY/--llm-api-key")
     if missing:
@@ -380,7 +380,7 @@ def main():
     verbose = args.verbose
     uri = args.neo4j_uri
     user = args.neo4j_user
-    password = args.neo4j_password
+    password = args.NEO4J_PASS
     project_id = args.project_id
     node_labels = args.node_labels
     node_id_field = args.node_id_field

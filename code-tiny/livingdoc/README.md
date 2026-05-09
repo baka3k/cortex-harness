@@ -34,10 +34,10 @@ The pipeline has three phases:
 ```bash
 export NEO4J_URI=bolt://localhost:7687
 export NEO4J_USER=neo4j
-export NEO4J_PASSWORD=your_password
+export NEO4J_PASS=your_password
 export PROJECT_ID=nfc_emulation_card
 export QDRANT_URL=http://localhost:6333
-export QDRANT_COLLECTION=livingdoc
+export QDRANT_COLLECTION_CODE=livingdoc
 export LLM_API_KEY=your_key
 
 python living-doc-summarize.py
@@ -97,7 +97,7 @@ Biến môi trường và ý nghĩa:
 | --- | --- | --- |
 | `NEO4J_URI` | | Neo4j Bolt URI |
 | `NEO4J_USER` | | Neo4j username |
-| `NEO4J_PASSWORD` | | Neo4j password |
+| `NEO4J_PASS` | | Neo4j password |
 | `PROJECT_ID` | | Lọc `n.project_id` theo `CONTAINS` |
 | `NODE_LABELS` | | CSV labels để lọc node |
 | `LABEL_MATCH` | `any` | `any` hoặc `all` cho `NODE_LABELS` |
@@ -131,19 +131,19 @@ Biến môi trường và ý nghĩa:
 | --- | --- | --- |
 | `NEO4J_URI` | | Neo4j Bolt URI |
 | `NEO4J_USER` | | Neo4j username |
-| `NEO4J_PASSWORD` | | Neo4j password |
+| `NEO4J_PASS` | | Neo4j password |
 | `PROJECT_ID` | | Lưu vào metadata |
 | `NODE_ID_FIELD` | `id` | ID node |
 | `FILE_PATH_FIELD` | `file_path` | Property lưu path gốc |
 | `SUMMARY_PROPERTY` | `summary` | Property lưu summary |
 | `SUMMARY_STORE` | `string` | `string` hoặc `map` |
 | `CACHE_DIR` | `cache` | Thư mục cache |
-| `EMBED_MODEL` | `BAAI/bge-m3` | Model embedding |
-| `EMBED_DEVICE` | | Thiết bị (cpu/cuda) |
+| `CODE_EMBEDDING_MODEL` | `BAAI/bge-m3` | Model embedding |
+| `EMBEDDING_DEVICE` | | Thiết bị (cpu/cuda) |
 | `EMBED_SLEEP` | `0` | Nghỉ giữa các embed |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
 | `QDRANT_API_KEY` | | API key (nếu có) |
-| `QDRANT_COLLECTION` | | Tên collection |
+| `QDRANT_COLLECTION_CODE` | | Tên collection |
 | `QDRANT_CREATE` | `1` | `0` để không auto-create |
 | `QDRANT_STORE_SUMMARY` | `1` | `0` để không lưu full summary |
 | `QDRANT_SUMMARY_KEY` | `summary` | Payload key cho summary |
@@ -169,7 +169,7 @@ Biến môi trường và ý nghĩa:
 | --- | --- | --- |
 | `NEO4J_URI` | | Neo4j Bolt URI |
 | `NEO4J_USER` | | Neo4j username |
-| `NEO4J_PASSWORD` | | Neo4j password |
+| `NEO4J_PASS` | | Neo4j password |
 | `PROJECT_ID` | | Lọc code node theo project_id (so sánh exact) |
 | `NODE_ID_FIELD` | `id` | ID code node |
 | `CODE_LABEL` | | Label code node để match |
@@ -187,11 +187,11 @@ Biến môi trường và ý nghĩa:
 | `DOCUMENT_ID_FIELD` | `id` | Property id Document |
 | `DOCUMENT_ID_KEY` | `source_id` | Payload key Document |
 | `DOCUMENT_REL` | `IMPLEMENTS_DOCUMENT` | Relationship Document |
-| `EMBED_MODEL` | `BAAI/bge-m3` | Model embedding |
-| `EMBED_DEVICE` | | Thiết bị (cpu/cuda) |
+| `CODE_EMBEDDING_MODEL` | `BAAI/bge-m3` | Model embedding |
+| `EMBEDDING_DEVICE` | | Thiết bị (cpu/cuda) |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
 | `QDRANT_API_KEY` | | API key (nếu có) |
-| `QDRANT_COLLECTION` | | Tên collection |
+| `QDRANT_COLLECTION_CODE` | | Tên collection |
 | `REQUIRE_DOC_KEY` | `1` | `0` để search không filter payload |
 | `TOP_K` | `5` | Số kết quả mỗi node |
 | `SCORE_THRESHOLD` | `0.0` | Ngưỡng score |
@@ -213,7 +213,7 @@ Biến môi trường và ý nghĩa:
 | --- | --- | --- |
 | `NEO4J_URI` | | Neo4j Bolt URI |
 | `NEO4J_USER` | | Neo4j username |
-| `NEO4J_PASSWORD` | | Neo4j password |
+| `NEO4J_PASS` | | Neo4j password |
 | `PROJECT_ID` | | Lọc theo `project_id` dùng `CONTAINS` |
 | `GDS_GRAPH_NAME` | `functionGraph` | Tên graph in-memory |
 | `NODE_LABEL` | `Function` | Label node |
@@ -237,7 +237,7 @@ Biến môi trường và ý nghĩa:
 | --- | --- | --- |
 | `NEO4J_URI` | | Neo4j Bolt URI |
 | `NEO4J_USER` | | Neo4j username |
-| `NEO4J_PASSWORD` | | Neo4j password |
+| `NEO4J_PASS` | | Neo4j password |
 | `PROJECT_ID` | | Lọc `n.project_id` theo `CONTAINS` |
 | `NODE_LABELS` | | CSV labels để lọc |
 | `LABEL_MATCH` | `any` | `any` hoặc `all` |

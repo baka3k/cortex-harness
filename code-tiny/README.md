@@ -156,13 +156,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `kotlin_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `kotlin_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Example:
@@ -198,13 +198,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `java_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `java_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Example:
@@ -240,13 +240,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `typescript_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `typescript_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Note: install Tree-sitter parser for TypeScript/TSX (`tree-sitter-typescript`) or use `tree-sitter-languages`.
@@ -284,13 +284,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `javascript_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `javascript_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Note: install Tree-sitter parser for JavaScript/JSX (`tree-sitter-javascript`) or use `tree-sitter-languages`.
@@ -328,13 +328,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `php_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `php_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Note: install Tree-sitter parser for PHP (`tree-sitter-php`) or use `tree-sitter-languages`.
@@ -372,13 +372,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `sql_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `sql_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Note: install Tree-sitter parser for SQL (`tree-sitter-sql`) or use `tree-sitter-languages`.
@@ -416,13 +416,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `plsql_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `plsql_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `auto`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Note: PL/SQL analyzer uses regex heuristics (no tree-sitter dependency).
@@ -460,13 +460,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `cplus_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `cplus_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Note: install Tree-sitter parsers for C/C++ (`tree-sitter-c`, `tree-sitter-cpp`) or use `tree-sitter-languages`.
@@ -564,13 +564,13 @@ Environment variables:
 
 - `NEO4J_URI`: Neo4j Bolt URI (e.g., `bolt://localhost:7687`).
 - `NEO4J_USER`: Neo4j username.
-- `NEO4J_PASSWORD`: Neo4j password.
+- `NEO4J_PASS`: Neo4j password.
 - `NEO4J_DB`: Neo4j database name (optional).
 - `QDRANT_URL`: Qdrant base URL (e.g., `http://localhost:6333`).
-- `QDRANT_COLLECTION`: Qdrant collection name (default: `csharp_functions`).
-- `EMBED_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
-- `JINA_MODEL_PATH`: optional local path used when `EMBED_MODEL` is unset.
-- `EMBED_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
+- `QDRANT_COLLECTION_CODE`: Qdrant collection name (default: `csharp_functions`).
+- `CODE_EMBEDDING_MODEL`: embedding model id or local path (default: `jinaai/jina-embeddings-v3`).
+- `JINA_MODEL_PATH`: optional local path used when `CODE_EMBEDDING_MODEL` is unset.
+- `EMBEDDING_DEVICE`: embedding device (default: `cpu`; e.g., `cuda`).
   Note: Qdrant collection vector size is inferred from the embed model; if the collection exists, its vector size must match or recreate the collection.
 
 Note: install Tree-sitter parser for C# (`tree-sitter-c-sharp`) or use `tree-sitter-languages`.

@@ -73,7 +73,7 @@ python living-doc-louvain.py
 ```
 
 ### Env vars/flags chính
-- `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD` (bắt buộc)
+- `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASS` (bắt buộc)
 - `PROJECT_ID` (lọc Function theo project_id, dùng `CONTAINS`)
 - `GDS_GRAPH_NAME` (default `functionGraph`)
 - `NODE_LABEL` (default `Function`)
@@ -93,7 +93,7 @@ Ví dụ:
 ```bash
 export NEO4J_URI=bolt://localhost:7687
 export NEO4J_USER=neo4j
-export NEO4J_PASSWORD=your_password
+export NEO4J_PASS=your_password
 export PROJECT_ID=my_project
 export DROP_GRAPH=1
 python living-doc-louvain.py
