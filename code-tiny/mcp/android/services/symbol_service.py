@@ -26,6 +26,9 @@ class ResolveSymbolResult:
     function_id: Optional[int] = None
 
 
+DELPHI_PARSER = getattr(ParserType, "DELPHI", ParserType.CPLUS)
+
+
 EXTENSION_PARSER_MAP = {
     ".c": ParserType.C,
     ".h": ParserType.C,
@@ -35,6 +38,9 @@ EXTENSION_PARSER_MAP = {
     ".hpp": ParserType.CPLUS,
     ".hh": ParserType.CPLUS,
     ".hxx": ParserType.CPLUS,
+    ".pas": DELPHI_PARSER,
+    ".dpr": DELPHI_PARSER,
+    ".inc": DELPHI_PARSER,
     ".java": ParserType.JAVA,
     ".kt": ParserType.KOTLIN,
 }

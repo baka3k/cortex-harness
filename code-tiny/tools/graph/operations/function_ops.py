@@ -35,6 +35,7 @@ class FunctionNodeOperations:
         query = """
         CREATE (f:Function {
             id: $id,
+            node_type: 'code',
             name: $name,
             qualified_name: $qualified_name,
             code: $code,

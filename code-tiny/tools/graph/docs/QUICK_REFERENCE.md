@@ -170,7 +170,7 @@ def main(argv):
      --root /path/to/kotlin/code \
      --neo4j-uri bolt://localhost:7687 \
      --neo4j-user neo4j \
-     --neo4j-pass password \
+     --neo4j-password password \
      --verbose
    ```
 
@@ -231,7 +231,7 @@ finally:
 
 ```bash
 # Make sure you're running from project root
-cd /Users/yourusername/AI/graph-code-tiny
+cd /Users/yourname/AI/graph-code-tiny
 source .venv/bin/activate
 python -m tools.kotlin.kotlin_analyzer ...
 ```

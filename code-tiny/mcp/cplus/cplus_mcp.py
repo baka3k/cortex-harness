@@ -12,8 +12,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import logging
 
 import httpx
+import torch
 from fastmcp import FastMCP
 from neo4j.exceptions import Neo4jError
+from transformers import AutoModel, AutoTokenizer
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
@@ -25,7 +27,7 @@ if _MCP_DIR not in sys.path:
 
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
-from tool_metadata import _FULL_CATALOG
+from tool_metadata import build_catalog
 
 
 def _load_env_file(env_path: str) -> None:
@@ -76,16 +78,20 @@ def _parse_transport_env(value: Optional[str]) -> List[str]:
 DEFAULT_TIMEOUT = float(os.environ.get("MCP_BACKEND_TIMEOUT", "60"))
 DEFAULT_TRANSPORTS = _parse_transport_env(os.environ.get("MCP_FASTMCP_TRANSPORT"))
 DEFAULT_MODEL = (
-    os.environ.get("CODE_EMBEDDING_MODEL")
+    os.environ.get("CODE_EMBEDDING_MODEL_PATH")
+    or os.environ.get("CODE_EMBEDDING_MODEL")
     or os.environ.get("JINA_MODEL_PATH")
     or "jinaai/jina-embeddings-v3"
 )
+PRELOAD_EMBEDDER_ON_STARTUP = os.environ.get("MCP_PRELOAD_EMBEDDER", "1")
 DEFAULT_QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
-DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION_CODE", "kotlin_functions")
+DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "kotlin_functions")
 DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
-DEFAULT_NEO4J_PASS = os.environ.get("NEO4J_PASS")
+DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
 DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "neo4j"
+FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft"
+FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft"
 
 IPC_MESSAGES_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "temp", "ipc_messages.json")
 
@@ -93,25 +99,15 @@ MCP_NAME = "Project Call Graph"
 
 INSTRUCTIONS = """Project Call Graph MCP (local mode) reads directly from Neo4j and Qdrant.
 
-Core tools:
-- activate_project
-- search_functions
-- search_by_code
-- get_symbol
-- get_ipc_message
-- get_node_details
-- query_subgraph
-- find_paths
-- find_path_between_module
-- listup_symbols_matching_file_path
-- listup_class_matching_path
-- list_up_entrypoint
-- trace_flow
-- trace_flow_between_module
-- semantic_search
-- list_qdrant_collections
-- list_databases
-- annotate_node
+Discovery:
+- Call `list_mcp_functions` first to get the exact tool list and parameters supported by this backend.
+
+Core capability groups:
+- Symbol/graph search: search_functions, search_by_code, get_symbol, get_node_details
+- Call graph traversal: query_subgraph, find_paths, find_path_between_module, trace_flow, trace_flow_between_module
+- Module/class views: listup_symbols_matching_file_path, listup_class_matching_path, list_up_entrypoint
+- Infrastructure: list_databases, list_qdrant_collections, list_parsers
+- Utilities: semantic_search, get_ipc_message, list_possible_calls, annotate_node, find_screen_workflows
 
 Response content controls (most tools):
 - content_mode: auto (default), summary, comment, code, name
@@ -120,7 +116,7 @@ Response content controls (most tools):
 
 Call-path relationship defaults (query_subgraph/find_paths/find_path_between_module):
 - Optional parser_type selects default relation types when include_possible/include_fp are both false.
-- Parser mapping: cplus/cpp/c++/c/clang -> C++ rel types; android/android-kotlin/kotlin-android/java/kotlin/jvm -> Android rel types; others -> generic rel types.
+- Parser mapping: cplus/cpp/c++/c/clang/delphi/pascal -> C++ rel types; android/android-kotlin/kotlin-android/java/kotlin/jvm -> Android rel types; others -> generic rel types.
 - If include_possible/include_fp is set, relation types are forced to CALLS plus requested optional types.
 - The server filters chosen relation types to relationship types that actually exist in the selected Neo4j database.
 
@@ -152,12 +148,12 @@ async def _get_graph_driver() -> GraphDriver:
     global _graph_driver
     if _graph_driver is not None:
         return _graph_driver
-    if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASS:
+    if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
         raise RuntimeError("NEO4J_USER and NEO4J_PASS must be set.")
     config = {
         "uri": DEFAULT_NEO4J_URI,
         "user": DEFAULT_NEO4J_USER,
-        "password": DEFAULT_NEO4J_PASS,
+        "password": DEFAULT_NEO4J_PASSWORD,
     }
     _graph_driver = await GraphDriverFactory.create_driver(GraphProvider.NEO4J, config)
     return _graph_driver
@@ -361,7 +357,7 @@ DEFAULT_FLOW_REL_TYPES_GENERIC = [
 ]
 
 PARSER_ALIASES_ANDROID = {"android", "android-kotlin", "kotlin-android"}
-PARSER_ALIASES_CPLUS = {"cplus", "cpp", "c++", "c", "clang"}
+PARSER_ALIASES_CPLUS = {"cplus", "cpp", "c++", "c", "clang", "delphi", "pascal", "vbnet", "vb6", "vba", "vbscript"}
 PARSER_ALIASES_JVM = {"java", "kotlin", "jvm"}
 
 
@@ -546,12 +542,10 @@ def _should_trust_remote_code(model_name: str) -> bool:
 def _get_embedder(model_name: str, device_name: Optional[str] = None) -> Tuple[Any, Any, Any]:
     if model_name in _embedder_cache:
         return _embedder_cache[model_name]
-    import torch  # noqa: PLC0415  (lazy import — avoid slow startup)
-    from transformers import AutoModel, AutoTokenizer  # noqa: PLC0415
     trust_remote_code = _should_trust_remote_code(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
     model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-    device = torch.device(device_name or os.environ.get("EMBEDDING_DEVICE", "cpu"))
+    device = torch.device(device_name or os.environ.get("EMBED_DEVICE", "cpu"))
     model.to(device)
     model.eval()
     _embedder_cache[model_name] = (tokenizer, model, device)
@@ -566,7 +560,6 @@ def _mean_pool(last_hidden: Any, mask: Any) -> Any:
 
 
 def _encode_texts(model: Any, texts: List[str], device: Any) -> Optional[List[List[float]]]:
-    import torch  # noqa: PLC0415
     if not hasattr(model, "encode"):
         return None
     try:
@@ -585,7 +578,6 @@ def _embed_query(text: str, model_name: str) -> List[float]:
     encoded = _encode_texts(model, [text], device)
     if encoded is not None:
         return encoded[0]
-    import torch  # noqa: PLC0415
     with torch.no_grad():
         encoded = tokenizer(
             [text],
@@ -598,6 +590,26 @@ def _embed_query(text: str, model_name: str) -> List[float]:
         outputs = model(**encoded)
         embedding = _mean_pool(outputs.last_hidden_state, encoded["attention_mask"]).cpu().tolist()[0]
     return embedding
+
+
+def _is_preload_enabled(raw: Optional[str]) -> bool:
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _preload_embedder_on_startup() -> None:
+    if not _is_preload_enabled(PRELOAD_EMBEDDER_ON_STARTUP):
+        print("[embed] startup preload disabled by MCP_PRELOAD_EMBEDDER.")
+        return
+    model_name = (DEFAULT_MODEL or "").strip()
+    if not model_name:
+        print("[embed] startup preload skipped: empty model name.")
+        return
+    device_name = os.environ.get("EMBED_DEVICE", "cpu")
+    print(f"[embed] preloading model at startup: model={model_name}, device={device_name}")
+    _get_embedder(model_name, device_name=device_name)
+    print("[embed] preload completed.")
 
 
 def _qdrant_search(
@@ -942,12 +954,14 @@ async def _list_databases() -> List[str]:
 
 def _load_ipc_messages_sync() -> List[Dict[str, Any]]:
     if not os.path.isfile(IPC_MESSAGES_PATH):
-        raise RuntimeError(f"IPC messages file not found: {IPC_MESSAGES_PATH}")
+        logger.warning("IPC messages file not found: %s", IPC_MESSAGES_PATH)
+        return []
     with open(IPC_MESSAGES_PATH, "r", encoding="utf-8") as handle:
         data = json.load(handle)
     messages = data.get("messages", [])
     if not isinstance(messages, list):
-        raise RuntimeError("IPC messages file format invalid: 'messages' must be a list.")
+        logger.warning("IPC messages file format invalid at %s: 'messages' must be a list.", IPC_MESSAGES_PATH)
+        return []
     return [msg for msg in messages if isinstance(msg, dict)]
 
 
@@ -955,7 +969,71 @@ async def _load_ipc_messages() -> List[Dict[str, Any]]:
     return await asyncio.to_thread(_load_ipc_messages_sync)
 
 
-@mcp_server.tool(name="list_databases", description="List available Neo4j databases.")
+async def _query_ipc_messages_from_graph(
+    *,
+    sender_queries: List[str],
+    receiver_queries: List[str],
+    db_candidates: List[str],
+    project_id: Optional[str],
+) -> List[Dict[str, Any]]:
+    query = """
+    MATCH (m:Message)
+    WHERE ($project_id = '' OR coalesce(m.project_id, '') = $project_id)
+      AND (
+        size($sender_queries) = 0
+        OR any(q IN $sender_queries WHERE toLower(coalesce(m.sender, '')) CONTAINS toLower(q))
+      )
+      AND (
+        size($receiver_queries) = 0
+        OR any(q IN $receiver_queries WHERE toLower(coalesce(m.receiver, '')) CONTAINS toLower(q))
+      )
+    RETURN
+      m.id AS id,
+      m.name AS name,
+      m.sender AS sender,
+      m.receiver AS receiver,
+      m.payload AS payload,
+      m.response AS response,
+      m.explanation AS explanation,
+      m.file_path AS file_path,
+      m.line AS line,
+      m.confidence AS confidence,
+      m.language AS language
+    ORDER BY coalesce(m.confidence, 0.0) DESC, coalesce(m.file_path, ''), coalesce(m.line, 0)
+    LIMIT 500
+    """
+    _, rows = await _run_cypher_first(
+        query,
+        {
+            "project_id": (project_id or "").strip(),
+            "sender_queries": sender_queries,
+            "receiver_queries": receiver_queries,
+        },
+        db_candidates,
+    )
+    messages: List[Dict[str, Any]] = []
+    for row in rows:
+        messages.append(
+            {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "sender": row.get("sender"),
+                "receiver": row.get("receiver"),
+                "payload": row.get("payload"),
+                "response": row.get("response"),
+                "explanation": row.get("explanation"),
+                "source": {
+                    "file": row.get("file_path"),
+                    "line": row.get("line"),
+                },
+                "confidence": row.get("confidence"),
+                "language": row.get("language"),
+            }
+        )
+    return messages
+
+
+@mcp_server.tool(name="list_databases", description="List available Neo4j databases.", output_schema=None)
 async def tool_list_databases(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     _coerce_payload(payload)
     names = await _list_databases()
@@ -966,17 +1044,20 @@ async def tool_list_databases(payload: Optional[Dict[str, Any]] = None) -> Dict[
 @mcp_server.tool(
     name="get_ipc_message",
     description=(
-        "Query IPC messages by sender/receiver from temp/ipc_messages.json. "
+        "Query IPC messages by sender/receiver (Neo4j Message nodes first, JSON fallback, output_schema=None). "
         "If only sender is provided, return a list of receivers. "
         "If only receiver is provided, return a list of senders. "
         "If both sender and receiver are provided, return matching message objects."
     ),
+    output_schema=None
 )
 async def tool_get_ipc_message(
     sender: Optional[str] = None,
     receiver: Optional[str] = None,
     senders: Optional[Any] = None,
     receivers: Optional[Any] = None,
+    db: Optional[str] = None,
+    project_id: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> List[Any]:
     payload = _merge_payload(
@@ -986,6 +1067,8 @@ async def tool_get_ipc_message(
             "receiver": receiver,
             "senders": senders,
             "receivers": receivers,
+            "db": db,
+            "project_id": project_id,
         },
     )
     sender_queries = _normalize_string_list(payload.get("sender"))
@@ -1003,8 +1086,25 @@ async def tool_get_ipc_message(
         lowered = str(field).lower()
         return any(query.lower() in lowered for query in queries)
 
-    messages = await _load_ipc_messages()
-    print(f"Loaded {len(messages)} IPC messages.")
+    graph_messages: List[Dict[str, Any]] = []
+    graph_error: Optional[str] = None
+    db_candidates = _resolve_db_candidates(payload.get("db"))
+    try:
+        graph_messages = await _query_ipc_messages_from_graph(
+            sender_queries=sender_queries,
+            receiver_queries=receiver_queries,
+            db_candidates=db_candidates,
+            project_id=payload.get("project_id"),
+        )
+    except Exception as exc:
+        graph_error = str(exc)
+
+    if graph_error is None:
+        messages = graph_messages
+    else:
+        messages = await _load_ipc_messages()
+        logger.warning("Message graph query failed; fallback to JSON: %s", graph_error)
+        print(f"Loaded {len(messages)} IPC messages.")
     if sender_queries and receiver_queries:
         return [
             message
@@ -1043,6 +1143,7 @@ async def tool_get_ipc_message(
 @mcp_server.tool(
     name="activate_project",
     description="Set default parser_type and optional database_name for subsequent tool calls.",
+    output_schema=None
 )
 async def tool_activate_project(
     parser_type: Optional[str] = None,
@@ -1123,6 +1224,7 @@ async def _enrich_with_infra_community(
         "Use list_qdrant_collections first to discover available collections. "
         "Set with_neo4j=true to auto-attach InfraNode community context to each result."
     ),
+    output_schema=None
 )
 async def tool_semantic_search(
     query: Optional[str] = None,
@@ -1287,7 +1389,7 @@ async def tool_semantic_search(
     return results
 
 
-@mcp_server.tool(name="list_qdrant_collections", description="List available Qdrant collections.")
+@mcp_server.tool(name="list_qdrant_collections", description="List available Qdrant collections.", output_schema=None)
 async def tool_list_qdrant_collections(
     qdrant_url: Optional[str] = None,
     include_vectors: bool = False,
@@ -1302,6 +1404,7 @@ async def tool_list_qdrant_collections(
 @mcp_server.tool(
     name="get_symbol",
     description="Retrieve metadata for a specific node by id. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_get_symbol(
     node_id: Any = None,
@@ -1345,7 +1448,8 @@ async def tool_get_symbol(
 
 @mcp_server.tool(
     name="list_possible_calls",
-    description="List POSSIBLE_CALLS edges (virtual dispatch). Supports content_mode/include_raw_fields.",
+    description="List POSSIBLE_CALLS edges (virtual dispatch, output_schema=None). Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_list_possible_calls(
     db: Optional[str] = None,
@@ -1406,6 +1510,7 @@ async def tool_list_possible_calls(
 @mcp_server.tool(
     name="get_node_details",
     description="Fetch metadata for multiple node IDs. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_get_node_details(
     node_ids: Optional[List[Any]] = None,
@@ -1446,12 +1551,13 @@ async def tool_get_node_details(
             if _is_db_not_found(exc):
                 continue
             raise
-    raise RuntimeError("No matching nodes found in any db.")
+    return {"db": candidates[0] if candidates else None, "nodes": []}
 
 
 @mcp_server.tool(
     name="query_subgraph",
     description="Return call graph context around a function ID. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_query_subgraph(
     db: Optional[str] = None,
@@ -1523,12 +1629,18 @@ async def tool_query_subgraph(
             raise
     if last_error:
         raise last_error
-    raise RuntimeError(f"No subgraph found for node {function_id} in any db.")
+    return {
+        "db": candidates[0] if candidates else None,
+        "nodes": [],
+        "edges": [],
+        "reason": "no_subgraph",
+    }
 
 
 @mcp_server.tool(
     name="find_paths",
     description="Find call paths between two functions. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_find_paths(
     db: Optional[str] = None,
@@ -1602,6 +1714,7 @@ async def tool_find_paths(
 @mcp_server.tool(
     name="find_path_between_module",
     description="Find call paths between modules. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_find_path_between_module(
     source_modules: Optional[List[str]] = None,
@@ -1693,6 +1806,7 @@ async def tool_find_path_between_module(
 @mcp_server.tool(
     name="listup_symbols_matching_file_path",
     description="List symbols by file path token. Supports content_mode/include_raw_fields. Use node_types=['Function'] to list only functions.",
+    output_schema=None
 )
 async def tool_listup_symbols_matching_file_path(
     modules: Optional[List[str]] = None,
@@ -1752,6 +1866,7 @@ async def tool_listup_symbols_matching_file_path(
 @mcp_server.tool(
     name="listup_class_matching_path",
     description="List functions for classes/types by name. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_listup_class_matching_path(
     class_names: Optional[List[str]] = None,
@@ -1809,6 +1924,7 @@ async def tool_listup_class_matching_path(
         "List entrypoint functions that are called from outside the given modules. "
         "Supports content_mode/include_raw_fields."
     ),
+    output_schema=None
 )
 async def tool_list_up_entrypoint(
     modules: Optional[List[str]] = None,
@@ -1870,6 +1986,7 @@ async def tool_list_up_entrypoint(
         "Trace a flow across graph relationships using configurable relation types. "
         "Supports content_mode/include_raw_fields."
     ),
+    output_schema=None
 )
 async def tool_trace_flow(
     start_id: Any = None,
@@ -1997,6 +2114,7 @@ async def tool_trace_flow(
         "Trace flow paths between functions in two modules using configurable relation types. "
         "Supports content_mode/include_raw_fields."
     ),
+    output_schema=None
 )
 async def tool_trace_flow_between_module(
     source_modules: Optional[List[str]] = None,
@@ -2122,6 +2240,7 @@ async def tool_trace_flow_between_module(
 @mcp_server.tool(
     name="search_functions",
     description="Search nodes by name/qualified_name. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_search_functions(
     query: Optional[str] = None,
@@ -2156,14 +2275,38 @@ async def tool_search_functions(
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
-    cypher = (
+    fallback_cypher = (
         "MATCH (n) WHERE (n:Function OR n:Type OR n:Namespace OR n:File OR n:Field "
         "OR n:Alias OR n:Template OR n:FunctionType OR n:Event OR n:Project) "
         "AND any(q IN $qs WHERE toLower(coalesce(n.name, '')) CONTAINS q "
         "OR toLower(coalesce(n.qualified_name, '')) CONTAINS q) "
         "RETURN n LIMIT $limit"
     )
-    used_db, results = await _run_cypher_first(cypher, {"qs": qs, "limit": int(limit)}, db_candidates)
+    fulltext_query = " OR ".join(qs)
+    fulltext_cypher = (
+        "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
+        "WHERE (node:Function OR node:Type OR node:Namespace OR node:File OR node:Field "
+        "OR node:Alias OR node:Template OR node:FunctionType OR node:Event OR node:Project) "
+        "RETURN node AS n ORDER BY score DESC LIMIT $limit"
+    )
+    try:
+        used_db, results = await _run_cypher_first(
+            fulltext_cypher,
+            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit)},
+            db_candidates,
+        )
+        if not results:
+            used_db, results = await _run_cypher_first(
+                fallback_cypher,
+                {"qs": qs, "limit": int(limit)},
+                db_candidates,
+            )
+    except Exception:
+        used_db, results = await _run_cypher_first(
+            fallback_cypher,
+            {"qs": qs, "limit": int(limit)},
+            db_candidates,
+        )
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
     ids = [node.get("id") for node in nodes if node.get("id")]
@@ -2173,6 +2316,7 @@ async def tool_search_functions(
 @mcp_server.tool(
     name="search_by_code",
     description="Search nodes by matching text in code snippets. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_search_by_code(
     query: Optional[str] = None,
@@ -2207,8 +2351,30 @@ async def tool_search_by_code(
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query is required.")
     qs = [t.strip() for t in query.split("|") if t.strip()]
-    cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) RETURN n LIMIT $limit"
-    used_db, results = await _run_cypher_first(cypher, {"qs": qs, "limit": int(limit)}, db_candidates)
+    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) RETURN n LIMIT $limit"
+    fulltext_query = " OR ".join(qs)
+    fulltext_cypher = (
+        "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
+        "RETURN node AS n ORDER BY score DESC LIMIT $limit"
+    )
+    try:
+        used_db, results = await _run_cypher_first(
+            fulltext_cypher,
+            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit)},
+            db_candidates,
+        )
+        if not results:
+            used_db, results = await _run_cypher_first(
+                fallback_cypher,
+                {"qs": qs, "limit": int(limit)},
+                db_candidates,
+            )
+    except Exception:
+        used_db, results = await _run_cypher_first(
+            fallback_cypher,
+            {"qs": qs, "limit": int(limit)},
+            db_candidates,
+        )
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
     return {"db": used_db, "results": nodes}
@@ -2217,6 +2383,7 @@ async def tool_search_by_code(
 @mcp_server.tool(
     name="annotate_node",
     description="Add or update annotations for a node. Supports content_mode/include_raw_fields.",
+    output_schema=None
 )
 async def tool_annotate_node(
     node_id: Any = None,
@@ -2268,19 +2435,31 @@ async def tool_annotate_node(
     return {"db": used_db, "node": _record_node(result[0]["n"], mode, include_raw_fields)}
 
 
+_CPLUS_TOOL_NAMES: frozenset = frozenset({
+    "activate_project", "search_functions", "search_by_code",
+    "get_symbol", "get_node_details", "query_subgraph",
+    "find_paths", "find_path_between_module",
+    "listup_symbols_matching_file_path", "listup_class_matching_path",
+    "list_up_entrypoint", "trace_flow", "trace_flow_between_module",
+    "semantic_search", "get_ipc_message", "list_possible_calls",
+    "annotate_node", "list_databases", "list_qdrant_collections",
+    "list_parsers", "list_mcp_functions", "find_screen_workflows",
+})
+_cplus_catalog = build_catalog(_CPLUS_TOOL_NAMES)
 _MCP_FUNCTIONS_JSON: str = json.dumps(
-    {"total_count": len(_FULL_CATALOG), "functions": _FULL_CATALOG},
+    {"total_count": len(_cplus_catalog), "functions": _cplus_catalog},
     ensure_ascii=False,
 )
 
 @mcp_server.tool(
     name="list_mcp_functions",
-    description="List all available MCP tools with descriptions, parameters, and use cases. Call this FIRST to discover what tools are available before making other calls."
+    description="List all available MCP tools with descriptions, parameters, and use cases. Call this FIRST to discover what tools are available before making other calls.",
+    output_schema=None
 )
 async def tool_list_mcp_functions(payload: Optional[Dict[str, Any]] = None) -> str:
     return _MCP_FUNCTIONS_JSON
 
-@mcp_server.tool(name="list_parsers", description="List available parser types supported locally.")
+@mcp_server.tool(name="list_parsers", description="List available parser types supported locally.", output_schema=None)
 async def tool_list_parsers(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     _coerce_payload(payload)
     tools_dir = os.path.join(_ROOT_DIR, "tools")
@@ -2295,6 +2474,54 @@ async def tool_list_parsers(payload: Optional[Dict[str, Any]] = None) -> Dict[st
     
     parsers.sort()
     return {"parsers": parsers}
+
+
+@mcp_server.tool(
+    name="find_screen_workflows",
+    description=(
+        "Discover ranked screen-only NAVIGATE workflows for a React/TS project. "
+        "Input either a pair (node_a + node_b) or a single node_a with a "
+        "direction (inbound|outbound|bidirectional). Returns dedup'd and "
+        "confidence-ranked paths. Requires project_id."
+    ),
+    output_schema=None,
+)
+async def tool_find_screen_workflows(
+    project_id: str = "",
+    node_a: str = "",
+    node_b: str = "",
+    direction: str = "bidirectional",
+    max_hops: int = 8,
+    max_paths: int = 100,
+    include_entry_function: bool = False,
+    include_api_calls: bool = False,
+    db: Optional[str] = None,
+    parser_type: Optional[str] = None,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = _merge_payload(
+        payload,
+        {
+            "project_id": project_id,
+            "node_a": node_a,
+            "node_b": node_b or None,
+            "direction": direction,
+            "max_hops": max_hops,
+            "max_paths": max_paths,
+            "include_entry_function": include_entry_function,
+            "include_api_calls": include_api_calls,
+            "db": db,
+            "parser_type": parser_type,
+        },
+    )
+    from services.workflow_service import run_find_screen_workflows
+
+    driver = await _get_graph_driver()
+
+    async def _provider() -> Any:
+        return driver
+
+    return await run_find_screen_workflows(_provider, payload)
 
 
 def parse_args() -> argparse.Namespace:
@@ -2353,6 +2580,7 @@ def main() -> None:
         print(f"Endpoint: {endpoint}")
     else:
         print("Endpoint: (stdio)")
+    _preload_embedder_on_startup()
     kwargs: Dict[str, Any] = {"transport": transport}
     if transport != "stdio":
         kwargs.update({"host": args.host, "port": args.port})

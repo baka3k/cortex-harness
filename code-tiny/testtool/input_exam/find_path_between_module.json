@@ -3,7 +3,7 @@
         "Knio01"
     ],
     "target_modules": [
-        "SampleDatabase01"
+        "sample_database01"
     ],
     "db": "neo4j",
     "max_depth": 8,

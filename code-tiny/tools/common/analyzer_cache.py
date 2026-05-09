@@ -8,8 +8,31 @@ from typing import Any, Dict, Optional
 CACHE_VERSION = 1
 
 
-def safe_cache_root(cache_dir: Optional[str], default_name: str) -> str:
-    root = cache_dir or os.path.join(os.getcwd(), ".cache", default_name)
+def _safe_cache_segment(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)
+    return cleaned or "root"
+
+
+def _project_cache_segment(project_root: Optional[str]) -> Optional[str]:
+    if not project_root:
+        return None
+    normalized = os.path.realpath(os.path.abspath(project_root))
+    basename = os.path.basename(normalized.rstrip(os.sep)) or "root"
+    digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+    return f"{_safe_cache_segment(basename)}_{digest}"
+
+
+def safe_cache_root(
+    cache_dir: Optional[str],
+    default_name: str,
+    *,
+    project_root: Optional[str] = None,
+) -> str:
+    base_root = cache_dir or os.path.join(os.getcwd(), ".cache")
+    root = os.path.join(base_root, default_name)
+    project_segment = _project_cache_segment(project_root)
+    if project_segment:
+        root = os.path.join(root, project_segment)
     os.makedirs(root, exist_ok=True)
     return root
 

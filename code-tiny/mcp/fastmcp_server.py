@@ -6,7 +6,7 @@ import os
 import sys
 import signal
 
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import logging
 
@@ -22,6 +22,7 @@ if _ROOT_DIR not in sys.path:
 
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
+from tool_metadata import build_catalog
 
 
 def _load_env_file(env_path: str) -> None:
@@ -72,44 +73,47 @@ def _parse_transport_env(value: Optional[str]) -> List[str]:
 DEFAULT_TIMEOUT = float(os.environ.get("MCP_BACKEND_TIMEOUT", "60"))
 DEFAULT_TRANSPORTS = _parse_transport_env(os.environ.get("MCP_FASTMCP_TRANSPORT"))
 DEFAULT_MODEL = (
-    os.environ.get("CODE_EMBEDDING_MODEL")
+    os.environ.get("CODE_EMBEDDING_MODEL_PATH")
+    or os.environ.get("CODE_EMBEDDING_MODEL")
     or os.environ.get("JINA_MODEL_PATH")
     or "jinaai/jina-embeddings-v3"
 )
+PRELOAD_EMBEDDER_ON_STARTUP = os.environ.get("MCP_PRELOAD_EMBEDDER", "1")
 DEFAULT_QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
-DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION_CODE", "kotlin_functions")
+DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "kotlin_functions")
 DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
-DEFAULT_NEO4J_PASS = os.environ.get("NEO4J_PASS")
+DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
 DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "neo4j"
+FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft"
+FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft"
 
 
 MCP_NAME = "Project Call Graph"
 
 INSTRUCTIONS = """Project Call Graph MCP (local mode) reads directly from Neo4j and Qdrant.
 
-Core tools:
-- list_mcp_functions (NEW: Lists all available MCP tools with descriptions, inputs, outputs)
-- activate_project
-- search_functions
-- get_id_by_name
-- search_by_code
-- get_symbol
-- get_node_details
-- query_subgraph
-- find_paths
-- find_path_between_module
-- listup_symbols_matching_file_path
-- listup_class_matching_path
-- list_up_entrypoint
-- semantic_search
-- list_qdrant_collections
-- list_databases
+Discovery:
+- Call `list_mcp_functions` first to get the exact tool list and parameters exposed by this server.
+
+Core capability groups:
+- Symbol/graph search: search_functions, search_by_code, get_symbol, get_node_details
+- Graph traversal/planning: query_subgraph, find_paths, find_path_between_module
+- Dependency planning: compute_scc, topological_sort, plan_dependency_order, plan_file_dependency_order, plan_function_dependency_order
+- Workflow discovery: list_workflows, get_workflow_steps, search_workflows
+- Module/class views: listup_symbols_matching_file_path, listup_class_matching_path, list_up_entrypoint
+- Infrastructure: list_databases, list_qdrant_collections, list_parsers
+- Utilities: semantic_search, annotate_node, activate_project
 
 Response content controls (most tools):
 - content_mode: auto (default), summary, comment, code, name
   - auto fallback order: summary -> comment -> name
 - include_raw_fields: false by default; when true, keep summary/comment/code fields in payload
+
+Planner output highlights:
+- `plan_dependency_order`: module-level waves/order + depends_on_map + SCC/cycle diagnostics.
+- `plan_file_dependency_order`: per-module file waves/order + cross_module_edges + SCC/cycle diagnostics.
+- `plan_function_dependency_order`: per-module function waves + `function_order_ids` + function metadata (`name`, `qualified_name`, `file_path`) + `depends_on_map` + `unresolved_cycles`/`node_to_scc` + `cross_module_edges`.
 
 When include_raw_fields=false, only properties.content is returned (plus metadata) to reduce payload size.
 """
@@ -134,12 +138,12 @@ async def _get_graph_driver() -> GraphDriver:
     global _graph_driver
     if _graph_driver is not None:
         return _graph_driver
-    if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASS:
+    if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
         raise RuntimeError("NEO4J_USER and NEO4J_PASS must be set.")
     config = {
         "uri": DEFAULT_NEO4J_URI,
         "user": DEFAULT_NEO4J_USER,
-        "password": DEFAULT_NEO4J_PASS,
+        "password": DEFAULT_NEO4J_PASSWORD,
     }
     _graph_driver = await GraphDriverFactory.create_driver(GraphProvider.NEO4J, config)
     return _graph_driver
@@ -249,6 +253,36 @@ def _normalize_string_list(value: Any) -> List[str]:
     return [text] if text else []
 
 
+_CODE_LABELS = {
+    "Project", "Repository", "Directory", "File", "Class", "Function", "Method",
+    "Namespace", "Interface", "Enum", "Type", "Package", "Alias", "Template",
+}
+
+_DOC_LABELS = {
+    "Document", "Paragraph", "Chunk", "PdfDocument", "WordDocument", "WorksheetDocument", "Slide",
+}
+
+
+def _normalize_node_type(value: Optional[str], default_value: str = "code") -> str:
+    text = (value or "").strip().lower()
+    if text in {"code", "doc"}:
+        return text
+    return default_value
+
+
+def _classify_node_type(labels: List[str], properties: Dict[str, Any]) -> str:
+    label_set = set(labels or [])
+    if label_set & _DOC_LABELS:
+        return "doc"
+    if label_set & _CODE_LABELS:
+        return "code"
+    if properties.get("paragraph_id") is not None or properties.get("doc_id") is not None:
+        return "doc"
+    if properties.get("source_id") is not None and properties.get("text") is not None:
+        return "doc"
+    return "code"
+
+
 def _fallback_node_name(properties: Dict[str, Any], node_id: Optional[str]) -> str:
     for key in ("name", "qualified_name", "file_path", "path"):
         value = properties.get(key)
@@ -291,17 +325,31 @@ def _record_node(
     node: Any,
     content_mode: str = "auto",
     include_raw_fields: bool = False,
+    requested_node_type: Optional[str] = None,
+    compact_bridge: bool = False,
 ) -> Dict[str, Any]:
     mode = _normalize_content_mode(content_mode)
     if isinstance(node, dict):
         node_id = node.get("id")
         props = {key: value for key, value in node.items() if key != "labels"}
+        labels = list(node.get("labels", []))
+        node_type = _classify_node_type(labels, props)
+        props["node_type"] = node_type
+        if compact_bridge and requested_node_type and node_type != requested_node_type:
+            return {
+                "id": node_id,
+                "labels": labels,
+                "properties": {
+                    "name": _fallback_node_name(props, node_id),
+                    "node_type": node_type,
+                },
+            }
         content = _select_content(props, node_id, mode)
         if not include_raw_fields:
             _prune_content_fields(props)
         return {
             "id": node_id,
-            "labels": list(node.get("labels", [])),
+            "labels": labels,
             "properties": {
                 **props,
                 "content_mode": mode,
@@ -310,13 +358,25 @@ def _record_node(
         }
     node_id = node.get("id")
     properties = dict(node)
+    labels = list(getattr(node, "labels", []))
+    node_type = _classify_node_type(labels, properties)
+    properties["node_type"] = node_type
+    if compact_bridge and requested_node_type and node_type != requested_node_type:
+        return {
+            "id": node_id,
+            "labels": labels,
+            "properties": {
+                "name": _fallback_node_name(properties, node_id),
+                "node_type": node_type,
+            },
+        }
     properties["content_mode"] = mode
     properties["content"] = _select_content(properties, node_id, mode)
     if not include_raw_fields:
         _prune_content_fields(properties)
     return {
         "id": node_id,
-        "labels": list(getattr(node, "labels", [])),
+        "labels": labels,
         "properties": properties,
     }
 
@@ -357,10 +417,18 @@ def _paths_to_graph(
     paths: Iterable[Any],
     content_mode: str = "auto",
     include_raw_fields: bool = False,
+    node_type: Optional[str] = None,
+    expand_search: bool = False,
 ) -> Dict[str, Any]:
     nodes: Dict[str, Dict[str, Any]] = {}
     edges: List[Dict[str, Any]] = []
     mode = _normalize_content_mode(content_mode)
+    requested_type = _normalize_node_type(node_type, default_value="code")
+
+    def _accept(rec: Dict[str, Any]) -> bool:
+        rec_type = ((rec.get("properties") or {}).get("node_type") or "code").lower()
+        return expand_search or rec_type == requested_type
+
     for path in paths:
         if isinstance(path, list):
             # neo4j 6.x: record.data() serializes a Path as a flat list
@@ -372,7 +440,15 @@ def _paths_to_graph(
                         if isinstance(item, dict):
                             node_id = item.get("id")
                             if node_id and node_id not in nodes:
-                                nodes[node_id] = _record_node(item, mode, include_raw_fields=include_raw_fields)
+                                rec = _record_node(
+                                    item,
+                                    mode,
+                                    include_raw_fields=include_raw_fields,
+                                    requested_node_type=requested_type,
+                                    compact_bridge=expand_search,
+                                )
+                                if _accept(rec):
+                                    nodes[node_id] = rec
                     else:  # relationship
                         edges.append(_record_rel(item))
                 continue
@@ -396,10 +472,23 @@ def _paths_to_graph(
         for node in path_nodes:
             node_id = node.get("id")
             if node_id and node_id not in nodes:
-                nodes[node_id] = _record_node(node, mode, include_raw_fields=include_raw_fields)
+                rec = _record_node(
+                    node,
+                    mode,
+                    include_raw_fields=include_raw_fields,
+                    requested_node_type=requested_type,
+                    compact_bridge=expand_search,
+                )
+                if _accept(rec):
+                    nodes[node_id] = rec
         for rel in path_rels:
             edges.append(_record_rel(rel))
-    return {"nodes": list(nodes.values()), "edges": edges}
+    node_ids = {item.get("id") for item in nodes.values() if item.get("id")}
+    filtered_edges = [
+        edge for edge in edges
+        if edge.get("start_id") in node_ids and edge.get("end_id") in node_ids
+    ]
+    return {"nodes": list(nodes.values()), "edges": filtered_edges}
 
 
 def _should_trust_remote_code(model_name: str) -> bool:
@@ -415,7 +504,7 @@ def _get_embedder(model_name: str, device_name: Optional[str] = None) -> Tuple[A
     trust_remote_code = _should_trust_remote_code(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
     model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-    device = torch.device(device_name or os.environ.get("EMBEDDING_DEVICE", "cpu"))
+    device = torch.device(device_name or os.environ.get("EMBED_DEVICE", "cpu"))
     model.to(device)
     model.eval()
     _embedder_cache[model_name] = (tokenizer, model, device)
@@ -460,6 +549,26 @@ def _embed_query(text: str, model_name: str) -> List[float]:
         outputs = model(**encoded)
         embedding = _mean_pool(outputs.last_hidden_state, encoded["attention_mask"]).cpu().tolist()[0]
     return embedding
+
+
+def _is_preload_enabled(raw: Optional[str]) -> bool:
+    if raw is None:
+        return True
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _preload_embedder_on_startup() -> None:
+    if not _is_preload_enabled(PRELOAD_EMBEDDER_ON_STARTUP):
+        print("[embed] startup preload disabled by MCP_PRELOAD_EMBEDDER.")
+        return
+    model_name = (DEFAULT_MODEL or "").strip()
+    if not model_name:
+        print("[embed] startup preload skipped: empty model name.")
+        return
+    device_name = os.environ.get("EMBED_DEVICE", "cpu")
+    print(f"[embed] preloading model at startup: model={model_name}, device={device_name}")
+    _get_embedder(model_name, device_name=device_name)
+    print("[embed] preload completed.")
 
 
 def _qdrant_search(
@@ -673,6 +782,195 @@ def _format_collection_errors(errors: List[Dict[str, str]], max_items: int = 5) 
             items.append(str(col))
     suffix = " ..." if len(errors) > max_items else ""
     return "; ".join(items) + suffix
+
+
+def _normalize_edge_semantics(value: Optional[str]) -> str:
+    semantics = (value or "depends_on").strip().lower()
+    if semantics in {"depends_on", "dependent_to_dependency", "call_graph", "calls", "caller_to_callee"}:
+        return "depends_on"
+    if semantics in {"dependency_to_dependent", "prerequisite_to_dependent"}:
+        return "dependency_to_dependent"
+    return "depends_on"
+
+
+def _build_prerequisite_graph(
+    nodes: Iterable[str],
+    edges: Iterable[Tuple[str, str]],
+    edge_semantics: str = "depends_on",
+) -> Tuple[Set[str], Dict[str, Set[str]]]:
+    """
+    Build adjacency where edge u->v means: u must be done before v.
+
+    Semantics:
+    - depends_on: input edge is dependent->dependency, so reverse to dependency->dependent
+    - dependency_to_dependent: keep direction as-is
+    """
+    semantics = _normalize_edge_semantics(edge_semantics)
+    node_set: Set[str] = {str(n) for n in nodes if str(n)}
+    adjacency: Dict[str, Set[str]] = {}
+    for node in node_set:
+        adjacency[node] = set()
+    for start, end in edges:
+        s = str(start).strip()
+        e = str(end).strip()
+        if not s or not e:
+            continue
+        node_set.add(s)
+        node_set.add(e)
+        if s not in adjacency:
+            adjacency[s] = set()
+        if e not in adjacency:
+            adjacency[e] = set()
+        if semantics == "depends_on":
+            prereq, dependent = e, s
+        else:
+            prereq, dependent = s, e
+        adjacency.setdefault(prereq, set()).add(dependent)
+        adjacency.setdefault(dependent, set())
+    for node in node_set:
+        adjacency.setdefault(node, set())
+    return node_set, adjacency
+
+
+def _compute_scc(nodes: Set[str], adjacency: Dict[str, Set[str]]) -> List[List[str]]:
+    """Tarjan SCC, O(V+E)."""
+    index_counter = 0
+    index: Dict[str, int] = {}
+    lowlink: Dict[str, int] = {}
+    stack: List[str] = []
+    on_stack: Set[str] = set()
+    components: List[List[str]] = []
+
+    def strong_connect(v: str) -> None:
+        nonlocal index_counter
+        index[v] = index_counter
+        lowlink[v] = index_counter
+        index_counter += 1
+        stack.append(v)
+        on_stack.add(v)
+
+        for w in adjacency.get(v, set()):
+            if w not in index:
+                strong_connect(w)
+                lowlink[v] = min(lowlink[v], lowlink[w])
+            elif w in on_stack:
+                lowlink[v] = min(lowlink[v], index[w])
+
+        if lowlink[v] == index[v]:
+            component: List[str] = []
+            while stack:
+                w = stack.pop()
+                on_stack.remove(w)
+                component.append(w)
+                if w == v:
+                    break
+            component.sort()
+            components.append(component)
+
+    for node in sorted(nodes):
+        if node not in index:
+            strong_connect(node)
+    return components
+
+
+def _build_condensed_dag(
+    adjacency: Dict[str, Set[str]],
+    components: List[List[str]],
+) -> Tuple[List[str], Dict[str, Set[str]], Dict[str, int]]:
+    """
+    Returns:
+    - scc_ids: list of SCC IDs
+    - dag_adjacency: SCC DAG adjacency (u -> v means u before v)
+    - node_to_scc_idx: node -> scc index mapping
+    """
+    node_to_scc_idx: Dict[str, int] = {}
+    for idx, comp in enumerate(components):
+        for node in comp:
+            node_to_scc_idx[node] = idx
+    scc_ids = [f"scc_{idx}" for idx in range(len(components))]
+    dag_adjacency: Dict[str, Set[str]] = {sid: set() for sid in scc_ids}
+    for src, neighbors in adjacency.items():
+        src_idx = node_to_scc_idx[src]
+        src_sid = scc_ids[src_idx]
+        for dst in neighbors:
+            dst_idx = node_to_scc_idx[dst]
+            dst_sid = scc_ids[dst_idx]
+            if src_idx != dst_idx:
+                dag_adjacency[src_sid].add(dst_sid)
+    return scc_ids, dag_adjacency, node_to_scc_idx
+
+
+def _topological_waves(
+    nodes: Iterable[str],
+    adjacency: Dict[str, Set[str]],
+) -> Tuple[List[List[str]], List[str], Dict[str, int]]:
+    """
+    Kahn-style topological wave decomposition.
+
+    Returns:
+    - waves: each wave contains nodes ready in parallel
+    - unresolved_nodes: non-empty if cycles exist
+    - indegree_snapshot: final indegree map
+    """
+    node_list = sorted({str(n) for n in nodes if str(n)})
+    indegree: Dict[str, int] = {n: 0 for n in node_list}
+    for src in node_list:
+        for dst in adjacency.get(src, set()):
+            indegree[dst] = indegree.get(dst, 0) + 1
+            indegree.setdefault(src, 0)
+
+    current_wave = sorted([n for n, d in indegree.items() if d == 0])
+    waves: List[List[str]] = []
+    processed: Set[str] = set()
+
+    while current_wave:
+        waves.append(current_wave)
+        next_candidates: Set[str] = set()
+        for node in current_wave:
+            if node in processed:
+                continue
+            processed.add(node)
+            for neighbor in adjacency.get(node, set()):
+                indegree[neighbor] -= 1
+                if indegree[neighbor] == 0:
+                    next_candidates.add(neighbor)
+        current_wave = sorted(next_candidates)
+
+    unresolved = sorted([n for n in indegree if n not in processed])
+    return waves, unresolved, indegree
+
+
+def _extract_edges_from_graph_payload(edges: Any) -> List[Tuple[str, str]]:
+    pairs: List[Tuple[str, str]] = []
+    if not isinstance(edges, list):
+        return pairs
+    for edge in edges:
+        if not isinstance(edge, dict):
+            continue
+        start_id = (
+            edge.get("start_id")
+            or edge.get("from")
+            or edge.get("source")
+            or edge.get("src")
+            or edge.get("start")
+            or edge.get("u")
+            or edge.get("caller")
+            or edge.get("dependent")
+        )
+        end_id = (
+            edge.get("end_id")
+            or edge.get("to")
+            or edge.get("target")
+            or edge.get("dst")
+            or edge.get("end")
+            or edge.get("v")
+            or edge.get("callee")
+            or edge.get("dependency")
+        )
+        if start_id is None or end_id is None:
+            continue
+        pairs.append((str(start_id), str(end_id)))
+    return pairs
 
 
 async def _run_cypher(query: str, params: Dict[str, Any], db: str) -> List[Dict[str, Any]]:
@@ -969,6 +1267,7 @@ async def tool_get_symbol(
     db: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    node_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(db)
     _require(candidates[0] if candidates else None, "db")
@@ -980,7 +1279,11 @@ async def tool_get_symbol(
             node = await driver.find_node_by_id(node_id, db_candidate)
             if node:
                 mode = _normalize_content_mode(content_mode)
-                return {"db": db_candidate, "node": _record_node(node, mode, include_raw_fields)}
+                requested_type = _normalize_node_type(node_type, default_value="code")
+                rec = _record_node(node, mode, include_raw_fields, requested_node_type=requested_type)
+                if ((rec.get("properties") or {}).get("node_type") or "code") != requested_type:
+                    return {"db": db_candidate, "node": None, "reason": "node_type_mismatch"}
+                return {"db": db_candidate, "node": rec}
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
@@ -997,6 +1300,7 @@ async def tool_get_node_details(
     db: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    node_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(db)
     _require(candidates[0] if candidates else None, "db")
@@ -1008,13 +1312,18 @@ async def tool_get_node_details(
             nodes = await driver.find_nodes_by_ids(ids, db_candidate)
             if nodes:
                 mode = _normalize_content_mode(content_mode)
-                result_nodes = [_record_node(node, mode, include_raw_fields) for node in nodes]
+                requested_type = _normalize_node_type(node_type, default_value="code")
+                result_nodes = []
+                for node in nodes:
+                    rec = _record_node(node, mode, include_raw_fields, requested_node_type=requested_type)
+                    if ((rec.get("properties") or {}).get("node_type") or "code") == requested_type:
+                        result_nodes.append(rec)
                 return {"db": db_candidate, "nodes": result_nodes}
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
             raise
-    raise RuntimeError("No matching nodes found in any db.")
+    return {"db": candidates[0] if candidates else None, "nodes": []}
 
 
 @mcp_server.tool(
@@ -1028,6 +1337,8 @@ async def tool_query_subgraph(
     max_depth: int = 2,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    node_type: Optional[str] = None,
+    expand_search: bool = False,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(db)
     _require(candidates[0] if candidates else None, "db")
@@ -1051,6 +1362,8 @@ async def tool_query_subgraph(
                     paths,
                     content_mode=content_mode or "auto",
                     include_raw_fields=include_raw_fields,
+                    node_type=node_type,
+                    expand_search=expand_search,
                 )
                 graph["db"] = candidate
                 return graph
@@ -1061,7 +1374,12 @@ async def tool_query_subgraph(
             raise
     if last_error:
         raise last_error
-    raise RuntimeError(f"No subgraph found for node {function_id} in any db.")
+    return {
+        "db": candidates[0] if candidates else None,
+        "nodes": [],
+        "edges": [],
+        "reason": "no_subgraph",
+    }
 
 
 @mcp_server.tool(
@@ -1075,6 +1393,8 @@ async def tool_find_paths(
     max_depth: int = 8,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    node_type: Optional[str] = None,
+    expand_search: bool = False,
 ) -> Dict[str, Any]:
     candidates = _resolve_db_candidates(db)
     _require(candidates[0] if candidates else None, "db")
@@ -1097,6 +1417,8 @@ async def tool_find_paths(
                     paths,
                     content_mode=content_mode or "auto",
                     include_raw_fields=include_raw_fields,
+                    node_type=node_type,
+                    expand_search=expand_search,
                 )
                 graph["db"] = db_candidate
                 return graph
@@ -1142,6 +1464,564 @@ async def tool_find_path_between_module(
     )
     graph["db"] = used_db
     return graph
+
+
+@mcp_server.tool(
+    name="compute_scc",
+    description=(
+        "Compute strongly connected components (SCC) from a directed graph. "
+        "Useful for detecting dependency cycles before migration planning."
+    ),
+)
+async def tool_compute_scc(
+    nodes: Optional[List[str]] = None,
+    edges: Optional[List[Dict[str, Any]]] = None,
+    parser_type: Optional[str] = None,
+    edge_semantics: str = "depends_on",
+    include_singletons: bool = True,
+) -> Dict[str, Any]:
+    node_list = _normalize_string_list(nodes)
+    edge_pairs = _extract_edges_from_graph_payload(edges or [])
+    if not node_list and not edge_pairs:
+        raise ValueError("Provide at least one node or edge.")
+
+    graph_nodes, adjacency = _build_prerequisite_graph(node_list, edge_pairs, edge_semantics=edge_semantics)
+    components = _compute_scc(graph_nodes, adjacency)
+    component_payload: List[Dict[str, Any]] = []
+    cyclic_count = 0
+    self_loop_count = 0
+    for idx, comp in enumerate(components):
+        if len(comp) == 1:
+            node = comp[0]
+            has_self_loop = node in adjacency.get(node, set())
+            if has_self_loop:
+                self_loop_count += 1
+            is_cycle = has_self_loop
+        else:
+            is_cycle = True
+        if is_cycle:
+            cyclic_count += 1
+        if include_singletons or len(comp) > 1 or is_cycle:
+            component_payload.append(
+                {
+                    "scc_id": f"scc_{idx}",
+                    "nodes": comp,
+                    "size": len(comp),
+                    "is_cycle": is_cycle,
+                }
+            )
+
+    node_to_scc: Dict[str, str] = {}
+    for item in component_payload:
+        for node in item["nodes"]:
+            node_to_scc[node] = item["scc_id"]
+
+    return {
+        "edge_semantics": _normalize_edge_semantics(edge_semantics),
+        "components": component_payload,
+        "node_to_scc": node_to_scc,
+        "cycle_summary": {
+            "total_scc": len(components),
+            "reported_scc": len(component_payload),
+            "cyclic_scc": cyclic_count,
+            "self_loops": self_loop_count,
+        },
+    }
+
+
+@mcp_server.tool(
+    name="topological_sort",
+    description=(
+        "Topologically sort a directed dependency graph. "
+        "Returns linear order and parallel waves. Supports cycle handling via SCC condensation."
+    ),
+)
+async def tool_topological_sort(
+    nodes: Optional[List[str]] = None,
+    edges: Optional[List[Dict[str, Any]]] = None,
+    parser_type: Optional[str] = None,
+    edge_semantics: str = "depends_on",
+    output_mode: str = "both",
+    on_cycle: str = "auto_condense_scc",
+) -> Dict[str, Any]:
+    node_list = _normalize_string_list(nodes)
+    edge_pairs = _extract_edges_from_graph_payload(edges or [])
+    if not node_list and not edge_pairs:
+        raise ValueError("Provide at least one node or edge.")
+
+    graph_nodes, adjacency = _build_prerequisite_graph(node_list, edge_pairs, edge_semantics=edge_semantics)
+    waves, unresolved_nodes, indegree = _topological_waves(graph_nodes, adjacency)
+    is_dag = len(unresolved_nodes) == 0
+
+    cycle_mode = (on_cycle or "auto_condense_scc").strip().lower()
+    if unresolved_nodes and cycle_mode == "error":
+        raise RuntimeError(f"Graph contains cycles. Unresolved nodes: {unresolved_nodes}")
+
+    condensed = None
+    resolved_waves = waves
+    unresolved_cycles: List[Dict[str, Any]] = []
+    if unresolved_nodes and cycle_mode == "auto_condense_scc":
+        components = _compute_scc(graph_nodes, adjacency)
+        scc_ids, dag_adjacency, node_to_scc_idx = _build_condensed_dag(adjacency, components)
+        scc_waves, _, _ = _topological_waves(scc_ids, dag_adjacency)
+        scc_id_to_nodes = {f"scc_{idx}": comp for idx, comp in enumerate(components)}
+        resolved_waves = []
+        for scc_wave in scc_waves:
+            expanded: List[str] = []
+            for scc_id in sorted(scc_wave):
+                expanded.extend(sorted(scc_id_to_nodes.get(scc_id, [])))
+            resolved_waves.append(expanded)
+        for idx, comp in enumerate(components):
+            if len(comp) > 1:
+                unresolved_cycles.append({"scc_id": f"scc_{idx}", "nodes": comp, "size": len(comp)})
+            elif comp and comp[0] in adjacency.get(comp[0], set()):
+                unresolved_cycles.append({"scc_id": f"scc_{idx}", "nodes": comp, "size": 1})
+        condensed = {
+            "scc_count": len(components),
+            "dag_nodes": scc_ids,
+            "node_to_scc": {node: f"scc_{idx}" for node, idx in node_to_scc_idx.items()},
+        }
+
+    linear_order = [node for wave in resolved_waves for node in wave]
+    mode = (output_mode or "both").strip().lower()
+    payload: Dict[str, Any] = {
+        "edge_semantics": _normalize_edge_semantics(edge_semantics),
+        "is_dag": is_dag,
+        "on_cycle": cycle_mode,
+        "unresolved_nodes": unresolved_nodes,
+        "unresolved_cycles": unresolved_cycles,
+        "diagnostics": {
+            "node_count": len(graph_nodes),
+            "edge_count": sum(len(v) for v in adjacency.values()),
+            "indegree": indegree,
+        },
+    }
+    if condensed is not None:
+        payload["condensed"] = condensed
+    if mode in {"linear", "both"}:
+        payload["linear_order"] = linear_order
+    if mode in {"waves", "both"}:
+        payload["waves"] = [{"wave": idx, "nodes": wave} for idx, wave in enumerate(resolved_waves)]
+    return payload
+
+
+@mcp_server.tool(
+    name="plan_dependency_order",
+    description=(
+        "Plan module migration order from graph_mcp CALLS edges. "
+        "Prioritizes independent prerequisites first and returns wave-based execution order."
+    ),
+)
+async def tool_plan_dependency_order(
+    modules: List[str],
+    parser_type: Optional[str] = None,
+    db: Optional[str] = None,
+    edge_semantics: str = "depends_on",
+    on_cycle: str = "auto_condense_scc",
+) -> Dict[str, Any]:
+    module_tokens = _normalize_string_list(modules)
+    if not module_tokens:
+        raise ValueError("modules must be a non-empty list.")
+    db_candidates = _resolve_db_candidates(db)
+    _require(db_candidates[0] if db_candidates else None, "db")
+
+    query = (
+        "MATCH (caller:Function)-[:CALLS]->(callee:Function) "
+        "WHERE any(token IN $modules WHERE caller.file_path CONTAINS token) "
+        "AND any(token IN $modules WHERE callee.file_path CONTAINS token) "
+        "WITH [token IN $modules WHERE caller.file_path CONTAINS token] AS caller_tokens, "
+        "[token IN $modules WHERE callee.file_path CONTAINS token] AS callee_tokens "
+        "WHERE size(caller_tokens) > 0 AND size(callee_tokens) > 0 "
+        "WITH caller_tokens[0] AS src_module, callee_tokens[0] AS dst_module "
+        "WHERE src_module <> dst_module "
+        "RETURN src_module, dst_module, count(*) AS call_count "
+        "ORDER BY call_count DESC"
+    )
+    used_db, records = await _run_cypher_first(query, {"modules": module_tokens}, db_candidates)
+    edge_pairs: List[Tuple[str, str]] = []
+    module_dep_records: List[Dict[str, Any]] = []
+    for row in records:
+        src = row.get("src_module")
+        dst = row.get("dst_module")
+        calls = row.get("call_count")
+        if not isinstance(src, str) or not isinstance(dst, str):
+            continue
+        edge_pairs.append((src, dst))
+        module_dep_records.append(
+            {
+                "dependent_module": src,
+                "dependency_module": dst,
+                "call_count": int(calls) if isinstance(calls, (int, float)) else 0,
+            }
+        )
+
+    graph_nodes, adjacency = _build_prerequisite_graph(module_tokens, edge_pairs, edge_semantics=edge_semantics)
+    waves, unresolved_nodes, _ = _topological_waves(graph_nodes, adjacency)
+    components = _compute_scc(graph_nodes, adjacency)
+    unresolved_cycles: List[Dict[str, Any]] = []
+    for idx, comp in enumerate(components):
+        if len(comp) > 1 or (len(comp) == 1 and comp[0] in adjacency.get(comp[0], set())):
+            unresolved_cycles.append({"scc_id": f"scc_{idx}", "nodes": comp, "size": len(comp)})
+
+    cycle_mode = (on_cycle or "auto_condense_scc").strip().lower()
+    final_waves = waves
+    if unresolved_nodes and cycle_mode == "auto_condense_scc":
+        scc_ids, dag_adjacency, node_to_scc_idx = _build_condensed_dag(adjacency, components)
+        scc_waves, _, _ = _topological_waves(scc_ids, dag_adjacency)
+        scc_id_to_nodes = {f"scc_{idx}": comp for idx, comp in enumerate(components)}
+        final_waves = []
+        for scc_wave in scc_waves:
+            expanded: List[str] = []
+            for scc_id in sorted(scc_wave):
+                expanded.extend(sorted(scc_id_to_nodes.get(scc_id, [])))
+            final_waves.append(expanded)
+        node_to_scc = {node: f"scc_{idx}" for node, idx in node_to_scc_idx.items()}
+    else:
+        node_to_scc = {}
+
+    depends_on_map: Dict[str, List[str]] = {}
+    for prereq, dependents in adjacency.items():
+        for dep in dependents:
+            depends_on_map.setdefault(dep, []).append(prereq)
+        depends_on_map.setdefault(prereq, [])
+    for key in list(depends_on_map.keys()):
+        depends_on_map[key] = sorted(set(depends_on_map[key]))
+
+    wave_payload = [{"wave": idx, "modules": wave} for idx, wave in enumerate(final_waves)]
+    expanded_order = [m for wave in final_waves for m in wave]
+    return {
+        "db": used_db,
+        "edge_semantics": _normalize_edge_semantics(edge_semantics),
+        "on_cycle": cycle_mode,
+        "input_modules": module_tokens,
+        "module_dependencies": module_dep_records,
+        "waves": wave_payload,
+        "module_order": expanded_order,
+        "depends_on_map": depends_on_map,
+        "unresolved_nodes": unresolved_nodes,
+        "unresolved_cycles": unresolved_cycles,
+        "node_to_scc": node_to_scc,
+    }
+
+
+@mcp_server.tool(
+    name="plan_file_dependency_order",
+    description=(
+        "Plan per-module file migration order from graph_mcp CALLS edges. "
+        "Returns wave-based file order, dependency map, and cycle/SCC diagnostics."
+    ),
+)
+async def tool_plan_file_dependency_order(
+    modules: List[str],
+    parser_type: Optional[str] = None,
+    db: Optional[str] = None,
+    edge_semantics: str = "depends_on",
+    on_cycle: str = "auto_condense_scc",
+    include_cross_module: bool = False,
+    max_files_per_module: int = 2000,
+) -> Dict[str, Any]:
+    module_tokens = _normalize_string_list(modules)
+    if not module_tokens:
+        raise ValueError("modules must be a non-empty list.")
+    if max_files_per_module < 1:
+        raise ValueError("max_files_per_module must be >= 1.")
+    db_candidates = _resolve_db_candidates(db)
+    _require(db_candidates[0] if db_candidates else None, "db")
+
+    query = (
+        "MATCH (caller:Function)-[:CALLS]->(callee:Function) "
+        "WHERE any(token IN $modules WHERE caller.file_path CONTAINS token) "
+        "AND any(token IN $modules WHERE callee.file_path CONTAINS token) "
+        "AND caller.file_path IS NOT NULL AND callee.file_path IS NOT NULL "
+        "WITH caller.file_path AS src_file, callee.file_path AS dst_file, "
+        "[token IN $modules WHERE caller.file_path CONTAINS token] AS caller_tokens, "
+        "[token IN $modules WHERE callee.file_path CONTAINS token] AS callee_tokens "
+        "WHERE size(caller_tokens) > 0 AND size(callee_tokens) > 0 AND src_file <> dst_file "
+        "RETURN src_file, dst_file, caller_tokens[0] AS src_module, callee_tokens[0] AS dst_module, "
+        "count(*) AS call_count "
+        "ORDER BY call_count DESC"
+    )
+    used_db, records = await _run_cypher_first(query, {"modules": module_tokens}, db_candidates)
+
+    module_files: Dict[str, Set[str]] = {token: set() for token in module_tokens}
+    intra_edges: Dict[str, List[Tuple[str, str]]] = {token: [] for token in module_tokens}
+    cross_edges: List[Dict[str, Any]] = []
+    file_dependencies: Dict[str, List[Dict[str, Any]]] = {token: [] for token in module_tokens}
+
+    for row in records:
+        src_file = row.get("src_file")
+        dst_file = row.get("dst_file")
+        src_module = row.get("src_module")
+        dst_module = row.get("dst_module")
+        call_count = row.get("call_count")
+        if not isinstance(src_file, str) or not isinstance(dst_file, str):
+            continue
+        if not isinstance(src_module, str) or not isinstance(dst_module, str):
+            continue
+        if src_module not in module_files:
+            module_files[src_module] = set()
+            intra_edges[src_module] = []
+            file_dependencies[src_module] = []
+        if dst_module not in module_files:
+            module_files[dst_module] = set()
+            intra_edges[dst_module] = []
+            file_dependencies[dst_module] = []
+
+        module_files[src_module].add(src_file)
+        module_files[dst_module].add(dst_file)
+
+        dep_record = {
+            "dependent_file": src_file,
+            "dependency_file": dst_file,
+            "dependent_module": src_module,
+            "dependency_module": dst_module,
+            "call_count": int(call_count) if isinstance(call_count, (int, float)) else 0,
+        }
+        if src_module == dst_module:
+            intra_edges[src_module].append((src_file, dst_file))
+            file_dependencies[src_module].append(dep_record)
+        else:
+            cross_edges.append(dep_record)
+            if include_cross_module:
+                intra_edges[src_module].append((src_file, dst_file))
+
+    module_plans: List[Dict[str, Any]] = []
+    cycle_mode = (on_cycle or "auto_condense_scc").strip().lower()
+    for module in sorted(module_files.keys()):
+        files = sorted(module_files[module])[:max_files_per_module]
+        file_set = set(files)
+        edges = [(s, d) for s, d in intra_edges.get(module, []) if s in file_set and d in file_set]
+
+        graph_nodes, adjacency = _build_prerequisite_graph(
+            files,
+            edges,
+            edge_semantics=edge_semantics,
+        )
+        waves, unresolved_nodes, _ = _topological_waves(graph_nodes, adjacency)
+        components = _compute_scc(graph_nodes, adjacency)
+        unresolved_cycles: List[Dict[str, Any]] = []
+        for idx, comp in enumerate(components):
+            if len(comp) > 1 or (len(comp) == 1 and comp[0] in adjacency.get(comp[0], set())):
+                unresolved_cycles.append({"scc_id": f"scc_{idx}", "nodes": comp, "size": len(comp)})
+
+        node_to_scc: Dict[str, str] = {}
+        final_waves = waves
+        if unresolved_nodes and cycle_mode == "auto_condense_scc":
+            scc_ids, dag_adjacency, node_to_scc_idx = _build_condensed_dag(adjacency, components)
+            scc_waves, _, _ = _topological_waves(scc_ids, dag_adjacency)
+            scc_id_to_nodes = {f"scc_{idx}": comp for idx, comp in enumerate(components)}
+            final_waves = []
+            for scc_wave in scc_waves:
+                expanded: List[str] = []
+                for scc_id in sorted(scc_wave):
+                    expanded.extend(sorted(scc_id_to_nodes.get(scc_id, [])))
+                final_waves.append(expanded)
+            node_to_scc = {node: f"scc_{idx}" for node, idx in node_to_scc_idx.items()}
+
+        depends_on_map: Dict[str, List[str]] = {}
+        for prereq, dependents in adjacency.items():
+            for dep in dependents:
+                depends_on_map.setdefault(dep, []).append(prereq)
+            depends_on_map.setdefault(prereq, [])
+        for key in list(depends_on_map.keys()):
+            depends_on_map[key] = sorted(set(depends_on_map[key]))
+
+        module_plans.append(
+            {
+                "module": module,
+                "file_count": len(graph_nodes),
+                "waves": [{"wave": idx, "files": wave} for idx, wave in enumerate(final_waves)],
+                "file_order": [f for wave in final_waves for f in wave],
+                "depends_on_map": depends_on_map,
+                "unresolved_nodes": unresolved_nodes,
+                "unresolved_cycles": unresolved_cycles,
+                "node_to_scc": node_to_scc,
+                "file_dependencies": file_dependencies.get(module, []),
+            }
+        )
+
+    return {
+        "db": used_db,
+        "edge_semantics": _normalize_edge_semantics(edge_semantics),
+        "on_cycle": cycle_mode,
+        "include_cross_module": include_cross_module,
+        "input_modules": module_tokens,
+        "cross_module_edges": cross_edges,
+        "modules": module_plans,
+    }
+
+
+@mcp_server.tool(
+    name="plan_function_dependency_order",
+    description=(
+        "Plan per-module function migration order from graph_mcp CALLS edges. "
+        "Returns wave-based function order, dependency map, and cycle/SCC diagnostics."
+    ),
+)
+async def tool_plan_function_dependency_order(
+    modules: List[str],
+    parser_type: Optional[str] = None,
+    db: Optional[str] = None,
+    edge_semantics: str = "depends_on",
+    on_cycle: str = "auto_condense_scc",
+    include_cross_module: bool = False,
+    include_lambdas: bool = False,
+    max_functions_per_module: int = 5000,
+) -> Dict[str, Any]:
+    module_tokens = _normalize_string_list(modules)
+    if not module_tokens:
+        raise ValueError("modules must be a non-empty list.")
+    if max_functions_per_module < 1:
+        raise ValueError("max_functions_per_module must be >= 1.")
+    db_candidates = _resolve_db_candidates(db)
+    _require(db_candidates[0] if db_candidates else None, "db")
+
+    lambda_filter = "" if include_lambdas else "AND (caller.kind IS NULL OR caller.kind <> 'lambda') AND (callee.kind IS NULL OR callee.kind <> 'lambda') "
+    query = (
+        "MATCH (caller:Function)-[:CALLS]->(callee:Function) "
+        "WHERE any(token IN $modules WHERE caller.file_path CONTAINS token) "
+        "AND any(token IN $modules WHERE callee.file_path CONTAINS token) "
+        f"{lambda_filter}"
+        "WITH caller, callee, [token IN $modules WHERE caller.file_path CONTAINS token] AS caller_tokens, "
+        "[token IN $modules WHERE callee.file_path CONTAINS token] AS callee_tokens "
+        "WHERE size(caller_tokens) > 0 AND size(callee_tokens) > 0 "
+        "RETURN caller.id AS src_id, caller.name AS src_name, caller.qualified_name AS src_qualified_name, "
+        "caller.file_path AS src_file_path, "
+        "callee.id AS dst_id, callee.name AS dst_name, callee.qualified_name AS dst_qualified_name, "
+        "callee.file_path AS dst_file_path, "
+        "caller_tokens[0] AS src_module, callee_tokens[0] AS dst_module, "
+        "count(*) AS call_count "
+        "ORDER BY call_count DESC"
+    )
+    used_db, records = await _run_cypher_first(query, {"modules": module_tokens}, db_candidates)
+
+    module_functions: Dict[str, Set[str]] = {token: set() for token in module_tokens}
+    intra_edges: Dict[str, List[Tuple[str, str]]] = {token: [] for token in module_tokens}
+    cross_edges: List[Dict[str, Any]] = []
+    function_dependencies: Dict[str, List[Dict[str, Any]]] = {token: [] for token in module_tokens}
+    function_metadata: Dict[str, Dict[str, Dict[str, Any]]] = {token: {} for token in module_tokens}
+
+    for row in records:
+        src_id = row.get("src_id")
+        dst_id = row.get("dst_id")
+        src_module = row.get("src_module")
+        dst_module = row.get("dst_module")
+        if not isinstance(src_id, str) or not isinstance(dst_id, str):
+            continue
+        if not isinstance(src_module, str) or not isinstance(dst_module, str):
+            continue
+
+        for module in (src_module, dst_module):
+            if module not in module_functions:
+                module_functions[module] = set()
+                intra_edges[module] = []
+                function_dependencies[module] = []
+                function_metadata[module] = {}
+
+        module_functions[src_module].add(src_id)
+        module_functions[dst_module].add(dst_id)
+        function_metadata[src_module][src_id] = {
+            "id": src_id,
+            "name": row.get("src_name"),
+            "qualified_name": row.get("src_qualified_name"),
+            "file_path": row.get("src_file_path"),
+        }
+        function_metadata[dst_module][dst_id] = {
+            "id": dst_id,
+            "name": row.get("dst_name"),
+            "qualified_name": row.get("dst_qualified_name"),
+            "file_path": row.get("dst_file_path"),
+        }
+
+        dep_record = {
+            "dependent_function_id": src_id,
+            "dependency_function_id": dst_id,
+            "dependent_module": src_module,
+            "dependency_module": dst_module,
+            "call_count": int(row.get("call_count")) if isinstance(row.get("call_count"), (int, float)) else 0,
+        }
+        if src_module == dst_module:
+            intra_edges[src_module].append((src_id, dst_id))
+            function_dependencies[src_module].append(dep_record)
+        else:
+            cross_edges.append(dep_record)
+            if include_cross_module:
+                intra_edges[src_module].append((src_id, dst_id))
+
+    module_plans: List[Dict[str, Any]] = []
+    cycle_mode = (on_cycle or "auto_condense_scc").strip().lower()
+    for module in sorted(module_functions.keys()):
+        funcs = sorted(module_functions[module])[:max_functions_per_module]
+        func_set = set(funcs)
+        edges = [(s, d) for s, d in intra_edges.get(module, []) if s in func_set and d in func_set]
+
+        graph_nodes, adjacency = _build_prerequisite_graph(
+            funcs,
+            edges,
+            edge_semantics=edge_semantics,
+        )
+        waves, unresolved_nodes, _ = _topological_waves(graph_nodes, adjacency)
+        components = _compute_scc(graph_nodes, adjacency)
+        unresolved_cycles: List[Dict[str, Any]] = []
+        for idx, comp in enumerate(components):
+            if len(comp) > 1 or (len(comp) == 1 and comp[0] in adjacency.get(comp[0], set())):
+                unresolved_cycles.append({"scc_id": f"scc_{idx}", "function_ids": comp, "size": len(comp)})
+
+        node_to_scc: Dict[str, str] = {}
+        final_waves = waves
+        if unresolved_nodes and cycle_mode == "auto_condense_scc":
+            scc_ids, dag_adjacency, node_to_scc_idx = _build_condensed_dag(adjacency, components)
+            scc_waves, _, _ = _topological_waves(scc_ids, dag_adjacency)
+            scc_id_to_nodes = {f"scc_{idx}": comp for idx, comp in enumerate(components)}
+            final_waves = []
+            for scc_wave in scc_waves:
+                expanded: List[str] = []
+                for scc_id in sorted(scc_wave):
+                    expanded.extend(sorted(scc_id_to_nodes.get(scc_id, [])))
+                final_waves.append(expanded)
+            node_to_scc = {node: f"scc_{idx}" for node, idx in node_to_scc_idx.items()}
+
+        depends_on_map: Dict[str, List[str]] = {}
+        for prereq, dependents in adjacency.items():
+            for dep in dependents:
+                depends_on_map.setdefault(dep, []).append(prereq)
+            depends_on_map.setdefault(prereq, [])
+        for key in list(depends_on_map.keys()):
+            depends_on_map[key] = sorted(set(depends_on_map[key]))
+
+        metadata = function_metadata.get(module, {})
+        module_plans.append(
+            {
+                "module": module,
+                "function_count": len(graph_nodes),
+                "waves": [
+                    {
+                        "wave": idx,
+                        "function_ids": wave,
+                        "functions": [metadata.get(fid, {"id": fid}) for fid in wave],
+                    }
+                    for idx, wave in enumerate(final_waves)
+                ],
+                "function_order_ids": [f for wave in final_waves for f in wave],
+                "function_order": [metadata.get(fid, {"id": fid}) for wave in final_waves for fid in wave],
+                "depends_on_map": depends_on_map,
+                "unresolved_nodes": unresolved_nodes,
+                "unresolved_cycles": unresolved_cycles,
+                "node_to_scc": node_to_scc,
+                "function_dependencies": function_dependencies.get(module, []),
+            }
+        )
+
+    return {
+        "db": used_db,
+        "edge_semantics": _normalize_edge_semantics(edge_semantics),
+        "on_cycle": cycle_mode,
+        "include_cross_module": include_cross_module,
+        "include_lambdas": include_lambdas,
+        "input_modules": module_tokens,
+        "cross_module_edges": cross_edges,
+        "modules": module_plans,
+    }
 
 
 @mcp_server.tool(
@@ -1262,18 +2142,55 @@ async def tool_search_functions(
     db: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    node_type: Optional[str] = None,
+    expand_search: bool = False,
 ) -> Dict[str, Any]:
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
-    cypher = (
+    fallback_cypher = (
         "MATCH (n) WHERE (n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package) "
         "AND any(q IN $qs WHERE toLower(n.name) CONTAINS q OR toLower(n.qualified_name) CONTAINS q) "
         "RETURN n LIMIT $limit"
     )
-    used_db, results = await _run_cypher_first(cypher, {"qs": qs, "limit": int(limit)}, db_candidates)
+    fulltext_query = " OR ".join(qs)
+    fulltext_cypher = (
+        "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
+        "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package) "
+        "RETURN node AS n ORDER BY score DESC LIMIT $limit"
+    )
+    try:
+        used_db, results = await _run_cypher_first(
+            fulltext_cypher,
+            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit)},
+            db_candidates,
+        )
+        if not results:
+            used_db, results = await _run_cypher_first(
+                fallback_cypher,
+                {"qs": qs, "limit": int(limit)},
+                db_candidates,
+            )
+    except Exception:
+        used_db, results = await _run_cypher_first(
+            fallback_cypher,
+            {"qs": qs, "limit": int(limit)},
+            db_candidates,
+        )
     mode = _normalize_content_mode(content_mode)
-    nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
+    requested_type = _normalize_node_type(node_type, default_value="code")
+    nodes = []
+    for row in results:
+        rec = _record_node(
+            row["n"],
+            mode,
+            include_raw_fields,
+            requested_node_type=requested_type,
+            compact_bridge=expand_search,
+        )
+        rec_type = ((rec.get("properties") or {}).get("node_type") or "code").lower()
+        if expand_search or rec_type == requested_type:
+            nodes.append(rec)
     ids = [node.get("id") for node in nodes if node.get("id")]
     return {"db": used_db, "results": nodes, "ids": ids}
 
@@ -1288,16 +2205,52 @@ async def tool_search_by_code(
     db: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    node_type: Optional[str] = None,
+    expand_search: bool = False,
 ) -> Dict[str, Any]:
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.strip() for t in query.split("|") if t.strip()]
     if not qs:
         raise ValueError("query is required.")
-    cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) RETURN n LIMIT $limit"
-    used_db, results = await _run_cypher_first(cypher, {"qs": qs, "limit": int(limit)}, db_candidates)
+    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) RETURN n LIMIT $limit"
+    fulltext_query = " OR ".join(qs)
+    fulltext_cypher = (
+        "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
+        "RETURN node AS n ORDER BY score DESC LIMIT $limit"
+    )
+    try:
+        used_db, results = await _run_cypher_first(
+            fulltext_cypher,
+            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit)},
+            db_candidates,
+        )
+        if not results:
+            used_db, results = await _run_cypher_first(
+                fallback_cypher,
+                {"qs": qs, "limit": int(limit)},
+                db_candidates,
+            )
+    except Exception:
+        used_db, results = await _run_cypher_first(
+            fallback_cypher,
+            {"qs": qs, "limit": int(limit)},
+            db_candidates,
+        )
     mode = _normalize_content_mode(content_mode)
-    nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
+    requested_type = _normalize_node_type(node_type, default_value="code")
+    nodes = []
+    for row in results:
+        rec = _record_node(
+            row["n"],
+            mode,
+            include_raw_fields,
+            requested_node_type=requested_type,
+            compact_bridge=expand_search,
+        )
+        rec_type = ((rec.get("properties") or {}).get("node_type") or "code").lower()
+        if expand_search or rec_type == requested_type:
+            nodes.append(rec)
     return {"db": used_db, "results": nodes}
 
 
@@ -1333,6 +2286,149 @@ async def tool_annotate_node(
     return {"db": used_db, "node": _record_node(result[0]["n"], mode, include_raw_fields)}
 
 
+# ── Workflow tools ────────────────────────────────────────────────────────────
+
+@mcp_server.tool(
+    name="list_workflows",
+    description=(
+        "List detected business workflows (Login Flow, Payment Flow, etc.) "
+        "extracted from source code. Filter by project, language, or domain."
+    ),
+)
+async def tool_list_workflows(
+    project: str = "",
+    language: str = "",
+    domain: str = "",
+    limit: int = 50,
+    db: str = "",
+) -> Dict[str, Any]:
+    db_candidates = _resolve_db_candidates(db if db else None)
+    if not db_candidates:
+        db_candidates = [DEFAULT_NEO4J_DB]
+    filters = []
+    params: Dict[str, Any] = {"limit": limit}
+    if project:
+        filters.append("w.project = $project")
+        params["project"] = project
+    if language:
+        filters.append("w.language = $language")
+        params["language"] = language
+    if domain:
+        filters.append("w.domain = $domain")
+        params["domain"] = domain
+    where = ("WHERE " + " AND ".join(filters)) if filters else ""
+    query = f"""
+    MATCH (w:Workflow) {where}
+    RETURN w.workflow_id   AS workflow_id,
+           w.name          AS name,
+           w.domain        AS domain,
+           w.description   AS description,
+           w.confidence    AS confidence,
+           w.entrypoint_id AS entrypoint_id,
+           w.language      AS language,
+           w.project       AS project,
+           w.kind          AS kind
+    ORDER BY w.confidence DESC, w.name ASC
+    LIMIT $limit
+    """
+    used_db, records = await _run_cypher_first(query, params, db_candidates)
+    workflows = [dict(r) for r in records]
+    return {"db": used_db, "workflows": workflows, "total": len(workflows)}
+
+
+@mcp_server.tool(
+    name="get_workflow_steps",
+    description=(
+        "Get the ordered execution steps (Function nodes) of a specific workflow "
+        "identified by its workflow_id."
+    ),
+)
+async def tool_get_workflow_steps(
+    workflow_id: str,
+    db: str = "",
+) -> Dict[str, Any]:
+    if not workflow_id:
+        raise ValueError("workflow_id is required")
+    db_candidates = _resolve_db_candidates(db if db else None)
+    if not db_candidates:
+        db_candidates = [DEFAULT_NEO4J_DB]
+    wf_query = """
+    MATCH (w:Workflow {workflow_id: $wid})
+    RETURN w.workflow_id   AS workflow_id,
+           w.name          AS name,
+           w.domain        AS domain,
+           w.description   AS description,
+           w.confidence    AS confidence,
+           w.entrypoint_id AS entrypoint_id,
+           w.language      AS language,
+           w.project       AS project,
+           w.kind          AS kind
+    """
+    steps_query = """
+    MATCH (w:Workflow {workflow_id: $wid})-[s:HAS_STEP]->(f:Function)
+    RETURN s.order          AS step_order,
+           f.id             AS id,
+           f.name           AS name,
+           f.qualified_name AS qualified_name,
+           f.file_path      AS file_path,
+           f.start_line     AS start_line,
+           f.end_line       AS end_line,
+           f.summary        AS summary,
+           f.kind           AS kind
+    ORDER BY s.order ASC
+    """
+    params = {"wid": workflow_id}
+    used_db, wf_records = await _run_cypher_first(wf_query, params, db_candidates)
+    if not wf_records:
+        return {"error": f"Workflow '{workflow_id}' not found"}
+    _, step_records = await _run_cypher_first(steps_query, params, [used_db])
+    return {
+        "db": used_db,
+        "workflow": dict(wf_records[0]),
+        "steps": [dict(r) for r in step_records],
+    }
+
+
+@mcp_server.tool(
+    name="search_workflows",
+    description=(
+        "Search workflows by keyword across names, descriptions, and domains. "
+        "Useful for finding 'payment', 'auth', 'login' etc. workflows."
+    ),
+)
+async def tool_search_workflows(
+    query: str,
+    limit: int = 20,
+    db: str = "",
+) -> Dict[str, Any]:
+    if not query:
+        raise ValueError("query is required")
+    db_candidates = _resolve_db_candidates(db if db else None)
+    if not db_candidates:
+        db_candidates = [DEFAULT_NEO4J_DB]
+    cypher = """
+    MATCH (w:Workflow)
+    WHERE toLower(w.name) CONTAINS toLower($q)
+       OR toLower(w.description) CONTAINS toLower($q)
+       OR toLower(w.domain) CONTAINS toLower($q)
+    RETURN w.workflow_id   AS workflow_id,
+           w.name          AS name,
+           w.domain        AS domain,
+           w.description   AS description,
+           w.confidence    AS confidence,
+           w.entrypoint_id AS entrypoint_id,
+           w.language      AS language,
+           w.project       AS project,
+           w.kind          AS kind
+    ORDER BY w.confidence DESC, w.name ASC
+    LIMIT $limit
+    """
+    params = {"q": query, "limit": limit}
+    used_db, records = await _run_cypher_first(cypher, params, db_candidates)
+    workflows = [dict(r) for r in records]
+    return {"db": used_db, "workflows": workflows, "total": len(workflows)}
+
+
 @mcp_server.tool(name="list_parsers", description="List available parser types supported locally.")
 async def tool_list_parsers() -> Dict[str, Any]:
     tools_dir = os.path.join(_ROOT_DIR, "tools")
@@ -1363,88 +2459,106 @@ async def tool_list_mcp_functions() -> Dict[str, Any]:
         - functions: List of tool metadata (name, description, inputs, output_description)
     """
     import inspect
-    
-    functions_metadata = []
-    
-    # Get all registered tools from the FastMCP server
-    if hasattr(mcp_server, '_tools'):
-        tools = mcp_server._tools
-    elif hasattr(mcp_server, 'list_tools'):
-        tools = mcp_server.list_tools()
+
+    # Get all registered tools from the FastMCP server.
+    # Keep a name->tool_obj map to support both metadata catalog and signature fallback.
+    tool_map: Dict[str, Any] = {}
+    if hasattr(mcp_server, "_tools") and isinstance(mcp_server._tools, dict):
+        for key, obj in mcp_server._tools.items():
+            name = getattr(obj, "name", None) or (str(key) if key is not None else "")
+            if name:
+                tool_map[name] = obj
+    elif hasattr(mcp_server, "list_tools"):
+        for obj in mcp_server.list_tools():
+            name = getattr(obj, "name", None)
+            if name:
+                tool_map[name] = obj
     else:
         # Fallback: inspect module globals for functions decorated with @mcp_server.tool
-        tools = {}
         for name, obj in globals().items():
-            if name.startswith('tool_') and callable(obj):
-                tools[name] = obj
-    
-    for tool_name, tool_obj in (tools.items() if isinstance(tools, dict) else enumerate(tools)):
+            if name.startswith("tool_") and callable(obj):
+                tool_map[name.replace("tool_", "")] = obj
+
+    catalog_entries = build_catalog(set(tool_map.keys()))
+    catalog_by_name = {entry["name"]: entry for entry in catalog_entries}
+    functions_metadata: List[Dict[str, Any]] = []
+
+    for name in sorted(tool_map.keys()):
+        if name in catalog_by_name:
+            # Prefer curated metadata with accurate use_cases/inputs/outputs.
+            functions_metadata.append(catalog_by_name[name])
+            continue
+
+        tool_obj = tool_map[name]
         try:
-            # Get function metadata
-            if hasattr(tool_obj, '__wrapped__'):
+            if hasattr(tool_obj, "__wrapped__"):
                 func = tool_obj.__wrapped__
             elif callable(tool_obj):
                 func = tool_obj
             else:
                 continue
-            
-            # Extract function name (for MCP tools)
-            if hasattr(tool_obj, 'name'):
-                mcp_name = tool_obj.name
-            elif hasattr(tool_obj, '__name__'):
-                mcp_name = tool_obj.__name__.replace('tool_', '')
-            else:
-                mcp_name = str(tool_name)
-            
-            # Extract description
-            if hasattr(tool_obj, 'description'):
-                description = tool_obj.description
-            elif hasattr(tool_obj, '__doc__'):
-                description = (tool_obj.__doc__ or "").strip()
-            else:
-                description = "No description available"
-            
-            # Extract parameters/inputs
+
             sig = inspect.signature(func)
             inputs = []
             for param_name, param in sig.parameters.items():
-                param_info = {
-                    "name": param_name,
-                    "type": str(param.annotation) if param.annotation != inspect.Parameter.empty else "Any",
-                    "required": param.default == inspect.Parameter.empty,
-                    "default": str(param.default) if param.default != inspect.Parameter.empty else None
+                inputs.append(
+                    {
+                        "name": param_name,
+                        "type": str(param.annotation) if param.annotation != inspect.Parameter.empty else "Any",
+                        "required": param.default == inspect.Parameter.empty,
+                        "default": str(param.default) if param.default != inspect.Parameter.empty else None,
+                    }
+                )
+
+            functions_metadata.append(
+                {
+                    "name": name,
+                    "description": getattr(tool_obj, "description", None)
+                    or ((tool_obj.__doc__ or "").strip() if hasattr(tool_obj, "__doc__") else "No description available"),
+                    "inputs": inputs,
+                    "output": "Dict with tool-specific payload",
                 }
-                inputs.append(param_info)
-            
-            # Extract return type
-            return_annotation = sig.return_annotation
-            if return_annotation != inspect.Signature.empty:
-                output_type = str(return_annotation)
-            else:
-                output_type = "Dict[str, Any]"
-            
-            functions_metadata.append({
-                "name": mcp_name,
-                "description": description,
-                "inputs": inputs,
-                "output_type": output_type,
-                "output_description": "Returns a dictionary with relevant data based on the function's purpose"
-            })
-            
+            )
         except Exception as e:
-            # Skip tools that can't be introspected
-            logger.warning(f"Could not introspect tool {tool_name}: {e}")
-            continue
-    
-    # Sort by name for consistency
-    functions_metadata.sort(key=lambda x: x["name"])
-    
+            logger.warning("Could not introspect tool %s: %s", name, e)
+
     return {
         "total_count": len(functions_metadata),
         "functions": functions_metadata,
         "server_name": MCP_NAME,
         "server_version": "2.1.0"
     }
+
+
+def _normalize_http_path(path: str) -> str:
+    """Normalize MCP HTTP path, fixing MSYS/Git Bash Windows path conversion.
+
+    On Windows, Git Bash converts Unix paths like ``/mcp`` to Windows absolute
+    paths like ``C:/Program Files/Git/mcp``.  This function detects this and
+    reverses the conversion via ``cygpath``, falling back to a best-effort
+    string extraction so that the returned value always starts with ``/``.
+    """
+    if not path:
+        return "/mcp"
+    path = path.strip()
+    if path.startswith("/"):
+        return path
+    # Attempt cygpath reverse-conversion (available in Git Bash / MSYS2).
+    import subprocess as _sp
+    try:
+        r = _sp.run(["cygpath", "-u", path], capture_output=True, text=True, timeout=2)
+        if r.returncode == 0:
+            converted = r.stdout.strip()
+            if converted.startswith("/"):
+                return converted
+    except (FileNotFoundError, _sp.TimeoutExpired, OSError):
+        pass
+    # Fallback: strip the Windows drive + path prefix and prepend "/".
+    import re as _re
+    m = _re.match(r"^[A-Za-z]:[/\\](.+)$", path)
+    if m:
+        return "/" + m.group(1).replace("\\", "/")
+    return "/" + path.replace("\\", "/")
 
 
 def parse_args() -> argparse.Namespace:
@@ -1474,6 +2588,20 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    import logging as _logging
+    from pathlib import Path as _Path
+
+    _log_file = _Path(__file__).resolve().parent.parent / "mcp_server.log"
+    _logging.basicConfig(
+        level=_logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            _logging.FileHandler(str(_log_file), encoding="utf-8"),
+            _logging.StreamHandler(),
+        ],
+    )
+    _startup_logger = _logging.getLogger(__name__)
+
     force_quit = {"armed": False}
 
     def _handle_sigint(signum, _frame) -> None:
@@ -1493,22 +2621,31 @@ def main() -> None:
 
     args = parse_args()
     transport = args.transport
-    stream_path = args.stream_path
-    if stream_path and not stream_path.startswith("/"):
-        stream_path = "/" + stream_path
+    stream_path = _normalize_http_path(args.stream_path)
+    if stream_path != args.stream_path:
+        _startup_logger.info(
+            "Normalized stream path: %r -> %r (MSYS path conversion detected)",
+            args.stream_path,
+            stream_path,
+        )
     endpoint = f"http://{args.host}:{args.port}{stream_path}"
-    print(f"Starting MCP server: {MCP_NAME}")
-    print(f"Transport: {transport}")
+    _startup_logger.info("Starting MCP server: %s", MCP_NAME)
+    _startup_logger.info("Transport: %s", transport)
     if transport == "streamable-http":
-        print(f"Endpoint: {endpoint}")
+        _startup_logger.info("Endpoint: %s", endpoint)
     else:
-        print("Endpoint: (stdio)")
-    kwargs: Dict[str, Any] = {"transport": transport}
-    if transport != "stdio":
-        kwargs.update({"host": args.host, "port": args.port})
-        if stream_path:
-            kwargs["path"] = stream_path
-    mcp_server.run(**kwargs)
+        _startup_logger.info("Endpoint: (stdio)")
+    try:
+        _preload_embedder_on_startup()
+        kwargs: Dict[str, Any] = {"transport": transport}
+        if transport != "stdio":
+            kwargs.update({"host": args.host, "port": args.port})
+            if stream_path:
+                kwargs["path"] = stream_path
+        mcp_server.run(**kwargs)
+    except Exception:
+        _startup_logger.exception("MCP server startup failed. See log: %s", _log_file)
+        raise
 
 
 if __name__ == "__main__":

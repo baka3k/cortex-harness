@@ -287,8 +287,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     neo4j_writer = None
-    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
-        neo4j_writer = Neo4jWriter(args.neo4j_uri, args.neo4j_user, args.NEO4J_PASS, args.neo4j_db)
+    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
+        neo4j_writer = Neo4jWriter(args.neo4j_uri, args.neo4j_user, args.neo4j_password, args.neo4j_db)
 
     # ... rest of setup ...
 
@@ -319,13 +319,13 @@ async def async_main(argv: Optional[List[str]] = None) -> int:
     # NEW - Create driver and writer using factory
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
+    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
         driver = GraphDriverFactory.create_driver(
             GraphProvider.NEO4J,
             {
                 "uri": args.neo4j_uri,
                 "user": args.neo4j_user,
-                "password": args.NEO4J_PASS,
+                "password": args.neo4j_password,
                 "database": args.neo4j_db,
             }
         )
