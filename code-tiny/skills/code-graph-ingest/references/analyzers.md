@@ -2,7 +2,7 @@
 
 ## Common flags (all analyzers)
 - `--root` (required)
-- `--neo4j-uri`, `--neo4j-user`, `--neo4j-password`, `--neo4j-db`
+- `--neo4j-uri`, `--neo4j-user`, `--neo4j-pass`, `--neo4j-db`
 - `--qdrant-url`, `--qdrant-collection`
 - `--embed-model`, `--max-embed-chars`, `--chunk-embed`
 - `--device`

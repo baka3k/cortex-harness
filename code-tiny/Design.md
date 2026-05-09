@@ -635,7 +635,7 @@ python tools/kotlin/kotlin_analyzer.py \
   --root /path/to/kotlin/project \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --verbose
 
@@ -644,7 +644,7 @@ python tools/cplus/cplus_analyzer.py \
   --root /path/to/cpp/project \
   --neo4j-uri bolt://localhost:7687 \
   --neo4j-user neo4j \
-  --neo4j-password password \
+  --neo4j-pass password \
   --verbose
 ```
 

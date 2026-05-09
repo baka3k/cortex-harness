@@ -11,13 +11,13 @@ Phases:
 
 Usage examples:
   # Run all phases with defaults:
-  python3 livingdoc/living-doc-pipeline.py --neo4j-password abcd1234
+  python3 livingdoc/living-doc-pipeline.py --neo4j-pass abcd1234
 
   # Run only vectorize:
-  python3 livingdoc/living-doc-pipeline.py --neo4j-password abcd1234 --only vectorize
+  python3 livingdoc/living-doc-pipeline.py --neo4j-pass abcd1234 --only vectorize
 
   # Skip summarize (already done):
-  python3 livingdoc/living-doc-pipeline.py --neo4j-password abcd1234 --skip-summarize
+  python3 livingdoc/living-doc-pipeline.py --neo4j-pass abcd1234 --skip-summarize
 """
 import argparse
 import os
@@ -55,7 +55,7 @@ def parse_args():
     # ── Common: Neo4j ─────────────────────────────────────────────────────────
     parser.add_argument("--neo4j-uri",      default=get_env("NEO4J_URI",      "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user",     default=get_env("NEO4J_USER",     "neo4j"))
-    parser.add_argument("--neo4j-password", default=get_env("NEO4J_PASSWORD"))
+    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASSWORD"))
     parser.add_argument("--project-id",     default=get_env("PROJECT_ID",     "digital_key_main"))
 
     # ── Common: Embedding ─────────────────────────────────────────────────────
@@ -141,7 +141,7 @@ def parse_args():
 
     args = parser.parse_args()
     if not args.neo4j_password:
-        print("Missing required: NEO4J_PASSWORD/--neo4j-password", file=sys.stderr)
+        print("Missing required: NEO4J_PASSWORD/--neo4j-pass", file=sys.stderr)
         sys.exit(2)
     return args
 
@@ -164,7 +164,7 @@ def build_summarize_cmd(args, base_dir) -> list:
         sys.executable, str(base_dir / "living-doc-summarize.py"),
         "--neo4j-uri",       args.neo4j_uri,
         "--neo4j-user",      args.neo4j_user,
-        "--neo4j-password",  args.neo4j_password,
+        "--neo4j-pass",  args.neo4j_password,
         "--llm-api-base",    args.llm_api_base,
         "--llm-api-key",     args.llm_api_key,
         "--llm-model",       args.llm_model,
@@ -181,7 +181,7 @@ def build_vectorize_cmd(args, base_dir) -> list:
         sys.executable, str(base_dir / "living-doc-vectorize.py"),
         "--neo4j-uri",      args.neo4j_uri,
         "--neo4j-user",     args.neo4j_user,
-        "--neo4j-password", args.neo4j_password,
+        "--neo4j-pass", args.neo4j_password,
         "--cache-dir",      args.cache_dir,
         "--embed-model",    args.embed_model,
         "--embed-device",   args.embed_device,
@@ -198,7 +198,7 @@ def build_link_cmd(args, base_dir) -> list:
         sys.executable, str(base_dir / "living-doc-link.py"),
         "--neo4j-uri",       args.neo4j_uri,
         "--neo4j-user",      args.neo4j_user,
-        "--neo4j-password",  args.neo4j_password,
+        "--neo4j-pass",  args.neo4j_password,
         "--cache-dir",       args.cache_dir,
         "--collection",      args.qdrant_collection,
         "--embed-model",     args.embed_model,
@@ -216,7 +216,7 @@ def build_summarize_infra_cmd(args, base_dir) -> list:
         sys.executable, str(base_dir / "living-doc-summarize-infra.py"),
         "--neo4j-uri",          args.neo4j_uri,
         "--neo4j-user",         args.neo4j_user,
-        "--neo4j-password",     args.neo4j_password,
+        "--neo4j-pass",     args.neo4j_password,
         "--project-id",         args.project_id,
         "--infra-label",        args.infra_label,
         "--belongs-rel",        args.belongs_rel,
@@ -238,7 +238,7 @@ def build_vectorize_infra_cmd(args, base_dir) -> list:
         sys.executable, str(base_dir / "living-doc-vectorize-infra.py"),
         "--neo4j-uri",      args.neo4j_uri,
         "--neo4j-user",     args.neo4j_user,
-        "--neo4j-password", args.neo4j_password,
+        "--neo4j-pass", args.neo4j_password,
         "--project-id",     args.project_id,
         "--infra-label",    args.infra_label,
         "--done-status",    args.infra_done_status,
@@ -257,7 +257,7 @@ def build_louvain_cmd(args, base_dir) -> list:
         sys.executable, str(base_dir / "living-doc-louvain.py"),
         "--neo4j-uri",          args.neo4j_uri,
         "--neo4j-user",         args.neo4j_user,
-        "--neo4j-password",     args.neo4j_password,
+        "--neo4j-pass",     args.neo4j_password,
         "--project-id",         args.project_id,
         "--graph-name",         args.graph_name,
         "--node-label",         args.node_label,

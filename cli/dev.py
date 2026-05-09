@@ -280,7 +280,7 @@ def sync_code(config, lang, dry_run, verbose, batch_size):
             "--root", root,
             "--neo4j-uri", neo4j["uri"],
             "--neo4j-user", neo4j["user"],
-            "--neo4j-password", neo4j["password"],
+            "--neo4j-pass", neo4j["password"],
             "--qdrant-url", qdrant["url"],
             "--qdrant-collection", src.get("collection", f"{lname}_functions"),
             "--embed-model", embed_model,
