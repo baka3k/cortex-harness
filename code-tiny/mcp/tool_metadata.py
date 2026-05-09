@@ -35,10 +35,10 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "parser_type", "type": "str", "required": False,
              "description": "Parser type: cplus/cpp/c++/c/clang/delphi/pascal/java/kotlin/jvm/vbnet/vb6/vba/vbscript or android/android-kotlin"},
             {"name": "database_name", "type": "str", "required": False,
-             "description": "Neo4j database name (e.g., 'neo4j', 'modulename', 'modulename')"},
+             "description": "Neo4j database name (e.g., 'neo4j', 'ctam', 'minat')"},
         ],
         "output": "Dict with parser_type, database_name, activated status",
-        "example": "activate_project(parser_type='cplus', database_name='modulename')",
+        "example": "activate_project(parser_type='cplus', database_name='sample_database')",
     },
     {
         "name": "search_functions",
@@ -173,7 +173,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
                       "Architectural analysis", "Module coupling analysis"],
         "inputs": [
             {"name": "source_modules", "type": "List[str]", "required": True,
-             "description": "Source file path patterns (e.g., ['sample_database01', 'SampleDatabase'])"},
+             "description": "Source file path patterns (e.g., ['sample_database01', 'sample_database'])"},
             {"name": "target_modules", "type": "List[str]", "required": True,
              "description": "Target file path patterns"},
             {"name": "max_depth", "type": "int", "required": False, "description": "Max path length (default: 6)"},
@@ -264,7 +264,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "db", "type": "str", "required": False},
         ],
         "output": "Dict with module flow paths",
-        "example": "trace_flow_between_module(source_modules=['modulename'], target_modules=['modulename'], rel_types=['CALLS'])",
+        "example": "trace_flow_between_module(source_modules=['sample_database'], target_modules=['minat'], rel_types=['CALLS'])",
     },
     # --- Planning / dependency ordering -----------------------------------------
     {
