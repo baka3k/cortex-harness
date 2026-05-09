@@ -109,7 +109,7 @@ class PackageNodeOperations:
         
         Args:
             driver: Graph driver instance
-            file_path: File path
+            file_path: File identifier (stored in File.id; typically the path)
             package_id: Package ID
             database: Optional database name
             
@@ -117,7 +117,7 @@ class PackageNodeOperations:
             True if relationship created
         """
         query = """
-        MATCH (f:File {file_path: $file_path})
+        MATCH (f:File {id: $file_path})
         MATCH (p:Package {id: $package_id})
         MERGE (f)-[r:BELONGS_TO_PACKAGE]->(p)
         RETURN r

@@ -28,7 +28,10 @@ from tools.common.analyzer_cache import (
     write_parse_cache,
     write_state,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload
+from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
+from tools.common.git_diff import load_manifest_paths
+from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
+from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
@@ -36,6 +39,45 @@ try:
     from tree_sitter_languages import get_parser as ts_get_parser
 except Exception:
     ts_get_parser = None
+
+_PARSE_CACHE_VERSION = "csharp-v2026-03-09-1"
+_SCAN_SKIP_DIRS = {
+    # Version control
+    ".git", ".hg", ".svn",
+
+    # IDE
+    ".idea", ".vs", ".vscode", ".settings",
+
+    # Build outputs (.NET)
+    "bin", "obj", "Out", "out",
+
+    # NuGet/packages
+    "packages", ".nuget",
+
+    # Build outputs (general)
+    "build", "dist", "target",
+
+    # Node (mixed projects)
+    "node_modules",
+
+    # Cache
+    ".cache", ".parcel-cache", "__pycache__",
+
+    # Testing
+    "coverage", "TestResults", ".test-results", "test-results",
+
+    # Temporary
+    "tmp", "temp", ".tmp", "tmpdir",
+
+    # OS specific
+    ".DS_Store", "Thumbs.db",
+
+    # Compiled/output files
+    "*.dll", "*.exe", "*.pdb", "*.nupkg",
+
+    # User-specific
+    "*.user", "*.suo", "*.cache",
+}
 
 
 @dataclass
@@ -180,6 +222,14 @@ def _find_nodes_by_type(node, node_type: str) -> Iterable:
         yield from _find_nodes_by_type(child, node_type)
 
 
+def _tree_error_stats(tree) -> Tuple[bool, int]:
+    if tree is None:
+        return False, 0
+    has_error = bool(getattr(tree.root_node, "has_error", False))
+    error_nodes = sum(1 for _ in _find_nodes_by_type(tree.root_node, "ERROR"))
+    return has_error, error_nodes
+
+
 def _first_identifier(node, source_bytes: bytes) -> Optional[str]:
     if node is None:
         return None
@@ -274,7 +324,7 @@ def _count_parameters(node) -> int:
 
 
 def _count_arguments(node) -> int:
-    args = node.child_by_field_name("argument_list")
+    args = node.child_by_field_name("arguments") or node.child_by_field_name("argument_list")
     if args is None:
         return 0
     return sum(1 for child in args.children if child.type == "argument")
@@ -283,13 +333,21 @@ def _count_arguments(node) -> int:
 def _iter_calls(func_node) -> Iterable:
     for node in _find_nodes_by_type(func_node, "invocation_expression"):
         yield node
+    for node in _find_nodes_by_type(func_node, "object_creation_expression"):
+        yield node
 
 
 def _extract_call_name(call_node, source_bytes: bytes) -> Optional[str]:
-    expr = call_node.child_by_field_name("expression")
+    expr = None
+    if call_node.type == "invocation_expression":
+        expr = call_node.child_by_field_name("expression") or call_node.child_by_field_name("function")
+    elif call_node.type == "object_creation_expression":
+        expr = call_node.child_by_field_name("type")
     if expr is not None:
         return _normalize_call_name(_node_text(expr, source_bytes).strip())
     text = _node_text(call_node, source_bytes).split("(", 1)[0].strip()
+    if text.startswith("new "):
+        text = text[4:].strip()
     return _normalize_call_name(text)
 
 
@@ -307,7 +365,70 @@ def _walk_tree(
     namespace_registry: Dict[str, NamespaceDef],
     type_registry: Dict[str, TypeDef],
 ) -> None:
-    if node.type == "namespace_declaration":
+    if node.type == "compilation_unit":
+        file_scoped_ns = None
+        for child in node.children:
+            if child.type == "file_scoped_namespace_declaration":
+                file_scoped_ns = child
+                break
+        if file_scoped_ns is not None:
+            name = _extract_name_field(file_scoped_ns, source_bytes)
+            if not name:
+                name = _anonymous_name("Namespace", file_scoped_ns)
+            qualified = "::".join(namespace_stack + [name])
+            ns_id = _namespace_id(qualified)
+            snippet, start_line, end_line = _node_snippet(file_scoped_ns, source_bytes)
+            comment = _extract_leading_comment(file_scoped_ns, source_bytes)
+            summary = comment
+            note = _build_note(snippet, comment, summary)
+            namespaces.append(
+                NamespaceDef(
+                    symbol_id=ns_id,
+                    qualified_name=qualified,
+                    name=name,
+                    file_path=rel_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    code=snippet,
+                    comment=comment,
+                    summary=summary,
+                    note=note,
+                )
+            )
+            namespace_registry[ns_id] = namespaces[-1]
+            if namespace_stack:
+                parent = _namespace_id("::".join(namespace_stack))
+                relations.append(
+                    RelationEdge(
+                        source_id=parent,
+                        source_label="Namespace",
+                        target_id=ns_id,
+                        target_label="Namespace",
+                        rel_type="CONTAINS",
+                        properties={},
+                    )
+                )
+            scoped_stack = namespace_stack + [name]
+            for child in node.children:
+                if child is file_scoped_ns:
+                    continue
+                _walk_tree(
+                    child,
+                    source_bytes,
+                    rel_path,
+                    scoped_stack,
+                    type_stack,
+                    namespaces,
+                    types,
+                    functions,
+                    relations,
+                    calls,
+                    namespace_registry,
+                    type_registry,
+                )
+            return
+
+    if node.type in {"namespace_declaration", "file_scoped_namespace_declaration"}:
         name = _extract_name_field(node, source_bytes)
         if not name:
             name = _anonymous_name("Namespace", node)
@@ -531,9 +652,11 @@ def parse_csharp_file(path: str, root: str) -> Tuple[
     List[NamespaceDef],
     List[RelationEdge],
     FileDef,
+    Dict[str, Any],
 ]:
     rel_path = os.path.relpath(path, root)
     tree, source_bytes = _parse_file(path)
+    has_error, error_nodes = _tree_error_stats(tree)
     snippet = source_bytes.decode("utf-8", errors="ignore")
     start_line = 1
     end_line = snippet.count("\n") + 1
@@ -570,7 +693,20 @@ def parse_csharp_file(path: str, root: str) -> Tuple[
         namespace_registry,
         type_registry,
     )
-    return functions, calls, types, namespaces, relations, file_def
+    return (
+        functions,
+        calls,
+        types,
+        namespaces,
+        relations,
+        file_def,
+        {
+            "parser_language": "csharp_tree_sitter",
+            "parser_available": True,
+            "has_error": has_error,
+            "error_nodes": error_nodes,
+        },
+    )
 
 
 def _resolve_calls(functions: List[FunctionDef], calls: List[CallEdge]) -> None:
@@ -627,6 +763,14 @@ class QdrantWriter:
                     timeout=self.timeout,
                 )
                 if response.status_code == 200:
+                    existing_size = self._extract_vector_size(response)
+                    if existing_size and existing_size != self.vector_size:
+                        raise ValueError(
+                            "Qdrant collection vector size mismatch: "
+                            f"{self.collection} has size {existing_size}, "
+                            f"but embedder produces size {self.vector_size}. "
+                            "Use a matching embedder or recreate the collection."
+                        )
                     return
                 payload = {
                     "vectors": {"size": self.vector_size, "distance": "Cosine"},
@@ -642,6 +786,22 @@ class QdrantWriter:
                 if attempt >= self.retries:
                     raise
                 time.sleep(self.retry_sleep)
+
+    @staticmethod
+    def _extract_vector_size(response: requests.Response) -> Optional[int]:
+        try:
+            data = response.json()
+        except ValueError:
+            return None
+        result = data.get("result", {})
+        config = result.get("config", {})
+        params = config.get("params", {})
+        vectors = params.get("vectors", {})
+        if isinstance(vectors, dict):
+            size = vectors.get("size")
+            if isinstance(size, int):
+                return size
+        return None
 
     def upsert(self, points: List[Dict]) -> None:
         if not points:
@@ -669,17 +829,30 @@ def _should_trust_remote_code(model_name: str) -> bool:
     return "jina" in model_name.lower()
 
 
+def _resolve_embedding_model_source(model_name: str) -> str:
+    local_model_path = os.environ.get("CODE_EMBEDDING_MODEL_PATH")
+    if not local_model_path:
+        return model_name
+    resolved_path = os.path.abspath(os.path.expanduser(local_model_path))
+    if not os.path.exists(resolved_path):
+        raise FileNotFoundError(
+            "CODE_EMBEDDING_MODEL_PATH does not exist: %s" % local_model_path
+        )
+    return resolved_path
+
+
 class CodeEmbedder:
     def __init__(self, model_name: str, device: str, max_embed_chars: int, chunk_embed: bool) -> None:
-        trust_remote_code = _should_trust_remote_code(model_name)
+        model_source = _resolve_embedding_model_source(model_name)
+        trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
         extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
             **extra_tokenizer_kwargs,
         )
         self.model = AutoModel.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
         )
         self.device = torch.device(device)
@@ -687,6 +860,7 @@ class CodeEmbedder:
         self.model.eval()
         self.max_embed_chars = max_embed_chars if max_embed_chars > 0 else None
         self.chunk_embed = chunk_embed
+        self.vector_size = self._infer_vector_size()
 
     def embed(self, texts: List[str], batch_size: int = 8, verbose: bool = False) -> List[List[float]]:
         if not texts:
@@ -782,6 +956,25 @@ class CodeEmbedder:
             results.append([value / denom for value in sums[idx]])
         return results
 
+    def _infer_vector_size(self) -> int:
+        if hasattr(self.model, "get_sentence_embedding_dimension"):
+            try:
+                size = self.model.get_sentence_embedding_dimension()
+                if isinstance(size, int) and size > 0:
+                    return size
+            except Exception:
+                pass
+        config = getattr(self.model, "config", None)
+        if config:
+            for attr in ("sentence_embedding_dimension", "projection_dim", "hidden_size", "dim"):
+                size = getattr(config, attr, None)
+                if isinstance(size, int) and size > 0:
+                    return size
+        sample = self.embed(["_"], batch_size=1, verbose=False)
+        if sample and sample[0]:
+            return len(sample[0])
+        raise ValueError("Unable to infer embedding vector size.")
+
 
 def _stable_point_id(symbol_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, symbol_id))
@@ -789,11 +982,96 @@ def _stable_point_id(symbol_id: str) -> str:
 
 def _scan_csharp_files(root: str) -> List[str]:
     files: List[str] = []
-    for dirpath, _, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
         for name in filenames:
             if name.endswith(".cs"):
                 files.append(os.path.join(dirpath, name))
     return sorted(files)
+
+
+def _extract_csharp_namespace_and_usings_from_text(text: str) -> Tuple[Optional[str], List[str]]:
+    namespace_name: Optional[str] = None
+    usings: List[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("//") or line.startswith("/*") or line.startswith("*"):
+            continue
+        if namespace_name is None:
+            match_ns = re.match(r"^namespace\s+([A-Za-z_][A-Za-z0-9_\.]*)\s*(?:;|\{)", line)
+            if match_ns:
+                namespace_name = match_ns.group(1)
+                continue
+        match_using = re.match(
+            r"^using\s+(?:static\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?([A-Za-z_][A-Za-z0-9_\.]*)\s*;",
+            line,
+        )
+        if match_using:
+            usings.append(match_using.group(1))
+    return namespace_name, usings
+
+
+def _collect_csharp_import_graph(
+    all_csharp_files: List[str],
+    root: str,
+) -> Dict[str, List[str]]:
+    namespace_to_files: Dict[str, set[str]] = {}
+    namespace_by_file: Dict[str, Optional[str]] = {}
+    using_by_file: Dict[str, List[str]] = {}
+    rel_paths: List[str] = []
+
+    for abs_path in all_csharp_files:
+        rel_path = os.path.relpath(abs_path, root).replace("\\", "/")
+        rel_paths.append(rel_path)
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+                text = handle.read()
+        except OSError:
+            namespace_by_file[rel_path] = None
+            using_by_file[rel_path] = []
+            continue
+        namespace_name, usings = _extract_csharp_namespace_and_usings_from_text(text)
+        namespace_by_file[rel_path] = namespace_name
+        using_by_file[rel_path] = usings
+        if namespace_name:
+            namespace_to_files.setdefault(namespace_name, set()).add(rel_path)
+
+    deps_by_file: Dict[str, List[str]] = {rel: [] for rel in rel_paths}
+    for rel_path in rel_paths:
+        resolved: set[str] = set()
+        namespace_name = namespace_by_file.get(rel_path)
+        if namespace_name:
+            resolved.update(namespace_to_files.get(namespace_name, set()))
+        for using in using_by_file.get(rel_path, []):
+            resolved.update(namespace_to_files.get(using, set()))
+            if "." in using:
+                resolved.update(namespace_to_files.get(using.rsplit(".", 1)[0], set()))
+        resolved.discard(rel_path)
+        deps_by_file[rel_path] = sorted(resolved)
+    return deps_by_file
+
+
+def _expand_impacted_files_by_imports(
+    changed_existing: set[str],
+    deps_by_file: Dict[str, List[str]],
+) -> set[str]:
+    reverse_map: Dict[str, set[str]] = {}
+    for source, deps in deps_by_file.items():
+        for dep in deps:
+            reverse_map.setdefault(dep, set()).add(source)
+
+    impacted: set[str] = set()
+    queue: List[str] = list(changed_existing)
+    seen: set[str] = set(changed_existing)
+    while queue:
+        current = queue.pop(0)
+        for dependent in sorted(reverse_map.get(current, set())):
+            if dependent in seen:
+                continue
+            seen.add(dependent)
+            impacted.add(dependent)
+            queue.append(dependent)
+    return impacted
 
 
 def _load_or_parse_payload(
@@ -833,13 +1111,23 @@ def _load_or_parse_payload(
             for item in functions:
                 if isinstance(item, dict):
                     ensure_text_fields(item)
+        parse_meta = payload.get("parse_meta")
+        if not isinstance(parse_meta, dict):
+            payload["parse_meta"] = {
+                "parser_language": "csharp_tree_sitter",
+                "parser_available": True,
+                "has_error": False,
+                "error_nodes": 0,
+            }
         return payload
 
     rel_path = os.path.relpath(file_path, root)
     cached_payload = None
     signature = None
     if parse_cache:
-        signature = file_signature(file_path)
+        file_sig = file_signature(file_path)
+        if file_sig is not None:
+            signature = f"{file_sig}|schema:{_PARSE_CACHE_VERSION}"
         cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         return normalize_cached_payload(cached_payload)
@@ -850,6 +1138,7 @@ def _load_or_parse_payload(
         file_namespaces,
         file_relations,
         file_def,
+        parse_meta,
     ) = parse_csharp_file(file_path, root)
     payload = {
         "functions": [asdict(item) for item in file_functions],
@@ -858,6 +1147,7 @@ def _load_or_parse_payload(
         "namespaces": [asdict(item) for item in file_namespaces],
         "relations": [asdict(item) for item in file_relations],
         "file_def": asdict(file_def),
+        "parse_meta": parse_meta,
     }
     if parse_cache and signature is not None:
         write_parse_cache(parse_cache_root, rel_path, signature, payload)
@@ -882,30 +1172,133 @@ async def build_call_graph(
     repo: str,
     build_system: str,
     verbose: bool,
+    incremental: bool = False,
+    changed_files: Optional[Iterable[str]] = None,
+    deleted_files: Optional[Iterable[str]] = None,
+    commit_sha: str = "",
+    commit_sha_before: str = "",
 ) -> None:
     start_time = time.time()
-    cache_root = safe_cache_root(cache_dir, "csharp_analyzer")
+    cache_root = safe_cache_root(cache_dir, "csharp_analyzer", project_root=root)
     parse_cache_root = os.path.join(cache_root, "parse")
     qdrant_cache_root = os.path.join(cache_root, "qdrant")
     os.makedirs(parse_cache_root, exist_ok=True)
     os.makedirs(qdrant_cache_root, exist_ok=True)
-    all_files = _scan_csharp_files(root)
+    all_scanned_files = _scan_csharp_files(root)
+    all_rel_paths = [os.path.relpath(path, root).replace("\\", "/") for path in all_scanned_files]
+    rel_to_abs = {os.path.relpath(path, root).replace("\\", "/"): path for path in all_scanned_files}
+    changed_set = {item.replace("\\", "/") for item in (changed_files or []) if item}
+    deleted_set = {item.replace("\\", "/") for item in (deleted_files or []) if item}
+    selected_rel_paths: set[str]
+    impacted_by_imports_count = 0
+    if incremental:
+        changed_existing = {path for path in changed_set if path in rel_to_abs}
+        deps_by_file = _collect_csharp_import_graph(all_scanned_files, root)
+        impacted = _expand_impacted_files_by_imports(changed_existing, deps_by_file)
+        selected_rel_paths = changed_existing | impacted
+        impacted_by_imports_count = len(impacted)
+        all_files = [rel_to_abs[path] for path in all_rel_paths if path in selected_rel_paths]
+    else:
+        selected_rel_paths = set(all_rel_paths)
+        all_files = all_scanned_files
     if verbose:
+        if incremental:
+            print(
+                "[scan] incremental before=%s after=%s changed=%d deleted=%d selected=%d/%d impacted_by_imports=%d"
+                % (
+                    commit_sha_before or "unknown",
+                    commit_sha or "unknown",
+                    len(changed_set),
+                    len(deleted_set),
+                    len(all_files),
+                    len(all_scanned_files),
+                    impacted_by_imports_count,
+                )
+            )
         print(f"[scan] Found {len(all_files)} C# files under {root}")
     total_files = len(all_files)
 
-    def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
+    cleanup_targets = sorted(changed_set | deleted_set)
+    if incremental and cleanup_targets:
+        if code_writer:
+            await cleanup_neo4j_for_files(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+        if qdrant_writer:
+            cleanup_qdrant_with_writer(
+                writer=qdrant_writer,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+
+    def iter_selected_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
         for index, file_path in enumerate(all_files, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
             yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache)
 
+    selected_payloads: List[Dict[str, Any]] = []
+    selected_payload_by_rel: Dict[str, Dict[str, Any]] = {}
+    parse_error_file_count = 0
+    parse_error_node_total = 0
+    parse_error_examples: List[str] = []
+    for payload in iter_selected_payloads(log_parse=True):
+        selected_payloads.append(payload)
+        file_def = payload.get("file_def") or {}
+        rel_path = file_def.get("file_path") or ""
+        if rel_path:
+            selected_payload_by_rel[rel_path] = payload
+        parse_meta = payload.get("parse_meta") or {}
+        has_error = bool(parse_meta.get("has_error"))
+        error_nodes = int(parse_meta.get("error_nodes") or 0)
+        if has_error or error_nodes > 0:
+            parse_error_file_count += 1
+            parse_error_node_total += error_nodes
+            if rel_path and len(parse_error_examples) < 10:
+                parse_error_examples.append(rel_path)
+
+    if verbose:
+        if parse_error_file_count:
+            print(
+                "[parse] tree-sitter reported errors in %d/%d files (%d ERROR nodes)"
+                % (parse_error_file_count, total_files, parse_error_node_total)
+            )
+            for path in parse_error_examples:
+                print(f"  [parse][sample-error] {path}")
+        else:
+            print("[parse] tree-sitter parse status: no error nodes detected")
+
+    index_payloads: List[Dict[str, Any]]
+    if incremental and selected_rel_paths:
+        index_payloads = []
+        for index, rel_path in enumerate(all_rel_paths, start=1):
+            cached = selected_payload_by_rel.get(rel_path)
+            if cached is not None:
+                index_payloads.append(cached)
+                continue
+            abs_path = rel_to_abs[rel_path]
+            if verbose and (index == 1 or index % 200 == 0 or index == len(all_rel_paths)):
+                print(f"[index] {index}/{len(all_rel_paths)}: {rel_path}")
+            index_payloads.append(_load_or_parse_payload(abs_path, root, parse_cache_root, parse_cache))
+    elif incremental:
+        index_payloads = []
+    else:
+        index_payloads = list(selected_payloads)
+
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
     function_index_by_name_arity: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
     expected_points = 0
-    for payload in iter_payloads(log_parse=True):
+    for payload in index_payloads:
+        file_def = payload.get("file_def") or {}
+        file_path = file_def.get("file_path")
         for func in payload["functions"]:
-            expected_points += 1
+            if file_path in selected_rel_paths:
+                expected_points += 1
             entry = {
                 "symbol_id": func["symbol_id"],
                 "scope_name": func["scope_name"],
@@ -954,7 +1347,7 @@ async def build_call_graph(
         all_relations: List[Dict[str, Any]] = []
         all_calls: List[Dict[str, Any]] = []
 
-        for payload in iter_payloads(log_parse=False):
+        for payload in selected_payloads:
             file_def = payload["file_def"]
             file_id = file_def["file_path"]
             all_files.append(
@@ -1112,7 +1505,7 @@ async def build_call_graph(
                 batch_funcs: List[Dict[str, Any]] = []
                 batch_index = 0
                 total_batches = max(1, (expected_points + batch_size - 1) // batch_size)
-                for payload in iter_payloads(log_parse=False):
+                for payload in selected_payloads:
                     for func in payload["functions"]:
                         batch_funcs.append(func)
                         if len(batch_funcs) < batch_size:
@@ -1224,6 +1617,9 @@ async def build_call_graph(
                 os.remove(state_path)
             except OSError:
                 pass
+    _sr_fn = sum(len(p.get("functions") or []) for p in selected_payloads)
+    _sr_cls = sum(len(p.get("classes") or []) for p in selected_payloads)
+    print(f"[SCAN_RESULT] parser={language} files={len(selected_payloads)} functions={_sr_fn} classes={_sr_cls}", flush=True)
     if verbose:
         elapsed = time.time() - start_time
         print(f"[done] Total time: {elapsed:.2f}s")
@@ -1234,10 +1630,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--root", required=True, help="Root folder containing C# sources")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASS"))
+    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
-    parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION_CODE", "csharp_functions"))
+    parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "csharp_functions"))
     parser.add_argument(
         "--embed-model",
         default=os.environ.get("CODE_EMBEDDING_MODEL")
@@ -1246,7 +1642,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-embed-chars", type=int, default=4000)
     parser.add_argument("--chunk-embed", action="store_true")
-    parser.add_argument("--device", default=os.environ.get("EMBEDDING_DEVICE", "cpu"))
+    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))
     parser.add_argument("--batch-size", type=int, default=4) # for embedding - 4 function 1 turn embedding
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
@@ -1255,14 +1651,35 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
     parser.add_argument("--qdrant-retries", type=int, default=3)
     parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
+    parser.set_defaults(enable_message_scan=True)
+    parser.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true", help="Enable message scan and sync (default)")
+    parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false", help="Disable message scan and sync")
+    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"))
+    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION"))
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
     parser.add_argument("--keep-cache", action="store_true")
     parser.add_argument("--disable-parse-cache", action="store_true")
+    parser.add_argument(
+        "--ignore-cache",
+        action="store_true",
+        help="Ignore local caches for this run (parse cache, Neo4j/Qdrant resume state).",
+    )
     parser.add_argument("--project-id", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--project-name", default=os.environ.get("PROJECT_NAME"))
     parser.add_argument("--language", default=os.environ.get("PROJECT_LANGUAGE"))
     parser.add_argument("--repo", default=os.environ.get("PROJECT_REPO"))
     parser.add_argument("--build-system", default=os.environ.get("PROJECT_BUILD_SYSTEM", ""))
+    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""))
+    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""))
+    parser.add_argument("--incremental", action="store_true", help="Enable incremental ingestion mode")
+    parser.add_argument(
+        "--changed-files-manifest",
+        help="JSON/TXT manifest of changed+impacted file paths (relative to --root)",
+    )
+    parser.add_argument(
+        "--deleted-files-manifest",
+        help="JSON/TXT manifest of deleted file paths (relative to --root)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
@@ -1276,12 +1693,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
+    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
         driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=args.neo4j_uri,
             user=args.neo4j_user,
-            password=args.NEO4J_PASS,
+            password=args.neo4j_password,
         )
         code_writer = LanguageCodeWriter(
             driver=driver,
@@ -1304,27 +1721,87 @@ async def main(argv: Optional[List[str]] = None) -> int:
         )
 
     parse_cache = not args.disable_parse_cache
+    effective_cache_dir = args.cache_dir
+    if args.ignore_cache:
+        run_cache_root = safe_cache_root(effective_cache_dir, "csharp_analyzer", project_root=args.root)
+        effective_cache_dir = os.path.join(
+            run_cache_root,
+            "ignore_runs",
+            f"run_{int(time.time() * 1000)}",
+        )
+        os.makedirs(effective_cache_dir, exist_ok=True)
+        parse_cache = False
+        args.disable_neo4j_resume = True
+        args.keep_cache = False
+        if args.verbose:
+            print(
+                "[cache] ignore-cache enabled; using isolated cache dir: %s"
+                % effective_cache_dir
+            )
+    changed_manifest_files: List[str] = []
+    deleted_manifest_files: List[str] = []
+    if args.incremental:
+        if args.changed_files_manifest:
+            changed_manifest_files = sorted(load_manifest_paths(args.changed_files_manifest, args.root))
+        if args.deleted_files_manifest:
+            deleted_manifest_files = sorted(load_manifest_paths(args.deleted_files_manifest, args.root))
+        if args.verbose:
+            print(
+                "[diff] incremental manifests changed=%d deleted=%d"
+                % (len(changed_manifest_files), len(deleted_manifest_files))
+            )
     neo4j_state_path = None
-    if not args.disable_neo4j_resume:
-        cache_root = safe_cache_root(args.cache_dir, "csharp_analyzer")
+    if not args.disable_neo4j_resume and not args.incremental:
+        cache_root = safe_cache_root(effective_cache_dir, "csharp_analyzer", project_root=args.root)
         neo4j_state_path = args.neo4j_state or os.path.join(cache_root, "neo4j_state.json")
+    elif args.incremental and args.verbose:
+        print("[state] incremental mode disables neo4j resume state")
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
     language = args.language or "csharp"
     repo = args.repo or os.path.abspath(args.root)
     build_system = args.build_system or ""
+    commit_sha = args.commit_sha_after or ""
+    commit_sha_before = args.commit_sha_before or ""
+    message_qdrant_collection = (
+        args.message_qdrant_collection
+        or default_message_collection_name(args.qdrant_collection)
+    )
     if code_writer:
         cloc_raw = collect_cloc_stats(args.root)
         if cloc_raw:
             cloc_stats = normalize_cloc_payload(cloc_raw)
-            pass  # CLOC stats now handled directly in build_call_graph
+            await write_cloc_stats_to_neo4j(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                project_name=project_name,
+                root=args.root,
+                repo=repo,
+                language=language,
+                stats=cloc_stats,
+            )
+            if args.verbose:
+                print("[cloc] Stats stored in Neo4j")
         elif args.verbose:
             print("[cloc] Skipped (cloc not available or failed)")
 
     try:
         if args.dry_run:
             files = _scan_csharp_files(args.root)
-            print(f"Dry run: {len(files)} C# files found")
+            if args.incremental and changed_manifest_files:
+                manifest_set = set(changed_manifest_files)
+                files = [
+                    file_path
+                    for file_path in files
+                    if os.path.relpath(file_path, args.root).replace("\\", "/") in manifest_set
+                ]
+                print(
+                    "Dry run (incremental): %d C# files selected (manifest=%d)"
+                    % (len(files), len(changed_manifest_files))
+                )
+            else:
+                print(f"Dry run: {len(files)} C# files found")
             return 0
         await build_call_graph(
             args.root,
@@ -1333,7 +1810,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             embedder=embedder,
             batch_size=args.batch_size,
             qdrant_batch_size=args.qdrant_batch_size,
-            cache_dir=args.cache_dir,
+            cache_dir=effective_cache_dir,
             keep_cache=args.keep_cache,
             parse_cache=parse_cache,
             neo4j_batch_size=args.neo4j_batch_size,
@@ -1344,12 +1821,66 @@ async def main(argv: Optional[List[str]] = None) -> int:
             repo=repo,
             build_system=build_system,
             verbose=args.verbose,
+            incremental=args.incremental,
+            changed_files=changed_manifest_files,
+            deleted_files=deleted_manifest_files,
+            commit_sha=commit_sha,
+            commit_sha_before=commit_sha_before,
         )
+        if args.enable_message_scan:
+            message_summary = await run_message_scan_pipeline(
+                root=args.root,
+                parser="csharp",
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+                incremental=args.incremental,
+                changed_files=changed_manifest_files,
+                deleted_files=deleted_manifest_files,
+                driver=driver,
+                neo4j_database=args.neo4j_db,
+                qdrant_url=args.qdrant_url,
+                qdrant_collection=message_qdrant_collection if args.qdrant_url else None,
+                qdrant_vector_size=embedder.vector_size if embedder else 1024,
+                embed_texts=embedder.embed if embedder else None,
+                output_dir=args.message_output_dir,
+                cache_dir=effective_cache_dir,
+                commit_sha_before=commit_sha_before,
+                commit_sha_after=commit_sha,
+                qdrant_batch_size=args.qdrant_batch_size,
+                qdrant_timeout=args.qdrant_timeout,
+                qdrant_retries=args.qdrant_retries,
+                qdrant_retry_sleep=args.qdrant_retry_sleep,
+                verbose=args.verbose,
+            )
+            print(
+                "[message] parser=%s count=%s neo4j=%s qdrant=%s collection=%s artifact=%s"
+                % (
+                    message_summary.get("parser"),
+                    message_summary.get("message_count"),
+                    message_summary.get("neo4j_upserted"),
+                    message_summary.get("qdrant_upserted"),
+                    message_summary.get("qdrant_collection"),
+                    message_summary.get("artifact_path"),
+                )
+            )
     finally:
         if driver:
-            await driver.close()
+            close_result = driver.close()
+            if hasattr(close_result, "__await__"):
+                await close_result
     return 0
 
 
 if __name__ == "__main__":
+    print(f"Starting C# analyzer with Python {sys.version} on platform {sys.platform}")
+    print(f"NEO4J_URI: {os.environ.get('NEO4J_URI', 'Not Set')}")
+    print(f"NEO4J_USER: {os.environ.get('NEO4J_USER', 'Not Set')}")
+    print(f"NEO4J_PASS: {'****' if os.environ.get('NEO4J_PASS') else 'Not Set'}")
+    print(f"NEO4J_DB: {os.environ.get('NEO4J_DB', 'Not Set')}")
+    print(f"QDRANT_URL: {os.environ.get('QDRANT_URL', 'Not Set')}")
+    print(f"QDRANT_COLLECTION: {os.environ.get('QDRANT_COLLECTION', 'Not Set')}")
+    print(f"CODE_EMBEDDING_MODEL: {os.environ.get('CODE_EMBEDDING_MODEL', 'Not Set')}")
     raise SystemExit(asyncio.run(main()))

@@ -56,7 +56,8 @@ class LanguageCodeWriter:
     
     def _log_progress(self, label: str, current: int, total: int) -> None:
         """Log batch progress"""
-        if self.verbose and (current == 1 or current % 1000 == 0 or current == total):
+        first_checkpoint = min(total, max(1, self.batch_size))
+        if self.verbose and (current == first_checkpoint or current % 1000 == 0 or current == total):
             logger.info(f"[{self.driver.provider.value}] {label} {current}/{total}")
             if self.verbose:
                 print(f"[{self.driver.provider.value}] {label} {current}/{total}")
@@ -168,12 +169,15 @@ class LanguageCodeWriter:
         """Write file nodes in batches"""
         if not files:
             return 0
+        for row in files:
+            row.setdefault("node_type", "code")
         
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
             UNWIND $rows AS row
             MERGE (f:File {id: row.id})
             SET f.path = row.path,
+                f.node_type = 'code',
                 f.start_line = row.start_line,
                 f.end_line = row.end_line,
                 f.code = row.code,
@@ -202,7 +206,45 @@ class LanguageCodeWriter:
             state,
             state_writer
         )
-    
+
+    async def write_repo_file_edges(
+        self,
+        files: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Create (Repository)-[:HAS_FILE]->(File) edges for every file that
+        carries a ``repo`` field matching a Repository node's ``name``.
+
+        This must run AFTER write_files so the File nodes already exist.
+        The Repository nodes are created by setup_graph_project.py before
+        the analyzer runs, so they are guaranteed to be present.
+        """
+        rows = [f for f in (files or []) if f.get("repo")]
+        if not rows:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MATCH (r:Repository {name: row.repo})
+            MATCH (f:File {id: row.id})
+            MERGE (r)-[:HAS_FILE]->(f)
+            RETURN count(f) AS count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches(
+            "repo_file_edges",
+            rows,
+            write_batch,
+            state,
+            state_writer,
+        )
+
     async def write_classes(
         self,
         classes: List[Dict[str, Any]],
@@ -212,6 +254,8 @@ class LanguageCodeWriter:
         """Write class nodes in batches"""
         if not classes:
             return 0
+        for row in classes:
+            row.setdefault("node_type", "code")
         
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             return await self.class_ops.batch_create_classes(
@@ -262,6 +306,8 @@ class LanguageCodeWriter:
         """Write function nodes in batches"""
         if not functions:
             return 0
+        for row in functions:
+            row.setdefault("node_type", "code")
         
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             return await self.function_ops.batch_create_functions(
@@ -359,16 +405,15 @@ class LanguageCodeWriter:
             ON MATCH SET r.count = COALESCE(r.count, 0) + 1
             SET r.call_type = row.call_type,
                 r.updated_at = datetime()
-            RETURN count(r) as count
             """
-            
-            records, _, _ = await self.driver.execute_query(
+
+            await self.driver.execute_query(
                 query,
                 {"rows": batch},
                 self.database
             )
-            
-            return records[0]["count"] if records else 0
+
+            return len(batch)
         
         return await self.write_batches(
             "calls",
@@ -533,12 +578,15 @@ class LanguageCodeWriter:
         """Write project nodes in batches"""
         if not projects:
             return 0
+        for row in projects:
+            row.setdefault("node_type", "code")
 
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
             UNWIND $rows AS row
-            MERGE (p:Project {id: row.id})
+            MERGE (p:Project {project_id: row.id})
             SET p.name = row.name,
+                p.node_type = 'code',
                 p.language = row.language,
                 p.repo = row.repo,
                 p.root = row.root,
@@ -642,6 +690,7 @@ class LanguageCodeWriter:
             UNWIND $rows AS row
             MERGE (f:File {id: row.id})
             SET f.path = row.path,
+                f.node_type = 'code',
                 f.start_line = row.start_line,
                 f.end_line = row.end_line,
                 f.code = row.code,
@@ -680,6 +729,7 @@ class LanguageCodeWriter:
             UNWIND $rows AS row
             MERGE (f:File {id: row.id})
             SET f.path = row.path,
+                f.node_type = 'code',
                 f.start_line = row.start_line,
                 f.end_line = row.end_line,
                 f.code = row.code,
@@ -720,6 +770,7 @@ class LanguageCodeWriter:
             UNWIND $rows AS row
             MERGE (f:File {id: row.id})
             SET f.path = row.path,
+                f.node_type = 'code',
                 f.package_name = row.package_name,
                 f.start_line = row.start_line,
                 f.end_line = row.end_line,
@@ -757,6 +808,7 @@ class LanguageCodeWriter:
             UNWIND $rows AS row
             MERGE (c:Class {id: row.id})
             SET c.name = row.name,
+                c.node_type = 'code',
                 c.qualified_name = row.qualified_name,
                 c.kind = row.kind,
                 c.package_name = row.package_name,
@@ -839,12 +891,15 @@ class LanguageCodeWriter:
             UNWIND $rows AS row
             MERGE (f:Function {id: row.id})
             SET f.name = row.name,
+                f.node_type = 'code',
                 f.qualified_name = row.qualified_name,
                 f.kind = row.kind,
                 f.class_name = row.class_name,
                 f.package_name = row.package_name,
                 f.scope_name = row.scope_name,
                 f.file_path = row.file_path,
+                f.start_byte = row.start_byte,
+                f.end_byte = row.end_byte,
                 f.start_line = row.start_line,
                 f.end_line = row.end_line,
                 f.arity = row.arity,
@@ -853,6 +908,10 @@ class LanguageCodeWriter:
                 f.summary = row.summary,
                 f.note = row.note,
                 f.exported = coalesce(row.exported, false),
+                f.external = coalesce(row.external, false),
+                f.builtin = coalesce(row.builtin, false),
+                f.react_role = coalesce(row.react_role, ''),
+                f.middleware_kind = coalesce(row.middleware_kind, ''),
                 f.project_id = row.project_id,
                 f.project_name = row.project_name,
                 f.language = row.language,
@@ -868,6 +927,265 @@ class LanguageCodeWriter:
 
         return await self.write_batches("functions", functions, write_batch, state, state_writer)
 
+    async def write_properties_full(
+        self,
+        properties: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write property nodes with full project metadata in batches."""
+        if not properties:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (p:Property {id: row.id})
+            SET p.name = row.name,
+                p.qualified_name = row.qualified_name,
+                p.kind = row.kind,
+                p.scope_name = row.scope_name,
+                p.class_name = row.class_name,
+                p.package_name = row.package_name,
+                p.file_path = row.file_path,
+                p.start_line = row.start_line,
+                p.end_line = row.end_line,
+                p.parameters = row.parameters,
+                p.return_type = row.return_type,
+                p.code = row.code,
+                p.comment = row.comment,
+                p.summary = row.summary,
+                p.note = row.note,
+                p.exported = row.exported,
+                p.project_id = row.project_id,
+                p.project_name = row.project_name,
+                p.language = row.language,
+                p.repo = row.repo,
+                p.build_system = row.build_system,
+                p.updated_at = datetime()
+            RETURN count(p) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("properties", properties, write_batch, state, state_writer)
+
+    async def write_events_full(
+        self,
+        events: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write event nodes with full project metadata in batches."""
+        if not events:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (e:Event {id: row.id})
+            SET e.name = row.name,
+                e.qualified_name = row.qualified_name,
+                e.kind = row.kind,
+                e.scope_name = row.scope_name,
+                e.class_name = row.class_name,
+                e.package_name = row.package_name,
+                e.file_path = row.file_path,
+                e.start_line = row.start_line,
+                e.end_line = row.end_line,
+                e.parameters = row.parameters,
+                e.code = row.code,
+                e.comment = row.comment,
+                e.summary = row.summary,
+                e.note = row.note,
+                e.exported = row.exported,
+                e.project_id = row.project_id,
+                e.project_name = row.project_name,
+                e.language = row.language,
+                e.repo = row.repo,
+                e.build_system = row.build_system,
+                e.updated_at = datetime()
+            RETURN count(e) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("events", events, write_batch, state, state_writer)
+
+    async def write_interfaces_full(
+        self,
+        interfaces: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write interface nodes with full project metadata in batches."""
+        if not interfaces:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (i:Interface {id: row.id})
+            SET i.name = row.name,
+                i.qualified_name = row.qualified_name,
+                i.kind = row.kind,
+                i.file_path = row.file_path,
+                i.start_line = row.start_line,
+                i.end_line = row.end_line,
+                i.base_interfaces = row.base_interfaces,
+                i.code = row.code,
+                i.comment = row.comment,
+                i.summary = row.summary,
+                i.note = row.note,
+                i.project_id = row.project_id,
+                i.project_name = row.project_name,
+                i.language = row.language,
+                i.repo = row.repo,
+                i.build_system = row.build_system,
+                i.updated_at = datetime()
+            RETURN count(i) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("interfaces", interfaces, write_batch, state, state_writer)
+
+    async def write_enums_full(
+        self,
+        enums: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write enum nodes with full project metadata in batches."""
+        if not enums:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (e:Enum {id: row.id})
+            SET e.name = row.name,
+                e.qualified_name = row.qualified_name,
+                e.kind = row.kind,
+                e.scope_name = row.scope_name,
+                e.class_name = row.class_name,
+                e.package_name = row.package_name,
+                e.file_path = row.file_path,
+                e.start_line = row.start_line,
+                e.end_line = row.end_line,
+                e.members = row.members,
+                e.code = row.code,
+                e.comment = row.comment,
+                e.summary = row.summary,
+                e.note = row.note,
+                e.project_id = row.project_id,
+                e.project_name = row.project_name,
+                e.language = row.language,
+                e.repo = row.repo,
+                e.build_system = row.build_system,
+                e.updated_at = datetime()
+            RETURN count(e) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("enums", enums, write_batch, state, state_writer)
+
+    async def write_constants_full(
+        self,
+        constants: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write constant nodes with full project metadata in batches."""
+        if not constants:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (c:Constant {id: row.id})
+            SET c.name = row.name,
+                c.qualified_name = row.qualified_name,
+                c.kind = row.kind,
+                c.scope_name = row.scope_name,
+                c.class_name = row.class_name,
+                c.package_name = row.package_name,
+                c.file_path = row.file_path,
+                c.line_number = row.line_number,
+                c.value = row.value,
+                c.type_name = row.type_name,
+                c.code = row.code,
+                c.comment = row.comment,
+                c.summary = row.summary,
+                c.note = row.note,
+                c.project_id = row.project_id,
+                c.project_name = row.project_name,
+                c.language = row.language,
+                c.repo = row.repo,
+                c.build_system = row.build_system,
+                c.updated_at = datetime()
+            RETURN count(c) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("constants", constants, write_batch, state, state_writer)
+
+    async def write_variables_full(
+        self,
+        variables: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write variable nodes with full project metadata in batches."""
+        if not variables:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (v:Variable {id: row.id})
+            SET v.name = row.name,
+                v.qualified_name = row.qualified_name,
+                v.kind = row.kind,
+                v.scope_name = row.scope_name,
+                v.class_name = row.class_name,
+                v.package_name = row.package_name,
+                v.file_path = row.file_path,
+                v.line_number = row.line_number,
+                v.type_name = row.type_name,
+                v.is_global = row.is_global,
+                v.is_shared = row.is_shared,
+                v.code = row.code,
+                v.comment = row.comment,
+                v.summary = row.summary,
+                v.note = row.note,
+                v.project_id = row.project_id,
+                v.project_name = row.project_name,
+                v.language = row.language,
+                v.repo = row.repo,
+                v.build_system = row.build_system,
+                v.updated_at = datetime()
+            RETURN count(v) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("variables", variables, write_batch, state, state_writer)
+
     async def write_relations_typed(
         self,
         relations: List[Dict[str, Any]],
@@ -880,6 +1198,17 @@ class LanguageCodeWriter:
         Relations are grouped by (source_label, target_label, rel_type) if those fields
         are present, otherwise matched by id only.
         """
+        if not relations:
+            return 0
+
+        # Strip (Project)-[:CONTAINS]->(anything) edges regardless of call site.
+        # Android analyzer calls this method directly (not through write_all) so
+        # the write_all-level filter does not apply here.  We detect these edges
+        # by the explicit source_label field that the Android builder sets.
+        relations = [
+            r for r in relations
+            if not (r.get("source_label") == "Project" and r.get("rel_type") == "CONTAINS")
+        ]
         if not relations:
             return 0
 
@@ -953,7 +1282,18 @@ class LanguageCodeWriter:
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
             UNWIND $rows AS row
-            MATCH (caller:Function {id: row.caller_id}), (callee:Function {id: row.callee_id})
+            CALL {
+                WITH row
+                MATCH (caller:Function {id: row.caller_id})
+                RETURN caller
+                LIMIT 1
+            }
+            CALL {
+                WITH row
+                MATCH (callee:Function {id: row.callee_id})
+                RETURN callee
+                LIMIT 1
+            }
             MERGE (caller)-[r:CALLS {site_id: row.site_id}]->(callee)
             SET r += row.props
             RETURN count(r) as count
@@ -964,6 +1304,151 @@ class LanguageCodeWriter:
             return records[0]["count"] if records else 0
 
         return await self.write_batches("calls", calls, write_batch, state, state_writer)
+
+    async def write_navigators(
+        self,
+        navigators: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """MERGE :Navigator nodes (React Navigation factory declarations)."""
+        if not navigators:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (n:Navigator {id: row.id})
+            SET n.var_name        = row.var_name,
+                n.nav_type        = row.nav_type,
+                n.factory         = row.factory,
+                n.param_list_ref  = row.param_list_ref,
+                n.file_path       = row.file_path,
+                n.start_line      = row.start_line,
+                n.project_id      = row.project_id,
+                n.project_name    = row.project_name,
+                n.updated_at      = datetime()
+            RETURN count(n) AS count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("navigators", navigators, write_batch, state, state_writer)
+
+    async def write_has_routes(
+        self,
+        routes: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """MERGE (:Navigator)-[:HAS_ROUTE {name, param_schema}]->(:Function) edges."""
+        if not routes:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MATCH (n:Navigator {id: row.navigator_id})
+            MATCH (s:Function  {id: row.screen_id})
+            MERGE (n)-[r:HAS_ROUTE {name: row.route_name}]->(s)
+            SET r.param_schema = row.param_schema,
+                r.updated_at   = datetime()
+            RETURN count(r) AS count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("has_routes", routes, write_batch, state, state_writer)
+
+    async def write_param_lists(
+        self,
+        param_lists: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """MERGE :RouteParam nodes carrying per-route type schemas."""
+        if not param_lists:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (p:RouteParam {id: row.symbol_id + '::' + row.route_name})
+            SET p.param_list_name = row.name,
+                p.route           = row.route_name,
+                p.type_str        = row.type_str,
+                p.file_path       = row.file_path,
+                p.project_id      = row.project_id,
+                p.updated_at      = datetime()
+            RETURN count(p) AS count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("param_lists", param_lists, write_batch, state, state_writer)
+
+    async def write_workflows(
+        self,
+        workflows: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write :Workflow nodes via MERGE in batches."""
+        if not workflows:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (w:Workflow {workflow_id: row.workflow_id})
+            SET w.name          = row.workflow_name,
+                w.domain        = row.domain,
+                w.description   = row.description,
+                w.confidence    = row.confidence,
+                w.entrypoint_id = row.entrypoint_id,
+                w.language      = row.language,
+                w.project       = row.project,
+                w.kind          = row.kind,
+                w.updated_at    = datetime()
+            RETURN count(w) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("workflows", workflows, write_batch, state, state_writer)
+
+    async def write_workflow_steps(
+        self,
+        step_rows: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write :HAS_STEP edges between :Workflow and :Function nodes."""
+        if not step_rows:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MATCH (w:Workflow  {workflow_id: row.workflow_id})
+            MATCH (f:Function  {id:          row.function_id})
+            MERGE (w)-[s:HAS_STEP {order: row.step_order}]->(f)
+            RETURN count(s) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("workflow_steps", step_rows, write_batch, state, state_writer)
 
     async def write_all(
         self,
@@ -981,6 +1466,19 @@ class LanguageCodeWriter:
         relations: List[Dict[str, Any]] = None,
         calls: List[Dict[str, Any]] = None,
         calls_with_site: List[Dict[str, Any]] = None,
+        # VB-specific symbol types
+        properties: List[Dict[str, Any]] = None,
+        events: List[Dict[str, Any]] = None,
+        interfaces: List[Dict[str, Any]] = None,
+        enums: List[Dict[str, Any]] = None,
+        constants: List[Dict[str, Any]] = None,
+        variables: List[Dict[str, Any]] = None,
+        # React Navigation navigator graph
+        navigators: List[Dict[str, Any]] = None,
+        has_routes: List[Dict[str, Any]] = None,
+        param_lists: List[Dict[str, Any]] = None,
+        workflows: List[Dict[str, Any]] = None,
+        workflow_steps: List[Dict[str, Any]] = None,
         state: Optional[Dict[str, int]] = None,
         state_writer: Optional[Callable] = None,
         # Selector flags – set to True to use the *_full inline-Cypher variants
@@ -1005,6 +1503,12 @@ class LanguageCodeWriter:
             relations: Generic relationships (use write_relations_typed for typed rels)
             calls: Function call relationships
             calls_with_site: Call relationships that carry a ``site_id`` (Android/C++)
+            properties: VB.NET property definitions
+            events: VB.NET event definitions
+            interfaces: VB.NET interface definitions
+            enums: Enum definitions (VB.NET, VB6, VBA)
+            constants: Constant definitions (VB6, VBA)
+            variables: Variable definitions (VB6, VBA)
             state: State dict for resume
             state_writer: Function to persist state
             use_full_writers: When True use the *_full inline-Cypher methods that
@@ -1043,6 +1547,9 @@ class LanguageCodeWriter:
                 counts["files"] = await self.write_files_jsx(files, state, state_writer)
             else:
                 counts["files"] = await self.write_files(files, state, state_writer)
+            # Attach each File to its owning Repository node.
+            # Runs after files are written so the File nodes are guaranteed to exist.
+            counts["repo_file_edges"] = await self.write_repo_file_edges(files, state, state_writer)
 
         # --- Classes ---
         if classes:
@@ -1068,6 +1575,47 @@ class LanguageCodeWriter:
             else:
                 counts["functions"] = await self.write_functions(functions, state, state_writer)
 
+        # --- React Navigation: Navigator nodes + HAS_ROUTE edges + RouteParam nodes ---
+        # Written after functions so that HAS_ROUTE MATCH on :Function will resolve.
+        if navigators:
+            counts["navigators"] = await self.write_navigators(navigators, state, state_writer)
+
+        if has_routes:
+            counts["has_routes"] = await self.write_has_routes(has_routes, state, state_writer)
+
+        if param_lists:
+            counts["param_lists"] = await self.write_param_lists(param_lists, state, state_writer)
+
+        # --- Properties (VB-specific) ---
+        if properties:
+            if use_full_writers:
+                counts["properties"] = await self.write_properties_full(properties, state, state_writer)
+
+        # --- Events (VB-specific) ---
+        if events:
+            if use_full_writers:
+                counts["events"] = await self.write_events_full(events, state, state_writer)
+
+        # --- Interfaces (VB-specific) ---
+        if interfaces:
+            if use_full_writers:
+                counts["interfaces"] = await self.write_interfaces_full(interfaces, state, state_writer)
+
+        # --- Enums (VB-specific) ---
+        if enums:
+            if use_full_writers:
+                counts["enums"] = await self.write_enums_full(enums, state, state_writer)
+
+        # --- Constants (VB-specific) ---
+        if constants:
+            if use_full_writers:
+                counts["constants"] = await self.write_constants_full(constants, state, state_writer)
+
+        # --- Variables (VB-specific) ---
+        if variables:
+            if use_full_writers:
+                counts["variables"] = await self.write_variables_full(variables, state, state_writer)
+
         if fields:
             counts["fields"] = await self.write_fields(fields, state, state_writer)
 
@@ -1079,6 +1627,31 @@ class LanguageCodeWriter:
 
         # --- Relationships ---
         if relations:
+            # Strip (Project)-[:CONTAINS]->(anything) edges.
+            # Project nodes must ONLY connect to Repository nodes via HAS_REPOSITORY.
+            # The full intended hierarchy is:
+            #   (Project)-[:HAS_REPOSITORY]->(Repository)
+            #       -[:HAS_FILE]->(File)-[:CONTAINS]->(Function/Class/…)
+            # All child nodes carry project_id as a property so project-scoped
+            # queries can still find them without traversing from Project.
+            #
+            # Build the project ID set from BOTH the explicit `projects` list AND
+            # the `project_id` field on every file node.  This ensures the filter
+            # works even when a caller omits the `projects` argument (e.g.
+            # cplus_analyzer, kotlin_analyzer).
+            _project_ids: set = set()
+            if projects:
+                _project_ids.update(p["id"] for p in projects if p.get("id"))
+            if files:
+                _project_ids.update(f["project_id"] for f in files if f.get("project_id"))
+            if _project_ids:
+                relations = [
+                    r for r in relations
+                    if not (
+                        r.get("source_id") in _project_ids
+                        and r.get("rel_type") == "CONTAINS"
+                    )
+                ]
             if use_full_writers:
                 counts["relations"] = await self.write_relations_typed(relations, state, state_writer)
             else:
@@ -1089,5 +1662,12 @@ class LanguageCodeWriter:
 
         if calls_with_site:
             counts["calls_with_site"] = await self.write_calls_with_site(calls_with_site, state, state_writer)
+
+        # --- Workflows (written after functions so FK constraints are satisfied) ---
+        if workflows:
+            counts["workflows"] = await self.write_workflows(workflows, state, state_writer)
+
+        if workflow_steps:
+            counts["workflow_steps"] = await self.write_workflow_steps(workflow_steps, state, state_writer)
 
         return counts

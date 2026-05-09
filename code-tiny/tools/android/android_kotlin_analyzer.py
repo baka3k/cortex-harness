@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import hashlib
+import fnmatch
 import os
 import re
 import sys
@@ -28,7 +29,11 @@ from tools.common.analyzer_cache import (
     safe_cache_root,
     write_parse_cache,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload
+from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
+from tools.common.git_diff import load_manifest_paths
+from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
+from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
+from tools.android import android_common
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
@@ -36,6 +41,9 @@ try:
     from tree_sitter_languages import get_parser as ts_get_parser
 except Exception:
     ts_get_parser = None
+
+
+_PARSE_CACHE_VERSION = "android-kotlin-v2026-03-09-1"
 
 
 @dataclass
@@ -152,107 +160,16 @@ class CallEdge:
     callee_id: Optional[str]
 
 
-@dataclass
-class AndroidManifestDef:
-    symbol_id: str
-    package_name: Optional[str]
-    file_path: str
-    start_line: int
-    end_line: int
-    code: str
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class AndroidComponentDef:
-    symbol_id: str
-    name: str
-    component_type: str
-    class_name: Optional[str]
-    exported: Optional[bool]
-    process: Optional[str]
-    permission: Optional[str]
-    enabled: Optional[bool]
-    direct_boot_aware: Optional[bool]
-    target_activity: Optional[str]
-    intent_actions: List[str]
-    intent_categories: List[str]
-    intent_data: List[str]
-    file_path: str
-    start_line: int
-    end_line: int
-    code: str
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class AndroidResourceDef:
-    symbol_id: str
-    name: str
-    res_type: str
-    file_path: str
-    qualifier: str
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class GradleModuleDef:
-    symbol_id: str
-    name: str
-    module_path: str
-    module_type: str
-    namespace: Optional[str]
-    application_id: Optional[str]
-    file_path: str
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class GradleDependencyDef:
-    symbol_id: str
-    coordinate: str
-    group: Optional[str]
-    artifact: Optional[str]
-    version: Optional[str]
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class AndroidAnnotationDef:
-    symbol_id: str
-    name: str
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class AndroidNavRouteDef:
-    symbol_id: str
-    route: str
-    file_path: str
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class AndroidIntentActionDef:
-    symbol_id: str
-    action: str
-    summary: str = ""
-    note: str = ""
-
-
-@dataclass
-class AndroidHandlerMessageDef:
-    symbol_id: str
-    token: str
-    summary: str = ""
-    note: str = ""
+# Import shared Android dataclasses from android_common
+AndroidManifestDef = android_common.AndroidManifestDef
+AndroidComponentDef = android_common.AndroidComponentDef
+AndroidResourceDef = android_common.AndroidResourceDef
+GradleModuleDef = android_common.GradleModuleDef
+GradleDependencyDef = android_common.GradleDependencyDef
+AndroidAnnotationDef = android_common.AndroidAnnotationDef
+AndroidNavRouteDef = android_common.AndroidNavRouteDef
+AndroidIntentActionDef = android_common.AndroidIntentActionDef
+AndroidHandlerMessageDef = android_common.AndroidHandlerMessageDef
 
 
 def _node_text(node, source_bytes: bytes) -> str:
@@ -358,6 +275,14 @@ def _find_nodes_by_types(node, node_types: set[str]) -> Iterable:
         yield from _find_nodes_by_types(child, node_types)
 
 
+def _tree_error_stats(tree) -> Tuple[bool, int]:
+    if tree is None:
+        return False, 0
+    has_error = bool(getattr(tree.root_node, "has_error", False))
+    error_nodes = sum(1 for _ in _find_nodes_by_type(tree.root_node, "ERROR"))
+    return has_error, error_nodes
+
+
 def _collect_package_info(tree, source_bytes: bytes) -> Tuple[Optional[str], int, int, str, str]:
     for node in _find_nodes_by_type(tree.root_node, "package_header"):
         text = _node_text(node, source_bytes)
@@ -373,13 +298,13 @@ def _collect_imports(tree, source_bytes: bytes) -> List[str]:
     imports: List[str] = []
     for node in _find_nodes_by_type(tree.root_node, "import_header"):
         text = _node_text(node, source_bytes)
-        identifiers = [
-            token
-            for token in _extract_identifiers(text)
-            if token not in {"import", "as"}
-        ]
-        if identifiers:
-            imports.append(".".join(identifiers))
+        for line in text.splitlines():
+            match = re.search(
+                r"^\s*import\s+([A-Za-z_][A-Za-z0-9_\.]*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*$",
+                line.strip(),
+            )
+            if match:
+                imports.append(match.group(1))
     return imports
 
 
@@ -414,10 +339,15 @@ def _extract_class_name(class_node, source_bytes: bytes) -> Optional[str]:
 
 
 def _normalize_callee(text: str) -> str:
-    callee = text.split("(", 1)[0].strip()
+    callee = _strip_outer_call_args(text)
     callee = callee.replace("?.", ".").replace("::", ".")
     callee = re.sub(r"<.*?>", "", callee)
     callee = callee.strip(" .")
+    if "(" in callee or ")" in callee:
+        # Receiver chain contains nested call(s): A.b(...).c -> c
+        tail = callee.rsplit(".", 1)[-1].strip()
+        if tail:
+            return tail
     return callee
 
 
@@ -448,10 +378,53 @@ def _iter_callable_reference_matches(text: str) -> Iterable[Tuple[str, int]]:
 def _extract_call_name(call_node, source_bytes: bytes) -> Optional[str]:
     function_node = call_node.child_by_field_name("function")
     if function_node is not None:
+        if function_node.type == "navigation_expression" and _has_descendant_type(function_node, "call_expression"):
+            # For call-chains like A.b(...).c(...), prefer the final callee "c".
+            tail = _rightmost_identifier(function_node, source_bytes)
+            if tail:
+                return tail
         text = _node_text(function_node, source_bytes)
         return _normalize_callee(text)
     text = _node_text(call_node, source_bytes)
     return _normalize_callee(text)
+
+
+def _strip_outer_call_args(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw.endswith(")"):
+        return raw
+    depth = 0
+    for idx in range(len(raw) - 1, -1, -1):
+        ch = raw[idx]
+        if ch == ")":
+            depth += 1
+        elif ch == "(":
+            depth -= 1
+            if depth == 0:
+                return raw[:idx].strip()
+    return raw
+
+
+def _rightmost_identifier(node, source_bytes: bytes) -> Optional[str]:
+    ident_types = {"identifier", "simple_identifier", "field_identifier", "type_identifier"}
+    if node.type in ident_types:
+        text = _node_text(node, source_bytes).strip()
+        if text:
+            return text
+    for child in reversed(node.children):
+        found = _rightmost_identifier(child, source_bytes)
+        if found:
+            return found
+    return None
+
+
+def _has_descendant_type(node, target_type: str) -> bool:
+    for child in node.children:
+        if child.type == target_type:
+            return True
+        if _has_descendant_type(child, target_type):
+            return True
+    return False
 
 
 def _extract_parameter_info(param_node, source_bytes: bytes) -> Tuple[Optional[str], Optional[str], Optional[Tuple[int, int, str]]]:
@@ -607,16 +580,6 @@ def _iter_calls(function_node) -> Iterable:
         yield node
 
 
-def _get_kotlin_parser(function_node) -> Iterable:
-    for node in _find_nodes_by_type(function_node, "call_expression"):
-        yield node
-
-
-# def _get_kotlin_parser(function_node) -> Iterable:
-#     for node in _find_nodes_by_type(function_node, "call_expression"):
-#         yield node
-
-
 def _get_kotlin_parser() -> Parser:
     if ts_get_parser is not None:
         try:
@@ -664,11 +627,13 @@ def parse_kotlin_file(
     FileDef,
     Optional[PackageDef],
     Dict[str, Any],
+    Dict[str, Any],
 ]:
     parser = _get_kotlin_parser()
     with open(path, "rb") as handle:
         source_bytes = handle.read()
     tree = parser.parse(source_bytes)
+    has_error, error_nodes = _tree_error_stats(tree)
     rel_path = os.path.relpath(path, root)
     package_name, pkg_start, pkg_end, pkg_snippet, pkg_comment = _collect_package_info(tree, source_bytes)
     imports = _collect_imports(tree, source_bytes)
@@ -971,6 +936,12 @@ def parse_kotlin_file(
         package_def,
         compose_routes,
         {"events": android_events},
+        {
+            "parser_language": "kotlin_tree_sitter",
+            "parser_available": True,
+            "has_error": has_error,
+            "error_nodes": error_nodes,
+        },
     )
 
 
@@ -1129,19 +1100,106 @@ def _should_trust_remote_code(model_name: str) -> bool:
     return "jina" in model_name.lower()
 
 
+def _resolve_embedding_model_source(model_name: str, *, verbose: bool = False) -> str:
+    local_model_path = os.environ.get("CODE_EMBEDDING_MODEL_PATH")
+    if not local_model_path:
+        return model_name
+    resolved_path = os.path.abspath(os.path.expanduser(local_model_path))
+    if not os.path.exists(resolved_path):
+        raise FileNotFoundError(
+            "CODE_EMBEDDING_MODEL_PATH does not exist: %s" % local_model_path
+        )
+    if verbose:
+        print("[embed] using local model path from CODE_EMBEDDING_MODEL_PATH: %s" % resolved_path)
+    return resolved_path
+
+
+def _is_hf_cache_permission_error(exc: BaseException) -> bool:
+    current: Optional[BaseException] = exc
+    while current is not None:
+        if isinstance(current, PermissionError):
+            return True
+        if isinstance(current, OSError):
+            message = str(current).lower()
+            if "permissionerror" in message and "huggingface" in message:
+                return True
+            if "permission denied" in message and "huggingface" in message:
+                return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _prepare_local_hf_caches(base_dir: str) -> str:
+    hub_cache = os.path.join(base_dir, "hub")
+    modules_cache = os.path.join(base_dir, "modules")
+    os.makedirs(hub_cache, exist_ok=True)
+    os.makedirs(modules_cache, exist_ok=True)
+    os.environ["HF_HOME"] = base_dir
+    os.environ["HUGGINGFACE_HUB_CACHE"] = hub_cache
+    os.environ["TRANSFORMERS_CACHE"] = hub_cache
+    os.environ["HF_MODULES_CACHE"] = modules_cache
+    try:
+        import transformers.dynamic_module_utils as dynamic_module_utils
+
+        dynamic_module_utils.HF_MODULES_CACHE = modules_cache
+    except Exception:
+        pass
+    try:
+        import transformers.utils.hub as hub_utils
+
+        hub_utils.HUGGINGFACE_HUB_CACHE = hub_cache
+        hub_utils.TRANSFORMERS_CACHE = hub_cache
+    except Exception:
+        pass
+    return hub_cache
+
+
 class CodeEmbedder:
-    def __init__(self, model_name: str, device: str, max_embed_chars: int, chunk_embed: bool) -> None:
-        trust_remote_code = _should_trust_remote_code(model_name)
+    def __init__(
+        self,
+        model_name: str,
+        device: str,
+        max_embed_chars: int,
+        chunk_embed: bool,
+        *,
+        fallback_cache_base_dir: Optional[str] = None,
+        project_root: Optional[str] = None,
+        verbose: bool = False,
+    ) -> None:
+        model_source = _resolve_embedding_model_source(model_name, verbose=verbose)
+        trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
         extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            trust_remote_code=trust_remote_code,
-            **extra_tokenizer_kwargs,
-        )
-        self.model = AutoModel.from_pretrained(
-            model_name,
-            trust_remote_code=trust_remote_code,
-        )
+
+        def _load_pretrained(cache_dir: Optional[str]) -> Tuple[Any, Any]:
+            tokenizer_kwargs: Dict[str, Any] = {
+                "trust_remote_code": trust_remote_code,
+                **extra_tokenizer_kwargs,
+            }
+            model_kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
+            if cache_dir:
+                tokenizer_kwargs["cache_dir"] = cache_dir
+                model_kwargs["cache_dir"] = cache_dir
+            tokenizer = AutoTokenizer.from_pretrained(model_source, **tokenizer_kwargs)
+            model = AutoModel.from_pretrained(model_source, **model_kwargs)
+            return tokenizer, model
+
+        try:
+            self.tokenizer, self.model = _load_pretrained(cache_dir=None)
+        except Exception as exc:
+            if not _is_hf_cache_permission_error(exc):
+                raise
+            fallback_cache_dir = safe_cache_root(
+                fallback_cache_base_dir,
+                "hugging_cache",
+                project_root=project_root,
+            )
+            fallback_hub_cache = _prepare_local_hf_caches(fallback_cache_dir)
+            if verbose:
+                print(
+                    "[embed] HuggingFace cache permission denied; retrying with local cache: %s"
+                    % fallback_cache_dir
+                )
+            self.tokenizer, self.model = _load_pretrained(cache_dir=fallback_hub_cache)
         self.device = torch.device(device)
         self.model.to(self.device)
         self.model.eval()
@@ -1298,21 +1356,62 @@ def _call_site_id(
 
 
 _ANDROID_SKIP_DIRS = {
-    ".git",
-    ".gradle",
-    ".idea",
-    ".android",
-    ".cxx",
-    "build",
-    "out",
-    "dist",
+    # Version control
+    ".git", ".hg", ".svn",
+
+    # Gradle
+    ".gradle", "gradleCache", ".mvn",
+
+    # IDE
+    ".idea", ".vscode", ".settings", ".capture",
+
+    # Android specific
+    ".android", ".cxx", ".externalNativeBuild",
+
+    # Build outputs
+    "build", "out", "bin", "dist", "buildSrc",
+
+    # Generated
+    "gen", "generated",
+
+    # Node (mixed projects)
     "node_modules",
+
+    # Cache
+    ".cache", ".parcel-cache", "__pycache__",
+
+    # Testing
+    "coverage", ".test-results", "test-results", "androidTest",
+
+    # Lint
+    "lint-results", "lint-baseline.xml",
+
+    # Temporary
+    "tmp", "temp", ".tmp", "tmpdir",
+
+    # OS specific
+    ".DS_Store", "Thumbs.db",
+
+    # Misc project files
+    ".project", ".classpath", "*.iml", "*.ipr", "*.iws",
+
+    # APK/AAB outputs
+    "*.apk", "*.aab", "*.ap_",
 }
 
 
+def _is_skipped_android_name(name: str) -> bool:
+    if name.startswith("."):
+        return True
+    for pattern in _ANDROID_SKIP_DIRS:
+        if name == pattern or fnmatch.fnmatch(name, pattern):
+            return True
+    return False
+
+
 def _walk_android_tree(root: str) -> Iterable[Tuple[str, List[str], List[str]]]:
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _ANDROID_SKIP_DIRS]
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        dirnames[:] = [name for name in dirnames if not _is_skipped_android_name(name)]
         yield dirpath, dirnames, filenames
 
 
@@ -1320,6 +1419,8 @@ def _scan_android_kotlin_files(root: str) -> List[str]:
     kotlin_files: List[str] = []
     for dirpath, _, filenames in _walk_android_tree(root):
         for name in filenames:
+            if _is_skipped_android_name(name):
+                continue
             if name.endswith((".kt", ".kts")):
                 kotlin_files.append(os.path.join(dirpath, name))
     return sorted(kotlin_files)
@@ -1329,6 +1430,8 @@ def _scan_android_manifest_files(root: str) -> List[str]:
     manifests: List[str] = []
     for dirpath, _, filenames in _walk_android_tree(root):
         for name in filenames:
+            if _is_skipped_android_name(name):
+                continue
             if name == "AndroidManifest.xml":
                 manifests.append(os.path.join(dirpath, name))
     return sorted(manifests)
@@ -1338,6 +1441,8 @@ def _scan_android_gradle_files(root: str) -> List[str]:
     gradle_files: List[str] = []
     for dirpath, _, filenames in _walk_android_tree(root):
         for name in filenames:
+            if _is_skipped_android_name(name):
+                continue
             if name in {"build.gradle", "build.gradle.kts"}:
                 gradle_files.append(os.path.join(dirpath, name))
     return sorted(gradle_files)
@@ -1349,177 +1454,159 @@ def _scan_android_resource_xml_files(root: str) -> List[str]:
         if f"{os.sep}res{os.sep}" not in f"{dirpath}{os.sep}":
             continue
         for name in filenames:
+            if _is_skipped_android_name(name):
+                continue
             if name.endswith(".xml"):
                 xml_files.append(os.path.join(dirpath, name))
     return sorted(xml_files)
 
 
-_ANDROID_NS = "http://schemas.android.com/apk/res/android"
+def _extract_kotlin_package_and_imports_from_text(text: str) -> Tuple[Optional[str], List[str]]:
+    package_name: Optional[str] = None
+    imports: List[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("//"):
+            continue
+        if package_name is None:
+            match_pkg = re.match(r"^package\s+([A-Za-z_][A-Za-z0-9_\.]*)\s*$", line)
+            if match_pkg:
+                package_name = match_pkg.group(1)
+                continue
+        match_imp = re.match(
+            r"^import\s+([A-Za-z_][A-Za-z0-9_\.]*)(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*)?\s*$",
+            line,
+        )
+        if match_imp:
+            imports.append(match_imp.group(1))
+    return package_name, imports
+
+
+def _collect_kotlin_import_graph(
+    all_kotlin_files: List[str],
+    root: str,
+) -> Dict[str, List[str]]:
+    package_to_files: Dict[str, set[str]] = {}
+    imports_by_file: Dict[str, List[str]] = {}
+    rel_paths: List[str] = []
+
+    for abs_path in all_kotlin_files:
+        rel_path = os.path.relpath(abs_path, root).replace("\\", "/")
+        rel_paths.append(rel_path)
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+                text = handle.read()
+        except OSError:
+            imports_by_file[rel_path] = []
+            continue
+        package_name, imports = _extract_kotlin_package_and_imports_from_text(text)
+        imports_by_file[rel_path] = imports
+        if package_name:
+            package_to_files.setdefault(package_name, set()).add(rel_path)
+
+    deps_by_file: Dict[str, List[str]] = {rel: [] for rel in rel_paths}
+    for rel_path in rel_paths:
+        resolved: set[str] = set()
+        for imp in imports_by_file.get(rel_path, []):
+            for package_name, files in package_to_files.items():
+                if imp == package_name or imp.startswith(f"{package_name}."):
+                    resolved.update(files)
+        resolved.discard(rel_path)
+        deps_by_file[rel_path] = sorted(resolved)
+    return deps_by_file
+
+
+def _expand_impacted_files_by_imports(
+    changed_existing: set[str],
+    deps_by_file: Dict[str, List[str]],
+) -> set[str]:
+    reverse_map: Dict[str, set[str]] = {}
+    for source, deps in deps_by_file.items():
+        for dep in deps:
+            reverse_map.setdefault(dep, set()).add(source)
+
+    impacted: set[str] = set()
+    queue: List[str] = list(changed_existing)
+    seen: set[str] = set(changed_existing)
+    while queue:
+        current = queue.pop(0)
+        for dependent in sorted(reverse_map.get(current, set())):
+            if dependent in seen:
+                continue
+            seen.add(dependent)
+            impacted.add(dependent)
+            queue.append(dependent)
+    return impacted
 
 
 def _android_attr(element: ET.Element, name: str) -> Optional[str]:
-    return element.get(f"{{{_ANDROID_NS}}}{name}")
+    """Extract Android attributes using shared utility."""
+    return android_common._android_attr(element, name)
 
 
 def _parse_bool(value: Optional[str]) -> Optional[bool]:
-    if value is None:
-        return None
-    lowered = value.strip().lower()
-    if lowered in {"true", "false"}:
-        return lowered == "true"
-    return None
+    """Parse boolean values using shared utility."""
+    return android_common._parse_bool(value)
 
 
 def _strip_ns(tag: str) -> str:
-    return tag.split("}")[-1] if "}" in tag else tag
+    """Strip XML namespace using shared utility."""
+    return android_common._strip_ns(tag)
 
 
 def _resolve_android_class_name(name: Optional[str], package_name: Optional[str]) -> Optional[str]:
-    if not name:
-        return None
-    if name.startswith("."):
-        return f"{package_name}{name}" if package_name else name.lstrip(".")
-    if "." in name:
-        return name
-    return f"{package_name}.{name}" if package_name else name
+    """Resolve Android class names using shared utility."""
+    return android_common._resolve_android_class_name(name, package_name)
 
 
 def _manifest_symbol_id(rel_path: str) -> str:
-    return f"manifest::{rel_path}"
+    """Generate manifest symbol ID using shared utility."""
+    return android_common._manifest_symbol_id(rel_path)
 
 
 def _component_symbol_id(component_type: str, class_name: Optional[str], rel_path: str, line: int) -> str:
-    base = class_name or "unknown"
-    return f"component::{component_type}:{base}@{rel_path}:{line}"
+    """Generate component symbol ID using shared utility."""
+    return android_common._component_symbol_id(component_type, class_name, rel_path, line)
 
 
 def _resource_symbol_id(res_type: str, name: str) -> str:
-    return f"res::{res_type}:{name}"
+    """Generate resource symbol ID using shared utility."""
+    return android_common._resource_symbol_id(res_type, name)
 
 
 def _module_symbol_id(module_path: str) -> str:
-    return f"module::{module_path}"
+    """Generate module symbol ID using shared utility."""
+    return android_common._module_symbol_id(module_path)
 
 
 def _dependency_symbol_id(coordinate: str) -> str:
-    return f"dep::{coordinate}"
+    """Generate dependency symbol ID using shared utility."""
+    return android_common._dependency_symbol_id(coordinate)
 
 
 def _annotation_symbol_id(name: str) -> str:
-    return f"annotation::{name}"
+    """Generate annotation symbol ID using shared utility."""
+    return android_common._annotation_symbol_id(name)
 
 
 def _nav_route_symbol_id(route: str) -> str:
-    return f"navroute::{route}"
+    """Generate nav route symbol ID using shared utility."""
+    return android_common._nav_route_symbol_id(route)
 
 
 def _intent_action_symbol_id(action: str) -> str:
-    return f"intent_action::{action}"
+    """Generate intent action symbol ID using shared utility."""
+    return android_common._intent_action_symbol_id(action)
 
 
 def _handler_message_symbol_id(token: str) -> str:
-    return f"handler_msg::{token}"
+    """Generate handler message symbol ID using shared utility."""
+    return android_common._handler_message_symbol_id(token)
 
 
 def _parse_android_manifest(path: str, root: str) -> Tuple[AndroidManifestDef, List[AndroidComponentDef]]:
-    rel_path = os.path.relpath(path, root)
-    with open(path, "r", encoding="utf-8", errors="ignore") as handle:
-        content = handle.read()
-    end_line = content.count("\n") + 1
-    package_name = None
-    components: List[AndroidComponentDef] = []
-
-    try:
-        tree = ET.parse(path)
-        root_elem = tree.getroot()
-        package_name = root_elem.get("package")
-
-        for elem in root_elem.iter():
-            tag = _strip_ns(elem.tag)
-            if tag not in {"activity", "activity-alias", "service", "receiver", "provider"}:
-                continue
-            name = _android_attr(elem, "name")
-            class_name = _resolve_android_class_name(name, package_name)
-            exported = _parse_bool(_android_attr(elem, "exported"))
-            enabled = _parse_bool(_android_attr(elem, "enabled"))
-            direct_boot = _parse_bool(_android_attr(elem, "directBootAware"))
-            process = _android_attr(elem, "process")
-            permission = _android_attr(elem, "permission")
-            target_activity = _android_attr(elem, "targetActivity")
-            start_line = getattr(elem, "sourceline", 0) or 0
-            code = ET.tostring(elem, encoding="unicode")
-            intent_actions: List[str] = []
-            intent_categories: List[str] = []
-            intent_data: List[str] = []
-            for child in list(elem):
-                if _strip_ns(child.tag) != "intent-filter":
-                    continue
-                for sub in list(child):
-                    sub_tag = _strip_ns(sub.tag)
-                    if sub_tag == "action":
-                        action_name = _android_attr(sub, "name")
-                        if action_name:
-                            intent_actions.append(action_name)
-                    elif sub_tag == "category":
-                        category_name = _android_attr(sub, "name")
-                        if category_name:
-                            intent_categories.append(category_name)
-                    elif sub_tag == "data":
-                        data_parts: List[str] = []
-                        for key in (
-                            "scheme",
-                            "host",
-                            "port",
-                            "path",
-                            "pathPrefix",
-                            "pathPattern",
-                            "mimeType",
-                        ):
-                            value = _android_attr(sub, key)
-                            if value:
-                                data_parts.append(f"{key}={value}")
-                        if data_parts:
-                            intent_data.append(",".join(data_parts))
-            component_id = _component_symbol_id(tag, class_name, rel_path, start_line)
-            note = _build_note(code, "", "")
-            components.append(
-                AndroidComponentDef(
-                    symbol_id=component_id,
-                    name=name or "",
-                    component_type=tag,
-                    class_name=class_name,
-                    exported=exported,
-                    process=process,
-                    permission=permission,
-                    enabled=enabled,
-                    direct_boot_aware=direct_boot,
-                    target_activity=target_activity,
-                    intent_actions=intent_actions,
-                    intent_categories=intent_categories,
-                    intent_data=intent_data,
-                    file_path=rel_path,
-                    start_line=start_line,
-                    end_line=start_line,
-                    code=code,
-                    summary="",
-                    note=note,
-                )
-            )
-    except ET.ParseError:
-        pass
-
-    manifest_note = _build_note(content, "", "")
-    manifest_def = AndroidManifestDef(
-        symbol_id=_manifest_symbol_id(rel_path),
-        package_name=package_name,
-        file_path=rel_path,
-        start_line=1,
-        end_line=end_line,
-        code=content,
-        summary="",
-        note=manifest_note,
-    )
-    return manifest_def, components
+    """Parse AndroidManifest.xml using shared utility."""
+    return android_common._parse_android_manifest(path, root)
 
 
 def _extract_resource_ids_from_xml(path: str) -> List[str]:
@@ -1535,10 +1622,14 @@ def _extract_resource_ids_from_xml(path: str) -> List[str]:
     return ids
 
 
-def _collect_android_resources(root: str) -> Tuple[List[AndroidResourceDef], Dict[Tuple[str, str], str]]:
+def _collect_android_resources(
+    root: str,
+    xml_files: Optional[Iterable[str]] = None,
+) -> Tuple[List[AndroidResourceDef], Dict[Tuple[str, str], str]]:
     resources: List[AndroidResourceDef] = []
     resource_index: Dict[Tuple[str, str], str] = {}
-    for path in _scan_android_resource_xml_files(root):
+    candidates = list(xml_files) if xml_files is not None else _scan_android_resource_xml_files(root)
+    for path in candidates:
         rel_path = os.path.relpath(path, root)
         dir_name = os.path.basename(os.path.dirname(path))
         if "-" in dir_name:
@@ -2127,13 +2218,23 @@ def _load_or_parse_payload(
             payload["compose_routes"] = {"routes": [], "start_routes": [], "route_targets": []}
         if "android_events" not in payload:
             payload["android_events"] = {"events": []}
+        parse_meta = payload.get("parse_meta")
+        if not isinstance(parse_meta, dict):
+            payload["parse_meta"] = {
+                "parser_language": "kotlin_tree_sitter",
+                "parser_available": True,
+                "has_error": False,
+                "error_nodes": 0,
+            }
         return payload
 
     rel_path = os.path.relpath(file_path, root)
     cached_payload = None
     signature = None
     if parse_cache:
-        signature = file_signature(file_path)
+        file_sig = file_signature(file_path)
+        if file_sig is not None:
+            signature = f"{file_sig}|schema:{_PARSE_CACHE_VERSION}"
         cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         return normalize_cached_payload(cached_payload)
@@ -2148,6 +2249,7 @@ def _load_or_parse_payload(
         package_def,
         compose_routes,
         android_events,
+        parse_meta,
     ) = parse_kotlin_file(file_path, root)
     payload = {
         "functions": [asdict(item) for item in file_functions],
@@ -2160,6 +2262,7 @@ def _load_or_parse_payload(
         "package_def": asdict(package_def) if package_def else None,
         "compose_routes": compose_routes,
         "android_events": android_events,
+        "parse_meta": parse_meta,
     }
     if parse_cache and signature is not None:
         write_parse_cache(parse_cache_root, rel_path, signature, payload)
@@ -2197,23 +2300,149 @@ async def build_call_graph(
     build_system: str,
     event_map_path: Optional[str],
     verbose: bool,
+    incremental: bool = False,
+    changed_files: Optional[Iterable[str]] = None,
+    deleted_files: Optional[Iterable[str]] = None,
+    commit_sha: str = "",
+    commit_sha_before: str = "",
 ) -> None:
     start_time = time.time()
-    cache_root = safe_cache_root(cache_dir, "android_kotlin_analyzer")
+    cache_root = safe_cache_root(cache_dir, "android_kotlin_analyzer", project_root=root)
     parse_cache_root = os.path.join(cache_root, "parse")
     qdrant_cache_root = os.path.join(cache_root, "qdrant")
     os.makedirs(parse_cache_root, exist_ok=True)
     os.makedirs(qdrant_cache_root, exist_ok=True)
-    kotlin_files = _scan_android_kotlin_files(root)
+    all_kotlin_files = _scan_android_kotlin_files(root)
+    all_manifest_files = _scan_android_manifest_files(root)
+    all_gradle_files = _scan_android_gradle_files(root)
+    all_resource_xml_files = _scan_android_resource_xml_files(root)
+    all_kotlin_rel_paths = [os.path.relpath(path, root).replace("\\", "/") for path in all_kotlin_files]
+    kotlin_rel_to_abs = {os.path.relpath(path, root).replace("\\", "/"): path for path in all_kotlin_files}
+    changed_set = {item.replace("\\", "/") for item in (changed_files or []) if item}
+    deleted_set = {item.replace("\\", "/") for item in (deleted_files or []) if item}
+    selected_kotlin_rel_paths: set[str]
+    impacted_by_imports_count = 0
+    if incremental:
+        changed_kotlin_existing = {path for path in changed_set if path in kotlin_rel_to_abs}
+        deps_by_file = _collect_kotlin_import_graph(all_kotlin_files, root)
+        impacted_kotlin = _expand_impacted_files_by_imports(changed_kotlin_existing, deps_by_file)
+        selected_kotlin_rel_paths = changed_kotlin_existing | impacted_kotlin
+        impacted_by_imports_count = len(impacted_kotlin)
+        kotlin_files = [kotlin_rel_to_abs[path] for path in all_kotlin_rel_paths if path in selected_kotlin_rel_paths]
+        manifest_files = [
+            file_path
+            for file_path in all_manifest_files
+            if os.path.relpath(file_path, root).replace("\\", "/") in changed_set
+        ]
+        gradle_files = [
+            file_path
+            for file_path in all_gradle_files
+            if os.path.relpath(file_path, root).replace("\\", "/") in changed_set
+        ]
+        resource_xml_files = [
+            file_path
+            for file_path in all_resource_xml_files
+            if os.path.relpath(file_path, root).replace("\\", "/") in changed_set
+        ]
+    else:
+        selected_kotlin_rel_paths = set(all_kotlin_rel_paths)
+        kotlin_files = all_kotlin_files
+        manifest_files = all_manifest_files
+        gradle_files = all_gradle_files
+        resource_xml_files = all_resource_xml_files
     if verbose:
+        if incremental:
+            print(
+                "[scan] incremental before=%s after=%s changed=%d deleted=%d selected(kotlin=%d,manifest=%d,gradle=%d,res_xml=%d) impacted_by_imports=%d"
+                % (
+                    commit_sha_before or "unknown",
+                    commit_sha or "unknown",
+                    len(changed_set),
+                    len(deleted_set),
+                    len(kotlin_files),
+                    len(manifest_files),
+                    len(gradle_files),
+                    len(resource_xml_files),
+                    impacted_by_imports_count,
+                )
+            )
         print(f"[scan] Found {len(kotlin_files)} Kotlin files under {root}")
     total_files = len(kotlin_files)
 
-    def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
+    cleanup_targets = sorted(changed_set | deleted_set)
+    if incremental and cleanup_targets:
+        if code_writer:
+            await cleanup_neo4j_for_files(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+        if qdrant_writer:
+            cleanup_qdrant_with_writer(
+                writer=qdrant_writer,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+
+    def iter_selected_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
         for index, file_path in enumerate(kotlin_files, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
             yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache)
+
+    selected_payloads: List[Dict[str, Any]] = []
+    selected_payload_by_rel: Dict[str, Dict[str, Any]] = {}
+    parse_error_file_count = 0
+    parse_error_node_total = 0
+    parse_error_examples: List[str] = []
+    for payload in iter_selected_payloads(log_parse=True):
+        selected_payloads.append(payload)
+        file_def = payload.get("file_def") or {}
+        rel = file_def.get("file_path") or ""
+        if rel:
+            selected_payload_by_rel[rel] = payload
+        parse_meta = payload.get("parse_meta") or {}
+        has_error = bool(parse_meta.get("has_error"))
+        error_nodes = int(parse_meta.get("error_nodes") or 0)
+        if has_error or error_nodes > 0:
+            parse_error_file_count += 1
+            parse_error_node_total += error_nodes
+            if rel and len(parse_error_examples) < 10:
+                parse_error_examples.append(rel)
+
+    if verbose:
+        if parse_error_file_count:
+            print(
+                "[parse] tree-sitter reported errors in %d/%d files (%d ERROR nodes)"
+                % (parse_error_file_count, total_files, parse_error_node_total)
+            )
+            for path in parse_error_examples:
+                print(f"  [parse][sample-error] {path}")
+        else:
+            print("[parse] tree-sitter parse status: no error nodes detected")
+
+    index_payloads: List[Dict[str, Any]]
+    if incremental:
+        # LAZY LOADING OPTIMIZATION: Reuse payloads from selected_payloads to avoid
+        # redundant file I/O and parsing. This is especially important for large projects
+        # where the index can include thousands of files but only a small subset changed.
+        # The memory overhead is acceptable since we need the full index anyway for
+        # proper call graph resolution.
+        index_payloads = []
+        for idx, rel_path in enumerate(all_kotlin_rel_paths, start=1):
+            cached = selected_payload_by_rel.get(rel_path)
+            if cached is not None:
+                index_payloads.append(cached)
+                continue
+            abs_path = kotlin_rel_to_abs[rel_path]
+            if verbose and (idx == 1 or idx % 200 == 0 or idx == len(all_kotlin_rel_paths)):
+                print(f"[index] {idx}/{len(all_kotlin_rel_paths)}: {rel_path}")
+            index_payloads.append(_load_or_parse_payload(abs_path, root, parse_cache_root, parse_cache))
+    else:
+        index_payloads = list(selected_payloads)
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
     function_index_by_qualified: Dict[str, Dict[str, Any]] = {}
@@ -2233,7 +2462,7 @@ async def build_call_graph(
     file_package_by_path: Dict[str, Optional[str]] = {}
     expected_points = 0
 
-    for payload in iter_payloads(log_parse=True):
+    for payload in index_payloads:
         file_def = payload.get("file_def") or {}
         file_path = file_def.get("file_path")
         if file_path and file_path not in file_package_by_path:
@@ -2251,7 +2480,8 @@ async def build_call_graph(
             if component_type:
                 component_candidates[edge["source_id"]] = component_type
         for func in payload["functions"]:
-            expected_points += 1
+            if file_path in selected_kotlin_rel_paths:
+                expected_points += 1
             entry = {
                 "symbol_id": func["symbol_id"],
                 "class_name": func["class_name"],
@@ -2367,7 +2597,7 @@ async def build_call_graph(
 
     external_classes: Dict[str, Dict[str, Any]] = {}
 
-    for payload in iter_payloads(log_parse=False):
+    for payload in selected_payloads:
         for edge in payload["type_edges"]:
             target_id = None
             target_name = edge["target_name"]
@@ -2406,7 +2636,7 @@ async def build_call_graph(
     gradle_dep_edges: List[Tuple[str, str, str]] = []
 
     if code_writer:
-        for manifest_path in _scan_android_manifest_files(root):
+        for manifest_path in manifest_files:
             manifest_def, components = _parse_android_manifest(manifest_path, root)
             manifest_defs.append(manifest_def)
             for component in components:
@@ -2466,9 +2696,9 @@ async def build_call_graph(
                 )
             )
 
-        resource_defs, resource_index = _collect_android_resources(root)
+        resource_defs, resource_index = _collect_android_resources(root, resource_xml_files)
 
-        for gradle_path in _scan_android_gradle_files(root):
+        for gradle_path in gradle_files:
             module_def, deps, dep_edges = _parse_gradle_file(gradle_path, root)
             gradle_modules.append(module_def)
             for dep in deps:
@@ -2613,8 +2843,8 @@ async def build_call_graph(
             node_queries = {
                 "projects": """
                 UNWIND $rows AS row
-                MERGE (p {id: row.id})
-                SET p:Project,
+                MERGE (p:Project {project_id: row.id})
+                SET p.id = row.id,
                     p.name = row.name,
                     p.language = row.language,
                     p.repo = row.repo,
@@ -2674,6 +2904,19 @@ async def build_call_graph(
                     f.language = row.language,
                     f.repo = row.repo,
                     f.build_system = row.build_system
+                """,
+                "directories": """
+                UNWIND $rows AS row
+                MERGE (d {id: row.id})
+                SET d:Directory,
+                    d.name = row.name,
+                    d.path = row.path,
+                    d.depth = row.depth,
+                    d.project_id = row.project_id,
+                    d.project_name = row.project_name,
+                    d.language = row.language,
+                    d.repo = row.repo,
+                    d.build_system = row.build_system
                 """,
                 "classes": """
                 UNWIND $rows AS row
@@ -2740,6 +2983,7 @@ async def build_call_graph(
                 SET m:AndroidManifest,
                     m.package_name = row.package_name,
                     m.file_path = row.file_path,
+                    m.path = row.path,
                     m.start_line = row.start_line,
                     m.end_line = row.end_line,
                     m.code = row.code,
@@ -2768,6 +3012,7 @@ async def build_call_graph(
                     c.intent_categories = row.intent_categories,
                     c.intent_data = row.intent_data,
                     c.file_path = row.file_path,
+                    c.path = row.path,
                     c.start_line = row.start_line,
                     c.end_line = row.end_line,
                     c.code = row.code,
@@ -2913,10 +3158,21 @@ async def build_call_graph(
             handler_message_defs: Dict[str, AndroidHandlerMessageDef] = {}
             android_event_relations: List[Dict[str, Any]] = []
             intent_action_to_components: Dict[str, List[str]] = {}
-            project_added = False
 
             def add_node_row(label: str, row: Dict[str, object]) -> None:
                 node_rows[label].append(row)
+
+            add_node_row(
+                "projects",
+                {
+                    "id": project_id,
+                    "name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "root": root,
+                    "build_system": build_system,
+                },
+            )
 
             for event_def in event_nodes:
                 add_node_row("events", event_def)
@@ -2928,6 +3184,7 @@ async def build_call_graph(
                         "id": manifest_def.symbol_id,
                         "package_name": manifest_def.package_name,
                         "file_path": manifest_def.file_path,
+                        "path": manifest_def.file_path,
                         "start_line": manifest_def.start_line,
                         "end_line": manifest_def.end_line,
                         "code": manifest_def.code,
@@ -2958,6 +3215,7 @@ async def build_call_graph(
                         "intent_categories": component_def.intent_categories,
                         "intent_data": component_def.intent_data,
                         "file_path": component_def.file_path,
+                        "path": component_def.file_path,
                         "start_line": component_def.start_line,
                         "end_line": component_def.end_line,
                         "code": component_def.code,
@@ -3067,20 +3325,7 @@ async def build_call_graph(
                     },
                 )
 
-            for payload in iter_payloads(log_parse=False):
-                if not project_added:
-                    add_node_row(
-                        "projects",
-                        {
-                            "id": project_id,
-                            "name": project_name,
-                            "language": language,
-                            "repo": repo,
-                            "root": root,
-                            "build_system": build_system,
-                        },
-                    )
-                    project_added = True
+            for payload in selected_payloads:
                 file_def = payload["file_def"]
                 add_node_row(
                     "files",
@@ -3507,6 +3752,45 @@ async def build_call_graph(
                     },
                 )
 
+            file_paths_for_tree: List[str] = []
+            file_paths_for_tree.extend(
+                str(row.get("path") or "")
+                for row in node_rows.get("files", [])
+                if str(row.get("path") or "")
+            )
+            file_paths_for_tree.extend(
+                str(row.get("file_path") or "")
+                for row in node_rows.get("android_manifests", [])
+                if str(row.get("file_path") or "")
+            )
+            file_paths_for_tree.extend(
+                str(row.get("file_path") or "")
+                for row in node_rows.get("android_resources", [])
+                if str(row.get("file_path") or "")
+            )
+            file_paths_for_tree.extend(
+                str(row.get("file_path") or "")
+                for row in node_rows.get("gradle_modules", [])
+                if str(row.get("file_path") or "")
+            )
+            file_paths_for_tree.extend(
+                str(row.get("file_path") or "")
+                for row in node_rows.get("android_components", [])
+                if str(row.get("file_path") or "")
+            )
+            directory_paths_for_tree = android_common._scan_android_directory_paths(root)
+            directory_rows, directory_relations = android_common._build_directory_nodes_and_relations(
+                file_paths=file_paths_for_tree,
+                directory_paths=directory_paths_for_tree,
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+            )
+            for row in directory_rows:
+                add_node_row("directories", row)
+
             # node flush now handled in the write phase below
 
             all_relations: List[Dict[str, Any]] = []
@@ -3530,6 +3814,8 @@ async def build_call_graph(
 
             all_calls: List[Dict[str, Any]] = []
             seen_project_resources: set[str] = set()
+
+            all_relations.extend(directory_relations)
 
             for event_rel in event_relations:
                 add_relation_row(
@@ -3649,7 +3935,7 @@ async def build_call_graph(
                     {"source_id": module_id, "target_id": dep_id, "props": {"configuration": config}},
                 )
 
-            for payload in iter_payloads(log_parse=False):
+            for payload in selected_payloads:
                 file_def = payload["file_def"]
                 file_id = file_def["file_path"]
                 add_relation_row(
@@ -3858,7 +4144,7 @@ async def build_call_graph(
                 batch_funcs: List[Dict[str, Any]] = []
                 batch_index = 0
                 total_batches = max(1, (expected_points + batch_size - 1) // batch_size)
-                for payload in iter_payloads(log_parse=False):
+                for payload in selected_payloads:
                     for func in payload["functions"]:
                         batch_funcs.append(func)
                         if len(batch_funcs) < batch_size:
@@ -3972,6 +4258,9 @@ async def build_call_graph(
                 os.remove(state_path)
             except OSError:
                 pass
+    _sr_fn = sum(len(p.get("functions") or []) for p in selected_payloads)
+    _sr_cls = sum(len(p.get("classes") or []) for p in selected_payloads)
+    print(f"[SCAN_RESULT] parser={language} files={len(selected_payloads)} functions={_sr_fn} classes={_sr_cls}", flush=True)
     if verbose:
         elapsed = time.time() - start_time
         print(f"[done] Total time: {elapsed:.2f}s")
@@ -3982,12 +4271,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--root", required=True, help="Root folder containing Kotlin sources")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASS"))
+    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument(
         "--qdrant-collection",
-        default=os.environ.get("QDRANT_COLLECTION_CODE", "android_kotlin_functions"),
+        default=os.environ.get("QDRANT_COLLECTION", "android_kotlin_functions"),
     )
     parser.add_argument(
         "--embed-model",
@@ -3997,7 +4286,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-embed-chars", type=int, default=4000)
     parser.add_argument("--chunk-embed", action="store_true")
-    parser.add_argument("--device", default=os.environ.get("EMBEDDING_DEVICE", "auto"))
+    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "auto"))
     parser.add_argument("--batch-size", type=int, default=4) # for embedding - 4 function 1 turn embedding
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
@@ -4006,9 +4295,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
     parser.add_argument("--qdrant-retries", type=int, default=3)
     parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
+    parser.set_defaults(enable_message_scan=True)
+    parser.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true", help="Enable message scan and sync (default)")
+    parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false", help="Disable message scan and sync")
+    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"))
+    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION"))
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
     parser.add_argument("--keep-cache", action="store_true")
     parser.add_argument("--disable-parse-cache", action="store_true")
+    parser.add_argument(
+        "--ignore-cache",
+        action="store_true",
+        help="Ignore local caches for this run (parse cache, Neo4j/Qdrant resume state).",
+    )
     parser.add_argument("--project-id", dest="project_id", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--project_id", dest="project_id")
     parser.add_argument("--project-name", dest="project_name", default=os.environ.get("PROJECT_NAME"))
@@ -4018,6 +4317,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--build-system", dest="build_system", default=os.environ.get("PROJECT_BUILD_SYSTEM", ""))
     parser.add_argument("--build_system", dest="build_system")
     parser.add_argument("--event-map", help="JSON mapping file for cross-project events/IDL")
+    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""))
+    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""))
+    parser.add_argument("--incremental", action="store_true", help="Enable incremental ingestion mode")
+    parser.add_argument(
+        "--changed-files-manifest",
+        help="JSON/TXT manifest of changed+impacted file paths (relative to --root)",
+    )
+    parser.add_argument(
+        "--deleted-files-manifest",
+        help="JSON/TXT manifest of deleted file paths (relative to --root)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
@@ -4042,12 +4352,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
+    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
         driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=args.neo4j_uri,
             user=args.neo4j_user,
-            password=args.NEO4J_PASS,
+            password=args.neo4j_password,
         )
         code_writer = LanguageCodeWriter(
             driver=driver,
@@ -4062,7 +4372,15 @@ async def main(argv: Optional[List[str]] = None) -> int:
         args.device = _resolve_embed_device(args.device)
         if args.verbose:
             print(f"[embed] device: {args.device}")
-        embedder = CodeEmbedder(args.embed_model, args.device, args.max_embed_chars, args.chunk_embed)
+        embedder = CodeEmbedder(
+            args.embed_model,
+            args.device,
+            args.max_embed_chars,
+            args.chunk_embed,
+            fallback_cache_base_dir=args.cache_dir,
+            project_root=args.root,
+            verbose=args.verbose,
+        )
         qdrant_writer = QdrantWriter(
             args.qdrant_url,
             args.qdrant_collection,
@@ -4073,27 +4391,87 @@ async def main(argv: Optional[List[str]] = None) -> int:
         )
 
     parse_cache = not args.disable_parse_cache
+    effective_cache_dir = args.cache_dir
+    if args.ignore_cache:
+        run_cache_root = safe_cache_root(effective_cache_dir, "android_kotlin_analyzer", project_root=args.root)
+        effective_cache_dir = os.path.join(
+            run_cache_root,
+            "ignore_runs",
+            f"run_{int(time.time() * 1000)}",
+        )
+        os.makedirs(effective_cache_dir, exist_ok=True)
+        parse_cache = False
+        args.disable_neo4j_resume = True
+        args.keep_cache = False
+        if args.verbose:
+            print(
+                "[cache] ignore-cache enabled; using isolated cache dir: %s"
+                % effective_cache_dir
+            )
+    changed_manifest_files: List[str] = []
+    deleted_manifest_files: List[str] = []
+    if args.incremental:
+        if args.changed_files_manifest:
+            changed_manifest_files = sorted(load_manifest_paths(args.changed_files_manifest, args.root))
+        if args.deleted_files_manifest:
+            deleted_manifest_files = sorted(load_manifest_paths(args.deleted_files_manifest, args.root))
+        if args.verbose:
+            print(
+                "[diff] incremental manifests changed=%d deleted=%d"
+                % (len(changed_manifest_files), len(deleted_manifest_files))
+            )
     neo4j_state_path = None
-    if not args.disable_neo4j_resume:
-        cache_root = safe_cache_root(args.cache_dir, "android_kotlin_analyzer")
+    if not args.disable_neo4j_resume and not args.incremental:
+        cache_root = safe_cache_root(effective_cache_dir, "android_kotlin_analyzer", project_root=args.root)
         neo4j_state_path = args.neo4j_state or os.path.join(cache_root, "neo4j_state.json")
+    elif args.incremental and args.verbose:
+        print("[state] incremental mode disables neo4j resume state")
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
     language = args.language or "android-kotlin"
     repo = args.repo or os.path.abspath(args.root)
     build_system = args.build_system or ""
+    commit_sha = args.commit_sha_after or ""
+    commit_sha_before = args.commit_sha_before or ""
+    message_qdrant_collection = (
+        args.message_qdrant_collection
+        or default_message_collection_name(args.qdrant_collection)
+    )
     if code_writer:
         cloc_raw = collect_cloc_stats(args.root)
         if cloc_raw:
             cloc_stats = normalize_cloc_payload(cloc_raw)
-            pass  # CLOC stats now handled directly in build_call_graph
+            await write_cloc_stats_to_neo4j(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                project_name=project_name,
+                root=args.root,
+                repo=repo,
+                language=language,
+                stats=cloc_stats,
+            )
+            if args.verbose:
+                print("[cloc] Stats stored in Neo4j")
         elif args.verbose:
             print("[cloc] Skipped (cloc not available or failed)")
 
     try:
         if args.dry_run:
             kotlin_files = _scan_android_kotlin_files(args.root)
-            print(f"Dry run: {len(kotlin_files)} Kotlin files found")
+            if args.incremental and changed_manifest_files:
+                manifest_set = set(changed_manifest_files)
+                kotlin_files = [
+                    file_path
+                    for file_path in kotlin_files
+                    if os.path.relpath(file_path, args.root).replace("\\", "/") in manifest_set
+                ]
+                print(
+                    "Dry run (incremental): %d Android Kotlin files selected (manifest=%d)"
+                    % (len(kotlin_files), len(changed_manifest_files))
+                )
+            else:
+                print(f"Dry run: {len(kotlin_files)} Kotlin files found")
             return 0
         await build_call_graph(
             args.root,
@@ -4102,7 +4480,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             embedder=embedder,
             batch_size=args.batch_size,
             qdrant_batch_size=args.qdrant_batch_size,
-            cache_dir=args.cache_dir,
+            cache_dir=effective_cache_dir,
             keep_cache=args.keep_cache,
             parse_cache=parse_cache,
             neo4j_batch_size=args.neo4j_batch_size,
@@ -4114,10 +4492,56 @@ async def main(argv: Optional[List[str]] = None) -> int:
             build_system=build_system,
             event_map_path=args.event_map,
             verbose=args.verbose,
+            incremental=args.incremental,
+            changed_files=changed_manifest_files,
+            deleted_files=deleted_manifest_files,
+            commit_sha=commit_sha,
+            commit_sha_before=commit_sha_before,
         )
+        if args.enable_message_scan:
+            message_summary = await run_message_scan_pipeline(
+                root=args.root,
+                parser="android",
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+                incremental=args.incremental,
+                changed_files=changed_manifest_files,
+                deleted_files=deleted_manifest_files,
+                driver=driver,
+                neo4j_database=args.neo4j_db,
+                qdrant_url=args.qdrant_url,
+                qdrant_collection=message_qdrant_collection if args.qdrant_url else None,
+                qdrant_vector_size=embedder.vector_size if embedder else 1024,
+                embed_texts=embedder.embed if embedder else None,
+                output_dir=args.message_output_dir,
+                cache_dir=effective_cache_dir,
+                commit_sha_before=commit_sha_before,
+                commit_sha_after=commit_sha,
+                qdrant_batch_size=args.qdrant_batch_size,
+                qdrant_timeout=args.qdrant_timeout,
+                qdrant_retries=args.qdrant_retries,
+                qdrant_retry_sleep=args.qdrant_retry_sleep,
+                verbose=args.verbose,
+            )
+            print(
+                "[message] parser=%s count=%s neo4j=%s qdrant=%s collection=%s artifact=%s"
+                % (
+                    message_summary.get("parser"),
+                    message_summary.get("message_count"),
+                    message_summary.get("neo4j_upserted"),
+                    message_summary.get("qdrant_upserted"),
+                    message_summary.get("qdrant_collection"),
+                    message_summary.get("artifact_path"),
+                )
+            )
     finally:
         if driver:
-            await driver.close()
+            close_result = driver.close()
+            if hasattr(close_result, "__await__"):
+                await close_result
     return 0
 
 

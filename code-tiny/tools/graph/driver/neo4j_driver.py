@@ -4,6 +4,9 @@ Neo4j Implementation of Graph Driver
 Concrete implementation of the GraphDriver abstraction for Neo4j.
 """
 
+import base64
+import os
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from neo4j import GraphDatabase, Driver, Session
 import logging
@@ -11,7 +14,105 @@ import logging
 from tools.graph.core.base import GraphDriver, GraphProvider
 
 
+_FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
+
+
+def _maybe_decrypt_neo4j_password(password: str) -> str:
+    """If *password* is a Fernet-encrypted token, decrypt it using
+    HYPER_PACK_ENCRYPTION_PASSWORD (falls back to the compiled-in default key).
+    Returns the original value unchanged if decryption is unavailable or fails.
+    """
+    if not _FERNET_TOKEN_RE.match(password):
+        return password
+    try:
+        from cryptography.fernet import Fernet
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    except ImportError:
+        return password
+    enc_pw = os.environ.get("HYPER_PACK_ENCRYPTION_PASSWORD", "my-secret-encryption-key-2026")
+    try:
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=b"static_salt_2026",
+            iterations=100_000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(enc_pw.encode("utf-8")))
+        return Fernet(key).decrypt(password.encode("utf-8")).decode("utf-8")
+    except Exception as exc:
+        logger.warning(
+            "[neo4j_driver] Could not decrypt NEO4J_PASS (%s); "
+            "using value as-is (wrong HYPER_PACK_ENCRYPTION_PASSWORD?)",
+            exc,
+        )
+        return password
+
+
 logger = logging.getLogger(__name__)
+
+
+_FAST_ID_LOOKUP_LABELS: Tuple[str, ...] = (
+    "Function",
+    "File",
+    "Class",
+    "Namespace",
+    "Type",
+    "Property",
+    "Event",
+    "Interface",
+    "Enum",
+    "Constant",
+    "Variable",
+    "UnknownFunction",
+    "ParseRun",
+    "Document",
+    "Entity",
+)
+
+_FALLBACK_ID_LOOKUP_LABELS: Tuple[str, ...] = (
+    "Type",
+    "Package",
+    "Field",
+    "Alias",
+    "Template",
+    "FunctionType",
+    "Project",
+    "Repository",
+    "Message",
+    "MessageEndpoint",
+    "InfraNode",
+    "Workflow",
+    "Paragraph",
+    "Chunk",
+    "Slide",
+    "AndroidManifest",
+    "AndroidComponent",
+    "AndroidResource",
+    "GradleModule",
+    "AndroidIntentAction",
+    "AndroidAnnotation",
+)
+
+
+def _build_id_lookup_query(for_multiple: bool, labels: Tuple[str, ...]) -> str:
+    branches: List[str] = []
+    for label in labels:
+        if for_multiple:
+            branches.append(f"MATCH (n:{label}) WHERE n.id IN $ids RETURN n")
+        else:
+            branches.append(f"MATCH (n:{label} {{id: $id}}) RETURN n")
+    union_query = "\nUNION ALL\n".join(branches)
+    tail = "RETURN DISTINCT n" if for_multiple else "RETURN n LIMIT 1"
+    return f"CALL () {{\n{union_query}\n}}\n{tail}"
+
+
+_FIND_NODE_BY_ID_QUERY = _build_id_lookup_query(for_multiple=False, labels=_FAST_ID_LOOKUP_LABELS)
+_FIND_NODES_BY_IDS_QUERY = _build_id_lookup_query(for_multiple=True, labels=_FAST_ID_LOOKUP_LABELS)
+_FALLBACK_FIND_NODE_BY_ID_QUERY = _build_id_lookup_query(for_multiple=False, labels=_FALLBACK_ID_LOOKUP_LABELS)
+_FALLBACK_FIND_NODES_BY_IDS_QUERY = _build_id_lookup_query(for_multiple=True, labels=_FALLBACK_ID_LOOKUP_LABELS)
+_FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft"
+_FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft"
 
 
 class Neo4jDriver(GraphDriver):
@@ -37,9 +138,9 @@ class Neo4jDriver(GraphDriver):
         """
         self._uri = uri
         self._user = user
-        self._password = password
+        self._password = _maybe_decrypt_neo4j_password(password)
         self._database = database or "neo4j"
-        self._driver: Driver = GraphDatabase.driver(uri, auth=(user, password))
+        self._driver: Driver = GraphDatabase.driver(uri, auth=(user, self._password))
         
     @property
     def provider(self) -> GraphProvider:
@@ -311,12 +412,17 @@ class Neo4jDriver(GraphDriver):
         database: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Find a node by its ID"""
-        query = "MATCH (n) WHERE n.id = $id RETURN n LIMIT 1"
         records, _, _ = await self.execute_query(
-            query,
+            _FIND_NODE_BY_ID_QUERY,
             {"id": node_id},
             database
         )
+        if not records:
+            records, _, _ = await self.execute_query(
+                _FALLBACK_FIND_NODE_BY_ID_QUERY,
+                {"id": node_id},
+                database
+            )
         if records:
             return records[0].get("n")
         return None
@@ -330,13 +436,22 @@ class Neo4jDriver(GraphDriver):
         if not node_ids:
             return []
         
-        query = "MATCH (n) WHERE n.id IN $ids RETURN n"
         records, _, _ = await self.execute_query(
-            query,
+            _FIND_NODES_BY_IDS_QUERY,
             {"ids": node_ids},
             database
         )
-        return [record.get("n") for record in records if record.get("n")]
+        nodes = [record.get("n") for record in records if record.get("n")]
+        found_ids = {str(node.get("id")) for node in nodes if node and node.get("id") is not None}
+        unresolved_ids = [node_id for node_id in node_ids if str(node_id) not in found_ids]
+        if unresolved_ids:
+            fallback_records, _, _ = await self.execute_query(
+                _FALLBACK_FIND_NODES_BY_IDS_QUERY,
+                {"ids": unresolved_ids},
+                database
+            )
+            nodes.extend(record.get("n") for record in fallback_records if record.get("n"))
+        return nodes
     
     async def search_functions(
         self,
@@ -345,6 +460,25 @@ class Neo4jDriver(GraphDriver):
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for functions by name or qualified_name"""
+        fulltext_cypher = """
+        CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
+        WHERE node:Function
+        RETURN node AS n
+        ORDER BY score DESC
+        LIMIT $limit
+        """
+        try:
+            fulltext_records, _, _ = await self.execute_query(
+                fulltext_cypher,
+                {"index_name": _FULLTEXT_SYMBOL_TEXT_INDEX, "query": query, "limit": limit},
+                database
+            )
+            fulltext_nodes = [record.get("n") for record in fulltext_records if record.get("n")]
+            if fulltext_nodes:
+                return fulltext_nodes
+        except Exception as exc:
+            logger.debug("Fulltext search_functions fallback to CONTAINS: %s", exc)
+
         cypher = """
         MATCH (n:Function)
         WHERE toLower(n.name) CONTAINS toLower($query)
@@ -366,6 +500,24 @@ class Neo4jDriver(GraphDriver):
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for nodes by code content"""
+        fulltext_cypher = """
+        CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
+        RETURN node AS n
+        ORDER BY score DESC
+        LIMIT $limit
+        """
+        try:
+            fulltext_records, _, _ = await self.execute_query(
+                fulltext_cypher,
+                {"index_name": _FULLTEXT_SYMBOL_CODE_INDEX, "query": query, "limit": limit},
+                database
+            )
+            fulltext_nodes = [record.get("n") for record in fulltext_records if record.get("n")]
+            if fulltext_nodes:
+                return fulltext_nodes
+        except Exception as exc:
+            logger.debug("Fulltext search_by_code fallback to CONTAINS: %s", exc)
+
         cypher = """
         MATCH (n)
         WHERE toLower(coalesce(n.code, '')) CONTAINS toLower($query)

@@ -35,6 +35,7 @@ class ClassNodeOperations:
         query = """
         CREATE (c:Class {
             id: $id,
+            node_type: 'code',
             qualified_name: $qualified_name,
             name: $name,
             kind: $kind,
@@ -83,6 +84,7 @@ class ClassNodeOperations:
         UNWIND $rows AS row
         MERGE (c:Class {id: row.id})
         SET c.qualified_name = row.qualified_name,
+            c.node_type = 'code',
             c.name = row.name,
             c.kind = row.kind,
             c.package_name = row.package_name,

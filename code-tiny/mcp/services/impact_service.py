@@ -1,16 +1,55 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import logging
+import os
+from typing import Any, Dict, List, Optional
 
 from fastapi import Request
 
 from ..utils import fetch_node_annotations
 from .graph_service import graph_query_service
 
+logger = logging.getLogger(__name__)
+
 
 class ImpactAnalyzer:
     def __init__(self):
         self.graph_service = graph_query_service
+        self._workflow_scorer: Optional[Any] = None  # WorkflowImpactScorer, lazy-init
+
+    def _get_workflow_scorer(self, db: str) -> Optional[Any]:
+        """
+        Lazy-init a WorkflowImpactScorer backed by a direct Neo4j driver.
+
+        Returns None if:
+        - WORKFLOW_IMPACT_DISABLED env var is set to '1'
+        - Required env vars (NEO4J_URI / NEO4J_USER / NEO4J_PASS) are missing
+        - neo4j package is not installed
+        - Driver construction fails for any reason
+        """
+        if os.environ.get("WORKFLOW_IMPACT_DISABLED", "").strip() == "1":
+            return None
+
+        if self._workflow_scorer is not None:
+            return self._workflow_scorer
+
+        try:
+            import neo4j as _neo4j  # noqa: PLC0415
+            from tools.common.workflow_impact_scorer import WorkflowImpactScorer  # noqa: PLC0415
+
+            uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+            user = os.environ.get("NEO4J_USER", "")
+            pwd = os.environ.get("NEO4J_PASS", "")
+            if user and pwd:
+                driver = _neo4j.GraphDatabase.driver(uri, auth=(user, pwd))
+            else:
+                driver = _neo4j.GraphDatabase.driver(uri)
+
+            self._workflow_scorer = WorkflowImpactScorer(driver, database=db)
+            return self._workflow_scorer
+        except Exception as exc:
+            logger.debug("WorkflowImpactScorer unavailable: %s", exc)
+            return None
 
     @staticmethod
     def _external_nodes(nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -75,7 +114,7 @@ class ImpactAnalyzer:
                     "annotation": annotations.get(node_id),
                 }
             )
-        return {
+        base_result: Dict[str, Any] = {
             "risk_score": round(risk, 3),
             "node_count": len(nodes),
             "edge_count": len(edges),
@@ -84,6 +123,69 @@ class ImpactAnalyzer:
             "annotations": annotations,
             "suggested_tests": self._suggest_tests(len(nodes), len(externals), annotations),
         }
+
+        # ── Workflow impact layer (non-breaking extension) ─────────────────────
+        function_id = payload.get("function_id", "")
+        db = payload.get("db", "neo4j")
+        scorer = self._get_workflow_scorer(db)
+        if scorer and function_id:
+            try:
+                max_depth = int(payload.get("max_depth") or 4)
+                wf_impact = await scorer.score(function_id, nodes, max_depth=max_depth)
+
+                # Merge function-level risk with workflow risk
+                overall = min(1.0, round(0.4 * risk + 0.6 * wf_impact.workflow_risk_score, 3))
+                wf_impact.overall_risk_score = overall
+
+                base_result["workflow_impact"] = {
+                    "directly_affected_workflows": [
+                        {
+                            "name": w.workflow_name,
+                            "domain": w.domain,
+                            "severity": w.severity,
+                            "step_index": w.step_index,
+                            "reason": w.reason,
+                        }
+                        for w in wf_impact.directly_affected_workflows
+                    ],
+                    "indirectly_affected_workflows": [
+                        {
+                            "name": w.workflow_name,
+                            "domain": w.domain,
+                            "severity": w.severity,
+                            "call_depth": w.call_depth,
+                        }
+                        for w in wf_impact.indirectly_affected_workflows
+                    ],
+                    "cascade_workflows": [
+                        {
+                            "name": w.workflow_name,
+                            "domain": w.domain,
+                            "severity": w.severity,
+                            "reason": w.reason,
+                        }
+                        for w in wf_impact.cascade_workflows
+                    ],
+                    "navigator_impacts": [
+                        {
+                            "navigator": n.var_name,
+                            "route": n.affected_route,
+                            "impact_type": n.impact_type,
+                        }
+                        for n in wf_impact.navigator_impacts
+                    ],
+                    "shared_screen_conflict": wf_impact.shared_screen_conflict,
+                    "workflow_risk_score": wf_impact.workflow_risk_score,
+                    "overall_risk_score": overall,
+                    "recommendation": wf_impact.recommendation,
+                }
+                # Override top-level risk_score with the combined overall score
+                base_result["risk_score"] = overall
+            except Exception as exc:
+                logger.warning("WorkflowImpactScorer failed for %s: %s", function_id, exc)
+                base_result["workflow_impact"] = {"error": str(exc)}
+
+        return base_result
 
 
 impact_analyzer = ImpactAnalyzer()

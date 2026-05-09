@@ -28,7 +28,10 @@ from tools.common.analyzer_cache import (
     write_parse_cache,
     write_state,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload
+from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
+from tools.common.git_diff import load_manifest_paths
+from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
+from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
@@ -116,6 +119,10 @@ class CallEdge:
     callee_name: str
     callee_id: Optional[str]
     callee_arity: Optional[int]
+    callee_raw: str = ""
+    callee_qualified: str = ""
+    callee_simple: str = ""
+    call_line: int = 0
 
 
 def _node_text(node, source_bytes: bytes) -> str:
@@ -204,13 +211,35 @@ def _extract_name_field(node, source_bytes: bytes) -> Optional[str]:
 
 
 def _normalize_call_name(text: str) -> str:
-    cleaned = re.sub(r"<[^<>]*>", "", text)
+    cleaned = re.sub(r"<[^<>]*>", "", text or "")
     cleaned = cleaned.replace("?.", ".")
     cleaned = cleaned.replace("::", ".")
-    cleaned = cleaned.strip()
+    cleaned = re.sub(r"\s+", "", cleaned).strip()
     if "." in cleaned:
         cleaned = cleaned.split(".")[-1]
     return cleaned.strip()
+
+
+def _normalize_call_parts(text: str) -> Tuple[str, str]:
+    cleaned = re.sub(r"<[^<>]*>", "", text or "")
+    cleaned = cleaned.replace("?.", ".")
+    cleaned = cleaned.replace("::", ".")
+    cleaned = re.sub(r"\s+", "", cleaned).strip(".")
+    simple = cleaned.split(".")[-1] if cleaned else ""
+    return cleaned, simple
+
+
+def _normalize_lookup(text: Optional[str]) -> str:
+    return (text or "").strip().replace("::", ".").lower()
+
+
+def _scope_tail(scope_name: Optional[str]) -> str:
+    text = _normalize_lookup(scope_name)
+    if not text:
+        return ""
+    if "." in text:
+        return text.rsplit(".", 1)[-1]
+    return text
 
 
 def _extract_scope_stack(stack: List[str]) -> Optional[str]:
@@ -557,28 +586,125 @@ def _walk_tree(
         )
 
 
+_SQL_IDENTIFIER = r"[A-Za-z_][\w$#]*"
+_SQL_QUALIFIED_IDENTIFIER = rf"(?:{_SQL_IDENTIFIER}\.)*{_SQL_IDENTIFIER}"
+
 _SQL_CREATE_RE = re.compile(
-    r"\\bcreate\\s+(?:or\\s+replace\\s+)?(?P<kind>procedure|proc|function)\\s+(?P<name>[A-Za-z_][\\w$#\\.]+)",
+    rf"\bcreate\s+(?:or\s+replace\s+)?(?P<kind>procedure|proc|function)\s+(?P<name>{_SQL_QUALIFIED_IDENTIFIER})",
     re.IGNORECASE,
 )
-_SQL_CALL_RE = re.compile(r"\\bcall\\s+(?P<name>[A-Za-z_][\\w$#\\.]+)", re.IGNORECASE)
-_SQL_EXEC_RE = re.compile(r"\\bexec(?:ute)?\\s+(?P<name>[A-Za-z_][\\w$#\\.]+)", re.IGNORECASE)
-_SQL_GENERIC_CALL_RE = re.compile(r"\\b(?P<name>[A-Za-z_][\\w$#\\.]+)\\s*\\(", re.IGNORECASE)
-_SQL_BODY_START_RE = re.compile(r"\\b(as|is|begin)\\b", re.IGNORECASE)
+_SQL_CALL_RE = re.compile(rf"\bcall\s+(?P<name>{_SQL_QUALIFIED_IDENTIFIER})", re.IGNORECASE)
+_SQL_EXEC_RE = re.compile(rf"\bexec(?:ute)?\s+(?P<name>{_SQL_QUALIFIED_IDENTIFIER})", re.IGNORECASE)
+_SQL_GENERIC_CALL_RE = re.compile(rf"\b(?P<name>{_SQL_QUALIFIED_IDENTIFIER})\s*\(", re.IGNORECASE)
+_SQL_BARE_CALL_RE = re.compile(rf"^\s*(?P<name>{_SQL_QUALIFIED_IDENTIFIER})\s*;\s*$", re.IGNORECASE | re.MULTILINE)
+_SQL_BODY_START_RE = re.compile(r"\b(as|is|begin)\b", re.IGNORECASE)
+
+_SQL_CALL_KEYWORDS: Set[str] = {
+    "and",
+    "as",
+    "begin",
+    "by",
+    "case",
+    "create",
+    "declare",
+    "delete",
+    "drop",
+    "else",
+    "elseif",
+    "end",
+    "exec",
+    "execute",
+    "from",
+    "function",
+    "group",
+    "having",
+    "if",
+    "insert",
+    "into",
+    "join",
+    "left",
+    "limit",
+    "merge",
+    "not",
+    "null",
+    "on",
+    "or",
+    "order",
+    "procedure",
+    "return",
+    "right",
+    "select",
+    "set",
+    "then",
+    "truncate",
+    "union",
+    "update",
+    "values",
+    "when",
+    "where",
+    "while",
+}
+
+_SQL_TYPE_KEYWORDS: Set[str] = {
+    "bigint",
+    "binary",
+    "bit",
+    "blob",
+    "bool",
+    "boolean",
+    "char",
+    "date",
+    "datetime",
+    "decimal",
+    "double",
+    "float",
+    "int",
+    "integer",
+    "json",
+    "nchar",
+    "numeric",
+    "nvarchar",
+    "real",
+    "smallint",
+    "text",
+    "time",
+    "timestamp",
+    "tinyint",
+    "varchar",
+    "xml",
+}
+
+_SQL_BLOCK_END_LABELS: Set[str] = {
+    "if",
+    "loop",
+    "case",
+    "while",
+    "repeat",
+    "for",
+}
+
+_SQL_BUILTIN_PREFIXES: Tuple[str, ...] = (
+    "pg_catalog.",
+    "information_schema.",
+    "sys.",
+    "dbms_",
+    "utl_",
+)
 
 
 def _mask_sql_comments(text: str) -> str:
     def repl(match: re.Match) -> str:
-        return " " * (match.end() - match.start())
+        chunk = match.group(0)
+        return "".join("\n" if ch == "\n" else " " for ch in chunk)
 
-    masked = re.sub(r"/\\*.*?\\*/", repl, text, flags=re.DOTALL)
-    masked = re.sub(r"--[^\\n]*", repl, masked)
-    masked = re.sub(r"//[^\\n]*", repl, masked)
+    masked = re.sub(r"/\*.*?\*/", repl, text, flags=re.DOTALL)
+    masked = re.sub(r"--[^\n]*", repl, masked)
+    masked = re.sub(r"//[^\n]*", repl, masked)
     return masked
 
 
 def _line_from_index(text: str, index: int) -> int:
-    return text.count("\\n", 0, index) + 1
+    return text.count("\n", 0, index) + 1
 
 
 def _snippet_from_span(text: str, start_idx: int, end_idx: int) -> Tuple[str, int, int]:
@@ -643,12 +769,14 @@ def _extract_leading_comment_from_lines(lines: List[str], start_line: int) -> st
 
 
 def _find_definition_end(masked_text: str, start_idx: int) -> int:
-    end_match = re.search(
-        r"\\bend\\b\\s*(?:[A-Za-z_][\\w$#\\.]*)?\\s*;",
+    for end_match in re.finditer(
+        r"\bend\b\s*(?P<label>[A-Za-z_][\w$#\.]*)?\s*;",
         masked_text[start_idx:],
         flags=re.IGNORECASE,
-    )
-    if end_match:
+    ):
+        label = (end_match.group("label") or "").lower()
+        if label in _SQL_BLOCK_END_LABELS:
+            continue
         return start_idx + end_match.end()
     semi = masked_text.find(";", start_idx)
     if semi != -1:
@@ -656,11 +784,23 @@ def _find_definition_end(masked_text: str, start_idx: int) -> int:
     return len(masked_text)
 
 
-def _find_body_start(masked_text: str, start_idx: int, end_idx: int) -> int:
+def _find_routine_end(masked_text: str, start_idx: int, name: str) -> int:
+    candidates = [name]
+    if "." in name:
+        candidates.append(name.rsplit(".", 1)[-1])
+    for candidate in candidates:
+        pattern = rf"\bend\b\s+{re.escape(candidate)}\s*;"
+        match = re.search(pattern, masked_text[start_idx:], flags=re.IGNORECASE)
+        if match:
+            return start_idx + match.end()
+    return _find_definition_end(masked_text, start_idx)
+
+
+def _find_body_start(masked_text: str, start_idx: int, end_idx: int) -> Optional[int]:
     match = _SQL_BODY_START_RE.search(masked_text, start_idx, end_idx)
     if match:
         return match.end()
-    return start_idx
+    return None
 
 
 def _extract_paren_segment(text: str, open_index: int) -> Optional[str]:
@@ -735,25 +875,59 @@ def _split_scope(qualified_name: str) -> Tuple[Optional[str], str]:
     return None, qualified_name.strip()
 
 
-def _extract_calls_from_body(body_text: str, body_masked: str, include_generic: bool) -> List[str]:
-    calls: List[str] = []
-    seen: Set[str] = set()
-    for match in _SQL_CALL_RE.finditer(body_masked):
-        name = _normalize_call_name(match.group("name"))
-        if name and name not in seen:
-            seen.add(name)
-            calls.append(name)
-    for match in _SQL_EXEC_RE.finditer(body_masked):
-        name = _normalize_call_name(match.group("name"))
-        if name and name not in seen:
-            seen.add(name)
-            calls.append(name)
+def _is_valid_callee(simple_name: str) -> bool:
+    token = (simple_name or "").strip().lower()
+    if not token:
+        return False
+    if token in _SQL_CALL_KEYWORDS:
+        return False
+    if token in _SQL_TYPE_KEYWORDS:
+        return False
+    return True
+
+
+def _is_builtin_callee(qualified_name: str, simple_name: str) -> bool:
+    q = (qualified_name or "").strip().lower()
+    s = (simple_name or "").strip().lower()
+    if not s:
+        return True
+    if s in _SQL_CALL_KEYWORDS or s in _SQL_TYPE_KEYWORDS:
+        return True
+    if any(q.startswith(prefix) for prefix in _SQL_BUILTIN_PREFIXES):
+        return True
+    return False
+
+
+def _extract_calls_from_body(body_masked: str, *, base_line: int = 0, include_generic: bool = True) -> List[Dict[str, Any]]:
+    calls: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, int]] = set()
+
+    def append_call(raw_name: str, start_idx: int) -> None:
+        qualified, simple = _normalize_call_parts(raw_name)
+        if not _is_valid_callee(simple):
+            return
+        call_line = base_line + body_masked.count("\n", 0, start_idx)
+        key = (qualified.lower(), call_line)
+        if key in seen:
+            return
+        seen.add(key)
+        calls.append(
+            {
+                "callee_raw": raw_name.strip(),
+                "callee_qualified": qualified,
+                "callee_simple": simple,
+                "call_line": call_line,
+            }
+        )
+
+    for matcher in (_SQL_CALL_RE, _SQL_EXEC_RE):
+        for match in matcher.finditer(body_masked):
+            append_call(match.group("name"), match.start())
     if include_generic:
         for match in _SQL_GENERIC_CALL_RE.finditer(body_masked):
-            name = _normalize_call_name(match.group("name"))
-            if name and name not in seen:
-                seen.add(name)
-                calls.append(name)
+            append_call(match.group("name"), match.start())
+    for match in _SQL_BARE_CALL_RE.finditer(body_masked):
+        append_call(match.group("name"), match.start())
     return calls
 
 
@@ -771,7 +945,7 @@ def parse_sql_file(path: str, root: str) -> Tuple[
     masked = _mask_sql_comments(source)
     lines = source.splitlines()
     start_line = 1
-    end_line = source.count("\\n") + 1
+    end_line = source.count("\n") + 1
     file_comment = _extract_file_comment_from_lines(lines)
     file_summary = file_comment
     file_note = _build_note(source, file_comment, file_summary)
@@ -799,15 +973,17 @@ def parse_sql_file(path: str, root: str) -> Tuple[
             kind = "procedure"
         full_name = match.group("name")
         start_idx = match.start()
-        end_idx = _find_definition_end(masked, match.end())
+        end_idx = _find_routine_end(masked, match.end(), full_name)
         snippet, def_start_line, def_end_line = _snippet_from_span(source, start_idx, end_idx)
         comment = _extract_leading_comment_from_lines(lines, def_start_line)
         summary = comment
         note = _build_note(snippet, comment, summary)
         scope_name, name = _split_scope(full_name)
         body_start = _find_body_start(masked, match.end(), end_idx)
+        if body_start is None:
+            continue
         param_segment = ""
-        search_limit = body_start if body_start > match.end() else end_idx
+        search_limit = body_start
         param_open = source.find("(", match.end(), search_limit)
         if param_open != -1:
             param_segment = _extract_paren_segment(source, param_open) or ""
@@ -831,16 +1007,20 @@ def parse_sql_file(path: str, root: str) -> Tuple[
                 exported=False,
             )
         )
-        body_text = source[body_start:end_idx]
         body_masked = masked[body_start:end_idx]
-        for callee in _extract_calls_from_body(body_text, body_masked, include_generic=False):
+        body_start_line = _line_from_index(source, body_start)
+        for call_item in _extract_calls_from_body(body_masked, base_line=body_start_line, include_generic=True):
             calls.append(
                 CallEdge(
                     caller_id=func_id,
                     caller_scope=scope_name,
-                    callee_name=callee,
+                    callee_name=call_item["callee_simple"],
                     callee_id=None,
                     callee_arity=None,
+                    callee_raw=call_item["callee_raw"],
+                    callee_qualified=call_item["callee_qualified"],
+                    callee_simple=call_item["callee_simple"],
+                    call_line=call_item["call_line"],
                 )
             )
     return functions, calls, classes, namespaces, relations, file_def
@@ -942,17 +1122,30 @@ def _should_trust_remote_code(model_name: str) -> bool:
     return "jina" in model_name.lower()
 
 
+def _resolve_embedding_model_source(model_name: str) -> str:
+    local_model_path = os.environ.get("CODE_EMBEDDING_MODEL_PATH")
+    if not local_model_path:
+        return model_name
+    resolved_path = os.path.abspath(os.path.expanduser(local_model_path))
+    if not os.path.exists(resolved_path):
+        raise FileNotFoundError(
+            "CODE_EMBEDDING_MODEL_PATH does not exist: %s" % local_model_path
+        )
+    return resolved_path
+
+
 class CodeEmbedder:
     def __init__(self, model_name: str, device: str, max_embed_chars: int, chunk_embed: bool) -> None:
-        trust_remote_code = _should_trust_remote_code(model_name)
+        model_source = _resolve_embedding_model_source(model_name)
+        trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
         extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
             **extra_tokenizer_kwargs,
         )
         self.model = AutoModel.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
         )
         self.device = torch.device(device)
@@ -1080,12 +1273,76 @@ def _stable_point_id(symbol_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, symbol_id))
 
 
+def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
+    """
+    Check if a directory should be ignored during SQL project scanning.
+
+    Ignores:
+    - Database backups: *.bak, *.backup, *.dump
+    - Logs: logs/, *.log
+    - Migration outputs: migrations/sql/
+    - Temporary: tmp/, temp/
+    """
+    ignore_patterns = {
+        # Version control
+        ".git", ".svn", ".hg",
+
+        # IDE
+        ".idea", ".vscode",
+
+        # Backup directories
+        "backup", "backups", "dumps", "exports",
+
+        # Logs
+        "logs", "log",
+
+        # Temporary
+        "tmp", "temp", ".tmp", "tmpdir",
+
+        # OS specific
+        ".DS_Store", "Thumbs.db",
+
+        # Node (mixed projects)
+        "node_modules", "dist", "build",
+
+        # Cache
+        ".cache", "__pycache__",
+    }
+
+    if dir_name in ignore_patterns:
+        return True
+
+    if dir_name.endswith((".swp", ".swo")):
+        return True
+
+    return False
+
+
 def _scan_sql_files(root: str) -> List[str]:
+    """
+    Scan for SQL files, ignoring unnecessary directories.
+    """
     files: List[str] = []
-    for dirpath, _, filenames in os.walk(root):
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        # Filter out ignored directories in-place
+        dirnames[:] = [
+            d for d in dirnames
+            if not _should_ignore_directory(d, os.path.join(dirpath, d))
+        ]
+
         for name in filenames:
+            # Skip backup and log files
+            if name.endswith((".bak", ".backup", ".dump", ".gz", ".zip", ".tar")):
+                continue
+            if name.endswith((".swp", ".swo", ".log")):
+                continue
+            if name in (".DS_Store", "Thumbs.db"):
+                continue
+
             if name.endswith((".sql", ".ddl", ".dml", ".psql")):
                 files.append(os.path.join(dirpath, name))
+
     return sorted(files)
 
 
@@ -1118,6 +1375,16 @@ def _load_or_parse_payload(
         if "exported" not in item:
             item["exported"] = False
 
+    def ensure_call_fields(item: Dict[str, Any]) -> None:
+        if "callee_raw" not in item:
+            item["callee_raw"] = item.get("callee_name") or ""
+        if "callee_qualified" not in item:
+            item["callee_qualified"] = item.get("callee_raw") or item.get("callee_name") or ""
+        if "callee_simple" not in item:
+            item["callee_simple"] = item.get("callee_name") or ""
+        if "call_line" not in item:
+            item["call_line"] = 0
+
     def normalize_cached_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         file_def = payload.get("file_def")
         if isinstance(file_def, dict):
@@ -1139,6 +1406,11 @@ def _load_or_parse_payload(
                 if isinstance(item, dict):
                     ensure_text_fields(item)
                     ensure_exported_field(item)
+        calls = payload.get("calls")
+        if isinstance(calls, list):
+            for item in calls:
+                if isinstance(item, dict):
+                    ensure_call_fields(item)
         return payload
 
     rel_path = os.path.relpath(file_path, root)
@@ -1188,59 +1460,167 @@ async def build_call_graph(
     repo: str,
     build_system: str,
     verbose: bool,
+    call_scope: str = "internal",
+    unresolved_calls_path: Optional[str] = None,
+    call_stats_path: Optional[str] = None,
+    incremental: bool = False,
+    changed_files: Optional[Iterable[str]] = None,
+    deleted_files: Optional[Iterable[str]] = None,
+    commit_sha: str = "",
+    commit_sha_before: str = "",
 ) -> None:
     start_time = time.time()
-    cache_root = safe_cache_root(cache_dir, "sql_analyzer")
+    cache_root = safe_cache_root(cache_dir, "sql_analyzer", project_root=root)
     parse_cache_root = os.path.join(cache_root, "parse")
     qdrant_cache_root = os.path.join(cache_root, "qdrant")
     os.makedirs(parse_cache_root, exist_ok=True)
     os.makedirs(qdrant_cache_root, exist_ok=True)
-    all_files = _scan_sql_files(root)
+    all_scanned_files = _scan_sql_files(root)
+    changed_set = {item.replace("\\", "/") for item in (changed_files or []) if item}
+    deleted_set = {item.replace("\\", "/") for item in (deleted_files or []) if item}
+    if incremental:
+        selected_files = [
+            file_path
+            for file_path in all_scanned_files
+            if os.path.relpath(file_path, root).replace("\\", "/") in changed_set
+        ]
+    else:
+        selected_files = all_scanned_files
     if verbose:
-        print(f"[scan] Found {len(all_files)} SQL files under {root}")
-    total_files = len(all_files)
+        if incremental:
+            print(
+                "[scan] incremental before=%s after=%s changed=%d deleted=%d selected=%d/%d"
+                % (
+                    commit_sha_before or "unknown",
+                    commit_sha or "unknown",
+                    len(changed_set),
+                    len(deleted_set),
+                    len(selected_files),
+                    len(all_scanned_files),
+                )
+            )
+        print(f"[scan] Found {len(selected_files)} SQL files under {root}")
+    total_files = len(selected_files)
+
+    cleanup_targets = sorted(changed_set | deleted_set)
+    if incremental and cleanup_targets:
+        if code_writer:
+            await cleanup_neo4j_for_files(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+        if qdrant_writer:
+            cleanup_qdrant_with_writer(
+                writer=qdrant_writer,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
 
     def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
-        for index, file_path in enumerate(all_files, start=1):
+        for index, file_path in enumerate(selected_files, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
             yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache)
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
     function_index_by_name_arity: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+    function_index_by_qualified: Dict[str, List[Dict[str, Any]]] = {}
+    function_index_by_qualified_arity: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
     expected_points = 0
     for payload in iter_payloads(log_parse=True):
         for func in payload["functions"]:
             expected_points += 1
+            name_key = _normalize_lookup(func["name"])
+            scope_key = _normalize_lookup(func.get("scope_name"))
+            qualified_key = _normalize_lookup(func.get("qualified_name"))
             entry = {
                 "symbol_id": func["symbol_id"],
                 "scope_name": func["scope_name"],
+                "scope_key": scope_key,
                 "arity": func["arity"],
+                "qualified_name": func.get("qualified_name"),
+                "qualified_key": qualified_key,
             }
-            function_index_by_name.setdefault(func["name"], []).append(entry)
+            function_index_by_name.setdefault(name_key, []).append(entry)
             if func["arity"] is not None:
-                function_index_by_name_arity.setdefault((func["name"], func["arity"]), []).append(entry)
+                function_index_by_name_arity.setdefault((name_key, func["arity"]), []).append(entry)
+            if qualified_key:
+                function_index_by_qualified.setdefault(qualified_key, []).append(entry)
+                if func["arity"] is not None:
+                    function_index_by_qualified_arity.setdefault((qualified_key, func["arity"]), []).append(entry)
 
     if code_writer:
         if verbose:
             print("[graph] Writing nodes and relations (streaming)...")
 
-        def resolve_callee_id(call: Dict[str, Any]) -> Optional[str]:
-            candidates = None
-            if call.get("callee_arity") is not None:
-                candidates = function_index_by_name_arity.get((call["callee_name"], call["callee_arity"]))
+        def resolve_callee_id(call: Dict[str, Any]) -> Tuple[Optional[str], str]:
+            simple_key = _normalize_lookup(call.get("callee_simple") or call.get("callee_name"))
+            qualified_key = _normalize_lookup(call.get("callee_qualified"))
+            caller_scope_key = _normalize_lookup(call.get("caller_scope"))
+            callee_arity = call.get("callee_arity")
+
+            if qualified_key:
+                candidates = (
+                    function_index_by_qualified_arity.get((qualified_key, callee_arity))
+                    if callee_arity is not None
+                    else function_index_by_qualified.get(qualified_key)
+                )
+                if candidates:
+                    if len(candidates) == 1:
+                        return candidates[0]["symbol_id"], "qualified_exact"
+                    scoped = [cand for cand in candidates if cand.get("scope_key") == caller_scope_key]
+                    if len(scoped) == 1:
+                        return scoped[0]["symbol_id"], "qualified_scope"
+
+            candidates = (
+                function_index_by_name_arity.get((simple_key, callee_arity))
+                if callee_arity is not None
+                else function_index_by_name.get(simple_key)
+            )
             if not candidates:
-                candidates = function_index_by_name.get(call["callee_name"])
-            if not candidates:
-                return None
-            if len(candidates) == 1:
-                return candidates[0]["symbol_id"]
-            caller_scope = call.get("caller_scope")
-            if caller_scope:
-                scoped = [cand for cand in candidates if cand.get("scope_name") == caller_scope]
+                return None, "missing"
+            if caller_scope_key:
+                scoped = [cand for cand in candidates if cand.get("scope_key") == caller_scope_key]
                 if len(scoped) == 1:
-                    return scoped[0]["symbol_id"]
-            return None
+                    return scoped[0]["symbol_id"], "same_scope"
+                caller_tail = _scope_tail(caller_scope_key)
+                package_scoped = [cand for cand in candidates if _scope_tail(cand.get("scope_key")) == caller_tail]
+                if len(package_scoped) == 1:
+                    return package_scoped[0]["symbol_id"], "same_package"
+            if len(candidates) == 1:
+                return candidates[0]["symbol_id"], "global_unique"
+            return None, "ambiguous"
+
+        def call_kind(call: Dict[str, Any]) -> str:
+            qualified = call.get("callee_qualified") or call.get("callee_raw") or call.get("callee_name") or ""
+            simple = call.get("callee_simple") or call.get("callee_name") or ""
+            return "builtin" if _is_builtin_callee(qualified, simple) else "external"
+
+        def should_materialize_external(call: Dict[str, Any]) -> bool:
+            scope_mode = (call_scope or "internal").strip().lower()
+            if scope_mode == "internal":
+                return False
+            if scope_mode == "everything":
+                return True
+            return call_kind(call) != "builtin"
+
+        def build_external_symbol(call: Dict[str, Any]) -> Tuple[str, str, str]:
+            qualified = (call.get("callee_qualified") or "").strip()
+            simple = (call.get("callee_simple") or call.get("callee_name") or "").strip()
+            base = qualified or simple or "unknown_external"
+            key = _normalize_lookup(base) or "unknown_external"
+            symbol_id = f"external::{key}"
+            scope_name, display_name = _split_scope(base) if "." in base else (None, base)
+            return symbol_id, scope_name or "<external>", display_name
+
+        def symbol_file_from_id(symbol_id: str) -> str:
+            if "@" in symbol_id:
+                return symbol_id.rsplit("@", 1)[-1]
+            return "<external>"
 
         all_projects = [
             {
@@ -1258,6 +1638,17 @@ async def build_call_graph(
         all_functions: List[Dict[str, Any]] = []
         all_relations: List[Dict[str, Any]] = []
         all_calls: List[Dict[str, Any]] = []
+        external_functions: Dict[str, Dict[str, Any]] = {}
+        known_function_ids: Set[str] = set()
+        call_stats: Dict[str, Any] = {
+            "total_calls": 0,
+            "resolved_calls": 0,
+            "unresolved_calls": 0,
+            "external_calls_written": 0,
+            "resolved_ratio": 0.0,
+            "by_file": {},
+        }
+        unresolved_calls: List[Dict[str, Any]] = []
 
         for payload in iter_payloads(log_parse=False):
             file_def = payload["file_def"]
@@ -1333,6 +1724,7 @@ async def build_call_graph(
                     {"source_id": file_id, "target_id": class_def["symbol_id"], "rel_type": "CONTAINS", "properties": {}}
                 )
             for func in payload["functions"]:
+                known_function_ids.add(func["symbol_id"])
                 all_functions.append(
                     {
                         "id": func["symbol_id"],
@@ -1371,11 +1763,89 @@ async def build_call_graph(
                     }
                 )
             for call in payload["calls"]:
-                callee_id = call.get("callee_id") or resolve_callee_id(call)
-                if callee_id:
-                    all_calls.append({"caller_id": call["caller_id"], "callee_id": callee_id})
+                call_file = symbol_file_from_id(call.get("caller_id", ""))
+                by_file = call_stats["by_file"].setdefault(
+                    call_file,
+                    {"total_calls": 0, "resolved_calls": 0, "unresolved_calls": 0, "external_calls_written": 0},
+                )
+                call_stats["total_calls"] += 1
+                by_file["total_calls"] += 1
 
-        await code_writer.write_all(            projects=all_projects,
+                callee_id, reason = resolve_callee_id(call)
+                if callee_id:
+                    all_calls.append(
+                        {
+                            "caller_id": call["caller_id"],
+                            "callee_id": callee_id,
+                            "call_type": "internal",
+                        }
+                    )
+                    call_stats["resolved_calls"] += 1
+                    by_file["resolved_calls"] += 1
+                    continue
+
+                unresolved = {
+                    "caller_id": call.get("caller_id"),
+                    "caller_scope": call.get("caller_scope"),
+                    "file_path": call_file,
+                    "line": call.get("call_line") or 0,
+                    "callee_name": call.get("callee_name"),
+                    "callee_simple": call.get("callee_simple"),
+                    "callee_qualified": call.get("callee_qualified"),
+                    "callee_raw": call.get("callee_raw"),
+                    "reason": reason,
+                }
+
+                if should_materialize_external(call):
+                    symbol_id, external_scope, external_name = build_external_symbol(call)
+                    if symbol_id not in known_function_ids and symbol_id not in external_functions:
+                        is_builtin = call_kind(call) == "builtin"
+                        external_functions[symbol_id] = {
+                            "id": symbol_id,
+                            "name": external_name,
+                            "qualified_name": call.get("callee_qualified") or external_name,
+                            "kind": "external_function",
+                            "scope_name": external_scope,
+                            "class_name": None,
+                            "package_name": None,
+                            "file_path": "<external>",
+                            "start_line": 0,
+                            "end_line": 0,
+                            "arity": call.get("callee_arity") or 0,
+                            "code": "",
+                            "comment": "",
+                            "summary": "External callee inferred from SQL callsite",
+                            "note": "",
+                            "exported": False,
+                            "external": True,
+                            "builtin": is_builtin,
+                            "project_id": project_id,
+                            "project_name": project_name,
+                            "language": language,
+                            "repo": repo,
+                            "build_system": build_system,
+                        }
+                    all_calls.append(
+                        {
+                            "caller_id": call["caller_id"],
+                            "callee_id": symbol_id,
+                            "call_type": call_kind(call),
+                        }
+                    )
+                    call_stats["resolved_calls"] += 1
+                    call_stats["external_calls_written"] += 1
+                    by_file["resolved_calls"] += 1
+                    by_file["external_calls_written"] += 1
+                else:
+                    call_stats["unresolved_calls"] += 1
+                    by_file["unresolved_calls"] += 1
+                    unresolved_calls.append(unresolved)
+
+        if external_functions:
+            all_functions.extend(external_functions.values())
+
+        await code_writer.write_all(
+            projects=all_projects,
             namespaces=all_namespaces or None,
             files=all_files or None,
             types=all_types or None,
@@ -1385,6 +1855,32 @@ async def build_call_graph(
             use_full_writers=True,
             files_variant="with_imports",
         )
+        if call_stats["total_calls"] > 0:
+            call_stats["resolved_ratio"] = round(
+                (call_stats["resolved_calls"] / call_stats["total_calls"]) * 100.0,
+                2,
+            )
+        if call_stats_path:
+            os.makedirs(os.path.dirname(os.path.abspath(call_stats_path)), exist_ok=True)
+            with open(call_stats_path, "w", encoding="utf-8") as handle:
+                json.dump(call_stats, handle, ensure_ascii=True, indent=2)
+                handle.write("\n")
+        if unresolved_calls_path:
+            os.makedirs(os.path.dirname(os.path.abspath(unresolved_calls_path)), exist_ok=True)
+            with open(unresolved_calls_path, "w", encoding="utf-8") as handle:
+                for record in unresolved_calls:
+                    handle.write(json.dumps(record, ensure_ascii=True) + "\n")
+        if verbose:
+            print(
+                "[calls] resolved %d/%d (%.2f%%), unresolved %d, external %d"
+                % (
+                    call_stats["resolved_calls"],
+                    call_stats["total_calls"],
+                    call_stats["resolved_ratio"],
+                    call_stats["unresolved_calls"],
+                    call_stats["external_calls_written"],
+                )
+            )
         if verbose:
             print("[graph] Write complete")
 
@@ -1531,22 +2027,25 @@ async def build_call_graph(
                 os.remove(state_path)
             except OSError:
                 pass
+    _sr_fn = len(all_functions) if 'all_functions' in vars() else 0  # noqa: F821
+    _sr_cls = len(all_types) if 'all_types' in vars() else 0  # noqa: F821
+    print(f"[SCAN_RESULT] parser={language} files={total_files} functions={_sr_fn} classes={_sr_cls}", flush=True)
     if verbose:
         elapsed = time.time() - start_time
         print(f"[done] Total time: {elapsed:.2f}s")
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Python call graph analyzer")
-    parser.add_argument("--root", required=True, help="Root folder containing Python sources")
+    parser = argparse.ArgumentParser(description="SQL call graph analyzer")
+    parser.add_argument("--root", required=True, help="Root folder containing SQL sources")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASS"))
+    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument(
         "--qdrant-collection",
-        default=os.environ.get("QDRANT_COLLECTION_CODE", "sql_functions"),
+        default=os.environ.get("QDRANT_COLLECTION", "sql_functions"),
     )
     parser.add_argument(
         "--embed-model",
@@ -1556,7 +2055,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-embed-chars", type=int, default=4000)
     parser.add_argument("--chunk-embed", action="store_true")
-    parser.add_argument("--device", default=os.environ.get("EMBEDDING_DEVICE", "auto"))
+    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "auto"))
     parser.add_argument("--batch-size", type=int, default=4)  # for embedding - 4 function 1 turn embedding
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
@@ -1565,9 +2064,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
     parser.add_argument("--qdrant-retries", type=int, default=3)
     parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
+    parser.set_defaults(enable_message_scan=True)
+    parser.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true", help="Enable message scan and sync (default)")
+    parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false", help="Disable message scan and sync")
+    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"))
+    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION"))
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
     parser.add_argument("--keep-cache", action="store_true")
     parser.add_argument("--disable-parse-cache", action="store_true")
+    parser.add_argument(
+        "--ignore-cache",
+        action="store_true",
+        help="Ignore local caches for this run (parse cache, Neo4j/Qdrant resume state).",
+    )
     parser.add_argument("--project-id", dest="project_id", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--project_id", dest="project_id")
     parser.add_argument("--project-name", dest="project_name", default=os.environ.get("PROJECT_NAME"))
@@ -1576,6 +2085,25 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--repo", default=os.environ.get("PROJECT_REPO"))
     parser.add_argument("--build-system", dest="build_system", default=os.environ.get("PROJECT_BUILD_SYSTEM", ""))
     parser.add_argument("--build_system", dest="build_system")
+    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""))
+    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""))
+    parser.add_argument("--incremental", action="store_true", help="Enable incremental ingestion mode")
+    parser.add_argument(
+        "--changed-files-manifest",
+        help="JSON/TXT manifest of changed+impacted file paths (relative to --root)",
+    )
+    parser.add_argument(
+        "--deleted-files-manifest",
+        help="JSON/TXT manifest of deleted file paths (relative to --root)",
+    )
+    parser.add_argument(
+        "--call-scope",
+        choices=["internal", "hybrid", "everything"],
+        default=os.environ.get("CALL_SCOPE", "internal"),
+        help="Control unresolved callee materialization: internal, hybrid, everything.",
+    )
+    parser.add_argument("--unresolved-calls-path", help="Write unresolved calls as JSONL")
+    parser.add_argument("--call-stats-path", help="Write call resolution stats as JSON")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
@@ -1600,12 +2128,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
+    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
         driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=args.neo4j_uri,
             user=args.neo4j_user,
-            password=args.NEO4J_PASS,
+            password=args.neo4j_password,
         )
         code_writer = LanguageCodeWriter(
             driver=driver,
@@ -1631,27 +2159,87 @@ async def main(argv: Optional[List[str]] = None) -> int:
         )
 
     parse_cache = not args.disable_parse_cache
+    effective_cache_dir = args.cache_dir
+    if args.ignore_cache:
+        run_cache_root = safe_cache_root(effective_cache_dir, "sql_analyzer", project_root=args.root)
+        effective_cache_dir = os.path.join(
+            run_cache_root,
+            "ignore_runs",
+            f"run_{int(time.time() * 1000)}",
+        )
+        os.makedirs(effective_cache_dir, exist_ok=True)
+        parse_cache = False
+        args.disable_neo4j_resume = True
+        args.keep_cache = False
+        if args.verbose:
+            print(
+                "[cache] ignore-cache enabled; using isolated cache dir: %s"
+                % effective_cache_dir
+            )
+    changed_manifest_files: List[str] = []
+    deleted_manifest_files: List[str] = []
+    if args.incremental:
+        if args.changed_files_manifest:
+            changed_manifest_files = sorted(load_manifest_paths(args.changed_files_manifest, args.root))
+        if args.deleted_files_manifest:
+            deleted_manifest_files = sorted(load_manifest_paths(args.deleted_files_manifest, args.root))
+        if args.verbose:
+            print(
+                "[diff] incremental manifests changed=%d deleted=%d"
+                % (len(changed_manifest_files), len(deleted_manifest_files))
+            )
     neo4j_state_path = None
-    if not args.disable_neo4j_resume:
-        cache_root = safe_cache_root(args.cache_dir, "sql_analyzer")
+    if not args.disable_neo4j_resume and not args.incremental:
+        cache_root = safe_cache_root(effective_cache_dir, "sql_analyzer", project_root=args.root)
         neo4j_state_path = args.neo4j_state or os.path.join(cache_root, "neo4j_state.json")
+    elif args.incremental and args.verbose:
+        print("[state] incremental mode disables neo4j resume state")
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
     language = args.language or "sql"
     repo = args.repo or os.path.abspath(args.root)
     build_system = args.build_system or ""
+    commit_sha = args.commit_sha_after or ""
+    commit_sha_before = args.commit_sha_before or ""
+    message_qdrant_collection = (
+        args.message_qdrant_collection
+        or default_message_collection_name(args.qdrant_collection)
+    )
     if code_writer:
         cloc_raw = collect_cloc_stats(args.root)
         if cloc_raw:
             cloc_stats = normalize_cloc_payload(cloc_raw)
-            pass  # CLOC stats now handled directly in build_call_graph
+            await write_cloc_stats_to_neo4j(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                project_name=project_name,
+                root=args.root,
+                repo=repo,
+                language=language,
+                stats=cloc_stats,
+            )
+            if args.verbose:
+                print("[cloc] Stats stored in Neo4j")
         elif args.verbose:
             print("[cloc] Skipped (cloc not available or failed)")
 
     try:
         if args.dry_run:
             files = _scan_sql_files(args.root)
-            print(f"Dry run: {len(files)} SQL files found")
+            if args.incremental and changed_manifest_files:
+                manifest_set = set(changed_manifest_files)
+                files = [
+                    file_path
+                    for file_path in files
+                    if os.path.relpath(file_path, args.root).replace("\\", "/") in manifest_set
+                ]
+                print(
+                    "Dry run (incremental): %d SQL files selected (manifest=%d)"
+                    % (len(files), len(changed_manifest_files))
+                )
+            else:
+                print(f"Dry run: {len(files)} SQL files found")
             return 0
         await build_call_graph(
             args.root,
@@ -1660,7 +2248,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             embedder=embedder,
             batch_size=args.batch_size,
             qdrant_batch_size=args.qdrant_batch_size,
-            cache_dir=args.cache_dir,
+            cache_dir=effective_cache_dir,
             keep_cache=args.keep_cache,
             parse_cache=parse_cache,
             neo4j_batch_size=args.neo4j_batch_size,
@@ -1671,10 +2259,59 @@ async def main(argv: Optional[List[str]] = None) -> int:
             repo=repo,
             build_system=build_system,
             verbose=args.verbose,
+            call_scope=args.call_scope,
+            unresolved_calls_path=args.unresolved_calls_path,
+            call_stats_path=args.call_stats_path,
+            incremental=args.incremental,
+            changed_files=changed_manifest_files,
+            deleted_files=deleted_manifest_files,
+            commit_sha=commit_sha,
+            commit_sha_before=commit_sha_before,
         )
+        if args.enable_message_scan:
+            message_summary = await run_message_scan_pipeline(
+                root=args.root,
+                parser="sql",
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+                incremental=args.incremental,
+                changed_files=changed_manifest_files,
+                deleted_files=deleted_manifest_files,
+                driver=driver,
+                neo4j_database=args.neo4j_db,
+                qdrant_url=args.qdrant_url,
+                qdrant_collection=message_qdrant_collection if args.qdrant_url else None,
+                qdrant_vector_size=embedder.vector_size if embedder else 1024,
+                embed_texts=embedder.embed if embedder else None,
+                output_dir=args.message_output_dir,
+                cache_dir=effective_cache_dir,
+                commit_sha_before=commit_sha_before,
+                commit_sha_after=commit_sha,
+                qdrant_batch_size=args.qdrant_batch_size,
+                qdrant_timeout=args.qdrant_timeout,
+                qdrant_retries=args.qdrant_retries,
+                qdrant_retry_sleep=args.qdrant_retry_sleep,
+                verbose=args.verbose,
+            )
+            print(
+                "[message] parser=%s count=%s neo4j=%s qdrant=%s collection=%s artifact=%s"
+                % (
+                    message_summary.get("parser"),
+                    message_summary.get("message_count"),
+                    message_summary.get("neo4j_upserted"),
+                    message_summary.get("qdrant_upserted"),
+                    message_summary.get("qdrant_collection"),
+                    message_summary.get("artifact_path"),
+                )
+            )
     finally:
         if driver:
-            await driver.close()
+            close_result = driver.close()
+            if hasattr(close_result, "__await__"):
+                await close_result
     return 0
 
 

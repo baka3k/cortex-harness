@@ -5,6 +5,8 @@ import asyncio
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 import time
 import uuid
@@ -28,9 +30,62 @@ from tools.common.analyzer_cache import (
     write_parse_cache,
     write_state,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload
+from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
+from tools.common.git_diff import load_manifest_paths
+from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
+from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.writer.language_writer import LanguageCodeWriter
+try:
+    from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
+except Exception:
+    ensure_compile_commands = None  # type: ignore[assignment]
+
+
+_PARSE_CACHE_VERSION = "cplus-v2026-03-06-1"
+_SCAN_SKIP_DIRS = {
+    # Version control
+    ".git", ".hg", ".svn",
+
+    # IDE
+    ".idea", ".vs", ".vscode", ".eclipse", ".settings",
+
+    # Build outputs
+    "build", "out", "bin", "obj", "cmake-build-*",
+
+    # CMake cache
+    "CMakeFiles", "CMakeCache.txt", "cmake_install.cmake", "Makefile",
+
+    # Compiled
+    "*.o", "*.obj", "*.so", "*.dll", "*.dylib", "*.a", "*.lib", "*.exe",
+
+    # Precompiled headers
+    "*.gch", "*.pch",
+
+    # Gradle (Android NDK)
+    ".gradle", ".externalNativeBuild",
+
+    # Node (mixed projects)
+    "node_modules", "dist", "target",
+
+    # Qt
+    "moc_*", "ui_*", "qrc_*.cpp",
+
+    # Cache
+    ".cache", ".parcel-cache", "__pycache__",
+
+    # Testing
+    "coverage", ".test-results", "test-results",
+
+    # Temporary
+    "tmp", "temp", ".tmp", "tmpdir",
+
+    # OS specific
+    ".DS_Store", "Thumbs.db",
+
+    # Misc project files
+    "*.pro.user", "*.user", "*.suo",
+}
 
 try:
     from tree_sitter_languages import get_parser as ts_get_parser
@@ -46,6 +101,8 @@ class FunctionDef:
     kind: str
     scope_name: Optional[str]
     file_path: str
+    start_byte: int
+    end_byte: int
     start_line: int
     end_line: int
     arity: int
@@ -158,6 +215,10 @@ class CallEdge:
     caller_scope: Optional[str]
     call_line: int
     call_column: int
+    call_start_byte: int
+    call_branch_kind: str
+    call_loop_depth: int
+    call_control_frames_json: str
     call_type: str
     call_arity: int
     callee_name: str
@@ -233,7 +294,7 @@ def _find_nodes_by_type(node, node_type: str) -> Iterable:
 def _first_identifier(node, source_bytes: bytes) -> Optional[str]:
     if node is None:
         return None
-    if node.type in {"identifier", "type_identifier", "field_identifier"}:
+    if node.type in {"identifier", "type_identifier", "field_identifier", "namespace_identifier"}:
         return _node_text(node, source_bytes)
     for child in node.children:
         result = _first_identifier(child, source_bytes)
@@ -251,6 +312,11 @@ def _extract_type_name(text: str) -> Optional[str]:
 
 def _normalize_type_signature(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip())
+
+
+def _function_type_id(type_signature: str) -> str:
+    normalized = _normalize_type_signature(type_signature)
+    return f"functype::{_stable_point_id(normalized)}"
 
 
 def _symbol_id(scope: Optional[str], name: str, arity: int, rel_path: str) -> str:
@@ -312,6 +378,100 @@ def _anonymous_name(prefix: str, node) -> str:
     return f"Anonymous{prefix}@{node.start_point[0] + 1}:{node.start_point[1] + 1}"
 
 
+_CPP_HEADER_HINT_RE = re.compile(
+    r"\b(namespace|class|template|typename|operator|using\s+namespace|constexpr)\b|::"
+)
+_C_HEADER_HINT_RE = re.compile(r'\bextern\s+"C"\b')
+
+
+def _looks_like_cpp_header(path: str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            chunk = handle.read(65536)
+    except OSError:
+        return False
+    text = chunk.decode("utf-8", errors="ignore")
+    if _CPP_HEADER_HINT_RE.search(text):
+        return True
+    if _C_HEADER_HINT_RE.search(text):
+        return False
+    return False
+
+
+def _parse_compile_command_tokens(entry: Dict[str, Any]) -> List[str]:
+    args = entry.get("arguments")
+    if isinstance(args, list):
+        return [str(item) for item in args if isinstance(item, (str, int, float))]
+    command = entry.get("command")
+    if isinstance(command, str) and command.strip():
+        try:
+            return shlex.split(command)
+        except ValueError:
+            return command.strip().split()
+    return []
+
+
+def _command_implies_cpp(tokens: List[str], file_path: str) -> bool:
+    if tokens:
+        compiler = os.path.basename(tokens[0]).lower()
+        if "++" in compiler:
+            return True
+        for idx, token in enumerate(tokens):
+            if token == "-x" and idx + 1 < len(tokens):
+                lang = tokens[idx + 1].lower()
+                if "c++" in lang:
+                    return True
+                if lang == "c":
+                    return False
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"}:
+        return True
+    return False
+
+
+def _load_compile_commands_index(path: str, root: str) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "path": path,
+        "entries": 0,
+        "cpp_files": set(),
+        "c_files": set(),
+    }
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return summary
+    if not isinstance(payload, list):
+        return summary
+
+    root_abs = os.path.abspath(root)
+    default_dir = os.path.dirname(os.path.abspath(path))
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        file_path = item.get("file")
+        if not isinstance(file_path, str) or not file_path.strip():
+            continue
+        file_path = file_path.strip()
+        entry_dir = item.get("directory")
+        base_dir = entry_dir if isinstance(entry_dir, str) and entry_dir.strip() else default_dir
+        if os.path.isabs(file_path):
+            abs_file = os.path.abspath(file_path)
+        else:
+            abs_file = os.path.abspath(os.path.join(base_dir, file_path))
+        try:
+            rel_file = os.path.relpath(abs_file, root_abs).replace("\\", "/")
+        except ValueError:
+            rel_file = abs_file.replace("\\", "/")
+        is_cpp_cmd = _command_implies_cpp(_parse_compile_command_tokens(item), abs_file)
+        if is_cpp_cmd:
+            summary["cpp_files"].add(rel_file)
+        else:
+            summary["c_files"].add(rel_file)
+        summary["entries"] += 1
+    return summary
+
+
 def _get_cpp_parser() -> Parser:
     if ts_get_parser is not None:
         try:
@@ -362,24 +522,44 @@ def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes]:
     return tree, source_bytes
 
 
+def _tree_error_stats(tree) -> Tuple[bool, int]:
+    has_error = bool(getattr(tree.root_node, "has_error", False))
+    error_nodes = sum(1 for _ in _find_nodes_by_type(tree.root_node, "ERROR"))
+    return has_error, error_nodes
+
+
 def _extract_base_types(node, source_bytes: bytes) -> List[str]:
-    text = _node_text(node, source_bytes)
-    if ":" not in text:
+    base_clause = node.child_by_field_name("base_class_clause") if hasattr(node, "child_by_field_name") else None
+    if base_clause is None:
+        for child in node.children:
+            if child.type == "base_class_clause":
+                base_clause = child
+                break
+    if base_clause is None:
         return []
-    after = text.split(":", 1)[1]
-    after = after.split("{", 1)[0]
-    after = re.sub(r"<.*?>", "", after)
-    parts = [part.strip() for part in after.split(",") if part.strip()]
+
     results: List[str] = []
-    for part in parts:
-        name = _extract_type_name(part)
-        if name:
-            results.append(name)
+    seen: set[str] = set()
+    for child in base_clause.children:
+        if not child.is_named:
+            continue
+        if child.type in {"access_specifier", "virtual_specifier"}:
+            continue
+        name = _extract_base_type(_node_text(child, source_bytes))
+        if not name:
+            continue
+        if name in {"public", "private", "protected", "virtual"}:
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        results.append(name)
     return results
 
 
 def _iter_calls(func_node) -> Iterable:
-    for node in _find_nodes_by_type(func_node, "call_expression"):
+    # C/C++ execution inference is lexical in this analyzer; keep calls in source order.
+    for node in sorted(_find_nodes_by_type(func_node, "call_expression"), key=lambda item: item.start_byte):
         yield node
 
 
@@ -412,6 +592,199 @@ def _identifier_from_node(node, source_bytes: bytes) -> Optional[str]:
     return match.group(0) if match else None
 
 
+def _iter_field_declarators(field_node) -> Iterable:
+    """Yield every declarator node from a field_declaration.
+
+    Tree-sitter C/C++ can expose multiple declarators in one declaration:
+    e.g. `int *p, q;` has two declarators (`*p`, `q`).
+    """
+    seen: set[tuple[int, int, str]] = set()
+    if hasattr(field_node, "field_name_for_child"):
+        for idx, child in enumerate(field_node.children):
+            if not child.is_named:
+                continue
+            field_name = field_node.field_name_for_child(idx)
+            if field_name != "declarator":
+                continue
+            key = (int(child.start_byte), int(child.end_byte), str(child.type))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield child
+        if seen:
+            return
+
+    # Fallback path for parsers/builds that do not expose per-child field names.
+    first_decl = field_node.child_by_field_name("declarator")
+    if first_decl is not None:
+        key = (int(first_decl.start_byte), int(first_decl.end_byte), str(first_decl.type))
+        seen.add(key)
+        yield first_decl
+    for child in field_node.children:
+        if not child.is_named:
+            continue
+        if child.type in {
+            "field_identifier",
+            "identifier",
+            "array_declarator",
+            "pointer_declarator",
+            "reference_declarator",
+            "function_declarator",
+            "parenthesized_declarator",
+            "init_declarator",
+        }:
+            key = (int(child.start_byte), int(child.end_byte), str(child.type))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield child
+
+
+def _iter_declaration_declarators(decl_node) -> Iterable:
+    seen: set[tuple[int, int, str]] = set()
+    if hasattr(decl_node, "field_name_for_child"):
+        for idx, child in enumerate(decl_node.children):
+            if not child.is_named:
+                continue
+            field_name = decl_node.field_name_for_child(idx)
+            if field_name != "declarator":
+                continue
+            key = (int(child.start_byte), int(child.end_byte), str(child.type))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield child
+        if seen:
+            return
+
+    first_decl = decl_node.child_by_field_name("declarator")
+    if first_decl is not None:
+        key = (int(first_decl.start_byte), int(first_decl.end_byte), str(first_decl.type))
+        seen.add(key)
+        yield first_decl
+
+    for child in decl_node.children:
+        if not child.is_named:
+            continue
+        if child.type in {
+            "identifier",
+            "init_declarator",
+            "pointer_declarator",
+            "reference_declarator",
+            "array_declarator",
+            "function_declarator",
+            "parenthesized_declarator",
+        }:
+            key = (int(child.start_byte), int(child.end_byte), str(child.type))
+            if key in seen:
+                continue
+            seen.add(key)
+            yield child
+
+
+def _field_name_from_declarator(declarator_node, source_bytes: bytes) -> Optional[str]:
+    if declarator_node is None:
+        return None
+    if declarator_node.type in {"field_identifier", "identifier"}:
+        return _node_text(declarator_node, source_bytes).strip()
+
+    nested = declarator_node.child_by_field_name("declarator")
+    if nested is not None and nested is not declarator_node:
+        nested_name = _field_name_from_declarator(nested, source_bytes)
+        if nested_name:
+            return nested_name
+
+    for kind in ("field_identifier", "identifier"):
+        for node in _find_nodes_by_type(declarator_node, kind):
+            value = _node_text(node, source_bytes).strip()
+            if value:
+                return value
+    return None
+
+
+def _declarator_arity(declarator) -> int:
+    if declarator is None:
+        return 0
+    for child in declarator.children:
+        if child.type == "parameter_list":
+            return sum(1 for item in child.children if item.type == "parameter_declaration")
+    for node in _find_nodes_by_type(declarator, "parameter_list"):
+        return sum(1 for item in node.children if item.type == "parameter_declaration")
+    return 0
+
+
+def _declaration_type_text(decl_node, source_bytes: bytes) -> str:
+    type_node = decl_node.child_by_field_name("type")
+    type_text = _node_text(type_node, source_bytes).strip() if type_node is not None else ""
+    prefix_parts: List[str] = []
+    for child in decl_node.children:
+        if not child.is_named:
+            continue
+        if child.type in {"storage_class_specifier", "type_qualifier"}:
+            text = _node_text(child, source_bytes).strip()
+            if text:
+                prefix_parts.append(text)
+    prefix_text = " ".join(prefix_parts).strip()
+    if prefix_text and type_text:
+        return f"{prefix_text} {type_text}".strip()
+    return (prefix_text or type_text).strip()
+
+
+def _iter_parameter_declarations(declarator) -> Iterable:
+    if declarator is None:
+        return
+    for child in declarator.children:
+        if child.type == "parameter_list":
+            for item in child.children:
+                if item.type == "parameter_declaration":
+                    yield item
+            return
+    for param_list in _find_nodes_by_type(declarator, "parameter_list"):
+        for item in param_list.children:
+            if item.type == "parameter_declaration":
+                yield item
+        return
+
+
+def _is_function_pointer_declarator(declarator, source_bytes: bytes) -> bool:
+    if declarator is None:
+        return False
+    text = _node_text(declarator, source_bytes)
+    if "(*" in text or "(&" in text:
+        return True
+    for node in _find_nodes_by_type(declarator, "pointer_declarator"):
+        if node is declarator:
+            continue
+        return True
+    for node in _find_nodes_by_type(declarator, "reference_declarator"):
+        if node is declarator:
+            continue
+        return True
+    return False
+
+
+def _is_method_field_declarator(declarator, source_bytes: bytes) -> bool:
+    if declarator is None:
+        return False
+    if declarator.type != "function_declarator":
+        if not any(True for _ in _find_nodes_by_type(declarator, "function_declarator")):
+            return False
+    if _is_function_pointer_declarator(declarator, source_bytes):
+        return False
+    return True
+
+
+def _declarator_is_function(declarator, source_bytes: bytes) -> bool:
+    if declarator is None:
+        return False
+    if declarator.type == "function_declarator":
+        return not _is_function_pointer_declarator(declarator, source_bytes)
+    has_function = any(True for _ in _find_nodes_by_type(declarator, "function_declarator"))
+    if not has_function:
+        return False
+    return not _is_function_pointer_declarator(declarator, source_bytes)
+
+
 def _call_arity(call_node) -> int:
     args = call_node.child_by_field_name("arguments")
     if args is None:
@@ -422,6 +795,68 @@ def _call_arity(call_node) -> int:
     if args is None:
         return 0
     return sum(1 for child in args.children if child.is_named)
+
+
+def _node_contains(outer_node, inner_node) -> bool:
+    return outer_node.start_byte <= inner_node.start_byte and outer_node.end_byte >= inner_node.end_byte
+
+
+def _collect_call_control_context(call_node) -> Tuple[str, int, str]:
+    loop_types = {
+        "for_statement",
+        "while_statement",
+        "do_statement",
+        "range_based_for_statement",
+        "for_range_loop",
+        "range_for_statement",
+    }
+    branch_types = {"if_statement", "switch_statement", "case_statement", "default_statement", "conditional_expression"}
+    loop_depth = 0
+    branch_kind = "none"
+    frames: List[Dict[str, Any]] = []
+    cursor = call_node.parent
+    while cursor is not None:
+        node_type = cursor.type
+        frame: Optional[Dict[str, Any]] = None
+        if node_type in loop_types:
+            loop_depth += 1
+            frame = {
+                "kind": "loop",
+                "type": node_type,
+                "line": cursor.start_point[0] + 1,
+                "start_byte": cursor.start_byte,
+                "end_byte": cursor.end_byte,
+            }
+        elif node_type in branch_types:
+            resolved_branch = "branch"
+            if node_type == "if_statement":
+                consequence = cursor.child_by_field_name("consequence")
+                alternative = cursor.child_by_field_name("alternative")
+                if alternative is not None and _node_contains(alternative, call_node):
+                    resolved_branch = "if_else"
+                elif consequence is not None and _node_contains(consequence, call_node):
+                    resolved_branch = "if_then"
+                else:
+                    resolved_branch = "if"
+            elif node_type == "conditional_expression":
+                resolved_branch = "ternary"
+            elif node_type in {"switch_statement", "case_statement", "default_statement"}:
+                resolved_branch = "switch_case"
+            if branch_kind == "none":
+                branch_kind = resolved_branch
+            frame = {
+                "kind": "branch",
+                "type": node_type,
+                "branch": resolved_branch,
+                "line": cursor.start_point[0] + 1,
+                "start_byte": cursor.start_byte,
+                "end_byte": cursor.end_byte,
+            }
+        if frame is not None:
+            frames.append(frame)
+        cursor = cursor.parent
+    frames.reverse()
+    return branch_kind, loop_depth, json.dumps(frames, ensure_ascii=True)
 
 
 def _collect_fp_aliases(func_node, source_bytes: bytes) -> Dict[str, str]:
@@ -453,6 +888,38 @@ def _extract_function_name(declarator, source_bytes: bytes) -> Optional[str]:
     if op_match:
         return f"operator{op_match.group(1)}"
     return None
+
+
+def _extract_declarator_scope(declarator, source_bytes: bytes) -> Optional[str]:
+    """Extract scope from qualified declarator text.
+
+    Examples:
+      CinnerMaker::DivideBotBox(...) -> CinnerMaker
+      NS::Inner::Foo::Bar(...)         -> NS::Inner::Foo
+    """
+    if declarator is None:
+        return None
+
+    qualified_text = ""
+    if declarator.type == "qualified_identifier":
+        qualified_text = _node_text(declarator, source_bytes).strip()
+    else:
+        for node in _find_nodes_by_type(declarator, "qualified_identifier"):
+            qualified_text = _node_text(node, source_bytes).strip()
+            if qualified_text:
+                break
+
+    if not qualified_text:
+        # Fallback to lexical extraction before '(' if AST node is not available.
+        head = _node_text(declarator, source_bytes).split("(", 1)[0].strip()
+        qualified_text = head
+
+    if "::" not in qualified_text:
+        return None
+    parts = [item.strip() for item in qualified_text.split("::") if item.strip()]
+    if len(parts) < 2:
+        return None
+    return "::".join(parts[:-1])
 
 
 def _extract_param_name_from_text(text: str) -> Optional[str]:
@@ -842,17 +1309,12 @@ def _walk_tree(
         scope_stack = namespace_stack + type_stack
         scope = _extract_scope_stack(scope_stack)
         declarator = node.child_by_field_name("declarator")
+        declarator_scope = _extract_declarator_scope(declarator, source_bytes)
+        if not scope and declarator_scope:
+            scope = declarator_scope
         name = _extract_function_name(declarator, source_bytes)
         if name:
-            arity = 0
-            if declarator is not None:
-                params = None
-                for child in declarator.children:
-                    if child.type == "parameter_list":
-                        params = child
-                        break
-                if params is not None:
-                    arity = sum(1 for child in params.children if child.type == "parameter_declaration")
+            arity = _declarator_arity(declarator)
             symbol_id = _symbol_id(scope, name, arity, rel_path)
             qualified = _qualified_name(scope, name)
             snippet, start_line, end_line = _node_snippet(node, source_bytes)
@@ -867,6 +1329,8 @@ def _walk_tree(
                     kind="destructor" if name.startswith("~") else ("constructor" if type_stack and name == type_stack[-1] else "function"),
                     scope_name=scope,
                     file_path=rel_path,
+                    start_byte=int(node.start_byte),
+                    end_byte=int(node.end_byte),
                     start_line=start_line,
                     end_line=end_line,
                     arity=arity,
@@ -888,11 +1352,17 @@ def _walk_tree(
                         properties={},
                     )
                 )
+            declaring_type_id: Optional[str] = None
             if type_stack:
-                type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+                declaring_type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+            elif scope:
+                candidate_type_id = _type_id(None, scope)
+                if candidate_type_id in type_registry:
+                    declaring_type_id = candidate_type_id
+            if declaring_type_id:
                 relations.append(
                     RelationEdge(
-                        source_id=type_id,
+                        source_id=declaring_type_id,
                         source_label="Type",
                         target_id=symbol_id,
                         target_label="Function",
@@ -903,45 +1373,42 @@ def _walk_tree(
             param_fp_types: Dict[str, str] = {}
             fp_aliases: Dict[str, str] = {}
             if declarator is not None:
-                for child in declarator.children:
-                    if child.type == "parameter_list":
-                        for param in child.children:
-                            if param.type == "parameter_declaration":
-                                _register_type_usage(
-                                    symbol_id,
-                                    "Function",
-                                    _node_text(param, source_bytes),
-                                    rel_path,
-                                    types,
-                                    relations,
-                                    type_registry,
-                                )
-                                param_text = _node_text(param, source_bytes)
-                                if "(*" in param_text or "std::function" in param_text or "function<" in param_text:
-                                    param_name = _extract_param_name_from_text(param_text)
-                                    fp_sig = _normalize_type_signature(param_text)
-                                    fp_id = f"functype::{fp_sig}"
-                                    if fp_id not in func_types:
-                                        func_types[fp_id] = FunctionTypeDef(
-                                            symbol_id=fp_id,
-                                            type_signature=fp_sig,
-                                            file_path=rel_path,
-                                            start_line=start_line,
-                                            end_line=end_line,
-                                            code=fp_sig,
-                                        )
-                                    if param_name:
-                                        param_fp_types[param_name] = fp_id
-                                    relations.append(
-                                        RelationEdge(
-                                            source_id=symbol_id,
-                                            source_label="Function",
-                                            target_id=fp_id,
-                                            target_label="FunctionType",
-                                            rel_type="TAKES_FUNCTION",
-                                            properties={"parameter_name": param_name or ""},
-                                        )
-                                    )
+                for param in _iter_parameter_declarations(declarator):
+                    _register_type_usage(
+                        symbol_id,
+                        "Function",
+                        _node_text(param, source_bytes),
+                        rel_path,
+                        types,
+                        relations,
+                        type_registry,
+                    )
+                    param_text = _node_text(param, source_bytes)
+                    if "(*" in param_text or "std::function" in param_text or "function<" in param_text:
+                        param_name = _extract_param_name_from_text(param_text)
+                        fp_sig = _normalize_type_signature(param_text)
+                        fp_id = _function_type_id(fp_sig)
+                        if fp_id not in func_types:
+                            func_types[fp_id] = FunctionTypeDef(
+                                symbol_id=fp_id,
+                                type_signature=fp_sig,
+                                file_path=rel_path,
+                                start_line=start_line,
+                                end_line=end_line,
+                                code=fp_sig,
+                            )
+                        if param_name:
+                            param_fp_types[param_name] = fp_id
+                        relations.append(
+                            RelationEdge(
+                                source_id=symbol_id,
+                                source_label="Function",
+                                target_id=fp_id,
+                                target_label="FunctionType",
+                                rel_type="TAKES_FUNCTION",
+                                properties={"parameter_name": param_name or ""},
+                            )
+                        )
             fp_aliases = _collect_fp_aliases(node, source_bytes)
             for call_node in _iter_calls(node):
                 callee, call_type = _extract_call_info(call_node, source_bytes)
@@ -949,6 +1416,8 @@ def _walk_tree(
                     continue
                 call_line = call_node.start_point[0] + 1
                 call_column = call_node.start_point[1] + 1
+                call_start_byte = call_node.start_byte
+                call_branch_kind, call_loop_depth, call_control_frames_json = _collect_call_control_context(call_node)
                 call_arity = _call_arity(call_node)
                 calls.append(
                     CallEdge(
@@ -957,6 +1426,10 @@ def _walk_tree(
                         caller_scope=scope,
                         call_line=call_line,
                         call_column=call_column,
+                        call_start_byte=call_start_byte,
+                        call_branch_kind=call_branch_kind,
+                        call_loop_depth=call_loop_depth,
+                        call_control_frames_json=call_control_frames_json,
                         call_type=call_type,
                         call_arity=call_arity,
                         callee_name=callee,
@@ -972,6 +1445,10 @@ def _walk_tree(
                             caller_scope=scope,
                             call_line=call_line,
                             call_column=call_column,
+                            call_start_byte=call_start_byte,
+                            call_branch_kind=call_branch_kind,
+                            call_loop_depth=call_loop_depth,
+                            call_control_frames_json=call_control_frames_json,
                             call_type="fp_alias",
                             call_arity=call_arity,
                             callee_name=fp_target,
@@ -995,7 +1472,7 @@ def _walk_tree(
                         )
                     )
             for fp_sig in _find_function_pointer_types(node, source_bytes):
-                fp_id = f"functype::{fp_sig}"
+                fp_id = _function_type_id(fp_sig)
                 if fp_id not in func_types:
                     func_types[fp_id] = FunctionTypeDef(
                         symbol_id=fp_id,
@@ -1021,17 +1498,12 @@ def _walk_tree(
         scope_stack = namespace_stack + type_stack
         scope = _extract_scope_stack(scope_stack)
         declarator = node.child_by_field_name("declarator")
+        declarator_scope = _extract_declarator_scope(declarator, source_bytes)
+        if not scope and declarator_scope:
+            scope = declarator_scope
         name = _extract_function_name(declarator, source_bytes)
         if name:
-            arity = 0
-            if declarator is not None:
-                params = None
-                for child in declarator.children:
-                    if child.type == "parameter_list":
-                        params = child
-                        break
-                if params is not None:
-                    arity = sum(1 for child in params.children if child.type == "parameter_declaration")
+            arity = _declarator_arity(declarator)
             symbol_id = _symbol_id(scope, name, arity, rel_path)
             qualified = _qualified_name(scope, name)
             snippet, start_line, end_line = _node_snippet(node, source_bytes)
@@ -1046,6 +1518,8 @@ def _walk_tree(
                     kind="declaration",
                     scope_name=scope,
                     file_path=rel_path,
+                    start_byte=int(node.start_byte),
+                    end_byte=int(node.end_byte),
                     start_line=start_line,
                     end_line=end_line,
                     arity=arity,
@@ -1067,11 +1541,17 @@ def _walk_tree(
                         properties={},
                     )
                 )
+            declaring_type_id: Optional[str] = None
             if type_stack:
-                type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+                declaring_type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+            elif scope:
+                candidate_type_id = _type_id(None, scope)
+                if candidate_type_id in type_registry:
+                    declaring_type_id = candidate_type_id
+            if declaring_type_id:
                 relations.append(
                     RelationEdge(
-                        source_id=type_id,
+                        source_id=declaring_type_id,
                         source_label="Type",
                         target_id=symbol_id,
                         target_label="Function",
@@ -1080,27 +1560,222 @@ def _walk_tree(
                     )
                 )
             if declarator is not None:
-                for child in declarator.children:
-                    if child.type == "parameter_list":
-                        for param in child.children:
-                            if param.type == "parameter_declaration":
-                                _register_type_usage(
-                                    symbol_id,
-                                    "Function",
-                                    _node_text(param, source_bytes),
-                                    rel_path,
-                                    types,
-                                    relations,
-                                    type_registry,
-                                )
+                for param in _iter_parameter_declarations(declarator):
+                    _register_type_usage(
+                        symbol_id,
+                        "Function",
+                        _node_text(param, source_bytes),
+                        rel_path,
+                        types,
+                        relations,
+                        type_registry,
+                    )
+        return
+
+    if node.type == "declaration":
+        parent_type = node.parent.type if node.parent is not None else ""
+        if parent_type not in {"translation_unit", "declaration_list"}:
+            return
+        scope = _extract_scope_stack(namespace_stack + type_stack)
+        declarators = list(_iter_declaration_declarators(node))
+        if not declarators:
+            return
+        decl_type_text = _declaration_type_text(node, source_bytes)
+        has_extern = any(
+            child.type == "storage_class_specifier" and _node_text(child, source_bytes).strip() == "extern"
+            for child in node.children
+            if child.is_named
+        )
+        snippet, start_line, end_line = _node_snippet(node, source_bytes)
+        comment = _extract_leading_comment(node, source_bytes)
+        summary = comment
+        note = _build_note(snippet, comment, summary)
+
+        seen_function_keys: set[Tuple[str, int]] = set()
+        seen_variable_names: set[str] = set()
+        for declarator in declarators:
+            if _declarator_is_function(declarator, source_bytes):
+                name = _extract_function_name(declarator, source_bytes)
+                if not name:
+                    continue
+                arity = _declarator_arity(declarator)
+                func_key = (name, arity)
+                if func_key in seen_function_keys:
+                    continue
+                seen_function_keys.add(func_key)
+                symbol_id = _symbol_id(scope, name, arity, rel_path)
+                qualified = _qualified_name(scope, name)
+                functions.append(
+                    FunctionDef(
+                        symbol_id=symbol_id,
+                        qualified_name=qualified,
+                        name=name,
+                        kind="extern_declaration" if has_extern else "declaration",
+                        scope_name=scope,
+                        file_path=rel_path,
+                        start_byte=int(node.start_byte),
+                        end_byte=int(node.end_byte),
+                        start_line=start_line,
+                        end_line=end_line,
+                        arity=arity,
+                        code=snippet,
+                        comment=comment,
+                        summary=summary,
+                        note=note,
+                    )
+                )
+                if namespace_stack:
+                    ns_id = _namespace_id("::".join(namespace_stack))
+                    relations.append(
+                        RelationEdge(
+                            source_id=ns_id,
+                            source_label="Namespace",
+                            target_id=symbol_id,
+                            target_label="Function",
+                            rel_type="CONTAINS",
+                            properties={},
+                        )
+                    )
+                for param in _iter_parameter_declarations(declarator):
+                    _register_type_usage(
+                        symbol_id,
+                        "Function",
+                        _node_text(param, source_bytes),
+                        rel_path,
+                        types,
+                        relations,
+                        type_registry,
+                    )
+                continue
+
+            var_name = _field_name_from_declarator(declarator, source_bytes)
+            if not var_name:
+                var_name = _first_identifier(declarator, source_bytes)
+            if not var_name or var_name in seen_variable_names:
+                continue
+            seen_variable_names.add(var_name)
+            decl_text = _node_text(declarator, source_bytes).strip()
+            field_signature = _normalize_type_signature(f"{decl_type_text} {decl_text}".strip())
+            if not field_signature:
+                field_signature = _normalize_type_signature(_node_text(node, source_bytes))
+            field_id = f"{scope}::{var_name}@{rel_path}" if scope else f"{var_name}@{rel_path}"
+            fields.append(
+                FieldDef(
+                    symbol_id=field_id,
+                    qualified_name=_qualified_name(scope, var_name),
+                    name=var_name,
+                    scope_name=scope,
+                    type_signature=field_signature,
+                    file_path=rel_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    code=snippet,
+                )
+            )
+            if namespace_stack:
+                ns_id = _namespace_id("::".join(namespace_stack))
+                relations.append(
+                    RelationEdge(
+                        source_id=ns_id,
+                        source_label="Namespace",
+                        target_id=field_id,
+                        target_label="Field",
+                        rel_type="CONTAINS",
+                        properties={"storage": "extern"} if has_extern else {},
+                    )
+                )
+            _register_type_usage(
+                field_id,
+                "Field",
+                field_signature,
+                rel_path,
+                types,
+                relations,
+                type_registry,
+            )
         return
 
     if node.type == "field_declaration":
         scope_stack = namespace_stack + type_stack
         scope = _extract_scope_stack(scope_stack)
         snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        field_name = _first_identifier(node, source_bytes)
-        if field_name:
+        type_node = node.child_by_field_name("type")
+        type_text = _node_text(type_node, source_bytes).strip() if type_node is not None else ""
+
+        declarators = list(_iter_field_declarators(node))
+        if not declarators:
+            # Conservative fallback to preserve previous behavior when AST is unexpected.
+            declarators = [node]
+
+        seen_field_names: set[str] = set()
+        seen_method_keys: set[Tuple[str, int]] = set()
+        for declarator in declarators:
+            if _is_method_field_declarator(declarator, source_bytes):
+                method_name = _extract_function_name(declarator, source_bytes)
+                if not method_name:
+                    continue
+                arity = _declarator_arity(declarator)
+                method_key = (method_name, arity)
+                if method_key in seen_method_keys:
+                    continue
+                seen_method_keys.add(method_key)
+                symbol_id = _symbol_id(scope, method_name, arity, rel_path)
+                qualified = _qualified_name(scope, method_name)
+                functions.append(
+                    FunctionDef(
+                        symbol_id=symbol_id,
+                        qualified_name=qualified,
+                        name=method_name,
+                        kind="declaration",
+                        scope_name=scope,
+                        file_path=rel_path,
+                        start_byte=int(node.start_byte),
+                        end_byte=int(node.end_byte),
+                        start_line=start_line,
+                        end_line=end_line,
+                        arity=arity,
+                        code=snippet,
+                        comment="",
+                        summary="",
+                        note=_build_note(snippet, "", ""),
+                    )
+                )
+                if type_stack:
+                    type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+                    relations.append(
+                        RelationEdge(
+                            source_id=type_id,
+                            source_label="Type",
+                            target_id=symbol_id,
+                            target_label="Function",
+                            rel_type="DECLARES",
+                            properties={},
+                        )
+                    )
+                for param in _iter_parameter_declarations(declarator):
+                    _register_type_usage(
+                        symbol_id,
+                        "Function",
+                        _node_text(param, source_bytes),
+                        rel_path,
+                        types,
+                        relations,
+                        type_registry,
+                    )
+                continue
+
+            field_name = _field_name_from_declarator(declarator, source_bytes)
+            if not field_name:
+                field_name = _first_identifier(declarator, source_bytes)
+            if not field_name or field_name in seen_field_names:
+                continue
+            seen_field_names.add(field_name)
+
+            decl_text = _node_text(declarator, source_bytes).strip() if declarator is not node else ""
+            field_signature = _normalize_type_signature(f"{type_text} {decl_text}".strip())
+            if not field_signature:
+                field_signature = _normalize_type_signature(_node_text(node, source_bytes))
+
             field_id = f"{scope}::{field_name}@{rel_path}" if scope else f"{field_name}@{rel_path}"
             fields.append(
                 FieldDef(
@@ -1108,7 +1783,7 @@ def _walk_tree(
                     qualified_name=_qualified_name(scope, field_name),
                     name=field_name,
                     scope_name=scope,
-                    type_signature=_normalize_type_signature(_node_text(node, source_bytes)),
+                    type_signature=field_signature,
                     file_path=rel_path,
                     start_line=start_line,
                     end_line=end_line,
@@ -1130,7 +1805,7 @@ def _walk_tree(
             _register_type_usage(
                 field_id,
                 "Field",
-                _node_text(node, source_bytes),
+                field_signature,
                 rel_path,
                 types,
                 relations,
@@ -1278,8 +1953,36 @@ def parse_c_family_file(
     Dict[str, str],
     List[str],
     Dict[str, str],
+    Dict[str, Any],
 ]:
-    tree, source_bytes = _parse_file(path, is_cpp)
+    initial_is_cpp = is_cpp
+    tree, source_bytes = _parse_file(path, initial_is_cpp)
+    selected_is_cpp = initial_is_cpp
+    retry_attempted = False
+    retry_selected = False
+    retry_has_error: Optional[bool] = None
+    retry_error_nodes: Optional[int] = None
+    initial_has_error, initial_error_nodes = _tree_error_stats(tree)
+    selected_has_error = initial_has_error
+    selected_error_nodes = initial_error_nodes
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".h" and (initial_has_error or initial_error_nodes > 0):
+        retry_attempted = True
+        retry_is_cpp = not initial_is_cpp
+        retry_tree, retry_source_bytes = _parse_file(path, retry_is_cpp)
+        retry_has_error, retry_error_nodes = _tree_error_stats(retry_tree)
+        if (
+            retry_error_nodes < initial_error_nodes
+            or (retry_error_nodes == initial_error_nodes and (not retry_has_error and initial_has_error))
+        ):
+            tree = retry_tree
+            source_bytes = retry_source_bytes
+            selected_is_cpp = retry_is_cpp
+            selected_has_error = retry_has_error
+            selected_error_nodes = retry_error_nodes
+            retry_selected = True
+
     rel_path = os.path.relpath(path, root)
     file_code = source_bytes.decode("utf-8", errors="ignore")
     file_lines = file_code.count("\n") + 1
@@ -1297,6 +2000,17 @@ def parse_c_family_file(
     )
     file_includes = _extract_includes(file_code)
     file_macros = _extract_macros(file_code)
+    parse_meta: Dict[str, Any] = {
+        "parser_language": "cpp" if selected_is_cpp else "c",
+        "parser_language_initial": "cpp" if initial_is_cpp else "c",
+        "header_retry_attempted": retry_attempted,
+        "header_retry_selected": retry_selected,
+        "has_error": selected_has_error,
+        "error_nodes": selected_error_nodes,
+        "error_nodes_initial": initial_error_nodes,
+        "header_retry_error_nodes": retry_error_nodes,
+        "header_retry_has_error": retry_has_error,
+    }
 
     functions: List[FunctionDef] = []
     calls: List[CallEdge] = []
@@ -1348,6 +2062,7 @@ def parse_c_family_file(
         using_imports,
         file_includes,
         file_macros,
+        parse_meta,
     )
 
 
@@ -1356,6 +2071,8 @@ def _resolve_calls(functions: List[FunctionDef], calls: List[CallEdge]) -> None:
     by_name_arity: Dict[Tuple[str, int], List[FunctionDef]] = {}
     by_scope_name: Dict[Tuple[Optional[str], str], List[FunctionDef]] = {}
     by_scope_name_arity: Dict[Tuple[Optional[str], str, int], List[FunctionDef]] = {}
+    by_file_name: Dict[Tuple[str, str], List[FunctionDef]] = {}
+    by_file_name_arity: Dict[Tuple[str, str, int], List[FunctionDef]] = {}
     by_qualified: Dict[str, FunctionDef] = {}
     by_qualified_arity: Dict[Tuple[str, int], FunctionDef] = {}
 
@@ -1365,51 +2082,64 @@ def _resolve_calls(functions: List[FunctionDef], calls: List[CallEdge]) -> None:
         by_name_arity.setdefault((func.name, func.arity), []).append(func)
         by_scope_name.setdefault((func.scope_name, func.name), []).append(func)
         by_scope_name_arity.setdefault((func.scope_name, func.name, func.arity), []).append(func)
+        by_file_name.setdefault((func.file_path, func.name), []).append(func)
+        by_file_name_arity.setdefault((func.file_path, func.name, func.arity), []).append(func)
         by_qualified_arity[(func.qualified_name, func.arity)] = func
+
+    def scope_chain(scope: Optional[str]) -> List[Optional[str]]:
+        if not scope:
+            return [None]
+        parts = scope.split("::")
+        chain = ["::".join(parts[:idx]) for idx in range(len(parts), 0, -1)]
+        chain.append(None)
+        return chain
 
     for call in calls:
         callee_name = call.callee_name
-        candidate = None
         call_arity = call.call_arity
+        best_by_symbol: Dict[str, Tuple[int, int, str]] = {}
 
-        def scope_chain(scope: Optional[str]) -> List[Optional[str]]:
-            if not scope:
-                return [None]
-            parts = scope.split("::")
-            chain = ["::".join(parts[:idx]) for idx in range(len(parts), 0, -1)]
-            chain.append(None)
-            return chain
+        def add_candidates(items: Iterable[FunctionDef], score: int, distance: int) -> None:
+            for item in items:
+                key = item.symbol_id
+                tie_breaker = item.qualified_name or item.name
+                current = best_by_symbol.get(key)
+                candidate_rank = (score, -distance, tie_breaker)
+                if current is None:
+                    best_by_symbol[key] = (score, distance, tie_breaker)
+                    continue
+                current_rank = (current[0], -current[1], current[2])
+                if candidate_rank > current_rank:
+                    best_by_symbol[key] = (score, distance, tie_breaker)
 
         if "::" in callee_name:
-            if (callee_name, call_arity) in by_qualified_arity:
-                candidate = by_qualified_arity[(callee_name, call_arity)]
-            elif callee_name in by_qualified:
-                candidate = by_qualified[callee_name]
+            exact = by_qualified_arity.get((callee_name, call_arity))
+            if exact is not None:
+                add_candidates([exact], 120, 0)
+            qualified = by_qualified.get(callee_name)
+            if qualified is not None:
+                add_candidates([qualified], 110, 0)
 
-        if candidate is None:
-            short_name = callee_name.split("::")[-1]
-            for scope in scope_chain(call.caller_scope):
-                if call_arity >= 0:
-                    scoped = by_scope_name_arity.get((scope, short_name, call_arity))
-                    if scoped:
-                        candidate = scoped[0]
-                        break
-                scoped = by_scope_name.get((scope, short_name))
-                if scoped:
-                    candidate = scoped[0]
-                    break
+        short_name = callee_name.split("::")[-1]
+        add_candidates(by_file_name_arity.get((call.caller_file, short_name, call_arity), []), 115, 0)
+        add_candidates(by_file_name.get((call.caller_file, short_name), []), 105, 0)
+        for depth, scope in enumerate(scope_chain(call.caller_scope)):
+            scoped_arity = by_scope_name_arity.get((scope, short_name, call_arity), [])
+            if scoped_arity:
+                add_candidates(scoped_arity, 100 - min(depth, 25), depth)
+            scoped = by_scope_name.get((scope, short_name), [])
+            if scoped:
+                add_candidates(scoped, 90 - min(depth, 25), depth)
 
-        if candidate is None and call_arity >= 0:
-            candidates = by_name_arity.get((callee_name.split("::")[-1], call_arity), [])
-            if candidates:
-                candidate = candidates[0]
+        add_candidates(by_name_arity.get((short_name, call_arity), []), 70, 999)
+        add_candidates(by_name.get(short_name, []), 50, 999)
 
-        if candidate is None:
-            candidates = by_name.get(callee_name.split("::")[-1], [])
-            if candidates:
-                candidate = candidates[0]
-        if candidate:
-            call.callee_id = candidate.symbol_id
+        if best_by_symbol:
+            winner = max(
+                best_by_symbol.items(),
+                key=lambda item: (item[1][0], -item[1][1], item[1][2]),
+            )[0]
+            call.callee_id = winner
 
 
 class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
@@ -1602,6 +2332,8 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
                     "kind": f.kind,
                     "scope_name": f.scope_name,
                     "file_path": f.file_path,
+                    "start_byte": f.start_byte,
+                    "end_byte": f.end_byte,
                     "start_line": f.start_line,
                     "end_line": f.end_line,
                     "arity": f.arity,
@@ -1623,6 +2355,8 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
                     f.kind = row.kind,
                     f.scope_name = row.scope_name,
                     f.file_path = row.file_path,
+                    f.start_byte = row.start_byte,
+                    f.end_byte = row.end_byte,
                     f.start_line = row.start_line,
                     f.end_line = row.end_line,
                     f.arity = row.arity,
@@ -1760,6 +2494,10 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
                         "file_path": call.caller_file,
                         "line": call.call_line,
                         "column": call.call_column,
+                        "call_start_byte": call.call_start_byte,
+                        "call_branch_kind": call.call_branch_kind,
+                        "call_loop_depth": call.call_loop_depth,
+                        "call_control_frames_json": call.call_control_frames_json,
                         "call_type": call.call_type,
                         "call_arity": call.call_arity,
                         "callee_name": call.callee_name,
@@ -1892,6 +2630,7 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
             "POINTER_TO",
             "ALIASES",
             "TEMPLATES",
+            "INCLUDES",
             "EMITS_EVENT",
             "HANDLES_EVENT",
             "CALLS_FUNCTION_POINTER",
@@ -1921,6 +2660,8 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
                 f.kind = $kind,
                 f.scope_name = $scope_name,
                 f.file_path = $file_path,
+                f.start_byte = $start_byte,
+                f.end_byte = $end_byte,
                 f.start_line = $start_line,
                 f.end_line = $end_line,
                 f.arity = $arity,
@@ -1935,6 +2676,8 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
             kind=func.kind,
             scope_name=func.scope_name,
             file_path=func.file_path,
+            start_byte=func.start_byte,
+            end_byte=func.end_byte,
             start_line=func.start_line,
             end_line=func.end_line,
             arity=func.arity,
@@ -2035,6 +2778,10 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
                 "file_path": call.caller_file,
                 "line": call.call_line,
                 "column": call.call_column,
+                "call_start_byte": call.call_start_byte,
+                "call_branch_kind": call.call_branch_kind,
+                "call_loop_depth": call.call_loop_depth,
+                "call_control_frames_json": call.call_control_frames_json,
                 "call_type": call.call_type,
                 "callee_name": call.callee_name,
                 "caller_scope": call.caller_scope or "",
@@ -2083,6 +2830,13 @@ class _LegacyNeo4jWriter:  # dead code – kept as tombstone only
                     s.elapsed_seconds = $elapsed_seconds,
                     s.languages_json = $languages_json,
                     s.generated_at = $generated_at
+                MERGE (p:Project {project_id: $project_id})
+                ON CREATE SET
+                    p.name = $project_name,
+                    p.root = $root,
+                    p.repo = $repo,
+                    p.language = $language
+                MERGE (p)-[:HAS_STATS]->(s)
                 """,
                 **payload,
             )
@@ -2179,17 +2933,30 @@ def _should_trust_remote_code(model_name: str) -> bool:
     return "jina" in model_name.lower()
 
 
+def _resolve_embedding_model_source(model_name: str) -> str:
+    local_model_path = os.environ.get("CODE_EMBEDDING_MODEL_PATH")
+    if not local_model_path:
+        return model_name
+    resolved_path = os.path.abspath(os.path.expanduser(local_model_path))
+    if not os.path.exists(resolved_path):
+        raise FileNotFoundError(
+            "CODE_EMBEDDING_MODEL_PATH does not exist: %s" % local_model_path
+        )
+    return resolved_path
+
+
 class CodeEmbedder:
     def __init__(self, model_name: str, device: str, max_embed_chars: int, chunk_embed: bool) -> None:
-        trust_remote_code = _should_trust_remote_code(model_name)
+        model_source = _resolve_embedding_model_source(model_name)
+        trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
         extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
             **extra_tokenizer_kwargs,
         )
         self.model = AutoModel.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
         )
         self.device = torch.device(device)
@@ -2347,17 +3114,172 @@ def _call_site_id(
     return _stable_point_id(key)
 
 
+def _unknown_function_id(callee_name: str) -> str:
+    normalized = (callee_name or "").strip() or "unknown"
+    return f"unknown::{_stable_point_id(normalized.lower())}"
+
+
+def _call_payload_sort_key(call: Dict[str, Any]) -> Tuple[int, int, int, str, str]:
+    try:
+        start_byte = int(call.get("call_start_byte") or 0)
+    except (TypeError, ValueError):
+        start_byte = 0
+    try:
+        line = int(call.get("call_line") or 0)
+    except (TypeError, ValueError):
+        line = 0
+    try:
+        column = int(call.get("call_column") or 0)
+    except (TypeError, ValueError):
+        column = 0
+    caller_id = str(call.get("caller_id") or "")
+    callee_name = str(call.get("callee_name") or "")
+    return (start_byte, line, column, caller_id, callee_name)
+
+
+def _detect_git_commit_sha(root: str) -> str:
+    try:
+        sha = subprocess.check_output(
+            ["git", "-C", root, "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+        return sha or "unknown"
+    except Exception:
+        return "unknown"
+
+
 def _scan_c_family_files(root: str) -> List[str]:
     files: List[str] = []
-    for dirpath, _, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
         for name in filenames:
             if name.endswith((".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx")):
                 files.append(os.path.join(dirpath, name))
     return sorted(files)
 
 
-def _is_cpp_file(path: str) -> bool:
-    return os.path.splitext(path)[1].lower() in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"}
+def _is_cpp_file(path: str, root: str, compile_db_index: Optional[Dict[str, Any]] = None) -> bool:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"}:
+        return True
+    if ext == ".c":
+        return False
+    if ext != ".h":
+        return False
+
+    abs_path = os.path.abspath(path)
+    rel_path = os.path.relpath(abs_path, os.path.abspath(root)).replace("\\", "/")
+    if compile_db_index:
+        cpp_files = compile_db_index.get("cpp_files", set())
+        c_files = compile_db_index.get("c_files", set())
+        if rel_path in cpp_files:
+            return True
+        if rel_path in c_files:
+            return False
+
+    stem, _ = os.path.splitext(abs_path)
+    has_cpp_sibling = any(os.path.exists(stem + suffix) for suffix in (".cpp", ".cc", ".cxx"))
+    if has_cpp_sibling:
+        return True
+    has_c_sibling = os.path.exists(stem + ".c")
+    if has_c_sibling:
+        return False
+
+    if _looks_like_cpp_header(abs_path):
+        return True
+
+    if compile_db_index:
+        cpp_count = len(compile_db_index.get("cpp_files", []))
+        c_count = len(compile_db_index.get("c_files", []))
+        if cpp_count or c_count:
+            return cpp_count >= c_count
+    return True
+
+
+def _collect_include_graph(
+    all_file_paths: List[str],
+    root: str,
+) -> Dict[str, List[str]]:
+    rel_to_abs: Dict[str, str] = {
+        os.path.relpath(path, root).replace("\\", "/"): path
+        for path in all_file_paths
+    }
+    basename_to_rel: Dict[str, List[str]] = {}
+    for rel_path in rel_to_abs:
+        basename_to_rel.setdefault(os.path.basename(rel_path), []).append(rel_path)
+
+    def resolve_include(source_rel: str, include_name: str) -> Optional[str]:
+        include_norm = include_name.replace("\\", "/")
+        if "/" in include_norm:
+            candidate = os.path.normpath(
+                os.path.join(os.path.dirname(source_rel), include_norm)
+            ).replace("\\", "/")
+            if candidate in rel_to_abs:
+                return candidate
+            candidate = os.path.normpath(include_norm).replace("\\", "/")
+            if candidate in rel_to_abs:
+                return candidate
+        matches = basename_to_rel.get(os.path.basename(include_norm), [])
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+        source_parts = [part for part in os.path.dirname(source_rel).split("/") if part]
+
+        def _score(rel_path: str) -> Tuple[int, int, str]:
+            cand_parts = [part for part in os.path.dirname(rel_path).split("/") if part]
+            common = 0
+            for left, right in zip(reversed(source_parts), reversed(cand_parts)):
+                if left != right:
+                    break
+                common += 1
+            distance = abs(len(source_parts) - len(cand_parts))
+            return (common, -distance, rel_path)
+
+        return max(matches, key=_score)
+
+    deps_by_file: Dict[str, List[str]] = {}
+    for rel_path, abs_path in rel_to_abs.items():
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+                includes = _extract_includes(handle.read())
+        except OSError:
+            deps_by_file[rel_path] = []
+            continue
+        resolved: List[str] = []
+        seen: set[str] = set()
+        for include_name in includes:
+            target_rel = resolve_include(rel_path, include_name)
+            if not target_rel or target_rel == rel_path or target_rel in seen:
+                continue
+            seen.add(target_rel)
+            resolved.append(target_rel)
+        deps_by_file[rel_path] = resolved
+    return deps_by_file
+
+
+def _expand_impacted_files_by_includes(
+    changed_existing: set[str],
+    deps_by_file: Dict[str, List[str]],
+) -> set[str]:
+    reverse_map: Dict[str, set[str]] = {}
+    for source, deps in deps_by_file.items():
+        for dep in deps:
+            reverse_map.setdefault(dep, set()).add(source)
+
+    impacted: set[str] = set()
+    queue: List[str] = list(changed_existing)
+    seen: set[str] = set(changed_existing)
+    while queue:
+        current = queue.pop(0)
+        for dependent in sorted(reverse_map.get(current, set())):
+            if dependent in seen:
+                continue
+            seen.add(dependent)
+            impacted.add(dependent)
+            queue.append(dependent)
+    return impacted
 
 
 def _load_or_parse_payload(
@@ -2365,6 +3287,7 @@ def _load_or_parse_payload(
     root: str,
     parse_cache_root: str,
     parse_cache: bool,
+    compile_db_index: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     def ensure_text_fields(item: Dict[str, Any]) -> None:
         if "comment" not in item:
@@ -2379,6 +3302,7 @@ def _load_or_parse_payload(
             )
 
     def normalize_cached_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+        function_type_id_map: Dict[str, str] = {}
         file_def = payload.get("file_def")
         if isinstance(file_def, dict):
             ensure_text_fields(file_def)
@@ -2419,13 +3343,64 @@ def _load_or_parse_payload(
         macros = payload.get("macros")
         if macros is None:
             payload["macros"] = {}
+        parse_meta = payload.get("parse_meta")
+        if not isinstance(parse_meta, dict):
+            payload["parse_meta"] = {
+                "parser_language": "unknown",
+                "parser_language_initial": "unknown",
+                "header_retry_attempted": False,
+                "header_retry_selected": False,
+                "has_error": False,
+                "error_nodes": 0,
+                "error_nodes_initial": 0,
+                "header_retry_error_nodes": None,
+                "header_retry_has_error": None,
+            }
+        else:
+            parse_meta.setdefault("parser_language", "unknown")
+            parse_meta.setdefault("parser_language_initial", parse_meta.get("parser_language", "unknown"))
+            parse_meta.setdefault("header_retry_attempted", False)
+            parse_meta.setdefault("header_retry_selected", False)
+            parse_meta.setdefault("has_error", False)
+            parse_meta.setdefault("error_nodes", 0)
+            parse_meta.setdefault("error_nodes_initial", parse_meta.get("error_nodes", 0))
+            parse_meta.setdefault("header_retry_error_nodes", None)
+            parse_meta.setdefault("header_retry_has_error", None)
         templates = payload.get("templates")
         if isinstance(templates, list):
             for item in templates:
                 if isinstance(item, dict):
                     ensure_text_fields(item)
+        function_types = payload.get("function_types")
+        if isinstance(function_types, list):
+            for item in function_types:
+                if not isinstance(item, dict):
+                    continue
+                signature = str(item.get("type_signature") or "")
+                old_id = str(item.get("symbol_id") or "")
+                if signature:
+                    new_id = _function_type_id(signature)
+                elif old_id:
+                    new_id = f"functype::{_stable_point_id(old_id)}"
+                else:
+                    continue
+                item["symbol_id"] = new_id
+                if old_id and old_id != new_id:
+                    function_type_id_map[old_id] = new_id
+        relations = payload.get("relations")
+        if isinstance(relations, list):
+            for item in relations:
+                if not isinstance(item, dict):
+                    continue
+                source_id = item.get("source_id")
+                target_id = item.get("target_id")
+                if isinstance(source_id, str) and source_id in function_type_id_map:
+                    item["source_id"] = function_type_id_map[source_id]
+                if isinstance(target_id, str) and target_id in function_type_id_map:
+                    item["target_id"] = function_type_id_map[target_id]
         calls = payload.get("calls")
         if isinstance(calls, list):
+            normalized_calls: List[Dict[str, Any]] = []
             for item in calls:
                 if not isinstance(item, dict):
                     continue
@@ -2433,18 +3408,39 @@ def _load_or_parse_payload(
                 item.setdefault("caller_scope", None)
                 item.setdefault("call_line", 0)
                 item.setdefault("call_column", 0)
+                item.setdefault("call_start_byte", 0)
+                item.setdefault("call_branch_kind", "none")
+                item.setdefault("call_loop_depth", 0)
+                item.setdefault("call_control_frames_json", "[]")
                 item.setdefault("call_type", "call_expression")
                 item.setdefault("call_arity", 0)
+                normalized_calls.append(item)
+            payload["calls"] = sorted(normalized_calls, key=_call_payload_sort_key)
         return payload
 
     rel_path = os.path.relpath(file_path, root)
+    is_cpp = _is_cpp_file(file_path, root, compile_db_index)
     cached_payload = None
     signature = None
     if parse_cache:
-        signature = file_signature(file_path)
+        file_sig = file_signature(file_path)
+        if file_sig is not None:
+            signature = f"{file_sig}|lang:{'cpp' if is_cpp else 'c'}|schema:{_PARSE_CACHE_VERSION}"
         cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
-        return normalize_cached_payload(cached_payload)
+        cached_calls = cached_payload.get("calls")
+        missing_call_metadata = isinstance(cached_calls, list) and any(
+            isinstance(item, dict)
+            and (
+                "call_start_byte" not in item
+                or "call_branch_kind" not in item
+                or "call_loop_depth" not in item
+                or "call_control_frames_json" not in item
+            )
+            for item in cached_calls
+        )
+        if not missing_call_metadata:
+            return normalize_cached_payload(cached_payload)
     (
         file_functions,
         file_calls,
@@ -2460,7 +3456,8 @@ def _load_or_parse_payload(
         file_using_imports,
         file_includes,
         file_macros,
-    ) = parse_c_family_file(file_path, root, _is_cpp_file(file_path))
+        parse_meta,
+    ) = parse_c_family_file(file_path, root, is_cpp)
     payload = {
         "functions": [asdict(item) for item in file_functions],
         "calls": [asdict(item) for item in file_calls],
@@ -2476,7 +3473,9 @@ def _load_or_parse_payload(
         "using_imports": file_using_imports,
         "includes": file_includes,
         "macros": file_macros,
+        "parse_meta": parse_meta,
     }
+    payload["calls"] = sorted(payload["calls"], key=_call_payload_sort_key)
     if parse_cache and signature is not None:
         write_parse_cache(parse_cache_root, rel_path, signature, payload)
     return payload
@@ -2505,6 +3504,7 @@ async def build_call_graph(
     keep_cache: bool,
     parse_cache: bool,
     neo4j_batch_size: int,
+    neo4j_calls_batch_size: int,
     neo4j_state_path: Optional[str],
     project_id: str,
     project_name: str,
@@ -2515,24 +3515,77 @@ async def build_call_graph(
     call_stats_path: Optional[str],
     possible_calls_path: Optional[str],
     unresolved_calls_path: Optional[str],
+    parse_errors_path: Optional[str],
+    parse_run_id: str,
+    commit_sha: str,
     verbose: bool,
+    compile_db_index: Optional[Dict[str, Any]] = None,
+    incremental: bool = False,
+    changed_files: Optional[Iterable[str]] = None,
+    deleted_files: Optional[Iterable[str]] = None,
+    commit_sha_before: str = "",
 ) -> None:
     start_time = time.time()
-    cache_root = safe_cache_root(cache_dir, "cplus_analyzer")
+    cache_root = safe_cache_root(cache_dir, "cplus_analyzer", project_root=root)
     parse_cache_root = os.path.join(cache_root, "parse")
     qdrant_cache_root = os.path.join(cache_root, "qdrant")
     os.makedirs(parse_cache_root, exist_ok=True)
     os.makedirs(qdrant_cache_root, exist_ok=True)
-    all_file_paths = _scan_c_family_files(root)
+    all_scanned_paths = _scan_c_family_files(root)
+    all_rel_paths = [os.path.relpath(path, root).replace("\\", "/") for path in all_scanned_paths]
+    rel_to_abs = {os.path.relpath(path, root).replace("\\", "/"): path for path in all_scanned_paths}
+    changed_set = {item.replace("\\", "/") for item in (changed_files or []) if item}
+    deleted_set = {item.replace("\\", "/") for item in (deleted_files or []) if item}
+    impacted_by_includes_count = 0
+    if incremental:
+        changed_existing = {path for path in changed_set if path in rel_to_abs}
+        deps_by_file = _collect_include_graph(all_scanned_paths, root)
+        impacted = _expand_impacted_files_by_includes(changed_existing, deps_by_file)
+        selected_rel_paths = changed_existing | impacted
+        impacted_by_includes_count = len(impacted)
+        all_file_paths = [rel_to_abs[path] for path in all_rel_paths if path in selected_rel_paths]
+    else:
+        all_file_paths = all_scanned_paths
     if verbose:
+        if incremental:
+            print(
+                "[scan] incremental before=%s after=%s changed=%d deleted=%d selected=%d/%d"
+                % (
+                    commit_sha_before or "unknown",
+                    commit_sha or "unknown",
+                    len(changed_set),
+                    len(deleted_set),
+                    len(all_file_paths),
+                    len(all_scanned_paths),
+                )
+            )
+            print(f"[impact] impacted_by_includes={impacted_by_includes_count}")
         print(f"[scan] Found {len(all_file_paths)} C/C++ files under {root}")
     total_files = len(all_file_paths)
+
+    cleanup_targets = sorted(changed_set | deleted_set)
+    if incremental and cleanup_targets:
+        if code_writer:
+            await cleanup_neo4j_for_files(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+        if qdrant_writer:
+            cleanup_qdrant_with_writer(
+                writer=qdrant_writer,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
 
     def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
         for index, file_path in enumerate(all_file_paths, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
-            yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache)
+            yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache, compile_db_index)
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
     function_index_by_name_arity: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
@@ -2553,14 +3606,43 @@ async def build_call_graph(
     class_methods: Dict[str, List[Dict[str, Any]]] = {}
     base_relations: List[Tuple[str, str]] = []
     expected_points = 0
-    all_files_set = set(all_file_paths)
+    parse_error_file_count = 0
+    parse_error_node_total = 0
+    parse_error_examples: List[str] = []
+    header_retry_used_count = 0
+    parse_error_details: List[Dict[str, Any]] = []
+    all_files_set = set(all_scanned_paths)
     file_lookup_by_basename: Dict[str, List[str]] = {}
-    for path in all_file_paths:
+    for path in all_scanned_paths:
         file_lookup_by_basename.setdefault(os.path.basename(path), []).append(path)
 
     for payload in iter_payloads(log_parse=True):
         file_def = payload.get("file_def") or {}
         file_path = file_def.get("file_path")
+        parse_meta = payload.get("parse_meta") or {}
+        has_error = bool(parse_meta.get("has_error"))
+        error_nodes = int(parse_meta.get("error_nodes") or 0)
+        if bool(parse_meta.get("header_retry_selected")):
+            header_retry_used_count += 1
+        if has_error or error_nodes > 0:
+            parse_error_file_count += 1
+            parse_error_node_total += error_nodes
+            parse_error_details.append(
+                {
+                    "file_path": file_path or "",
+                    "parser_language": parse_meta.get("parser_language") or "unknown",
+                    "parser_language_initial": parse_meta.get("parser_language_initial") or "unknown",
+                    "header_retry_attempted": bool(parse_meta.get("header_retry_attempted")),
+                    "header_retry_selected": bool(parse_meta.get("header_retry_selected")),
+                    "error_nodes": error_nodes,
+                    "error_nodes_initial": int(parse_meta.get("error_nodes_initial") or error_nodes),
+                    "header_retry_error_nodes": parse_meta.get("header_retry_error_nodes"),
+                    "has_error": has_error,
+                    "header_retry_has_error": parse_meta.get("header_retry_has_error"),
+                }
+            )
+            if file_path and len(parse_error_examples) < 10:
+                parse_error_examples.append(file_path)
         if file_path:
             using_namespaces_by_file[file_path] = list(payload.get("using_namespaces") or [])
             using_imports_by_file[file_path] = dict(payload.get("using_imports") or {})
@@ -2607,18 +3689,67 @@ async def build_call_graph(
             ):
                 base_relations.append((rel.get("source_id"), rel.get("target_id")))
 
+    if verbose:
+        if parse_error_file_count:
+            print(
+                "[parse] tree-sitter reported errors in %d/%d files (%d ERROR nodes)"
+                % (parse_error_file_count, total_files, parse_error_node_total)
+            )
+            if header_retry_used_count:
+                print(f"[parse] header parser auto-retry selected alternate parser for {header_retry_used_count} files")
+            for path in parse_error_examples:
+                print(f"  [parse][sample-error] {path}")
+        else:
+            print("[parse] tree-sitter parse status: no error nodes detected")
+            if header_retry_used_count:
+                print(f"[parse] header parser auto-retry selected alternate parser for {header_retry_used_count} files")
+
+    if parse_errors_path:
+        os.makedirs(os.path.dirname(os.path.abspath(parse_errors_path)), exist_ok=True)
+        payload = {
+            "parse_run_id": parse_run_id,
+            "commit_sha": commit_sha,
+            "root": root,
+            "total_files": total_files,
+            "error_file_count": parse_error_file_count,
+            "error_node_total": parse_error_node_total,
+            "header_retry_used_count": header_retry_used_count,
+            "files": parse_error_details,
+        }
+        with open(parse_errors_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, indent=2)
+        if verbose:
+            print(f"[parse] wrote parse error report: {parse_errors_path}")
+
     def resolve_include_path(source_file: str, include_name: str) -> Optional[str]:
         if not include_name:
             return None
-        if "/" in include_name or "\\" in include_name:
-            candidate = os.path.normpath(os.path.join(os.path.dirname(source_file), include_name))
+        include_norm = include_name.replace("\\", "/")
+        if "/" in include_norm:
+            candidate = os.path.normpath(os.path.join(os.path.dirname(source_file), include_norm))
             if candidate in all_files_set:
                 return candidate
-            candidate = os.path.normpath(os.path.join(root, include_name))
+            candidate = os.path.normpath(os.path.join(root, include_norm))
             if candidate in all_files_set:
                 return candidate
-        candidates = file_lookup_by_basename.get(os.path.basename(include_name), [])
-        return candidates[0] if candidates else None
+        candidates = file_lookup_by_basename.get(os.path.basename(include_norm), [])
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        source_dir = os.path.dirname(source_file)
+
+        def _candidate_score(candidate_path: str) -> Tuple[int, int, str]:
+            candidate_dir = os.path.dirname(candidate_path)
+            try:
+                common = os.path.commonpath([source_dir, candidate_dir])
+                common_parts = len([part for part in common.split(os.sep) if part])
+            except ValueError:
+                common_parts = 0
+            rel_depth = os.path.relpath(candidate_dir, source_dir).count(os.sep)
+            return (common_parts, -rel_depth, candidate_path)
+
+        return max(candidates, key=_candidate_score)
 
     resolved_includes_by_file: Dict[str, List[str]] = {}
     for file_path, includes in includes_by_file.items():
@@ -2626,9 +3757,27 @@ async def build_call_graph(
         for inc in includes:
             resolved_path = resolve_include_path(os.path.join(root, file_path), inc)
             if resolved_path:
-                rel_inc = os.path.relpath(resolved_path, root)
+                rel_inc = os.path.relpath(resolved_path, root).replace("\\", "/")
                 resolved.append(rel_inc)
         resolved_includes_by_file[file_path] = resolved
+
+    include_closure_cache: Dict[str, set[str]] = {}
+
+    def include_closure(file_path: str, stack: Optional[set[str]] = None) -> set[str]:
+        if file_path in include_closure_cache:
+            return include_closure_cache[file_path]
+        if stack is None:
+            stack = set()
+        if file_path in stack:
+            return set()
+        stack.add(file_path)
+        result: set[str] = set()
+        for inc in resolved_includes_by_file.get(file_path, []):
+            result.add(inc)
+            result.update(include_closure(inc, stack))
+        stack.remove(file_path)
+        include_closure_cache[file_path] = result
+        return result
 
     def collect_transitive(
         start_file: str,
@@ -2786,6 +3935,7 @@ async def build_call_graph(
         all_templates: List[Dict[str, Any]] = []
         all_relations: List[Dict[str, Any]] = []
         all_calls: List[Dict[str, Any]] = []
+        all_unknown_calls: List[Dict[str, Any]] = []
 
         allowed_rel_types = {
             "CONTAINS",
@@ -2796,6 +3946,7 @@ async def build_call_graph(
             "POINTER_TO",
             "ALIASES",
             "TEMPLATES",
+            "INCLUDES",
             "EMITS_EVENT",
             "HANDLES_EVENT",
             "CALLS_FUNCTION_POINTER",
@@ -2835,59 +3986,88 @@ async def build_call_graph(
                     return [name, f"{target}::{rest}"]
                 return [name]
 
-            candidates: List[Dict[str, Any]] = []
-            expanded = []
+            best_by_symbol: Dict[str, Tuple[int, str]] = {}
+            include_scope = include_closure(caller_file) if caller_file else set()
+            scope_depth = {scope: idx for idx, scope in enumerate(scope_chain(caller_scope))}
+
+            def consider(entry: Dict[str, Any], base_score: int) -> None:
+                symbol_id = entry.get("symbol_id")
+                if not symbol_id:
+                    return
+                score = base_score
+                entry_file = entry.get("file_path")
+                if caller_file and entry_file == caller_file:
+                    score += 10
+                elif caller_file and entry_file and entry_file in include_scope:
+                    score += 5
+                entry_scope = entry.get("scope_name")
+                if caller_scope and entry_scope == caller_scope:
+                    score += 8
+                if entry_scope in scope_depth:
+                    score += max(0, 6 - scope_depth[entry_scope])
+                tie = str(entry.get("qualified_name") or entry.get("name") or symbol_id)
+                current = best_by_symbol.get(symbol_id)
+                if current is None or (score, tie) > current:
+                    best_by_symbol[symbol_id] = (score, tie)
+
+            def consider_many(entries: Iterable[Dict[str, Any]], base_score: int) -> None:
+                for item in entries:
+                    consider(item, base_score)
+
+            expanded: List[str] = []
             for variant in expand_aliases(callee_name):
                 for macro_variant in expand_macros(variant, caller_file):
-                    expanded.append(macro_variant)
+                    if macro_variant not in expanded:
+                        expanded.append(macro_variant)
+
             for variant in expanded:
                 if "::" in variant:
                     entry = function_index_by_qualified_arity.get((variant, call_arity))
                     if entry:
-                        return entry["symbol_id"]
+                        consider(entry, 130)
                     entry = function_index_by_qualified.get(variant)
                     if entry:
-                        return entry["symbol_id"]
+                        consider(entry, 120)
 
             short_name = callee_name.split("::")[-1]
             if caller_file:
-                scoped = function_index_by_file_name_arity.get((caller_file, short_name, call_arity))
-                if scoped:
-                    return scoped[0]["symbol_id"]
-                scoped = function_index_by_file_name.get((caller_file, short_name))
-                if scoped:
-                    return scoped[0]["symbol_id"]
+                consider_many(function_index_by_file_name_arity.get((caller_file, short_name, call_arity), []), 115)
+                consider_many(function_index_by_file_name.get((caller_file, short_name), []), 105)
                 for ns in using_namespaces_by_file.get(caller_file, []):
                     qualified = f"{ns}::{short_name}"
                     entry = function_index_by_qualified_arity.get((qualified, call_arity))
                     if entry:
-                        return entry["symbol_id"]
+                        consider(entry, 100)
                     entry = function_index_by_qualified.get(qualified)
                     if entry:
-                        return entry["symbol_id"]
+                        consider(entry, 90)
                 imported = using_imports_by_file.get(caller_file, {}).get(short_name)
                 if imported:
                     entry = function_index_by_qualified_arity.get((imported, call_arity))
                     if entry:
-                        return entry["symbol_id"]
+                        consider(entry, 102)
                     entry = function_index_by_qualified.get(imported)
                     if entry:
-                        return entry["symbol_id"]
-            for scope in scope_chain(caller_scope):
-                scoped = function_index_by_scope_name_arity.get((scope, short_name, call_arity))
-                if scoped:
-                    return scoped[0]["symbol_id"]
-                scoped = function_index_by_scope_name.get((scope, short_name))
-                if scoped:
-                    return scoped[0]["symbol_id"]
+                        consider(entry, 92)
 
-            candidates = function_index_by_name_arity.get((short_name, call_arity), [])
-            if candidates:
-                return candidates[0]["symbol_id"]
+            for depth, scope in enumerate(scope_chain(caller_scope)):
+                consider_many(
+                    function_index_by_scope_name_arity.get((scope, short_name, call_arity), []),
+                    95 - min(depth, 20),
+                )
+                consider_many(
+                    function_index_by_scope_name.get((scope, short_name), []),
+                    85 - min(depth, 20),
+                )
 
-            candidates = function_index_by_name.get(short_name, [])
-            if candidates:
-                return candidates[0]["symbol_id"]
+            consider_many(function_index_by_name_arity.get((short_name, call_arity), []), 70)
+            consider_many(function_index_by_name.get(short_name, []), 55)
+
+            if best_by_symbol:
+                return max(
+                    best_by_symbol.items(),
+                    key=lambda item: (item[1][0], item[1][1]),
+                )[0]
             return None
 
         call_stats_total = 0
@@ -2979,6 +4159,8 @@ async def build_call_graph(
                     "kind": func["kind"],
                     "scope_name": func["scope_name"],
                     "file_path": func["file_path"],
+                    "start_byte": int(func.get("start_byte") or 0),
+                    "end_byte": int(func.get("end_byte") or 0),
                     "start_line": func["start_line"],
                     "end_line": func["end_line"],
                     "arity": func["arity"],
@@ -3051,6 +4233,17 @@ async def build_call_graph(
                 "target_id": file_id,
                 "properties": {},
             })
+            for inc_file in resolved_includes_by_file.get(file_id, []):
+                all_relations.append(
+                    {
+                        "source_label": "File",
+                        "target_label": "File",
+                        "rel_type": "INCLUDES",
+                        "source_id": file_id,
+                        "target_id": inc_file,
+                        "properties": {},
+                    }
+                )
             for ns in payload["namespaces"]:
                 all_relations.append({
                     "source_label": "File",
@@ -3118,14 +4311,23 @@ async def build_call_graph(
                     "properties": rel["properties"],
                 })
 
-            for call in payload["calls"]:
+            for call in sorted(payload["calls"], key=_call_payload_sort_key):
                 call_stats_total += 1
                 macro_hit = False
                 call_file = call.get("caller_file") or file_id
+                call_line = int(call.get("call_line") or 0)
+                call_column = int(call.get("call_column") or 0)
+                call_start_byte = int(call.get("call_start_byte") or 0)
+                call_type = call.get("call_type") or "call_expression"
+                call_branch_kind = call.get("call_branch_kind") or "none"
+                call_loop_depth = int(call.get("call_loop_depth") or 0)
+                call_control_frames_json = call.get("call_control_frames_json") or "[]"
+                callee_name = call.get("callee_name") or ""
+                caller_scope = call.get("caller_scope") or ""
                 if call.get("callee_name") in macros_by_file.get(call_file, {}):
                     macro_hit = True
                 callee_id = call.get("callee_id") or resolve_callee_id(
-                    call["callee_name"],
+                    callee_name,
                     call.get("caller_scope"),
                     int(call.get("call_arity") or 0),
                     call_file,
@@ -3133,20 +4335,61 @@ async def build_call_graph(
                 if not callee_id:
                     total, resolved = call_stats_by_file.get(call_file, (0, 0))
                     call_stats_by_file[call_file] = (total + 1, resolved)
+                    unknown_id = _unknown_function_id(callee_name)
+                    stable_site_id = _call_site_id(
+                        call["caller_id"],
+                        unknown_id,
+                        call_file,
+                        call_line,
+                        call_column,
+                        call_type,
+                    )
+                    site_id = f"{parse_run_id}:{stable_site_id}"
+                    all_unknown_calls.append(
+                        {
+                            "caller_id": call["caller_id"],
+                            "unknown_id": unknown_id,
+                            "site_id": site_id,
+                            "props": {
+                                "file_path": call_file,
+                                "line": call_line,
+                                "column": call_column,
+                                "call_start_byte": call_start_byte,
+                                "call_branch_kind": call_branch_kind,
+                                "call_loop_depth": call_loop_depth,
+                                "call_control_frames_json": call_control_frames_json,
+                                "call_type": call_type,
+                                "call_arity": int(call.get("call_arity") or 0),
+                                "callee_name": callee_name,
+                                "caller_scope": caller_scope,
+                                "parse_run_id": parse_run_id,
+                                "commit_sha": commit_sha,
+                                "stable_site_id": stable_site_id,
+                            },
+                        }
+                    )
                     if unresolved_handle is not None:
                         macro_expansion = macros_by_file.get(call_file, {}).get(call.get("callee_name") or "")
                         unresolved_handle.write(
                             json.dumps(
                                 {
                                     "caller_id": call.get("caller_id"),
-                                    "caller_scope": call.get("caller_scope"),
+                                    "caller_scope": caller_scope,
                                     "file_path": call_file,
-                                    "line": int(call.get("call_line") or 0),
-                                    "column": int(call.get("call_column") or 0),
-                                    "call_type": call.get("call_type") or "call_expression",
+                                    "line": call_line,
+                                    "column": call_column,
+                                    "call_start_byte": call_start_byte,
+                                    "call_branch_kind": call_branch_kind,
+                                    "call_loop_depth": call_loop_depth,
+                                    "call_control_frames_json": call_control_frames_json,
+                                    "call_type": call_type,
                                     "call_arity": int(call.get("call_arity") or 0),
-                                    "callee_name": call.get("callee_name") or "",
+                                    "callee_name": callee_name,
                                     "macro_expansion": macro_expansion or "",
+                                    "unknown_id": unknown_id,
+                                    "site_id": site_id,
+                                    "parse_run_id": parse_run_id,
+                                    "commit_sha": commit_sha,
                                 },
                                 ensure_ascii=True,
                             )
@@ -3156,10 +4399,7 @@ async def build_call_graph(
                 call_stats_resolved += 1
                 if macro_hit:
                     call_stats_macro_resolved += 1
-                call_line = int(call.get("call_line") or 0)
-                call_column = int(call.get("call_column") or 0)
-                call_type = call.get("call_type") or "call_expression"
-                site_id = _call_site_id(
+                stable_site_id = _call_site_id(
                     call["caller_id"],
                     callee_id,
                     call_file,
@@ -3167,6 +4407,7 @@ async def build_call_graph(
                     call_column,
                     call_type,
                 )
+                site_id = f"{parse_run_id}:{stable_site_id}"
                 total, resolved = call_stats_by_file.get(call_file, (0, 0))
                 call_stats_by_file[call_file] = (total + 1, resolved + 1)
                 all_calls.append({
@@ -3177,10 +4418,17 @@ async def build_call_graph(
                         "file_path": call_file,
                         "line": call_line,
                         "column": call_column,
+                        "call_start_byte": call_start_byte,
+                        "call_branch_kind": call_branch_kind,
+                        "call_loop_depth": call_loop_depth,
+                        "call_control_frames_json": call_control_frames_json,
                         "call_type": call_type,
                         "call_arity": int(call.get("call_arity") or 0),
-                        "callee_name": call.get("callee_name") or "",
-                        "caller_scope": call.get("caller_scope") or "",
+                        "callee_name": callee_name,
+                        "caller_scope": caller_scope,
+                        "parse_run_id": parse_run_id,
+                        "commit_sha": commit_sha,
+                        "stable_site_id": stable_site_id,
                     },
                 })
 
@@ -3204,6 +4452,101 @@ async def build_call_graph(
                 "properties": rel["props"],
             })
 
+        # Infer missing Type-DECLARES->Function links for out-of-class definitions
+        # where scope_name was recovered from qualified declarators.
+        relation_keys = {
+            (rel["source_label"], rel["target_label"], rel["rel_type"], rel["source_id"], rel["target_id"])
+            for rel in all_relations
+        }
+        type_ids = {item["id"] for item in all_types}
+        namespace_qualified_names = {item["qualified_name"] for item in all_namespaces}
+
+        scopes_with_ctor_dtor: set[str] = set()
+        for func in all_functions:
+            scope = (func.get("scope_name") or "").strip()
+            if not scope:
+                continue
+            scope_leaf = scope.split("::")[-1]
+            name = (func.get("name") or "").strip()
+            if name in {scope_leaf, f"~{scope_leaf}"}:
+                scopes_with_ctor_dtor.add(scope)
+
+        inferred_type_nodes = 0
+        inferred_declares = 0
+        for func in all_functions:
+            scope = (func.get("scope_name") or "").strip()
+            if not scope:
+                continue
+            type_id = _type_id(None, scope)
+            rel_key = ("Type", "Function", "DECLARES", type_id, func["id"])
+            if rel_key in relation_keys:
+                continue
+
+            has_type = type_id in type_ids
+            if not has_type:
+                # Avoid creating pseudo-types for namespace functions unless we have
+                # strong constructor/destructor evidence that scope denotes a type.
+                if scope in namespace_qualified_names and scope not in scopes_with_ctor_dtor:
+                    continue
+                if scope not in scopes_with_ctor_dtor:
+                    continue
+
+                all_types.append(
+                    {
+                        "id": type_id,
+                        "name": scope.split("::")[-1],
+                        "qualified_name": scope,
+                        "kind": "external",
+                        "file_path": func.get("file_path") or "",
+                        "start_line": 0,
+                        "end_line": 0,
+                        "code": scope,
+                        "comment": "",
+                        "summary": "",
+                        "note": "",
+                        "project_id": project_id,
+                        "project_name": project_name,
+                        "language": language,
+                        "repo": repo,
+                        "build_system": build_system,
+                    }
+                )
+                inferred_type_nodes += 1
+                type_ids.add(type_id)
+
+                file_contains_key = (
+                    "File",
+                    "Type",
+                    "CONTAINS",
+                    func.get("file_path") or "",
+                    type_id,
+                )
+                if file_contains_key not in relation_keys:
+                    all_relations.append(
+                        {
+                            "source_label": "File",
+                            "target_label": "Type",
+                            "rel_type": "CONTAINS",
+                            "source_id": func.get("file_path") or "",
+                            "target_id": type_id,
+                            "properties": {},
+                        }
+                    )
+                    relation_keys.add(file_contains_key)
+
+            all_relations.append(
+                {
+                    "source_label": "Type",
+                    "target_label": "Function",
+                    "rel_type": "DECLARES",
+                    "source_id": type_id,
+                    "target_id": func["id"],
+                    "properties": {"inferred": "scope_name"},
+                }
+            )
+            relation_keys.add(rel_key)
+            inferred_declares += 1
+
         if unresolved_handle is not None:
             unresolved_handle.close()
 
@@ -3212,8 +4555,59 @@ async def build_call_graph(
                   f"{len(all_types)} types, {len(all_function_types)} function_types, "
                   f"{len(all_functions)} functions, {len(all_fields)} fields, "
                   f"{len(all_aliases)} aliases, {len(all_templates)} templates, "
-                  f"{len(all_relations)} relations, {len(all_calls)} calls")
-        
+                  f"{len(all_relations)} relations, {len(all_calls)} calls, "
+                  f"{len(all_unknown_calls)} unknown calls")
+            print(
+                f"[neo4j] inferred declares links: {inferred_declares}, "
+                f"inferred synthetic types: {inferred_type_nodes}"
+            )
+
+        index_queries = [
+            "CREATE INDEX function_id_lookup IF NOT EXISTS FOR (f:Function) ON (f.id)",
+            "CREATE INDEX file_id_lookup IF NOT EXISTS FOR (f:File) ON (f.id)",
+            "CREATE INDEX unknown_function_id_lookup IF NOT EXISTS FOR (u:UnknownFunction) ON (u.id)",
+            "CREATE INDEX parse_run_id_lookup IF NOT EXISTS FOR (r:ParseRun) ON (r.id)",
+        ]
+        for query in index_queries:
+            try:
+                await code_writer.driver.execute_query(query, database=code_writer.database)
+            except Exception as exc:
+                if verbose:
+                    print(f"[neo4j] index ensure skipped: {exc}")
+
+        try:
+            await code_writer.driver.execute_query(
+                """
+                MERGE (r:ParseRun {id: $parse_run_id})
+                SET r.project_id = $project_id,
+                    r.project_name = $project_name,
+                    r.language = $language,
+                    r.repo = $repo,
+                    r.build_system = $build_system,
+                    r.commit_sha = $commit_sha,
+                    r.updated_at = datetime()
+                """,
+                {
+                    "parse_run_id": parse_run_id,
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                    "commit_sha": commit_sha,
+                },
+                database=code_writer.database,
+            )
+        except Exception as exc:
+            if verbose:
+                print(f"[neo4j] parse run node upsert skipped: {exc}")
+
+        state = load_state(neo4j_state_path) if neo4j_state_path else None
+
+        def state_writer(updated_state: Dict[str, int]) -> None:
+            if neo4j_state_path:
+                write_state(neo4j_state_path, updated_state)
+
         await code_writer.write_all(
             files=all_files,
             namespaces=all_namespaces,
@@ -3224,8 +4618,50 @@ async def build_call_graph(
             aliases=all_aliases,
             templates=all_templates,
             relations=all_relations,
-            calls_with_site=all_calls,
+            state=state,
+            state_writer=state_writer,
+            use_full_writers=True,
         )
+
+        if all_calls:
+            original_batch_size = code_writer.batch_size
+            code_writer.batch_size = max(1, neo4j_calls_batch_size)
+            if verbose:
+                print(f"[neo4j] calls batch size: {code_writer.batch_size}")
+            try:
+                await code_writer.write_calls_with_site(
+                    all_calls,
+                    state=state,
+                    state_writer=state_writer,
+                )
+            finally:
+                code_writer.batch_size = original_batch_size
+
+        if all_unknown_calls:
+            batch_size = max(1, neo4j_calls_batch_size)
+            if verbose:
+                print(f"[neo4j] unknown-calls batch size: {batch_size}")
+            for offset in range(0, len(all_unknown_calls), batch_size):
+                batch = all_unknown_calls[offset : offset + batch_size]
+                await code_writer.driver.execute_query(
+                    """
+                    UNWIND $rows AS row
+                    CALL {
+                        WITH row
+                        MATCH (caller:Function {id: row.caller_id})
+                        RETURN caller
+                        LIMIT 1
+                    }
+                    MERGE (unknown:UnknownFunction {id: row.unknown_id})
+                    SET unknown.name = row.props.callee_name,
+                        unknown.updated_at = datetime()
+                    MERGE (caller)-[r:UNKNOWN_CALL {site_id: row.site_id}]->(unknown)
+                    SET r += row.props
+                    RETURN count(r) AS count
+                    """,
+                    {"rows": batch},
+                    database=code_writer.database,
+                )
 
         if verbose:
             unresolved = call_stats_total - call_stats_resolved
@@ -3251,9 +4687,12 @@ async def build_call_graph(
                 json.dump(possible_call_relations, handle, ensure_ascii=True, indent=2)
         if call_stats_path:
             stats_payload = {
+                "parse_run_id": parse_run_id,
+                "commit_sha": commit_sha,
                 "total_calls": call_stats_total,
                 "resolved_calls": call_stats_resolved,
                 "unresolved_calls": call_stats_total - call_stats_resolved,
+                "unknown_calls_written": len(all_unknown_calls),
                 "resolved_ratio": (call_stats_resolved / call_stats_total) if call_stats_total else 0.0,
                 "macro_resolved_calls": call_stats_macro_resolved,
                 "possible_calls_written": len(possible_call_relations),
@@ -3323,6 +4762,8 @@ async def build_call_graph(
                                     "kind": func_item["kind"],
                                     "scope_name": func_item["scope_name"],
                                     "file_path": func_item["file_path"],
+                                    "start_byte": int(func_item.get("start_byte") or 0),
+                                    "end_byte": int(func_item.get("end_byte") or 0),
                                     "start_line": func_item["start_line"],
                                     "end_line": func_item["end_line"],
                                     "arity": func_item["arity"],
@@ -3356,6 +4797,8 @@ async def build_call_graph(
                                 "kind": func_item["kind"],
                                 "scope_name": func_item["scope_name"],
                                 "file_path": func_item["file_path"],
+                                "start_byte": int(func_item.get("start_byte") or 0),
+                                "end_byte": int(func_item.get("end_byte") or 0),
                                 "start_line": func_item["start_line"],
                                 "end_line": func_item["end_line"],
                                 "arity": func_item["arity"],
@@ -3414,6 +4857,10 @@ async def build_call_graph(
                 os.remove(state_path)
             except OSError:
                 pass
+    _sr_fn = len(all_functions) if 'all_functions' in vars() else 0
+    _sr_cls = len(all_types) if 'all_types' in vars() else 0
+    _sr_files = total_files if 'total_files' in vars() else 0
+    print(f"[SCAN_RESULT] parser=cplus files={_sr_files} functions={_sr_fn} classes={_sr_cls}", flush=True)
     if verbose:
         elapsed = time.time() - start_time
         print(f"[done] Total time: {elapsed:.2f}s")
@@ -3424,10 +4871,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--root", required=True, help="Root folder containing C/C++ sources")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASS"))
+    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
-    parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION_CODE", "cplus_functions"))
+    parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "cplus_functions"))
     parser.add_argument(
         "--embed-model",
         default=os.environ.get("CODE_EMBEDDING_MODEL")
@@ -3436,18 +4883,34 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-embed-chars", type=int, default=4000)
     parser.add_argument("--chunk-embed", action="store_true")
-    parser.add_argument("--device", default=os.environ.get("EMBEDDING_DEVICE", "cpu"))
+    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
+    parser.add_argument(
+        "--neo4j-calls-batch-size",
+        type=int,
+        default=50,
+        help="Batch size dedicated to CALLS edges (lower helps avoid Neo4j transaction OOM)",
+    )
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
     parser.add_argument("--disable-neo4j-resume", action="store_true")
     parser.add_argument("--qdrant-batch-size", type=int, default=512)
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
     parser.add_argument("--qdrant-retries", type=int, default=3)
     parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
+    parser.set_defaults(enable_message_scan=True)
+    parser.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true", help="Enable message scan and sync (default)")
+    parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false", help="Disable message scan and sync")
+    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"))
+    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION"))
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
     parser.add_argument("--keep-cache", action="store_true")
     parser.add_argument("--disable-parse-cache", action="store_true")
+    parser.add_argument(
+        "--ignore-cache",
+        action="store_true",
+        help="Ignore local caches for this run (parse cache, Neo4j/Qdrant resume state).",
+    )
     parser.add_argument("--project-id", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--project-name", default=os.environ.get("PROJECT_NAME"))
     parser.add_argument("--language", default=os.environ.get("PROJECT_LANGUAGE"))
@@ -3457,6 +4920,37 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--call-stats-path", help="Write call resolution stats JSON")
     parser.add_argument("--possible-calls-path", help="Write POSSIBLE_CALLS edges JSON")
     parser.add_argument("--unresolved-calls-path", help="Write unresolved calls as JSONL")
+    parser.add_argument(
+        "--parse-errors-path",
+        help="Write tree-sitter parse error summary JSON",
+    )
+    parser.add_argument(
+        "--compile-commands-path",
+        help="Path to compile_commands.json (default: <root>/compile_commands.json)",
+    )
+    parser.add_argument(
+        "--disable-compile-db-bootstrap",
+        action="store_true",
+        help="Skip auto-bootstrap of compile_commands.json",
+    )
+    parser.add_argument(
+        "--compile-db-symlink",
+        action="store_true",
+        help="Symlink compile_commands.json when reused/generated in another path",
+    )
+    parser.add_argument("--parse-run-id", default=os.environ.get("PARSE_RUN_ID"))
+    parser.add_argument("--commit-sha", default=os.environ.get("GIT_COMMIT_SHA"))
+    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""))
+    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""))
+    parser.add_argument("--incremental", action="store_true", help="Enable incremental ingestion mode")
+    parser.add_argument(
+        "--changed-files-manifest",
+        help="JSON/TXT manifest of changed+impacted file paths (relative to --root)",
+    )
+    parser.add_argument(
+        "--deleted-files-manifest",
+        help="JSON/TXT manifest of deleted file paths (relative to --root)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
@@ -3468,12 +4962,53 @@ async def main(argv: Optional[List[str]] = None) -> int:
         print(f"Root not found: {args.root}", file=sys.stderr)
         return 2
 
+    compile_db_path = os.path.abspath(
+        args.compile_commands_path or os.path.join(args.root, "compile_commands.json")
+    )
+    compile_db_index: Optional[Dict[str, Any]] = None
+    if args.disable_compile_db_bootstrap:
+        print("[compile-db] bootstrap disabled; using existing file if present")
+    else:
+        if ensure_compile_commands is None:
+            print("[compile-db] bootstrap unavailable; continuing with tree-sitter heuristics only")
+        else:
+            result = ensure_compile_commands(
+                root=args.root,
+                output=compile_db_path,
+                symlink=args.compile_db_symlink,
+                verbose=args.verbose,
+            )
+            if result.ok:
+                print(
+                    "[compile-db] ready (%s): %s"
+                    % (result.strategy, result.output_path)
+                )
+            else:
+                print(
+                    "[compile-db] bootstrap failed: %s; continuing with tree-sitter heuristics only"
+                    % (result.message or "unknown error")
+                )
+    if os.path.isfile(compile_db_path):
+        compile_db_index = _load_compile_commands_index(compile_db_path, args.root)
+        cpp_count = len(compile_db_index.get("cpp_files", []))
+        c_count = len(compile_db_index.get("c_files", []))
+        entries = int(compile_db_index.get("entries") or 0)
+        print(
+            "[compile-db] loaded %d entries (cpp_files=%d, c_files=%d) from %s"
+            % (entries, cpp_count, c_count, compile_db_path)
+        )
+    else:
+        print(
+            "[compile-db] not found at %s; parser mode falls back to extension/content heuristics"
+            % compile_db_path
+        )
+
     driver = None
     code_writer = None
-    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
+    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
         driver = await GraphDriverFactory.create_driver(
             GraphProvider.NEO4J,
-            {"uri": args.neo4j_uri, "user": args.neo4j_user, "password": args.NEO4J_PASS, "database": args.neo4j_db}
+            {"uri": args.neo4j_uri, "user": args.neo4j_user, "password": args.neo4j_password, "database": args.neo4j_db}
         )
         code_writer = LanguageCodeWriter(driver, database=args.neo4j_db, batch_size=args.neo4j_batch_size, verbose=args.verbose)
 
@@ -3491,52 +5026,68 @@ async def main(argv: Optional[List[str]] = None) -> int:
         )
 
     parse_cache = not args.disable_parse_cache
+    effective_cache_dir = args.cache_dir
+    if args.ignore_cache:
+        run_cache_root = safe_cache_root(effective_cache_dir, "cplus_analyzer", project_root=args.root)
+        effective_cache_dir = os.path.join(
+            run_cache_root,
+            "ignore_runs",
+            f"run_{int(time.time() * 1000)}",
+        )
+        os.makedirs(effective_cache_dir, exist_ok=True)
+        parse_cache = False
+        args.disable_neo4j_resume = True
+        args.keep_cache = False
+        if args.verbose:
+            print(
+                "[cache] ignore-cache enabled; using isolated cache dir: %s"
+                % effective_cache_dir
+            )
+    changed_manifest_files: List[str] = []
+    deleted_manifest_files: List[str] = []
+    if args.incremental:
+        if args.changed_files_manifest:
+            changed_manifest_files = sorted(load_manifest_paths(args.changed_files_manifest, args.root))
+        if args.deleted_files_manifest:
+            deleted_manifest_files = sorted(load_manifest_paths(args.deleted_files_manifest, args.root))
+        if args.verbose:
+            print(
+                "[diff] incremental manifests changed=%d deleted=%d"
+                % (len(changed_manifest_files), len(deleted_manifest_files))
+            )
+
     neo4j_state_path = None
-    if not args.disable_neo4j_resume:
-        cache_root = safe_cache_root(args.cache_dir, "cplus_analyzer")
+    if not args.disable_neo4j_resume and not args.incremental:
+        cache_root = safe_cache_root(effective_cache_dir, "cplus_analyzer", project_root=args.root)
         neo4j_state_path = args.neo4j_state or os.path.join(cache_root, "neo4j_state.json")
+    elif args.incremental and args.verbose:
+        print("[state] incremental mode disables neo4j resume state")
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
     language = args.language or "cplus"
     repo = args.repo or os.path.abspath(args.root)
     build_system = args.build_system or ""
+    parse_run_id = args.parse_run_id or f"parse-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    commit_sha = args.commit_sha_after or args.commit_sha or _detect_git_commit_sha(args.root)
+    commit_sha_before = args.commit_sha_before or ""
+    message_qdrant_collection = (
+        args.message_qdrant_collection
+        or default_message_collection_name(args.qdrant_collection)
+    )
     if driver:
         cloc_raw = collect_cloc_stats(args.root)
         if cloc_raw:
             cloc_stats = normalize_cloc_payload(cloc_raw)
-            payload = {
-                "id": project_id,
-                "project_id": project_id,
-                "project_name": project_name,
-                "root": args.root,
-                "repo": repo,
-                "language": language,
-                "total_files": cloc_stats.get("total_files"),
-                "total_blank": cloc_stats.get("total_blank"),
-                "total_comment": cloc_stats.get("total_comment"),
-                "total_code": cloc_stats.get("total_code"),
-                "cloc_version": cloc_stats.get("cloc_version"),
-                "elapsed_seconds": cloc_stats.get("elapsed_seconds"),
-                "languages_json": json.dumps(cloc_stats.get("languages", {}), ensure_ascii=True),
-                "generated_at": cloc_stats.get("generated_at"),
-            }
-            query = """
-                MERGE (s:CodebaseStats {id: $id})
-                SET s.project_id = $project_id,
-                    s.project_name = $project_name,
-                    s.root = $root,
-                    s.repo = $repo,
-                    s.language = $language,
-                    s.total_files = $total_files,
-                    s.total_blank = $total_blank,
-                    s.total_comment = $total_comment,
-                    s.total_code = $total_code,
-                    s.cloc_version = $cloc_version,
-                    s.elapsed_seconds = $elapsed_seconds,
-                    s.languages_json = $languages_json,
-                    s.generated_at = $generated_at
-            """
-            await driver.execute_query(query, payload, database=args.neo4j_db)
+            await write_cloc_stats_to_neo4j(
+                driver=driver,
+                database=args.neo4j_db,
+                project_id=project_id,
+                project_name=project_name,
+                root=args.root,
+                repo=repo,
+                language=language,
+                stats=cloc_stats,
+            )
             if args.verbose:
                 print("[cloc] Stats stored in Neo4j")
         elif args.verbose:
@@ -3545,7 +5096,23 @@ async def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.dry_run:
             files = _scan_c_family_files(args.root)
-            print(f"Dry run: {len(files)} C/C++ files found")
+            if args.incremental and changed_manifest_files:
+                all_rel_paths = [os.path.relpath(path, args.root).replace("\\", "/") for path in files]
+                rel_to_abs = {
+                    os.path.relpath(path, args.root).replace("\\", "/"): path
+                    for path in files
+                }
+                changed_existing = {path for path in changed_manifest_files if path in rel_to_abs}
+                deps_by_file = _collect_include_graph(files, args.root)
+                impacted = _expand_impacted_files_by_includes(changed_existing, deps_by_file)
+                selected_rel_paths = changed_existing | impacted
+                files = [rel_to_abs[path] for path in all_rel_paths if path in selected_rel_paths]
+                print(
+                    "Dry run (incremental): %d C/C++ files selected (manifest=%d impacted=%d)"
+                    % (len(files), len(changed_manifest_files), len(impacted))
+                )
+            else:
+                print(f"Dry run: {len(files)} C/C++ files found")
             return 0
         await build_call_graph(
             args.root,
@@ -3554,10 +5121,11 @@ async def main(argv: Optional[List[str]] = None) -> int:
             embedder=embedder,
             batch_size=args.batch_size,
             qdrant_batch_size=args.qdrant_batch_size,
-            cache_dir=args.cache_dir,
+            cache_dir=effective_cache_dir,
             keep_cache=args.keep_cache,
             parse_cache=parse_cache,
             neo4j_batch_size=args.neo4j_batch_size,
+            neo4j_calls_batch_size=args.neo4j_calls_batch_size,
             neo4j_state_path=neo4j_state_path,
             project_id=project_id,
             project_name=project_name,
@@ -3568,13 +5136,75 @@ async def main(argv: Optional[List[str]] = None) -> int:
             call_stats_path=args.call_stats_path,
             possible_calls_path=args.possible_calls_path,
             unresolved_calls_path=args.unresolved_calls_path,
+            parse_errors_path=args.parse_errors_path,
+            parse_run_id=parse_run_id,
+            commit_sha=commit_sha,
             verbose=args.verbose,
+            compile_db_index=compile_db_index,
+            incremental=args.incremental,
+            changed_files=changed_manifest_files,
+            deleted_files=deleted_manifest_files,
+            commit_sha_before=commit_sha_before,
         )
+        if args.enable_message_scan:
+            message_summary = await run_message_scan_pipeline(
+                root=args.root,
+                parser="cplus",
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+                incremental=args.incremental,
+                changed_files=changed_manifest_files,
+                deleted_files=deleted_manifest_files,
+                driver=driver,
+                neo4j_database=args.neo4j_db,
+                qdrant_url=args.qdrant_url,
+                qdrant_collection=message_qdrant_collection if args.qdrant_url else None,
+                qdrant_vector_size=embedder.vector_size if embedder else 1024,
+                embed_texts=embedder.embed if embedder else None,
+                output_dir=args.message_output_dir,
+                cache_dir=effective_cache_dir,
+                commit_sha_before=commit_sha_before,
+                commit_sha_after=commit_sha,
+                qdrant_batch_size=args.qdrant_batch_size,
+                qdrant_timeout=args.qdrant_timeout,
+                qdrant_retries=args.qdrant_retries,
+                qdrant_retry_sleep=args.qdrant_retry_sleep,
+                verbose=args.verbose,
+            )
+            print(
+                "[message] parser=%s count=%s neo4j=%s qdrant=%s collection=%s artifact=%s"
+                % (
+                    message_summary.get("parser"),
+                    message_summary.get("message_count"),
+                    message_summary.get("neo4j_upserted"),
+                    message_summary.get("qdrant_upserted"),
+                    message_summary.get("qdrant_collection"),
+                    message_summary.get("artifact_path"),
+                )
+            )
     finally:
         if driver:
-            await driver.close()
+            close_result = driver.close()
+            if hasattr(close_result, "__await__"):
+                await close_result
     return 0
 
 
 if __name__ == "__main__":
+    print(f"Starting C/C++ analyzer with Python {sys.version} on platform {sys.platform}")
+    print(f"NEO4J_URI: {os.environ.get('NEO4J_URI', 'Not Set')}")
+    print(f"NEO4J_USER: {os.environ.get('NEO4J_USER', 'Not Set')}")
+    print(f"NEO4J_PASS: {'****' if os.environ.get('NEO4J_PASS') else 'Not Set'}")
+    print(f"NEO4J_DB: {os.environ.get('NEO4J_DB', 'Not Set')}")
+    print(f"QDRANT_URL: {os.environ.get('QDRANT_URL', 'Not Set')}")
+    print(f"QDRANT_COLLECTION: {os.environ.get('QDRANT_COLLECTION', 'Not Set')}")
+    print(f"QDRANT_CACHE_DIR: {os.environ.get('QDRANT_CACHE_DIR', 'Not Set')}")
+    print(f"CODE_EMBEDDING_MODEL: {os.environ.get('CODE_EMBEDDING_MODEL', 'Not Set')}")
+    print(f"EMBED_DEVICE: {os.environ.get('EMBED_DEVICE', 'Not Set')}")
+    print(f"HF_HOME: {os.environ.get('HF_HOME', 'Not Set')}")
+    print(f"HUGGINGFACE_HUB_CACHE: {os.environ.get('HUGGINGFACE_HUB_CACHE', 'Not Set')}")
+    print(f"HF_MODULES_CACHE: {os.environ.get('HF_MODULES_CACHE', 'Not Set')}")
     raise SystemExit(asyncio.run(main()))

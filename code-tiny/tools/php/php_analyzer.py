@@ -28,7 +28,10 @@ from tools.common.analyzer_cache import (
     write_parse_cache,
     write_state,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload
+from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
+from tools.common.git_diff import load_manifest_paths
+from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
+from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
@@ -881,17 +884,30 @@ def _should_trust_remote_code(model_name: str) -> bool:
     return "jina" in model_name.lower()
 
 
+def _resolve_embedding_model_source(model_name: str) -> str:
+    local_model_path = os.environ.get("CODE_EMBEDDING_MODEL_PATH")
+    if not local_model_path:
+        return model_name
+    resolved_path = os.path.abspath(os.path.expanduser(local_model_path))
+    if not os.path.exists(resolved_path):
+        raise FileNotFoundError(
+            "CODE_EMBEDDING_MODEL_PATH does not exist: %s" % local_model_path
+        )
+    return resolved_path
+
+
 class CodeEmbedder:
     def __init__(self, model_name: str, device: str, max_embed_chars: int, chunk_embed: bool) -> None:
-        trust_remote_code = _should_trust_remote_code(model_name)
+        model_source = _resolve_embedding_model_source(model_name)
+        trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
         extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
             **extra_tokenizer_kwargs,
         )
         self.model = AutoModel.from_pretrained(
-            model_name,
+            model_source,
             trust_remote_code=trust_remote_code,
         )
         self.device = torch.device(device)
@@ -1019,12 +1035,79 @@ def _stable_point_id(symbol_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, symbol_id))
 
 
+def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
+    """
+    Check if a directory should be ignored during PHP project scanning.
+
+    Ignores:
+    - Composer: vendor/, composer.lock
+    - Frameworks: var/, cache/, storage/cache/
+    - Build: var/cache/, bootstrap/cache/
+    - Testing: vendor/bin/, phpunit/, tests/output/
+    """
+    ignore_patterns = {
+        # Composer
+        "vendor",
+
+        # Build outputs & cache
+        "var", "cache", "tmp", "temp",
+
+        # Framework caches (Laravel, Symfony, etc.)
+        "storage/cache", "bootstrap/cache",
+
+        # Testing
+        "tests/output", ".phpunit.result.cache", "phpstan-cache", "psalm-cache",
+
+        # IDE
+        ".idea", ".vscode",
+
+        # Version control
+        ".git", ".svn", ".hg",
+
+        # Node (mixed projects)
+        "node_modules", "dist", "build",
+
+        # Logs
+        "storage/logs", "logs",
+
+        # Environment
+        ".env", ".env.local", ".env.*.local",
+
+        # OS specific
+        ".DS_Store", "Thumbs.db",
+    }
+
+    if dir_name in ignore_patterns:
+        return True
+
+    if dir_name.endswith((".swp", ".swo")):
+        return True
+
+    return False
+
+
 def _scan_php_files(root: str) -> List[str]:
+    """
+    Scan for PHP files, ignoring unnecessary directories.
+    """
     files: List[str] = []
-    for dirpath, _, filenames in os.walk(root):
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        # Filter out ignored directories in-place
+        dirnames[:] = [
+            d for d in dirnames
+            if not _should_ignore_directory(d, os.path.join(dirpath, d))
+        ]
+
         for name in filenames:
+            if name.endswith((".swp", ".swo", ".cache")):
+                continue
+            if name in (".DS_Store", "Thumbs.db", ".env", ".env.local"):
+                continue
+
             if name.endswith((".php", ".phtml", ".inc", ".php4", ".php5")):
                 files.append(os.path.join(dirpath, name))
+
     return sorted(files)
 
 
@@ -1131,20 +1214,65 @@ async def build_call_graph(
     repo: str,
     build_system: str,
     verbose: bool,
+    incremental: bool = False,
+    changed_files: Optional[Iterable[str]] = None,
+    deleted_files: Optional[Iterable[str]] = None,
+    commit_sha: str = "",
+    commit_sha_before: str = "",
 ) -> None:
     start_time = time.time()
-    cache_root = safe_cache_root(cache_dir, "php_analyzer")
+    cache_root = safe_cache_root(cache_dir, "php_analyzer", project_root=root)
     parse_cache_root = os.path.join(cache_root, "parse")
     qdrant_cache_root = os.path.join(cache_root, "qdrant")
     os.makedirs(parse_cache_root, exist_ok=True)
     os.makedirs(qdrant_cache_root, exist_ok=True)
-    all_files = _scan_php_files(root)
+    all_scanned_files = _scan_php_files(root)
+    changed_set = {item.replace("\\", "/") for item in (changed_files or []) if item}
+    deleted_set = {item.replace("\\", "/") for item in (deleted_files or []) if item}
+    if incremental:
+        selected_files = [
+            file_path
+            for file_path in all_scanned_files
+            if os.path.relpath(file_path, root).replace("\\", "/") in changed_set
+        ]
+    else:
+        selected_files = all_scanned_files
     if verbose:
-        print(f"[scan] Found {len(all_files)} PHP files under {root}")
-    total_files = len(all_files)
+        if incremental:
+            print(
+                "[scan] incremental before=%s after=%s changed=%d deleted=%d selected=%d/%d"
+                % (
+                    commit_sha_before or "unknown",
+                    commit_sha or "unknown",
+                    len(changed_set),
+                    len(deleted_set),
+                    len(selected_files),
+                    len(all_scanned_files),
+                )
+            )
+        print(f"[scan] Found {len(selected_files)} PHP files under {root}")
+    total_files = len(selected_files)
+
+    cleanup_targets = sorted(changed_set | deleted_set)
+    if incremental and cleanup_targets:
+        if code_writer:
+            await cleanup_neo4j_for_files(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+        if qdrant_writer:
+            cleanup_qdrant_with_writer(
+                writer=qdrant_writer,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
 
     def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
-        for index, file_path in enumerate(all_files, start=1):
+        for index, file_path in enumerate(selected_files, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
             yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache)
@@ -1477,6 +1605,9 @@ async def build_call_graph(
                 os.remove(state_path)
             except OSError:
                 pass
+    _sr_fn = len(all_functions) if 'all_functions' in vars() else 0  # noqa: F821
+    _sr_cls = len(all_types) if 'all_types' in vars() else 0  # noqa: F821
+    print(f"[SCAN_RESULT] parser={language} files={total_files} functions={_sr_fn} classes={_sr_cls}", flush=True)
     if verbose:
         elapsed = time.time() - start_time
         print(f"[done] Total time: {elapsed:.2f}s")
@@ -1487,12 +1618,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--root", required=True, help="Root folder containing PHP sources")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=os.environ.get("NEO4J_PASS"))
+    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument(
         "--qdrant-collection",
-        default=os.environ.get("QDRANT_COLLECTION_CODE", "php_functions"),
+        default=os.environ.get("QDRANT_COLLECTION", "php_functions"),
     )
     parser.add_argument(
         "--embed-model",
@@ -1502,7 +1633,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--max-embed-chars", type=int, default=4000)
     parser.add_argument("--chunk-embed", action="store_true")
-    parser.add_argument("--device", default=os.environ.get("EMBEDDING_DEVICE", "auto"))
+    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "auto"))
     parser.add_argument("--batch-size", type=int, default=4)  # for embedding - 4 function 1 turn embedding
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
@@ -1511,9 +1642,19 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
     parser.add_argument("--qdrant-retries", type=int, default=3)
     parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
+    parser.set_defaults(enable_message_scan=True)
+    parser.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true", help="Enable message scan and sync (default)")
+    parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false", help="Disable message scan and sync")
+    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"))
+    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION"))
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
     parser.add_argument("--keep-cache", action="store_true")
     parser.add_argument("--disable-parse-cache", action="store_true")
+    parser.add_argument(
+        "--ignore-cache",
+        action="store_true",
+        help="Ignore local caches for this run (parse cache, Neo4j/Qdrant resume state).",
+    )
     parser.add_argument("--project-id", dest="project_id", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--project_id", dest="project_id")
     parser.add_argument("--project-name", dest="project_name", default=os.environ.get("PROJECT_NAME"))
@@ -1522,6 +1663,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--repo", default=os.environ.get("PROJECT_REPO"))
     parser.add_argument("--build-system", dest="build_system", default=os.environ.get("PROJECT_BUILD_SYSTEM", ""))
     parser.add_argument("--build_system", dest="build_system")
+    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""))
+    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""))
+    parser.add_argument("--incremental", action="store_true", help="Enable incremental ingestion mode")
+    parser.add_argument(
+        "--changed-files-manifest",
+        help="JSON/TXT manifest of changed+impacted file paths (relative to --root)",
+    )
+    parser.add_argument(
+        "--deleted-files-manifest",
+        help="JSON/TXT manifest of deleted file paths (relative to --root)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
@@ -1546,12 +1698,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.NEO4J_PASS:
+    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
         driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=args.neo4j_uri,
             user=args.neo4j_user,
-            password=args.NEO4J_PASS,
+            password=args.neo4j_password,
         )
         code_writer = LanguageCodeWriter(
             driver=driver,
@@ -1577,27 +1729,87 @@ async def main(argv: Optional[List[str]] = None) -> int:
         )
 
     parse_cache = not args.disable_parse_cache
+    effective_cache_dir = args.cache_dir
+    if args.ignore_cache:
+        run_cache_root = safe_cache_root(effective_cache_dir, "php_analyzer", project_root=args.root)
+        effective_cache_dir = os.path.join(
+            run_cache_root,
+            "ignore_runs",
+            f"run_{int(time.time() * 1000)}",
+        )
+        os.makedirs(effective_cache_dir, exist_ok=True)
+        parse_cache = False
+        args.disable_neo4j_resume = True
+        args.keep_cache = False
+        if args.verbose:
+            print(
+                "[cache] ignore-cache enabled; using isolated cache dir: %s"
+                % effective_cache_dir
+            )
+    changed_manifest_files: List[str] = []
+    deleted_manifest_files: List[str] = []
+    if args.incremental:
+        if args.changed_files_manifest:
+            changed_manifest_files = sorted(load_manifest_paths(args.changed_files_manifest, args.root))
+        if args.deleted_files_manifest:
+            deleted_manifest_files = sorted(load_manifest_paths(args.deleted_files_manifest, args.root))
+        if args.verbose:
+            print(
+                "[diff] incremental manifests changed=%d deleted=%d"
+                % (len(changed_manifest_files), len(deleted_manifest_files))
+            )
     neo4j_state_path = None
-    if not args.disable_neo4j_resume:
-        cache_root = safe_cache_root(args.cache_dir, "php_analyzer")
+    if not args.disable_neo4j_resume and not args.incremental:
+        cache_root = safe_cache_root(effective_cache_dir, "php_analyzer", project_root=args.root)
         neo4j_state_path = args.neo4j_state or os.path.join(cache_root, "neo4j_state.json")
+    elif args.incremental and args.verbose:
+        print("[state] incremental mode disables neo4j resume state")
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
     language = args.language or "php"
     repo = args.repo or os.path.abspath(args.root)
     build_system = args.build_system or ""
+    commit_sha = args.commit_sha_after or ""
+    commit_sha_before = args.commit_sha_before or ""
+    message_qdrant_collection = (
+        args.message_qdrant_collection
+        or default_message_collection_name(args.qdrant_collection)
+    )
     if code_writer:
         cloc_raw = collect_cloc_stats(args.root)
         if cloc_raw:
             cloc_stats = normalize_cloc_payload(cloc_raw)
-            pass  # CLOC stats now handled directly in build_call_graph
+            await write_cloc_stats_to_neo4j(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                project_name=project_name,
+                root=args.root,
+                repo=repo,
+                language=language,
+                stats=cloc_stats,
+            )
+            if args.verbose:
+                print("[cloc] Stats stored in Neo4j")
         elif args.verbose:
             print("[cloc] Skipped (cloc not available or failed)")
 
     try:
         if args.dry_run:
             files = _scan_php_files(args.root)
-            print(f"Dry run: {len(files)} PHP files found")
+            if args.incremental and changed_manifest_files:
+                manifest_set = set(changed_manifest_files)
+                files = [
+                    file_path
+                    for file_path in files
+                    if os.path.relpath(file_path, args.root).replace("\\", "/") in manifest_set
+                ]
+                print(
+                    "Dry run (incremental): %d PHP files selected (manifest=%d)"
+                    % (len(files), len(changed_manifest_files))
+                )
+            else:
+                print(f"Dry run: {len(files)} PHP files found")
             return 0
         await build_call_graph(
             args.root,
@@ -1606,7 +1818,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             embedder=embedder,
             batch_size=args.batch_size,
             qdrant_batch_size=args.qdrant_batch_size,
-            cache_dir=args.cache_dir,
+            cache_dir=effective_cache_dir,
             keep_cache=args.keep_cache,
             parse_cache=parse_cache,
             neo4j_batch_size=args.neo4j_batch_size,
@@ -1617,10 +1829,56 @@ async def main(argv: Optional[List[str]] = None) -> int:
             repo=repo,
             build_system=build_system,
             verbose=args.verbose,
+            incremental=args.incremental,
+            changed_files=changed_manifest_files,
+            deleted_files=deleted_manifest_files,
+            commit_sha=commit_sha,
+            commit_sha_before=commit_sha_before,
         )
+        if args.enable_message_scan:
+            message_summary = await run_message_scan_pipeline(
+                root=args.root,
+                parser="php",
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+                incremental=args.incremental,
+                changed_files=changed_manifest_files,
+                deleted_files=deleted_manifest_files,
+                driver=driver,
+                neo4j_database=args.neo4j_db,
+                qdrant_url=args.qdrant_url,
+                qdrant_collection=message_qdrant_collection if args.qdrant_url else None,
+                qdrant_vector_size=embedder.vector_size if embedder else 1024,
+                embed_texts=embedder.embed if embedder else None,
+                output_dir=args.message_output_dir,
+                cache_dir=effective_cache_dir,
+                commit_sha_before=commit_sha_before,
+                commit_sha_after=commit_sha,
+                qdrant_batch_size=args.qdrant_batch_size,
+                qdrant_timeout=args.qdrant_timeout,
+                qdrant_retries=args.qdrant_retries,
+                qdrant_retry_sleep=args.qdrant_retry_sleep,
+                verbose=args.verbose,
+            )
+            print(
+                "[message] parser=%s count=%s neo4j=%s qdrant=%s collection=%s artifact=%s"
+                % (
+                    message_summary.get("parser"),
+                    message_summary.get("message_count"),
+                    message_summary.get("neo4j_upserted"),
+                    message_summary.get("qdrant_upserted"),
+                    message_summary.get("qdrant_collection"),
+                    message_summary.get("artifact_path"),
+                )
+            )
     finally:
         if driver:
-            await driver.close()
+            close_result = driver.close()
+            if hasattr(close_result, "__await__"):
+                await close_result
     return 0
 
 
