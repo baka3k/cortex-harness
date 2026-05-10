@@ -70,6 +70,8 @@ DOC_EXT_FLAGS = {
     ".xlsx": "--xlsx",
 }
 
+DOC_EXTENSIONS = set(DOC_EXT_FLAGS.keys())
+
 _SCAFFOLD_DIRS = [
     "docs/design-docs",
     "docs/exec-plans/active",
@@ -356,6 +358,222 @@ def _write_manifest(files: list, suffix: str) -> Path:
     with open(fd, "w", encoding="utf-8") as f:
         json.dump(files, f)
     return Path(path)
+
+
+# ---------------------------------------------------------------------------
+# Doc change detection helpers
+# ---------------------------------------------------------------------------
+
+def _doc_file_hash(path: Path) -> str:
+    """SHA-256 hash of a file (for hash-based incremental detection)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _find_doc_files(folder_path: Path) -> list:
+    """Return all supported document files under folder_path (sorted)."""
+    return sorted(
+        f for f in folder_path.rglob("*")
+        if f.is_file() and f.suffix.lower() in DOC_EXTENSIONS and not _is_sensitive(f)
+    )
+
+
+def _detect_changed_docs(folder_path: Path, state: dict) -> tuple:
+    """Return (changed_files, deleted_rel_paths) for incremental doc sync.
+
+    Priority: git diff > file-hash comparison > mtime.
+    changed_files  : list of absolute Path objects to ingest.
+    deleted_rel_paths: list of relative str paths no longer on disk.
+    """
+    since_commit = state.get("git_commit", "")
+    since_ts     = state.get("last_sync_ts", 0.0)
+    stored_hashes: dict = state.get("file_hashes", {})
+
+    # ── git diff ──────────────────────────────────────────────────────────
+    if since_commit:
+        current = _git_head(folder_path)
+        if current and current == since_commit:
+            return [], []                        # nothing changed
+        changed_rel, deleted_rel = _git_status_since(folder_path, since_commit)
+        changed = [folder_path / r for r in changed_rel
+                   if (folder_path / r).suffix.lower() in DOC_EXTENSIONS
+                   and not _is_sensitive(folder_path / r)]
+        deleted = [r for r in deleted_rel if Path(r).suffix.lower() in DOC_EXTENSIONS]
+        return changed, deleted
+
+    # ── hash comparison ───────────────────────────────────────────────────
+    if stored_hashes:
+        current_files = {
+            str(f.relative_to(folder_path)): f
+            for f in _find_doc_files(folder_path)
+        }
+        changed = [
+            abs_path for rel, abs_path in current_files.items()
+            if _doc_file_hash(abs_path) != stored_hashes.get(rel, "")
+        ]
+        deleted = [rel for rel in stored_hashes if rel not in current_files]
+        return changed, deleted
+
+    # ── mtime fallback ────────────────────────────────────────────────────
+    if since_ts:
+        changed = [
+            f for f in _find_doc_files(folder_path)
+            if f.stat().st_mtime > since_ts
+        ]
+        return changed, []
+
+    return [], []
+
+
+def _build_file_hashes(folder_path: Path) -> dict:
+    """Build {relative_path: sha256} mapping for all doc files in folder."""
+    return {
+        str(f.relative_to(folder_path)): _doc_file_hash(f)
+        for f in _find_doc_files(folder_path)
+    }
+
+
+def _sync_doc_folder(
+    *,
+    project_path: Path,
+    folder: str,
+    env: dict,
+    python: str,
+    force_mode: str,   # "full" | "incremental" | "auto"
+    entity_provider: str,
+    dry_run: bool,
+    preview: bool,
+) -> dict:
+    """Sync one doc folder. Returns result summary dict."""
+    folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
+
+    if not folder_path.exists():
+        click.echo(f"\n[warn] Folder not found: {folder_path} — skipping")
+        return {"folder": folder, "status": "skipped", "reason": "not found"}
+
+    state = _load_state(project_path, f"doc:{folder}")
+    mode  = force_mode if force_mode != "auto" else ("incremental" if state else "full")
+
+    qdrant_url = _env_to_qdrant_url(env)
+
+    base_cmd = [
+        python, str(DOC_INGESTOR),
+        "--neo4j-uri",       env.get("NEO4J_URI", "bolt://localhost:7687"),
+        "--neo4j-user",      env.get("NEO4J_USER", "neo4j"),
+        "--neo4j-pass",      env.get("NEO4J_PASS", ""),
+        "--qdrant-url",      qdrant_url,
+        "--collection",      "graphrag_entities",
+        "--entity-provider", entity_provider,
+        "--embedding-model", env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
+        "--no-batch",
+    ]
+    if env.get("NEO4J_DB"):
+        base_cmd += ["--neo4j-uri"]   # neo4j-db not a standard flag; skip
+
+    click.echo(f"\n{'─' * 52}")
+    click.echo(f" folder : {folder}")
+    click.echo(f" mode   : {mode}")
+    click.echo(f" provider: {entity_provider}")
+
+    start_ts = time.time()
+
+    # ── Full sync ─────────────────────────────────────────────────────────
+    if mode == "full":
+        all_files = _find_doc_files(folder_path)
+        click.echo(f" files  : {len(all_files)} document(s)")
+        if not all_files:
+            click.echo("  [warn] No supported document files found — skipping")
+            return {"folder": folder, "status": "skipped", "reason": "no doc files"}
+
+        rc = _run_with_retry(base_cmd + ["--folder", str(folder_path)], dry_run=dry_run)
+        elapsed = time.time() - start_ts
+
+        if rc == 0 and not dry_run:
+            _save_state(project_path, f"doc:{folder}", {
+                "folder":       folder,
+                "last_sync":    datetime.now(timezone.utc).isoformat(),
+                "last_sync_ts": time.time(),
+                "mode":         "full",
+                "git_commit":   _git_head(folder_path),
+                "file_hashes":  _build_file_hashes(folder_path),
+                "file_count":   len(all_files),
+            })
+
+        return {"folder": folder, "status": "ok" if rc == 0 else "error",
+                "mode": mode, "elapsed": elapsed}
+
+    # ── Incremental sync ──────────────────────────────────────────────────
+    changed_files, deleted_rel = _detect_changed_docs(folder_path, state)
+
+    if not changed_files and not deleted_rel:
+        click.echo("  [ok] No changes detected — skipping")
+        return {"folder": folder, "status": "skipped", "reason": "no changes"}
+
+    click.echo(f"  changed: {len(changed_files)}  deleted: {len(deleted_rel)}")
+
+    if preview and changed_files:
+        click.echo(f"\n  Preview — {len(changed_files)} file(s) queued:")
+        for f in sorted(changed_files)[:20]:
+            try:
+                rel = f.relative_to(folder_path)
+            except ValueError:
+                rel = f
+            click.echo(f"    + {rel}")
+        if len(changed_files) > 20:
+            click.echo(f"    … and {len(changed_files) - 20} more")
+        if deleted_rel:
+            click.echo(f"  Deleted ({len(deleted_rel)}):")
+            for r in deleted_rel[:10]:
+                click.echo(f"    - {r}")
+        if not click.confirm("\n  Proceed?", default=True):
+            return {"folder": folder, "status": "cancelled"}
+
+    errors = 0
+    for file_path in changed_files:
+        ext  = file_path.suffix.lower()
+        flag = DOC_EXT_FLAGS.get(ext)
+        if not flag:
+            continue
+        click.echo(f"  [+] {file_path.name}")
+        rc = _run_with_retry(base_cmd + [flag, str(file_path)], dry_run=dry_run)
+        if rc != 0:
+            click.echo(f"    [error] exited {rc}")
+            errors += 1
+
+    elapsed = time.time() - start_ts
+    success = errors == 0
+
+    if success and not dry_run:
+        # Update stored hashes for changed files only
+        new_hashes = dict(state.get("file_hashes", {}))
+        for f in changed_files:
+            try:
+                rel = str(f.relative_to(folder_path))
+                new_hashes[rel] = _doc_file_hash(f)
+            except (ValueError, OSError):
+                pass
+        for rel in deleted_rel:
+            new_hashes.pop(rel, None)
+
+        _save_state(project_path, f"doc:{folder}", {
+            "folder":       folder,
+            "last_sync":    datetime.now(timezone.utc).isoformat(),
+            "last_sync_ts": time.time(),
+            "mode":         "incremental",
+            "git_commit":   _git_head(folder_path),
+            "file_hashes":  new_hashes,
+            "file_count":   len(changed_files),
+        })
+
+    return {
+        "folder":  folder,
+        "status":  "ok" if success else "error",
+        "mode":    mode,
+        "elapsed": elapsed,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -897,69 +1115,110 @@ def sync_code_all(ctx):
 
 # ── sync doc ─────────────────────────────────────────────────────────────────
 
-@sync.command("doc")
+@sync.group("doc", invoke_without_command=True)
 @click.option("--project-dir", default=".", show_default=True)
-@click.option("--file", "single_file", default=None, help="Ingest a single file.")
-@click.option("--folder", default=None, help="Override doc folder from config.")
-@click.option("--source-id", default=None)
-@click.option("--entity-provider", default=None, help="gliner / langextract / spacy")
-@click.option("--batch/--no-batch", default=False, show_default=True)
+@click.option("--preview", is_flag=True, help="Preview changed files before syncing.")
+@click.option("--entity-provider", default="gliner", show_default=True,
+              help="Entity extraction provider: gliner / langextract / spacy")
 @click.option("--dry-run", is_flag=True)
-def sync_doc(project_dir, single_file, folder, source_id, entity_provider, batch, dry_run):
-    """Ingest documents (PDF, DOCX, MD, XLSX, …) into Neo4j + Qdrant."""
+@click.pass_context
+def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
+    """Interactive: pick doc folders, incremental if baseline exists.
+
+    \b
+    First run   -> full sync (no baseline)
+    Next runs   -> incremental (git diff > hash comparison > mtime)
+    Sub-command:
+      all       Full sync for all configured doc folders.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj.update(project_dir=project_dir, preview=preview,
+                   entity_provider=entity_provider, dry_run=dry_run)
+
+    if ctx.invoked_subcommand is not None:
+        return
+
     project_path = Path(project_dir).resolve()
     cfg, _  = _load_active_config(project_path)
     doc_cfg = cfg.get("doc", {})
     env     = doc_cfg.get("env", {})
-    src     = doc_cfg.get("source", {})
+    folders = [f for f in doc_cfg.get("source", {}).get("folder", []) if f]
+
+    if not folders:
+        click.echo("[warn] No folders in doc.source.folder. Run 'dev init' first.")
+        return
 
     if not DOC_INGESTOR.exists():
         click.echo(f"[error] Ingestor not found: {DOC_INGESTOR}", err=True)
         sys.exit(1)
 
-    provider   = entity_provider or "gliner"
-    collection = "graphrag_entities"
-    python     = _venv_python(DOC_TINY)
-    qdrant_url = _env_to_qdrant_url(env)
-
-    base_cmd = [
-        python, str(DOC_INGESTOR),
-        *_env_to_neo4j_args(env),
-        "--qdrant-url",      qdrant_url,
-        "--collection",      collection,
-        "--entity-provider", provider,
-        "--embedding-model", env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
-    ]
-    base_cmd.append("--batch" if batch else "--no-batch")
-    if source_id:
-        base_cmd += ["--source-id", source_id]
-
-    if single_file:
-        ext  = Path(single_file).suffix.lower()
-        flag = DOC_EXT_FLAGS.get(ext)
-        if not flag:
-            click.echo(f"[error] Unsupported extension '{ext}'. Supported: {', '.join(DOC_EXT_FLAGS)}")
-            sys.exit(1)
-        click.echo(f"\n[sync-doc] file={single_file}  provider={provider}")
-        rc = _run_with_retry(base_cmd + [flag, single_file], dry_run=dry_run)
-        if rc != 0:
-            click.echo(f"[error] Ingestor exited {rc}")
+    selected = _select_folders_interactive(folders)
+    if not selected:
+        click.echo("[info] No folders selected.")
         return
 
-    targets = [folder] if folder else [f for f in src.get("folder", []) if f]
-    if not targets:
-        click.echo("[error] No doc folders. Use --folder or run 'dev init' first.")
+    python      = _venv_python(DOC_TINY)
+    summaries   = []
+    total_start = time.time()
+
+    for folder in selected:
+        result = _sync_doc_folder(
+            project_path=project_path,
+            folder=folder,
+            env=env,
+            python=python,
+            force_mode="auto",
+            entity_provider=entity_provider,
+            dry_run=dry_run,
+            preview=preview,
+        )
+        summaries.append(result)
+
+    _print_summary(summaries, time.time() - total_start)
+
+
+@sync_doc.command("all")
+@click.pass_context
+def sync_doc_all(ctx):
+    """Full sync for all configured doc folders.
+
+    \b
+    Pushes every doc file through the doc-tiny pipeline.
+    Uses incremental if a sync baseline exists, full sync on first run.
+    """
+    o            = ctx.obj
+    project_path = Path(o["project_dir"]).resolve()
+    cfg, _       = _load_active_config(project_path)
+    doc_cfg      = cfg.get("doc", {})
+    env          = doc_cfg.get("env", {})
+    folders      = [f for f in doc_cfg.get("source", {}).get("folder", []) if f]
+
+    if not folders:
+        click.echo("[warn] No folders in doc.source.folder. Run 'dev init' first.")
+        return
+
+    if not DOC_INGESTOR.exists():
+        click.echo(f"[error] Ingestor not found: {DOC_INGESTOR}", err=True)
         sys.exit(1)
 
-    total_start = time.time()
+    click.echo(f"\n[sync-doc all]  folders={len(folders)}")
+
+    python      = _venv_python(DOC_TINY)
     summaries   = []
-    for target in targets:
-        full = str(project_path / target) if not Path(target).is_absolute() else target
-        click.echo(f"\n[sync-doc] folder={target}  provider={provider}")
-        rc = _run_with_retry(base_cmd + ["--folder", full], dry_run=dry_run)
-        summaries.append({"folder": target, "status": "ok" if rc == 0 else "error"})
-        if rc != 0:
-            click.echo(f"[error] Ingestor exited {rc}")
+    total_start = time.time()
+
+    for folder in folders:
+        result = _sync_doc_folder(
+            project_path=project_path,
+            folder=folder,
+            env=env,
+            python=python,
+            force_mode="full",
+            entity_provider=o["entity_provider"],
+            dry_run=o["dry_run"],
+            preview=False,
+        )
+        summaries.append(result)
 
     _print_summary(summaries, time.time() - total_start)
 
