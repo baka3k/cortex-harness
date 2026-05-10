@@ -6,6 +6,7 @@ import json
 import fnmatch
 import hashlib
 import subprocess
+import tempfile
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -22,16 +23,16 @@ HARNESS_CONFIG_DIR = ".cortext-harness/config"
 SYNC_STATE_DIR = ".cortext-harness/sync-state"
 
 LANG_ANALYZERS = {
-    "kotlin":  CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
-    "java":    CODE_TINY / "tools/java/java_analyzer.py",
-    "ts":      CODE_TINY / "tools/ts/ts_analyzer.py",
-    "js":      CODE_TINY / "tools/js/js_analyzer.py",
-    "php":     CODE_TINY / "tools/php/php_analyzer.py",
-    "sql":     CODE_TINY / "tools/sql/sql_analyzer.py",
-    "plsql":   CODE_TINY / "tools/plsql/plsql_analyzer.py",
-    "cplus":   CODE_TINY / "tools/cplus/cplus_analyzer.py",
-    "csharp":  CODE_TINY / "tools/csharp/csharp_analyzer.py",
-    "python":  CODE_TINY / "tools/python/python_analyzer.py",
+    "kotlin":         CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
+    "java":           CODE_TINY / "tools/java/java_analyzer.py",
+    "ts":             CODE_TINY / "tools/ts/ts_analyzer.py",
+    "js":             CODE_TINY / "tools/js/js_analyzer.py",
+    "php":            CODE_TINY / "tools/php/php_analyzer.py",
+    "sql":            CODE_TINY / "tools/sql/sql_analyzer.py",
+    "plsql":          CODE_TINY / "tools/plsql/plsql_analyzer.py",
+    "cplus":          CODE_TINY / "tools/cplus/cplus_analyzer.py",
+    "csharp":         CODE_TINY / "tools/csharp/csharp_analyzer.py",
+    "python":         CODE_TINY / "tools/python/python_analyzer.py",
     "android_java":   CODE_TINY / "tools/android/android_java_analyzer.py",
     "android_kotlin": CODE_TINY / "tools/android/android_kotlin_analyzer.py",
     "android_mixed":  CODE_TINY / "tools/android/android_mixed_analyzer.py",
@@ -266,9 +267,8 @@ def _is_sensitive(path: Path) -> bool:
 
 
 def _detect_langs(folder_path: Path) -> list:
-    """Detect languages by scanning file extensions. Android takes priority over java/kotlin."""
+    """Detect languages from extensions. Android takes priority when AndroidManifest exists."""
     counts: Counter = Counter()
-
     is_android = any(folder_path.rglob("AndroidManifest.xml"))
 
     for f in folder_path.rglob("*"):
@@ -289,12 +289,11 @@ def _detect_langs(folder_path: Path) -> list:
         else:
             return ["android_java"]
 
-    detected = [lang for lang, _ in counts.most_common() if counts[lang] > 0 and lang in LANG_ANALYZERS]
-    return detected
+    return [lang for lang, _ in counts.most_common() if counts[lang] > 0 and lang in LANG_ANALYZERS]
 
 
 # ---------------------------------------------------------------------------
-# Git helpers
+# Git / mtime change detection
 # ---------------------------------------------------------------------------
 
 def _git_head(folder_path: Path) -> str:
@@ -308,28 +307,55 @@ def _git_head(folder_path: Path) -> str:
         return ""
 
 
-def _git_changed_files(folder_path: Path, since_commit: str) -> list:
+def _git_status_since(folder_path: Path, since_commit: str) -> tuple:
+    """Return (changed_files, deleted_files) as paths relative to folder_path.
+
+    Uses --relative so paths align with --root passed to analyzers.
+    """
     try:
         r = subprocess.run(
-            ["git", "-C", str(folder_path), "diff", "--name-only", since_commit, "HEAD"],
+            ["git", "-C", str(folder_path), "diff",
+             "--name-status", "--relative", since_commit, "HEAD"],
             capture_output=True, text=True, timeout=30,
         )
         if r.returncode != 0:
-            return []
-        return [
-            folder_path / f.strip()
-            for f in r.stdout.splitlines()
-            if f.strip() and not _is_sensitive(folder_path / f.strip())
-        ]
+            return [], []
+        changed, deleted = [], []
+        for line in r.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            status = parts[0].strip()
+            fname  = parts[-1].strip()
+            if not fname or _is_sensitive(Path(fname)):
+                continue
+            if status.startswith("D"):
+                deleted.append(fname)
+            else:
+                changed.append(fname)
+        return changed, deleted
     except Exception:
-        return []
+        return [], []
 
 
-def _timestamp_changed_files(folder_path: Path, since_ts: float) -> list:
-    return [
-        f for f in folder_path.rglob("*")
-        if f.is_file() and not _is_sensitive(f) and f.stat().st_mtime > since_ts
-    ]
+def _mtime_changed_files(folder_path: Path, since_ts: float) -> tuple:
+    """Return (changed_files, []) using mtime comparison. Paths relative to folder_path."""
+    changed = []
+    for f in folder_path.rglob("*"):
+        if f.is_file() and not _is_sensitive(f) and f.stat().st_mtime > since_ts:
+            try:
+                changed.append(str(f.relative_to(folder_path)))
+            except ValueError:
+                pass
+    return changed, []
+
+
+def _write_manifest(files: list, suffix: str) -> Path:
+    """Write file list to a temp JSON manifest. Returns temp file path."""
+    fd, path = tempfile.mkstemp(suffix=f"_{suffix}.json")
+    with open(fd, "w", encoding="utf-8") as f:
+        json.dump(files, f)
+    return Path(path)
 
 
 # ---------------------------------------------------------------------------
@@ -368,14 +394,12 @@ def _run_with_retry(cmd: list, max_retries: int = 3, dry_run: bool = False) -> i
 # ---------------------------------------------------------------------------
 
 def _select_folders_interactive(folders: list) -> list:
-    """Prompt user to pick folders from a numbered list."""
     click.echo("\nConfigured source folders:")
     for i, f in enumerate(folders, 1):
         click.echo(f"  [{i:2d}] {f}")
     click.echo("  [ 0] All folders")
 
     raw = click.prompt("\nSelect (comma-separated numbers, 0 = all)", default="0").strip()
-
     if raw == "0":
         return list(folders)
 
@@ -393,40 +417,99 @@ def _select_folders_interactive(folders: list) -> list:
     return selected
 
 
-def _sync_one_folder(
+def _run_analyzer(
+    *,
+    lang: str,
+    analyzer: Path,
+    folder_path: Path,
+    env: dict,
+    python: str,
+    mode: str,
+    changed_files: list,
+    deleted_files: list,
+    dry_run: bool,
+    verbose: bool,
+) -> int:
+    """Build and invoke one analyzer subprocess. Returns exit code."""
+    qdrant_url = _env_to_qdrant_url(env)
+
+    cmd = [
+        python, str(analyzer),
+        "--root",             str(folder_path),
+        *_env_to_neo4j_args(env),
+        "--qdrant-url",        qdrant_url,
+        "--qdrant-collection", f"{lang}_functions",
+        "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
+        "--device",            env.get("device", "cpu"),
+        "--batch-size",        env.get("BATCH_SIZE", "1"),
+        "--qdrant-timeout",    "300",
+        "--qdrant-retries",    "3",
+        "--qdrant-retry-sleep","2",
+    ]
+
+    changed_manifest = None
+    deleted_manifest = None
+
+    if mode == "incremental" and changed_files:
+        # Delegate incremental to the analyzer's built-in mechanism
+        changed_manifest = _write_manifest(changed_files, "changed")
+        cmd += ["--incremental", "--changed-files-manifest", str(changed_manifest)]
+
+        if deleted_files:
+            deleted_manifest = _write_manifest(deleted_files, "deleted")
+            cmd += ["--deleted-files-manifest", str(deleted_manifest)]
+
+    if verbose:
+        cmd.append("--verbose")
+
+    rc = _run_with_retry(cmd, dry_run=dry_run)
+
+    # Clean up temp manifest files
+    for m in (changed_manifest, deleted_manifest):
+        if m and m.exists():
+            try:
+                m.unlink()
+            except Exception:
+                pass
+
+    return rc
+
+
+def _sync_folder(
     *,
     project_path: Path,
     folder: str,
     env: dict,
     python: str,
-    force_mode: str,   # "full" | "incremental" | "auto"
+    langs: list,      # [] = run ALL available analyzers
+    force_mode: str,  # "full" | "incremental" | "auto"
     dry_run: bool,
     verbose: bool,
     preview: bool,
 ) -> dict:
-    """Sync a single folder. Returns a result summary dict."""
+    """Sync one folder. langs=[] means run every analyzer that exists on disk."""
     folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
 
     if not folder_path.exists():
         click.echo(f"\n[warn] Folder not found: {folder_path} — skipping")
         return {"folder": folder, "status": "skipped", "reason": "not found"}
 
-    state   = _load_state(project_path, folder)
-    mode    = force_mode if force_mode != "auto" else ("incremental" if state else "full")
+    state = _load_state(project_path, folder)
+    mode  = force_mode if force_mode != "auto" else ("incremental" if state else "full")
+
+    # Resolve which analyzers to run
+    if langs:
+        targets = {l: LANG_ANALYZERS[l] for l in langs if l in LANG_ANALYZERS}
+    else:
+        targets = {l: p for l, p in LANG_ANALYZERS.items() if p.exists()}
 
     click.echo(f"\n{'─' * 52}")
     click.echo(f" folder : {folder}")
     click.echo(f" mode   : {mode}")
+    click.echo(f" tools  : {', '.join(targets)}")
 
-    # Language detection
-    langs = _detect_langs(folder_path)
-    if not langs:
-        click.echo("  [warn] No supported source files — skipping")
-        return {"folder": folder, "status": "skipped", "reason": "no supported files"}
-    click.echo(f" langs  : {', '.join(langs)}")
-
-    # Incremental: detect changes
-    changed_files = []
+    # Incremental: detect changed / deleted files
+    changed_files, deleted_files = [], []
     if mode == "incremental":
         since_commit = state.get("git_commit", "")
         since_ts     = state.get("last_sync_ts", 0.0)
@@ -436,67 +519,60 @@ def _sync_one_folder(
             if current and current == since_commit:
                 click.echo("  [ok] No new commits since last sync — skipping")
                 return {"folder": folder, "status": "skipped", "reason": "no changes"}
-            changed_files = _git_changed_files(folder_path, since_commit)
-            click.echo(f"  Changed files (git diff): {len(changed_files)}")
+            changed_files, deleted_files = _git_status_since(folder_path, since_commit)
+            click.echo(f"  git diff: {len(changed_files)} changed, {len(deleted_files)} deleted")
         elif since_ts:
-            changed_files = _timestamp_changed_files(folder_path, since_ts)
-            click.echo(f"  Changed files (mtime): {len(changed_files)}")
+            changed_files, _ = _mtime_changed_files(folder_path, since_ts)
+            click.echo(f"  mtime:    {len(changed_files)} changed")
         else:
-            click.echo("  [info] No baseline found — switching to full")
+            click.echo("  [info] No baseline — switching to full")
             mode = "full"
 
-        if mode == "incremental" and not changed_files:
+        if mode == "incremental" and not changed_files and not deleted_files:
             click.echo("  [ok] No changes detected — skipping")
             return {"folder": folder, "status": "skipped", "reason": "no changes"}
 
-        if preview and changed_files:
-            click.echo(f"\n  Preview — {len(changed_files)} file(s) queued:")
-            for f in sorted(changed_files)[:20]:
-                try:
-                    rel = f.relative_to(folder_path)
-                except ValueError:
-                    rel = f
-                click.echo(f"    {rel}")
-            if len(changed_files) > 20:
-                click.echo(f"    … and {len(changed_files) - 20} more")
+        if preview and (changed_files or deleted_files):
+            if changed_files:
+                click.echo(f"\n  Changed ({len(changed_files)}):")
+                for f in sorted(changed_files)[:20]:
+                    click.echo(f"    + {f}")
+                if len(changed_files) > 20:
+                    click.echo(f"    … and {len(changed_files) - 20} more")
+            if deleted_files:
+                click.echo(f"\n  Deleted ({len(deleted_files)}):")
+                for f in sorted(deleted_files)[:10]:
+                    click.echo(f"    - {f}")
             if not click.confirm("\n  Proceed?", default=True):
                 return {"folder": folder, "status": "cancelled"}
 
-    qdrant_url = _env_to_qdrant_url(env)
-    start_ts   = time.time()
+    start_ts     = time.time()
     lang_results = []
 
-    for lang in langs:
-        analyzer = LANG_ANALYZERS.get(lang)
-        if analyzer is None or not analyzer.exists():
-            click.echo(f"\n  [warn] Analyzer not found for '{lang}' — skipping")
+    for lang, analyzer in targets.items():
+        if not analyzer.exists():
+            click.echo(f"\n  [warn] Analyzer not found: {analyzer.name} — skipping {lang}")
             continue
 
-        cmd = [
-            python, str(analyzer),
-            "--root",             str(folder_path),
-            *_env_to_neo4j_args(env),
-            "--qdrant-url",        qdrant_url,
-            "--qdrant-collection", f"{lang}_functions",
-            "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
-            "--device",            env.get("device", "cpu"),
-            "--batch-size",        env.get("BATCH_SIZE", "1"),
-            "--qdrant-timeout",    "300",
-            "--qdrant-retries",    "3",
-            "--qdrant-retry-sleep","2",
-        ]
-        if verbose:
-            cmd.append("--verbose")
-
-        click.echo(f"\n  [{lang}] running analyzer…")
-        rc = _run_with_retry(cmd, dry_run=dry_run)
+        click.echo(f"\n  [{lang}] running…")
+        rc = _run_analyzer(
+            lang=lang,
+            analyzer=analyzer,
+            folder_path=folder_path,
+            env=env,
+            python=python,
+            mode=mode,
+            changed_files=changed_files,
+            deleted_files=deleted_files,
+            dry_run=dry_run,
+            verbose=verbose,
+        )
         lang_results.append({"lang": lang, "exit_code": rc})
-
         if rc != 0:
-            click.echo(f"  [error] {lang} analyzer exited {rc}")
+            click.echo(f"  [error] {lang} exited {rc}")
 
     elapsed = time.time() - start_ts
-    success = lang_results and all(r["exit_code"] == 0 for r in lang_results)
+    success = bool(lang_results) and all(r["exit_code"] == 0 for r in lang_results)
 
     if success and not dry_run:
         _save_state(project_path, folder, {
@@ -505,15 +581,13 @@ def _sync_one_folder(
             "last_sync_ts": time.time(),
             "mode":         mode,
             "git_commit":   _git_head(folder_path),
-            "langs":        langs,
-            "file_count":   len(changed_files) if mode == "incremental" else -1,
+            "langs":        list(targets.keys()),
         })
 
     return {
         "folder":  folder,
         "status":  "ok" if success else "error",
         "mode":    mode,
-        "langs":   langs,
         "elapsed": elapsed,
         "results": lang_results,
     }
@@ -529,8 +603,8 @@ def _print_summary(summaries: list, total_elapsed: float) -> None:
         mode    = s.get("mode", "")
         elapsed = s.get("elapsed", 0)
         reason  = s.get("reason", "")
-        icon = {"ok": "✓", "skipped": "↷", "cancelled": "–", "error": "✗"}.get(status, "?")
-        parts = [f"  {icon} {folder}"]
+        icon    = {"ok": "✓", "skipped": "↷", "cancelled": "–", "error": "✗"}.get(status, "?")
+        parts   = [f"  {icon} {folder}"]
         if mode:
             parts.append(f"[{mode}]")
         if elapsed:
@@ -558,8 +632,8 @@ def cli():
     Quick start:
       dev init              # configure project + scaffold folder structure
       dev status            # show active config
-      dev sync code         # interactive sync (incremental if baseline exists)
-      dev sync code all     # full sync all configured folders
+      dev sync code         # interactive: pick folders, auto incremental/full
+      dev sync code all     # ALL analyzers on all folders (incremental if baseline)
       dev sync doc          # ingest documents -> Neo4j + Qdrant
     """
 
@@ -575,12 +649,7 @@ def cli():
 @click.option("--project-dir", default=".", show_default=True,
               help="Target project root directory.")
 def init(env, project_dir):
-    """Create/update config and scaffold project folder structure.
-
-    \b
-    Config: <project-dir>/.cortext-harness/config/<env>.json
-    Structure: code.env + code.source / doc.env + doc.source
-    """
+    """Create/update config and scaffold project folder structure."""
     project_path = Path(project_dir).resolve()
     config_path  = _config_path(project_path, env)
 
@@ -640,31 +709,21 @@ def init(env, project_dir):
         "project": {"code": project_code, "name": project_name},
         "code": {
             "env": {
-                "NEO4J_URI":       code_neo4j_uri,
-                "NEO4J_DB":        code_neo4j_db,
-                "NEO4J_USER":      code_neo4j_user,
-                "NEO4J_PASS":      code_neo4j_pass,
-                "QDRANT_HOST":     code_qdrant_host,
-                "QDRANT_PORT":     code_qdrant_port,
-                "EMBEDDING_MODEL": code_embed_model,
-                "BATCH_SIZE":      code_batch_size,
-                "MAX_EMBED_CHARS": code_max_chars,
-                "device":          code_device,
+                "NEO4J_URI":       code_neo4j_uri,   "NEO4J_DB":  code_neo4j_db,
+                "NEO4J_USER":      code_neo4j_user,  "NEO4J_PASS": code_neo4j_pass,
+                "QDRANT_HOST":     code_qdrant_host, "QDRANT_PORT": code_qdrant_port,
+                "EMBEDDING_MODEL": code_embed_model, "BATCH_SIZE": code_batch_size,
+                "MAX_EMBED_CHARS": code_max_chars,   "device": code_device,
             },
             "source": {"git": code_git, "folder": code_folders},
         },
         "doc": {
             "env": {
-                "NEO4J_URI":       doc_neo4j_uri,
-                "NEO4J_DB":        doc_neo4j_db,
-                "NEO4J_USER":      doc_neo4j_user,
-                "NEO4J_PASS":      doc_neo4j_pass,
-                "QDRANT_HOST":     doc_qdrant_host,
-                "QDRANT_PORT":     doc_qdrant_port,
-                "EMBEDDING_MODEL": doc_embed_model,
-                "BATCH_SIZE":      doc_batch_size,
-                "MAX_EMBED_CHARS": doc_max_chars,
-                "device":          doc_device,
+                "NEO4J_URI":       doc_neo4j_uri,   "NEO4J_DB":  doc_neo4j_db,
+                "NEO4J_USER":      doc_neo4j_user,  "NEO4J_PASS": doc_neo4j_pass,
+                "QDRANT_HOST":     doc_qdrant_host, "QDRANT_PORT": doc_qdrant_port,
+                "EMBEDDING_MODEL": doc_embed_model, "BATCH_SIZE": doc_batch_size,
+                "MAX_EMBED_CHARS": doc_max_chars,   "device": doc_device,
             },
             "source": {"git": doc_git, "folder": doc_folders},
         },
@@ -730,36 +789,27 @@ def sync():
 
 @sync.group("code", invoke_without_command=True)
 @click.option("--project-dir", default=".", show_default=True)
-@click.option("--lang",    default=None, help="Override language detection (e.g. kotlin).")
-@click.option("--preview", is_flag=True, help="Show files queued before syncing (incremental).")
+@click.option("--preview", is_flag=True, help="Preview changed files before syncing.")
 @click.option("--verbose/--no-verbose", default=True, show_default=True)
 @click.option("--dry-run", is_flag=True)
 @click.pass_context
-def sync_code(ctx, project_dir, lang, preview, verbose, dry_run):
-    """Interactive sync: select folders, auto full/incremental.
+def sync_code(ctx, project_dir, preview, verbose, dry_run):
+    """Interactive: pick folders, auto-detect language, incremental if baseline exists.
 
     \b
-    First run on a folder  -> full sync
-    Subsequent runs        -> incremental (git diff or mtime)
-
-    Sub-commands:
-      all   Full sync every configured folder without prompts.
+    First run   -> full sync (no baseline)
+    Next runs   -> incremental via analyzer --changed-files-manifest (built-in)
+    Sub-command:
+      all       Run ALL analyzers on all folders (incremental if baseline exists).
     """
     ctx.ensure_object(dict)
-    ctx.obj.update(
-        project_dir=project_dir,
-        lang=lang,
-        preview=preview,
-        verbose=verbose,
-        dry_run=dry_run,
-    )
+    ctx.obj.update(project_dir=project_dir, preview=preview, verbose=verbose, dry_run=dry_run)
 
     if ctx.invoked_subcommand is not None:
-        return  # delegate to subcommand
+        return
 
-    # Interactive mode
     project_path = Path(project_dir).resolve()
-    cfg, _ = _load_active_config(project_path)
+    cfg, _   = _load_active_config(project_path)
     code_cfg = cfg.get("code", {})
     env      = code_cfg.get("env", {})
     folders  = [f for f in code_cfg.get("source", {}).get("folder", []) if f]
@@ -773,16 +823,20 @@ def sync_code(ctx, project_dir, lang, preview, verbose, dry_run):
         click.echo("[info] No folders selected.")
         return
 
-    python     = _venv_python(CODE_TINY)
-    summaries  = []
+    python      = _venv_python(CODE_TINY)
+    summaries   = []
     total_start = time.time()
 
     for folder in selected:
-        result = _sync_one_folder(
+        folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
+        langs = _detect_langs(folder_path) if folder_path.exists() else []
+
+        result = _sync_folder(
             project_path=project_path,
             folder=folder,
             env=env,
             python=python,
+            langs=langs,       # auto-detected
             force_mode="auto",
             dry_run=dry_run,
             verbose=verbose,
@@ -796,7 +850,15 @@ def sync_code(ctx, project_dir, lang, preview, verbose, dry_run):
 @sync_code.command("all")
 @click.pass_context
 def sync_code_all(ctx):
-    """Full sync every folder in code.source.folder (no prompts)."""
+    """Run ALL available analyzers on every configured folder.
+
+    \b
+    - Every tool in LANG_ANALYZERS that exists on disk is invoked.
+    - Each analyzer filters its own file types internally.
+    - Incremental if a sync baseline exists, full sync on first run.
+    - Changed/deleted files are passed via --changed-files-manifest
+      to the analyzer's built-in incremental engine.
+    """
     o            = ctx.obj
     project_path = Path(o["project_dir"]).resolve()
     cfg, _       = _load_active_config(project_path)
@@ -808,19 +870,22 @@ def sync_code_all(ctx):
         click.echo("[warn] No folders in code.source.folder. Run 'dev init' first.")
         return
 
-    click.echo(f"\n[sync-code all] {len(folders)} folder(s), full mode")
+    available = [l for l, p in LANG_ANALYZERS.items() if p.exists()]
+    click.echo(f"\n[sync-code all]  folders={len(folders)}  analyzers={len(available)}")
+    click.echo(f"  tools: {', '.join(available)}")
 
     python      = _venv_python(CODE_TINY)
     summaries   = []
     total_start = time.time()
 
     for folder in folders:
-        result = _sync_one_folder(
+        result = _sync_folder(
             project_path=project_path,
             folder=folder,
             env=env,
             python=python,
-            force_mode="full",
+            langs=[],           # [] = run every available analyzer
+            force_mode="auto",  # incremental if baseline exists, full otherwise
             dry_run=o["dry_run"],
             verbose=o["verbose"],
             preview=False,
