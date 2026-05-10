@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """dev - unified CLI for CortexHarness ingestion (code + documents)."""
 
+import os
 import sys
 import json
 import fnmatch
 import hashlib
+import shutil
 import subprocess
 import tempfile
 import time
@@ -71,6 +73,54 @@ DOC_EXT_FLAGS = {
 }
 
 DOC_EXTENSIONS = set(DOC_EXT_FLAGS.keys())
+
+MCP_LOG_DIR = REPO_ROOT / ".cache"
+
+MCP_SERVICES = {
+    "code-tiny": {
+        "script":  CODE_TINY / "mcp.sh",
+        "port":    8788,
+        "pattern": "unified_mcp.py",
+        "url":     "http://127.0.0.1:8788/mcp",
+    },
+    "doc-tiny": {
+        "script":  DOC_TINY / "mcp.sh",
+        "port":    8789,
+        "pattern": "mcp_graph_rag.py",
+        "url":     "http://127.0.0.1:8789/mcp",
+    },
+}
+
+
+def _agent_configs() -> dict:
+    """Return {agent_name: {path, key}} for the current platform."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        app_support = home / "Library" / "Application Support"
+    elif sys.platform == "win32":
+        app_support = Path(os.environ.get("APPDATA", str(home)))
+    else:
+        app_support = home / ".config"
+
+    return {
+        "claude": {
+            "path": app_support / "Claude" / "claude_desktop_config.json",
+            "key":  "mcpServers",
+        },
+        "claude-code": {
+            "path": home / ".claude" / "settings.json",
+            "key":  "mcpServers",
+        },
+        "vscode": {
+            "path": app_support / "Code" / "User" / "mcp.json",
+            "key":  "servers",
+        },
+        "cursor": {
+            "path": home / ".cursor" / "mcp.json",
+            "key":  "mcpServers",
+        },
+    }
+
 
 _SCAFFOLD_DIRS = [
     "docs/design-docs",
@@ -836,6 +886,110 @@ def _print_summary(summaries: list, total_elapsed: float) -> None:
 
 
 # ---------------------------------------------------------------------------
+# MCP process helpers
+# ---------------------------------------------------------------------------
+
+def _mcp_pids(pattern: str) -> list:
+    try:
+        r = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
+        return [int(p) for p in r.stdout.split() if p.strip().isdigit()]
+    except Exception:
+        return []
+
+
+def _mcp_uptime(pid: int) -> str:
+    try:
+        r = subprocess.run(["ps", "-p", str(pid), "-o", "etime="],
+                           capture_output=True, text=True)
+        return r.stdout.strip() or "?"
+    except Exception:
+        return "?"
+
+
+def _mcp_stop_pattern(pattern: str) -> int:
+    pids = _mcp_pids(pattern)
+    for pid in pids:
+        try:
+            subprocess.run(["kill", "-TERM", str(pid)], check=False)
+        except Exception:
+            pass
+    if pids:
+        time.sleep(1)
+    return len(pids)
+
+
+def _mcp_start_one(name: str, svc: dict, detached: bool) -> dict:
+    script: Path = svc["script"]
+    if not script.exists():
+        return {"name": name, "status": "error",
+                "reason": f"script not found: {script}"}
+    if not os.access(str(script), os.X_OK):
+        return {"name": name, "status": "error",
+                "reason": f"not executable — run: chmod +x {script}"}
+
+    MCP_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_file = MCP_LOG_DIR / f"dev-mcp-{name}.log"
+    pid_file = MCP_LOG_DIR / f"dev-mcp-{name}.pid"
+
+    if detached:
+        with open(log_file, "a") as lf:
+            proc = subprocess.Popen(
+                ["bash", str(script)],
+                cwd=str(script.parent),
+                stdout=lf, stderr=lf,
+                start_new_session=True,
+            )
+        pid_file.write_text(str(proc.pid))
+        return {
+            "name": name, "status": "started", "pid": proc.pid,
+            "url": svc["url"], "log": str(log_file),
+        }
+    else:
+        rc = subprocess.run(["bash", str(script)], cwd=str(script.parent)).returncode
+        return {"name": name, "status": "ok" if rc == 0 else "error",
+                "exit_code": rc, "url": svc["url"]}
+
+
+def _integrate_workspace(project_path: Path, entries: dict) -> None:
+    mcp_file = project_path / ".mcp.json"
+    existing: dict = {}
+
+    if mcp_file.exists():
+        try:
+            with open(mcp_file, encoding="utf-8") as f:
+                existing = json.load(f)
+        except json.JSONDecodeError:
+            pass
+        ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+        bak = mcp_file.with_suffix(f".bak.{ts}.json")
+        shutil.copy2(str(mcp_file), str(bak))
+        click.echo(f"  [backup] {bak.name}")
+
+    section = existing.setdefault("mcpServers", {})
+    added, updated = [], []
+    for svc_name, entry in entries.items():
+        if svc_name in section:
+            if section[svc_name] != entry:
+                section[svc_name] = entry
+                updated.append(svc_name)
+        else:
+            section[svc_name] = entry
+            added.append(svc_name)
+
+    with open(mcp_file, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=2, ensure_ascii=False)
+
+    click.echo(f"\n[workspace] {mcp_file}")
+    if added:
+        click.echo(f"  [added]   {', '.join(added)}")
+    if updated:
+        click.echo(f"  [updated] {', '.join(updated)}")
+    if not added and not updated:
+        click.echo("  [ok] already up to date")
+    click.echo("  [note] Restart Claude Code / your editor to apply changes.")
+
+
+# ---------------------------------------------------------------------------
 # CLI root
 # ---------------------------------------------------------------------------
 
@@ -1218,6 +1372,148 @@ def sync_doc_all(ctx):
         summaries.append(result)
 
     _print_summary(summaries, time.time() - total_start)
+
+
+# ---------------------------------------------------------------------------
+# dev mcp
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def mcp():
+    """Start and integrate MCP servers (code-tiny + doc-tiny)."""
+
+
+@mcp.command("start")
+@click.option("--detached", is_flag=True,
+              help="Run in the background (non-blocking).")
+@click.option("--force-restart", is_flag=True,
+              help="Kill existing instances before starting.")
+def mcp_start(detached, force_restart):
+    """Start MCP servers for code-tiny (port 8788) and doc-tiny (port 8789).
+
+    \b
+    If already running, displays PID and uptime.
+    Use --force-restart to kill and restart existing processes.
+    Logs written to .cache/dev-mcp-<name>.log when --detached.
+    """
+    for name, svc in MCP_SERVICES.items():
+        pattern = svc["pattern"]
+        pids    = _mcp_pids(pattern)
+
+        click.echo(f"\n── {name} (port {svc['port']}) {'─' * 30}")
+
+        if pids and not force_restart:
+            uptime = _mcp_uptime(pids[0])
+            click.echo(f"  [running]  pid={pids[0]}  uptime={uptime}")
+            click.echo(f"  [url]      {svc['url']}")
+            continue
+
+        if pids and force_restart:
+            stopped = _mcp_stop_pattern(pattern)
+            click.echo(f"  [stopped]  killed {stopped} process(es)")
+
+        mode = "detached" if detached else "foreground"
+        click.echo(f"  [starting] {mode}  script={svc['script'].name}")
+        result = _mcp_start_one(name, svc, detached)
+
+        if result["status"] in ("started", "ok"):
+            click.echo(f"  [ok]  url={svc['url']}")
+            if detached:
+                click.echo(f"  [pid] {result.get('pid', '?')}")
+                click.echo(f"  [log] {result.get('log', '?')}")
+        else:
+            click.echo(f"  [error] {result.get('reason', result.get('exit_code', '?'))}", err=True)
+
+
+@mcp.command("add")
+@click.option("--scope", default="workspace",
+              type=click.Choice(["global", "workspace"]), show_default=True,
+              help="'workspace' writes .mcp.json; 'global' updates agent config files.")
+@click.option("--agent", default="all", show_default=True,
+              help="Target: claude / claude-code / vscode / cursor / all")
+@click.option("--project-dir", default=".", show_default=True)
+def mcp_add(scope, agent, project_dir):
+    """Register MCP endpoints into agent configurations.
+
+    \b
+    Scope workspace  → writes .mcp.json in the project root (Claude Code picks this up).
+    Scope global     → patches system-wide agent config files (Claude Desktop, VS Code, Cursor…).
+    Config files are backed up before modification.
+    """
+    project_path = Path(project_dir).resolve()
+    configs      = _agent_configs()
+
+    entries = {
+        name: {"type": "http", "url": svc["url"]}
+        for name, svc in MCP_SERVICES.items()
+    }
+
+    # ── workspace scope ───────────────────────────────────────────────────
+    if scope == "workspace":
+        _integrate_workspace(project_path, entries)
+        return
+
+    # ── global scope ──────────────────────────────────────────────────────
+    click.echo("\n[warn] Modifying system-wide agent configuration files.\n")
+
+    if agent == "all":
+        targets = list(configs.keys())
+    elif agent in configs:
+        targets = [agent]
+    else:
+        click.echo(
+            f"[error] Unknown agent '{agent}'. "
+            f"Choose from: {', '.join(configs)} or 'all'", err=True
+        )
+        sys.exit(1)
+
+    for agent_name in targets:
+        cfg_info = configs[agent_name]
+        cfg_path = cfg_info["path"]
+        key      = cfg_info["key"]
+
+        click.echo(f"── {agent_name} {'─' * 40}")
+
+        if not cfg_path.parent.exists():
+            click.echo(f"  [skip] directory not found: {cfg_path.parent}")
+            continue
+
+        existing: dict = {}
+        if cfg_path.exists():
+            try:
+                with open(cfg_path, encoding="utf-8") as f:
+                    existing = json.load(f)
+            except json.JSONDecodeError:
+                click.echo(f"  [warn] could not parse {cfg_path.name} — patching section only")
+            ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+            bak = cfg_path.with_suffix(f".bak.{ts}.json")
+            shutil.copy2(str(cfg_path), str(bak))
+            click.echo(f"  [backup]  {bak.name}")
+        else:
+            click.echo(f"  [create]  {cfg_path}")
+
+        section = existing.setdefault(key, {})
+        added, updated = [], []
+        for svc_name, entry in entries.items():
+            if svc_name in section:
+                if section[svc_name] != entry:
+                    section[svc_name] = entry
+                    updated.append(svc_name)
+            else:
+                section[svc_name] = entry
+                added.append(svc_name)
+
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+
+        if added:
+            click.echo(f"  [added]   {', '.join(added)}")
+        if updated:
+            click.echo(f"  [updated] {', '.join(updated)}")
+        if not added and not updated:
+            click.echo("  [ok] already up to date")
+        click.echo(f"  [saved]   {cfg_path}\n")
 
 
 if __name__ == "__main__":
