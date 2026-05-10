@@ -470,9 +470,6 @@ def _sync_doc_folder(
         "--embedding-model", env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
         "--no-batch",
     ]
-    if env.get("NEO4J_DB"):
-        base_cmd += ["--neo4j-uri"]   # neo4j-db not a standard flag; skip
-
     click.echo(f"\n{'─' * 52}")
     click.echo(f" folder : {folder}")
     click.echo(f" mode   : {mode}")
