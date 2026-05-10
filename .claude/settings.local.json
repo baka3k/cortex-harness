@@ -11,7 +11,9 @@
       "Bash(rm -rf test-cortex2)",
       "Bash(mkdir test-cortex2 *)",
       "Bash(rm -rf test-cortex3)",
-      "Bash(mkdir test-cortex3 *)"
+      "Bash(mkdir test-cortex3 *)",
+      "Bash(rm -rf test-sync)",
+      "Bash(mkdir test-sync *)"
     ]
   }
 }

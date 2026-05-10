@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""dev - unified CLI for graph-rag-tiny ingestion (code + documents)."""
+"""dev - unified CLI for CortexHarness ingestion (code + documents)."""
 
 import sys
 import json
+import fnmatch
+import hashlib
 import subprocess
+import time
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -14,6 +19,7 @@ CODE_TINY = REPO_ROOT / "code-tiny"
 DOC_TINY = REPO_ROOT / "doc-tiny"
 
 HARNESS_CONFIG_DIR = ".cortext-harness/config"
+SYNC_STATE_DIR = ".cortext-harness/sync-state"
 
 LANG_ANALYZERS = {
     "kotlin":  CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
@@ -26,8 +32,31 @@ LANG_ANALYZERS = {
     "cplus":   CODE_TINY / "tools/cplus/cplus_analyzer.py",
     "csharp":  CODE_TINY / "tools/csharp/csharp_analyzer.py",
     "python":  CODE_TINY / "tools/python/python_analyzer.py",
-    "android": CODE_TINY / "tools/android/android_analyzer.py",
+    "android_java":   CODE_TINY / "tools/android/android_java_analyzer.py",
+    "android_kotlin": CODE_TINY / "tools/android/android_kotlin_analyzer.py",
+    "android_mixed":  CODE_TINY / "tools/android/android_mixed_analyzer.py",
 }
+
+LANG_EXTENSIONS = {
+    "kotlin":  {".kt", ".kts"},
+    "java":    {".java"},
+    "ts":      {".ts", ".tsx"},
+    "js":      {".js", ".jsx"},
+    "php":     {".php"},
+    "sql":     {".sql"},
+    "plsql":   {".pls", ".pkb", ".pks"},
+    "cplus":   {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"},
+    "csharp":  {".cs"},
+    "python":  {".py"},
+}
+
+SENSITIVE_PATTERNS = [
+    ".env", "*.env", ".env.*",
+    "*.key", "*.pem", "*.p12", "*.pfx", "*.crt", "*.cer",
+    "id_rsa", "id_ed25519", "id_dsa", "id_ecdsa",
+    "*secret*", "*password*", "*credential*", "*token*",
+    "*.keystore", "*.jks",
+]
 
 DOC_INGESTOR = DOC_TINY / "graphrag_ingest_langextract.py"
 
@@ -90,7 +119,6 @@ def _config_path(project_dir: Path, env: str) -> Path:
 
 
 def _load_active_config(project_dir: Path) -> tuple:
-    """Return (config_dict, config_path) for the active environment."""
     cfg_dir = _config_dir(project_dir)
     if not cfg_dir.exists():
         click.echo(f"[error] No config found at '{cfg_dir}'. Run 'dev init' first.", err=True)
@@ -140,12 +168,28 @@ def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
             pass
 
 
+def _env_to_neo4j_args(env: dict) -> list:
+    args = [
+        "--neo4j-uri",  env.get("NEO4J_URI",  "bolt://localhost:7687"),
+        "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
+        "--neo4j-pass", env.get("NEO4J_PASS", ""),
+    ]
+    if env.get("NEO4J_DB"):
+        args += ["--neo4j-db", env["NEO4J_DB"]]
+    return args
+
+
+def _env_to_qdrant_url(env: dict) -> str:
+    host = env.get("QDRANT_HOST", "localhost")
+    port = env.get("QDRANT_PORT", "6333")
+    return f"http://{host}:{port}"
+
+
 # ---------------------------------------------------------------------------
 # Scaffold helpers
 # ---------------------------------------------------------------------------
 
 def _discover_folders(project_dir: Path, root_prefix: str) -> list:
-    """Scan project_dir and return relative paths of all subdirs under root_prefix."""
     result = []
     base = project_dir / root_prefix
     if not base.exists():
@@ -156,15 +200,10 @@ def _discover_folders(project_dir: Path, root_prefix: str) -> list:
         rel = item.relative_to(project_dir)
         if not set(rel.parts).intersection(_SCAN_EXCLUDE):
             result.append(str(rel))
-    # Prepend the root itself
     return [root_prefix] + result
 
 
 def _scaffold_project(project_dir: Path) -> tuple:
-    """Scaffold standard project structure.
-
-    Returns (doc_folders, code_folders) discovered after scaffold.
-    """
     click.echo("\n─── Scaffolding project structure ─────────")
     created = []
 
@@ -194,6 +233,106 @@ def _scaffold_project(project_dir: Path) -> tuple:
 
 
 # ---------------------------------------------------------------------------
+# Sync state helpers
+# ---------------------------------------------------------------------------
+
+def _state_path(project_dir: Path, folder: str) -> Path:
+    key = hashlib.md5(folder.encode()).hexdigest()[:12]
+    return project_dir / SYNC_STATE_DIR / f"{key}.json"
+
+
+def _load_state(project_dir: Path, folder: str) -> dict:
+    p = _state_path(project_dir, folder)
+    if p.exists():
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def _save_state(project_dir: Path, folder: str, state: dict) -> None:
+    p = _state_path(project_dir, folder)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# Language detection & sensitive file filtering
+# ---------------------------------------------------------------------------
+
+def _is_sensitive(path: Path) -> bool:
+    name = path.name.lower()
+    return any(fnmatch.fnmatch(name, pat) for pat in SENSITIVE_PATTERNS)
+
+
+def _detect_langs(folder_path: Path) -> list:
+    """Detect languages by scanning file extensions. Android takes priority over java/kotlin."""
+    counts: Counter = Counter()
+
+    is_android = any(folder_path.rglob("AndroidManifest.xml"))
+
+    for f in folder_path.rglob("*"):
+        if not f.is_file() or _is_sensitive(f):
+            continue
+        ext = f.suffix.lower()
+        for lang, exts in LANG_EXTENSIONS.items():
+            if ext in exts:
+                counts[lang] += 1
+
+    if is_android and (counts.get("java", 0) > 0 or counts.get("kotlin", 0) > 0):
+        has_java   = counts.get("java", 0) > 0
+        has_kotlin = counts.get("kotlin", 0) > 0
+        if has_java and has_kotlin:
+            return ["android_mixed"]
+        elif has_kotlin:
+            return ["android_kotlin"]
+        else:
+            return ["android_java"]
+
+    detected = [lang for lang, _ in counts.most_common() if counts[lang] > 0 and lang in LANG_ANALYZERS]
+    return detected
+
+
+# ---------------------------------------------------------------------------
+# Git helpers
+# ---------------------------------------------------------------------------
+
+def _git_head(folder_path: Path) -> str:
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(folder_path), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _git_changed_files(folder_path: Path, since_commit: str) -> list:
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(folder_path), "diff", "--name-only", since_commit, "HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return []
+        return [
+            folder_path / f.strip()
+            for f in r.stdout.splitlines()
+            if f.strip() and not _is_sensitive(folder_path / f.strip())
+        ]
+    except Exception:
+        return []
+
+
+def _timestamp_changed_files(folder_path: Path, since_ts: float) -> list:
+    return [
+        f for f in folder_path.rglob("*")
+        if f.is_file() and not _is_sensitive(f) and f.stat().st_mtime > since_ts
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Process helpers
 # ---------------------------------------------------------------------------
 
@@ -207,14 +346,204 @@ def _venv_python(base_dir: Path) -> str:
     return sys.executable
 
 
-def _run(cmd: list, dry_run: bool = False) -> int:
+def _run_with_retry(cmd: list, max_retries: int = 3, dry_run: bool = False) -> int:
     display = " ".join(str(c) for c in cmd)
     click.echo(f"  $ {display}")
     if dry_run:
-        click.echo("  [dry-run] skipped\n")
+        click.echo("  [dry-run] skipped")
         return 0
-    result = subprocess.run([str(c) for c in cmd])
-    return result.returncode
+    for attempt in range(1, max_retries + 1):
+        rc = subprocess.run([str(c) for c in cmd]).returncode
+        if rc == 0:
+            return 0
+        if attempt < max_retries:
+            wait = 2 ** attempt
+            click.echo(f"  [retry {attempt}/{max_retries - 1}] exit={rc}, retrying in {wait}s…")
+            time.sleep(wait)
+    return rc
+
+
+# ---------------------------------------------------------------------------
+# Core sync logic
+# ---------------------------------------------------------------------------
+
+def _select_folders_interactive(folders: list) -> list:
+    """Prompt user to pick folders from a numbered list."""
+    click.echo("\nConfigured source folders:")
+    for i, f in enumerate(folders, 1):
+        click.echo(f"  [{i:2d}] {f}")
+    click.echo("  [ 0] All folders")
+
+    raw = click.prompt("\nSelect (comma-separated numbers, 0 = all)", default="0").strip()
+
+    if raw == "0":
+        return list(folders)
+
+    selected = []
+    for part in raw.split(","):
+        part = part.strip()
+        try:
+            idx = int(part) - 1
+            if 0 <= idx < len(folders):
+                selected.append(folders[idx])
+            else:
+                click.echo(f"  [warn] Index {part} out of range, skipping")
+        except ValueError:
+            click.echo(f"  [warn] Invalid input '{part}', skipping")
+    return selected
+
+
+def _sync_one_folder(
+    *,
+    project_path: Path,
+    folder: str,
+    env: dict,
+    python: str,
+    force_mode: str,   # "full" | "incremental" | "auto"
+    dry_run: bool,
+    verbose: bool,
+    preview: bool,
+) -> dict:
+    """Sync a single folder. Returns a result summary dict."""
+    folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
+
+    if not folder_path.exists():
+        click.echo(f"\n[warn] Folder not found: {folder_path} — skipping")
+        return {"folder": folder, "status": "skipped", "reason": "not found"}
+
+    state   = _load_state(project_path, folder)
+    mode    = force_mode if force_mode != "auto" else ("incremental" if state else "full")
+
+    click.echo(f"\n{'─' * 52}")
+    click.echo(f" folder : {folder}")
+    click.echo(f" mode   : {mode}")
+
+    # Language detection
+    langs = _detect_langs(folder_path)
+    if not langs:
+        click.echo("  [warn] No supported source files — skipping")
+        return {"folder": folder, "status": "skipped", "reason": "no supported files"}
+    click.echo(f" langs  : {', '.join(langs)}")
+
+    # Incremental: detect changes
+    changed_files = []
+    if mode == "incremental":
+        since_commit = state.get("git_commit", "")
+        since_ts     = state.get("last_sync_ts", 0.0)
+
+        if since_commit:
+            current = _git_head(folder_path)
+            if current and current == since_commit:
+                click.echo("  [ok] No new commits since last sync — skipping")
+                return {"folder": folder, "status": "skipped", "reason": "no changes"}
+            changed_files = _git_changed_files(folder_path, since_commit)
+            click.echo(f"  Changed files (git diff): {len(changed_files)}")
+        elif since_ts:
+            changed_files = _timestamp_changed_files(folder_path, since_ts)
+            click.echo(f"  Changed files (mtime): {len(changed_files)}")
+        else:
+            click.echo("  [info] No baseline found — switching to full")
+            mode = "full"
+
+        if mode == "incremental" and not changed_files:
+            click.echo("  [ok] No changes detected — skipping")
+            return {"folder": folder, "status": "skipped", "reason": "no changes"}
+
+        if preview and changed_files:
+            click.echo(f"\n  Preview — {len(changed_files)} file(s) queued:")
+            for f in sorted(changed_files)[:20]:
+                try:
+                    rel = f.relative_to(folder_path)
+                except ValueError:
+                    rel = f
+                click.echo(f"    {rel}")
+            if len(changed_files) > 20:
+                click.echo(f"    … and {len(changed_files) - 20} more")
+            if not click.confirm("\n  Proceed?", default=True):
+                return {"folder": folder, "status": "cancelled"}
+
+    qdrant_url = _env_to_qdrant_url(env)
+    start_ts   = time.time()
+    lang_results = []
+
+    for lang in langs:
+        analyzer = LANG_ANALYZERS.get(lang)
+        if analyzer is None or not analyzer.exists():
+            click.echo(f"\n  [warn] Analyzer not found for '{lang}' — skipping")
+            continue
+
+        cmd = [
+            python, str(analyzer),
+            "--root",             str(folder_path),
+            *_env_to_neo4j_args(env),
+            "--qdrant-url",        qdrant_url,
+            "--qdrant-collection", f"{lang}_functions",
+            "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
+            "--device",            env.get("device", "cpu"),
+            "--batch-size",        env.get("BATCH_SIZE", "1"),
+            "--qdrant-timeout",    "300",
+            "--qdrant-retries",    "3",
+            "--qdrant-retry-sleep","2",
+        ]
+        if verbose:
+            cmd.append("--verbose")
+
+        click.echo(f"\n  [{lang}] running analyzer…")
+        rc = _run_with_retry(cmd, dry_run=dry_run)
+        lang_results.append({"lang": lang, "exit_code": rc})
+
+        if rc != 0:
+            click.echo(f"  [error] {lang} analyzer exited {rc}")
+
+    elapsed = time.time() - start_ts
+    success = lang_results and all(r["exit_code"] == 0 for r in lang_results)
+
+    if success and not dry_run:
+        _save_state(project_path, folder, {
+            "folder":       folder,
+            "last_sync":    datetime.now(timezone.utc).isoformat(),
+            "last_sync_ts": time.time(),
+            "mode":         mode,
+            "git_commit":   _git_head(folder_path),
+            "langs":        langs,
+            "file_count":   len(changed_files) if mode == "incremental" else -1,
+        })
+
+    return {
+        "folder":  folder,
+        "status":  "ok" if success else "error",
+        "mode":    mode,
+        "langs":   langs,
+        "elapsed": elapsed,
+        "results": lang_results,
+    }
+
+
+def _print_summary(summaries: list, total_elapsed: float) -> None:
+    click.echo(f"\n{'═' * 52}")
+    click.echo(f"  Sync Summary  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    click.echo(f"{'─' * 52}")
+    for s in summaries:
+        status  = s.get("status", "?")
+        folder  = s.get("folder", "?")
+        mode    = s.get("mode", "")
+        elapsed = s.get("elapsed", 0)
+        reason  = s.get("reason", "")
+        icon = {"ok": "✓", "skipped": "↷", "cancelled": "–", "error": "✗"}.get(status, "?")
+        parts = [f"  {icon} {folder}"]
+        if mode:
+            parts.append(f"[{mode}]")
+        if elapsed:
+            parts.append(f"{elapsed:.1f}s")
+        if reason:
+            parts.append(f"({reason})")
+        click.echo("  ".join(parts))
+    ok      = sum(1 for s in summaries if s.get("status") == "ok")
+    skipped = sum(1 for s in summaries if s.get("status") in ("skipped", "cancelled"))
+    errors  = sum(1 for s in summaries if s.get("status") == "error")
+    click.echo(f"{'─' * 52}")
+    click.echo(f"  {ok} ok  {skipped} skipped  {errors} errors  total {total_elapsed:.1f}s")
+    click.echo(f"{'═' * 52}")
 
 
 # ---------------------------------------------------------------------------
@@ -228,10 +557,10 @@ def cli():
     \b
     Quick start:
       dev init              # configure project + scaffold folder structure
-      dev init --env prod   # create prod config
       dev status            # show active config
-      dev sync code         # ingest source code -> Neo4j + Qdrant
-      dev sync doc          # ingest documents  -> Neo4j + Qdrant
+      dev sync code         # interactive sync (incremental if baseline exists)
+      dev sync code all     # full sync all configured folders
+      dev sync doc          # ingest documents -> Neo4j + Qdrant
     """
 
 
@@ -240,30 +569,20 @@ def cli():
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option(
-    "--env",
-    default="dev",
-    show_default=True,
-    type=click.Choice(["dev", "prod"]),
-    help="Environment to configure (dev or prod).",
-)
-@click.option(
-    "--project-dir",
-    default=".",
-    show_default=True,
-    help="Target project root directory.",
-)
+@click.option("--env", default="dev", show_default=True,
+              type=click.Choice(["dev", "prod"]),
+              help="Environment to configure.")
+@click.option("--project-dir", default=".", show_default=True,
+              help="Target project root directory.")
 def init(env, project_dir):
     """Create/update config and scaffold project folder structure.
 
     \b
-    Config saved to: <project-dir>/.cortext-harness/config/<env>.json
-    Format:
-      code.env  + code.source  -> source code settings
-      doc.env   + doc.source   -> document settings
+    Config: <project-dir>/.cortext-harness/config/<env>.json
+    Structure: code.env + code.source / doc.env + doc.source
     """
     project_path = Path(project_dir).resolve()
-    config_path = _config_path(project_path, env)
+    config_path  = _config_path(project_path, env)
 
     existing: dict = {}
     if config_path.exists():
@@ -274,61 +593,51 @@ def init(env, project_dir):
         click.echo(f"[info] Creating new {env} config: {config_path}\n")
 
     def _p(label, keys: list, default=""):
-        """Prompt with existing value as default. keys is a nested key path."""
         cur = existing
         for k in keys:
             cur = cur.get(k, {}) if isinstance(cur, dict) else {}
         cur_val = cur if isinstance(cur, str) else default
         return click.prompt(label, default=cur_val or default)
 
-    # ── Project ──────────────────────────────────────────────────────────
     click.echo("─── Project ────────────────────────────────")
     project_code = _p("Project code (short ID)", ["project", "code"], "my_project")
     project_name = _p("Project name",            ["project", "name"], project_code)
 
-    # ── Code env ─────────────────────────────────────────────────────────
     click.echo("\n─── Code — Neo4j + Qdrant + Embedding ──────")
-    code_neo4j_uri  = _p("NEO4J_URI",       ["code", "env", "NEO4J_URI"],  "bolt://localhost:7687")
-    code_neo4j_db   = _p("NEO4J_DB",        ["code", "env", "NEO4J_DB"],   "neo4j")
-    code_neo4j_user = _p("NEO4J_USER",      ["code", "env", "NEO4J_USER"], "neo4j")
-    code_neo4j_pass = _p("NEO4J_PASS",      ["code", "env", "NEO4J_PASS"], "")
-    code_qdrant_host= _p("QDRANT_HOST",     ["code", "env", "QDRANT_HOST"],"localhost")
-    code_qdrant_port= _p("QDRANT_PORT",     ["code", "env", "QDRANT_PORT"],"6333")
-    code_embed_model= _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], "jinaai/jina-embeddings-v3")
-    code_batch_size = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],  "1")
-    code_max_chars  = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
-    code_device     = _p("device",          ["code", "env", "device"],      "cpu")
+    code_neo4j_uri   = _p("NEO4J_URI",       ["code", "env", "NEO4J_URI"],       "bolt://localhost:7687")
+    code_neo4j_db    = _p("NEO4J_DB",        ["code", "env", "NEO4J_DB"],        "neo4j")
+    code_neo4j_user  = _p("NEO4J_USER",      ["code", "env", "NEO4J_USER"],      "neo4j")
+    code_neo4j_pass  = _p("NEO4J_PASS",      ["code", "env", "NEO4J_PASS"],      "")
+    code_qdrant_host = _p("QDRANT_HOST",     ["code", "env", "QDRANT_HOST"],     "localhost")
+    code_qdrant_port = _p("QDRANT_PORT",     ["code", "env", "QDRANT_PORT"],     "6333")
+    code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], "jinaai/jina-embeddings-v3")
+    code_batch_size  = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],      "1")
+    code_max_chars   = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
+    code_device      = _p("device",          ["code", "env", "device"],          "cpu")
 
-    # ── Code source ───────────────────────────────────────────────────────
     click.echo("\n─── Code — source ──────────────────────────")
     code_git = _p("Git remote URL (blank = none)", ["code", "source", "git"], "")
 
-    # ── Doc env ──────────────────────────────────────────────────────────
     click.echo("\n─── Doc — Neo4j + Qdrant + Embedding ───────")
-    doc_neo4j_uri   = _p("NEO4J_URI",       ["doc", "env", "NEO4J_URI"],  code_neo4j_uri)
-    doc_neo4j_db    = _p("NEO4J_DB",        ["doc", "env", "NEO4J_DB"],   code_neo4j_db)
-    doc_neo4j_user  = _p("NEO4J_USER",      ["doc", "env", "NEO4J_USER"], code_neo4j_user)
-    doc_neo4j_pass  = _p("NEO4J_PASS",      ["doc", "env", "NEO4J_PASS"], code_neo4j_pass)
-    doc_qdrant_host = _p("QDRANT_HOST",     ["doc", "env", "QDRANT_HOST"],code_qdrant_host)
-    doc_qdrant_port = _p("QDRANT_PORT",     ["doc", "env", "QDRANT_PORT"],code_qdrant_port)
+    doc_neo4j_uri   = _p("NEO4J_URI",       ["doc", "env", "NEO4J_URI"],       code_neo4j_uri)
+    doc_neo4j_db    = _p("NEO4J_DB",        ["doc", "env", "NEO4J_DB"],        code_neo4j_db)
+    doc_neo4j_user  = _p("NEO4J_USER",      ["doc", "env", "NEO4J_USER"],      code_neo4j_user)
+    doc_neo4j_pass  = _p("NEO4J_PASS",      ["doc", "env", "NEO4J_PASS"],      code_neo4j_pass)
+    doc_qdrant_host = _p("QDRANT_HOST",     ["doc", "env", "QDRANT_HOST"],     code_qdrant_host)
+    doc_qdrant_port = _p("QDRANT_PORT",     ["doc", "env", "QDRANT_PORT"],     code_qdrant_port)
     doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], "BAAI/bge-m3")
-    doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],  "1")
+    doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],      "1")
     doc_max_chars   = _p("MAX_EMBED_CHARS", ["doc", "env", "MAX_EMBED_CHARS"], "500")
-    doc_device      = _p("device",          ["doc", "env", "device"],      code_device)
+    doc_device      = _p("device",          ["doc", "env", "device"],          code_device)
 
-    # ── Doc source ────────────────────────────────────────────────────────
     click.echo("\n─── Doc — source ───────────────────────────")
     doc_git = _p("Git remote URL (blank = none)", ["doc", "source", "git"], code_git)
 
-    # ── Scaffold then auto-discover folders ───────────────────────────────
     doc_folders, code_folders = _scaffold_project(project_path)
 
     cfg = {
         "active": True,
-        "project": {
-            "code": project_code,
-            "name": project_name,
-        },
+        "project": {"code": project_code, "name": project_name},
         "code": {
             "env": {
                 "NEO4J_URI":       code_neo4j_uri,
@@ -342,10 +651,7 @@ def init(env, project_dir):
                 "MAX_EMBED_CHARS": code_max_chars,
                 "device":          code_device,
             },
-            "source": {
-                "git":    code_git,
-                "folder": code_folders,
-            },
+            "source": {"git": code_git, "folder": code_folders},
         },
         "doc": {
             "env": {
@@ -360,10 +666,7 @@ def init(env, project_dir):
                 "MAX_EMBED_CHARS": doc_max_chars,
                 "device":          doc_device,
             },
-            "source": {
-                "git":    doc_git,
-                "folder": doc_folders,
-            },
+            "source": {"git": doc_git, "folder": doc_folders},
         },
     }
 
@@ -379,7 +682,7 @@ def init(env, project_dir):
 @cli.command()
 @click.option("--project-dir", default=".", show_default=True)
 def status(project_dir):
-    """Show current active config and all available environments."""
+    """Show active config and all available environments."""
     project_path = Path(project_dir).resolve()
     cfg_dir = _config_dir(project_path)
 
@@ -388,10 +691,6 @@ def status(project_dir):
         sys.exit(1)
 
     envs = sorted(cfg_dir.glob("*.json"))
-    if not envs:
-        click.echo("[error] No config files found. Run 'dev init' first.", err=True)
-        sys.exit(1)
-
     click.echo(f"\nProject dir : {project_path}")
     click.echo(f"Config dir  : {cfg_dir}\n")
     click.echo("Environments:")
@@ -406,25 +705,16 @@ def status(project_dir):
     click.echo(f"\n─── Active: {active_path.name} ───────────────────────")
     click.echo(f"Project     : {proj.get('name')} ({proj.get('code')})")
 
-    code = cfg.get("code", {})
-    code_env = code.get("env", {})
-    code_src = code.get("source", {})
-    click.echo(f"\n[code]")
-    click.echo(f"  Neo4j     : {code_env.get('NEO4J_URI')}  db={code_env.get('NEO4J_DB')}")
-    click.echo(f"  Qdrant    : {code_env.get('QDRANT_HOST')}:{code_env.get('QDRANT_PORT')}")
-    click.echo(f"  Embedding : {code_env.get('EMBEDDING_MODEL')}  device={code_env.get('device')}")
-    click.echo(f"  Git       : {code_src.get('git') or '(none)'}")
-    click.echo(f"  Folders   : {len(code_src.get('folder', []))} paths")
-
-    doc = cfg.get("doc", {})
-    doc_env = doc.get("env", {})
-    doc_src = doc.get("source", {})
-    click.echo(f"\n[doc]")
-    click.echo(f"  Neo4j     : {doc_env.get('NEO4J_URI')}  db={doc_env.get('NEO4J_DB')}")
-    click.echo(f"  Qdrant    : {doc_env.get('QDRANT_HOST')}:{doc_env.get('QDRANT_PORT')}")
-    click.echo(f"  Embedding : {doc_env.get('EMBEDDING_MODEL')}  device={doc_env.get('device')}")
-    click.echo(f"  Git       : {doc_src.get('git') or '(none)'}")
-    click.echo(f"  Folders   : {len(doc_src.get('folder', []))} paths")
+    for section in ("code", "doc"):
+        sec = cfg.get(section, {})
+        env = sec.get("env", {})
+        src = sec.get("source", {})
+        click.echo(f"\n[{section}]")
+        click.echo(f"  Neo4j     : {env.get('NEO4J_URI')}  db={env.get('NEO4J_DB')}")
+        click.echo(f"  Qdrant    : {env.get('QDRANT_HOST')}:{env.get('QDRANT_PORT')}")
+        click.echo(f"  Embedding : {env.get('EMBEDDING_MODEL')}  device={env.get('device')}")
+        click.echo(f"  Git       : {src.get('git') or '(none)'}")
+        click.echo(f"  Folders   : {len(src.get('folder', []))} paths")
 
 
 # ---------------------------------------------------------------------------
@@ -436,95 +726,124 @@ def sync():
     """Sync code or documents into Neo4j + Qdrant."""
 
 
-def _env_to_neo4j_args(env: dict) -> list:
-    args = [
-        "--neo4j-uri",  env.get("NEO4J_URI",  "bolt://localhost:7687"),
-        "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
-        "--neo4j-pass", env.get("NEO4J_PASS", ""),
-    ]
-    if env.get("NEO4J_DB"):
-        args += ["--neo4j-db", env["NEO4J_DB"]]
-    return args
+# ── sync code ────────────────────────────────────────────────────────────────
 
-
-def _env_to_qdrant_url(env: dict) -> str:
-    host = env.get("QDRANT_HOST", "localhost")
-    port = env.get("QDRANT_PORT", "6333")
-    return f"http://{host}:{port}"
-
-
-@sync.command("code")
+@sync.group("code", invoke_without_command=True)
 @click.option("--project-dir", default=".", show_default=True)
-@click.option("--lang", default=None, help="Sync a single language only (e.g. kotlin).")
-@click.option("--collection", default=None, help="Override Qdrant collection name.")
-@click.option("--dry-run", is_flag=True)
+@click.option("--lang",    default=None, help="Override language detection (e.g. kotlin).")
+@click.option("--preview", is_flag=True, help="Show files queued before syncing (incremental).")
 @click.option("--verbose/--no-verbose", default=True, show_default=True)
-def sync_code(project_dir, lang, collection, dry_run, verbose):
-    """Ingest source code into Neo4j + Qdrant via language analyzers."""
+@click.option("--dry-run", is_flag=True)
+@click.pass_context
+def sync_code(ctx, project_dir, lang, preview, verbose, dry_run):
+    """Interactive sync: select folders, auto full/incremental.
+
+    \b
+    First run on a folder  -> full sync
+    Subsequent runs        -> incremental (git diff or mtime)
+
+    Sub-commands:
+      all   Full sync every configured folder without prompts.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj.update(
+        project_dir=project_dir,
+        lang=lang,
+        preview=preview,
+        verbose=verbose,
+        dry_run=dry_run,
+    )
+
+    if ctx.invoked_subcommand is not None:
+        return  # delegate to subcommand
+
+    # Interactive mode
     project_path = Path(project_dir).resolve()
     cfg, _ = _load_active_config(project_path)
-
     code_cfg = cfg.get("code", {})
     env      = code_cfg.get("env", {})
-    src      = code_cfg.get("source", {})
+    folders  = [f for f in code_cfg.get("source", {}).get("folder", []) if f]
 
-    folders = [f for f in src.get("folder", []) if f]
     if not folders:
-        click.echo("[warn] No code source folders in config. Run 'dev init' first.")
+        click.echo("[warn] No folders in code.source.folder. Run 'dev init' first.")
         return
 
-    if lang and lang not in LANG_ANALYZERS:
-        click.echo(f"[error] Unknown language '{lang}'. Supported: {', '.join(LANG_ANALYZERS)}")
-        sys.exit(1)
+    selected = _select_folders_interactive(folders)
+    if not selected:
+        click.echo("[info] No folders selected.")
+        return
 
-    targets = {lang: LANG_ANALYZERS[lang]} if lang else LANG_ANALYZERS
-    python = _venv_python(CODE_TINY)
-    qdrant_url = _env_to_qdrant_url(env)
+    python     = _venv_python(CODE_TINY)
+    summaries  = []
+    total_start = time.time()
 
-    for lname, analyzer in targets.items():
-        if not analyzer.exists():
-            click.echo(f"[warn] Analyzer not found: {analyzer}")
-            continue
+    for folder in selected:
+        result = _sync_one_folder(
+            project_path=project_path,
+            folder=folder,
+            env=env,
+            python=python,
+            force_mode="auto",
+            dry_run=dry_run,
+            verbose=verbose,
+            preview=preview,
+        )
+        summaries.append(result)
 
-        for folder in folders:
-            root = str(project_path / folder)
-            coll = collection or f"{lname}_functions"
-            cmd = [
-                python, str(analyzer),
-                "--root", root,
-                *_env_to_neo4j_args(env),
-                "--qdrant-url",        qdrant_url,
-                "--qdrant-collection", coll,
-                "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
-                "--device",            env.get("device", "cpu"),
-                "--batch-size",        env.get("BATCH_SIZE", "1"),
-                "--max-embed-chars",   env.get("MAX_EMBED_CHARS", "500"),
-                "--qdrant-timeout", "300",
-                "--qdrant-retries", "3",
-                "--qdrant-retry-sleep", "2",
-            ]
-            if verbose:
-                cmd.append("--verbose")
+    _print_summary(summaries, time.time() - total_start)
 
-            click.echo(f"\n[sync-code] lang={lname}  folder={folder}")
-            rc = _run(cmd, dry_run)
-            if rc != 0:
-                click.echo(f"[error] {lname} analyzer exited {rc}")
 
+@sync_code.command("all")
+@click.pass_context
+def sync_code_all(ctx):
+    """Full sync every folder in code.source.folder (no prompts)."""
+    o            = ctx.obj
+    project_path = Path(o["project_dir"]).resolve()
+    cfg, _       = _load_active_config(project_path)
+    code_cfg     = cfg.get("code", {})
+    env          = code_cfg.get("env", {})
+    folders      = [f for f in code_cfg.get("source", {}).get("folder", []) if f]
+
+    if not folders:
+        click.echo("[warn] No folders in code.source.folder. Run 'dev init' first.")
+        return
+
+    click.echo(f"\n[sync-code all] {len(folders)} folder(s), full mode")
+
+    python      = _venv_python(CODE_TINY)
+    summaries   = []
+    total_start = time.time()
+
+    for folder in folders:
+        result = _sync_one_folder(
+            project_path=project_path,
+            folder=folder,
+            env=env,
+            python=python,
+            force_mode="full",
+            dry_run=o["dry_run"],
+            verbose=o["verbose"],
+            preview=False,
+        )
+        summaries.append(result)
+
+    _print_summary(summaries, time.time() - total_start)
+
+
+# ── sync doc ─────────────────────────────────────────────────────────────────
 
 @sync.command("doc")
 @click.option("--project-dir", default=".", show_default=True)
 @click.option("--file", "single_file", default=None, help="Ingest a single file.")
 @click.option("--folder", default=None, help="Override doc folder from config.")
 @click.option("--source-id", default=None)
-@click.option("--entity-provider", default=None, help="Override entity provider (gliner/langextract/spacy).")
+@click.option("--entity-provider", default=None, help="gliner / langextract / spacy")
 @click.option("--batch/--no-batch", default=False, show_default=True)
 @click.option("--dry-run", is_flag=True)
 def sync_doc(project_dir, single_file, folder, source_id, entity_provider, batch, dry_run):
-    """Ingest documents (PDF, DOCX, MD, XLSX, ...) into Neo4j + Qdrant."""
+    """Ingest documents (PDF, DOCX, MD, XLSX, …) into Neo4j + Qdrant."""
     project_path = Path(project_dir).resolve()
-    cfg, _ = _load_active_config(project_path)
-
+    cfg, _  = _load_active_config(project_path)
     doc_cfg = cfg.get("doc", {})
     env     = doc_cfg.get("env", {})
     src     = doc_cfg.get("source", {})
@@ -538,7 +857,7 @@ def sync_doc(project_dir, single_file, folder, source_id, entity_provider, batch
     python     = _venv_python(DOC_TINY)
     qdrant_url = _env_to_qdrant_url(env)
 
-    cmd = [
+    base_cmd = [
         python, str(DOC_INGESTOR),
         *_env_to_neo4j_args(env),
         "--qdrant-url",      qdrant_url,
@@ -546,11 +865,9 @@ def sync_doc(project_dir, single_file, folder, source_id, entity_provider, batch
         "--entity-provider", provider,
         "--embedding-model", env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
     ]
-
-    cmd.append("--batch" if batch else "--no-batch")
-
+    base_cmd.append("--batch" if batch else "--no-batch")
     if source_id:
-        cmd += ["--source-id", source_id]
+        base_cmd += ["--source-id", source_id]
 
     if single_file:
         ext  = Path(single_file).suffix.lower()
@@ -558,24 +875,28 @@ def sync_doc(project_dir, single_file, folder, source_id, entity_provider, batch
         if not flag:
             click.echo(f"[error] Unsupported extension '{ext}'. Supported: {', '.join(DOC_EXT_FLAGS)}")
             sys.exit(1)
-        cmd += [flag, single_file]
         click.echo(f"\n[sync-doc] file={single_file}  provider={provider}")
-        rc = _run(cmd, dry_run)
+        rc = _run_with_retry(base_cmd + [flag, single_file], dry_run=dry_run)
         if rc != 0:
             click.echo(f"[error] Ingestor exited {rc}")
         return
 
     targets = [folder] if folder else [f for f in src.get("folder", []) if f]
     if not targets:
-        click.echo("[error] No doc folders in config. Use --folder or run 'dev init' first.")
+        click.echo("[error] No doc folders. Use --folder or run 'dev init' first.")
         sys.exit(1)
 
+    total_start = time.time()
+    summaries   = []
     for target in targets:
-        full_target = str(project_path / target) if not Path(target).is_absolute() else target
+        full = str(project_path / target) if not Path(target).is_absolute() else target
         click.echo(f"\n[sync-doc] folder={target}  provider={provider}")
-        rc = _run(cmd + ["--folder", full_target], dry_run)
+        rc = _run_with_retry(base_cmd + ["--folder", full], dry_run=dry_run)
+        summaries.append({"folder": target, "status": "ok" if rc == 0 else "error"})
         if rc != 0:
-            click.echo(f"[error] Ingestor exited {rc} for folder '{target}'")
+            click.echo(f"[error] Ingestor exited {rc}")
+
+    _print_summary(summaries, time.time() - total_start)
 
 
 if __name__ == "__main__":
