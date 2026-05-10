@@ -1,3 +1,45 @@
+# CortexHarness
+
+CortexHarness is a cognition-aware context orchestration framework for AI systems.
+
+It combines Graph Database relationships, Vector Database semantic retrieval, and structured harness engineering to build reliable, scalable, and context-consistent AI applications.
+
+Instead of treating prompts as isolated inputs, CortexHarness focuses on constructing a persistent contextual cognition layer for models — enabling better memory synthesis, contextual reasoning, execution stability, and orchestration control.
+
+## Core Capabilities
+
+* Graph + Vector hybrid context retrieval
+* Structured system context generation
+* Harness engineering support for stable execution flows
+* Context contracts and orchestration pipelines
+* Semantic memory layering
+* Multi-source context synthesis
+* AI-agent and Copilot-ready architecture
+* Extensible runtime integration
+
+## Philosophy
+
+Modern AI systems should not rely on prompts alone.
+
+CortexHarness treats context as infrastructure:
+
+* memory is structured,
+* cognition is composable,
+* execution is orchestrated.
+
+The goal is to provide a foundational layer for building reliable AI-native systems at scale.
+
+## Use Cases
+
+* AI Copilot systems
+* Multi-agent architectures
+* Enterprise AI orchestration
+* Long-context memory systems
+* Knowledge graph enhanced AI
+* Retrieval-augmented generation (RAG)
+* Harness engineering platforms
+* Cognitive runtime infrastructure
+
 The Dev CLI has been created at `cli/dev.py` with launchers `dev.bat` (Windows) and `dev.sh` (Unix).
 
 ---
