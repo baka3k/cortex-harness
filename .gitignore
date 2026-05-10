@@ -38,3 +38,4 @@ build/
 *.log
 .serena
 testdata1/
+code-tiny/tools/vb/roslyn_worker/*
