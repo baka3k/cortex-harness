@@ -1,0 +1,47 @@
+{
+  "active":false,
+  "project": {
+    "code": "xxx",
+    "name": "projectname"
+  },
+  "doc": {
+    "env": {
+      "NEO4J_URI": "bolt://localhost:7687",
+      "NEO4J_DB": "neo4j",
+      "NEO4J_USER": "neo4j",
+      "NEO4J_PASS": "gAAAAABppUqbCz0g2n6nLf3xnMGVMDdUDcyHH-bQw1sPhEGYIdrefzS7-6odqmSi0gca8lbHflt_kefM3XGEgPY4ecKnB9jRMQ==",
+      "QDRANT_HOST": "localhost",
+      "QDRANT_PORT": "6333",
+      "EMBEDDING_MODEL": "BAAI/bge-m3",
+      "BATCH_SIZE": "1",
+      "MAX_EMBED_CHARS": "500",
+      "device": "mps"
+    },
+    "source": {
+      "git": "",
+      "folder": [
+        ""
+      ]
+    }
+  },
+  "code": {
+    "env": {
+      "NEO4J_URI": "bolt://localhost:7687",
+      "NEO4J_DB": "neo4j",
+      "NEO4J_USER": "neo4j",
+      "NEO4J_PASS": "gAAAAABptoyWpkogz6mAcBIqTjs1gQodBl7DTw5gpf0Dy7oVW9zCeo8QTK8HG-fBpIxEr8XXNnql5SEm2F9aornS_bctX9zX9g==",
+      "QDRANT_HOST": "localhost",
+      "QDRANT_PORT": "6333",
+      "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
+      "BATCH_SIZE": "1",
+      "MAX_EMBED_CHARS": "500",
+      "device": "mps"
+    },
+    "source": {
+      "git": "",
+      "folder": [
+        ""
+      ]
+    }
+  }
+}
