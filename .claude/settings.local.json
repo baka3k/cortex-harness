@@ -5,7 +5,13 @@
       "mcp__serena__check_onboarding_performed",
       "mcp__serena__onboarding",
       "mcp__serena__write_memory",
-      "Bash(python *)"
+      "Bash(python *)",
+      "mcp__serena__replace_content",
+      "Read(//private/tmp/**)",
+      "Bash(rm -rf test-cortex2)",
+      "Bash(mkdir test-cortex2 *)",
+      "Bash(rm -rf test-cortex3)",
+      "Bash(mkdir test-cortex3 *)"
     ]
   }
 }
