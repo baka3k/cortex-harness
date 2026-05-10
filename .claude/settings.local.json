@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__serena__initial_instructions",
+      "mcp__serena__check_onboarding_performed",
+      "mcp__serena__onboarding",
+      "mcp__serena__write_memory",
+      "Bash(python *)"
+    ]
+  }
+}

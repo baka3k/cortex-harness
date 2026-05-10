@@ -13,7 +13,7 @@ REPO_ROOT = CLI_DIR.parent
 CODE_TINY = REPO_ROOT / "code-tiny"
 DOC_TINY = REPO_ROOT / "doc-tiny"
 
-CONFIG_FILE = "dev.json"
+HARNESS_CONFIG_DIR = ".cortext-harness/config"
 
 LANG_ANALYZERS = {
     "kotlin":     CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
@@ -40,9 +40,43 @@ DOC_EXT_FLAGS = {
     ".xlsx": "--xlsx",
 }
 
+# Folders and placeholder files to scaffold in the target project
+_SCAFFOLD_DIRS = [
+    "docs/design-docs",
+    "docs/exec-plans/active",
+    "docs/exec-plans/completed",
+    "docs/generated",
+    "docs/product-specs",
+    "docs/references",
+    "src/core/migration",
+    "src/core/services",
+    "src/infra/persistence",
+    "src/infra/providers",
+    "src/interface/api",
+    "src/interface/cli",
+    "src/shared",
+]
+
+_SCAFFOLD_FILES = {
+    "docs/design-docs/index.md":         "# Design Docs\n",
+    "docs/exec-plans/tech-debt-tracker.md": "# Tech Debt Tracker\n",
+    "docs/generated/db-schema.md":       "# DB Schema\n",
+    "docs/product-specs/index.md":       "# Product Specs\n",
+    "docs/DESIGN.md":                    "# Design\n",
+    "docs/FRONTEND.md":                  "# Frontend Guidelines\n",
+    "docs/PLANS.md":                     "# Project Roadmap\n",
+    "docs/PRODUCT_SENSE.md":             "# Product Logic & Philosophy\n",
+    "docs/QUALITY_SCORE.md":             "# Engineering Standards\n",
+    "docs/RELIABILITY.md":               "# Stability & Error Handling\n",
+    "docs/SECURITY.md":                  "# Security Protocols\n",
+    "AGENTS.md":                         "# Agents\n",
+    "ARCHITECTURE.md":                   "# Architecture\n",
+    ".cursorrules":                      "# AI Instruction Set\n",
+    "README.md":                         "# Project\n",
+}
+
 
 def _venv_python(base_dir: Path) -> str:
-    """Return venv python if found, else fall back to current interpreter."""
     for candidate in [
         base_dir / ".venv" / "Scripts" / "python.exe",
         base_dir / ".venv" / "bin" / "python",
@@ -52,19 +86,95 @@ def _venv_python(base_dir: Path) -> str:
     return sys.executable
 
 
-def _load_config(path: str) -> dict:
-    p = Path(path)
-    if not p.exists():
-        click.echo(f"[error] '{path}' not found. Run 'dev init' first.", err=True)
+def _config_dir(project_dir: Path) -> Path:
+    return project_dir / HARNESS_CONFIG_DIR
+
+
+def _config_path(project_dir: Path, env: str) -> Path:
+    return _config_dir(project_dir) / f"{env}.json"
+
+
+def _load_active_config(project_dir: Path) -> tuple[dict, Path]:
+    """Return (config_dict, config_path) for the active environment."""
+    cfg_dir = _config_dir(project_dir)
+    if not cfg_dir.exists():
+        click.echo(f"[error] No config found at '{cfg_dir}'. Run 'dev init' first.", err=True)
         sys.exit(1)
+
+    configs = list(cfg_dir.glob("*.json"))
+    if not configs:
+        click.echo(f"[error] No config files in '{cfg_dir}'. Run 'dev init' first.", err=True)
+        sys.exit(1)
+
+    for p in configs:
+        with open(p, encoding="utf-8") as f:
+            cfg = json.load(f)
+        if cfg.get("active"):
+            return cfg, p
+
+    # Fall back to the first config if none marked active
+    p = configs[0]
     with open(p, encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    click.echo(f"[warn] No active config found; using '{p.name}'", err=True)
+    return cfg, p
 
 
-def _save_config(cfg: dict, path: str) -> None:
+def _save_config(cfg: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
     click.echo(f"[ok] Config saved -> {path}")
+
+
+def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
+    cfg_dir = _config_dir(project_dir)
+    if not cfg_dir.exists():
+        return
+    for p in cfg_dir.glob("*.json"):
+        if p.stem == current_env:
+            continue
+        try:
+            with open(p, encoding="utf-8") as f:
+                other = json.load(f)
+            if other.get("active"):
+                other["active"] = False
+                with open(p, "w", encoding="utf-8") as f:
+                    json.dump(other, f, indent=2, ensure_ascii=False)
+                click.echo(f"[info] Deactivated config: {p.name}")
+        except Exception:
+            pass
+
+
+def _scaffold_project(project_dir: Path, source_folders: list[str]) -> None:
+    click.echo("\n─── Scaffolding project structure ─────────")
+    created = []
+
+    for d in _SCAFFOLD_DIRS:
+        root = d.split("/")[0]
+        if root not in source_folders:
+            continue
+        full = project_dir / d
+        if not full.exists():
+            full.mkdir(parents=True, exist_ok=True)
+            created.append(f"  [dir]  {d}/")
+
+    for rel, content in _SCAFFOLD_FILES.items():
+        root = rel.split("/")[0]
+        # Root-level files (AGENTS.md etc.) always scaffold
+        if "/" in rel and root not in source_folders:
+            continue
+        full = project_dir / rel
+        if not full.exists():
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content, encoding="utf-8")
+            created.append(f"  [file] {rel}")
+
+    if created:
+        for line in created:
+            click.echo(line)
+    else:
+        click.echo("  (all paths already exist, nothing created)")
 
 
 def _run(cmd: list, dry_run: bool = False) -> int:
@@ -83,14 +193,15 @@ def _run(cmd: list, dry_run: bool = False) -> int:
 
 @click.group()
 def cli():
-    """dev - graph-rag-tiny ingestion CLI.
+    """dev - CortexHarness ingestion CLI.
 
     \b
     Quick start:
-      dev init          # configure project (creates dev.json)
-      dev sync code     # ingest source code -> Neo4j + Qdrant
-      dev sync doc      # ingest documents  -> Neo4j + Qdrant
-      dev status        # show current config
+      dev init              # configure project + scaffold folder structure
+      dev init --env prod   # create prod config
+      dev status            # show active config
+      dev sync code         # ingest source code -> Neo4j + Qdrant
+      dev sync doc          # ingest documents  -> Neo4j + Qdrant
     """
 
 
@@ -99,16 +210,36 @@ def cli():
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--config", default=CONFIG_FILE, show_default=True, help="Config file to create/update.")
-def init(config):
-    """Set up project environment and save config to dev.json."""
+@click.option(
+    "--env",
+    default="dev",
+    show_default=True,
+    type=click.Choice(["dev", "prod"]),
+    help="Environment to configure (dev or prod).",
+)
+@click.option(
+    "--project-dir",
+    default=".",
+    show_default=True,
+    help="Target project root directory.",
+)
+def init(env, project_dir):
+    """Create/update config and scaffold project folder structure.
+
+    \b
+    Config is saved to: <project-dir>/.cortext-harness/config/<env>.json
+    The new config is marked active; other env configs are deactivated.
+    """
+    project_path = Path(project_dir).resolve()
+    config_path = _config_path(project_path, env)
+
     existing: dict = {}
-    if Path(config).exists():
-        with open(config, encoding="utf-8") as f:
+    if config_path.exists():
+        with open(config_path, encoding="utf-8") as f:
             existing = json.load(f)
-        click.echo(f"[info] Updating existing config: {config}\n")
+        click.echo(f"[info] Updating existing config: {config_path}\n")
     else:
-        click.echo(f"[info] Creating new config: {config}\n")
+        click.echo(f"[info] Creating new {env} config: {config_path}\n")
 
     def _prompt(label, key_path: list, default=""):
         cur = existing
@@ -118,8 +249,17 @@ def init(config):
         return click.prompt(label, default=cur_val or default)
 
     # ── Project ──────────────────────────────────────────────────────────
-    click.echo("─── Project ───────────────────────────────")
+    click.echo("─── Project ────────────────────────────────")
     project_id = _prompt("Project ID", ["project_id"], "my_project")
+    git_remote = _prompt("Git remote URL (blank = none)", ["source", "git"], "")
+
+    # ── Source folders ────────────────────────────────────────────────────
+    click.echo("\n─── Source folders ─────────────────────────")
+    click.echo("Which top-level folders to include in this project?")
+    existing_folders = existing.get("source", {}).get("folder", ["docs", "src"])
+    folders_default = ",".join(existing_folders)
+    folders_raw = click.prompt("Folders (comma-separated)", default=folders_default)
+    source_folders = [f.strip() for f in folders_raw.split(",") if f.strip()]
 
     # ── Neo4j ────────────────────────────────────────────────────────────
     click.echo("\n─── Neo4j ──────────────────────────────────")
@@ -172,15 +312,26 @@ def init(config):
     gliner_path = click.prompt("  Local path (blank = download)", default=gliner_ex.get("model_path", ""))
 
     cfg = {
+        "active": True,
+        "environment": env,
         "project_id": project_id,
-        "neo4j":   {"uri": neo4j_uri, "user": neo4j_user, "password": neo4j_pass, "db": neo4j_db},
-        "qdrant":  {"url": qdrant_url},
-        "embed":   {"model": embed_model, "path": embed_path, "device": embed_device},
-        "code":    {"sources": sources},
-        "doc":     {"folder": doc_folder, "collection": doc_collection, "entity_provider": doc_provider},
-        "gliner":  {"model_name": gliner_name, "model_path": gliner_path},
+        "source": {
+            "git": git_remote,
+            "folder": source_folders,
+        },
+        "neo4j":  {"uri": neo4j_uri, "user": neo4j_user, "password": neo4j_pass, "db": neo4j_db},
+        "qdrant": {"url": qdrant_url},
+        "embed":  {"model": embed_model, "path": embed_path, "device": embed_device},
+        "code":   {"sources": sources},
+        "doc":    {"folder": doc_folder, "collection": doc_collection, "entity_provider": doc_provider},
+        "gliner": {"model_name": gliner_name, "model_path": gliner_path},
     }
-    _save_config(cfg, config)
+
+    _deactivate_other_envs(project_path, env)
+    _save_config(cfg, config_path)
+    _scaffold_project(project_path, source_folders)
+
+    click.echo(f"\n[ok] Environment '{env}' is now active.")
 
 
 # ---------------------------------------------------------------------------
@@ -188,22 +339,53 @@ def init(config):
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--config", default=CONFIG_FILE, show_default=True)
-def status(config):
-    """Show current project config."""
-    cfg = _load_config(config)
+@click.option(
+    "--project-dir",
+    default=".",
+    show_default=True,
+    help="Target project root directory.",
+)
+def status(project_dir):
+    """Show current active config and all available environments."""
+    project_path = Path(project_dir).resolve()
+    cfg_dir = _config_dir(project_path)
 
-    click.echo(f"\nProject : {cfg.get('project_id', '?')}")
-    click.echo(f"Config  : {Path(config).resolve()}\n")
+    if not cfg_dir.exists():
+        click.echo("[error] No config directory found. Run 'dev init' first.", err=True)
+        sys.exit(1)
+
+    envs = list(cfg_dir.glob("*.json"))
+    if not envs:
+        click.echo("[error] No config files found. Run 'dev init' first.", err=True)
+        sys.exit(1)
+
+    # Show all envs
+    click.echo(f"\nProject dir : {project_path}")
+    click.echo(f"Config dir  : {cfg_dir}\n")
+    click.echo("Environments:")
+    for p in sorted(envs):
+        with open(p, encoding="utf-8") as f:
+            c = json.load(f)
+        marker = " [ACTIVE]" if c.get("active") else ""
+        click.echo(f"  {p.name}{marker}")
+
+    cfg, active_path = _load_active_config(project_path)
+    click.echo(f"\n─── Active: {active_path.name} ───────────────────────")
+    click.echo(f"Project     : {cfg.get('project_id', '?')}")
+    click.echo(f"Environment : {cfg.get('environment', '?')}")
+
+    src = cfg.get("source", {})
+    click.echo(f"Git remote  : {src.get('git') or '(none)'}")
+    click.echo(f"Folders     : {', '.join(src.get('folder', []))}")
 
     neo4j = cfg.get("neo4j", {})
-    click.echo(f"Neo4j   : {neo4j.get('uri')}  db={neo4j.get('db')}  user={neo4j.get('user')}")
+    click.echo(f"\nNeo4j       : {neo4j.get('uri')}  db={neo4j.get('db')}  user={neo4j.get('user')}")
 
     qdrant = cfg.get("qdrant", {})
-    click.echo(f"Qdrant  : {qdrant.get('url')}")
+    click.echo(f"Qdrant      : {qdrant.get('url')}")
 
     embed = cfg.get("embed", {})
-    click.echo(f"Embed   : {embed.get('path') or embed.get('model')}  device={embed.get('device')}")
+    click.echo(f"Embed       : {embed.get('path') or embed.get('model')}  device={embed.get('device')}")
 
     sources = cfg.get("code", {}).get("sources", {})
     if sources:
@@ -232,14 +414,16 @@ def sync():
 
 
 @sync.command("code")
-@click.option("--config", default=CONFIG_FILE, show_default=True)
+@click.option("--project-dir", default=".", show_default=True)
 @click.option("--lang", default=None, help="Sync a single language only (e.g. kotlin).")
 @click.option("--dry-run", is_flag=True, help="Print commands without executing.")
 @click.option("--verbose/--no-verbose", default=True, show_default=True)
 @click.option("--batch-size", default=None, type=int, help="Embedding batch size.")
-def sync_code(config, lang, dry_run, verbose, batch_size):
+def sync_code(project_dir, lang, dry_run, verbose, batch_size):
     """Ingest source code into Neo4j + Qdrant via language analyzers."""
-    cfg = _load_config(config)
+    project_path = Path(project_dir).resolve()
+    cfg, _ = _load_active_config(project_path)
+
     neo4j  = cfg["neo4j"]
     qdrant = cfg["qdrant"]
     embed  = cfg["embed"]
@@ -303,16 +487,18 @@ def sync_code(config, lang, dry_run, verbose, batch_size):
 
 
 @sync.command("doc")
-@click.option("--config", default=CONFIG_FILE, show_default=True)
+@click.option("--project-dir", default=".", show_default=True)
 @click.option("--folder", default=None, help="Override doc folder from config.")
 @click.option("--file", "single_file", default=None, help="Ingest a single file (pdf/md/docx/txt/pptx/xlsx).")
 @click.option("--source-id", default=None, help="Override source_id in Neo4j / Qdrant.")
 @click.option("--entity-provider", default=None, help="Override entity provider (gliner/langextract/spacy).")
 @click.option("--batch/--no-batch", default=False, show_default=True, help="Enable GLiNER + Neo4j batching.")
 @click.option("--dry-run", is_flag=True)
-def sync_doc(config, folder, single_file, source_id, entity_provider, batch, dry_run):
+def sync_doc(project_dir, folder, single_file, source_id, entity_provider, batch, dry_run):
     """Ingest documents (PDF, DOCX, MD, XLSX, ...) into Neo4j + Qdrant."""
-    cfg = _load_config(config)
+    project_path = Path(project_dir).resolve()
+    cfg, _ = _load_active_config(project_path)
+
     neo4j  = cfg["neo4j"]
     qdrant = cfg["qdrant"]
     embed  = cfg["embed"]
@@ -363,7 +549,7 @@ def sync_doc(config, folder, single_file, source_id, entity_provider, batch, dry
     else:
         target = folder or doc_cfg.get("folder", "")
         if not target:
-            click.echo("[error] No folder specified. Use --folder or set 'doc.folder' in dev.json.")
+            click.echo("[error] No folder specified. Use --folder or set 'doc.folder' in config.")
             sys.exit(1)
         cmd += ["--folder", target]
         click.echo(f"\n[sync-doc] folder={target}  provider={provider}  collection={collection}")
