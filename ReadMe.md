@@ -84,6 +84,25 @@ The Dev CLI lives at `cli/dev.py` with launchers `dev.bat` (Windows) and `dev.sh
 > **Subsequent runs:** incremental — detects changes via git diff → SHA-256 hash comparison → mtime.
 > **Supported formats:** `.pdf`, `.md`, `.docx`, `.txt`, `.pptx`, `.xlsx`
 
+### MCP Servers
+
+| Command | Description |
+| --- | --- |
+| `dev mcp start` | Start code-tiny (port 8788) and doc-tiny (port 8789); shows status if already running |
+| `dev mcp start --detached` | Start in background; logs to `.cache/dev-mcp-<name>.log` |
+| `dev mcp start --force-restart` | Kill existing processes then restart |
+| `dev mcp add` | Write `.mcp.json` in project root (workspace scope, default) |
+| `dev mcp add --scope global` | Patch system-wide agent config files |
+| `dev mcp add --agent claude` | Target a specific agent: `claude` / `claude-code` / `vscode` / `cursor` / `all` |
+
+> Config files are backed up before modification (`*.bak.<timestamp>.json`).
+> Supported agents and their config paths:
+> - **Claude Desktop** — `~/Library/Application Support/Claude/claude_desktop_config.json`
+> - **Claude Code** — `~/.claude/settings.json`
+> - **VS Code** — `~/Library/Application Support/Code/User/mcp.json`
+> - **Cursor** — `~/.cursor/mcp.json`
+> - **Workspace** — `.mcp.json` in project root
+
 ---
 
 ## 2. Usage from a Project Directory
@@ -100,6 +119,8 @@ Run the CLI from any project folder by referencing the launcher with an absolute
 /path/to/cortex-harness/dev.sh sync code all           # Full code sync (all analyzers)
 /path/to/cortex-harness/dev.sh sync doc                # Interactive doc sync
 /path/to/cortex-harness/dev.sh sync doc all            # Full doc sync
+/path/to/cortex-harness/dev.sh mcp start --detached    # Start MCP servers in background
+/path/to/cortex-harness/dev.sh mcp add                 # Register MCP endpoints in .mcp.json
 ```
 
 **Windows:**
@@ -108,6 +129,8 @@ Run the CLI from any project folder by referencing the launcher with an absolute
 C:\ai\cortex-harness\dev.bat init
 C:\ai\cortex-harness\dev.bat sync code
 C:\ai\cortex-harness\dev.bat sync doc all
+C:\ai\cortex-harness\dev.bat mcp start --detached
+C:\ai\cortex-harness\dev.bat mcp add --scope global
 ```
 
 ---
