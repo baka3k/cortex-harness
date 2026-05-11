@@ -13,7 +13,13 @@
       "Bash(rm -rf test-cortex3)",
       "Bash(mkdir test-cortex3 *)",
       "Bash(rm -rf test-sync)",
-      "Bash(mkdir test-sync *)"
+      "Bash(mkdir test-sync *)",
+      "Bash(cp /Users/baka3k.rpm/AI/harness/.harness/scripts/init.sh /Users/baka3k.rpm/AI/cortex-harness/harness/scripts/init.sh)",
+      "Bash(cp /Users/baka3k.rpm/AI/harness/.harness/scripts/verify.sh /Users/baka3k.rpm/AI/cortex-harness/harness/scripts/verify.sh)",
+      "Bash(cp /Users/baka3k.rpm/AI/harness/.harness/scripts/context_selector.py /Users/baka3k.rpm/AI/cortex-harness/harness/scripts/context_selector.py)",
+      "Bash(cp /Users/baka3k.rpm/AI/harness/.harness/scripts/orchestrator.py /Users/baka3k.rpm/AI/cortex-harness/harness/scripts/orchestrator.py)",
+      "Bash(chmod +x /Users/baka3k.rpm/AI/cortex-harness/harness/scripts/init.sh /Users/baka3k.rpm/AI/cortex-harness/harness/scripts/verify.sh)",
+      "Bash(python3 *)"
     ]
   }
 }
