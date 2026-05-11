@@ -1,0 +1,12 @@
+{
+  "id": "task-xxx",
+  "title": "Short task title",
+  "type": "bugfix|feature|refactor",
+  "status": "todo|in_progress|done|blocked",
+  "priority": 1,
+  "graph_entry_node": "namespace.symbol",
+  "related_modules": [],
+  "related_files": [],
+  "notes": "Optional notes",
+  "session_id": null
+}

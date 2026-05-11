@@ -64,6 +64,9 @@ SENSITIVE_PATTERNS = [
 DOC_INGESTOR          = DOC_TINY  / "graphrag_ingest_langextract.py"
 BUILD_OWNER_MANIFESTS = CODE_TINY / "tools/sync/build_owner_manifests.py"
 
+HARNESS_SCRIPTS   = REPO_ROOT / "harness" / "scripts"
+HARNESS_TEMPLATES = REPO_ROOT / "harness" / "templates"
+
 _LANG_TO_OWNER_PARSER = {
     "android_java":   "android",
     "android_kotlin": "android",
@@ -1639,6 +1642,464 @@ def mcp_add(scope, agent, project_dir):
         if not added and not updated:
             click.echo("  [ok] already up to date")
         click.echo(f"  [saved]   {cfg_path}\n")
+
+
+# ---------------------------------------------------------------------------
+# Harness helpers
+# ---------------------------------------------------------------------------
+
+def _harness_dir(project_dir: Path) -> Path:
+    return project_dir / ".harness"
+
+
+def _harness_state(project_dir: Path) -> Path:
+    return project_dir / ".harness" / "state"
+
+
+def _harness_feature_list(project_dir: Path) -> Path:
+    return _harness_state(project_dir) / "feature_list.json"
+
+
+def _harness_load_features(project_dir: Path) -> dict:
+    p = _harness_feature_list(project_dir)
+    if not p.exists():
+        click.echo(f"[error] No feature_list.json at '{p}'. Run 'dev harness init' first.", err=True)
+        sys.exit(1)
+    with open(p, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _harness_save_features(project_dir: Path, payload: dict) -> None:
+    p = _harness_feature_list(project_dir)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def _harness_next_task_id(features: list) -> str:
+    nums = []
+    for t in features:
+        tid = str(t.get("id", ""))
+        if tid.startswith("task-"):
+            try:
+                nums.append(int(tid[5:]))
+            except ValueError:
+                pass
+    n = (max(nums) + 1) if nums else 1
+    return f"task-{n:03d}"
+
+
+def _harness_probe_mcp(url: str) -> str:
+    """Quick HTTP probe of an MCP endpoint. Returns status string."""
+    if not url:
+        return "not configured"
+    import urllib.request, urllib.error
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": "probe", "method": "initialize",
+        "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                   "clientInfo": {"name": "dev-harness-probe", "version": "0.1"}},
+    }).encode()
+    req = urllib.request.Request(url, data=payload,
+                                 headers={"Content-Type": "application/json",
+                                          "Accept": "application/json, text/event-stream"},
+                                 method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return f"ok (HTTP {resp.status})"
+    except Exception as exc:
+        return f"unreachable ({exc})"
+
+
+def _harness_read_config_yaml(project_dir: Path) -> dict:
+    """Read .harness/config.yaml using the simple YAML parser from orchestrator."""
+    cfg_path = _harness_dir(project_dir) / "config.yaml"
+    if not cfg_path.exists():
+        return {}
+
+    root: dict = {}
+    stack: list = [(-1, root)]
+
+    with open(cfg_path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if line.lstrip().startswith("-"):
+                continue
+            indent = len(line) - len(line.lstrip(" "))
+            content = line.strip()
+            if ":" not in content:
+                continue
+            key, value = content.split(":", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            while stack and indent <= stack[-1][0]:
+                stack.pop()
+            parent = stack[-1][1] if stack else root
+            if value == "":
+                node: dict = {}
+                parent[key] = node
+                stack.append((indent, node))
+            else:
+                parent[key] = value
+    return root
+
+
+# ---------------------------------------------------------------------------
+# dev harness
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def harness():
+    """Manage AI agent task sessions (harness orchestration layer).
+
+    \b
+    Bootstrap:
+      dev harness init          Set up .harness/ in a project
+    Task management:
+      dev harness task list     List all tasks
+      dev harness task add      Add a new task
+      dev harness task show     Show full task details
+    Execution:
+      dev harness run           Run orchestrator session
+      dev harness context       Select context for a task
+      dev harness verify        Run verify gate
+      dev harness status        Show backlog summary + MCP health
+    """
+
+
+@harness.command("init")
+@click.option("--project-dir", default=".", show_default=True,
+              help="Target project root to bootstrap .harness/ in.")
+def harness_init(project_dir):
+    """Bootstrap .harness/ structure in a target project.
+
+    \b
+    Copies scripts and templates from the cortex-harness repo,
+    creates state directories, and writes config.yaml.
+    Existing files are NOT overwritten.
+    """
+    project_path = Path(project_dir).resolve()
+    h_dir = _harness_dir(project_path)
+
+    if not HARNESS_SCRIPTS.exists():
+        click.echo(f"[error] harness/scripts not found at '{HARNESS_SCRIPTS}'", err=True)
+        sys.exit(1)
+
+    click.echo(f"\n─── Bootstrapping .harness/ in: {project_path} ───")
+
+    # Create directories
+    for sub in ["scripts", "templates", "state", "state/session_log"]:
+        d = h_dir / sub
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Copy scripts
+    for script in ["init.sh", "verify.sh", "context_selector.py", "orchestrator.py"]:
+        src = HARNESS_SCRIPTS / script
+        dst = h_dir / "scripts" / script
+        if dst.exists():
+            click.echo(f"  [skip]   scripts/{script} (already exists)")
+        else:
+            shutil.copy2(str(src), str(dst))
+            if script.endswith(".sh"):
+                dst.chmod(dst.stat().st_mode | 0o111)
+            click.echo(f"  [copied] scripts/{script}")
+
+    # Copy templates
+    for tmpl in ["feature_template.json", "session_template.json", "AGENT.md"]:
+        src = HARNESS_TEMPLATES / tmpl
+        dst = h_dir / "templates" / tmpl
+        if dst.exists():
+            click.echo(f"  [skip]   templates/{tmpl} (already exists)")
+        else:
+            shutil.copy2(str(src), str(dst))
+            click.echo(f"  [copied] templates/{tmpl}")
+
+    # Initial feature_list.json
+    fl = _harness_feature_list(project_path)
+    if fl.exists():
+        click.echo(f"  [skip]   state/feature_list.json (already exists)")
+    else:
+        with open(fl, "w", encoding="utf-8") as f:
+            json.dump({"features": []}, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        click.echo(f"  [created] state/feature_list.json")
+
+    # config.yaml
+    cfg_path = h_dir / "config.yaml"
+    if cfg_path.exists():
+        click.echo(f"  [skip]   config.yaml (already exists)")
+    else:
+        click.echo("\n─── MCP configuration ──────────────────────────")
+        graph_url = click.prompt("  graph_mcp_url (code-tiny)",
+                                 default="http://127.0.0.1:8788/mcp")
+        mind_url  = click.prompt("  mind_mcp_url  (doc-tiny)",
+                                 default="http://127.0.0.1:8789/mcp")
+        click.echo("\n─── Verify commands (blank = skip) ─────────────")
+        test_cmd  = click.prompt("  critical test_cmd", default="")
+        lint_cmd  = click.prompt("  critical lint_cmd", default="")
+        type_cmd  = click.prompt("  critical type_cmd", default="")
+
+        tmpl = HARNESS_TEMPLATES / "config.yaml"
+        cfg_text = tmpl.read_text(encoding="utf-8")
+        cfg_text = cfg_text.replace(
+            'graph_mcp_url: "http://127.0.0.1:8788/mcp"',
+            f'graph_mcp_url: "{graph_url}"',
+        ).replace(
+            'mind_mcp_url: "http://127.0.0.1:8789/mcp"',
+            f'mind_mcp_url: "{mind_url}"',
+        ).replace(
+            '    test_cmd: ""', f'    test_cmd: "{test_cmd}"',
+        ).replace(
+            '    lint_cmd: ""', f'    lint_cmd: "{lint_cmd}"',
+        ).replace(
+            '    type_cmd: ""', f'    type_cmd: "{type_cmd}"',
+        )
+        cfg_path.write_text(cfg_text, encoding="utf-8")
+        click.echo(f"  [created] config.yaml")
+
+    click.echo(f"\n[ok] .harness/ is ready at: {h_dir}")
+    click.echo("     Next: dev harness task add  to create your first task.")
+
+
+@harness.command("status")
+@click.option("--project-dir", default=".", show_default=True)
+def harness_status(project_dir):
+    """Show task backlog summary and MCP endpoint health."""
+    project_path = Path(project_dir).resolve()
+
+    payload  = _harness_load_features(project_path)
+    features = payload.get("features", [])
+
+    counts: dict = {}
+    for t in features:
+        s = t.get("status", "unknown")
+        counts[s] = counts.get(s, 0) + 1
+
+    click.echo(f"\n── Harness status: {project_path} ─────────────────")
+    click.echo(f"  Tasks total : {len(features)}")
+    for status in ("todo", "in_progress", "done", "blocked"):
+        n = counts.get(status, 0)
+        click.echo(f"  {status:<12}: {n}")
+
+    if features:
+        in_prog = [t for t in features if t.get("status") == "in_progress"]
+        if in_prog:
+            t = in_prog[0]
+            click.echo(f"\n  In-progress : [{t['id']}] {t.get('title', '')}")
+
+    cfg = _harness_read_config_yaml(project_path)
+    mcp_cfg = cfg.get("mcp", {})
+    graph_url = mcp_cfg.get("graph_mcp_url", "http://127.0.0.1:8788/mcp")
+    mind_url  = mcp_cfg.get("mind_mcp_url",  "http://127.0.0.1:8789/mcp")
+
+    click.echo(f"\n── MCP endpoints ───────────────────────────────────")
+    click.echo(f"  graph_mcp  {graph_url}")
+    click.echo(f"             → {_harness_probe_mcp(graph_url)}")
+    click.echo(f"  mind_mcp   {mind_url}")
+    click.echo(f"             → {_harness_probe_mcp(mind_url)}")
+
+
+# ── harness task sub-group ────────────────────────────────────────────────────
+
+@harness.group("task")
+def harness_task():
+    """Manage tasks in the harness backlog."""
+
+
+@harness_task.command("list")
+@click.option("--project-dir", default=".", show_default=True)
+def harness_task_list(project_dir):
+    """List all tasks in the backlog."""
+    project_path = Path(project_dir).resolve()
+    payload  = _harness_load_features(project_path)
+    features = payload.get("features", [])
+
+    if not features:
+        click.echo("[info] No tasks yet. Use 'dev harness task add' to create one.")
+        return
+
+    STATUS_ICON = {"todo": "○", "in_progress": "◎", "done": "✓", "blocked": "✗"}
+    click.echo(f"\n{'ID':<12} {'ST':<2} {'P':<3} {'TYPE':<10} TITLE")
+    click.echo("─" * 70)
+    for t in features:
+        sid  = STATUS_ICON.get(t.get("status", ""), "?")
+        click.echo(
+            f"{t.get('id', '?'):<12} {sid:<2} {str(t.get('priority', '')):<3}"
+            f" {t.get('type', ''):<10} {t.get('title', '')}"
+        )
+
+
+@harness_task.command("add")
+@click.option("--project-dir", default=".", show_default=True)
+def harness_task_add(project_dir):
+    """Add a new task to the backlog interactively."""
+    project_path = Path(project_dir).resolve()
+    payload  = _harness_load_features(project_path)
+    features = payload.get("features", [])
+
+    task_id = _harness_next_task_id(features)
+
+    click.echo(f"\n─── Add task {task_id} ─────────────────────────────────")
+    title       = click.prompt("  Title")
+    task_type   = click.prompt("  Type", default="feature",
+                               type=click.Choice(["feature", "bugfix", "refactor"]))
+    priority    = click.prompt("  Priority", default=1, type=int)
+    entry_node  = click.prompt("  Graph entry node (namespace.Symbol)", default="")
+    modules_raw = click.prompt("  Related modules (comma-separated)", default="")
+    files_raw   = click.prompt("  Related files   (comma-separated)", default="")
+    notes       = click.prompt("  Notes", default="")
+
+    related_modules = [m.strip() for m in modules_raw.split(",") if m.strip()]
+    related_files   = [f.strip() for f in files_raw.split(",") if f.strip()]
+
+    task = {
+        "id":               task_id,
+        "title":            title,
+        "type":             task_type,
+        "status":           "todo",
+        "priority":         priority,
+        "graph_entry_node": entry_node or None,
+        "related_modules":  related_modules,
+        "related_files":    related_files,
+        "notes":            notes,
+        "session_id":       None,
+    }
+    features.append(task)
+    payload["features"] = features
+    _harness_save_features(project_path, payload)
+    click.echo(f"\n[ok] Task '{task_id}' added → {_harness_feature_list(project_path)}")
+
+
+@harness_task.command("show")
+@click.argument("task_id")
+@click.option("--project-dir", default=".", show_default=True)
+def harness_task_show(task_id, project_dir):
+    """Show full details for a task."""
+    project_path = Path(project_dir).resolve()
+    payload  = _harness_load_features(project_path)
+    features = payload.get("features", [])
+
+    for t in features:
+        if t.get("id") == task_id:
+            click.echo(json.dumps(t, indent=2, ensure_ascii=False))
+            return
+
+    click.echo(f"[error] Task '{task_id}' not found.", err=True)
+    sys.exit(1)
+
+
+@harness.command("run")
+@click.option("--task-id", default=None, help="Run a specific task ID (default: next todo).")
+@click.option("--max-rounds", default=None, type=int,
+              help="Override max_rounds from config.")
+@click.option("--agent-command", default="",
+              help="Shell command that invokes the agent (if used as sub-process).")
+@click.option("--project-dir", default=".", show_default=True)
+def harness_run(task_id, max_rounds, agent_command, project_dir):
+    """Run an orchestrator session for the next todo task (or --task-id).
+
+    \b
+    Delegates entirely to .harness/scripts/orchestrator.py.
+    Session log is written to .harness/state/session_log/<session-id>.json.
+    """
+    project_path = Path(project_dir).resolve()
+    orchestrator = project_path / ".harness" / "scripts" / "orchestrator.py"
+
+    if not orchestrator.exists():
+        click.echo(f"[error] orchestrator.py not found. Run 'dev harness init' first.", err=True)
+        sys.exit(1)
+
+    cmd = [sys.executable, str(orchestrator),
+           "--root",     str(project_path),
+           "--config",   ".harness/config.yaml",
+           "--state",    ".harness/state/feature_list.json",
+           "--progress", ".harness/state/progress.md",
+           "--session-log-dir", ".harness/state/session_log"]
+
+    if task_id:
+        cmd += ["--task-id", task_id]
+    if max_rounds is not None:
+        cmd += ["--max-rounds", str(max_rounds)]
+    if agent_command:
+        cmd += ["--agent-command", agent_command]
+
+    click.echo(f"[harness run] {' '.join(cmd[:6])} …")
+    rc = subprocess.run(cmd, cwd=str(project_path)).returncode
+    sys.exit(rc)
+
+
+@harness.command("context")
+@click.argument("task_id")
+@click.option("--output", default="-", show_default=True,
+              help="Output file path, or '-' for stdout.")
+@click.option("--project-dir", default=".", show_default=True)
+def harness_context(task_id, output, project_dir):
+    """Run context_selector.py for a task and print the result.
+
+    \b
+    Queries graph_mcp + mind_mcp using settings from .harness/config.yaml.
+    """
+    project_path = Path(project_dir).resolve()
+    selector = project_path / ".harness" / "scripts" / "context_selector.py"
+
+    if not selector.exists():
+        click.echo(f"[error] context_selector.py not found. Run 'dev harness init' first.", err=True)
+        sys.exit(1)
+
+    cfg = _harness_read_config_yaml(project_path)
+    mcp = cfg.get("mcp", {})
+
+    cmd = [
+        sys.executable, str(selector),
+        "--state",       ".harness/state/feature_list.json",
+        "--task-id",     task_id,
+        "--output",      output,
+        "--graph-mcp-url", mcp.get("graph_mcp_url", "http://127.0.0.1:8788/mcp"),
+        "--mind-mcp-url",  mcp.get("mind_mcp_url",  "http://127.0.0.1:8789/mcp"),
+    ]
+    graph_tool = mcp.get("graph_mcp_tool", "")
+    mind_tool  = mcp.get("mind_mcp_tool", "")
+    if graph_tool:
+        cmd += ["--graph-mcp-tool", graph_tool]
+    if mind_tool:
+        cmd += ["--mind-mcp-tool", mind_tool]
+
+    click.echo(f"[harness context] task={task_id}")
+    rc = subprocess.run(cmd, cwd=str(project_path)).returncode
+    sys.exit(rc)
+
+
+@harness.command("verify")
+@click.option("--project-dir", default=".", show_default=True)
+def harness_verify(project_dir):
+    """Run the verify gate (.harness/scripts/verify.sh).
+
+    \b
+    Reads CRITICAL_TEST_CMD / CRITICAL_LINT_CMD / CRITICAL_TYPE_CMD
+    from .harness/config.yaml and exports them before invoking verify.sh.
+    """
+    project_path = Path(project_dir).resolve()
+    verify_sh = project_path / ".harness" / "scripts" / "verify.sh"
+
+    if not verify_sh.exists():
+        click.echo(f"[error] verify.sh not found. Run 'dev harness init' first.", err=True)
+        sys.exit(1)
+
+    cfg = _harness_read_config_yaml(project_path)
+    verify_cfg = cfg.get("verify", {}).get("critical", {})
+
+    env = {**os.environ}
+    if verify_cfg.get("test_cmd"):
+        env["CRITICAL_TEST_CMD"] = str(verify_cfg["test_cmd"])
+    if verify_cfg.get("lint_cmd"):
+        env["CRITICAL_LINT_CMD"] = str(verify_cfg["lint_cmd"])
+    if verify_cfg.get("type_cmd"):
+        env["CRITICAL_TYPE_CMD"] = str(verify_cfg["type_cmd"])
+
+    click.echo(f"[harness verify] running verify.sh")
+    rc = subprocess.run(["bash", str(verify_sh)], cwd=str(project_path), env=env).returncode
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
