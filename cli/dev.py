@@ -78,13 +78,19 @@ MCP_LOG_DIR = REPO_ROOT / ".cache"
 
 MCP_SERVICES = {
     "code-tiny": {
-        "script":  CODE_TINY / "mcp.sh",
+        "dir":     CODE_TINY,
+        "cmd":     ["mcp/unified_mcp.py",
+                    "--transport", "streamable-http",
+                    "--host", "127.0.0.1", "--port", "8788", "--path", "/mcp"],
         "port":    8788,
         "pattern": "unified_mcp.py",
         "url":     "http://127.0.0.1:8788/mcp",
     },
     "doc-tiny": {
-        "script":  DOC_TINY / "mcp.sh",
+        "dir":     DOC_TINY,
+        "cmd":     ["mcp_graph_rag.py",
+                    "--host", "127.0.0.1", "--port", "8789",
+                    "--transport", "streamable-http", "--path", "/mcp"],
         "port":    8789,
         "pattern": "mcp_graph_rag.py",
         "url":     "http://127.0.0.1:8789/mcp",
@@ -918,36 +924,51 @@ def _mcp_stop_pattern(pattern: str) -> int:
     return len(pids)
 
 
-def _mcp_start_one(name: str, svc: dict, detached: bool) -> dict:
-    script: Path = svc["script"]
-    if not script.exists():
+def _load_dotenv(path: Path) -> dict:
+    """Parse a .env file into a dict. Skips comments and blank lines."""
+    result = {}
+    if not path.exists():
+        return result
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        result[k.strip()] = v.strip().strip('"').strip("'")
+    return result
+
+
+def _mcp_start_one(name: str, svc: dict) -> dict:
+    svc_dir: Path = svc["dir"]
+    python        = _venv_python(svc_dir)
+    entry_script  = svc_dir / svc["cmd"][0]
+
+    if not entry_script.exists():
         return {"name": name, "status": "error",
-                "reason": f"script not found: {script}"}
-    if not os.access(str(script), os.X_OK):
-        return {"name": name, "status": "error",
-                "reason": f"not executable — run: chmod +x {script}"}
+                "reason": f"entry not found: {entry_script}"}
+
+    cmd = [python, str(entry_script)] + svc["cmd"][1:]
+
+    # Inherit env and layer .env file on top
+    env = {**os.environ, **_load_dotenv(svc_dir / ".env")}
 
     MCP_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = MCP_LOG_DIR / f"dev-mcp-{name}.log"
     pid_file = MCP_LOG_DIR / f"dev-mcp-{name}.pid"
 
-    if detached:
-        with open(log_file, "a") as lf:
-            proc = subprocess.Popen(
-                ["bash", str(script)],
-                cwd=str(script.parent),
-                stdout=lf, stderr=lf,
-                start_new_session=True,
-            )
-        pid_file.write_text(str(proc.pid))
-        return {
-            "name": name, "status": "started", "pid": proc.pid,
-            "url": svc["url"], "log": str(log_file),
-        }
-    else:
-        rc = subprocess.run(["bash", str(script)], cwd=str(script.parent)).returncode
-        return {"name": name, "status": "ok" if rc == 0 else "error",
-                "exit_code": rc, "url": svc["url"]}
+    with open(log_file, "a") as lf:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(svc_dir),
+            stdout=lf, stderr=lf,
+            env=env,
+            start_new_session=True,
+        )
+    pid_file.write_text(str(proc.pid))
+    return {
+        "name": name, "status": "started", "pid": proc.pid,
+        "url": svc["url"], "log": str(log_file),
+    }
 
 
 def _integrate_workspace(project_path: Path, entries: dict) -> None:
@@ -1384,17 +1405,15 @@ def mcp():
 
 
 @mcp.command("start")
-@click.option("--detached", is_flag=True,
-              help="Run in the background (non-blocking).")
 @click.option("--force-restart", is_flag=True,
               help="Kill existing instances before starting.")
-def mcp_start(detached, force_restart):
+def mcp_start(force_restart):
     """Start MCP servers for code-tiny (port 8788) and doc-tiny (port 8789).
 
     \b
-    If already running, displays PID and uptime.
-    Use --force-restart to kill and restart existing processes.
-    Logs written to .cache/dev-mcp-<name>.log when --detached.
+    Both servers run in the background (non-blocking).
+    If already running, displays PID and uptime — use --force-restart to reload.
+    Logs: .cache/dev-mcp-<name>.log
     """
     for name, svc in MCP_SERVICES.items():
         pattern = svc["pattern"]
@@ -1412,17 +1431,15 @@ def mcp_start(detached, force_restart):
             stopped = _mcp_stop_pattern(pattern)
             click.echo(f"  [stopped]  killed {stopped} process(es)")
 
-        mode = "detached" if detached else "foreground"
-        click.echo(f"  [starting] {mode}  script={svc['script'].name}")
-        result = _mcp_start_one(name, svc, detached)
+        click.echo(f"  [starting] {svc['cmd'][0]}")
+        result = _mcp_start_one(name, svc)
 
-        if result["status"] in ("started", "ok"):
+        if result["status"] == "started":
             click.echo(f"  [ok]  url={svc['url']}")
-            if detached:
-                click.echo(f"  [pid] {result.get('pid', '?')}")
-                click.echo(f"  [log] {result.get('log', '?')}")
+            click.echo(f"  [pid] {result['pid']}")
+            click.echo(f"  [log] {result['log']}")
         else:
-            click.echo(f"  [error] {result.get('reason', result.get('exit_code', '?'))}", err=True)
+            click.echo(f"  [error] {result.get('reason', '?')}", err=True)
 
 
 @mcp.command("add")
