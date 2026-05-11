@@ -61,7 +61,14 @@ SENSITIVE_PATTERNS = [
     "*.keystore", "*.jks",
 ]
 
-DOC_INGESTOR = DOC_TINY / "graphrag_ingest_langextract.py"
+DOC_INGESTOR          = DOC_TINY  / "graphrag_ingest_langextract.py"
+BUILD_OWNER_MANIFESTS = CODE_TINY / "tools/sync/build_owner_manifests.py"
+
+_LANG_TO_OWNER_PARSER = {
+    "android_java":   "android",
+    "android_kotlin": "android",
+    "android_mixed":  "android",
+}
 
 DOC_EXT_FLAGS = {
     ".pdf":  "--pdf",
@@ -228,10 +235,23 @@ def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
 
 
 def _env_to_neo4j_args(env: dict) -> list:
+    """For doc-tiny ingestor (uses --neo4j-pass)."""
     args = [
         "--neo4j-uri",  env.get("NEO4J_URI",  "bolt://localhost:7687"),
         "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
         "--neo4j-pass", env.get("NEO4J_PASS", ""),
+    ]
+    if env.get("NEO4J_DB"):
+        args += ["--neo4j-db", env["NEO4J_DB"]]
+    return args
+
+
+def _neo4j_args_code(env: dict) -> list:
+    """For code-tiny analyzers (uses --neo4j-password)."""
+    args = [
+        "--neo4j-uri",      env.get("NEO4J_URI",  "bolt://localhost:7687"),
+        "--neo4j-user",     env.get("NEO4J_USER", "neo4j"),
+        "--neo4j-password", env.get("NEO4J_PASS", ""),
     ]
     if env.get("NEO4J_DB"):
         args += ["--neo4j-db", env["NEO4J_DB"]]
@@ -498,6 +518,7 @@ def _sync_doc_folder(
     folder: str,
     env: dict,
     python: str,
+    project: dict,
     force_mode: str,   # "full" | "incremental" | "auto"
     entity_provider: str,
     dry_run: bool,
@@ -513,17 +534,23 @@ def _sync_doc_folder(
     state = _load_state(project_path, f"doc:{folder}")
     mode  = force_mode if force_mode != "auto" else ("incremental" if state else "full")
 
-    qdrant_url = _env_to_qdrant_url(env)
+    qdrant_url   = _env_to_qdrant_url(env)
+    project_name = project.get("name", "project")
 
     base_cmd = [
         python, str(DOC_INGESTOR),
-        "--neo4j-uri",       env.get("NEO4J_URI", "bolt://localhost:7687"),
-        "--neo4j-user",      env.get("NEO4J_USER", "neo4j"),
-        "--neo4j-pass",      env.get("NEO4J_PASS", ""),
-        "--qdrant-url",      qdrant_url,
-        "--collection",      "graphrag_entities",
-        "--entity-provider", entity_provider,
-        "--embedding-model", env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
+        *_env_to_neo4j_args(env),
+        "--qdrant-url",          qdrant_url,
+        "--collection",          project_name,
+        "--entity-provider",     entity_provider,
+        "--embedding-model",     env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
+        "--embedding-device",    env.get("device", "cpu"),
+        "--max-paragraph-chars", env.get("MAX_PARAGRAPH_CHARS", "500"),
+        "--gliner-model-name",   env.get("GLINER_MODEL_NAME", "urchade/gliner_large-v2.1"),
+        "--gliner-labels",       env.get("GLINER_LABELS", "PERSON,ORG,PRODUCT,GPE,DATE,TECH,CRYPTO,STANDARD"),
+        "--gliner-threshold",    env.get("GLINER_THRESHOLD", "0.35"),
+        "--gliner-batch-size",   env.get("GLINER_BATCH_SIZE", "1"),
+        "--neo4j-batch-size",    env.get("NEO4J_BATCH_SIZE", "1"),
         "--no-batch",
     ]
     click.echo(f"\n{'─' * 52}")
@@ -630,6 +657,72 @@ def _sync_doc_folder(
 
 
 # ---------------------------------------------------------------------------
+# Owner-manifest helpers (code-tiny pre-processing step)
+# ---------------------------------------------------------------------------
+
+def _owner_manifest_dir(project_path: Path, project_id: str) -> Path:
+    return project_path / ".cache" / "owner_manifests" / project_id
+
+
+def _run_owner_manifests(
+    *,
+    folder_path: Path,
+    project_id: str,
+    langs: list,
+    owner_dir: Path,
+    python: str,
+    verbose: bool,
+    dry_run: bool,
+) -> Path:
+    """Run build_owner_manifests.py to partition files by parser. Returns owner_dir."""
+    if not BUILD_OWNER_MANIFESTS.exists():
+        click.echo(f"  [warn] build_owner_manifests not found — skipping pre-processing step")
+        return owner_dir
+
+    canonical = list(dict.fromkeys(
+        _LANG_TO_OWNER_PARSER.get(l, l) for l in langs
+    )) if langs else ["auto"]
+    parsers_str = ",".join(canonical)
+    owner_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        python, str(BUILD_OWNER_MANIFESTS),
+        "--root",       str(folder_path),
+        "--project-id", project_id,
+        "--parsers",    parsers_str,
+        "--output-dir", str(owner_dir),
+    ]
+    if verbose:
+        cmd.append("--verbose")
+
+    click.echo(f"  [owner-manifests] parsers={parsers_str}  out={owner_dir}")
+    _run_with_retry(cmd, max_retries=1, dry_run=dry_run)
+    return owner_dir
+
+
+def _owner_manifest_counts(owner_dir: Path, langs: list) -> dict:
+    """Read per-lang changed/deleted counts from owner manifest files."""
+    counts = {}
+    for lang in langs:
+        canonical = _LANG_TO_OWNER_PARSER.get(lang, lang)
+        changed_path = owner_dir / f"{canonical}_changed_owner.json"
+        deleted_path = owner_dir / f"{canonical}_deleted_owner.json"
+        changed, deleted = 0, 0
+        if changed_path.exists():
+            try:
+                changed = len(json.loads(changed_path.read_text()))
+            except Exception:
+                pass
+        if deleted_path.exists():
+            try:
+                deleted = len(json.loads(deleted_path.read_text()))
+            except Exception:
+                pass
+        counts[lang] = {"changed": changed, "deleted": deleted}
+    return counts
+
+
+# ---------------------------------------------------------------------------
 # Process helpers
 # ---------------------------------------------------------------------------
 
@@ -695,6 +788,7 @@ def _run_analyzer(
     folder_path: Path,
     env: dict,
     python: str,
+    project: dict,
     mode: str,
     changed_files: list,
     deleted_files: list,
@@ -702,30 +796,34 @@ def _run_analyzer(
     verbose: bool,
 ) -> int:
     """Build and invoke one analyzer subprocess. Returns exit code."""
-    qdrant_url = _env_to_qdrant_url(env)
+    qdrant_url   = _env_to_qdrant_url(env)
+    project_name = project.get("name", "project")
+    project_id   = project.get("code", project_name)
+    repo         = folder_path.name
 
     cmd = [
         python, str(analyzer),
         "--root",             str(folder_path),
-        *_env_to_neo4j_args(env),
+        *_neo4j_args_code(env),
         "--qdrant-url",        qdrant_url,
-        "--qdrant-collection", f"{lang}_functions",
+        "--qdrant-collection", project_name,
         "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
         "--device",            env.get("device", "cpu"),
         "--batch-size",        env.get("BATCH_SIZE", "1"),
-        "--qdrant-timeout",    "300",
-        "--qdrant-retries",    "3",
-        "--qdrant-retry-sleep","2",
+        "--max-embed-chars",   env.get("MAX_EMBED_CHARS", "800"),
+        "--language",          lang,
+        "--project-id",        project_id,
+        "--project-name",      project_name,
+        "--repo",              repo,
+        "--disable-message-scan",
     ]
 
     changed_manifest = None
     deleted_manifest = None
 
     if mode == "incremental" and changed_files:
-        # Delegate incremental to the analyzer's built-in mechanism
         changed_manifest = _write_manifest(changed_files, "changed")
         cmd += ["--incremental", "--changed-files-manifest", str(changed_manifest)]
-
         if deleted_files:
             deleted_manifest = _write_manifest(deleted_files, "deleted")
             cmd += ["--deleted-files-manifest", str(deleted_manifest)]
@@ -735,7 +833,6 @@ def _run_analyzer(
 
     rc = _run_with_retry(cmd, dry_run=dry_run)
 
-    # Clean up temp manifest files
     for m in (changed_manifest, deleted_manifest):
         if m and m.exists():
             try:
@@ -752,6 +849,7 @@ def _sync_folder(
     folder: str,
     env: dict,
     python: str,
+    project: dict,
     langs: list,      # [] = run ALL available analyzers
     force_mode: str,  # "full" | "incremental" | "auto"
     dry_run: bool,
@@ -779,7 +877,7 @@ def _sync_folder(
     click.echo(f" mode   : {mode}")
     click.echo(f" tools  : {', '.join(targets)}")
 
-    # Incremental: detect changed / deleted files
+    # ── Incremental: detect changed/deleted via git diff ─────────────────
     changed_files, deleted_files = [], []
     if mode == "incremental":
         since_commit = state.get("git_commit", "")
@@ -817,6 +915,7 @@ def _sync_folder(
             if not click.confirm("\n  Proceed?", default=True):
                 return {"folder": folder, "status": "cancelled"}
 
+    # ── Run each analyzer ─────────────────────────────────────────────────
     start_ts     = time.time()
     lang_results = []
 
@@ -832,6 +931,7 @@ def _sync_folder(
             folder_path=folder_path,
             env=env,
             python=python,
+            project=project,
             mode=mode,
             changed_files=changed_files,
             deleted_files=deleted_files,
@@ -1202,6 +1302,7 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run):
     cfg, _   = _load_active_config(project_path)
     code_cfg = cfg.get("code", {})
     env      = code_cfg.get("env", {})
+    project  = cfg.get("project", {})
     folders  = [f for f in code_cfg.get("source", {}).get("folder", []) if f]
 
     if not folders:
@@ -1226,7 +1327,8 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run):
             folder=folder,
             env=env,
             python=python,
-            langs=langs,       # auto-detected
+            project=project,
+            langs=langs,
             force_mode="auto",
             dry_run=dry_run,
             verbose=verbose,
@@ -1254,6 +1356,7 @@ def sync_code_all(ctx):
     cfg, _       = _load_active_config(project_path)
     code_cfg     = cfg.get("code", {})
     env          = code_cfg.get("env", {})
+    project      = cfg.get("project", {})
     folders      = [f for f in code_cfg.get("source", {}).get("folder", []) if f]
 
     if not folders:
@@ -1274,8 +1377,9 @@ def sync_code_all(ctx):
             folder=folder,
             env=env,
             python=python,
-            langs=[],           # [] = run every available analyzer
-            force_mode="auto",  # incremental if baseline exists, full otherwise
+            project=project,
+            langs=[],
+            force_mode="auto",
             dry_run=o["dry_run"],
             verbose=o["verbose"],
             preview=False,
@@ -1314,6 +1418,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
     cfg, _  = _load_active_config(project_path)
     doc_cfg = cfg.get("doc", {})
     env     = doc_cfg.get("env", {})
+    project = cfg.get("project", {})
     folders = [f for f in doc_cfg.get("source", {}).get("folder", []) if f]
 
     if not folders:
@@ -1339,6 +1444,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
             folder=folder,
             env=env,
             python=python,
+            project=project,
             force_mode="auto",
             entity_provider=entity_provider,
             dry_run=dry_run,
@@ -1363,6 +1469,7 @@ def sync_doc_all(ctx):
     cfg, _       = _load_active_config(project_path)
     doc_cfg      = cfg.get("doc", {})
     env          = doc_cfg.get("env", {})
+    project      = cfg.get("project", {})
     folders      = [f for f in doc_cfg.get("source", {}).get("folder", []) if f]
 
     if not folders:
@@ -1385,6 +1492,7 @@ def sync_doc_all(ctx):
             folder=folder,
             env=env,
             python=python,
+            project=project,
             force_mode="full",
             entity_provider=o["entity_provider"],
             dry_run=o["dry_run"],
