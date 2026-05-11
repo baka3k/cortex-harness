@@ -1,0 +1,15 @@
+{
+  "session_id": "session-<timestamp>",
+  "task_id": "task-xxx",
+  "task_type": "bugfix|feature|refactor",
+  "status": "in_progress|done|blocked",
+  "started_at": "ISO-8601",
+  "ended_at": "ISO-8601",
+  "rounds_used": 0,
+  "verify": {
+    "critical_passed": false,
+    "details": []
+  },
+  "scope_violations": [],
+  "notes": []
+}
