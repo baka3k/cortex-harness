@@ -218,6 +218,28 @@ def _save_config(cfg: dict, path: Path) -> None:
     click.echo(f"[ok] Config saved -> {path}")
 
 
+def _source_projects(source: dict) -> list:
+    """Return list of {git, folder[]} entries. Handles both old and new format.
+
+    New format: source.projects = [{git, folder}, ...]
+    Old format: source.git + source.folder  (migrated transparently)
+    """
+    if "projects" in source:
+        return list(source["projects"])
+    return [{"git": source.get("git", ""), "folder": source.get("folder", [])}]
+
+
+def _source_folders(source: dict) -> list:
+    """Flatten all project folders into a deduplicated, ordered list."""
+    result, seen = [], set()
+    for p in _source_projects(source):
+        for f in p.get("folder", []):
+            if f and f not in seen:
+                seen.add(f)
+                result.append(f)
+    return result
+
+
 def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
     cfg_dir = _config_dir(project_dir)
     if not cfg_dir.exists():
@@ -1177,9 +1199,6 @@ def init(env, project_dir):
     code_max_chars   = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
     code_device      = _p("device",          ["code", "env", "device"],          "cpu")
 
-    click.echo("\n─── Code — source ──────────────────────────")
-    code_git = _p("Git remote URL (blank = none)", ["code", "source", "git"], "")
-
     click.echo("\n─── Doc — Neo4j + Qdrant + Embedding ───────")
     doc_neo4j_uri   = _p("NEO4J_URI",       ["doc", "env", "NEO4J_URI"],       code_neo4j_uri)
     doc_neo4j_db    = _p("NEO4J_DB",        ["doc", "env", "NEO4J_DB"],        code_neo4j_db)
@@ -1192,39 +1211,94 @@ def init(env, project_dir):
     doc_max_chars   = _p("MAX_EMBED_CHARS", ["doc", "env", "MAX_EMBED_CHARS"], "500")
     doc_device      = _p("device",          ["doc", "env", "device"],          code_device)
 
-    click.echo("\n─── Doc — source ───────────────────────────")
-    doc_git = _p("Git remote URL (blank = none)", ["doc", "source", "git"], code_git)
+    # ── Code source — first project ──────────────────────────────────────────
+    existing_code_projects = _source_projects(existing.get("code", {}).get("source", {}))
+    first_code = existing_code_projects[0] if existing_code_projects else {}
 
-    doc_folders, code_folders = _scaffold_project(project_path)
+    click.echo("\n─── Code — first project ───────────────────")
+    if existing_code_projects and any(p.get("folder") for p in existing_code_projects):
+        click.echo(f"  Existing projects: {len(existing_code_projects)}")
+        for i, p in enumerate(existing_code_projects, 1):
+            click.echo(f"    [{i}] git={p.get('git') or '(local)'}  folders={p.get('folder', [])}")
+        click.echo("  (Run 'dev sync code add' to add more; editing here updates project #1 only)")
+
+    code_git     = click.prompt("  Git URL (blank = local)", default=first_code.get("git", "") or "")
+    code_folders_raw = click.prompt(
+        "  Source folders (comma-separated, blank = auto-scaffold)",
+        default=", ".join(f for f in first_code.get("folder", []) if f) or "",
+    )
+
+    # ── Doc source — first project ────────────────────────────────────────────
+    existing_doc_projects = _source_projects(existing.get("doc", {}).get("source", {}))
+    first_doc = existing_doc_projects[0] if existing_doc_projects else {}
+
+    click.echo("\n─── Doc — first project ────────────────────")
+    if existing_doc_projects and any(p.get("folder") for p in existing_doc_projects):
+        click.echo(f"  Existing projects: {len(existing_doc_projects)}")
+        for i, p in enumerate(existing_doc_projects, 1):
+            click.echo(f"    [{i}] git={p.get('git') or '(local)'}  folders={p.get('folder', [])}")
+        click.echo("  (Run 'dev sync doc add' to add more; editing here updates project #1 only)")
+
+    doc_git      = click.prompt("  Git URL (blank = local)", default=first_doc.get("git", "") or "")
+    doc_folders_raw = click.prompt(
+        "  Doc folders (comma-separated, blank = auto-scaffold)",
+        default=", ".join(f for f in first_doc.get("folder", []) if f) or "",
+    )
+
+    # ── Scaffold / resolve folders ────────────────────────────────────────────
+    if code_folders_raw.strip() or doc_folders_raw.strip():
+        code_folders = [f.strip() for f in code_folders_raw.split(",") if f.strip()]
+        doc_folders  = [f.strip() for f in doc_folders_raw.split(",")  if f.strip()]
+    else:
+        click.echo("")
+        doc_folders, code_folders = _scaffold_project(project_path)
+
+    # ── Merge: keep existing extra projects, replace/set project #1 ──────────
+    new_first_code = {"git": code_git, "folder": code_folders}
+    if len(existing_code_projects) > 1:
+        code_projects = [new_first_code] + existing_code_projects[1:]
+    else:
+        code_projects = [new_first_code]
+
+    new_first_doc = {"git": doc_git, "folder": doc_folders}
+    if len(existing_doc_projects) > 1:
+        doc_projects = [new_first_doc] + existing_doc_projects[1:]
+    else:
+        doc_projects = [new_first_doc]
 
     cfg = {
         "active": True,
         "project": {"code": project_code, "name": project_name},
         "code": {
             "env": {
-                "NEO4J_URI":       code_neo4j_uri,   "NEO4J_DB":  code_neo4j_db,
+                "NEO4J_URI":       code_neo4j_uri,   "NEO4J_DB":   code_neo4j_db,
                 "NEO4J_USER":      code_neo4j_user,  "NEO4J_PASS": code_neo4j_pass,
                 "QDRANT_HOST":     code_qdrant_host, "QDRANT_PORT": code_qdrant_port,
                 "EMBEDDING_MODEL": code_embed_model, "BATCH_SIZE": code_batch_size,
                 "MAX_EMBED_CHARS": code_max_chars,   "device": code_device,
             },
-            "source": {"git": code_git, "folder": code_folders},
+            "source": {"projects": code_projects},
         },
         "doc": {
             "env": {
-                "NEO4J_URI":       doc_neo4j_uri,   "NEO4J_DB":  doc_neo4j_db,
+                "NEO4J_URI":       doc_neo4j_uri,   "NEO4J_DB":   doc_neo4j_db,
                 "NEO4J_USER":      doc_neo4j_user,  "NEO4J_PASS": doc_neo4j_pass,
                 "QDRANT_HOST":     doc_qdrant_host, "QDRANT_PORT": doc_qdrant_port,
                 "EMBEDDING_MODEL": doc_embed_model, "BATCH_SIZE": doc_batch_size,
                 "MAX_EMBED_CHARS": doc_max_chars,   "device": doc_device,
             },
-            "source": {"git": doc_git, "folder": doc_folders},
+            "source": {"projects": doc_projects},
         },
     }
 
     _deactivate_other_envs(project_path, env)
     _save_config(cfg, config_path)
     click.echo(f"\n[ok] Environment '{env}' is now active.")
+    click.echo(f"     Code projects : {len(code_projects)}  "
+               f"(total {len(_source_folders({'projects': code_projects}))} folders)")
+    click.echo(f"     Doc  projects : {len(doc_projects)}  "
+               f"(total {len(_source_folders({'projects': doc_projects}))} folders)")
+    click.echo("     Tip: 'dev sync code add' / 'dev sync doc add' to add more projects.")
 
 
 # ---------------------------------------------------------------------------
@@ -1261,12 +1335,18 @@ def status(project_dir):
         sec = cfg.get(section, {})
         env = sec.get("env", {})
         src = sec.get("source", {})
+        projects = _source_projects(src)
         click.echo(f"\n[{section}]")
         click.echo(f"  Neo4j     : {env.get('NEO4J_URI')}  db={env.get('NEO4J_DB')}")
         click.echo(f"  Qdrant    : {env.get('QDRANT_HOST')}:{env.get('QDRANT_PORT')}")
         click.echo(f"  Embedding : {env.get('EMBEDDING_MODEL')}  device={env.get('device')}")
-        click.echo(f"  Git       : {src.get('git') or '(none)'}")
-        click.echo(f"  Folders   : {len(src.get('folder', []))} paths")
+        click.echo(f"  Projects  : {len(projects)}")
+        for i, p in enumerate(projects, 1):
+            git_label = p.get("git") or "(local)"
+            folders   = [f for f in p.get("folder", []) if f]
+            click.echo(f"    [{i}] {git_label}  ({len(folders)} folder(s))")
+            for f in folders:
+                click.echo(f"         • {f}")
 
 
 # ---------------------------------------------------------------------------
@@ -1306,10 +1386,10 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run):
     code_cfg = cfg.get("code", {})
     env      = code_cfg.get("env", {})
     project  = cfg.get("project", {})
-    folders  = [f for f in code_cfg.get("source", {}).get("folder", []) if f]
+    folders  = _source_folders(code_cfg.get("source", {}))
 
     if not folders:
-        click.echo("[warn] No folders in code.source.folder. Run 'dev init' first.")
+        click.echo("[warn] No source folders configured. Run 'dev init' or 'dev sync code add'.")
         return
 
     selected = _select_folders_interactive(folders)
@@ -1360,10 +1440,10 @@ def sync_code_all(ctx):
     code_cfg     = cfg.get("code", {})
     env          = code_cfg.get("env", {})
     project      = cfg.get("project", {})
-    folders      = [f for f in code_cfg.get("source", {}).get("folder", []) if f]
+    folders      = _source_folders(code_cfg.get("source", {}))
 
     if not folders:
-        click.echo("[warn] No folders in code.source.folder. Run 'dev init' first.")
+        click.echo("[warn] No source folders configured. Run 'dev init' or 'dev sync code add'.")
         return
 
     available = [l for l, p in LANG_ANALYZERS.items() if p.exists()]
@@ -1422,10 +1502,10 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
     doc_cfg = cfg.get("doc", {})
     env     = doc_cfg.get("env", {})
     project = cfg.get("project", {})
-    folders = [f for f in doc_cfg.get("source", {}).get("folder", []) if f]
+    folders = _source_folders(doc_cfg.get("source", {}))
 
     if not folders:
-        click.echo("[warn] No folders in doc.source.folder. Run 'dev init' first.")
+        click.echo("[warn] No doc folders configured. Run 'dev init' or 'dev sync doc add'.")
         return
 
     if not DOC_INGESTOR.exists():
@@ -1473,10 +1553,10 @@ def sync_doc_all(ctx):
     doc_cfg      = cfg.get("doc", {})
     env          = doc_cfg.get("env", {})
     project      = cfg.get("project", {})
-    folders      = [f for f in doc_cfg.get("source", {}).get("folder", []) if f]
+    folders      = _source_folders(doc_cfg.get("source", {}))
 
     if not folders:
-        click.echo("[warn] No folders in doc.source.folder. Run 'dev init' first.")
+        click.echo("[warn] No doc folders configured. Run 'dev init' or 'dev sync doc add'.")
         return
 
     if not DOC_INGESTOR.exists():
@@ -1504,6 +1584,90 @@ def sync_doc_all(ctx):
         summaries.append(result)
 
     _print_summary(summaries, time.time() - total_start)
+
+
+# ── sync code add ─────────────────────────────────────────────────────────────
+
+@sync_code.command("add")
+@click.option("--project-dir", default=".", show_default=True)
+def sync_code_add(project_dir):
+    """Add a new source project to code.source.projects.
+
+    \b
+    Prompts for a git URL and one or more source folders, then appends
+    a new entry to the active config without touching existing projects.
+    """
+    project_path = Path(project_dir).resolve()
+    cfg, cfg_path = _load_active_config(project_path)
+
+    existing_projects = _source_projects(cfg.get("code", {}).get("source", {}))
+    click.echo(f"\n─── Add code project  (current: {len(existing_projects)}) ───")
+    for i, p in enumerate(existing_projects, 1):
+        git_label = p.get("git") or "(local)"
+        click.echo(f"  [{i}] {git_label}  folders={p.get('folder', [])}")
+
+    click.echo("")
+    git_url     = click.prompt("  Git URL (blank = local)", default="")
+    folders_raw = click.prompt("  Source folders (comma-separated)")
+    folders     = [f.strip() for f in folders_raw.split(",") if f.strip()]
+
+    if not folders:
+        click.echo("[error] At least one folder is required.", err=True)
+        sys.exit(1)
+
+    new_project = {"git": git_url, "folder": folders}
+    existing_projects.append(new_project)
+    cfg.setdefault("code", {}).setdefault("source", {})["projects"] = existing_projects
+    # remove old flat keys if present (migration)
+    cfg["code"]["source"].pop("git", None)
+    cfg["code"]["source"].pop("folder", None)
+
+    _save_config(cfg, cfg_path)
+    click.echo(f"\n[ok] Added project #{len(existing_projects)}: {git_url or '(local)'}  {folders}")
+    click.echo(f"     Total code projects: {len(existing_projects)}  "
+               f"({len(_source_folders(cfg['code']['source']))} folders)")
+
+
+# ── sync doc add ──────────────────────────────────────────────────────────────
+
+@sync_doc.command("add")
+@click.option("--project-dir", default=".", show_default=True)
+def sync_doc_add(project_dir):
+    """Add a new doc project to doc.source.projects.
+
+    \b
+    Prompts for a git URL and one or more doc folders, then appends
+    a new entry to the active config without touching existing projects.
+    """
+    project_path = Path(project_dir).resolve()
+    cfg, cfg_path = _load_active_config(project_path)
+
+    existing_projects = _source_projects(cfg.get("doc", {}).get("source", {}))
+    click.echo(f"\n─── Add doc project  (current: {len(existing_projects)}) ───")
+    for i, p in enumerate(existing_projects, 1):
+        git_label = p.get("git") or "(local)"
+        click.echo(f"  [{i}] {git_label}  folders={p.get('folder', [])}")
+
+    click.echo("")
+    git_url     = click.prompt("  Git URL (blank = local)", default="")
+    folders_raw = click.prompt("  Doc folders (comma-separated)")
+    folders     = [f.strip() for f in folders_raw.split(",") if f.strip()]
+
+    if not folders:
+        click.echo("[error] At least one folder is required.", err=True)
+        sys.exit(1)
+
+    new_project = {"git": git_url, "folder": folders}
+    existing_projects.append(new_project)
+    cfg.setdefault("doc", {}).setdefault("source", {})["projects"] = existing_projects
+    # remove old flat keys if present (migration)
+    cfg["doc"]["source"].pop("git", None)
+    cfg["doc"]["source"].pop("folder", None)
+
+    _save_config(cfg, cfg_path)
+    click.echo(f"\n[ok] Added project #{len(existing_projects)}: {git_url or '(local)'}  {folders}")
+    click.echo(f"     Total doc projects: {len(existing_projects)}  "
+               f"({len(_source_folders(cfg['doc']['source']))} folders)")
 
 
 # ---------------------------------------------------------------------------
