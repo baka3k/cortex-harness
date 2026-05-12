@@ -1,5 +1,5 @@
 {
-  "active":true,
+  "active": true,
   "project": {
     "code": "xxx",
     "name": "projectname"
@@ -18,9 +18,21 @@
       "device": "mps"
     },
     "source": {
-      "git": "",
-      "folder": [
-        ""
+      "projects": [
+        {
+          "git": "https://github.com/company/project-a.git",
+          "folder": [
+            "",
+            ""
+          ]
+        },
+        {
+          "git": "https://github.com/company/project-b.git",
+          "folder": [
+            "backend",
+            "scripts"
+          ]
+        }
       ]
     }
   },
@@ -38,9 +50,21 @@
       "device": "mps"
     },
     "source": {
-      "git": "",
-      "folder": [
-        ""
+      "projects": [
+        {
+          "git": "https://github.com/company/project-a.git",
+          "folder": [
+            "",
+            ""
+          ]
+        },
+        {
+          "git": "https://github.com/company/project-b.git",
+          "folder": [
+            "backend",
+            "scripts"
+          ]
+        }
       ]
     }
   }
