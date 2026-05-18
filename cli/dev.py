@@ -1856,6 +1856,41 @@ def mcp_add(scope, agent, project_dir):
         click.echo(f"  [saved]   {cfg_path}\n")
 
 
+@mcp.command("stop")
+def mcp_stop():
+    """Stop all running MCP servers (code-tiny and doc-tiny).
+    
+    \b
+    Stops all MCP services defined in MCP_SERVICES.
+    Shows which processes were stopped.
+    """
+    click.echo("\n── Stopping MCP servers ─────────────────────────")
+    
+    total_stopped = 0
+    for name, svc in MCP_SERVICES.items():
+        pattern = svc["pattern"]
+        port    = svc["port"]
+        
+        pids = _mcp_pids(pattern)
+        
+        if not pids:
+            click.echo(f"  {name:<12} (port {port})  [not running]")
+            continue
+        
+        stopped = _mcp_stop_pattern(pattern)
+        total_stopped += stopped
+        
+        if stopped:
+            click.echo(f"  {name:<12} (port {port})  [stopped]  killed {stopped} process(es)")
+        else:
+            click.echo(f"  {name:<12} (port {port})  [already stopped]")
+    
+    if total_stopped == 0:
+        click.echo("\n[info] No MCP servers were running.")
+    else:
+        click.echo(f"\n[ok] Stopped {total_stopped} MCP server process(es) in total.")
+
+
 # ---------------------------------------------------------------------------
 # Harness helpers
 # ---------------------------------------------------------------------------
