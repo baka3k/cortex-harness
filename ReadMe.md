@@ -72,6 +72,7 @@ Because the install is **editable** (`-e`), `git pull` automatically picks up an
 > Use `dev.sh` (macOS/Linux) or `dev.bat` (Windows) from the repo root directly,
 > or set an alias: `alias dev='/path/to/cortex-harness/dev.sh'`
 
+
 ---
 
 ## 1. Commands
@@ -506,3 +507,134 @@ Sensitive files (`.env`, `*.pem`, `*.key`, `*secret*`, etc.) are always excluded
 ## 7. Environment Management
 
 The CLI automatically locates the Python interpreter inside `.venv/` for both `code-tiny` and `doc-tiny`, falling back to the system Python if no virtual environment is found.
+
+--- 
+## ONLY WINDOW 
+
+---
+
+## Windows Installation Notes
+
+### Quick Install (Automated)
+
+**PowerShell (Recommended):**
+```powershell
+# Run as Administrator
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\install-windows.ps1
+```
+
+**Command Prompt:**
+```cmd
+# Run as Administrator
+install-windows.bat
+```
+
+### Manual Install
+
+### Prerequisites
+- Python 3.10+ 
+- NVIDIA GPU + CUDA drivers (for GPU acceleration)
+- Git
+
+### Installation Steps
+
+**1. Clone and Install CortexHarness**
+```powershell
+git clone <repo-url>
+cd cortex-harness
+
+# Create virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+pip install -e .
+```
+
+**2. Install CUDA-enabled PyTorch (if you have NVIDIA GPU)**
+```powershell
+# Uninstall CPU-only PyTorch (if installed)
+pip uninstall torch torchvision torchaudio
+
+# Install CUDA version (for CUDA 12.4)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+```
+
+**3. Install Code-Tiny Dependencies**
+```powershell
+# Install additional ML dependencies
+pip install -r code-tiny/requirements.txt
+
+# Fix transformers compatibility (if needed)
+pip install "transformers<5.0"
+```
+
+**4. Create Global CLI Command**
+
+Due to Python environment limitations on Windows, create a global CLI using one of these methods:
+
+**Option A: Using Scoop (Recommended)**
+```powershell
+# Create shim file
+echo "path = `\"C:\ai\cortex-harness\.venv\Scripts\dev.exe`"" > C:\Users\$env:USERNAME\scoop\shims\dev.shim
+```
+
+**Option B: PowerShell Alias**
+```powershell
+# Add to PowerShell profile
+Add-Content -Path $PROFILE -Value "`nfunction dev { & 'C:\ai\cortex-harness\.venv\Scripts\dev.exe' @Args }"
+
+# Reload profile
+. $PROFILE
+```
+
+**Option C: Manual Wrapper Script**
+```powershell
+# Create wrapper script in user directory
+@echo off
+set CORTEX_HARNESS_DIR=C:\ai\cortex-harness
+set PYTHON_EXE=%CORTEX_HARNESS_DIR%\.venv\Scripts\python.exe
+set DEV_MODULE=%CORTEX_HARNESS_DIR%\cortex_harness\dev.py
+"%PYTHON_EXE%" "%DEV_MODULE%" %*
+```
+
+Save as `C:\Users\<username>\dev.cmd` and ensure this directory is in your PATH.
+
+**5. Using in Other Projects**
+
+For each new project, install cortex-harness as a dependency:
+```powershell
+cd C:\path\to\your-project
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e C:\ai\cortex-harness
+pip install -r C:\ai\cortex-harness\code-tiny\requirements.txt
+```
+
+Then use `uv run dev <command>` or `.venv\Scripts\dev.exe <command>`.
+
+**6. Verify Installation**
+```powershell
+# Test CUDA availability
+python -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+
+# Test CLI
+dev --help
+dev status
+```
+
+### Common Windows Issues
+
+**Issue**: `ModuleNotFoundError: No module named 'requests'`
+**Fix**: Install code-tiny dependencies: `pip install -r C:\ai\cortex-harness\code-tiny\requirements.txt`
+
+**Issue**: `TypeError: got multiple values for keyword argument 'fix_mistral_regex'`
+**Fix**: Downgrade transformers: `pip install "transformers<5.0"`
+
+**Issue**: `AssertionError: Torch not compiled with CUDA enabled`
+**Fix**: Install CUDA PyTorch: `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124`
+
+**Issue**: `'dev' is not recognized as a command`
+**Fix**: Use one of the CLI setup methods above or run: `C:\ai\cortex-harness\.venv\Scripts\dev.exe <command>`

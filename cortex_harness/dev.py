@@ -1360,7 +1360,8 @@ def status(project_dir):
 
     cfg, active_path = _load_active_config(project_path)
     proj = cfg.get("project", {})
-    click.echo(f"\n─── Active: {active_path.name} ───────────────────────")
+    # Use ASCII-compatible characters for Windows compatibility
+    click.echo(f"\n--- Active: {active_path.name} -----------------------------")
     click.echo(f"Project     : {proj.get('name')} ({proj.get('code')})")
 
     for section in ("code", "doc"):
