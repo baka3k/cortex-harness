@@ -64,8 +64,8 @@ def pick_task(features: list[dict[str, Any]], task_id: str | None) -> dict[str, 
     raise OrchestratorError("No todo task available")
 
 
-def run_command(cmd: list[str], cwd: Path) -> tuple[int, str]:
-    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+def run_command(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> tuple[int, str]:
+    proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=env)
     output = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode, output
 
@@ -308,7 +308,15 @@ def main() -> int:
                 }
             )
 
-        verify_code, verify_out = run_command(["bash", ".harness/scripts/verify.sh"], root)
+        verify_env = {**os.environ}
+        verify_critical = cfg_get(config, "verify.critical", {}) or {}
+        if verify_critical.get("test_cmd"):
+            verify_env["CRITICAL_TEST_CMD"] = str(verify_critical["test_cmd"])
+        if verify_critical.get("lint_cmd"):
+            verify_env["CRITICAL_LINT_CMD"] = str(verify_critical["lint_cmd"])
+        if verify_critical.get("type_cmd"):
+            verify_env["CRITICAL_TYPE_CMD"] = str(verify_critical["type_cmd"])
+        verify_code, verify_out = run_command(["bash", ".harness/scripts/verify.sh"], root, env=verify_env)
         log.verify_attempts.append(
             {
                 "round": round_no,

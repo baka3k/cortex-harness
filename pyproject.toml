@@ -12,8 +12,8 @@ dependencies = [
 ]
 
 [project.scripts]
-dev = "cli.dev:cli"
+dev = "cortex_harness.dev:cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cli*"]
+include = ["cortex_harness*"]
