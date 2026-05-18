@@ -218,6 +218,16 @@ def build_gliner_model(model: str):
         raise RuntimeError("gliner is not installed. pip install gliner") from exc
 
     resolved_model = _resolve_gliner_model(model)
+
+    # Absolute path → must exist locally; fail fast with a clear message
+    # instead of letting HuggingFace reject it as an invalid repo ID.
+    resolved_path = Path(resolved_model)
+    if resolved_path.is_absolute() and not resolved_path.exists():
+        raise FileNotFoundError(
+            f"GLiNER local model path not found: {resolved_model}\n"
+            f"Check GLINER_MODEL_PATH env var or --gliner-model-path argument."
+        )
+
     local_only = _gliner_local_only(resolved_model)
     if local_only:
         os.environ.setdefault("HF_HUB_OFFLINE", "1")

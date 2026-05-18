@@ -1,3 +1,16 @@
 {
-  "features": []
+  "features": [
+    {
+      "id": "task-001",
+      "title": "Bootstrap project harness",
+      "type": "feature",
+      "status": "todo",
+      "priority": 1,
+      "graph_entry_node": "namespace.EntryClass.method",
+      "related_modules": ["module-a"],
+      "related_files": ["src/module-a/entry.py"],
+      "notes": "Initial setup task — replace with your first real task",
+      "session_id": null
+    }
+  ]
 }
