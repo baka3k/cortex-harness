@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cortex-harness"
+version = "0.1.0"
+description = "Unified CLI for CortexHarness code and document ingestion"
+requires-python = ">=3.10"
+dependencies = [
+    "click",
+]
+
+[project.scripts]
+dev = "cli.dev:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cli*"]

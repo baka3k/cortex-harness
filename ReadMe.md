@@ -40,7 +40,37 @@ The goal is to provide a foundational layer for building reliable AI-native syst
 * Harness engineering platforms
 * Cognitive runtime infrastructure
 
-The Dev CLI lives at `cli/dev.py` with launchers `dev.bat` (Windows) and `dev.sh` (Unix/macOS).
+## Installation
+
+Clone the repo once, install the `dev` command globally — no aliases, no path prefixes needed.
+
+```bash
+git clone <repo-url>
+cd cortex-harness
+
+# Create and activate a virtual environment (recommended)
+python -m venv .venv
+source .venv/bin/activate          # macOS / Linux
+.venv\Scripts\activate             # Windows
+
+# Install dependencies and register the dev command
+pip install -r requirements.txt
+pip install -e .
+```
+
+After this, `dev` is available in your PATH on any platform:
+
+```bash
+dev init .
+dev sync code
+dev harness run
+```
+
+Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.
+
+> **Alternatives without pip install:**
+> Use `dev.sh` (macOS/Linux) or `dev.bat` (Windows) from the repo root directly,
+> or set an alias: `alias dev='/path/to/cortex-harness/dev.sh'`
 
 ---
 
@@ -303,41 +333,32 @@ Harness relies on the knowledge graph being up-to-date to produce useful context
 
 ## 3. Usage from a Project Directory
 
-Run the CLI from any project folder by referencing the launcher with an absolute path:
-
-**macOS / Linux:**
+After `pip install -e .`, navigate to any project folder and use `dev` directly.
 
 ```bash
+cd /path/to/your-project
+
+# First-time setup for this project
+dev init .                  # initialise config in current directory
+dev status                  # verify active config
+
 # Data pipeline
-/path/to/cortex-harness/dev.sh init
-/path/to/cortex-harness/dev.sh status
-/path/to/cortex-harness/dev.sh sync code
-/path/to/cortex-harness/dev.sh sync code all
-/path/to/cortex-harness/dev.sh sync doc
-/path/to/cortex-harness/dev.sh sync doc all
-/path/to/cortex-harness/dev.sh mcp start
-/path/to/cortex-harness/dev.sh mcp add
+dev sync code               # incremental code sync (git diff → mtime)
+dev sync code all           # full sync, all analyzers
+dev sync doc                # incremental doc sync
+dev sync doc all            # full doc sync
+dev mcp start               # start code-tiny (:8788) + doc-tiny (:8789)
+dev mcp add                 # register servers in .mcp.json
 
-# Agent harness (run from inside the project)
-/path/to/cortex-harness/dev.sh harness init
-/path/to/cortex-harness/dev.sh harness task add
-/path/to/cortex-harness/dev.sh harness task list
-/path/to/cortex-harness/dev.sh harness run
-/path/to/cortex-harness/dev.sh harness status
+# Agent harness
+dev harness init            # scaffold .harness/ in current project
+dev harness task add        # add a task to the backlog
+dev harness task list       # view backlog
+dev harness run             # run orchestrator on next todo task
+dev harness status          # summary + MCP health check
 ```
 
-**Windows:**
-
-```bash
-C:\ai\cortex-harness\dev.bat init
-C:\ai\cortex-harness\dev.bat sync code
-C:\ai\cortex-harness\dev.bat sync doc all
-C:\ai\cortex-harness\dev.bat mcp start
-C:\ai\cortex-harness\dev.bat mcp add --scope global
-C:\ai\cortex-harness\dev.bat harness init
-C:\ai\cortex-harness\dev.bat harness task add
-C:\ai\cortex-harness\dev.bat harness run
-```
+The `dev init .` dot argument tells the CLI to use the **current directory** as the project root, regardless of where the cortex-harness repo is cloned.
 
 ---
 

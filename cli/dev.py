@@ -172,7 +172,25 @@ _SCAFFOLD_FILES = {
     "README.md":                            "# Project\n",
 }
 
-_SCAN_EXCLUDE = {".cortext-harness", ".git", ".venv", "__pycache__", "node_modules", ".cache"}
+_SCAN_EXCLUDE = {
+    # version control
+    ".git",
+    # python envs & build artefacts
+    ".venv", "venv", "env", ".env",
+    "__pycache__", "*.egg-info", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    # js/ts
+    "node_modules",
+    # java/kotlin/android build
+    "build", "out", "target", ".gradle",
+    # compiled output (generic)
+    "dist", "bin", "obj",
+    # ios
+    "Pods", "DerivedData",
+    # go / php
+    "vendor",
+    # ide & tool caches
+    ".idea", ".vscode", ".cache", ".cortext-harness",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -369,13 +387,21 @@ def _is_sensitive(path: Path) -> bool:
     return any(fnmatch.fnmatch(name, pat) for pat in SENSITIVE_PATTERNS)
 
 
+def _is_excluded_path(path: Path, root: Path) -> bool:
+    """True if path lives inside a _SCAN_EXCLUDE directory (e.g. .venv, node_modules)."""
+    try:
+        return bool(set(path.relative_to(root).parts[:-1]).intersection(_SCAN_EXCLUDE))
+    except ValueError:
+        return False
+
+
 def _detect_langs(folder_path: Path) -> list:
     """Detect languages from extensions. Android takes priority when AndroidManifest exists."""
     counts: Counter = Counter()
     is_android = any(folder_path.rglob("AndroidManifest.xml"))
 
     for f in folder_path.rglob("*"):
-        if not f.is_file() or _is_sensitive(f):
+        if not f.is_file() or _is_sensitive(f) or _is_excluded_path(f, folder_path):
             continue
         ext = f.suffix.lower()
         for lang, exts in LANG_EXTENSIONS.items():
@@ -445,7 +471,9 @@ def _mtime_changed_files(folder_path: Path, since_ts: float) -> tuple:
     """Return (changed_files, []) using mtime comparison. Paths relative to folder_path."""
     changed = []
     for f in folder_path.rglob("*"):
-        if f.is_file() and not _is_sensitive(f) and f.stat().st_mtime > since_ts:
+        if (f.is_file() and not _is_sensitive(f)
+                and not _is_excluded_path(f, folder_path)
+                and f.stat().st_mtime > since_ts):
             try:
                 changed.append(str(f.relative_to(folder_path)))
             except ValueError:
@@ -478,7 +506,8 @@ def _find_doc_files(folder_path: Path) -> list:
     """Return all supported document files under folder_path (sorted)."""
     return sorted(
         f for f in folder_path.rglob("*")
-        if f.is_file() and f.suffix.lower() in DOC_EXTENSIONS and not _is_sensitive(f)
+        if (f.is_file() and f.suffix.lower() in DOC_EXTENSIONS
+                and not _is_sensitive(f) and not _is_excluded_path(f, folder_path))
     )
 
 
@@ -600,7 +629,7 @@ def _sync_doc_folder(
             _save_state(project_path, f"doc:{folder}", {
                 "folder":       folder,
                 "last_sync":    datetime.now(timezone.utc).isoformat(),
-                "last_sync_ts": time.time(),
+                "last_sync_ts": start_ts,
                 "mode":         "full",
                 "git_commit":   _git_head(folder_path),
                 "file_hashes":  _build_file_hashes(folder_path),
@@ -666,7 +695,7 @@ def _sync_doc_folder(
         _save_state(project_path, f"doc:{folder}", {
             "folder":       folder,
             "last_sync":    datetime.now(timezone.utc).isoformat(),
-            "last_sync_ts": time.time(),
+            "last_sync_ts": start_ts,
             "mode":         "incremental",
             "git_commit":   _git_head(folder_path),
             "file_hashes":  new_hashes,
@@ -846,9 +875,11 @@ def _run_analyzer(
     changed_manifest = None
     deleted_manifest = None
 
-    if mode == "incremental" and changed_files:
-        changed_manifest = _write_manifest(changed_files, "changed")
-        cmd += ["--incremental", "--changed-files-manifest", str(changed_manifest)]
+    if mode == "incremental" and (changed_files or deleted_files):
+        cmd += ["--incremental"]
+        if changed_files:
+            changed_manifest = _write_manifest(changed_files, "changed")
+            cmd += ["--changed-files-manifest", str(changed_manifest)]
         if deleted_files:
             deleted_manifest = _write_manifest(deleted_files, "deleted")
             cmd += ["--deleted-files-manifest", str(deleted_manifest)]
@@ -974,7 +1005,7 @@ def _sync_folder(
         _save_state(project_path, folder, {
             "folder":       folder,
             "last_sync":    datetime.now(timezone.utc).isoformat(),
-            "last_sync_ts": time.time(),
+            "last_sync_ts": start_ts,
             "mode":         mode,
             "git_commit":   _git_head(folder_path),
             "langs":        list(targets.keys()),
