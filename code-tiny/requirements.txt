@@ -14,6 +14,7 @@ python-multipart
 requests
 gliner
 torch
+# transformers<5.0 # only for windows
 transformers
 
 # Existing dependencies
