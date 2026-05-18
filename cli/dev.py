@@ -1161,11 +1161,15 @@ def cli():
 @click.option("--env", default="dev", show_default=True,
               type=click.Choice(["dev", "prod"]),
               help="Environment to configure.")
-@click.option("--project-dir", default=".", show_default=True,
+@click.option("--project-dir", default=None,
               help="Target project root directory.")
-def init(env, project_dir):
-    """Create/update config and scaffold project folder structure."""
-    project_path = Path(project_dir).resolve()
+@click.argument("path", default=None, required=False, metavar="[PATH]")
+def init(env, project_dir, path):
+    """Create/update config and scaffold project folder structure.
+
+    PATH can be passed positionally, e.g. 'dev init .' to use the current directory.
+    """
+    project_path = Path(path or project_dir or ".").resolve()
     config_path  = _config_path(project_path, env)
 
     existing: dict = {}

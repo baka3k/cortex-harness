@@ -1,0 +1,42 @@
+neo4j
+neo4j-graphrag
+qdrant-client
+python-dotenv
+pydantic
+openai
+langextract
+google-generativeai
+pypdf
+python-docx
+python-pptx
+openpyxl
+sentence-transformers
+spacy
+fastmcp
+lxml
+gliner
+pandas
+# FastMCP dependencies
+# New C/C++ analysis tools
+networkx
+# Additional dependencies for C++ analysis and web services
+fastapi
+uvicorn[standard]
+python-multipart
+requests
+torch
+transformers
+# Existing dependencies
+tree-sitter
+tree-sitter-languages
+tree-sitter-kotlin
+tree-sitter-java
+tree-sitter-c
+tree-sitter-cpp
+tree-sitter-typescript
+tree-sitter-javascript
+tree-sitter-php
+tree-sitter-python
+tree-sitter-sql
+# Deep learning librariespip
+einops
