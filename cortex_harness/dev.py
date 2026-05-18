@@ -2094,6 +2094,19 @@ def harness_init(project_dir):
         cfg_path.write_text(cfg_text, encoding="utf-8")
         click.echo(f"  [created] config.yaml")
 
+    # .claude/settings.json — project-level Claude Code hooks
+    claude_dir      = project_path / ".claude"
+    claude_settings = claude_dir / "settings.json"
+    tmpl_claude_settings = HARNESS_TEMPLATES / ".claude" / "settings.json"
+    if claude_settings.exists():
+        click.echo(f"  [skip]   .claude/settings.json (already exists)")
+    elif tmpl_claude_settings.exists():
+        claude_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(tmpl_claude_settings), str(claude_settings))
+        click.echo(f"  [created] .claude/settings.json (Claude Code hooks)")
+    else:
+        click.echo(f"  [skip]   .claude/settings.json (template not found)")
+
     # harness_manifest.json — bootstrap record
     manifest_path = h_dir / "harness_manifest.json"
     manifest = {
@@ -2112,6 +2125,7 @@ def harness_init(project_dir):
     click.echo("       dev harness task add        # add your first task")
     click.echo("       dev mcp start               # start MCP servers")
     click.echo("       dev harness run             # run orchestrator")
+    click.echo("       /cortex-harness-session     # invoke skill at session start")
 
 
 @harness.command("status")
