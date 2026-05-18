@@ -278,15 +278,12 @@ def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
 
 
 def _env_to_neo4j_args(env: dict) -> list:
-    """For doc-tiny ingestor (uses --neo4j-pass)."""
-    args = [
+    """For doc-tiny ingestor (uses --neo4j-pass, no --neo4j-db support)."""
+    return [
         "--neo4j-uri",  env.get("NEO4J_URI",  "bolt://localhost:7687"),
         "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
         "--neo4j-pass", env.get("NEO4J_PASS", ""),
     ]
-    if env.get("NEO4J_DB"):
-        args += ["--neo4j-db", env["NEO4J_DB"]]
-    return args
 
 
 def _neo4j_args_code(env: dict) -> list:
@@ -1625,12 +1622,16 @@ def sync_doc_all(ctx):
 
 @sync_code.command("add")
 @click.option("--project-dir", default=".", show_default=True)
-def sync_code_add(project_dir):
+@click.option("--git", "git_url", default=None, help="Git remote URL (blank = local).")
+@click.argument("folders", nargs=-1, required=False, metavar="[FOLDER...]")
+def sync_code_add(project_dir, git_url, folders):
     """Add a new source project to code.source.projects.
 
     \b
-    Prompts for a git URL and one or more source folders, then appends
-    a new entry to the active config without touching existing projects.
+    Folders can be passed as positional arguments or entered interactively.
+    Examples:
+      dev sync code add /path/to/src
+      dev sync code add /path/a /path/b --git https://github.com/org/repo.git
     """
     project_path = Path(project_dir).resolve()
     cfg, cfg_path = _load_active_config(project_path)
@@ -1642,9 +1643,13 @@ def sync_code_add(project_dir):
         click.echo(f"  [{i}] {git_label}  folders={p.get('folder', [])}")
 
     click.echo("")
-    git_url     = click.prompt("  Git URL (blank = local)", default="")
-    folders_raw = click.prompt("  Source folders (comma-separated)")
-    folders     = [f.strip() for f in folders_raw.split(",") if f.strip()]
+    if git_url is None:
+        git_url = click.prompt("  Git URL (blank = local)", default="")
+    if not folders:
+        folders_raw = click.prompt("  Source folders (comma-separated)")
+        folders     = [f.strip() for f in folders_raw.split(",") if f.strip()]
+    else:
+        folders = list(folders)
 
     if not folders:
         click.echo("[error] At least one folder is required.", err=True)
@@ -1667,12 +1672,16 @@ def sync_code_add(project_dir):
 
 @sync_doc.command("add")
 @click.option("--project-dir", default=".", show_default=True)
-def sync_doc_add(project_dir):
+@click.option("--git", "git_url", default=None, help="Git remote URL (blank = local).")
+@click.argument("folders", nargs=-1, required=False, metavar="[FOLDER...]")
+def sync_doc_add(project_dir, git_url, folders):
     """Add a new doc project to doc.source.projects.
 
     \b
-    Prompts for a git URL and one or more doc folders, then appends
-    a new entry to the active config without touching existing projects.
+    Folders can be passed as positional arguments or entered interactively.
+    Examples:
+      dev sync doc add /path/to/docs
+      dev sync doc add /path/a /path/b --git https://github.com/org/repo.git
     """
     project_path = Path(project_dir).resolve()
     cfg, cfg_path = _load_active_config(project_path)
@@ -1684,9 +1693,13 @@ def sync_doc_add(project_dir):
         click.echo(f"  [{i}] {git_label}  folders={p.get('folder', [])}")
 
     click.echo("")
-    git_url     = click.prompt("  Git URL (blank = local)", default="")
-    folders_raw = click.prompt("  Doc folders (comma-separated)")
-    folders     = [f.strip() for f in folders_raw.split(",") if f.strip()]
+    if git_url is None:
+        git_url = click.prompt("  Git URL (blank = local)", default="")
+    if not folders:
+        folders_raw = click.prompt("  Doc folders (comma-separated)")
+        folders     = [f.strip() for f in folders_raw.split(",") if f.strip()]
+    else:
+        folders = list(folders)
 
     if not folders:
         click.echo("[error] At least one folder is required.", err=True)
@@ -2014,15 +2027,39 @@ def harness_init(project_dir):
             shutil.copy2(str(src), str(dst))
             click.echo(f"  [copied] templates/{tmpl}")
 
-    # Initial feature_list.json
+    # Initial feature_list.json — with example task showing all required fields
     fl = _harness_feature_list(project_path)
     if fl.exists():
         click.echo(f"  [skip]   state/feature_list.json (already exists)")
     else:
-        with open(fl, "w", encoding="utf-8") as f:
-            json.dump({"features": []}, f, indent=2, ensure_ascii=False)
-            f.write("\n")
+        tmpl_fl = HARNESS_TEMPLATES / "state" / "feature_list.json"
+        if tmpl_fl.exists():
+            shutil.copy2(str(tmpl_fl), str(fl))
+        else:
+            with open(fl, "w", encoding="utf-8") as f:
+                json.dump({"features": []}, f, indent=2, ensure_ascii=False)
+                f.write("\n")
         click.echo(f"  [created] state/feature_list.json")
+
+    # progress.md — session continuity log
+    progress_md = h_dir / "state" / "progress.md"
+    if progress_md.exists():
+        click.echo(f"  [skip]   state/progress.md (already exists)")
+    else:
+        tmpl_prog = HARNESS_TEMPLATES / "progress.md"
+        if tmpl_prog.exists():
+            shutil.copy2(str(tmpl_prog), str(progress_md))
+            click.echo(f"  [copied] state/progress.md")
+
+    # session-handoff.md — handoff template
+    handoff_tmpl = h_dir / "templates" / "session-handoff.md"
+    if handoff_tmpl.exists():
+        click.echo(f"  [skip]   templates/session-handoff.md (already exists)")
+    else:
+        tmpl_ho = HARNESS_TEMPLATES / "session-handoff.md"
+        if tmpl_ho.exists():
+            shutil.copy2(str(tmpl_ho), str(handoff_tmpl))
+            click.echo(f"  [copied] templates/session-handoff.md")
 
     # config.yaml
     cfg_path = h_dir / "config.yaml"
@@ -2057,8 +2094,24 @@ def harness_init(project_dir):
         cfg_path.write_text(cfg_text, encoding="utf-8")
         click.echo(f"  [created] config.yaml")
 
+    # harness_manifest.json — bootstrap record
+    manifest_path = h_dir / "harness_manifest.json"
+    manifest = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "project_root": str(project_path),
+        "cortex_harness_version": "cli",
+        "subsystems": ["instructions", "state", "verification", "scope", "lifecycle"],
+    }
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    click.echo(f"  [created] harness_manifest.json")
+
     click.echo(f"\n[ok] .harness/ is ready at: {h_dir}")
-    click.echo("     Next: dev harness task add  to create your first task.")
+    click.echo("     Next steps:")
+    click.echo("       dev harness task add        # add your first task")
+    click.echo("       dev mcp start               # start MCP servers")
+    click.echo("       dev harness run             # run orchestrator")
 
 
 @harness.command("status")
