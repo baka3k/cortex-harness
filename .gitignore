@@ -39,3 +39,6 @@ build/
 .serena
 testdata1/
 code-tiny/tools/vb/roslyn_worker/*
+.cache/dev-mcp-code-tiny.pid
+.cache/dev-mcp-doc-tiny.pid
+uv.lock
