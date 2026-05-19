@@ -638,3 +638,22 @@ dev status
 
 **Issue**: `'dev' is not recognized as a command`
 **Fix**: Use one of the CLI setup methods above or run: `C:\ai\cortex-harness\.venv\Scripts\dev.exe <command>`
+
+## CUDA ONLY 
+Clean install
+```
+uv pip uninstall torch torchvision torchaudio
+uv cache clean
+uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+check cuda
+```
+python -c "import torch; print('torch', torch.__version__); print('cuda', torch.version.cuda); print('cuda_available', torch.cuda.is_available()); print('gpu', torch.cuda.get_device_name(0))"
+```
+you can see:
+```
+torch 2.x.x+cu128
+cuda 12.8
+cuda_available True
+gpu NVIDIA GeForce RTX 5060 Ti
+```
