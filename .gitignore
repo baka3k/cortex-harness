@@ -45,3 +45,12 @@ code-tiny/tools/vb/roslyn_worker/*
 uv.lock
 .cortext-harness/config/dev.json
 code-tiny/CLAUDE.md
+code-tiny/tools/android/CLAUDE.md
+code-tiny/tools/cplus/CLAUDE.md
+code-tiny/tools/php/CLAUDE.md
+code-tiny/tools/sql/CLAUDE.md
+code-tiny/tools/sync/CLAUDE.md
+code-tiny/tools/ts/CLAUDE.md
+code-tiny/tools/vb/CLAUDE.md
+cortex_harness/CLAUDE.md
+cortex_harness/CLAUDE.md
