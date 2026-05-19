@@ -25,7 +25,7 @@ uvicorn[standard]
 python-multipart
 requests
 torch
-transformers
+transformers<5.0
 # Existing dependencies
 tree-sitter
 tree-sitter-languages
