@@ -20,6 +20,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.harness_config import load_harness_config
 from tools.common.analyzer_cache import (
     file_signature,
     load_parse_cache,
@@ -2038,6 +2039,7 @@ async def build_call_graph(
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SQL call graph analyzer")
     parser.add_argument("--root", required=True, help="Root folder containing SQL sources")
+    parser.add_argument("--config", default=None, help="Path to harness dev.json config (default: <root>/.cortext-harness/config/dev.json)")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
@@ -2316,4 +2318,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--root", default=".")
+    _pre.add_argument("--config", default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _config_path = _pre_args.config or os.path.join(
+        _pre_args.root, ".cortext-harness", "config", "dev.json"
+    )
+    load_harness_config(_config_path)
     raise SystemExit(asyncio.run(main()))

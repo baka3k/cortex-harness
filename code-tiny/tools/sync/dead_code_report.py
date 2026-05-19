@@ -16,6 +16,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.harness_config import load_harness_config
 from tools.graph import GraphDriverFactory, GraphProvider
 
 _DEFAULT_ENTRY_NAMES = (
@@ -53,6 +54,8 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         description="Generate dead-code candidates from Neo4j graph using entrypoint reachability."
     )
     parser.add_argument("--project-id", required=True, help="Project ID stored in graph nodes")
+    parser.add_argument("--root", default=".", help="Project root (for config discovery)")
+    parser.add_argument("--config", default=None, help="Path to harness dev.json config (default: <root>/.cortext-harness/config/dev.json)")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
@@ -391,4 +394,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--root", default=".")
+    _pre.add_argument("--config", default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _config_path = _pre_args.config or os.path.join(
+        _pre_args.root, ".cortext-harness", "config", "dev.json"
+    )
+    load_harness_config(_config_path)
     raise SystemExit(main())

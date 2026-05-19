@@ -14,8 +14,8 @@ python-multipart
 requests
 gliner
 torch
-# transformers<5.0 # only for windows
-transformers
+transformers<5.0 # FOR WINDOW
+# transformers # FOR UBUNTU, MACOS...etc
 
 # Existing dependencies
 tree-sitter
@@ -29,6 +29,7 @@ tree-sitter-javascript
 tree-sitter-php
 tree-sitter-python
 tree-sitter-sql
+tree-sitter-c-sharp
 # Deep learning librariespip
 einops
 sentence-transformers
