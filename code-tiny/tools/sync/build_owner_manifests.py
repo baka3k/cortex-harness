@@ -12,6 +12,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.harness_config import load_harness_config
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.git_diff import write_manifest_paths
 from tools.sync.owner_manifest import SUPPORTED_PARSERS, build_owner_maps
@@ -49,6 +50,7 @@ def _parse_parsers(raw_value: str) -> List[str]:
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build parser-owner manifests for mixed-language ingest")
     parser.add_argument("--root", required=True, help="Project root")
+    parser.add_argument("--config", default=None, help="Path to harness dev.json config (default: <root>/.cortext-harness/config/dev.json)")
     parser.add_argument("--project-id", default=os.environ.get("PROJECT_ID"), help="Project id for output scope")
     parser.add_argument("--parsers", default="auto", help="auto or comma-separated parser list")
     parser.add_argument(
@@ -147,4 +149,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--root", default=".")
+    _pre.add_argument("--config", default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _config_path = _pre_args.config or os.path.join(
+        _pre_args.root, ".cortext-harness", "config", "dev.json"
+    )
+    load_harness_config(_config_path)
     raise SystemExit(main())

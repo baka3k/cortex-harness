@@ -20,6 +20,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.harness_config import load_harness_config
 from tools.common.analyzer_cache import (
     file_signature,
     load_parse_cache,
@@ -984,11 +985,9 @@ class CodeEmbedder:
     def __init__(self, model_name: str, device: str, max_embed_chars: int, chunk_embed: bool) -> None:
         model_source = _resolve_embedding_model_source(model_name)
         trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
-        extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_source,
             trust_remote_code=trust_remote_code,
-            **extra_tokenizer_kwargs,
         )
         self.model = AutoModel.from_pretrained(
             model_source,
@@ -1911,6 +1910,7 @@ async def build_call_graph(
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Python call graph analyzer")
     parser.add_argument("--root", required=True, help="Root folder containing Python sources")
+    parser.add_argument("--config", default=None, help="Path to harness dev.json config (default: <root>/.cortext-harness/config/dev.json)")
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
@@ -1926,10 +1926,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         or os.environ.get("JINA_MODEL_PATH")
         or "jinaai/jina-embeddings-v3",
     )
-    parser.add_argument("--max-embed-chars", type=int, default=4000)
+    parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", 4000)))
     parser.add_argument("--chunk-embed", action="store_true")
     parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "auto"))
-    parser.add_argument("--batch-size", type=int, default=4)  # for embedding - 4 function 1 turn embedding
+    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", 4)))  # for embedding - 4 function 1 turn embedding
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
     parser.add_argument("--disable-neo4j-resume", action="store_true")
@@ -2177,4 +2177,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--root", default=".")
+    _pre.add_argument("--config", default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _config_path = _pre_args.config or os.path.join(
+        _pre_args.root, ".cortext-harness", "config", "dev.json"
+    )
+    load_harness_config(_config_path)
     raise SystemExit(asyncio.run(main()))

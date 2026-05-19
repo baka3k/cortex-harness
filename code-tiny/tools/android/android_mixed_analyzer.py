@@ -12,6 +12,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.harness_config import load_harness_config
 from tools.android import android_common
 from tools.common.git_diff import load_manifest_paths
 
@@ -134,6 +135,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         allow_abbrev=False,
     )
     parser.add_argument("--root", required=True, help="Root folder containing Android sources")
+    parser.add_argument("--config", default=None, help="Path to harness dev.json config (default: <root>/.cortext-harness/config/dev.json)")
     parser.add_argument(
         "--languages",
         choices=["auto", "java", "kotlin", "both"],
@@ -296,4 +298,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--root", default=".")
+    _pre.add_argument("--config", default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _config_path = _pre_args.config or os.path.join(
+        _pre_args.root, ".cortext-harness", "config", "dev.json"
+    )
+    load_harness_config(_config_path)
     raise SystemExit(main())
