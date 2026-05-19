@@ -41,4 +41,7 @@ testdata1/
 code-tiny/tools/vb/roslyn_worker/*
 .cache/dev-mcp-code-tiny.pid
 .cache/dev-mcp-doc-tiny.pid
+.cache/*
 uv.lock
+.cortext-harness/config/dev.json
+code-tiny/CLAUDE.md
