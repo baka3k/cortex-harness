@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import collections
 import json
+import logging
 import os
 import re
 import shlex
@@ -23,6 +25,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+
 from tools.common.analyzer_cache import (
     file_signature,
     load_parse_cache,
@@ -41,6 +44,24 @@ try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
     ensure_compile_commands = None  # type: ignore[assignment]
+
+try:
+    from tools.cplus import clang_parser as _clang_parser  # optional libclang fallback
+except Exception:
+    _clang_parser = None  # type: ignore[assignment]
+
+# Number of tree-sitter error nodes that triggers the optional libclang fallback.
+# Set to 0 to always prefer libclang (when available); set very high to disable.
+_CLANG_FALLBACK_BASE_THRESHOLD: int = 50
+
+
+def _effective_fallback_threshold(file_size: int) -> int:
+    """Dynamic threshold: larger files need more errors before triggering libclang fallback."""
+    if file_size > 1_000_000:   # >1MB — generated / macro-heavy headers
+        return 200
+    if file_size > 100_000:     # >100KB
+        return 100
+    return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
 _PARSE_CACHE_VERSION = "cplus-v2026-03-06-1"
@@ -92,6 +113,11 @@ try:
     from tree_sitter_languages import get_parser as ts_get_parser
 except Exception:
     ts_get_parser = None
+
+# Deeply-nested C++ ASTs (template metaprogramming, nested lambdas) can exceed
+# Python's default recursion limit of 1000.  Raise it once at module load time.
+if sys.getrecursionlimit() < 10000:
+    sys.setrecursionlimit(10000)
 
 
 @dataclass
@@ -274,22 +300,35 @@ def _line_from_byte(source_bytes: bytes, byte_index: int) -> int:
 
 
 def _node_snippet(node, source_bytes: bytes) -> Tuple[str, int, int]:
-    start_byte = node.start_byte
+    # Walk back to include any preceding comment nodes.
+    start_node = node
     prev = node.prev_sibling
     while prev is not None and prev.type == "comment":
-        start_byte = prev.start_byte
+        start_node = prev
         prev = prev.prev_sibling
+    start_byte = start_node.start_byte
     snippet = source_bytes[start_byte : node.end_byte].decode("utf-8", errors="ignore")
-    start_line = _line_from_byte(source_bytes, start_byte)
+    # tree-sitter stores the line/col at each node in O(1) — no need to slice
+    # and count newlines in the whole source buffer.
+    start_line = start_node.start_point[0] + 1
     end_line = node.end_point[0] + 1
     return snippet, start_line, end_line
 
 
 def _find_nodes_by_type(node, node_type: str) -> Iterable:
-    if node.type == node_type:
-        yield node
-    for child in node.children:
-        yield from _find_nodes_by_type(child, node_type)
+    cursor = node.walk()
+    while True:
+        if cursor.node.type == node_type:
+            yield cursor.node
+        if cursor.goto_first_child():
+            continue
+        if cursor.goto_next_sibling():
+            continue
+        while cursor.goto_parent():
+            if cursor.goto_next_sibling():
+                break
+        else:
+            break
 
 
 def _first_identifier(node, source_bytes: bytes) -> Optional[str]:
@@ -473,10 +512,20 @@ def _load_compile_commands_index(path: str, root: str) -> Dict[str, Any]:
     return summary
 
 
+# Module-level parser singletons — created once and reused across all files.
+# tree-sitter Parser.parse() is stateless between calls, so sharing is safe.
+_CPP_PARSER: Optional[Parser] = None
+_C_PARSER: Optional[Parser] = None
+
+
 def _get_cpp_parser() -> Parser:
+    global _CPP_PARSER
+    if _CPP_PARSER is not None:
+        return _CPP_PARSER
     if ts_get_parser is not None:
         try:
-            return ts_get_parser("cpp")
+            _CPP_PARSER = ts_get_parser("cpp")
+            return _CPP_PARSER
         except Exception:
             pass
     try:
@@ -491,13 +540,18 @@ def _get_cpp_parser() -> Parser:
         parser.set_language(language)
     else:
         parser.language = language
-    return parser
+    _CPP_PARSER = parser
+    return _CPP_PARSER
 
 
 def _get_c_parser() -> Parser:
+    global _C_PARSER
+    if _C_PARSER is not None:
+        return _C_PARSER
     if ts_get_parser is not None:
         try:
-            return ts_get_parser("c")
+            _C_PARSER = ts_get_parser("c")
+            return _C_PARSER
         except Exception:
             pass
     try:
@@ -512,7 +566,8 @@ def _get_c_parser() -> Parser:
         parser.set_language(language)
     else:
         parser.language = language
-    return parser
+    _C_PARSER = parser
+    return _C_PARSER
 
 
 def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes]:
@@ -895,7 +950,7 @@ def _extract_declarator_scope(declarator, source_bytes: bytes) -> Optional[str]:
     """Extract scope from qualified declarator text.
 
     Examples:
-      CinnerMaker::DivideBotBox(...) -> CinnerMaker
+      CBozeBotMaker::DivideBotBox(...) -> CBozeBotMaker
       NS::Inner::Foo::Bar(...)         -> NS::Inner::Foo
     """
     if declarator is None:
@@ -1048,570 +1103,239 @@ def _walk_tree(
     type_registry: Dict[str, TypeDef],
     namespace_registry: Dict[str, NamespaceDef],
 ) -> None:
-    if node.type in {"using_directive", "using_declaration"}:
-        text = _node_text(node, source_bytes)
-        ns_name = _extract_using_namespace(text)
-        if ns_name:
-            using_namespaces.append(ns_name)
-            return
-        qualified = _extract_using_qualified(text)
-        if qualified and "::" in qualified:
-            short = qualified.split("::")[-1]
-            using_imports[short] = qualified
-        return
-    if node.type == "template_declaration":
-        name = _anonymous_name("Template", node)
-        snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        template_id = f"template::{rel_path}:{start_line}:{end_line}"
-        templates.append(
-            TemplateDef(
-                symbol_id=template_id,
-                name=name,
-                file_path=rel_path,
-                start_line=start_line,
-                end_line=end_line,
-                code=snippet,
-            )
-        )
-        for child in node.children:
-            if child.type in {
-                "class_specifier",
-                "struct_specifier",
-                "union_specifier",
-                "enum_specifier",
-                "function_definition",
-                "function_declaration",
-            }:
-                _walk_tree(
-                    child,
-                    source_bytes,
-                    rel_path,
-                    namespace_stack,
-                    type_stack,
-                    list(using_namespaces),
-                    dict(using_imports),
-                    namespaces,
-                    types,
-                    functions,
-                    relations,
-                    calls,
-                    func_types,
-                    fields,
-                    aliases,
-                    templates,
-                    type_registry,
-                    namespace_registry,
+    _TEMPLATE_CHILD_TYPES = frozenset({
+        "class_specifier",
+        "struct_specifier",
+        "union_specifier",
+        "enum_specifier",
+        "function_definition",
+        "function_declaration",
+    })
+    # Iterative replacement of recursion: explicit work stack eliminates call-stack depth issues.
+    # Each frame: (node, namespace_stack, type_stack, using_namespaces, using_imports)
+    work: collections.deque = collections.deque(
+        [(node, namespace_stack, type_stack, using_namespaces, using_imports)]
+    )
+    while work:
+        node, namespace_stack, type_stack, using_namespaces, using_imports = work.pop()
+        if node.type in {"using_directive", "using_declaration"}:
+            text = _node_text(node, source_bytes)
+            ns_name = _extract_using_namespace(text)
+            if ns_name:
+                using_namespaces.append(ns_name)
+                continue
+            qualified = _extract_using_qualified(text)
+            if qualified and "::" in qualified:
+                short = qualified.split("::")[-1]
+                using_imports[short] = qualified
+            continue
+        if node.type == "template_declaration":
+            name = _anonymous_name("Template", node)
+            snippet, start_line, end_line = _node_snippet(node, source_bytes)
+            template_id = f"template::{rel_path}:{start_line}:{end_line}"
+            templates.append(
+                TemplateDef(
+                    symbol_id=template_id,
+                    name=name,
+                    file_path=rel_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    code=snippet,
                 )
-                target_name = _extract_function_name(child.child_by_field_name("declarator"), source_bytes)
-                target_id = None
-                target_label = None
-                if child.type in {"function_definition", "function_declaration"} and target_name:
-                    scope = _extract_scope_stack(namespace_stack + type_stack)
-                    arity = 0
-                    declarator = child.child_by_field_name("declarator")
-                    if declarator is not None:
-                        params = None
-                        for grand in declarator.children:
-                            if grand.type == "parameter_list":
-                                params = grand
-                                break
-                        if params is not None:
-                            arity = sum(1 for grand in params.children if grand.type == "parameter_declaration")
-                    target_id = _symbol_id(scope, target_name, arity, rel_path)
-                    target_label = "Function"
-                if child.type in {"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"}:
-                    tname = _first_identifier(child, source_bytes) or _anonymous_name("Type", child)
-                    qualified = "::".join(namespace_stack + type_stack + [tname]) if (namespace_stack or type_stack) else tname
-                    target_id = _type_id(None, qualified)
-                    target_label = "Type"
-                if target_id and target_label:
+            )
+            for child in node.children:
+                if child.type in _TEMPLATE_CHILD_TYPES:
+                    target_name = _extract_function_name(child.child_by_field_name("declarator"), source_bytes)
+                    target_id = None
+                    target_label = None
+                    if child.type in {"function_definition", "function_declaration"} and target_name:
+                        scope = _extract_scope_stack(namespace_stack + type_stack)
+                        arity = 0
+                        declarator = child.child_by_field_name("declarator")
+                        if declarator is not None:
+                            params = None
+                            for grand in declarator.children:
+                                if grand.type == "parameter_list":
+                                    params = grand
+                                    break
+                            if params is not None:
+                                arity = sum(1 for grand in params.children if grand.type == "parameter_declaration")
+                        target_id = _symbol_id(scope, target_name, arity, rel_path)
+                        target_label = "Function"
+                    if child.type in {"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"}:
+                        tname = _first_identifier(child, source_bytes) or _anonymous_name("Type", child)
+                        qualified = "::".join(namespace_stack + type_stack + [tname]) if (namespace_stack or type_stack) else tname
+                        target_id = _type_id(None, qualified)
+                        target_label = "Type"
+                    if target_id and target_label:
+                        relations.append(
+                            RelationEdge(
+                                source_id=template_id,
+                                source_label="Template",
+                                target_id=target_id,
+                                target_label=target_label,
+                                rel_type="TEMPLATES",
+                                properties={},
+                            )
+                        )
+                    work.append((child, namespace_stack, type_stack, list(using_namespaces), dict(using_imports)))
+                    break
+            continue
+
+        if node.type == "namespace_definition":
+            name = _first_identifier(node, source_bytes)
+            if not name:
+                name = _anonymous_name("Namespace", node)
+            qualified = "::".join(namespace_stack + [name])
+            ns_id = _namespace_id(qualified)
+            snippet, start_line, end_line = _node_snippet(node, source_bytes)
+            comment = _extract_leading_comment(node, source_bytes)
+            summary = comment
+            note = ""
+            namespaces.append(
+                NamespaceDef(
+                    symbol_id=ns_id,
+                    qualified_name=qualified,
+                    name=name,
+                    file_path=rel_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    code=snippet,
+                    comment=comment,
+                    summary=summary,
+                    note=note,
+                )
+            )
+            namespace_registry[ns_id] = namespaces[-1]
+            if namespace_stack:
+                parent = _namespace_id("::".join(namespace_stack))
+                relations.append(
+                    RelationEdge(
+                        source_id=parent,
+                        source_label="Namespace",
+                        target_id=ns_id,
+                        target_label="Namespace",
+                        rel_type="CONTAINS",
+                        properties={},
+                    )
+                )
+            new_ns_stack = namespace_stack + [name]
+            for child in reversed(node.children):
+                work.append((child, new_ns_stack, type_stack, list(using_namespaces), dict(using_imports)))
+            continue
+
+        if node.type in {"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"}:
+            kind_map = {
+                "class_specifier": "class",
+                "struct_specifier": "struct",
+                "union_specifier": "union",
+                "enum_specifier": "enum",
+            }
+            name = _first_identifier(node, source_bytes)
+            kind = kind_map[node.type]
+            if not name:
+                name = _anonymous_name(kind.capitalize(), node)
+                kind = f"anonymous_{kind}"
+            qualified = "::".join(namespace_stack + type_stack + [name]) if (namespace_stack or type_stack) else name
+            type_id = _type_id(None, qualified)
+            snippet, start_line, end_line = _node_snippet(node, source_bytes)
+            comment = _extract_leading_comment(node, source_bytes)
+            summary = comment
+            note = ""
+            types.append(
+                TypeDef(
+                    symbol_id=type_id,
+                    qualified_name=qualified,
+                    name=qualified.split("::")[-1],
+                    kind=kind,
+                    file_path=rel_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    code=snippet,
+                    comment=comment,
+                    summary=summary,
+                    note=note,
+                )
+            )
+            type_registry[type_id] = types[-1]
+            if namespace_stack:
+                ns_id = _namespace_id("::".join(namespace_stack))
+                relations.append(
+                    RelationEdge(
+                        source_id=ns_id,
+                        source_label="Namespace",
+                        target_id=type_id,
+                        target_label="Type",
+                        rel_type="CONTAINS",
+                        properties={},
+                    )
+                )
+            if type_stack:
+                parent_type = _type_id(None, "::".join(namespace_stack + type_stack))
+                relations.append(
+                    RelationEdge(
+                        source_id=parent_type,
+                        source_label="Type",
+                        target_id=type_id,
+                        target_label="Type",
+                        rel_type="CONTAINS",
+                        properties={},
+                    )
+                )
+            if kind in {"class", "struct", "anonymous_class", "anonymous_struct"}:
+                for base in _extract_base_types(node, source_bytes):
+                    base_id = _type_id(None, base)
+                    if base_id not in type_registry:
+                        types.append(
+                            TypeDef(
+                                symbol_id=base_id,
+                                qualified_name=base,
+                                name=base.split("::")[-1],
+                                kind="external",
+                                file_path=rel_path,
+                                start_line=0,
+                                end_line=0,
+                                code=base,
+                            )
+                        )
+                        type_registry[base_id] = types[-1]
                     relations.append(
                         RelationEdge(
-                            source_id=template_id,
-                            source_label="Template",
-                            target_id=target_id,
-                            target_label=target_label,
-                            rel_type="TEMPLATES",
+                            source_id=type_id,
+                            source_label="Type",
+                            target_id=base_id,
+                            target_label="Type",
+                            rel_type="EXTENDS",
                             properties={},
                         )
                     )
-                return
-        return
+            new_ty_stack = type_stack + [name]
+            for child in reversed(node.children):
+                work.append((child, namespace_stack, new_ty_stack, list(using_namespaces), dict(using_imports)))
+            continue
 
-    if node.type == "namespace_definition":
-        name = _first_identifier(node, source_bytes)
-        if not name:
-            name = _anonymous_name("Namespace", node)
-        qualified = "::".join(namespace_stack + [name])
-        ns_id = _namespace_id(qualified)
-        snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        comment = _extract_leading_comment(node, source_bytes)
-        summary = comment
-        note = _build_note(snippet, comment, summary)
-        namespaces.append(
-            NamespaceDef(
-                symbol_id=ns_id,
-                qualified_name=qualified,
-                name=name,
-                file_path=rel_path,
-                start_line=start_line,
-                end_line=end_line,
-                code=snippet,
-                comment=comment,
-                summary=summary,
-                note=note,
-            )
-        )
-        namespace_registry[ns_id] = namespaces[-1]
-        if namespace_stack:
-            parent = _namespace_id("::".join(namespace_stack))
-            relations.append(
-                RelationEdge(
-                    source_id=parent,
-                    source_label="Namespace",
-                    target_id=ns_id,
-                    target_label="Namespace",
-                    rel_type="CONTAINS",
-                    properties={},
-                )
-            )
-        for child in node.children:
-            _walk_tree(
-                child,
-                source_bytes,
-                rel_path,
-                namespace_stack + [name],
-                type_stack,
-                list(using_namespaces),
-                dict(using_imports),
-                namespaces,
-                types,
-                functions,
-                relations,
-                calls,
-                func_types,
-                fields,
-                aliases,
-                templates,
-                type_registry,
-                namespace_registry,
-            )
-        return
-
-    if node.type in {"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"}:
-        kind_map = {
-            "class_specifier": "class",
-            "struct_specifier": "struct",
-            "union_specifier": "union",
-            "enum_specifier": "enum",
-        }
-        name = _first_identifier(node, source_bytes)
-        kind = kind_map[node.type]
-        if not name:
-            name = _anonymous_name(kind.capitalize(), node)
-            kind = f"anonymous_{kind}"
-        qualified = "::".join(namespace_stack + type_stack + [name]) if (namespace_stack or type_stack) else name
-        type_id = _type_id(None, qualified)
-        snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        comment = _extract_leading_comment(node, source_bytes)
-        summary = comment
-        note = _build_note(snippet, comment, summary)
-        types.append(
-            TypeDef(
-                symbol_id=type_id,
-                qualified_name=qualified,
-                name=qualified.split("::")[-1],
-                kind=kind,
-                file_path=rel_path,
-                start_line=start_line,
-                end_line=end_line,
-                code=snippet,
-                comment=comment,
-                summary=summary,
-                note=note,
-            )
-        )
-        type_registry[type_id] = types[-1]
-        if namespace_stack:
-            ns_id = _namespace_id("::".join(namespace_stack))
-            relations.append(
-                RelationEdge(
-                    source_id=ns_id,
-                    source_label="Namespace",
-                    target_id=type_id,
-                    target_label="Type",
-                    rel_type="CONTAINS",
-                    properties={},
-                )
-            )
-        if type_stack:
-            parent_type = _type_id(None, "::".join(namespace_stack + type_stack))
-            relations.append(
-                RelationEdge(
-                    source_id=parent_type,
-                    source_label="Type",
-                    target_id=type_id,
-                    target_label="Type",
-                    rel_type="CONTAINS",
-                    properties={},
-                )
-            )
-        if kind in {"class", "struct", "anonymous_class", "anonymous_struct"}:
-            for base in _extract_base_types(node, source_bytes):
-                base_id = _type_id(None, base)
-                if base_id not in type_registry:
-                    types.append(
-                        TypeDef(
-                            symbol_id=base_id,
-                            qualified_name=base,
-                            name=base.split("::")[-1],
-                            kind="external",
-                            file_path=rel_path,
-                            start_line=0,
-                            end_line=0,
-                            code=base,
-                        )
-                    )
-                    type_registry[base_id] = types[-1]
-                relations.append(
-                    RelationEdge(
-                        source_id=type_id,
-                        source_label="Type",
-                        target_id=base_id,
-                        target_label="Type",
-                        rel_type="EXTENDS",
-                        properties={},
-                    )
-                )
-        for child in node.children:
-            _walk_tree(
-                child,
-                source_bytes,
-                rel_path,
-                namespace_stack,
-                type_stack + [name],
-                list(using_namespaces),
-                dict(using_imports),
-                namespaces,
-                types,
-                functions,
-                relations,
-                calls,
-                func_types,
-                fields,
-                aliases,
-                templates,
-                type_registry,
-                namespace_registry,
-            )
-        return
-
-    if node.type == "function_definition":
-        scope_stack = namespace_stack + type_stack
-        scope = _extract_scope_stack(scope_stack)
-        declarator = node.child_by_field_name("declarator")
-        declarator_scope = _extract_declarator_scope(declarator, source_bytes)
-        if not scope and declarator_scope:
-            scope = declarator_scope
-        name = _extract_function_name(declarator, source_bytes)
-        if name:
-            arity = _declarator_arity(declarator)
-            symbol_id = _symbol_id(scope, name, arity, rel_path)
-            qualified = _qualified_name(scope, name)
-            snippet, start_line, end_line = _node_snippet(node, source_bytes)
-            comment = _extract_leading_comment(node, source_bytes)
-            summary = comment
-            note = _build_note(snippet, comment, summary)
-            functions.append(
-                FunctionDef(
-                    symbol_id=symbol_id,
-                    qualified_name=qualified,
-                    name=name,
-                    kind="destructor" if name.startswith("~") else ("constructor" if type_stack and name == type_stack[-1] else "function"),
-                    scope_name=scope,
-                    file_path=rel_path,
-                    start_byte=int(node.start_byte),
-                    end_byte=int(node.end_byte),
-                    start_line=start_line,
-                    end_line=end_line,
-                    arity=arity,
-                    code=snippet,
-                    comment=comment,
-                    summary=summary,
-                    note=note,
-                )
-            )
-            if namespace_stack:
-                ns_id = _namespace_id("::".join(namespace_stack))
-                relations.append(
-                    RelationEdge(
-                        source_id=ns_id,
-                        source_label="Namespace",
-                        target_id=symbol_id,
-                        target_label="Function",
-                        rel_type="CONTAINS",
-                        properties={},
-                    )
-                )
-            declaring_type_id: Optional[str] = None
-            if type_stack:
-                declaring_type_id = _type_id(None, "::".join(namespace_stack + type_stack))
-            elif scope:
-                candidate_type_id = _type_id(None, scope)
-                if candidate_type_id in type_registry:
-                    declaring_type_id = candidate_type_id
-            if declaring_type_id:
-                relations.append(
-                    RelationEdge(
-                        source_id=declaring_type_id,
-                        source_label="Type",
-                        target_id=symbol_id,
-                        target_label="Function",
-                        rel_type="DECLARES",
-                        properties={},
-                    )
-                )
-            param_fp_types: Dict[str, str] = {}
-            fp_aliases: Dict[str, str] = {}
-            if declarator is not None:
-                for param in _iter_parameter_declarations(declarator):
-                    _register_type_usage(
-                        symbol_id,
-                        "Function",
-                        _node_text(param, source_bytes),
-                        rel_path,
-                        types,
-                        relations,
-                        type_registry,
-                    )
-                    param_text = _node_text(param, source_bytes)
-                    if "(*" in param_text or "std::function" in param_text or "function<" in param_text:
-                        param_name = _extract_param_name_from_text(param_text)
-                        fp_sig = _normalize_type_signature(param_text)
-                        fp_id = _function_type_id(fp_sig)
-                        if fp_id not in func_types:
-                            func_types[fp_id] = FunctionTypeDef(
-                                symbol_id=fp_id,
-                                type_signature=fp_sig,
-                                file_path=rel_path,
-                                start_line=start_line,
-                                end_line=end_line,
-                                code=fp_sig,
-                            )
-                        if param_name:
-                            param_fp_types[param_name] = fp_id
-                        relations.append(
-                            RelationEdge(
-                                source_id=symbol_id,
-                                source_label="Function",
-                                target_id=fp_id,
-                                target_label="FunctionType",
-                                rel_type="TAKES_FUNCTION",
-                                properties={"parameter_name": param_name or ""},
-                            )
-                        )
-            fp_aliases = _collect_fp_aliases(node, source_bytes)
-            for call_node in _iter_calls(node):
-                callee, call_type = _extract_call_info(call_node, source_bytes)
-                if not callee:
-                    continue
-                call_line = call_node.start_point[0] + 1
-                call_column = call_node.start_point[1] + 1
-                call_start_byte = call_node.start_byte
-                call_branch_kind, call_loop_depth, call_control_frames_json = _collect_call_control_context(call_node)
-                call_arity = _call_arity(call_node)
-                calls.append(
-                    CallEdge(
-                        caller_id=symbol_id,
-                        caller_file=rel_path,
-                        caller_scope=scope,
-                        call_line=call_line,
-                        call_column=call_column,
-                        call_start_byte=call_start_byte,
-                        call_branch_kind=call_branch_kind,
-                        call_loop_depth=call_loop_depth,
-                        call_control_frames_json=call_control_frames_json,
-                        call_type=call_type,
-                        call_arity=call_arity,
-                        callee_name=callee,
-                        callee_id=None,
-                    )
-                )
-                fp_target = fp_aliases.get(callee)
-                if fp_target:
-                    calls.append(
-                        CallEdge(
-                            caller_id=symbol_id,
-                            caller_file=rel_path,
-                            caller_scope=scope,
-                            call_line=call_line,
-                            call_column=call_column,
-                            call_start_byte=call_start_byte,
-                            call_branch_kind=call_branch_kind,
-                            call_loop_depth=call_loop_depth,
-                            call_control_frames_json=call_control_frames_json,
-                            call_type="fp_alias",
-                            call_arity=call_arity,
-                            callee_name=fp_target,
-                            callee_id=None,
-                        )
-                    )
-                fp_id = param_fp_types.get(callee)
-                if fp_id:
-                    relations.append(
-                        RelationEdge(
-                            source_id=symbol_id,
-                            source_label="Function",
-                            target_id=fp_id,
-                            target_label="FunctionType",
-                            rel_type="CALLS_FUNCTION_POINTER",
-                            properties={
-                                "parameter_name": callee,
-                                "line": str(call_line),
-                                "column": str(call_column),
-                            },
-                        )
-                    )
-            for fp_sig in _find_function_pointer_types(node, source_bytes):
-                fp_id = _function_type_id(fp_sig)
-                if fp_id not in func_types:
-                    func_types[fp_id] = FunctionTypeDef(
-                        symbol_id=fp_id,
-                        type_signature=fp_sig,
-                        file_path=rel_path,
-                        start_line=start_line,
-                        end_line=end_line,
-                        code=fp_sig,
-                    )
-                relations.append(
-                    RelationEdge(
-                        source_id=symbol_id,
-                        source_label="Function",
-                        target_id=fp_id,
-                        target_label="FunctionType",
-                        rel_type="TAKES_FUNCTION",
-                        properties={},
-                    )
-                )
-        return
-
-    if node.type == "function_declaration":
-        scope_stack = namespace_stack + type_stack
-        scope = _extract_scope_stack(scope_stack)
-        declarator = node.child_by_field_name("declarator")
-        declarator_scope = _extract_declarator_scope(declarator, source_bytes)
-        if not scope and declarator_scope:
-            scope = declarator_scope
-        name = _extract_function_name(declarator, source_bytes)
-        if name:
-            arity = _declarator_arity(declarator)
-            symbol_id = _symbol_id(scope, name, arity, rel_path)
-            qualified = _qualified_name(scope, name)
-            snippet, start_line, end_line = _node_snippet(node, source_bytes)
-            comment = _extract_leading_comment(node, source_bytes)
-            summary = comment
-            note = _build_note(snippet, comment, summary)
-            functions.append(
-                FunctionDef(
-                    symbol_id=symbol_id,
-                    qualified_name=qualified,
-                    name=name,
-                    kind="declaration",
-                    scope_name=scope,
-                    file_path=rel_path,
-                    start_byte=int(node.start_byte),
-                    end_byte=int(node.end_byte),
-                    start_line=start_line,
-                    end_line=end_line,
-                    arity=arity,
-                    code=snippet,
-                    comment=comment,
-                    summary=summary,
-                    note=note,
-                )
-            )
-            if namespace_stack:
-                ns_id = _namespace_id("::".join(namespace_stack))
-                relations.append(
-                    RelationEdge(
-                        source_id=ns_id,
-                        source_label="Namespace",
-                        target_id=symbol_id,
-                        target_label="Function",
-                        rel_type="CONTAINS",
-                        properties={},
-                    )
-                )
-            declaring_type_id: Optional[str] = None
-            if type_stack:
-                declaring_type_id = _type_id(None, "::".join(namespace_stack + type_stack))
-            elif scope:
-                candidate_type_id = _type_id(None, scope)
-                if candidate_type_id in type_registry:
-                    declaring_type_id = candidate_type_id
-            if declaring_type_id:
-                relations.append(
-                    RelationEdge(
-                        source_id=declaring_type_id,
-                        source_label="Type",
-                        target_id=symbol_id,
-                        target_label="Function",
-                        rel_type="DECLARES",
-                        properties={},
-                    )
-                )
-            if declarator is not None:
-                for param in _iter_parameter_declarations(declarator):
-                    _register_type_usage(
-                        symbol_id,
-                        "Function",
-                        _node_text(param, source_bytes),
-                        rel_path,
-                        types,
-                        relations,
-                        type_registry,
-                    )
-        return
-
-    if node.type == "declaration":
-        parent_type = node.parent.type if node.parent is not None else ""
-        if parent_type not in {"translation_unit", "declaration_list"}:
-            return
-        scope = _extract_scope_stack(namespace_stack + type_stack)
-        declarators = list(_iter_declaration_declarators(node))
-        if not declarators:
-            return
-        decl_type_text = _declaration_type_text(node, source_bytes)
-        has_extern = any(
-            child.type == "storage_class_specifier" and _node_text(child, source_bytes).strip() == "extern"
-            for child in node.children
-            if child.is_named
-        )
-        snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        comment = _extract_leading_comment(node, source_bytes)
-        summary = comment
-        note = _build_note(snippet, comment, summary)
-
-        seen_function_keys: set[Tuple[str, int]] = set()
-        seen_variable_names: set[str] = set()
-        for declarator in declarators:
-            if _declarator_is_function(declarator, source_bytes):
-                name = _extract_function_name(declarator, source_bytes)
-                if not name:
-                    continue
+        if node.type == "function_definition":
+            scope_stack = namespace_stack + type_stack
+            scope = _extract_scope_stack(scope_stack)
+            declarator = node.child_by_field_name("declarator")
+            declarator_scope = _extract_declarator_scope(declarator, source_bytes)
+            if not scope and declarator_scope:
+                scope = declarator_scope
+            name = _extract_function_name(declarator, source_bytes)
+            if name:
                 arity = _declarator_arity(declarator)
-                func_key = (name, arity)
-                if func_key in seen_function_keys:
-                    continue
-                seen_function_keys.add(func_key)
                 symbol_id = _symbol_id(scope, name, arity, rel_path)
                 qualified = _qualified_name(scope, name)
+                snippet, start_line, end_line = _node_snippet(node, source_bytes)
+                comment = _extract_leading_comment(node, source_bytes)
+                summary = comment
+                note = ""
                 functions.append(
                     FunctionDef(
                         symbol_id=symbol_id,
                         qualified_name=qualified,
                         name=name,
-                        kind="extern_declaration" if has_extern else "declaration",
+                        kind="destructor" if name.startswith("~") else ("constructor" if type_stack and name == type_stack[-1] else "function"),
                         scope_name=scope,
                         file_path=rel_path,
                         start_byte=int(node.start_byte),
@@ -1637,96 +1361,169 @@ def _walk_tree(
                             properties={},
                         )
                     )
-                for param in _iter_parameter_declarations(declarator):
-                    _register_type_usage(
-                        symbol_id,
-                        "Function",
-                        _node_text(param, source_bytes),
-                        rel_path,
-                        types,
-                        relations,
-                        type_registry,
+                declaring_type_id: Optional[str] = None
+                if type_stack:
+                    declaring_type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+                elif scope:
+                    candidate_type_id = _type_id(None, scope)
+                    if candidate_type_id in type_registry:
+                        declaring_type_id = candidate_type_id
+                if declaring_type_id:
+                    relations.append(
+                        RelationEdge(
+                            source_id=declaring_type_id,
+                            source_label="Type",
+                            target_id=symbol_id,
+                            target_label="Function",
+                            rel_type="DECLARES",
+                            properties={},
+                        )
                     )
-                continue
-
-            var_name = _field_name_from_declarator(declarator, source_bytes)
-            if not var_name:
-                var_name = _first_identifier(declarator, source_bytes)
-            if not var_name or var_name in seen_variable_names:
-                continue
-            seen_variable_names.add(var_name)
-            decl_text = _node_text(declarator, source_bytes).strip()
-            field_signature = _normalize_type_signature(f"{decl_type_text} {decl_text}".strip())
-            if not field_signature:
-                field_signature = _normalize_type_signature(_node_text(node, source_bytes))
-            field_id = f"{scope}::{var_name}@{rel_path}" if scope else f"{var_name}@{rel_path}"
-            fields.append(
-                FieldDef(
-                    symbol_id=field_id,
-                    qualified_name=_qualified_name(scope, var_name),
-                    name=var_name,
-                    scope_name=scope,
-                    type_signature=field_signature,
-                    file_path=rel_path,
-                    start_line=start_line,
-                    end_line=end_line,
-                    code=snippet,
-                )
-            )
-            if namespace_stack:
-                ns_id = _namespace_id("::".join(namespace_stack))
-                relations.append(
-                    RelationEdge(
-                        source_id=ns_id,
-                        source_label="Namespace",
-                        target_id=field_id,
-                        target_label="Field",
-                        rel_type="CONTAINS",
-                        properties={"storage": "extern"} if has_extern else {},
+                param_fp_types: Dict[str, str] = {}
+                fp_aliases: Dict[str, str] = {}
+                if declarator is not None:
+                    for param in _iter_parameter_declarations(declarator):
+                        _register_type_usage(
+                            symbol_id,
+                            "Function",
+                            _node_text(param, source_bytes),
+                            rel_path,
+                            types,
+                            relations,
+                            type_registry,
+                        )
+                        param_text = _node_text(param, source_bytes)
+                        if "(*" in param_text or "std::function" in param_text or "function<" in param_text:
+                            param_name = _extract_param_name_from_text(param_text)
+                            fp_sig = _normalize_type_signature(param_text)
+                            fp_id = _function_type_id(fp_sig)
+                            if fp_id not in func_types:
+                                func_types[fp_id] = FunctionTypeDef(
+                                    symbol_id=fp_id,
+                                    type_signature=fp_sig,
+                                    file_path=rel_path,
+                                    start_line=start_line,
+                                    end_line=end_line,
+                                    code=fp_sig,
+                                )
+                            if param_name:
+                                param_fp_types[param_name] = fp_id
+                            relations.append(
+                                RelationEdge(
+                                    source_id=symbol_id,
+                                    source_label="Function",
+                                    target_id=fp_id,
+                                    target_label="FunctionType",
+                                    rel_type="TAKES_FUNCTION",
+                                    properties={"parameter_name": param_name or ""},
+                                )
+                            )
+                fp_aliases = _collect_fp_aliases(node, source_bytes)
+                for call_node in _iter_calls(node):
+                    callee, call_type = _extract_call_info(call_node, source_bytes)
+                    if not callee:
+                        continue
+                    call_line = call_node.start_point[0] + 1
+                    call_column = call_node.start_point[1] + 1
+                    call_start_byte = call_node.start_byte
+                    call_branch_kind, call_loop_depth, call_control_frames_json = _collect_call_control_context(call_node)
+                    call_arity = _call_arity(call_node)
+                    calls.append(
+                        CallEdge(
+                            caller_id=symbol_id,
+                            caller_file=rel_path,
+                            caller_scope=scope,
+                            call_line=call_line,
+                            call_column=call_column,
+                            call_start_byte=call_start_byte,
+                            call_branch_kind=call_branch_kind,
+                            call_loop_depth=call_loop_depth,
+                            call_control_frames_json=call_control_frames_json,
+                            call_type=call_type,
+                            call_arity=call_arity,
+                            callee_name=callee,
+                            callee_id=None,
+                        )
                     )
-                )
-            _register_type_usage(
-                field_id,
-                "Field",
-                field_signature,
-                rel_path,
-                types,
-                relations,
-                type_registry,
-            )
-        return
+                    fp_target = fp_aliases.get(callee)
+                    if fp_target:
+                        calls.append(
+                            CallEdge(
+                                caller_id=symbol_id,
+                                caller_file=rel_path,
+                                caller_scope=scope,
+                                call_line=call_line,
+                                call_column=call_column,
+                                call_start_byte=call_start_byte,
+                                call_branch_kind=call_branch_kind,
+                                call_loop_depth=call_loop_depth,
+                                call_control_frames_json=call_control_frames_json,
+                                call_type="fp_alias",
+                                call_arity=call_arity,
+                                callee_name=fp_target,
+                                callee_id=None,
+                            )
+                        )
+                    fp_id = param_fp_types.get(callee)
+                    if fp_id:
+                        relations.append(
+                            RelationEdge(
+                                source_id=symbol_id,
+                                source_label="Function",
+                                target_id=fp_id,
+                                target_label="FunctionType",
+                                rel_type="CALLS_FUNCTION_POINTER",
+                                properties={
+                                    "parameter_name": callee,
+                                    "line": str(call_line),
+                                    "column": str(call_column),
+                                },
+                            )
+                        )
+                for fp_sig in _find_function_pointer_types(node, source_bytes):
+                    fp_id = _function_type_id(fp_sig)
+                    if fp_id not in func_types:
+                        func_types[fp_id] = FunctionTypeDef(
+                            symbol_id=fp_id,
+                            type_signature=fp_sig,
+                            file_path=rel_path,
+                            start_line=start_line,
+                            end_line=end_line,
+                            code=fp_sig,
+                        )
+                    relations.append(
+                        RelationEdge(
+                            source_id=symbol_id,
+                            source_label="Function",
+                            target_id=fp_id,
+                            target_label="FunctionType",
+                            rel_type="TAKES_FUNCTION",
+                            properties={},
+                        )
+                    )
+            continue
 
-    if node.type == "field_declaration":
-        scope_stack = namespace_stack + type_stack
-        scope = _extract_scope_stack(scope_stack)
-        snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        type_node = node.child_by_field_name("type")
-        type_text = _node_text(type_node, source_bytes).strip() if type_node is not None else ""
-
-        declarators = list(_iter_field_declarators(node))
-        if not declarators:
-            # Conservative fallback to preserve previous behavior when AST is unexpected.
-            declarators = [node]
-
-        seen_field_names: set[str] = set()
-        seen_method_keys: set[Tuple[str, int]] = set()
-        for declarator in declarators:
-            if _is_method_field_declarator(declarator, source_bytes):
-                method_name = _extract_function_name(declarator, source_bytes)
-                if not method_name:
-                    continue
+        if node.type == "function_declaration":
+            scope_stack = namespace_stack + type_stack
+            scope = _extract_scope_stack(scope_stack)
+            declarator = node.child_by_field_name("declarator")
+            declarator_scope = _extract_declarator_scope(declarator, source_bytes)
+            if not scope and declarator_scope:
+                scope = declarator_scope
+            name = _extract_function_name(declarator, source_bytes)
+            if name:
                 arity = _declarator_arity(declarator)
-                method_key = (method_name, arity)
-                if method_key in seen_method_keys:
-                    continue
-                seen_method_keys.add(method_key)
-                symbol_id = _symbol_id(scope, method_name, arity, rel_path)
-                qualified = _qualified_name(scope, method_name)
+                symbol_id = _symbol_id(scope, name, arity, rel_path)
+                qualified = _qualified_name(scope, name)
+                snippet, start_line, end_line = _node_snippet(node, source_bytes)
+                comment = _extract_leading_comment(node, source_bytes)
+                summary = comment
+                note = ""
                 functions.append(
                     FunctionDef(
                         symbol_id=symbol_id,
                         qualified_name=qualified,
-                        name=method_name,
+                        name=name,
                         kind="declaration",
                         scope_name=scope,
                         file_path=rel_path,
@@ -1736,9 +1533,269 @@ def _walk_tree(
                         end_line=end_line,
                         arity=arity,
                         code=snippet,
-                        comment="",
-                        summary="",
-                        note=_build_note(snippet, "", ""),
+                        comment=comment,
+                        summary=summary,
+                        note=note,
+                    )
+                )
+                if namespace_stack:
+                    ns_id = _namespace_id("::".join(namespace_stack))
+                    relations.append(
+                        RelationEdge(
+                            source_id=ns_id,
+                            source_label="Namespace",
+                            target_id=symbol_id,
+                            target_label="Function",
+                            rel_type="CONTAINS",
+                            properties={},
+                        )
+                    )
+                declaring_type_id: Optional[str] = None
+                if type_stack:
+                    declaring_type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+                elif scope:
+                    candidate_type_id = _type_id(None, scope)
+                    if candidate_type_id in type_registry:
+                        declaring_type_id = candidate_type_id
+                if declaring_type_id:
+                    relations.append(
+                        RelationEdge(
+                            source_id=declaring_type_id,
+                            source_label="Type",
+                            target_id=symbol_id,
+                            target_label="Function",
+                            rel_type="DECLARES",
+                            properties={},
+                        )
+                    )
+                if declarator is not None:
+                    for param in _iter_parameter_declarations(declarator):
+                        _register_type_usage(
+                            symbol_id,
+                            "Function",
+                            _node_text(param, source_bytes),
+                            rel_path,
+                            types,
+                            relations,
+                            type_registry,
+                        )
+            continue
+
+        if node.type == "declaration":
+            parent_type = node.parent.type if node.parent is not None else ""
+            if parent_type not in {"translation_unit", "declaration_list"}:
+                continue
+            scope = _extract_scope_stack(namespace_stack + type_stack)
+            declarators = list(_iter_declaration_declarators(node))
+            if not declarators:
+                continue
+            decl_type_text = _declaration_type_text(node, source_bytes)
+            has_extern = any(
+                child.type == "storage_class_specifier" and _node_text(child, source_bytes).strip() == "extern"
+                for child in node.children
+                if child.is_named
+            )
+            snippet, start_line, end_line = _node_snippet(node, source_bytes)
+            comment = _extract_leading_comment(node, source_bytes)
+            summary = comment
+            note = ""
+
+            seen_function_keys: set[Tuple[str, int]] = set()
+            seen_variable_names: set[str] = set()
+            for declarator in declarators:
+                if _declarator_is_function(declarator, source_bytes):
+                    name = _extract_function_name(declarator, source_bytes)
+                    if not name:
+                        continue
+                    arity = _declarator_arity(declarator)
+                    func_key = (name, arity)
+                    if func_key in seen_function_keys:
+                        continue
+                    seen_function_keys.add(func_key)
+                    symbol_id = _symbol_id(scope, name, arity, rel_path)
+                    qualified = _qualified_name(scope, name)
+                    functions.append(
+                        FunctionDef(
+                            symbol_id=symbol_id,
+                            qualified_name=qualified,
+                            name=name,
+                            kind="extern_declaration" if has_extern else "declaration",
+                            scope_name=scope,
+                            file_path=rel_path,
+                            start_byte=int(node.start_byte),
+                            end_byte=int(node.end_byte),
+                            start_line=start_line,
+                            end_line=end_line,
+                            arity=arity,
+                            code=snippet,
+                            comment=comment,
+                            summary=summary,
+                            note=note,
+                        )
+                    )
+                    if namespace_stack:
+                        ns_id = _namespace_id("::".join(namespace_stack))
+                        relations.append(
+                            RelationEdge(
+                                source_id=ns_id,
+                                source_label="Namespace",
+                                target_id=symbol_id,
+                                target_label="Function",
+                                rel_type="CONTAINS",
+                                properties={},
+                            )
+                        )
+                    for param in _iter_parameter_declarations(declarator):
+                        _register_type_usage(
+                            symbol_id,
+                            "Function",
+                            _node_text(param, source_bytes),
+                            rel_path,
+                            types,
+                            relations,
+                            type_registry,
+                        )
+                    continue
+
+                var_name = _field_name_from_declarator(declarator, source_bytes)
+                if not var_name:
+                    var_name = _first_identifier(declarator, source_bytes)
+                if not var_name or var_name in seen_variable_names:
+                    continue
+                seen_variable_names.add(var_name)
+                decl_text = _node_text(declarator, source_bytes).strip()
+                field_signature = _normalize_type_signature(f"{decl_type_text} {decl_text}".strip())
+                if not field_signature:
+                    field_signature = _normalize_type_signature(_node_text(node, source_bytes))
+                field_id = f"{scope}::{var_name}@{rel_path}" if scope else f"{var_name}@{rel_path}"
+                fields.append(
+                    FieldDef(
+                        symbol_id=field_id,
+                        qualified_name=_qualified_name(scope, var_name),
+                        name=var_name,
+                        scope_name=scope,
+                        type_signature=field_signature,
+                        file_path=rel_path,
+                        start_line=start_line,
+                        end_line=end_line,
+                        code=snippet,
+                    )
+                )
+                if namespace_stack:
+                    ns_id = _namespace_id("::".join(namespace_stack))
+                    relations.append(
+                        RelationEdge(
+                            source_id=ns_id,
+                            source_label="Namespace",
+                            target_id=field_id,
+                            target_label="Field",
+                            rel_type="CONTAINS",
+                            properties={"storage": "extern"} if has_extern else {},
+                        )
+                    )
+                _register_type_usage(
+                    field_id,
+                    "Field",
+                    field_signature,
+                    rel_path,
+                    types,
+                    relations,
+                    type_registry,
+                )
+            continue
+
+        if node.type == "field_declaration":
+            scope_stack = namespace_stack + type_stack
+            scope = _extract_scope_stack(scope_stack)
+            snippet, start_line, end_line = _node_snippet(node, source_bytes)
+            type_node = node.child_by_field_name("type")
+            type_text = _node_text(type_node, source_bytes).strip() if type_node is not None else ""
+
+            declarators = list(_iter_field_declarators(node))
+            if not declarators:
+                # Conservative fallback to preserve previous behavior when AST is unexpected.
+                declarators = [node]
+
+            seen_field_names: set[str] = set()
+            seen_method_keys: set[Tuple[str, int]] = set()
+            for declarator in declarators:
+                if _is_method_field_declarator(declarator, source_bytes):
+                    method_name = _extract_function_name(declarator, source_bytes)
+                    if not method_name:
+                        continue
+                    arity = _declarator_arity(declarator)
+                    method_key = (method_name, arity)
+                    if method_key in seen_method_keys:
+                        continue
+                    seen_method_keys.add(method_key)
+                    symbol_id = _symbol_id(scope, method_name, arity, rel_path)
+                    qualified = _qualified_name(scope, method_name)
+                    functions.append(
+                        FunctionDef(
+                            symbol_id=symbol_id,
+                            qualified_name=qualified,
+                            name=method_name,
+                            kind="declaration",
+                            scope_name=scope,
+                            file_path=rel_path,
+                            start_byte=int(node.start_byte),
+                            end_byte=int(node.end_byte),
+                            start_line=start_line,
+                            end_line=end_line,
+                            arity=arity,
+                            code=snippet,
+                            comment="",
+                            summary="",
+                            note="",
+                        )
+                    )
+                    if type_stack:
+                        type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+                        relations.append(
+                            RelationEdge(
+                                source_id=type_id,
+                                source_label="Type",
+                                target_id=symbol_id,
+                                target_label="Function",
+                                rel_type="DECLARES",
+                                properties={},
+                            )
+                        )
+                    for param in _iter_parameter_declarations(declarator):
+                        _register_type_usage(
+                            symbol_id,
+                            "Function",
+                            _node_text(param, source_bytes),
+                            rel_path,
+                            types,
+                            relations,
+                            type_registry,
+                        )
+                    continue
+
+                field_name = _field_name_from_declarator(declarator, source_bytes)
+                if not field_name:
+                    field_name = _first_identifier(declarator, source_bytes)
+                if not field_name or field_name in seen_field_names:
+                    continue
+                seen_field_names.add(field_name)
+
+                decl_text = _node_text(declarator, source_bytes).strip() if declarator is not node else ""
+                field_signature = _normalize_type_signature(f"{type_text} {decl_text}".strip())
+                if not field_signature:
+                    field_signature = _normalize_type_signature(_node_text(node, source_bytes))
+                field_id = f"{scope}::{field_name}@{rel_path}" if scope else f"{field_name}@{rel_path}"
+                fields.append(
+                    FieldDef(
+                        symbol_id=field_id,
+                        qualified_name=_qualified_name(scope, field_name),
+                        name=field_name,
+                        scope_name=scope,
+                        type_signature=field_signature,
+                        file_path=rel_path,
+                        start_line=start_line,
+                        end_line=end_line,
+                        code=snippet,
                     )
                 )
                 if type_stack:
@@ -1747,193 +1804,124 @@ def _walk_tree(
                         RelationEdge(
                             source_id=type_id,
                             source_label="Type",
-                            target_id=symbol_id,
-                            target_label="Function",
+                            target_id=field_id,
+                            target_label="Field",
                             rel_type="DECLARES",
                             properties={},
                         )
                     )
-                for param in _iter_parameter_declarations(declarator):
-                    _register_type_usage(
-                        symbol_id,
-                        "Function",
-                        _node_text(param, source_bytes),
-                        rel_path,
-                        types,
-                        relations,
-                        type_registry,
-                    )
-                continue
+                _register_type_usage(
+                    field_id,
+                    "Field",
+                    field_signature,
+                    rel_path,
+                    types,
+                    relations,
+                    type_registry,
+                )
+            continue
 
-            field_name = _field_name_from_declarator(declarator, source_bytes)
-            if not field_name:
-                field_name = _first_identifier(declarator, source_bytes)
-            if not field_name or field_name in seen_field_names:
-                continue
-            seen_field_names.add(field_name)
-
-            decl_text = _node_text(declarator, source_bytes).strip() if declarator is not node else ""
-            field_signature = _normalize_type_signature(f"{type_text} {decl_text}".strip())
-            if not field_signature:
-                field_signature = _normalize_type_signature(_node_text(node, source_bytes))
-
-            field_id = f"{scope}::{field_name}@{rel_path}" if scope else f"{field_name}@{rel_path}"
-            fields.append(
-                FieldDef(
-                    symbol_id=field_id,
-                    qualified_name=_qualified_name(scope, field_name),
-                    name=field_name,
-                    scope_name=scope,
-                    type_signature=field_signature,
+        if node.type in {"type_definition", "alias_declaration", "type_alias_declaration"}:
+            kind = "typedef" if node.type == "type_definition" else "using"
+            snippet, start_line, end_line = _node_snippet(node, source_bytes)
+            alias_name = _first_identifier(node, source_bytes) or _anonymous_name("Alias", node)
+            scope = _extract_scope_stack(namespace_stack + type_stack)
+            alias_id = f"alias::{_qualified_name(scope, alias_name)}@{rel_path}"
+            target_name = _extract_base_type(_node_text(node, source_bytes))
+            aliases.append(
+                AliasDef(
+                    symbol_id=alias_id,
+                    qualified_name=_qualified_name(scope, alias_name),
+                    name=alias_name,
+                    kind=kind,
+                    target_name=target_name,
                     file_path=rel_path,
                     start_line=start_line,
                     end_line=end_line,
                     code=snippet,
                 )
             )
-            if type_stack:
-                type_id = _type_id(None, "::".join(namespace_stack + type_stack))
+            if target_name:
+                target_id = _type_id(None, target_name)
+                if target_id not in type_registry:
+                    types.append(
+                        TypeDef(
+                            symbol_id=target_id,
+                            qualified_name=target_name,
+                            name=target_name.split("::")[-1],
+                            kind="external",
+                            file_path=rel_path,
+                            start_line=0,
+                            end_line=0,
+                            code=target_name,
+                        )
+                    )
+                    type_registry[target_id] = types[-1]
                 relations.append(
                     RelationEdge(
-                        source_id=type_id,
-                        source_label="Type",
-                        target_id=field_id,
-                        target_label="Field",
-                        rel_type="DECLARES",
-                        properties={},
+                        source_id=alias_id,
+                        source_label="Alias",
+                        target_id=target_id,
+                        target_label="Type",
+                        rel_type="ALIASES",
+                        properties={"kind": kind},
                     )
                 )
-            _register_type_usage(
-                field_id,
-                "Field",
-                field_signature,
-                rel_path,
-                types,
-                relations,
-                type_registry,
-            )
-        return
+            continue
 
-    if node.type in {"type_definition", "alias_declaration", "type_alias_declaration"}:
-        kind = "typedef" if node.type == "type_definition" else "using"
-        snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        alias_name = _first_identifier(node, source_bytes) or _anonymous_name("Alias", node)
-        scope = _extract_scope_stack(namespace_stack + type_stack)
-        alias_id = f"alias::{_qualified_name(scope, alias_name)}@{rel_path}"
-        target_name = _extract_base_type(_node_text(node, source_bytes))
-        aliases.append(
-            AliasDef(
-                symbol_id=alias_id,
-                qualified_name=_qualified_name(scope, alias_name),
-                name=alias_name,
-                kind=kind,
-                target_name=target_name,
-                file_path=rel_path,
-                start_line=start_line,
-                end_line=end_line,
-                code=snippet,
+        if node.type == "namespace_alias_definition":
+            snippet, start_line, end_line = _node_snippet(node, source_bytes)
+            alias_name = _first_identifier(node, source_bytes) or _anonymous_name("NamespaceAlias", node)
+            scope = _extract_scope_stack(namespace_stack + type_stack)
+            alias_id = f"alias::{_qualified_name(scope, alias_name)}@{rel_path}"
+            target_name = None
+            text = _node_text(node, source_bytes)
+            parts = text.split("=", 1)
+            if len(parts) == 2:
+                target_name = _extract_type_name(parts[1])
+            aliases.append(
+                AliasDef(
+                    symbol_id=alias_id,
+                    qualified_name=_qualified_name(scope, alias_name),
+                    name=alias_name,
+                    kind="namespace_alias",
+                    target_name=target_name,
+                    file_path=rel_path,
+                    start_line=start_line,
+                    end_line=end_line,
+                    code=snippet,
+                )
             )
-        )
-        if target_name:
-            target_id = _type_id(None, target_name)
-            if target_id not in type_registry:
-                types.append(
-                    TypeDef(
-                        symbol_id=target_id,
-                        qualified_name=target_name,
-                        name=target_name.split("::")[-1],
-                        kind="external",
-                        file_path=rel_path,
-                        start_line=0,
-                        end_line=0,
-                        code=target_name,
+            if target_name:
+                ns_id = _namespace_id(target_name)
+                if ns_id not in namespace_registry:
+                    namespaces.append(
+                        NamespaceDef(
+                            symbol_id=ns_id,
+                            qualified_name=target_name,
+                            name=target_name.split("::")[-1],
+                            file_path=rel_path,
+                            start_line=0,
+                            end_line=0,
+                            code=target_name,
+                        )
+                    )
+                    namespace_registry[ns_id] = namespaces[-1]
+                relations.append(
+                    RelationEdge(
+                        source_id=alias_id,
+                        source_label="Alias",
+                        target_id=ns_id,
+                        target_label="Namespace",
+                        rel_type="ALIASES",
+                        properties={"kind": "namespace_alias"},
                     )
                 )
-                type_registry[target_id] = types[-1]
-            relations.append(
-                RelationEdge(
-                    source_id=alias_id,
-                    source_label="Alias",
-                    target_id=target_id,
-                    target_label="Type",
-                    rel_type="ALIASES",
-                    properties={"kind": kind},
-                )
-            )
-        return
+            continue
 
-    if node.type == "namespace_alias_definition":
-        snippet, start_line, end_line = _node_snippet(node, source_bytes)
-        alias_name = _first_identifier(node, source_bytes) or _anonymous_name("NamespaceAlias", node)
-        scope = _extract_scope_stack(namespace_stack + type_stack)
-        alias_id = f"alias::{_qualified_name(scope, alias_name)}@{rel_path}"
-        target_name = None
-        text = _node_text(node, source_bytes)
-        parts = text.split("=", 1)
-        if len(parts) == 2:
-            target_name = _extract_type_name(parts[1])
-        aliases.append(
-            AliasDef(
-                symbol_id=alias_id,
-                qualified_name=_qualified_name(scope, alias_name),
-                name=alias_name,
-                kind="namespace_alias",
-                target_name=target_name,
-                file_path=rel_path,
-                start_line=start_line,
-                end_line=end_line,
-                code=snippet,
-            )
-        )
-        if target_name:
-            ns_id = _namespace_id(target_name)
-            if ns_id not in namespace_registry:
-                namespaces.append(
-                    NamespaceDef(
-                        symbol_id=ns_id,
-                        qualified_name=target_name,
-                        name=target_name.split("::")[-1],
-                        file_path=rel_path,
-                        start_line=0,
-                        end_line=0,
-                        code=target_name,
-                    )
-                )
-                namespace_registry[ns_id] = namespaces[-1]
-            relations.append(
-                RelationEdge(
-                    source_id=alias_id,
-                    source_label="Alias",
-                    target_id=ns_id,
-                    target_label="Namespace",
-                    rel_type="ALIASES",
-                    properties={"kind": "namespace_alias"},
-                )
-            )
-        return
-
-    for child in node.children:
-        _walk_tree(
-            child,
-            source_bytes,
-            rel_path,
-            namespace_stack,
-            type_stack,
-            list(using_namespaces),
-            dict(using_imports),
-            namespaces,
-            types,
-            functions,
-            relations,
-            calls,
-            func_types,
-            fields,
-            aliases,
-            templates,
-            type_registry,
-            namespace_registry,
-        )
-
+        # Default: push all children onto the work stack with copies of using state.
+        for child in reversed(node.children):
+            work.append((child, namespace_stack, type_stack, list(using_namespaces), dict(using_imports)))
 
 def parse_c_family_file(
     path: str,
@@ -1989,7 +1977,7 @@ def parse_c_family_file(
     file_lines = file_code.count("\n") + 1
     file_comment = _extract_file_comment(tree, source_bytes)
     file_summary = file_comment
-    file_note = _build_note(file_code, file_comment, file_summary)
+    file_note = ""
     file_def = FileDef(
         file_path=rel_path,
         start_line=1,
@@ -3000,6 +2988,8 @@ class CodeEmbedder:
                         vectors.extend(encoded.detach().cpu().tolist())
                     else:
                         vectors.extend(encoded.tolist() if hasattr(encoded, "tolist") else [list(vec) for vec in encoded])
+                    del encoded
+                    self._clear_device_cache()
                     continue
                 encoded = self.tokenizer(
                     batch,
@@ -3012,7 +3002,16 @@ class CodeEmbedder:
                 outputs = self.model(**encoded)
                 embeddings = self._mean_pool(outputs.last_hidden_state, encoded["attention_mask"])
                 vectors.extend(embeddings.cpu().tolist())
+                del encoded, outputs, embeddings
+                self._clear_device_cache()
         return vectors
+
+    def _clear_device_cache(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device.type == "mps":
+            if hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
 
     @staticmethod
     def _mean_pool(last_hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -3270,10 +3269,10 @@ def _expand_impacted_files_by_includes(
             reverse_map.setdefault(dep, set()).add(source)
 
     impacted: set[str] = set()
-    queue: List[str] = list(changed_existing)
+    queue: collections.deque[str] = collections.deque(changed_existing)
     seen: set[str] = set(changed_existing)
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()  # O(1) vs O(n) for list.pop(0)
         for dependent in sorted(reverse_map.get(current, set())):
             if dependent in seen:
                 continue
@@ -3295,7 +3294,7 @@ def _load_or_parse_payload(
             item["comment"] = ""
         if "summary" not in item:
             item["summary"] = item.get("comment") or ""
-        if "note" not in item:
+        if not item.get("note"):
             item["note"] = _build_note(
                 item.get("code") or "",
                 item.get("comment") or "",
@@ -3459,6 +3458,53 @@ def _load_or_parse_payload(
         file_macros,
         parse_meta,
     ) = parse_c_family_file(file_path, root, is_cpp)
+
+    # -----------------------------------------------------------------------
+    # libclang fallback: when tree-sitter produces too many error nodes,
+    # try parsing with libclang for better accuracy on macro-heavy files.
+    #
+    # Guard conditions:
+    #   1. _clang_parser module imported successfully (libclang installed)
+    #   2. error_nodes >= dynamic threshold (base=50, scales with file size)
+    #
+    # NOTE: compile_commands.json is NOT required. libclang can parse in
+    # "free mode" (empty flags) — less accurate on includes/macros but still
+    # gives better scope/type resolution than tree-sitter on error-heavy code.
+    # -----------------------------------------------------------------------
+    if (
+        _clang_parser is not None
+        and parse_meta.get("error_nodes", 0) >= _effective_fallback_threshold(
+            os.path.getsize(file_path)
+        )
+    ):
+        _cc_path = (compile_db_index or {}).get("path")
+        try:
+            _clang_result = _clang_parser.parse_and_extract(file_path, root, _cc_path or "")
+            if _clang_result is not None:
+                _ts_errors = parse_meta.get("error_nodes", 0)
+                _clang_errors = _clang_result.get("parse_meta", {}).get("error_nodes", 0) or 0
+                if _clang_errors < _ts_errors:
+                    # Libclang gave better result — REPLACE tree-sitter output
+                    logging.info(
+                        "libclang fallback OK for %s (ts_errors=%d -> clang_errors=%d)",
+                        rel_path, _ts_errors, _clang_errors,
+                    )
+                    if parse_cache and signature is not None:
+                        write_parse_cache(parse_cache_root, rel_path, signature, _clang_result)
+                    return _clang_result
+                else:
+                    # Libclang not better — keep tree-sitter, no cache waste
+                    logging.debug(
+                        "libclang no better for %s (ts_errors=%d, clang_errors=%d) — keep TS",
+                        rel_path, _ts_errors, _clang_errors,
+                    )
+        except Exception as _clang_exc:
+            logging.warning(
+                "libclang fallback failed for %s: %s — using tree-sitter result",
+                file_path,
+                _clang_exc,
+            )
+
     payload = {
         "functions": [asdict(item) for item in file_functions],
         "calls": [asdict(item) for item in file_calls],
@@ -3925,18 +3971,88 @@ async def build_call_graph(
 
     if code_writer:
         if verbose:
-            print("[neo4j] Collecting nodes and relations for batch write...")
-        all_files: List[Dict[str, Any]] = []
-        all_namespaces: List[Dict[str, Any]] = []
-        all_types: List[Dict[str, Any]] = []
-        all_function_types: List[Dict[str, Any]] = []
-        all_functions: List[Dict[str, Any]] = []
-        all_fields: List[Dict[str, Any]] = []
-        all_aliases: List[Dict[str, Any]] = []
-        all_templates: List[Dict[str, Any]] = []
-        all_relations: List[Dict[str, Any]] = []
-        all_calls: List[Dict[str, Any]] = []
-        all_unknown_calls: List[Dict[str, Any]] = []
+            print("[neo4j] Streaming nodes and relations to Neo4j in batches...")
+        # --- Write buffers: flushed to Neo4j every _STREAM_BATCH_FILES files ---
+        _STREAM_BATCH_FILES = 500
+        buf_files: List[Dict[str, Any]] = []
+        buf_namespaces: List[Dict[str, Any]] = []
+        buf_types: List[Dict[str, Any]] = []
+        buf_function_types: List[Dict[str, Any]] = []
+        buf_functions: List[Dict[str, Any]] = []
+        buf_fields: List[Dict[str, Any]] = []
+        buf_aliases: List[Dict[str, Any]] = []
+        buf_templates: List[Dict[str, Any]] = []
+        buf_relations: List[Dict[str, Any]] = []
+        buf_calls: List[Dict[str, Any]] = []
+        buf_unknown_calls: List[Dict[str, Any]] = []
+        _files_in_buf: int = 0
+        # --- Lean metadata for post-loop DECLARES-inference (memory-compact) ---
+        func_metas: List[Dict[str, str]] = []   # {id, scope_name, name, file_path}
+        infer_type_ids: Set[str] = set()
+        infer_ns_qnames: Set[str] = set()
+        # Tracks DECLARES(Type→Function) + CONTAINS(File→Type) keys for dedup
+        infer_rel_keys: Set[tuple] = set()
+        # Running totals for stats/reporting
+        _total_files_written: int = 0
+        _total_calls_written: int = 0
+        _total_unknown_calls_written: int = 0
+
+        _UNKNOWN_CALLS_CYPHER = """UNWIND $rows AS row
+CALL {
+    WITH row
+    MATCH (caller:Function {id: row.caller_id})
+    RETURN caller
+    LIMIT 1
+}
+MERGE (unknown:UnknownFunction {id: row.unknown_id})
+SET unknown.name = row.props.callee_name,
+    unknown.updated_at = datetime()
+MERGE (caller)-[r:UNKNOWN_CALL {site_id: row.site_id}]->(unknown)
+SET r += row.props
+RETURN count(r) AS count
+"""
+
+        async def _flush_write_buffers() -> None:
+            nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
+            nonlocal buf_fields, buf_aliases, buf_templates, buf_relations, buf_calls, buf_unknown_calls
+            nonlocal _files_in_buf, _total_files_written, _total_calls_written, _total_unknown_calls_written
+            has_nodes = any([buf_files, buf_namespaces, buf_types, buf_function_types,
+                             buf_functions, buf_fields, buf_aliases, buf_templates])
+            if has_nodes or buf_relations:
+                await code_writer.write_all(
+                    files=buf_files or None,
+                    namespaces=buf_namespaces or None,
+                    types=buf_types or None,
+                    function_types=buf_function_types or None,
+                    functions=buf_functions or None,
+                    fields=buf_fields or None,
+                    aliases=buf_aliases or None,
+                    templates=buf_templates or None,
+                    relations=buf_relations or None,
+                    use_full_writers=True,
+                )
+                _total_files_written += len(buf_files)
+            if buf_calls:
+                _orig_bs = code_writer.batch_size
+                code_writer.batch_size = max(1, neo4j_calls_batch_size)
+                try:
+                    await code_writer.write_calls_with_site(buf_calls)
+                finally:
+                    code_writer.batch_size = _orig_bs
+                _total_calls_written += len(buf_calls)
+            if buf_unknown_calls:
+                _unk_bs = max(1, neo4j_calls_batch_size)
+                for _off in range(0, len(buf_unknown_calls), _unk_bs):
+                    _ubatch = buf_unknown_calls[_off : _off + _unk_bs]
+                    await code_writer.driver.execute_query(
+                        _UNKNOWN_CALLS_CYPHER, {"rows": _ubatch},
+                        database=code_writer.database,
+                    )
+                _total_unknown_calls_written += len(buf_unknown_calls)
+            buf_files = []; buf_namespaces = []; buf_types = []; buf_function_types = []
+            buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
+            buf_relations = []; buf_calls = []; buf_unknown_calls = []
+            _files_in_buf = 0
 
         allowed_rel_types = {
             "CONTAINS",
@@ -4086,7 +4202,7 @@ async def build_call_graph(
 
         for payload in iter_payloads(log_parse=False):
             file_def = payload["file_def"]
-            all_files.append({
+            buf_files.append({
                 "id": file_def["file_path"],
                 "path": file_def["file_path"],
                 "start_line": file_def["start_line"],
@@ -4102,7 +4218,8 @@ async def build_call_graph(
                 "build_system": build_system,
             })
             for ns in payload["namespaces"]:
-                all_namespaces.append({
+                infer_ns_qnames.add(ns["qualified_name"])
+                buf_namespaces.append({
                     "id": ns["symbol_id"],
                     "name": ns["name"],
                     "qualified_name": ns["qualified_name"],
@@ -4120,7 +4237,8 @@ async def build_call_graph(
                     "build_system": build_system,
                 })
             for type_def in payload["types"]:
-                all_types.append({
+                infer_type_ids.add(type_def["symbol_id"])
+                buf_types.append({
                     "id": type_def["symbol_id"],
                     "name": type_def["name"],
                     "qualified_name": type_def["qualified_name"],
@@ -4139,7 +4257,7 @@ async def build_call_graph(
                     "build_system": build_system,
                 })
             for func_type in payload["function_types"]:
-                all_function_types.append({
+                buf_function_types.append({
                     "id": func_type["symbol_id"],
                     "type_signature": func_type["type_signature"],
                     "file_path": func_type["file_path"],
@@ -4153,7 +4271,14 @@ async def build_call_graph(
                     "build_system": build_system,
                 })
             for func in payload["functions"]:
-                all_functions.append({
+                # Lean metadata for post-loop DECLARES-inference
+                func_metas.append({
+                    "id": func["symbol_id"],
+                    "scope_name": func["scope_name"],
+                    "name": func["name"],
+                    "file_path": func["file_path"],
+                })
+                buf_functions.append({
                     "id": func["symbol_id"],
                     "name": func["name"],
                     "qualified_name": func["qualified_name"],
@@ -4176,7 +4301,7 @@ async def build_call_graph(
                     "build_system": build_system,
                 })
             for field in payload["fields"]:
-                all_fields.append({
+                buf_fields.append({
                     "id": field["symbol_id"],
                     "name": field["name"],
                     "qualified_name": field["qualified_name"],
@@ -4193,7 +4318,7 @@ async def build_call_graph(
                     "build_system": build_system,
                 })
             for alias in payload["aliases"]:
-                all_aliases.append({
+                buf_aliases.append({
                     "id": alias["symbol_id"],
                     "name": alias["name"],
                     "qualified_name": alias["qualified_name"],
@@ -4210,7 +4335,7 @@ async def build_call_graph(
                     "build_system": build_system,
                 })
             for template in payload["templates"]:
-                all_templates.append({
+                buf_templates.append({
                     "id": template["symbol_id"],
                     "name": template["name"],
                     "file_path": template["file_path"],
@@ -4226,7 +4351,7 @@ async def build_call_graph(
 
             # Add relations for project containment
             file_id = file_def["file_path"]
-            all_relations.append({
+            buf_relations.append({
                 "source_label": "Project",
                 "target_label": "File",
                 "rel_type": "CONTAINS",
@@ -4235,7 +4360,7 @@ async def build_call_graph(
                 "properties": {},
             })
             for inc_file in resolved_includes_by_file.get(file_id, []):
-                all_relations.append(
+                buf_relations.append(
                     {
                         "source_label": "File",
                         "target_label": "File",
@@ -4246,7 +4371,7 @@ async def build_call_graph(
                     }
                 )
             for ns in payload["namespaces"]:
-                all_relations.append({
+                buf_relations.append({
                     "source_label": "File",
                     "target_label": "Namespace",
                     "rel_type": "CONTAINS",
@@ -4255,7 +4380,9 @@ async def build_call_graph(
                     "properties": {},
                 })
             for type_def in payload["types"]:
-                all_relations.append({
+                _ct_key = ("File", "Type", "CONTAINS", file_id, type_def["symbol_id"])
+                infer_rel_keys.add(_ct_key)
+                buf_relations.append({
                     "source_label": "File",
                     "target_label": "Type",
                     "rel_type": "CONTAINS",
@@ -4264,7 +4391,7 @@ async def build_call_graph(
                     "properties": {},
                 })
             for func in payload["functions"]:
-                all_relations.append({
+                buf_relations.append({
                     "source_label": "File",
                     "target_label": "Function",
                     "rel_type": "CONTAINS",
@@ -4273,7 +4400,7 @@ async def build_call_graph(
                     "properties": {},
                 })
             for field in payload["fields"]:
-                all_relations.append({
+                buf_relations.append({
                     "source_label": "File",
                     "target_label": "Field",
                     "rel_type": "CONTAINS",
@@ -4282,7 +4409,7 @@ async def build_call_graph(
                     "properties": {},
                 })
             for alias in payload["aliases"]:
-                all_relations.append({
+                buf_relations.append({
                     "source_label": "File",
                     "target_label": "Alias",
                     "rel_type": "CONTAINS",
@@ -4291,7 +4418,7 @@ async def build_call_graph(
                     "properties": {},
                 })
             for template in payload["templates"]:
-                all_relations.append({
+                buf_relations.append({
                     "source_label": "File",
                     "target_label": "Template",
                     "rel_type": "CONTAINS",
@@ -4303,7 +4430,11 @@ async def build_call_graph(
             for rel in payload["relations"]:
                 if rel["rel_type"] not in allowed_rel_types:
                     continue
-                all_relations.append({
+                _rk = (rel["source_label"], rel["target_label"], rel["rel_type"],
+                       rel["source_id"], rel["target_id"])
+                if rel["rel_type"] == "DECLARES":
+                    infer_rel_keys.add(_rk)
+                buf_relations.append({
                     "source_label": rel["source_label"],
                     "target_label": rel["target_label"],
                     "rel_type": rel["rel_type"],
@@ -4346,7 +4477,7 @@ async def build_call_graph(
                         call_type,
                     )
                     site_id = f"{parse_run_id}:{stable_site_id}"
-                    all_unknown_calls.append(
+                    buf_unknown_calls.append(
                         {
                             "caller_id": call["caller_id"],
                             "unknown_id": unknown_id,
@@ -4411,7 +4542,7 @@ async def build_call_graph(
                 site_id = f"{parse_run_id}:{stable_site_id}"
                 total, resolved = call_stats_by_file.get(call_file, (0, 0))
                 call_stats_by_file[call_file] = (total + 1, resolved + 1)
-                all_calls.append({
+                buf_calls.append({
                     "caller_id": call["caller_id"],
                     "callee_id": callee_id,
                     "site_id": site_id,
@@ -4433,9 +4564,18 @@ async def build_call_graph(
                     },
                 })
 
-        # Add event relations
+            # Flush write buffers periodically to keep memory bounded
+            _files_in_buf += 1
+            if _files_in_buf >= _STREAM_BATCH_FILES:
+                await _flush_write_buffers()
+
+        # Flush any remaining buffered data from the loop
+        await _flush_write_buffers()
+
+        # Add event and possible-call relations (small, built during Pass 1)
+        tail_relations: List[Dict[str, Any]] = []
         for event_rel in event_relations:
-            all_relations.append({
+            tail_relations.append({
                 "source_label": "Function",
                 "target_label": "Event",
                 "rel_type": event_rel["rel_type"],
@@ -4444,7 +4584,7 @@ async def build_call_graph(
                 "properties": event_rel["props"],
             })
         for rel in possible_call_relations:
-            all_relations.append({
+            tail_relations.append({
                 "source_label": "Function",
                 "target_label": "Function",
                 "rel_type": rel["rel_type"],
@@ -4455,50 +4595,47 @@ async def build_call_graph(
 
         # Infer missing Type-DECLARES->Function links for out-of-class definitions
         # where scope_name was recovered from qualified declarators.
-        relation_keys = {
-            (rel["source_label"], rel["target_label"], rel["rel_type"], rel["source_id"], rel["target_id"])
-            for rel in all_relations
-        }
-        type_ids = {item["id"] for item in all_types}
-        namespace_qualified_names = {item["qualified_name"] for item in all_namespaces}
-
+        # Uses lean func_metas, infer_type_ids, infer_ns_qnames, infer_rel_keys
+        # instead of the (now-flushed) full all_functions/all_types/all_namespaces lists.
         scopes_with_ctor_dtor: set[str] = set()
-        for func in all_functions:
-            scope = (func.get("scope_name") or "").strip()
+        for fm in func_metas:
+            scope = (fm.get("scope_name") or "").strip()
             if not scope:
                 continue
             scope_leaf = scope.split("::")[-1]
-            name = (func.get("name") or "").strip()
+            name = (fm.get("name") or "").strip()
             if name in {scope_leaf, f"~{scope_leaf}"}:
                 scopes_with_ctor_dtor.add(scope)
 
         inferred_type_nodes = 0
         inferred_declares = 0
-        for func in all_functions:
-            scope = (func.get("scope_name") or "").strip()
+        inferred_types: List[Dict[str, Any]] = []
+        inferred_relations: List[Dict[str, Any]] = []
+        for fm in func_metas:
+            scope = (fm.get("scope_name") or "").strip()
             if not scope:
                 continue
             type_id = _type_id(None, scope)
-            rel_key = ("Type", "Function", "DECLARES", type_id, func["id"])
-            if rel_key in relation_keys:
+            rel_key = ("Type", "Function", "DECLARES", type_id, fm["id"])
+            if rel_key in infer_rel_keys:
                 continue
 
-            has_type = type_id in type_ids
+            has_type = type_id in infer_type_ids
             if not has_type:
                 # Avoid creating pseudo-types for namespace functions unless we have
                 # strong constructor/destructor evidence that scope denotes a type.
-                if scope in namespace_qualified_names and scope not in scopes_with_ctor_dtor:
+                if scope in infer_ns_qnames and scope not in scopes_with_ctor_dtor:
                     continue
                 if scope not in scopes_with_ctor_dtor:
                     continue
 
-                all_types.append(
+                inferred_types.append(
                     {
                         "id": type_id,
                         "name": scope.split("::")[-1],
                         "qualified_name": scope,
                         "kind": "external",
-                        "file_path": func.get("file_path") or "",
+                        "file_path": fm.get("file_path") or "",
                         "start_line": 0,
                         "end_line": 0,
                         "code": scope,
@@ -4513,51 +4650,50 @@ async def build_call_graph(
                     }
                 )
                 inferred_type_nodes += 1
-                type_ids.add(type_id)
+                infer_type_ids.add(type_id)
 
                 file_contains_key = (
                     "File",
                     "Type",
                     "CONTAINS",
-                    func.get("file_path") or "",
+                    fm.get("file_path") or "",
                     type_id,
                 )
-                if file_contains_key not in relation_keys:
-                    all_relations.append(
+                if file_contains_key not in infer_rel_keys:
+                    inferred_relations.append(
                         {
                             "source_label": "File",
                             "target_label": "Type",
                             "rel_type": "CONTAINS",
-                            "source_id": func.get("file_path") or "",
+                            "source_id": fm.get("file_path") or "",
                             "target_id": type_id,
                             "properties": {},
                         }
                     )
-                    relation_keys.add(file_contains_key)
+                    infer_rel_keys.add(file_contains_key)
 
-            all_relations.append(
+            inferred_relations.append(
                 {
                     "source_label": "Type",
                     "target_label": "Function",
                     "rel_type": "DECLARES",
                     "source_id": type_id,
-                    "target_id": func["id"],
+                    "target_id": fm["id"],
                     "properties": {"inferred": "scope_name"},
                 }
             )
-            relation_keys.add(rel_key)
+            infer_rel_keys.add(rel_key)
             inferred_declares += 1
 
         if unresolved_handle is not None:
             unresolved_handle.close()
 
         if verbose:
-            print(f"[neo4j] Writing {len(all_files)} files, {len(all_namespaces)} namespaces, "
-                  f"{len(all_types)} types, {len(all_function_types)} function_types, "
-                  f"{len(all_functions)} functions, {len(all_fields)} fields, "
-                  f"{len(all_aliases)} aliases, {len(all_templates)} templates, "
-                  f"{len(all_relations)} relations, {len(all_calls)} calls, "
-                  f"{len(all_unknown_calls)} unknown calls")
+            print(
+                f"[neo4j] Streamed {_total_files_written} files, "
+                f"{_total_calls_written} calls, "
+                f"{_total_unknown_calls_written} unknown calls"
+            )
             print(
                 f"[neo4j] inferred declares links: {inferred_declares}, "
                 f"inferred synthetic types: {inferred_type_nodes}"
@@ -4603,66 +4739,14 @@ async def build_call_graph(
             if verbose:
                 print(f"[neo4j] parse run node upsert skipped: {exc}")
 
-        state = load_state(neo4j_state_path) if neo4j_state_path else None
-
-        def state_writer(updated_state: Dict[str, int]) -> None:
-            if neo4j_state_path:
-                write_state(neo4j_state_path, updated_state)
-
-        await code_writer.write_all(
-            files=all_files,
-            namespaces=all_namespaces,
-            types=all_types,
-            function_types=all_function_types,
-            functions=all_functions,
-            fields=all_fields,
-            aliases=all_aliases,
-            templates=all_templates,
-            relations=all_relations,
-            state=state,
-            state_writer=state_writer,
-            use_full_writers=True,
-        )
-
-        if all_calls:
-            original_batch_size = code_writer.batch_size
-            code_writer.batch_size = max(1, neo4j_calls_batch_size)
-            if verbose:
-                print(f"[neo4j] calls batch size: {code_writer.batch_size}")
-            try:
-                await code_writer.write_calls_with_site(
-                    all_calls,
-                    state=state,
-                    state_writer=state_writer,
-                )
-            finally:
-                code_writer.batch_size = original_batch_size
-
-        if all_unknown_calls:
-            batch_size = max(1, neo4j_calls_batch_size)
-            if verbose:
-                print(f"[neo4j] unknown-calls batch size: {batch_size}")
-            for offset in range(0, len(all_unknown_calls), batch_size):
-                batch = all_unknown_calls[offset : offset + batch_size]
-                await code_writer.driver.execute_query(
-                    """
-                    UNWIND $rows AS row
-                    CALL {
-                        WITH row
-                        MATCH (caller:Function {id: row.caller_id})
-                        RETURN caller
-                        LIMIT 1
-                    }
-                    MERGE (unknown:UnknownFunction {id: row.unknown_id})
-                    SET unknown.name = row.props.callee_name,
-                        unknown.updated_at = datetime()
-                    MERGE (caller)-[r:UNKNOWN_CALL {site_id: row.site_id}]->(unknown)
-                    SET r += row.props
-                    RETURN count(r) AS count
-                    """,
-                    {"rows": batch},
-                    database=code_writer.database,
-                )
+        # Write tail relations (event/possible-call) + inferred nodes/relations
+        tail_and_inferred: List[Dict[str, Any]] = tail_relations + inferred_relations
+        if inferred_types or tail_and_inferred:
+            await code_writer.write_all(
+                types=inferred_types or None,
+                relations=tail_and_inferred or None,
+                use_full_writers=True,
+            )
 
         if verbose:
             unresolved = call_stats_total - call_stats_resolved
@@ -4693,7 +4777,7 @@ async def build_call_graph(
                 "total_calls": call_stats_total,
                 "resolved_calls": call_stats_resolved,
                 "unresolved_calls": call_stats_total - call_stats_resolved,
-                "unknown_calls_written": len(all_unknown_calls),
+                "unknown_calls_written": _total_unknown_calls_written,
                 "resolved_ratio": (call_stats_resolved / call_stats_total) if call_stats_total else 0.0,
                 "macro_resolved_calls": call_stats_macro_resolved,
                 "possible_calls_written": len(possible_call_relations),
@@ -4781,6 +4865,9 @@ async def build_call_graph(
                             }
                             handle.write(json.dumps(point, ensure_ascii=True) + "\n")
                         batch_funcs.clear()
+                        del texts, vectors
+                        if batch_index % 50 == 0:
+                            gc.collect()
                 if batch_funcs:
                     batch_index += 1
                     if verbose:
@@ -4815,6 +4902,7 @@ async def build_call_graph(
                             },
                         }
                         handle.write(json.dumps(point, ensure_ascii=True) + "\n")
+                    del texts, vectors
             state = {"total_points": expected_points, "upserted": 0}
             write_qdrant_state(state)
         else:
@@ -4858,8 +4946,8 @@ async def build_call_graph(
                 os.remove(state_path)
             except OSError:
                 pass
-    _sr_fn = len(all_functions) if 'all_functions' in vars() else 0
-    _sr_cls = len(all_types) if 'all_types' in vars() else 0
+    _sr_fn = len(func_metas) if 'func_metas' in vars() else 0
+    _sr_cls = len(infer_type_ids) if 'infer_type_ids' in vars() else 0
     _sr_files = total_files if 'total_files' in vars() else 0
     print(f"[SCAN_RESULT] parser=cplus files={_sr_files} functions={_sr_fn} classes={_sr_cls}", flush=True)
     if verbose:
@@ -5204,7 +5292,6 @@ if __name__ == "__main__":
         _pre_args.root, ".cortext-harness", "config", "dev.json"
     )
     load_harness_config(_config_path)
-
     print(f"Starting C/C++ analyzer with Python {sys.version} on platform {sys.platform}")
     print(f"NEO4J_URI: {os.environ.get('NEO4J_URI', 'Not Set')}")
     print(f"NEO4J_USER: {os.environ.get('NEO4J_USER', 'Not Set')}")

@@ -1,74 +1,64 @@
 # VB Family Analyzer Guide (VB.NET, VB6, VBA, VBScript)
 
-This document describes how to set up the environment and run the VB analyzer group within `hyper-graph`.
-
----
+Tài liệu này mô tả cách cài môi trường và chạy nhóm analyzer VB trong `hyper-graph`.
 
 ## 1) Scope
 
-The scripts include:
+Các script:
 
-* `tools/vb/vbnet_analyzer.py`
-* `tools/vb/vb6_analyzer.py`
-* `tools/vb/vba_analyzer.py`
-* `tools/vb/vbscript_analyzer.py`
+- `tools/vb/vbnet_analyzer.py`
+- `tools/vb/vb6_analyzer.py`
+- `tools/vb/vba_analyzer.py`
+- `tools/vb/vbscript_analyzer.py`
 
-The pipeline follows the repository's standard workflow:
+Pipeline giữ nguyên chuẩn chung của repo:
 
-1. **Incremental cleanup** (Neo4j/Qdrant)
-2. **Source parsing**
-3. **Call graph resolution**
-4. **Neo4j writing**
-5. **Embedding + Qdrant upsert**
-6. **Message scan**
+1. incremental cleanup (Neo4j/Qdrant)
+2. parse source
+3. resolve call graph
+4. write Neo4j
+5. embed + upsert Qdrant
+6. message scan
 
----
+## 2) Yêu cầu môi trường
 
-## 2) Environment Requirements
+### Bắt buộc
 
-### Mandatory
+- Python 3.11+ (khuyến nghị 3.12)
+- Neo4j
+- Qdrant (nếu muốn semantic vector search)
 
-* **Python 3.11+** (3.12 recommended)
-* **Neo4j**
-* **Qdrant** (required for semantic vector search)
+### Cho VB.NET Roslyn engine
 
-### For VB.NET Roslyn Engine
+- .NET SDK (khuyến nghị 9.x; 8.x vẫn hỗ trợ)
+- Worker target: `net8.0;net9.0`
+- Analyzer sẽ tự build worker khi chạy VB.NET ở mode `auto|roslyn`
 
-* **.NET SDK** (9.x recommended; 8.x is still supported)
-* **Worker target:** `net8.0;net9.0`
-* The analyzer will automatically build the worker when running VB.NET in `auto|roslyn` mode.
-
-Quick check:
+Kiểm tra nhanh:
 
 ```bash
 dotnet --info
 dotnet --list-runtimes
-
 ```
 
----
+## 3) Cài đặt
 
-## 3) Installation
-
-From the `hyper-dev/hyper-graph` directory:
+Từ thư mục `hyper-dev/hyper-graph`:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-
 ```
 
-The `requirements.txt` file already includes grammar packages for:
+`requirements.txt` đã bao gồm grammar packages cho:
 
-* VB.NET tree-sitter
-* VB6 tree-sitter
-* VBA tree-sitter
-* VBScript tree-sitter
+- VB.NET tree-sitter
+- VB6 tree-sitter
+- VBA tree-sitter
+- VBScript tree-sitter
 
----
-
-## 4) Recommended Environment Variables
+## 4) Biến môi trường khuyến nghị
 
 ```bash
 export ROOT=/path/to/source
@@ -84,12 +74,9 @@ export QDRANT_URL=http://localhost:6333
 export QDRANT_COLLECTION=my_project
 export CODE_EMBEDDING_MODEL=jinaai/jina-embeddings-v3
 export EMBED_DEVICE=cpu
-
 ```
 
----
-
-## 5) Running VB Analyzers
+## 5) Chạy analyzer VB
 
 ### 5.1 Dry-run
 
@@ -98,10 +85,9 @@ export EMBED_DEVICE=cpu
 .venv/bin/python tools/vb/vb6_analyzer.py --root "$ROOT" --dry-run
 .venv/bin/python tools/vb/vba_analyzer.py --root "$ROOT" --dry-run
 .venv/bin/python tools/vb/vbscript_analyzer.py --root "$ROOT" --dry-run
-
 ```
 
-### 5.2 VB.NET Default (Roslyn AUTO)
+### 5.2 VB.NET mặc định (Roslyn AUTO)
 
 ```bash
 .venv/bin/python tools/vb/vbnet_analyzer.py \
@@ -117,10 +103,9 @@ export EMBED_DEVICE=cpu
   --vbnet-parser-engine auto \
   --vbnet-semantic auto \
   --verbose
-
 ```
 
-### 5.3 Force Roslyn Syntax-only
+### 5.3 Ép Roslyn syntax-only
 
 ```bash
 .venv/bin/python tools/vb/vbnet_analyzer.py \
@@ -129,10 +114,9 @@ export EMBED_DEVICE=cpu
   --vbnet-semantic off \
   --disable-message-scan \
   --verbose
-
 ```
 
-### 5.4 Force Regex Fallback (No Roslyn)
+### 5.4 Ép fallback regex (không dùng Roslyn)
 
 ```bash
 .venv/bin/python tools/vb/vbnet_analyzer.py \
@@ -140,10 +124,9 @@ export EMBED_DEVICE=cpu
   --vbnet-parser-engine regex \
   --disable-message-scan \
   --verbose
-
 ```
 
-### 5.5 Incremental via Owner Manifest
+### 5.5 Incremental theo owner manifest
 
 ```bash
 .venv/bin/python tools/vb/vbnet_analyzer.py \
@@ -156,75 +139,64 @@ export EMBED_DEVICE=cpu
   --vbnet-parser-engine auto \
   --vbnet-semantic auto \
   --verbose
-
 ```
 
----
+## 6) Cờ quan trọng cho VB.NET
 
-## 6) Important VB.NET Flags
+- `--vbnet-parser-engine auto|roslyn|regex`  
+  Default: `auto` (ưu tiên Roslyn, lỗi thì fallback regex).
+- `--vbnet-semantic auto|on|off`  
+  Default: `auto`:
+  - Có `.sln/.vbproj` => semantic path
+  - Không có workspace => syntax-only
+- `--vbnet-roslyn-worker-project <path.csproj>`  
+  Override đường dẫn worker.
+- `--vbnet-roslyn-timeout-sec <float>`
+- `--vbnet-roslyn-workspace-timeout-ms <int>`
+- `--vbnet-roslyn-file-timeout-ms <int>`
 
-* `--vbnet-parser-engine auto|roslyn|regex`
-* Default: `auto` (prioritizes Roslyn, fallbacks to regex if it fails).
+## 7) Ý nghĩa log chính
 
+- `[cleanup][qdrant] files=...`  
+  Xóa vector cũ cho file changed/deleted trước khi ingest mới.
+- `[parse][start] parser=vbnet files=N ...`  
+  Bắt đầu phase parse, `N` là số file cần parse trong batch hiện tại.
+- `[parse][engine] parser=vbnet engine=... semantic=...`  
+  Engine thực tế của VB.NET (Roslyn/regex).
+- `[parse][progress] parser=vbnet completed=x/N ...`  
+  Tiến độ parse file.
+- `[parse][fallback] ...`  
+  Roslyn fail (batch/file), chuyển sang regex để không block toàn job.
+- `[parse][done] parser=vbnet parsed=N/N`  
+  Kết thúc phase parse.
+- `[vb] calls: total/resolved`  
+  Tỷ lệ resolve call sau parse.
+- `[SCAN_RESULT] parser=vbnet files=... functions=... classes=...`  
+  Tổng kết parser.
 
-* `--vbnet-semantic auto|on|off`
-* Default: `auto`:
-* If `.sln/.vbproj` exists => semantic path.
-* No workspace => syntax-only.
+## 8) Troubleshooting nhanh
 
+### VB.NET chạy lâu bất thường
 
+1. Bật `--verbose` và kiểm tra có nhiều `[parse][fallback]` không.
+2. Nếu fallback nhiều, kiểm tra:
+   - `dotnet --list-runtimes`
+   - `dotnet build tools/vb/roslyn_worker/RoslynVbWorker.csproj -c Release`
+3. Cần debug parser thuần (không ghi DB/vector):
+   - bỏ `--neo4j-*`
+   - bỏ `--qdrant-url`
+   - thêm `--disable-message-scan`
 
+### Roslyn không dùng được trên máy hiện tại
 
-* `--vbnet-roslyn-worker-project <path.csproj>`: Overrides the worker path.
-* `--vbnet-roslyn-timeout-sec <float>`
-* `--vbnet-roslyn-workspace-timeout-ms <int>`
-* `--vbnet-roslyn-file-timeout-ms <int>`
+- Tạm thời chạy:
+  - `--vbnet-parser-engine regex`
 
----
+## 9) Ghi chú compatibility
 
-## 7) Key Log Meanings
-
-* `[cleanup][qdrant] files=...`: Deleting old vectors for changed/deleted files before new ingestion.
-* `[parse][start] parser=vbnet files=N ...`: Beginning the parse phase; `N` is the number of files in the current batch.
-* `[parse][engine] parser=vbnet engine=... semantic=...`: The actual engine used for VB.NET (Roslyn/regex).
-* `[parse][progress] parser=vbnet completed=x/N ...`: Progress of file parsing.
-* `[parse][fallback] ...`: Roslyn failure (batch or file level); switching to regex to avoid blocking the job.
-* `[parse][done] parser=vbnet parsed=N/N`: Parse phase complete.
-* `[vb] calls: total/resolved`: Ratio of resolved calls after parsing.
-* `[SCAN_RESULT] parser=vbnet files=... functions=... classes=...`: Parser summary.
-
----
-
-## 8) Quick Troubleshooting
-
-### VB.NET is unusually slow
-
-1. Enable `--verbose` and check for high frequency of `[parse][fallback]`.
-2. If many fallbacks occur, check:
-* `dotnet --list-runtimes`
-* `dotnet build tools/vb/roslyn_worker/RoslynVbWorker.csproj -c Release`
-
-
-3. To debug the parser alone (without writing to DB/vector):
-* Omit `--neo4j-*`
-* Omit `--qdrant-url`
-* Add `--disable-message-scan`
-
-
-
-### Roslyn cannot be used on the current machine
-
-* Temporarily run using: `--vbnet-parser-engine regex`
-
----
-
-## 9) Compatibility Notes
-
-* `parse_meta` for VB.NET now includes additional fields:
-* `parser_engine`, `semantic_mode`, `semantic_enabled`
-* `fallback_reason`, `worker_elapsed_ms`
-* `workspace_kind`, `solution_or_project_path`
-* `semantic_errors`, `requested_engine`
-
-
-* `PARSE_CACHE_VERSION` has been bumped to prevent old cache contract conflicts.
+- `parse_meta` của VB.NET đã có thêm các field:
+  - `parser_engine`, `semantic_mode`, `semantic_enabled`
+  - `fallback_reason`, `worker_elapsed_ms`
+  - `workspace_kind`, `solution_or_project_path`
+  - `semantic_errors`, `requested_engine`
+- `PARSE_CACHE_VERSION` đã bump để tránh cache contract cũ.

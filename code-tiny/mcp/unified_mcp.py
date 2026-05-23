@@ -107,6 +107,7 @@ Tool families available in unified MCP:
 - Fullstack bridge analysis: find_callers_of_endpoint, get_api_call_chain
 - Semantic/vector utilities: explore_graph, semantic_search, list_qdrant_collections
 
+
 Input contract:
 - Tools accept typed top-level parameters.
 - Empty string values are treated as "not provided".
@@ -114,7 +115,7 @@ Input contract:
 
 mcp_server = FastMCP(
     name=MCP_NAME,
-    version="1.0.0",
+    version="1.1.0",
     instructions=INSTRUCTIONS,
 )
 
@@ -618,6 +619,7 @@ async def tool_annotate_node(
     tags: str = "",
     parser_type: str = "",
     db: str = "neo4j",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Add or update annotations for a node."""
     values = {
@@ -626,6 +628,7 @@ async def tool_annotate_node(
         "tags": tags if tags else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("annotate_node", merged)
@@ -640,6 +643,7 @@ async def tool_semantic_search(
     db: str = "neo4j",
     top_k: str = "",
     collection: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Semantic search over Qdrant embeddings."""
     values = {
@@ -648,6 +652,7 @@ async def tool_semantic_search(
         "db": db,
         "top_k": int(top_k) if top_k and top_k.isdigit() else None,
         "collection": collection if collection else None,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("semantic_search", merged)
@@ -666,6 +671,7 @@ async def tool_trace_flow_between_module(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths between modules."""
     values = {
@@ -674,6 +680,7 @@ async def tool_trace_flow_between_module(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "limit": int(limit) if limit and limit.isdigit() else None,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     try:
@@ -701,6 +708,7 @@ async def tool_trace_flow(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths using configurable relationships."""
     values = {
@@ -709,6 +717,7 @@ async def tool_trace_flow(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "limit": int(limit) if limit and limit.isdigit() else None,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     try:
@@ -771,12 +780,14 @@ async def tool_list_up_entrypoint(
     modules: str = "",
     parser_type: str = "",
     db: str = "neo4j",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """List entrypoint functions called from outside modules."""
     values = {
         "modules": modules if modules else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("list_up_entrypoint", merged)
@@ -793,12 +804,14 @@ async def tool_listup_class_matching_path(
     class_name: str = "",
     parser_type: str = "",
     db: str = "neo4j",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """List functions for classes/types by name."""
     values = {
         "class_name": class_name if class_name else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("listup_class_matching_path", merged)
@@ -810,20 +823,63 @@ async def tool_listup_class_matching_path(
 
 
 # Define listup_symbols_matching_file_path separately with specific parameters
-@mcp_server.tool(name="listup_symbols_matching_file_path", description="List symbols by file path token.", output_schema=None)
+@mcp_server.tool(
+    name="listup_symbols_matching_file_path",
+    description=(
+        "List symbols by file-path tokens. Accepts a single ``file_path`` "
+        "string OR a ``modules`` list of tokens (CONTAINS-matched against "
+        "node.file_path/path). Examples: file_path='vtgm01.c' or "
+        "modules=['auth/', 'router.ts']."
+    ),
+    output_schema=None,
+)
 async def tool_listup_symbols_matching_file_path(
     file_path: str = "",
+    modules: Optional[List[str]] = None,
+    node_types: Optional[List[str]] = None,
     parser_type: str = "",
     db: str = "neo4j",
+    project_id: str = "",
 ) -> Dict[str, Any]:
-    """List symbols by file path token."""
-    values = {
-        "file_path": file_path if file_path else None,
-        "parser_type": parser_type if parser_type else None,
+    """List symbols by file path token.
+
+    Translates the single-string ``file_path`` surface into the backend's
+    required ``modules: List[str]`` parameter (fastmcp_server.py's
+    ``tool_listup_symbols_matching_file_path`` accepts only the list
+    form). Callers can pass either ``file_path`` (convenience) or
+    ``modules`` (explicit multi-token) — the union is forwarded as
+    ``modules``. Empty input raises a clear validation error rather
+    than the prior cryptic Pydantic ``unexpected keyword`` message.
+    """
+    tokens: List[str] = []
+    if modules:
+        tokens.extend(str(m).strip() for m in modules if str(m).strip())
+    if file_path:
+        token = file_path.strip()
+        if token and token not in tokens:
+            tokens.append(token)
+    if not tokens:
+        return {
+            "error": (
+                "Provide at least one path token via 'file_path' or "
+                "'modules'."
+            ),
+            "symbols": [],
+        }
+    values: Dict[str, Any] = {
+        "modules": tokens,
         "db": db,
+        "project_id": project_id if project_id else None,
     }
-    merged = {k: v for k, v in values.items() if v is not None}
-    result = await _dispatch_tool("listup_symbols_matching_file_path", merged)
+    if parser_type:
+        values["parser_type"] = parser_type
+    if node_types:
+        values["node_types"] = [
+            str(t).strip() for t in node_types if str(t).strip()
+        ]
+    result = await _dispatch_tool(
+        "listup_symbols_matching_file_path", values
+    )
     if result == []:
         return {"symbols": []}
     if isinstance(result, list):
@@ -839,6 +895,7 @@ async def tool_find_path_between_module(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Find call paths between modules."""
     values = {
@@ -847,6 +904,7 @@ async def tool_find_path_between_module(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "limit": int(limit) if limit and limit.isdigit() else None,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("find_path_between_module", merged)
@@ -867,6 +925,7 @@ async def tool_find_paths(
     limit: str = "",
     node_type: str = "",
     expand_search: bool = False,
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Find call paths between two functions."""
     values = {
@@ -877,6 +936,7 @@ async def tool_find_paths(
         "limit": int(limit) if limit and limit.isdigit() else None,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     try:
@@ -908,6 +968,7 @@ async def tool_query_subgraph(
     limit: str = "",
     node_type: str = "",
     expand_search: bool = False,
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Return call graph context around a function ID."""
     values = {
@@ -917,6 +978,7 @@ async def tool_query_subgraph(
         "limit": int(limit) if limit and limit.isdigit() else None,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     try:
@@ -943,6 +1005,7 @@ async def tool_get_node_details(
     parser_type: str = "",
     db: str = "neo4j",
     node_type: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Fetch metadata for multiple node IDs."""
     values = {
@@ -950,6 +1013,7 @@ async def tool_get_node_details(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "node_type": node_type if node_type else None,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("get_node_details", merged)
@@ -967,6 +1031,7 @@ async def tool_list_possible_calls(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """List POSSIBLE_CALLS edges."""
     values = {
@@ -974,6 +1039,7 @@ async def tool_list_possible_calls(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "limit": int(limit) if limit and limit.isdigit() else None,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("list_possible_calls", merged)
@@ -991,6 +1057,7 @@ async def tool_get_symbol(
     parser_type: str = "",
     db: str = "neo4j",
     node_type: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Retrieve metadata for a specific node by id."""
     values = {
@@ -998,6 +1065,7 @@ async def tool_get_symbol(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "node_type": node_type if node_type else None,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     try:
@@ -1018,6 +1086,7 @@ async def tool_search_by_code(
     limit: str = "",
     node_type: str = "",
     expand_search: bool = False,
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Search nodes by matching text in code snippets."""
     values = {
@@ -1027,6 +1096,7 @@ async def tool_search_by_code(
         "limit": int(limit) if limit and limit.isdigit() else None,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("search_by_code", merged)
@@ -1046,6 +1116,7 @@ async def tool_search_functions(
     limit: str = "",
     node_type: str = "",
     expand_search: bool = False,
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Search nodes by name/qualified_name."""
     values = {
@@ -1055,6 +1126,7 @@ async def tool_search_functions(
         "limit": int(limit) if limit and limit.isdigit() else None,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("search_functions", merged)
@@ -1072,6 +1144,7 @@ async def tool_get_ipc_message(
     receiver: str = "",
     parser_type: str = "",
     db: str = "neo4j",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """Query IPC messages by sender/receiver."""
     values = {
@@ -1079,6 +1152,7 @@ async def tool_get_ipc_message(
         "receiver": receiver if receiver else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
+        "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("get_ipc_message", merged)
@@ -1730,6 +1804,7 @@ LIMIT 30
         }
 
 
+# ===========================================================================
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Unified FastMCP server for Android/C++ code graphs.",

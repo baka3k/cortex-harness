@@ -88,10 +88,16 @@ async def _run_records(
 ) -> List[Dict[str, Any]]:
     """Execute a Cypher read and normalize to list of dicts.
 
-    Works with both plain ``neo4j.AsyncDriver`` and the project's
-    ``GraphDriver`` abstraction (which exposes ``execute_query`` or
-    ``run_read``).
+    Works with both plain ``neo4j.AsyncDriver`` (whose ``execute_query``
+    uses ``database_=`` per the trailing-underscore convention to avoid
+    collision with user query parameters of the same name) and the
+    project's ``GraphDriver`` abstraction (whose ``execute_query`` uses
+    plain ``database=``). We pick the kwarg by inspecting the signature
+    once rather than guessing — the prior code hard-coded ``database_=``
+    which raised ``TypeError: unexpected keyword argument 'database_'``
+    on every ``GraphDriver``-backed call (e.g. ``find_screen_workflows``).
     """
+    import inspect
 
     # Preferred: the project abstraction
     run = getattr(driver, "run_read", None)
@@ -101,8 +107,26 @@ async def _run_records(
 
     exec_q = getattr(driver, "execute_query", None)
     if callable(exec_q):
-        result = await exec_q(query, params, database_=database)
-        # neo4j.AsyncDriver.execute_query returns EagerResult in v5
+        try:
+            sig_params = inspect.signature(exec_q).parameters
+        except (TypeError, ValueError):
+            sig_params = {}
+        if "database_" in sig_params:
+            db_kwarg = {"database_": database}
+        elif "database" in sig_params:
+            db_kwarg = {"database": database}
+        else:
+            # Last-resort: both names rejected by signature inspection.
+            # Try the underscore-suffixed form first (matches modern
+            # neo4j-driver's design) and fall back to plain.
+            try:
+                result = await exec_q(query, params, database_=database)  # type: ignore[misc]
+            except TypeError:
+                result = await exec_q(query, params, database=database)  # type: ignore[misc]
+            # neo4j.AsyncDriver.execute_query returns EagerResult in v5+
+            records = getattr(result, "records", None) or result[0]
+            return [dict(r) for r in records]
+        result = await exec_q(query, params, **db_kwarg)  # type: ignore[misc]
         records = getattr(result, "records", None) or result[0]
         return [dict(r) for r in records]
 

@@ -35,10 +35,10 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "parser_type", "type": "str", "required": False,
              "description": "Parser type: cplus/cpp/c++/c/clang/delphi/pascal/java/kotlin/jvm/vbnet/vb6/vba/vbscript or android/android-kotlin"},
             {"name": "database_name", "type": "str", "required": False,
-             "description": "Neo4j database name (e.g., 'neo4j', 'ctam', 'minat')"},
+             "description": "Neo4j database name (e.g., 'neo4j', 'vtgm', 'boze')"},
         ],
         "output": "Dict with parser_type, database_name, activated status",
-        "example": "activate_project(parser_type='cplus', database_name='sample_database')",
+        "example": "activate_project(parser_type='cplus', database_name='vtgm')",
     },
     {
         "name": "search_functions",
@@ -173,7 +173,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
                       "Architectural analysis", "Module coupling analysis"],
         "inputs": [
             {"name": "source_modules", "type": "List[str]", "required": True,
-             "description": "Source file path patterns (e.g., ['sample_database01', 'sample_database'])"},
+             "description": "Source file path patterns (e.g., ['vtgm01', 'Vtgm'])"},
             {"name": "target_modules", "type": "List[str]", "required": True,
              "description": "Target file path patterns"},
             {"name": "max_depth", "type": "int", "required": False, "description": "Max path length (default: 6)"},
@@ -187,7 +187,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "db", "type": "str", "required": False},
         ],
         "output": "Dict with paths between modules, graph visualization data",
-        "example": "find_path_between_module(source_modules=['sample_database01'], target_modules=['minat01'], direction='both')",
+        "example": "find_path_between_module(source_modules=['vtgm01'], target_modules=['Boze01'], direction='both')",
     },
     {
         "name": "listup_symbols_matching_file_path",
@@ -203,7 +203,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "content_mode", "type": "str", "required": False},
         ],
         "output": "Dict with list of symbols matching path and type filters",
-        "example": "listup_symbols_matching_file_path(modules=['sample_database01.c'], node_types=['Function'])",
+        "example": "listup_symbols_matching_file_path(modules=['vtgm01.c'], node_types=['Function'])",
     },
     {
         "name": "listup_class_matching_path",
@@ -264,7 +264,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "db", "type": "str", "required": False},
         ],
         "output": "Dict with module flow paths",
-        "example": "trace_flow_between_module(source_modules=['sample_database'], target_modules=['minat'], rel_types=['CALLS'])",
+        "example": "trace_flow_between_module(source_modules=['vtgm'], target_modules=['boze'], rel_types=['CALLS'])",
     },
     # --- Planning / dependency ordering -----------------------------------------
     {
@@ -767,31 +767,8 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "output": "Dict with direct_workflows, indirect_workflows, and total",
         "example": "find_workflows_containing(function_id='func_123', include_indirect=True)",
     },
-]
-
-# Keyed lookup for O(1) access
-_CATALOG_BY_NAME: Dict[str, Dict[str, Any]] = {t["name"]: t for t in _FULL_CATALOG}
-
-# ---------------------------------------------------------------------------
-# Backend-specific overrides
-# ---------------------------------------------------------------------------
-
-# Android: trace_flow uses Android-specific edge types
-ANDROID_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    "trace_flow": {
-        "description": (
-            "Trace a call/interaction flow across Android graph edges "
-            "(UI resources, routes, intents, events, broadcasts, handler messages, etc.)."
-        ),
-        "use_cases": [
-            "Trace Android Intent flows",
-            "Follow broadcast sender → receiver chains",
-            "Trace NavRoute → Fragment navigation",
-            "Follow handler message dispatch",
-        ],
-        "example": "trace_flow(start_id='activityA', end_id='serviceB', rel_types=['STARTS_INTENT', 'CALLS'])",
-    },
-    "trace_flow_between_module": {
+    {
+        "name": "trace_flow_between_module",
         "description": (
             "Trace flow paths between functions in two modules using Android interaction edges "
             "(CALLS, routes, intents, events, etc.)."
@@ -802,7 +779,8 @@ ANDROID_OVERRIDES: Dict[str, Dict[str, Any]] = {
         ],
         "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])",
     },
-    "activate_project": {
+    {
+        "name": "activate_project",
         "inputs": [
             {"name": "parser_type", "type": "str", "required": False,
              "description": "Parser type: android / android-kotlin / kotlin-android"},
@@ -811,7 +789,7 @@ ANDROID_OVERRIDES: Dict[str, Dict[str, Any]] = {
         ],
         "example": "activate_project(parser_type='android', database_name='my_android_db')",
     },
-}
+]
 
 
 # ---------------------------------------------------------------------------
