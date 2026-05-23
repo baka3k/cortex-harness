@@ -13,6 +13,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.git_diff import write_manifest_paths
 from tools.sync.owner_manifest import SUPPORTED_PARSERS, build_owner_maps

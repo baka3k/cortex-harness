@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import concurrent.futures
+import gc
 import os
 import sys
 import time
@@ -16,6 +17,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+
 from tools.common.analyzer_cache import file_signature, load_parse_cache, safe_cache_root, write_parse_cache
 from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
 from tools.common.git_diff import load_manifest_paths
@@ -1027,8 +1029,11 @@ async def build_call_graph(
             for (_, point), vector in zip(batch, vectors):
                 points.append({"id": point["id"], "vector": vector, "payload": point["payload"]})
             qdrant_writer.upsert(points)
+            del texts, vectors, points, batch
+            batch_no = (idx // qdrant_batch_size) + 1
+            if batch_no % 20 == 0:
+                gc.collect()
             if verbose:
-                batch_no = (idx // qdrant_batch_size) + 1
                 if batch_no == 1 or batch_no % 10 == 0 or batch_no == total_batches:
                     print(
                         f"[embed][progress] parser={dialect} batch={batch_no}/{total_batches} points={len(points)}",

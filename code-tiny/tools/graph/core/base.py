@@ -199,6 +199,7 @@ class GraphDriver(QueryExecutor):
     async def find_node_by_id(
         self,
         node_id: str,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -206,6 +207,7 @@ class GraphDriver(QueryExecutor):
         
         Args:
             node_id: Node identifier
+            project_id: Optional project filter (if set, only return node belonging to this project)
             database: Optional database name
             
         Returns:
@@ -217,6 +219,7 @@ class GraphDriver(QueryExecutor):
     async def find_nodes_by_ids(
         self,
         node_ids: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -224,6 +227,7 @@ class GraphDriver(QueryExecutor):
         
         Args:
             node_ids: List of node identifiers
+            project_id: Optional project filter (if set, only return nodes belonging to this project)
             database: Optional database name
             
         Returns:
@@ -236,6 +240,7 @@ class GraphDriver(QueryExecutor):
         self,
         query: str,
         limit: int = 50,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -244,6 +249,7 @@ class GraphDriver(QueryExecutor):
         Args:
             query: Search query string
             limit: Maximum number of results
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -256,6 +262,7 @@ class GraphDriver(QueryExecutor):
         self,
         query: str,
         limit: int = 50,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -264,6 +271,7 @@ class GraphDriver(QueryExecutor):
         Args:
             query: Search query string
             limit: Maximum number of results
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -278,6 +286,7 @@ class GraphDriver(QueryExecutor):
         end_id: str,
         relationship_types: List[str],
         max_depth: int = 8,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Any]:
         """
@@ -288,6 +297,7 @@ class GraphDriver(QueryExecutor):
             end_id: Ending function ID
             relationship_types: Types of relationships to traverse
             max_depth: Maximum path depth
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -302,6 +312,7 @@ class GraphDriver(QueryExecutor):
         relationship_types: List[str],
         direction: str = "both",
         max_depth: int = 2,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Any]:
         """
@@ -312,6 +323,7 @@ class GraphDriver(QueryExecutor):
             relationship_types: Types of relationships to traverse
             direction: 'incoming', 'outgoing', or 'both'
             max_depth: Maximum traversal depth
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -328,6 +340,7 @@ class GraphDriver(QueryExecutor):
         max_depth: int = 8,
         limit: int = 10,
         direction: str = "out",
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Any]:
         """
@@ -340,6 +353,7 @@ class GraphDriver(QueryExecutor):
             max_depth: Maximum path depth
             limit: Maximum number of paths
             direction: 'out', 'in', or 'both'
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -371,6 +385,7 @@ class GraphDriver(QueryExecutor):
     async def list_symbols_by_file_path(
         self,
         file_paths: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -378,6 +393,7 @@ class GraphDriver(QueryExecutor):
         
         Args:
             file_paths: File path tokens to match
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -389,6 +405,7 @@ class GraphDriver(QueryExecutor):
     async def list_functions_by_class(
         self,
         class_names: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -396,6 +413,7 @@ class GraphDriver(QueryExecutor):
         
         Args:
             class_names: Class name tokens to match
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -407,6 +425,7 @@ class GraphDriver(QueryExecutor):
     async def list_functions_by_file(
         self,
         file_path: str,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -414,6 +433,7 @@ class GraphDriver(QueryExecutor):
         
         Args:
             file_path: File path token
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
@@ -426,6 +446,7 @@ class GraphDriver(QueryExecutor):
         self,
         modules: List[str],
         relationship_types: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -434,6 +455,7 @@ class GraphDriver(QueryExecutor):
         Args:
             modules: Module path tokens
             relationship_types: Types of relationships to consider
+            project_id: Optional project filter
             database: Optional database name
             
         Returns:
