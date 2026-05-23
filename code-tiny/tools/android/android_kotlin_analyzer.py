@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gc
 import json
 import hashlib
 import fnmatch
@@ -24,6 +25,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+
 from tools.common.analyzer_cache import (
     file_signature,
     load_parse_cache,
@@ -263,17 +265,35 @@ def _first_identifier(node, source_bytes: bytes) -> Optional[str]:
 
 
 def _find_nodes_by_type(node, node_type: str) -> Iterable:
-    if node.type == node_type:
-        yield node
-    for child in node.children:
-        yield from _find_nodes_by_type(child, node_type)
+    cursor = node.walk()
+    while True:
+        if cursor.node.type == node_type:
+            yield cursor.node
+        if cursor.goto_first_child():
+            continue
+        if cursor.goto_next_sibling():
+            continue
+        while cursor.goto_parent():
+            if cursor.goto_next_sibling():
+                break
+        else:
+            break
 
 
 def _find_nodes_by_types(node, node_types: set[str]) -> Iterable:
-    if node.type in node_types:
-        yield node
-    for child in node.children:
-        yield from _find_nodes_by_types(child, node_types)
+    cursor = node.walk()
+    while True:
+        if cursor.node.type in node_types:
+            yield cursor.node
+        if cursor.goto_first_child():
+            continue
+        if cursor.goto_next_sibling():
+            continue
+        while cursor.goto_parent():
+            if cursor.goto_next_sibling():
+                break
+        else:
+            break
 
 
 def _tree_error_stats(tree) -> Tuple[bool, int]:
@@ -1241,6 +1261,8 @@ class CodeEmbedder:
                         vectors.extend(encoded.detach().cpu().tolist())
                     else:
                         vectors.extend(encoded.tolist() if hasattr(encoded, "tolist") else [list(vec) for vec in encoded])
+                    del encoded
+                    self._clear_device_cache()
                     continue
                 encoded = self.tokenizer(
                     batch,
@@ -1253,7 +1275,16 @@ class CodeEmbedder:
                 outputs = self.model(**encoded)
                 embeddings = self._mean_pool(outputs.last_hidden_state, encoded["attention_mask"])
                 vectors.extend(embeddings.cpu().tolist())
+                del encoded, outputs, embeddings
+                self._clear_device_cache()
         return vectors
+
+    def _clear_device_cache(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device.type == "mps":
+            if hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
 
     @staticmethod
     def _mean_pool(last_hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -4183,6 +4214,9 @@ async def build_call_graph(
                             }
                             handle.write(json.dumps(point, ensure_ascii=True) + "\n")
                         batch_funcs.clear()
+                        del texts, vectors
+                        if batch_index % 50 == 0:
+                            gc.collect()
                 if batch_funcs:
                     batch_index += 1
                     if verbose:
@@ -4216,6 +4250,7 @@ async def build_call_graph(
                             },
                         }
                         handle.write(json.dumps(point, ensure_ascii=True) + "\n")
+                    del texts, vectors
             state = {"total_points": expected_points, "upserted": 0}
             write_qdrant_state(state)
         else:
