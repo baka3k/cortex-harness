@@ -231,7 +231,7 @@ finally:
 
 ```bash
 # Make sure you're running from project root
-cd /Users/yourname/AI/graph-code-tiny
+cd /Users/yourusername/AI/graph-code-tiny
 source .venv/bin/activate
 python -m tools.kotlin.kotlin_analyzer ...
 ```

@@ -25,6 +25,8 @@ from tools.graph.core.base import GraphDriver
 from tool_metadata import build_catalog
 
 
+
+
 def _load_env_file(env_path: str) -> None:
     if not os.path.isfile(env_path):
         return
@@ -36,7 +38,22 @@ def _load_env_file(env_path: str) -> None:
                 continue
             key, value = line.split("=", 1)
             key = key.strip()
-            value = value.strip().strip("\"'")
+            value = value.strip()
+            # Strip inline ``# comment`` tails so values like
+            # ``EMBED_DEVICE=mps # cuda or mps or cpu`` don't end up
+            # literally feeding ``mps # cuda or mps or cpu`` into
+            # downstream callers (``torch.device`` rejects this with
+            # ``RuntimeError: Invalid device string``). Only strip when
+            # the ``#`` is preceded by whitespace so it cannot eat a
+            # legitimate value containing ``#`` (e.g. a URL fragment or
+            # an API token).
+            if not (value.startswith('"') or value.startswith("'")):
+                hash_at = value.find(" #")
+                if hash_at == -1:
+                    hash_at = value.find("\t#")
+                if hash_at != -1:
+                    value = value[:hash_at].rstrip()
+            value = value.strip("\"'")
             if not key or key in os.environ or value == "":
                 continue
             os.environ[key] = value
@@ -120,7 +137,7 @@ When include_raw_fields=false, only properties.content is returned (plus metadat
 
 mcp_server = FastMCP(
     name=MCP_NAME,
-    version="2.1.0",
+    version="2.2.0",
     instructions=INSTRUCTIONS,
 )
 
@@ -382,6 +399,21 @@ def _record_node(
 
 
 def _record_rel(rel: Any) -> Dict[str, Any]:
+    # A bare string IS the relationship type name. Several Neo4j 6.x
+    # serialisation paths emit just the type label when start/end nodes
+    # aren't included in the record (e.g. ``RETURN type(r)`` or path
+    # traversals that pass relationships through ``COLLECT``). Treat
+    # these as valid edges with unknown endpoints rather than letting
+    # them fall through to the ``type(rel).__name__`` fallback, which
+    # would surface them as ``{"type": "str", ...}`` — that's how the
+    # observed placeholder edges leak into call-graph outputs.
+    if isinstance(rel, str):
+        return {
+            "type": rel,
+            "properties": {},
+            "start_id": None,
+            "end_id": None,
+        }
     if isinstance(rel, dict):
         return {
             "type": rel.get("type"),
@@ -410,7 +442,15 @@ def _record_rel(rel: Any) -> Dict[str, Any]:
             "end_id": rel.end_node.get("id"),
         }
     except AttributeError:
-        return {"type": str(type(rel).__name__), "properties": {}, "start_id": None, "end_id": None}
+        # Last resort: surface the runtime type so the operator can
+        # debug. Suffix with ``?`` so it's obvious this is a fallback
+        # and not a real relationship type.
+        return {
+            "type": f"unknown<{type(rel).__name__}>",
+            "properties": {},
+            "start_id": None,
+            "end_id": None,
+        }
 
 
 def _paths_to_graph(
@@ -578,14 +618,47 @@ def _qdrant_search(
     qdrant_url: str,
     vector_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    url = qdrant_url.rstrip("/") + f"/collections/{collection}/points/search"
-    payload_vector: Any = vector
+    """Vector search through Qdrant's Query API (``/points/query``).
+
+    Migrated from the legacy ``/points/search`` endpoint because:
+
+      1. The legacy named-vector payload shape is
+         ``{"vector": {"name": "semantic", "vector": [...]}}`` — easy to
+         get wrong (the prior bug shipped ``{"vector": {"semantic":
+         [...]}}`` which Qdrant rejects with 400 "did not match any
+         variant of untagged enum NamedVectorStruct").
+      2. ``/points/query`` accepts the same flat payload for v1
+         (unnamed) and v2 (named) collections — ``using=<name>`` selects
+         the vector space when the collection has multiple. Eliminates
+         the named/unnamed branching in the caller.
+
+    Response shape is normalised so legacy callers that walked the old
+    ``payload["result"]`` list still work: the new ``/points/query``
+    returns ``{"result": {"points": [...]}}`` — we unwrap to the same
+    list. Keep this in lock-step with
+    ``hyper_pack_core.qdrant_search.query_collection`` and
+    ``hyper-graph/tools/common/intelligent_retrieval._qdrant_search``;
+    all three are the search-side surface for Qdrant traffic.
+    """
+    url = qdrant_url.rstrip("/") + f"/collections/{collection}/points/query"
+    payload: Dict[str, Any] = {
+        "query": vector,
+        "limit": int(top_k),
+        "with_payload": True,
+    }
     if vector_name:
-        payload_vector = {vector_name: vector}
-    payload = {"vector": payload_vector, "limit": int(top_k), "with_payload": True}
+        payload["using"] = vector_name
     response = httpx.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
-    return response.json()
+    body = response.json()
+    # Normalise response: the Query API wraps hits inside
+    # ``result.points``; the legacy Search API returned them directly
+    # under ``result``. Re-shape so callers (e.g. ``_merge_qdrant_results``)
+    # don't have to change.
+    result = body.get("result")
+    if isinstance(result, dict) and "points" in result:
+        body = {**body, "result": result.get("points") or []}
+    return body
 
 
 def _normalize_collections(value: Optional[Any]) -> List[str]:
@@ -1265,6 +1338,7 @@ async def tool_list_qdrant_collections(
 async def tool_get_symbol(
     node_id: Any,
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
@@ -1276,7 +1350,7 @@ async def tool_get_symbol(
     driver = await _get_graph_driver()
     for db_candidate in candidates:
         try:
-            node = await driver.find_node_by_id(node_id, db_candidate)
+            node = await driver.find_node_by_id(node_id, project_id=project_id, database=db_candidate)
             if node:
                 mode = _normalize_content_mode(content_mode)
                 requested_type = _normalize_node_type(node_type, default_value="code")
@@ -1298,6 +1372,7 @@ async def tool_get_symbol(
 async def tool_get_node_details(
     node_ids: List[Any],
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
@@ -1309,7 +1384,7 @@ async def tool_get_node_details(
     driver = await _get_graph_driver()
     for db_candidate in candidates:
         try:
-            nodes = await driver.find_nodes_by_ids(ids, db_candidate)
+            nodes = await driver.find_nodes_by_ids(ids, project_id=project_id, database=db_candidate)
             if nodes:
                 mode = _normalize_content_mode(content_mode)
                 requested_type = _normalize_node_type(node_type, default_value="code")
@@ -1335,6 +1410,7 @@ async def tool_query_subgraph(
     function_id: Any,
     direction: str = "all",
     max_depth: int = 2,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
@@ -1355,6 +1431,7 @@ async def tool_query_subgraph(
                 relationship_types=["CALLS"],
                 direction=direction,
                 max_depth=depth,
+                project_id=project_id,
                 database=candidate
             )
             if paths:
@@ -1391,6 +1468,7 @@ async def tool_find_paths(
     start_function_id: Any,
     end_function_id: Any,
     max_depth: int = 8,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
@@ -1410,6 +1488,7 @@ async def tool_find_paths(
                 end_id=end_id,
                 relationship_types=["CALLS"],
                 max_depth=depth,
+                project_id=project_id,
                 database=db_candidate
             )
             if paths:
@@ -1438,6 +1517,7 @@ async def tool_find_path_between_module(
     target_modules: List[str],
     db: Optional[str] = None,
     max_depth: int = 8,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -1452,10 +1532,12 @@ async def tool_find_path_between_module(
         "MATCH (s:Function), (t:Function) "
         "WHERE any(token IN $sources WHERE s.file_path CONTAINS token) "
         "AND any(token IN $targets WHERE t.file_path CONTAINS token) "
+        "AND ($project_id IS NULL OR s.project_id = $project_id) "
+        "AND ($project_id IS NULL OR t.project_id = $project_id) "
         f"MATCH p=shortestPath((s)-[:CALLS*..{depth}]->(t)) "
         "RETURN p LIMIT 10"
     )
-    used_db, results = await _run_cypher_first(query, {"sources": source_modules, "targets": target_modules}, db_candidates)
+    used_db, results = await _run_cypher_first(query, {"sources": source_modules, "targets": target_modules, "project_id": project_id}, db_candidates)
     paths = [row["p"] for row in results]
     graph = _paths_to_graph(
         paths,
@@ -2033,6 +2115,7 @@ async def tool_listup_symbols_matching_file_path(
     db: Optional[str] = None,
     node_types: Optional[List[str]] = None,
     max_depth: Optional[int] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -2052,9 +2135,10 @@ async def tool_listup_symbols_matching_file_path(
     cypher = (
         f"MATCH (n) WHERE ({type_conditions}) "
         "AND any(token IN $modules WHERE n.file_path CONTAINS token OR n.path CONTAINS token) "
+        "AND ($project_id IS NULL OR n.project_id = $project_id) "
         "RETURN n"
     )
-    used_db, results = await _run_cypher_first(cypher, {"modules": modules}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id}, db_candidates)
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
     return {"db": used_db, "symbols": nodes}
@@ -2067,6 +2151,7 @@ async def tool_listup_symbols_matching_file_path(
 async def tool_listup_class_matching_path(
     class_names: List[str],
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -2080,10 +2165,12 @@ async def tool_listup_class_matching_path(
         "WHERE (c:Class OR c:Type) "
         "AND any(token IN $classes WHERE "
         "toLower(c.name) CONTAINS toLower(token) OR toLower(c.qualified_name) CONTAINS toLower(token)) "
+        "AND ($project_id IS NULL OR c.project_id = $project_id) "
         "OPTIONAL MATCH (c)-[:DECLARES]->(f:Function) "
+        "WHERE ($project_id IS NULL OR f.project_id = $project_id) "
         "RETURN c, f"
     )
-    used_db, results = await _run_cypher_first(cypher, {"classes": class_names}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id}, db_candidates)
     mode = _normalize_content_mode(content_mode)
     classes_seen: Dict[str, Dict[str, Any]] = {}
     functions: List[Dict[str, Any]] = []
@@ -2107,6 +2194,7 @@ async def tool_list_up_entrypoint(
     modules: List[str],
     db: Optional[str] = None,
     limit: int = 200,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -2120,11 +2208,12 @@ async def tool_list_up_entrypoint(
         "WHERE any(token IN $modules WHERE f.file_path CONTAINS token) "
         "AND none(token IN $modules WHERE caller.file_path CONTAINS token) "
         "AND (f.kind IS NULL OR f.kind <> 'lambda') "
+        "AND ($project_id IS NULL OR f.project_id = $project_id) "
         "RETURN DISTINCT f LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         cypher,
-        {"modules": modules, "limit": int(limit)},
+        {"modules": modules, "limit": int(limit), "project_id": project_id},
         db_candidates,
     )
     mode = _normalize_content_mode(content_mode)
@@ -2140,6 +2229,7 @@ async def tool_search_functions(
     query: str,
     limit: int = 50,
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
@@ -2151,30 +2241,32 @@ async def tool_search_functions(
     fallback_cypher = (
         "MATCH (n) WHERE (n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package) "
         "AND any(q IN $qs WHERE toLower(n.name) CONTAINS q OR toLower(n.qualified_name) CONTAINS q) "
+        "AND ($project_id IS NULL OR n.project_id = $project_id) "
         "RETURN n LIMIT $limit"
     )
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
         "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package) "
+        "AND ($project_id IS NULL OR node.project_id = $project_id) "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit)},
+            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id},
             db_candidates,
         )
         if not results:
             used_db, results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit)},
+                {"qs": qs, "limit": int(limit), "project_id": project_id},
                 db_candidates,
             )
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit)},
+            {"qs": qs, "limit": int(limit), "project_id": project_id},
             db_candidates,
         )
     mode = _normalize_content_mode(content_mode)
@@ -2203,6 +2295,7 @@ async def tool_search_by_code(
     query: str,
     limit: int = 50,
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
@@ -2213,28 +2306,29 @@ async def tool_search_by_code(
     qs = [t.strip() for t in query.split("|") if t.strip()]
     if not qs:
         raise ValueError("query is required.")
-    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) RETURN n LIMIT $limit"
+    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id = $project_id) RETURN n LIMIT $limit"
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
+        "WHERE ($project_id IS NULL OR node.project_id = $project_id) "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit)},
+            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id},
             db_candidates,
         )
         if not results:
             used_db, results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit)},
+                {"qs": qs, "limit": int(limit), "project_id": project_id},
                 db_candidates,
             )
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit)},
+            {"qs": qs, "limit": int(limit), "project_id": project_id},
             db_candidates,
         )
     mode = _normalize_content_mode(content_mode)
@@ -2264,6 +2358,7 @@ async def tool_annotate_node(
     note: Optional[str] = None,
     tags: Optional[str] = None,
     severity: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
@@ -2272,12 +2367,13 @@ async def tool_annotate_node(
     node_id = str(node_id)
     cypher = (
         "MATCH (n) WHERE n.id = $id "
+        "AND ($project_id IS NULL OR n.project_id = $project_id) "
         "SET n.note = $note, n.tags = $tags, n.severity = $severity "
         "RETURN n"
     )
     used_db, result = await _run_cypher_first(
         cypher,
-        {"id": node_id, "note": note, "tags": tags, "severity": severity},
+        {"id": node_id, "note": note, "tags": tags, "severity": severity, "project_id": project_id},
         db_candidates,
     )
     if not result:
@@ -2301,6 +2397,7 @@ async def tool_list_workflows(
     domain: str = "",
     limit: int = 50,
     db: str = "",
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     db_candidates = _resolve_db_candidates(db if db else None)
     if not db_candidates:
@@ -2316,6 +2413,9 @@ async def tool_list_workflows(
     if domain:
         filters.append("w.domain = $domain")
         params["domain"] = domain
+    if project_id is not None:
+        filters.append("w.project_id = $project_id")
+        params["project_id"] = project_id
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
     query = f"""
     MATCH (w:Workflow) {where}
@@ -2400,6 +2500,7 @@ async def tool_search_workflows(
     query: str,
     limit: int = 20,
     db: str = "",
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not query:
         raise ValueError("query is required")
@@ -2408,9 +2509,10 @@ async def tool_search_workflows(
         db_candidates = [DEFAULT_NEO4J_DB]
     cypher = """
     MATCH (w:Workflow)
-    WHERE toLower(w.name) CONTAINS toLower($q)
+    WHERE (toLower(w.name) CONTAINS toLower($q)
        OR toLower(w.description) CONTAINS toLower($q)
-       OR toLower(w.domain) CONTAINS toLower($q)
+       OR toLower(w.domain) CONTAINS toLower($q))
+      AND ($project_id IS NULL OR w.project_id = $project_id)
     RETURN w.workflow_id   AS workflow_id,
            w.name          AS name,
            w.domain        AS domain,
@@ -2423,7 +2525,7 @@ async def tool_search_workflows(
     ORDER BY w.confidence DESC, w.name ASC
     LIMIT $limit
     """
-    params = {"q": query, "limit": limit}
+    params = {"q": query, "limit": limit, "project_id": project_id}
     used_db, records = await _run_cypher_first(cypher, params, db_candidates)
     workflows = [dict(r) for r in records]
     return {"db": used_db, "workflows": workflows, "total": len(workflows)}
@@ -2526,8 +2628,10 @@ async def tool_list_mcp_functions() -> Dict[str, Any]:
         "total_count": len(functions_metadata),
         "functions": functions_metadata,
         "server_name": MCP_NAME,
-        "server_version": "2.1.0"
+        "server_version": "2.2.0"
     }
+
+
 
 
 def _normalize_http_path(path: str) -> str:

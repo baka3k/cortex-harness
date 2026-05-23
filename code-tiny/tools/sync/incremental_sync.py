@@ -22,6 +22,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.git_diff import (
     collect_changed_and_deleted,
@@ -119,15 +120,96 @@ def _project_scope_token(project_id: str, root: str) -> str:
     return f"{project}_{digest}"
 
 
-def _code_collection_name(project_id: str, root: str, parser: str) -> str:
-    scope = _project_scope_token(project_id, root)
+def _code_collection_name(
+    project_id: str,
+    root: str,
+    parser: str,
+    project_code: Optional[str] = None,
+) -> str:
+    """Build the per-parser code collection name.
+
+    Both schemes preserve the same root-path hash (``sha1[:10]``) so a
+    project with multiple source roots for the same parser produces
+    distinct collections in both legacy and per-project modes — there is
+    no information loss across the migration.
+
+    Per-project shape:  ``{slug}-code-{parser}-{root_hash}``
+    Legacy shape:       ``{safe(id)}_{root_hash}__{parser}_functions``
+    """
+    digest = hashlib.sha1(
+        os.path.realpath(os.path.abspath(root)).encode("utf-8")
+    ).hexdigest()[:_ROOT_HASH_LEN]
+    if _per_project_scheme_active():
+        code = _per_project_require_code(project_code)
+        slug = _per_project_slug(code)
+        parser_token = _per_project_validate_parser(parser)
+        # Must match qdrant_naming.collection_name(role=ROLE_CODE,
+        # parser=parser, root_hash=digest) byte-for-byte. The parity test
+        # in tests/test_incremental_sync_naming.py guards against drift.
+        return f"{slug}-code-{parser_token}-{digest}"
     parser_token = _safe_segment(parser)
+    scope = f"{_safe_segment(project_id)}_{digest}"
     name = f"{scope}__{parser_token}_functions"
     return name[:255]
 
 
-def _message_collection_name(project_id: str, root: str) -> str:
+# Per-project collection scheme — keep these constants in lock-step with
+# ``hyper_pack_core.qdrant_naming``.  Duplication is deliberate: this script
+# is shipped inside ``hyper-dev`` and must not assume the parent repo is on
+# sys.path.  A contract test (``tests/test_incremental_sync_naming.py``)
+# pins the two implementations together.
+_COLLECTION_SCHEME_ENV = "HYPERPACK_COLLECTION_SCHEME"
+_COLLECTION_SCHEME_PER_PROJECT = "per_project"
+_PROJECT_CODE_RE_LOCAL = re.compile(r"^[A-Z0-9][A-Z0-9\-]{1,19}$")
+_PARSER_TOKEN_RE_LOCAL = re.compile(r"^[a-z0-9_]+$")
+_ROOT_HASH_LEN = 10  # sha1 hex prefix; matches qdrant_naming root_hash bounds [6,16]
+
+
+def _per_project_scheme_active() -> bool:
+    return (
+        os.environ.get(_COLLECTION_SCHEME_ENV, "").strip().lower()
+        == _COLLECTION_SCHEME_PER_PROJECT
+    )
+
+
+def _per_project_slug(project_code: str) -> str:
+    code = (project_code or "").strip()
+    if not _PROJECT_CODE_RE_LOCAL.match(code):
+        raise ValueError(
+            "project_code must be 2-20 uppercase alphanumeric characters "
+            f"with hyphens (e.g., HP-UI, PROJ01); got: {project_code!r}"
+        )
+    return code.lower()
+
+
+def _per_project_validate_parser(parser: str) -> str:
+    token = (parser or "").strip()
+    if not _PARSER_TOKEN_RE_LOCAL.match(token):
+        raise ValueError(
+            "parser must contain only [a-z0-9_] for per-project collection "
+            f"naming; got: {parser!r}. Update the parser token to match "
+            "hyper_pack_core.qdrant_naming."
+        )
+    return token
+
+
+def _per_project_require_code(project_code: Optional[str]) -> str:
+    if not project_code or not project_code.strip():
+        raise ValueError(
+            "project_code is required when "
+            f"{_COLLECTION_SCHEME_ENV}={_COLLECTION_SCHEME_PER_PROJECT}; "
+            "pass --project-code or PROJECT_CODE env."
+        )
+    return project_code
+
+
+def _message_collection_name(
+    project_id: str, root: str, project_code: Optional[str] = None
+) -> str:
     del root
+    if _per_project_scheme_active():
+        code = _per_project_require_code(project_code)
+        return f"{_per_project_slug(code)}-messages"
     name = f"{_safe_segment(project_id)}_mess"
     return name[:255]
 
@@ -702,7 +784,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             "message_scan_artifacts",
             project_root=root,
         )
-        message_qdrant_collection = args.message_qdrant_collection or _message_collection_name(project_id, root)
+        message_qdrant_collection = args.message_qdrant_collection or _message_collection_name(
+            project_id, root, project_code=args.project_code
+        )
         summary["services"]["message_qdrant_collection"] = message_qdrant_collection
         env = _build_analyzer_env(args)
         executed_parsers: List[str] = []
@@ -740,7 +824,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "duration_seconds": None,
                 "changed_manifest": changed_manifest,
                 "deleted_manifest": deleted_manifest,
-                "qdrant_collection": _code_collection_name(project_id, root, parser),
+                "qdrant_collection": _code_collection_name(
+                    project_id, root, parser, project_code=args.project_code
+                ),
                 "message_scan_enabled": bool(args.sync_messages and parser in MESSAGE_ENABLED_PARSERS),
                 "ignore_cache": bool(args.ignore_cache),
                 "message_qdrant_collection": (
@@ -893,6 +979,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--config", default=None, help="Path to harness dev.json config (default: <root>/.cortext-harness/config/dev.json)")
     parser.add_argument("--project-id", default=os.environ.get("PROJECT_ID"))
     parser.add_argument("--project-name", default=os.environ.get("PROJECT_NAME"))
+    parser.add_argument(
+        "--project-code",
+        default=os.environ.get("PROJECT_CODE"),
+        help=(
+            "Project code (2-20 uppercase alphanumeric + hyphens). Required "
+            "when HYPERPACK_COLLECTION_SCHEME=per_project so per-project "
+            "Qdrant collection names can be derived (e.g. 'NEXT' -> "
+            "'next-messages')."
+        ),
+    )
     parser.add_argument("--before-sha", default=os.environ.get("GIT_COMMIT_SHA_BEFORE"))
     parser.add_argument("--after-sha", default=os.environ.get("GIT_COMMIT_SHA_AFTER", "HEAD"))
     parser.add_argument("--parsers", default="auto", help="auto or comma-separated parser list")

@@ -13,6 +13,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
 from tools.common.git_diff import load_manifest_paths

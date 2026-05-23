@@ -54,3 +54,8 @@ code-tiny/tools/ts/CLAUDE.md
 code-tiny/tools/vb/CLAUDE.md
 cortex_harness/CLAUDE.md
 cortex_harness/CLAUDE.md
+
+# sensitive-guard
+.sensitive-terms
+.commandcode/taste/taste.md
+.claude/settings.local.json
