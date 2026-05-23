@@ -791,7 +791,44 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
     },
 ]
 
+_CATALOG_BY_NAME: Dict[str, Dict[str, Any]] = {t["name"]: t for t in _FULL_CATALOG}
 
+# Android: trace_flow uses Android-specific edge types
+ANDROID_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "trace_flow": {
+        "description": (
+            "Trace a call/interaction flow across Android graph edges "
+            "(UI resources, routes, intents, events, broadcasts, handler messages, etc.)."
+        ),
+        "use_cases": [
+            "Trace Android Intent flows",
+            "Follow broadcast sender → receiver chains",
+            "Trace NavRoute → Fragment navigation",
+            "Follow handler message dispatch",
+        ],
+        "example": "trace_flow(start_id='activityA', end_id='serviceB', rel_types=['STARTS_INTENT', 'CALLS'])",
+    },
+    "trace_flow_between_module": {
+        "description": (
+            "Trace flow paths between functions in two modules using Android interaction edges "
+            "(CALLS, routes, intents, events, etc.)."
+        ),
+        "use_cases": [
+            "Trace cross-module Android IPC",
+            "Find inter-module event flows",
+        ],
+        "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])",
+    },
+    "activate_project": {
+        "inputs": [
+            {"name": "parser_type", "type": "str", "required": False,
+             "description": "Parser type: android / android-kotlin / kotlin-android"},
+            {"name": "database_name", "type": "str", "required": False,
+             "description": "Neo4j database name for the Android project"},
+        ],
+        "example": "activate_project(parser_type='android', database_name='my_android_db')",
+    },
+}
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
