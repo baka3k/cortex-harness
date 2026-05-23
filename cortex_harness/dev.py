@@ -1430,27 +1430,43 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run):
         click.echo("[info] No folders selected.")
         return
 
-    python      = _venv_python(CODE_TINY)
-    summaries   = []
-    total_start = time.time()
+    incremental_sync = CODE_TINY / "tools" / "sync" / "incremental_sync.py"
+    python           = _venv_python(CODE_TINY)
+    summaries        = []
+    total_start      = time.time()
 
     for folder in selected:
         folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
-        langs = _detect_langs(folder_path) if folder_path.exists() else []
+        if not folder_path.exists():
+            click.echo(f"\n[warn] Folder not found: {folder} — skipping")
+            continue
 
-        result = _sync_folder(
-            project_path=project_path,
-            folder=folder,
-            env=env,
-            python=python,
-            project=project,
-            langs=langs,
-            force_mode="auto",
-            dry_run=dry_run,
-            verbose=verbose,
-            preview=preview,
-        )
-        summaries.append(result)
+        cmd = [
+            python, str(incremental_sync),
+            "--root", str(folder_path),
+            "--project-id", project.get("code", project.get("name", "project")),
+            "--project-name", project.get("name", "project"),
+            "--python-bin", python,
+            *_neo4j_args_code(env),
+            "--qdrant-url", _env_to_qdrant_url(env),
+        ]
+        if dry_run:
+            cmd.append("--verbose")
+            click.echo(f"\n[dry-run] {' '.join(cmd)}")
+            summaries.append({"folder": folder, "status": "dry_run"})
+            continue
+        if verbose:
+            cmd.append("--verbose")
+
+        start = time.time()
+        rc = _run_with_retry(cmd, dry_run=False)
+        elapsed = time.time() - start
+        summaries.append({
+            "folder": folder,
+            "status": "ok" if rc == 0 else "error",
+            "elapsed": elapsed,
+            "exit_code": rc,
+        })
 
     _print_summary(summaries, time.time() - total_start)
 
@@ -1483,24 +1499,43 @@ def sync_code_all(ctx):
     click.echo(f"\n[sync-code all]  folders={len(folders)}  analyzers={len(available)}")
     click.echo(f"  tools: {', '.join(available)}")
 
+    incremental_sync = CODE_TINY / "tools" / "sync" / "incremental_sync.py"
     python      = _venv_python(CODE_TINY)
     summaries   = []
     total_start = time.time()
 
     for folder in folders:
-        result = _sync_folder(
-            project_path=project_path,
-            folder=folder,
-            env=env,
-            python=python,
-            project=project,
-            langs=[],
-            force_mode="auto",
-            dry_run=o["dry_run"],
-            verbose=o["verbose"],
-            preview=False,
-        )
-        summaries.append(result)
+        folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
+        if not folder_path.exists():
+            click.echo(f"[warn] Folder not found: {folder} — skipping")
+            continue
+
+        cmd = [
+            python, str(incremental_sync),
+            "--root", str(folder_path),
+            "--project-id", project.get("code", project.get("name", "project")),
+            "--project-name", project.get("name", "project"),
+            "--python-bin", python,
+            *_neo4j_args_code(env),
+            "--qdrant-url", _env_to_qdrant_url(env),
+        ]
+        if o["dry_run"]:
+            cmd.append("--verbose")
+            click.echo(f"[dry-run] {' '.join(cmd)}")
+            summaries.append({"folder": folder, "status": "dry_run"})
+            continue
+        if o["verbose"]:
+            cmd.append("--verbose")
+
+        start = time.time()
+        rc = _run_with_retry(cmd, dry_run=False)
+        elapsed = time.time() - start
+        summaries.append({
+            "folder": folder,
+            "status": "ok" if rc == 0 else "error",
+            "elapsed": elapsed,
+            "exit_code": rc,
+        })
 
     _print_summary(summaries, time.time() - total_start)
 
