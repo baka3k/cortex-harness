@@ -696,6 +696,30 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             "updated_at": state.updated_at,
         }
 
+        # Ensure Project + Repository nodes exist (idempotent MERGE).
+        if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
+            setup_script = os.path.join(_ROOT_DIR, "scripts", "setup_graph_project.py")
+            if os.path.isfile(setup_script):
+                repo_name = f"{project_name}/{os.path.basename(root)}"
+                setup_cmd = [
+                    sys.executable, setup_script,
+                    "--project-id", project_id,
+                    "--project-name", project_name,
+                    "--source-path", root,
+                    "--repo-name", repo_name,
+                    "--neo4j-uri", args.neo4j_uri,
+                    "--neo4j-user", args.neo4j_user,
+                    "--neo4j-password", args.neo4j_password,
+                    "--neo4j-db", args.neo4j_db,
+                ]
+                try:
+                    subprocess.run(setup_cmd, cwd=_ROOT_DIR, check=True,
+                                   capture_output=True, text=True)
+                    if args.verbose:
+                        print("[setup] Project+Repository nodes ensured")
+                except subprocess.CalledProcessError as exc:
+                    print(f"[setup] WARNING: setup_graph_project failed (non-fatal): {exc.stderr}", file=sys.stderr)
+
         if args.strict:
             missing: List[str] = []
             if not (args.neo4j_uri and args.neo4j_user and args.neo4j_password):
