@@ -84,7 +84,84 @@ DEFAULT_TOP_K        = 10
 
 # ─────────────────────────────────────────────────────────────
 # Qdrant HTTP helpers (no qdrant_client dependency)
+#
+# This module talks REST directly so it doesn't have to import
+# ``qdrant_client`` (lighter dep graph for places that just need
+# read-only retrieval). The shape of the request body changes between
+# v1 (single unnamed vector) and v2 (named ``semantic``/``keywords``/
+# ``behavior``) collections — we detect the schema once per collection
+# via ``GET /collections/{name}`` and route accordingly.
+#
+# This logic intentionally mirrors
+# ``hyper_pack_core.qdrant_search.query_collection`` so v1/v2 routing
+# stays consistent between the qdrant-client and the REST paths. Keep
+# the two in lock-step when adding new schemas.
 # ─────────────────────────────────────────────────────────────
+
+# Default named vector to query when a collection has named-vector
+# layout but the caller didn't specify one. Matches
+# ``hyper_pack_core.qdrant_search.DEFAULT_NAMED_VECTOR``.
+_DEFAULT_NAMED_VECTOR = "semantic"
+
+# Cache: (qdrant_url, collection) -> Optional[str]
+#   None  → single unnamed vector layout
+#   str   → use this named vector in queries
+_VECTOR_LAYOUT_CACHE: Dict[tuple, Optional[str]] = {}
+
+
+def _resolve_vector_layout(
+    qdrant_url: str,
+    collection: str,
+    timeout: float = 10.0,
+) -> Optional[str]:
+    """Return the named vector to query, or ``None`` for single-vector.
+
+    Cached per ``(qdrant_url, collection)``. Falls back to ``None`` on
+    any error — the caller's ``_qdrant_search`` will then issue a
+    legacy-style query that works for v1 collections; v2 misses will
+    appear as empty results rather than crashes.
+    """
+    key = (qdrant_url, collection)
+    if key in _VECTOR_LAYOUT_CACHE:
+        return _VECTOR_LAYOUT_CACHE[key]
+
+    info_url = f"{qdrant_url.rstrip('/')}/collections/{collection}"
+    try:
+        resp = httpx.get(info_url, timeout=timeout)
+        resp.raise_for_status()
+        config = (
+            resp.json()
+            .get("result", {})
+            .get("config", {})
+            .get("params", {})
+            .get("vectors", {})
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "[intelligent_retrieval] get_collection(%s) failed: %s",
+            collection,
+            exc,
+        )
+        _VECTOR_LAYOUT_CACHE[key] = None
+        return None
+
+    # REST schema:
+    #   * Single-vector layout:  {"size": int, "distance": str, ...}
+    #   * Named layout:          {"semantic": {...}, "keywords": {...}, ...}
+    # We detect ``size`` as a sentinel for single-vector — named-vector
+    # values are themselves dicts containing ``size``.
+    chosen: Optional[str]
+    if isinstance(config, dict) and "size" not in config and config:
+        if _DEFAULT_NAMED_VECTOR in config:
+            chosen = _DEFAULT_NAMED_VECTOR
+        else:
+            # Deterministic fallback so two callers without a hint agree.
+            chosen = sorted(config.keys())[0]
+    else:
+        chosen = None
+
+    _VECTOR_LAYOUT_CACHE[key] = chosen
+    return chosen
 
 
 def _qdrant_search(
@@ -97,15 +174,33 @@ def _qdrant_search(
     """
     Run a Qdrant vector search via the REST API.
 
+    Auto-detects whether ``collection`` is single-vector (v1 pipelines)
+    or named-vector (v2 ``-summaries`` collections). Uses the unified
+    Query API (``/points/query``) which accepts both schemas via the
+    ``using`` parameter.
+
     Returns a list of hit dicts:
       {"id": …, "score": …, "payload": {…}}
     """
-    url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points/search"
-    body = {"vector": vector, "limit": top_k, "with_payload": True}
+    named_vector = _resolve_vector_layout(qdrant_url, collection, timeout)
+    url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points/query"
+    body: Dict[str, Any] = {
+        "query": vector,
+        "limit": top_k,
+        "with_payload": True,
+    }
+    if named_vector is not None:
+        body["using"] = named_vector
     try:
         resp = httpx.post(url, json=body, timeout=timeout)
         resp.raise_for_status()
-        return resp.json().get("result", [])
+        # ``/points/query`` returns ``{"result": {"points": [...]}}``.
+        # The legacy ``/points/search`` returned ``{"result": [...]}``.
+        # Normalise to a flat list so the rest of this module is unchanged.
+        result = resp.json().get("result")
+        if isinstance(result, dict):
+            return list(result.get("points") or [])
+        return list(result or [])
     except Exception as exc:  # noqa: BLE001
         logger.warning("[intelligent_retrieval] Qdrant search failed: %s", exc)
         return []

@@ -122,10 +122,19 @@ def _node_snippet(node: Any, source_bytes: bytes) -> Tuple[str, int, int]:
 # ─── Node traversal helpers ───────────────────────────────────────────────────
 
 def _find_nodes_by_type(node: Any, node_type: str) -> Iterable[Any]:
-    if node.type == node_type:
-        yield node
-    for child in node.children:
-        yield from _find_nodes_by_type(child, node_type)
+    cursor = node.walk()
+    while True:
+        if cursor.node.type == node_type:
+            yield cursor.node
+        if cursor.goto_first_child():
+            continue
+        if cursor.goto_next_sibling():
+            continue
+        while cursor.goto_parent():
+            if cursor.goto_next_sibling():
+                break
+        else:
+            break
 
 
 def _first_identifier(node: Any, source_bytes: bytes) -> Optional[str]:

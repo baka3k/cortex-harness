@@ -409,6 +409,7 @@ class Neo4jDriver(GraphDriver):
     async def find_node_by_id(
         self,
         node_id: str,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Find a node by its ID"""
@@ -424,12 +425,15 @@ class Neo4jDriver(GraphDriver):
                 database
             )
         if records:
-            return records[0].get("n")
+            node = records[0].get("n")
+            if node and (project_id is None or node.get("project_id") == project_id):
+                return node
         return None
     
     async def find_nodes_by_ids(
         self,
         node_ids: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Find multiple nodes by their IDs"""
@@ -451,18 +455,23 @@ class Neo4jDriver(GraphDriver):
                 database
             )
             nodes.extend(record.get("n") for record in fallback_records if record.get("n"))
+        # Filter by project_id in Python (since queries are pre-built UNION queries)
+        if project_id is not None:
+            nodes = [n for n in nodes if n.get("project_id") == project_id]
         return nodes
     
     async def search_functions(
         self,
         query: str,
         limit: int = 50,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for functions by name or qualified_name"""
         fulltext_cypher = """
         CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
         WHERE node:Function
+          AND ($project_id IS NULL OR node.project_id = $project_id)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit
@@ -470,7 +479,7 @@ class Neo4jDriver(GraphDriver):
         try:
             fulltext_records, _, _ = await self.execute_query(
                 fulltext_cypher,
-                {"index_name": _FULLTEXT_SYMBOL_TEXT_INDEX, "query": query, "limit": limit},
+                {"index_name": _FULLTEXT_SYMBOL_TEXT_INDEX, "query": query, "limit": limit, "project_id": project_id},
                 database
             )
             fulltext_nodes = [record.get("n") for record in fulltext_records if record.get("n")]
@@ -483,12 +492,13 @@ class Neo4jDriver(GraphDriver):
         MATCH (n:Function)
         WHERE toLower(n.name) CONTAINS toLower($query)
            OR toLower(coalesce(n.qualified_name, '')) CONTAINS toLower($query)
+          AND ($project_id IS NULL OR n.project_id = $project_id)
         RETURN n
         LIMIT $limit
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"query": query, "limit": limit},
+            {"query": query, "limit": limit, "project_id": project_id},
             database
         )
         return [record.get("n") for record in records if record.get("n")]
@@ -497,11 +507,13 @@ class Neo4jDriver(GraphDriver):
         self,
         query: str,
         limit: int = 50,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Search for nodes by code content"""
         fulltext_cypher = """
         CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
+        WHERE ($project_id IS NULL OR node.project_id = $project_id)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit
@@ -509,7 +521,7 @@ class Neo4jDriver(GraphDriver):
         try:
             fulltext_records, _, _ = await self.execute_query(
                 fulltext_cypher,
-                {"index_name": _FULLTEXT_SYMBOL_CODE_INDEX, "query": query, "limit": limit},
+                {"index_name": _FULLTEXT_SYMBOL_CODE_INDEX, "query": query, "limit": limit, "project_id": project_id},
                 database
             )
             fulltext_nodes = [record.get("n") for record in fulltext_records if record.get("n")]
@@ -523,12 +535,13 @@ class Neo4jDriver(GraphDriver):
         WHERE toLower(coalesce(n.code, '')) CONTAINS toLower($query)
            OR toLower(coalesce(n.comment, '')) CONTAINS toLower($query)
            OR toLower(coalesce(n.summary, '')) CONTAINS toLower($query)
+          AND ($project_id IS NULL OR n.project_id = $project_id)
         RETURN n
         LIMIT $limit
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"query": query, "limit": limit},
+            {"query": query, "limit": limit, "project_id": project_id},
             database
         )
         return [record.get("n") for record in records if record.get("n")]
@@ -539,20 +552,23 @@ class Neo4jDriver(GraphDriver):
         end_id: str,
         relationship_types: List[str],
         max_depth: int = 8,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Any]:
         """Find shortest paths between two functions"""
         rel_pattern = f"[:{'|'.join(relationship_types)}*..{max_depth}]"
         cypher = f"""
         MATCH (a:Function) WHERE a.id = $start
+          AND ($project_id IS NULL OR a.project_id = $project_id)
         MATCH (b:Function) WHERE b.id = $end
+          AND ($project_id IS NULL OR b.project_id = $project_id)
         AND a.id <> b.id
         MATCH p=shortestPath((a)-{rel_pattern}->(b))
         RETURN p
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"start": start_id, "end": end_id},
+            {"start": start_id, "end": end_id, "project_id": project_id},
             database
         )
         return [record.get("p") for record in records if record.get("p")]
@@ -563,6 +579,7 @@ class Neo4jDriver(GraphDriver):
         relationship_types: List[str],
         direction: str = "both",
         max_depth: int = 2,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Any]:
         """Query subgraph around a function"""
@@ -577,12 +594,13 @@ class Neo4jDriver(GraphDriver):
         
         cypher = f"""
         MATCH (f:Function) WHERE f.id = $id
+          AND ($project_id IS NULL OR f.project_id = $project_id)
         MATCH p=(f){pattern}(n)
         RETURN p
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"id": function_id},
+            {"id": function_id, "project_id": project_id},
             database
         )
         return [record.get("p") for record in records if record.get("p")]
@@ -595,20 +613,21 @@ class Neo4jDriver(GraphDriver):
         max_depth: int = 8,
         limit: int = 10,
         direction: str = "out",
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Any]:
         """Find paths between modules (file paths)"""
         # Try with specified direction first
         paths = await self._find_module_paths_directed(
             source_modules, target_modules, relationship_types,
-            max_depth, limit, direction, database
+            max_depth, limit, direction, project_id, database
         )
         
         # If no paths found and direction is not 'both', try bidirectional
         if not paths and direction.lower() not in {"both", "any", "undirected"}:
             paths = await self._find_module_paths_directed(
                 source_modules, target_modules, relationship_types,
-                max_depth, limit, "both", database
+                max_depth, limit, "both", project_id, database
             )
         
         return paths
@@ -621,6 +640,7 @@ class Neo4jDriver(GraphDriver):
         max_depth: int,
         limit: int,
         direction: str,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Any]:
         """Internal helper for directional path finding"""
@@ -642,10 +662,12 @@ class Neo4jDriver(GraphDriver):
             toLower(coalesce(s.file_path, '')) CONTAINS token OR
             toLower(coalesce(sf.path, '')) CONTAINS token OR
             toLower(coalesce(sf.file_path, '')) CONTAINS token)
+          AND ($project_id IS NULL OR s.project_id = $project_id)
         AND any(token IN targets WHERE
             toLower(coalesce(t.file_path, '')) CONTAINS token OR
             toLower(coalesce(tf.path, '')) CONTAINS token OR
             toLower(coalesce(tf.file_path, '')) CONTAINS token)
+          AND ($project_id IS NULL OR t.project_id = $project_id)
         AND s.id <> t.id
         MATCH p=shortestPath((s){rel_pattern}(t))
         RETURN p
@@ -653,7 +675,7 @@ class Neo4jDriver(GraphDriver):
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"sources": source_modules, "targets": target_modules, "limit": limit},
+            {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id},
             database
         )
         return [record.get("p") for record in records if record.get("p")]
@@ -707,6 +729,7 @@ class Neo4jDriver(GraphDriver):
     async def list_symbols_by_file_path(
         self,
         file_paths: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List symbols (functions) in files matching path tokens"""
@@ -717,11 +740,12 @@ class Neo4jDriver(GraphDriver):
             toLower(coalesce(f.file_path, '')) CONTAINS token OR
             toLower(coalesce(file.path, '')) CONTAINS token OR
             toLower(coalesce(file.file_path, '')) CONTAINS token)
+          AND ($project_id IS NULL OR f.project_id = $project_id)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"tokens": file_paths},
+            {"tokens": file_paths, "project_id": project_id},
             database
         )
         return [record.get("f") for record in records if record.get("f")]
@@ -729,6 +753,7 @@ class Neo4jDriver(GraphDriver):
     async def list_functions_by_class(
         self,
         class_names: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List functions in classes matching names"""
@@ -738,12 +763,14 @@ class Neo4jDriver(GraphDriver):
         WHERE any(token IN tokens WHERE
             toLower(coalesce(c.name, '')) CONTAINS token OR
             toLower(coalesce(c.qualified_name, '')) CONTAINS token)
+          AND ($project_id IS NULL OR c.project_id = $project_id)
         MATCH (c)-[:CONTAINS]->(f:Function)
+        WHERE ($project_id IS NULL OR f.project_id = $project_id)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"tokens": class_names},
+            {"tokens": class_names, "project_id": project_id},
             database
         )
         return [record.get("f") for record in records if record.get("f")]
@@ -751,6 +778,7 @@ class Neo4jDriver(GraphDriver):
     async def list_functions_by_file(
         self,
         file_path: str,
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List functions in a specific file"""
@@ -759,11 +787,12 @@ class Neo4jDriver(GraphDriver):
         WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower($token)
            OR toLower(coalesce(file.path, '')) CONTAINS toLower($token)
            OR toLower(coalesce(file.file_path, '')) CONTAINS toLower($token)
+          AND ($project_id IS NULL OR f.project_id = $project_id)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"token": file_path},
+            {"token": file_path, "project_id": project_id},
             database
         )
         return [record.get("f") for record in records if record.get("f")]
@@ -772,6 +801,7 @@ class Neo4jDriver(GraphDriver):
         self,
         modules: List[str],
         relationship_types: List[str],
+        project_id: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List entrypoint functions called from outside specified modules"""
@@ -783,19 +813,22 @@ class Neo4jDriver(GraphDriver):
             toLower(coalesce(internalFn.file_path, '')) CONTAINS token OR
             toLower(coalesce(internalFile.path, '')) CONTAINS token OR
             toLower(coalesce(internalFile.file_path, '')) CONTAINS token)
+          AND ($project_id IS NULL OR internalFn.project_id = $project_id)
         WITH collect(internalFn.id) AS internalIds, modules
         MATCH (externalFile:File)-[:CONTAINS]->(externalFn:Function)
         WHERE NOT any(token IN modules WHERE
             toLower(coalesce(externalFn.file_path, '')) CONTAINS token OR
             toLower(coalesce(externalFile.path, '')) CONTAINS token OR
             toLower(coalesce(externalFile.file_path, '')) CONTAINS token)
+          AND ($project_id IS NULL OR externalFn.project_id = $project_id)
         MATCH (externalFn)-[:{rel_pattern}]->(entryFn:Function)
         WHERE entryFn.id IN internalIds
+          AND ($project_id IS NULL OR entryFn.project_id = $project_id)
         RETURN DISTINCT entryFn
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"modules": modules},
+            {"modules": modules, "project_id": project_id},
             database
         )
         return [record.get("entryFn") for record in records if record.get("entryFn")]

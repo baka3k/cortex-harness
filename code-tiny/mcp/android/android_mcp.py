@@ -680,14 +680,34 @@ def _qdrant_search(
     qdrant_url: str,
     vector_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    url = qdrant_url.rstrip("/") + f"/collections/{collection}/points/search"
-    payload_vector: Any = vector
+    """Vector search via Qdrant Query API (``/points/query``).
+
+    Kept byte-identical with the same function in ``fastmcp_server.py``,
+    ``mcp/cplus/cplus_mcp.py`` and ``mcp/java/java_mcp.py`` — every
+    backend ships its own copy and they all need the same v1/v2 routing
+    contract. When changing this body, update those siblings too.
+
+    See ``cplus_mcp.py`` for the full rationale on why this migrated
+    away from the legacy ``/points/search`` endpoint (named-vector
+    payload format was easy to malform and caused
+    ``unified_mcp.semantic_search`` to return Qdrant 400 on v2 summary
+    collections).
+    """
+    url = qdrant_url.rstrip("/") + f"/collections/{collection}/points/query"
+    payload: Dict[str, Any] = {
+        "query": vector,
+        "limit": int(top_k),
+        "with_payload": True,
+    }
     if vector_name:
-        payload_vector = {vector_name: vector}
-    payload = {"vector": payload_vector, "limit": int(top_k), "with_payload": True}
+        payload["using"] = vector_name
     response = httpx.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
-    return response.json()
+    body = response.json()
+    result = body.get("result")
+    if isinstance(result, dict) and "points" in result:
+        body = {**body, "result": result.get("points") or []}
+    return body
 
 
 def _normalize_collections(value: Optional[Any]) -> List[str]:
@@ -1441,6 +1461,7 @@ async def tool_list_qdrant_collections(
 async def tool_get_symbol(
     node_id: Any = None,
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -1450,12 +1471,14 @@ async def tool_get_symbol(
         {
             "node_id": node_id,
             "db": db,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
     )
     node_id = payload.get("node_id")
     db = payload.get("db")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     if node_id is None:
@@ -1467,7 +1490,7 @@ async def tool_get_symbol(
     driver = await _get_graph_driver()
     for db_candidate in candidates:
         try:
-            node = await driver.find_node_by_id(node_id, db_candidate)
+            node = await driver.find_node_by_id(node_id, project_id=project_id, database=db_candidate)
             if node:
                 mode = _normalize_content_mode(content_mode)
                 return {"db": db_candidate, "node": _record_node(node, mode, include_raw_fields)}
@@ -1546,6 +1569,7 @@ async def tool_list_possible_calls(
 async def tool_get_node_details(
     node_ids: Optional[List[Any]] = None,
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -1555,12 +1579,14 @@ async def tool_get_node_details(
         {
             "node_ids": node_ids,
             "db": db,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
     )
     node_ids = payload.get("node_ids")
     db = payload.get("db")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     node_ids = _normalize_string_list(node_ids)
@@ -1569,8 +1595,8 @@ async def tool_get_node_details(
     candidates = _resolve_db_candidates(db)
     _require(candidates[0] if candidates else None, "db")
     ids = [str(item) for item in node_ids]
-    query = "MATCH (n) WHERE n.id IN $ids RETURN n"
-    used_db, results = await _run_cypher_first(query, {"ids": ids}, candidates)
+    query = "MATCH (n) WHERE n.id IN $ids AND ($project_id IS NULL OR n.project_id = $project_id) RETURN n"
+    used_db, results = await _run_cypher_first(query, {"ids": ids, "project_id": project_id}, candidates)
     if results:
         mode = _normalize_content_mode(content_mode)
         nodes = [_record_node(item["n"], mode, include_raw_fields) for item in results]
@@ -1591,6 +1617,7 @@ async def tool_query_subgraph(
     include_possible: bool = False,
     include_fp: bool = False,
     parser_type: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -1605,6 +1632,7 @@ async def tool_query_subgraph(
             "include_possible": include_possible,
             "include_fp": include_fp,
             "parser_type": parser_type,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -1616,6 +1644,7 @@ async def tool_query_subgraph(
     include_possible = bool(payload.get("include_possible", False))
     include_fp = bool(payload.get("include_fp", False))
     parser_type = payload.get("parser_type")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     if function_id is None:
@@ -1639,47 +1668,39 @@ async def tool_query_subgraph(
             if direction in {"incoming", "in"}:
                 query = (
                     f"MATCH (f:Function) WHERE f.id = $id "
+                    "AND ($project_id IS NULL OR f.project_id = $project_id) "
                     f"MATCH p=(n:Function)-{rel_pattern}->(f) RETURN p"
                 )
-                # print(f"[query_subgraph] db={candidate} dir=in depth={depth} id={function_id}")
-                # print(f"[query_subgraph] cypher: {query}")
-                _, result = await _run_cypher_first(query, {"id": function_id}, [candidate])
-                # print(f"[query_subgraph] rows={len(result)}")
+                _, result = await _run_cypher_first(query, {"id": function_id, "project_id": project_id}, [candidate])
                 paths.extend([row["p"] for row in result])
             elif direction in {"outgoing", "out"}:
                 query = (
                     f"MATCH (f:Function) WHERE f.id = $id "
+                    "AND ($project_id IS NULL OR f.project_id = $project_id) "
                     f"MATCH p=(f)-{rel_pattern}->(n:Function) RETURN p"
                 )
-                # print(f"[query_subgraph] db={candidate} dir=out depth={depth} id={function_id}")
-                # print(f"[query_subgraph] cypher: {query}")
-                _, result = await _run_cypher_first(query, {"id": function_id}, [candidate])
-                # print(f"[query_subgraph] rows={len(result)}")
+                _, result = await _run_cypher_first(query, {"id": function_id, "project_id": project_id}, [candidate])
                 paths.extend([row["p"] for row in result])
             else:
                 query_out = (
                     f"MATCH (f:Function) WHERE f.id = $id "
+                    "AND ($project_id IS NULL OR f.project_id = $project_id) "
                     f"MATCH p=(f)-{rel_pattern}->(n:Function) RETURN p"
                 )
                 query_in = (
                     f"MATCH (f:Function) WHERE f.id = $id "
+                    "AND ($project_id IS NULL OR f.project_id = $project_id) "
                     f"MATCH p=(n:Function)-{rel_pattern}->(f) RETURN p"
                 )
-                # print(f"[query_subgraph] db={candidate} dir=both depth={depth} id={function_id}")
-                # print(f"[query_subgraph] cypher_out: {query_out}")
-                # print(f"[query_subgraph] cypher_in: {query_in}")
-                _, result_out = await _run_cypher_first(query_out, {"id": function_id}, [candidate])
-                _, result_in = await _run_cypher_first(query_in, {"id": function_id}, [candidate])
-                # print(f"[query_subgraph] rows_out={len(result_out)} rows_in={len(result_in)}")
+                _, result_out = await _run_cypher_first(query_out, {"id": function_id, "project_id": project_id}, [candidate])
+                _, result_in = await _run_cypher_first(query_in, {"id": function_id, "project_id": project_id}, [candidate])
                 paths.extend([row["p"] for row in result_out])
                 paths.extend([row["p"] for row in result_in])
-            # print(f"[query_subgraph] paths_len={len(paths)} sample_type={type(paths[0]).__name__ if paths else None}")
             graph = _paths_to_graph(
                 paths,
                 content_mode=content_mode or "auto",
                 include_raw_fields=include_raw_fields,
             )
-            # print(f"[query_subgraph] graph_nodes={len(graph.get('nodes', []))} graph_edges={len(graph.get('edges', []))}")
             graph["db"] = candidate
             return graph
         except Exception as exc:
@@ -1705,6 +1726,7 @@ async def tool_find_paths(
     include_possible: bool = False,
     include_fp: bool = False,
     parser_type: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -1719,6 +1741,7 @@ async def tool_find_paths(
             "include_possible": include_possible,
             "include_fp": include_fp,
             "parser_type": parser_type,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -1730,6 +1753,7 @@ async def tool_find_paths(
     include_possible = bool(payload.get("include_possible", False))
     include_fp = bool(payload.get("include_fp", False))
     parser_type = payload.get("parser_type")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     if start_function_id is None or end_function_id is None:
@@ -1748,10 +1772,12 @@ async def tool_find_paths(
     rel_pattern = f"[:{'|'.join(rel_types)}*..{depth}]"
     query = (
         f"MATCH (a:Function) WHERE a.id = $start "
+        "AND ($project_id IS NULL OR a.project_id = $project_id) "
         f"MATCH (b:Function) WHERE b.id = $end "
+        "AND ($project_id IS NULL OR b.project_id = $project_id) "
         f"MATCH p=shortestPath((a)-{rel_pattern}->(b)) RETURN p"
     )
-    used_db, result = await _run_cypher_first(query, {"start": start_id, "end": end_id}, candidates)
+    used_db, result = await _run_cypher_first(query, {"start": start_id, "end": end_id, "project_id": project_id}, candidates)
     if result:
         paths = [row["p"] for row in result]
         graph = _paths_to_graph(
@@ -1779,6 +1805,7 @@ async def tool_find_path_between_module(
     include_possible: bool = False,
     include_fp: bool = False,
     parser_type: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -1795,6 +1822,7 @@ async def tool_find_path_between_module(
             "include_possible": include_possible,
             "include_fp": include_fp,
             "parser_type": parser_type,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -1810,6 +1838,7 @@ async def tool_find_path_between_module(
     include_possible = bool(payload.get("include_possible", False))
     include_fp = bool(payload.get("include_fp", False))
     parser_type = payload.get("parser_type")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     debug = bool(payload.get("debug", False))
@@ -1975,13 +2004,15 @@ async def tool_find_path_between_module(
         "toLower(coalesce(t.file_path, '')) CONTAINS token OR "
         "toLower(coalesce(tf.path, '')) CONTAINS token OR "
         "toLower(coalesce(tf.file_path, '')) CONTAINS token) "
+        "AND ($project_id IS NULL OR s.project_id = $project_id) "
+        "AND ($project_id IS NULL OR t.project_id = $project_id) "
         "AND s.id <> t.id "
         f"MATCH p=shortestPath((s)-{rel_pattern}->(t)) "
         "RETURN p LIMIT 10"
     )
     used_db, results = await _run_cypher_first(
         query,
-        {"sources": source_modules, "targets": target_modules},
+        {"sources": source_modules, "targets": target_modules, "project_id": project_id},
         db_candidates,
     )
     if not results:
@@ -1997,13 +2028,15 @@ async def tool_find_path_between_module(
             "toLower(coalesce(t.file_path, '')) CONTAINS token OR "
             "toLower(coalesce(tf.path, '')) CONTAINS token OR "
             "toLower(coalesce(tf.file_path, '')) CONTAINS token) "
+            "AND ($project_id IS NULL OR s.project_id = $project_id) "
+            "AND ($project_id IS NULL OR t.project_id = $project_id) "
             "AND s.id <> t.id "
             f"MATCH p=shortestPath((s)-{rel_pattern}-(t)) "
             "RETURN p LIMIT 10"
         )
         used_db, results = await _run_cypher_first(
             fallback_query,
-            {"sources": source_modules, "targets": target_modules},
+            {"sources": source_modules, "targets": target_modules, "project_id": project_id},
             db_candidates,
         )
     paths = [row["p"] for row in results]
@@ -2029,6 +2062,7 @@ async def tool_listup_symbols_matching_file_path(
     db: Optional[str] = None,
     node_types: Optional[List[str]] = None,
     max_depth: Optional[int] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2041,6 +2075,7 @@ async def tool_listup_symbols_matching_file_path(
             "db": db,
             "node_types": node_types,
             "max_depth": max_depth,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -2050,6 +2085,7 @@ async def tool_listup_symbols_matching_file_path(
         modules = payload.get("module")
     db = payload.get("db")
     node_types_filter = payload.get("node_types")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     modules = _normalize_string_list(modules)
@@ -2068,9 +2104,10 @@ async def tool_listup_symbols_matching_file_path(
     cypher = (
         f"MATCH (n) WHERE {type_conditions} "
         f"AND {_android_file_match_predicate()} "
+        "AND ($project_id IS NULL OR n.project_id = $project_id) "
         "RETURN n"
     )
-    used_db, results = await _run_cypher_first(cypher, {"modules": modules}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id}, db_candidates)
     mode = _normalize_content_mode(content_mode)
     nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
     return {"db": used_db, "symbols": nodes}
@@ -2085,6 +2122,7 @@ async def tool_listup_class_matching_path(
     class_names: Optional[List[str]] = None,
     class_name: Optional[Any] = None,
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2095,6 +2133,7 @@ async def tool_listup_class_matching_path(
             "class_names": class_names,
             "class_name": class_name,
             "db": db,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -2103,6 +2142,7 @@ async def tool_listup_class_matching_path(
     if class_names is None:
         class_names = payload.get("class_name")
     db = payload.get("db")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     class_names = _normalize_string_list(class_names)
@@ -2115,10 +2155,12 @@ async def tool_listup_class_matching_path(
         "WHERE (c:Class OR c:Type) "
         "AND any(token IN $classes WHERE "
         "toLower(c.name) CONTAINS toLower(token) OR toLower(c.qualified_name) CONTAINS toLower(token)) "
+        "AND ($project_id IS NULL OR c.project_id = $project_id) "
         "OPTIONAL MATCH (c)-[:DECLARES]->(f:Function) "
+        "WHERE ($project_id IS NULL OR f.project_id = $project_id) "
         "RETURN c, f"
     )
-    used_db, results = await _run_cypher_first(cypher, {"classes": class_names}, db_candidates)
+    used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id}, db_candidates)
     mode = _normalize_content_mode(content_mode)
     classes_seen: Dict[str, Dict[str, Any]] = {}
     functions: List[Dict[str, Any]] = []
@@ -2145,6 +2187,7 @@ async def tool_list_up_entrypoint(
     db: Optional[str] = None,
     limit: int = 200,
     top_k: Optional[int] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2157,6 +2200,7 @@ async def tool_list_up_entrypoint(
             "db": db,
             "limit": limit,
             "top_k": top_k,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -2169,6 +2213,7 @@ async def tool_list_up_entrypoint(
     if limit_value is None:
         limit_value = payload.get("top_k")
     limit = limit_value if limit_value is not None else 200
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     modules = _normalize_string_list(modules)
@@ -2181,11 +2226,12 @@ async def tool_list_up_entrypoint(
         "WHERE any(token IN $modules WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower(token)) "
         "AND none(token IN $modules WHERE toLower(coalesce(caller.file_path, '')) CONTAINS toLower(token)) "
         "AND (f.kind IS NULL OR f.kind <> 'lambda') "
+        "AND ($project_id IS NULL OR f.project_id = $project_id) "
         "RETURN DISTINCT f LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         cypher,
-        {"modules": modules, "limit": int(limit)},
+        {"modules": modules, "limit": int(limit), "project_id": project_id},
         db_candidates,
     )
     mode = _normalize_content_mode(content_mode)
@@ -2213,6 +2259,7 @@ async def tool_trace_flow(
     limit: int = 30,
     top_k: Optional[int] = None,
     debug: bool = False,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2231,6 +2278,7 @@ async def tool_trace_flow(
             "limit": limit,
             "top_k": top_k,
             "debug": debug,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -2246,6 +2294,7 @@ async def tool_trace_flow(
         limit_value = payload.get("top_k")
     limit = int(limit_value if limit_value is not None else 30)
     debug = bool(payload.get("debug", False))
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     if start_id is None:
@@ -2264,13 +2313,15 @@ async def tool_trace_flow(
     if end_id is not None:
         query = (
             "MATCH (a {id: $start}) "
+            "WHERE ($project_id IS NULL OR a.project_id = $project_id) "
             "MATCH (b {id: $end}) "
+            "WHERE ($project_id IS NULL OR b.project_id = $project_id) "
             f"MATCH p=shortestPath((a){rel_match}(b)) "
             "RETURN p"
         )
         used_db, result = await _run_cypher_first(
             query,
-            {"start": start_id, "end": end_id},
+            {"start": start_id, "end": end_id, "project_id": project_id},
             candidates,
         )
         if not result:
@@ -2289,12 +2340,13 @@ async def tool_trace_flow(
     else:
         query = (
             "MATCH (a {id: $start}) "
+            "WHERE ($project_id IS NULL OR a.project_id = $project_id) "
             f"MATCH p=(a){rel_match}(n) "
             "RETURN p LIMIT $limit"
         )
         used_db, result = await _run_cypher_first(
             query,
-            {"start": start_id, "limit": limit},
+            {"start": start_id, "limit": limit, "project_id": project_id},
             candidates,
         )
         if not result:
@@ -2342,6 +2394,7 @@ async def tool_trace_flow_between_module(
     relationship_types: Optional[Any] = None,
     limit: int = 10,
     top_k: Optional[int] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2361,6 +2414,7 @@ async def tool_trace_flow_between_module(
             "relationship_types": relationship_types,
             "limit": limit,
             "top_k": top_k,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -2379,6 +2433,7 @@ async def tool_trace_flow_between_module(
     if limit_value is None:
         limit_value = payload.get("top_k")
     limit = int(limit_value if limit_value is not None else 10)
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     source_modules = _normalize_string_list(source_modules)
@@ -2405,13 +2460,15 @@ async def tool_trace_flow_between_module(
         "toLower(coalesce(t.file_path, '')) CONTAINS token OR "
         "toLower(coalesce(tf.path, '')) CONTAINS token OR "
         "toLower(coalesce(tf.file_path, '')) CONTAINS token) "
+        "AND ($project_id IS NULL OR s.project_id = $project_id) "
+        "AND ($project_id IS NULL OR t.project_id = $project_id) "
         "AND s.id <> t.id "
         f"MATCH p=shortestPath((s){rel_match}(t)) "
         "RETURN p LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         query,
-        {"sources": source_modules, "targets": target_modules, "limit": limit},
+        {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id},
         db_candidates,
     )
     if not results and direction not in {"both", "any", "undirected"}:
@@ -2428,13 +2485,15 @@ async def tool_trace_flow_between_module(
             "toLower(coalesce(t.file_path, '')) CONTAINS token OR "
             "toLower(coalesce(tf.path, '')) CONTAINS token OR "
             "toLower(coalesce(tf.file_path, '')) CONTAINS token) "
+            "AND ($project_id IS NULL OR s.project_id = $project_id) "
+            "AND ($project_id IS NULL OR t.project_id = $project_id) "
             "AND s.id <> t.id "
             f"MATCH p=shortestPath((s){rel_match}(t)) "
             "RETURN p LIMIT $limit"
         )
         used_db, results = await _run_cypher_first(
             fallback_query,
-            {"sources": source_modules, "targets": target_modules, "limit": limit},
+            {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id},
             db_candidates,
         )
     paths = [row["p"] for row in results]
@@ -2534,6 +2593,7 @@ async def tool_search_by_code(
     limit: int = 50,
     top_k: Optional[int] = None,
     db: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2545,6 +2605,7 @@ async def tool_search_by_code(
             "limit": limit,
             "top_k": top_k,
             "db": db,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -2555,6 +2616,7 @@ async def tool_search_by_code(
         limit_value = payload.get("top_k")
     limit = limit_value if limit_value is not None else 50
     db = payload.get("db")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     if not isinstance(query, str) or not query.strip():
@@ -2562,28 +2624,29 @@ async def tool_search_by_code(
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.strip() for t in query.split("|") if t.strip()]
-    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) RETURN n LIMIT $limit"
+    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id = $project_id) RETURN n LIMIT $limit"
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
+        "WHERE ($project_id IS NULL OR node.project_id = $project_id) "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit)},
+            {"index_name": FULLTEXT_SYMBOL_CODE_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id},
             db_candidates,
         )
         if not results:
             used_db, results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit)},
+                {"qs": qs, "limit": int(limit), "project_id": project_id},
                 db_candidates,
             )
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit)},
+            {"qs": qs, "limit": int(limit), "project_id": project_id},
             db_candidates,
         )
     mode = _normalize_content_mode(content_mode)
@@ -2602,6 +2665,7 @@ async def tool_annotate_node(
     note: Optional[str] = None,
     tags: Optional[str] = None,
     severity: Optional[str] = None,
+    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2614,6 +2678,7 @@ async def tool_annotate_node(
             "note": note,
             "tags": tags,
             "severity": severity,
+            "project_id": project_id,
             "content_mode": content_mode,
             "include_raw_fields": include_raw_fields,
         },
@@ -2623,6 +2688,7 @@ async def tool_annotate_node(
     note = payload.get("note")
     tags = payload.get("tags")
     severity = payload.get("severity")
+    project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
     include_raw_fields = payload.get("include_raw_fields", False)
     if node_id is None:
@@ -2632,12 +2698,13 @@ async def tool_annotate_node(
     node_id = str(node_id)
     cypher = (
         "MATCH (n) WHERE n.id = $id "
+        "AND ($project_id IS NULL OR n.project_id = $project_id) "
         "SET n.note = $note, n.tags = $tags, n.severity = $severity "
         "RETURN n"
     )
     used_db, result = await _run_cypher_first(
         cypher,
-        {"id": node_id, "note": note, "tags": tags, "severity": severity},
+        {"id": node_id, "note": note, "tags": tags, "severity": severity, "project_id": project_id},
         db_candidates,
     )
     if not result:

@@ -34,7 +34,7 @@ Examples:
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--root", default=".", help="Project root (default: current directory)")
+    parser.add_argument("--root", default.".", help="Project root (default: current directory)")
     parser.add_argument("--project-id", help="Project ID (default: basename of root)")
     parser.add_argument("--project-name", help="Project name (default: project_id)")
     parser.add_argument("--reset", action="store_true", help="Reset state và force full scan")

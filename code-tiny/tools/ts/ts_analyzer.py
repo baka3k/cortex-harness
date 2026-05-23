@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import functools
+import gc
 import json
 import os
 import re
@@ -22,6 +23,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+
 from tools.common.analyzer_cache import (
     file_signature,
     load_parse_cache,
@@ -634,6 +636,8 @@ class CodeEmbedder:
                         vectors.extend(encoded.detach().cpu().tolist())
                     else:
                         vectors.extend(encoded.tolist() if hasattr(encoded, "tolist") else [list(vec) for vec in encoded])
+                    del encoded
+                    self._clear_device_cache()
                     continue
                 encoded = self.tokenizer(
                     batch,
@@ -646,7 +650,16 @@ class CodeEmbedder:
                 outputs = self.model(**encoded)
                 embeddings = self._mean_pool(outputs.last_hidden_state, encoded["attention_mask"])
                 vectors.extend(embeddings.cpu().tolist())
+                del encoded, outputs, embeddings
+                self._clear_device_cache()
         return vectors
+
+    def _clear_device_cache(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+        elif self.device.type == "mps":
+            if hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
 
     @staticmethod
     def _mean_pool(last_hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -1830,6 +1843,9 @@ async def build_call_graph(
                             }
                             handle.write(json.dumps(point, ensure_ascii=True) + "\n")
                         batch_funcs.clear()
+                        del texts, vectors
+                        if batch_index % 50 == 0:
+                            gc.collect()
                 if batch_funcs:
                     batch_index += 1
                     if verbose:
@@ -1845,6 +1861,7 @@ async def build_call_graph(
                             ),
                         }
                         handle.write(json.dumps(point, ensure_ascii=True) + "\n")
+                    del texts, vectors
             state = {"total_points": expected_points, "upserted": 0}
             write_qdrant_state(state)
         else:

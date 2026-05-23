@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -172,6 +174,69 @@ def _collect_include_dirs(root: Path, include_limit: int) -> List[Path]:
     return include_dirs
 
 
+def _collect_platform_defines() -> List[str]:
+    """Return -D flags for the current platform/architecture.
+
+    These are the bare minimum macros that clang pre-defines on each
+    platform. Without them, libclang free mode may misinterpret
+    platform-conditional code (e.g. #ifdef __APPLE__).
+    """
+    defines: List[str] = []
+    system = platform.system().lower()
+    if system == "darwin":
+        defines.extend(["-D__APPLE__", "-D__MACH__"])
+    elif system == "linux":
+        defines.extend(["-D__linux__", "-D__unix__"])
+    elif system == "windows":
+        defines.extend(["-D_WIN32", "-D_WIN64"])
+
+    machine = platform.machine().lower()
+    if "arm" in machine or "aarch64" in machine:
+        defines.append("-D__arm__")
+    elif "x86_64" in machine or "amd64" in machine:
+        defines.append("-D__x86_64__")
+    elif "i386" in machine or "i686" in machine:
+        defines.append("-D__i386__")
+
+    return defines
+
+
+def _collect_source_defines(root: Path, max_depth: int = 4) -> List[str]:
+    """Scan source files for #ifdef / #ifndef patterns and emit -D flags.
+
+    Only emits flags for macros that are *referenced* in preprocessor
+    conditionals WITHOUT a corresponding #define in the scanned files.
+    This helps libclang free mode resolve conditional compilation paths
+    even when compile_commands.json is missing.
+    """
+    referenced: set[str] = set()
+    defined: set[str] = set()
+
+    _IFDEF_RE = re.compile(r'#\s*(?:ifdef|ifndef)\s+(\w+)')
+    _IF_DEFINED_RE = re.compile(r'#\s*if\s+defined\s*\(\s*(\w+)\s*\)')
+    _DEFINE_RE = re.compile(r'#\s*define\s+(\w+)')
+
+    for path in _walk_files(root, max_depth=max_depth):
+        ext = path.suffix.lower()
+        if ext not in SOURCE_EXTS_C | SOURCE_EXTS_CPP | HEADER_EXTS:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        for match in _IFDEF_RE.finditer(text):
+            referenced.add(match.group(1))
+        for match in _IF_DEFINED_RE.finditer(text):
+            referenced.add(match.group(1))
+        for match in _DEFINE_RE.finditer(text):
+            defined.add(match.group(1))
+
+    # Only emit -D for macros referenced but not locally defined
+    undef = referenced - defined
+    return sorted(f"-D{name}" for name in undef)
+
+
 def _generate_synthetic_compile_db(
     root: Path,
     output: Path,
@@ -189,6 +254,8 @@ def _generate_synthetic_compile_db(
         return None
     include_dirs = _collect_include_dirs(root, include_limit)
     include_flags = [f"-I{directory}" for directory in include_dirs]
+    platform_defines = _collect_platform_defines()
+    source_defines = _collect_source_defines(root, max_depth=4) if include_limit > 0 else []
 
     rows = []
     for source in sorted(sources, key=lambda item: str(item)):
@@ -196,7 +263,13 @@ def _generate_synthetic_compile_db(
         is_c = ext in SOURCE_EXTS_C
         compiler = "clang" if is_c else "clang++"
         std = c_std if is_c else cpp_std
-        command = [compiler, f"-std={std}"] + include_flags + ["-c", str(source)]
+        command = (
+            [compiler, f"-std={std}"]
+            + platform_defines
+            + source_defines
+            + include_flags
+            + ["-c", str(source)]
+        )
         rows.append(
             {
                 "directory": str(source.parent),
