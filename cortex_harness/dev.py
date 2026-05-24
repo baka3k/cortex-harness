@@ -2404,5 +2404,405 @@ def harness_verify(project_dir):
     sys.exit(rc)
 
 
+# ── installer ───────────────────────────────────────────────────────────────────
+
+@cli.group()
+def installer():
+    """Build and manage context menu installers for Windows, macOS, and Ubuntu."""
+
+@installer.command("build")
+@click.option("--platform", "platforms", multiple=True,
+              type=click.Choice(["windows", "macos", "ubuntu", "all"]),
+              default=["all"], show_default=True)
+@click.option("--output-dir", type=click.Path(), default="dist", show_default=True)
+def installer_build(platforms, output_dir):
+    """Build platform-specific installers for context menu integration.
+
+    \b
+    Builds installers for the specified platforms:
+      windows    -> Inno Setup .exe installer
+      macos      -> pkgbuild .pkg installer
+      ubuntu     -> Debian .deb package
+      all        -> All three platforms
+    """
+    import subprocess
+    
+    # Convert tuple to list and handle "all" option
+    target_platforms = list(platforms)
+    if "all" in target_platforms:
+        target_platforms = ["windows", "macos", "ubuntu"]
+    
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    click.echo(f"Building installers for: {', '.join(target_platforms)}")
+    click.echo(f"Output directory: {output_path}")
+    
+    for platform in target_platforms:
+        click.echo(f"\\n--- Building {platform} installer {'-' * 30}")
+        
+        if platform == "windows":
+            _build_windows_installer(output_path)
+        elif platform == "macos":
+            _build_macos_installer(output_path)
+        elif platform == "ubuntu":
+            _build_ubuntu_installer(output_path)
+
+def _build_windows_installer(output_dir: Path):
+    """Build Windows installer using Inno Setup."""
+    iss_script = Path("installers/windows/inno_setup/cortex_harness.iss")
+    
+    if not iss_script.exists():
+        click.echo(f"  [error] Inno Setup script not found: {iss_script}")
+        return False
+    
+    # Check if Inno Setup compiler is available
+    iscc_cmd = _find_iscc()
+    if not iscc_cmd:
+        click.echo("  [error] Inno Setup compiler (ISCC.exe) not found in PATH")
+        click.echo("  [install] Download from: https://jrsoftware.org/isdl.php")
+        return False
+    
+    # Build installer
+    cmd = [iscc_cmd, str(iss_script)]
+    click.echo(f"  [building] {' '.join(cmd)}")
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            click.echo("  [success] Windows installer created successfully")
+            return True
+        else:
+            click.echo(f"  [error] Build failed: {result.stderr}")
+            return False
+    except Exception as e:
+        click.echo(f"  [error] Build failed: {e}")
+        return False
+
+def _find_iscc() -> str:
+    """Find Inno Setup compiler executable."""
+    import shutil
+    
+    # Try to find ISCC in PATH
+    iscc = shutil.which("ISCC")
+    if iscc:
+        return iscc
+    
+    # Try common installation paths
+    common_paths = [
+        Path("C:/Program Files (x86)/Inno Setup 6/ISCC.exe"),
+        Path("C:/Program Files/Inno Setup 6/ISCC.exe"),
+        Path("C:/Program Files (x86)/Inno Setup 5/ISCC.exe"),
+        Path("C:/Program Files/Inno Setup 5/ISCC.exe"),
+    ]
+    
+    for path in common_paths:
+        if path.exists():
+            return str(path)
+    
+    return None
+
+def _build_macos_installer(output_dir: Path):
+    """Build macOS installer using pkgbuild."""
+    build_script = Path("installers/macos/build_pkg.sh")
+    
+    if not build_script.exists():
+        click.echo(f"  [error] macOS build script not found: {build_script}")
+        return False
+    
+    # Check if running on macOS
+    if sys.platform != "darwin":
+        click.echo("  [skip] macOS installers can only be built on macOS")
+        return False
+    
+    # Run build script
+    cmd = ["bash", str(build_script), "--output", str(output_dir)]
+    click.echo(f"  [building] {' '.join(cmd)}")
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            click.echo("  [success] macOS installer created successfully")
+            return True
+        else:
+            click.echo(f"  [error] Build failed: {result.stderr}")
+            return False
+    except Exception as e:
+        click.echo(f"  [error] Build failed: {e}")
+        return False
+
+def _build_ubuntu_installer(output_dir: Path):
+    """Build Ubuntu installer using Debian packaging tools."""
+    build_script = Path("installers/ubuntu/build_deb.sh")
+    
+    if not build_script.exists():
+        click.echo(f"  [error] Ubuntu build script not found: {build_script}")
+        return False
+    
+    # Check if running on Linux
+    if not sys.platform.startswith("linux"):
+        click.echo("  [skip] Ubuntu packages can only be built on Linux")
+        return False
+    
+    # Run build script
+    cmd = ["bash", str(build_script), "--output", str(output_dir)]
+    click.echo(f"  [building] {' '.join(cmd)}")
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            click.echo("  [success] Ubuntu package created successfully")
+            return True
+        else:
+            click.echo(f"  [error] Build failed: {result.stderr}")
+            return False
+    except Exception as e:
+        click.echo(f"  [error] Build failed: {e}")
+        return False
+
+@installer.command("install")
+@click.option("--local", is_flag=True, help="Install context menu for current user only (development mode)")
+@click.option("--project-dir", type=click.Path(exists=True), default=".", show_default=True)
+def installer_install(local, project_dir):
+    """Install context menu integration for the current platform.
+
+    \b
+    Development mode (--local):
+      Windows   -> Registry entries for current user
+      macOS     -> Services in ~/Library
+      Ubuntu    -> Nautilus scripts in home directory
+
+    System-wide mode (default, requires admin/sudo):
+      Windows   -> Registry entries + Program Files installation
+      macOS     -> Services in /Library
+      Ubuntu    -> Nautilus scripts in /usr/share
+    """
+    project_path = Path(project_dir).resolve()
+    
+    # Detect platform
+    if sys.platform == "win32":
+        _install_windows_context_menu(local, project_path)
+    elif sys.platform == "darwin":
+        _install_macos_context_menu(local, project_path)
+    elif sys.platform.startswith("linux"):
+        _install_ubuntu_context_menu(local, project_path)
+    else:
+        click.echo(f"[error] Unsupported platform: {sys.platform}")
+        sys.exit(1)
+
+def _install_windows_context_menu(local: bool, project_path: Path):
+    """Install Windows context menu integration."""
+    # Import Windows registry manager
+    import sys
+    sys.path.insert(0, str(project_path / "installers"))
+    
+    from windows.registry_manager import WindowsRegistryManager
+    from common.config_manager import ContextMenuConfig
+    
+    config_manager = ContextMenuConfig(project_path)
+    config = config_manager.get_config()
+    
+    # Check for admin privileges
+    registry_manager = WindowsRegistryManager(config["menu_name"])
+    
+    if not local and not registry_manager.is_admin():
+        click.echo("[error] System-wide installation requires administrator privileges")
+        click.echo("        Run as administrator, or use --local for user-only installation")
+        sys.exit(1)
+    
+    # Create context menu
+    commands = config_manager.get_menu_commands()
+    install_path = Path(config["platforms"]["windows"]["install_path"])
+    
+    if local:
+        install_path = Path.home() / "CortexHarness"
+    
+    click.echo(f"Installing context menu: {config['menu_name']}")
+    click.echo(f"Install path: {install_path}")
+    
+    # Create installation directory
+    install_path.mkdir(parents=True, exist_ok=True)
+    
+    # Copy wrapper script
+    scripts_dir = install_path / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    
+    wrapper_src = project_path / "installers" / "windows" / "scripts" / "wrapper.bat"
+    wrapper_dst = scripts_dir / "wrapper.bat"
+    
+    import shutil
+    if wrapper_src.exists():
+        shutil.copy2(wrapper_src, wrapper_dst)
+        click.echo(f"  [copied] {wrapper_dst}")
+    else:
+        click.echo(f"  [warning] Wrapper script not found: {wrapper_src}")
+    
+    # Create registry entries
+    if registry_manager.create_context_menu(commands, install_path):
+        click.echo("  [success] Context menu installed successfully")
+        
+        if local:
+            click.echo("\n  Note: User-only installation via Registry HKCU")
+        else:
+            click.echo("\n  Note: System-wide installation requires admin privileges")
+    else:
+        click.echo("  [error] Failed to install context menu")
+        sys.exit(1)
+
+def _install_macos_context_menu(local: bool, project_path: Path):
+    """Install macOS context menu integration."""
+    click.echo("macOS context menu installation")
+    click.echo("  [info] Requires Automator workflows in ~/Library/Services/")
+    
+    # Implementation would copy .workflow bundles
+    workflows_src = project_path / "installers" / "macos" / "workflows"
+    services_dst = Path.home() / "Library" / "Services"
+    
+    if not workflows_src.exists():
+        click.echo(f"  [error] Workflows directory not found: {workflows_src}")
+        return
+    
+    import shutil
+    services_dst.mkdir(parents=True, exist_ok=True)
+    
+    workflows = list(workflows_src.glob("*.workflow"))
+    if not workflows:
+        click.echo("  [warning] No Automator workflows found")
+        return
+    
+    for workflow in workflows:
+        dst = services_dst / workflow.name
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.copytree(workflow, dst)
+        click.echo(f"  [copied] {workflow.name}")
+    
+    # Refresh services
+    click.echo("  [refresh] Reloading system services...")
+    try:
+        subprocess.run([
+            "/System/Library/CoreServices/pbs",
+            "-flush"
+        ], check=True, capture_output=True)
+        click.echo("  [success] Context menu installed successfully")
+    except Exception as e:
+        click.echo(f"  [warning] Could not refresh services: {e}")
+        click.echo("  [info] You may need to log out and log back in")
+
+def _install_ubuntu_context_menu(local: bool, project_path: Path):
+    """Install Ubuntu context menu integration."""
+    click.echo("Ubuntu context menu installation")
+    click.echo("  [info] Installing Nautilus scripts")
+    
+    scripts_src = project_path / "installers" / "ubuntu" / "scripts"
+    
+    if local:
+        scripts_dst = Path.home() / ".local" / "share" / "nautilus" / "scripts" / "CortexHarness"
+    else:
+        scripts_dst = Path("/usr/share/nautilus-scripts/CortexHarness")
+    
+    if not scripts_src.exists():
+        click.echo(f"  [error] Scripts directory not found: {scripts_src}")
+        return
+    
+    import shutil
+    scripts_dst.mkdir(parents=True, exist_ok=True)
+    
+    scripts = list(scripts_src.glob("*.sh"))
+    if not scripts:
+        click.echo("  [warning] No shell scripts found")
+        return
+    
+    for script in scripts:
+        dst = scripts_dst / script.name
+        shutil.copy2(script, dst)
+        
+        # Make executable
+        import os
+        os.chmod(dst, 0o755)
+        click.echo(f"  [copied] {script.name}")
+    
+    click.echo("  [success] Context menu installed successfully")
+    click.echo("  [info] Restart Nautilus: nautilus -q")
+
+@installer.command("uninstall")
+@click.option("--local", is_flag=True, help="Uninstall local user installation only")
+@click.option("--project-dir", type=click.Path(exists=True), default=".", show_default=True)
+def installer_uninstall(local, project_dir):
+    """Remove context menu integration for the current platform."""
+    project_path = Path(project_dir).resolve()
+    
+    # Detect platform
+    if sys.platform == "win32":
+        _uninstall_windows_context_menu(local, project_path)
+    elif sys.platform == "darwin":
+        _uninstall_macos_context_menu(local, project_path)
+    elif sys.platform.startswith("linux"):
+        _uninstall_ubuntu_context_menu(local, project_path)
+    else:
+        click.echo(f"[error] Unsupported platform: {sys.platform}")
+
+def _uninstall_windows_context_menu(local: bool, project_path: Path):
+    """Remove Windows context menu integration."""
+    import sys
+    sys.path.insert(0, str(project_path / "installers"))
+    
+    from windows.registry_manager import WindowsRegistryManager
+    from common.config_manager import ContextMenuConfig
+    
+    config_manager = ContextMenuConfig(project_path)
+    config = config_manager.get_config()
+    
+    registry_manager = WindowsRegistryManager(config["menu_name"])
+    
+    if not local and not registry_manager.is_admin():
+        click.echo("[error] System-wide uninstallation requires administrator privileges")
+        sys.exit(1)
+    
+    click.echo(f"Removing context menu: {config['menu_name']}")
+    
+    if registry_manager.remove_context_menu():
+        click.echo("  [success] Context menu removed successfully")
+    else:
+        click.echo("  [error] Failed to remove context menu")
+
+def _uninstall_macos_context_menu(local: bool, project_path: Path):
+    """Remove macOS context menu integration."""
+    click.echo("Removing macOS context menu integration")
+    
+    services_dir = Path.home() / "Library" / "Services"
+    
+    # Remove CortexHarness workflows
+    workflows = list(services_dir.glob("*CortexHarness*.workflow"))
+    
+    if not workflows:
+        click.echo("  [info] No CortexHarness workflows found")
+        return
+    
+    import shutil
+    for workflow in workflows:
+        shutil.rmtree(workflow)
+        click.echo(f"  [removed] {workflow.name}")
+    
+    click.echo("  [success] Context menu removed successfully")
+
+def _uninstall_ubuntu_context_menu(local: bool, project_path: Path):
+    """Remove Ubuntu context menu integration."""
+    click.echo("Removing Ubuntu context menu integration")
+    
+    if local:
+        scripts_dir = Path.home() / ".local" / "share" / "nautilus" / "scripts" / "CortexHarness"
+    else:
+        scripts_dir = Path("/usr/share/nautilus-scripts/CortexHarness")
+    
+    if not scripts_dir.exists():
+        click.echo("  [info] No CortexHarness scripts found")
+        return
+    
+    import shutil
+    shutil.rmtree(scripts_dir)
+    click.echo("  [success] Context menu removed successfully")
+
+
 if __name__ == "__main__":
     cli()
