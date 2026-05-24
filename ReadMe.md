@@ -509,7 +509,8 @@ Sensitive files (`.env`, `*.pem`, `*.key`, `*secret*`, etc.) are always excluded
 The CLI automatically locates the Python interpreter inside `.venv/` for both `code-tiny` and `doc-tiny`, falling back to the system Python if no virtual environment is found.
 
 --- 
-## NOTICE ONLY WINDOW 
+
+## NOTICE FOR WINDOW 
 
 ---
 
