@@ -13,6 +13,7 @@ class WindowsRegistryManager:
 
     # Registry key constants
     HKEY_CLASSES_ROOT = winreg.HKEY_CLASSES_ROOT
+    HKEY_CURRENT_USER = winreg.HKEY_CURRENT_USER
     DIRECTORY_SHELL = r"Directory\shell"
     DIRECTORY_BG_SHELL = r"Directory\Background\shell"
     DRIVE_SHELL = r"Drive\shell"
@@ -21,16 +22,28 @@ class WindowsRegistryManager:
     REG_SZ = winreg.REG_SZ
     REG_EXPAND_SZ = winreg.REG_EXPAND_SZ
 
-    def __init__(self, menu_name: str = "CortexHarness"):
+    def __init__(self, menu_name: str = "CortexHarness", user_specific: bool = False):
         """Initialize Windows Registry manager.
 
         Args:
             menu_name: Name for the context menu (default: "CortexHarness")
+            user_specific: If True, use HKEY_CURRENT_USER instead of HKEY_CLASSES_ROOT
         """
         self.menu_name = menu_name
-        self.base_key_path = f"{self.DIRECTORY_SHELL}\\{menu_name}"
-        self.base_bg_key_path = f"{self.DIRECTORY_BG_SHELL}\\{menu_name}"
-        self.drive_key_path = f"{self.DRIVE_SHELL}\\{menu_name}"
+        self.user_specific = user_specific
+        
+        # Choose root key based on installation type
+        if user_specific:
+            self.root_key = self.HKEY_CURRENT_USER
+            # For user-specific, we need to use Software\Classes path
+            self.base_key_path = f"Software\\Classes\\Directory\\shell\\{menu_name}"
+            self.base_bg_key_path = f"Software\\Classes\\Directory\\Background\\shell\\{menu_name}"
+            self.drive_key_path = f"Software\\Classes\\Drive\\shell\\{menu_name}"
+        else:
+            self.root_key = self.HKEY_CLASSES_ROOT
+            self.base_key_path = f"{self.DIRECTORY_SHELL}\\{menu_name}"
+            self.base_bg_key_path = f"{self.DIRECTORY_BG_SHELL}\\{menu_name}"
+            self.drive_key_path = f"{self.DRIVE_SHELL}\\{menu_name}"
 
     def is_admin(self) -> bool:
         """Check if the current process has administrator privileges.
@@ -85,10 +98,17 @@ class WindowsRegistryManager:
             True if creation was successful, False otherwise
         """
         try:
+            # Use instance root key (HKCR or HKCU based on user_specific)
+            original_root = self.HKEY_CLASSES_ROOT
+            self.HKEY_CLASSES_ROOT = self.root_key
+            
             # Create main menu entries
             self._create_main_menu(self.base_key_path, commands, install_path, icon_path)
             self._create_main_menu(self.base_bg_key_path, commands, install_path, icon_path)
             self._create_main_menu(self.drive_key_path, commands, install_path, icon_path)
+            
+            # Restore original
+            self.HKEY_CLASSES_ROOT = original_root
 
             return True
 
@@ -195,7 +215,7 @@ class WindowsRegistryManager:
         root_key: int,
         key_path: str,
         values: Dict[str, str]
-    ) -> winreg.HKey:
+    ) -> int:
         """Create or open a registry key and set values.
 
         Args:
@@ -246,10 +266,17 @@ class WindowsRegistryManager:
             True if removal was successful, False otherwise
         """
         try:
+            # Use instance root key (HKCR or HKCU based on user_specific)
+            original_root = self.HKEY_CLASSES_ROOT
+            self.HKEY_CLASSES_ROOT = self.root_key
+            
             # Remove main menu entries from all locations
-            self._remove_registry_tree(self.HKEY_CLASSES_ROOT, self.base_key_path)
-            self._remove_registry_tree(self.HKEY_CLASSES_ROOT, self.base_bg_key_path)
-            self._remove_registry_tree(self.HKEY_CLASSES_ROOT, self.drive_key_path)
+            self._remove_registry_tree(self.root_key, self.base_key_path)
+            self._remove_registry_tree(self.root_key, self.base_bg_key_path)
+            self._remove_registry_tree(self.root_key, self.drive_key_path)
+            
+            # Restore original
+            self.HKEY_CLASSES_ROOT = original_root
 
             return True
 
@@ -295,7 +322,7 @@ class WindowsRegistryManager:
             True if context menu exists, False otherwise
         """
         try:
-            winreg.OpenKey(self.HKEY_CLASSES_ROOT, self.base_key_path, 0, winreg.KEY_READ)
+            winreg.OpenKey(self.root_key, self.base_key_path, 0, winreg.KEY_READ)
             return True
         except FileNotFoundError:
             return False
@@ -310,7 +337,7 @@ class WindowsRegistryManager:
 
         try:
             shell_key = winreg.OpenKey(
-                self.HKEY_CLASSES_ROOT,
+                self.root_key,
                 f"{self.base_key_path}\\shell",
                 0,
                 winreg.KEY_READ
