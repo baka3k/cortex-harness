@@ -2453,14 +2453,16 @@ def _build_windows_installer(output_dir: Path):
     iss_script = Path("installers/windows/inno_setup/cortex_harness.iss")
     
     if not iss_script.exists():
-        click.echo(f"  [error] Inno Setup script not found: {iss_script}")
+        click.echo(f"  [skip] Inno Setup script not found: {iss_script}")
+        click.echo("  [info] Use 'dev installer install --local' instead")
         return False
     
     # Check if Inno Setup compiler is available
     iscc_cmd = _find_iscc()
     if not iscc_cmd:
-        click.echo("  [error] Inno Setup compiler (ISCC.exe) not found in PATH")
-        click.echo("  [install] Download from: https://jrsoftware.org/isdl.php")
+        click.echo("  [skip] Inno Setup compiler (ISCC.exe) not found in PATH")
+        click.echo("  [info] For development use: dev installer install --local")
+        click.echo("  [info] For production: Download from https://jrsoftware.org/isdl.php")
         return False
     
     # Build installer
@@ -2602,8 +2604,8 @@ def _install_windows_context_menu(local: bool, project_path: Path):
     config_manager = ContextMenuConfig(project_path)
     config = config_manager.get_config()
     
-    # Check for admin privileges
-    registry_manager = WindowsRegistryManager(config["menu_name"])
+    # Create registry manager with user-specific option
+    registry_manager = WindowsRegistryManager(config["menu_name"], user_specific=local)
     
     if not local and not registry_manager.is_admin():
         click.echo("[error] System-wide installation requires administrator privileges")
@@ -2616,6 +2618,9 @@ def _install_windows_context_menu(local: bool, project_path: Path):
     
     if local:
         install_path = Path.home() / "CortexHarness"
+        click.echo("Installation mode: User-specific (HKCU)")
+    else:
+        click.echo("Installation mode: System-wide (HKCR)")
     
     click.echo(f"Installing context menu: {config['menu_name']}")
     click.echo(f"Install path: {install_path}")
@@ -2642,9 +2647,10 @@ def _install_windows_context_menu(local: bool, project_path: Path):
         click.echo("  [success] Context menu installed successfully")
         
         if local:
-            click.echo("\n  Note: User-only installation via Registry HKCU")
+            click.echo("\n  [info] Installed in HKEY_CURRENT_USER (for current user only)")
+            click.echo("  [info] Right-click any folder to see CortexHarness menu")
         else:
-            click.echo("\n  Note: System-wide installation requires admin privileges")
+            click.echo("\n  [info] Installed in HKEY_CLASSES_ROOT (system-wide)")
     else:
         click.echo("  [error] Failed to install context menu")
         sys.exit(1)
@@ -2753,7 +2759,8 @@ def _uninstall_windows_context_menu(local: bool, project_path: Path):
     config_manager = ContextMenuConfig(project_path)
     config = config_manager.get_config()
     
-    registry_manager = WindowsRegistryManager(config["menu_name"])
+    # Create registry manager with user-specific option
+    registry_manager = WindowsRegistryManager(config["menu_name"], user_specific=local)
     
     if not local and not registry_manager.is_admin():
         click.echo("[error] System-wide uninstallation requires administrator privileges")
