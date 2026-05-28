@@ -12,6 +12,7 @@ dependencies = [
     "requests",
     "neo4j",
     "qdrant-client",
+    "python-dotenv>=1.2.2",
 ]
 
 [project.scripts]

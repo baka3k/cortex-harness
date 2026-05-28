@@ -63,3 +63,7 @@ cortex_harness/CLAUDE.md
 .sensitive-terms
 .commandcode/taste/taste.md
 .claude/settings.local.json
+
+# Ignore local memory/context notes in app folders
+frontend/**/CLAUDE.md
+backendjs/**/CLAUDE.md
