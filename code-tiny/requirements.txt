@@ -33,3 +33,4 @@ tree-sitter-c-sharp
 # Deep learning librariespip
 einops
 sentence-transformers
+dotenv
