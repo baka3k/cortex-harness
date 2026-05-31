@@ -638,9 +638,19 @@ def _embed_query(text: str, model_name: str) -> List[float]:
     try:
         return _embed_query_with_model(tokenizer, model, device, text)
     except RuntimeError as exc:
-        if str(device).startswith("cuda") and _is_cuda_runtime_error(exc) and _is_embed_cpu_fallback_enabled():
-            logger.warning("[embed] CUDA inference failed (%s). Retrying on CPU.", exc)
+        # Catch CUDA errors even when device="cpu": some models (e.g.
+        # jinaai/jina-embeddings-v3 via trust_remote_code) auto-escalate
+        # to the GPU inside their own encode() regardless of the configured
+        # device, so the error can appear without an explicit cuda device.
+        if _is_cuda_runtime_error(exc) and _is_embed_cpu_fallback_enabled():
+            logger.warning(
+                "[embed] CUDA inference failed (configured device=%s, err=%s). "
+                "Flushing cache and retrying on CPU.",
+                device,
+                exc,
+            )
             _embedder_cache.pop((model_name, str(device)), None)
+            _embedder_cache.pop((model_name, "cpu"), None)
             tokenizer_cpu, model_cpu, device_cpu = _get_embedder(model_name, device_name="cpu")
             return _embed_query_with_model(tokenizer_cpu, model_cpu, device_cpu, text)
         raise
