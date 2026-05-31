@@ -147,7 +147,7 @@ active_project: Dict[str, Optional[str]] = {
 }
 
 _graph_driver: Optional[GraphDriver] = None
-_embedder_cache: Dict[str, Tuple[Any, Any, torch.device]] = {}
+_embedder_cache: Dict[Tuple[str, str], Tuple[Any, Any, torch.device]] = {}
 logger = logging.getLogger("project_call_graph.mcp.server")
 
 
@@ -538,16 +538,57 @@ def _should_trust_remote_code(model_name: str) -> bool:
     return "jina" in model_name.lower()
 
 
+def _is_embed_cpu_fallback_enabled() -> bool:
+    raw = os.environ.get("EMBED_FALLBACK_TO_CPU", "1")
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _is_cuda_runtime_error(exc: RuntimeError) -> bool:
+    message = str(exc).lower()
+    return "cuda" in message and (
+        "no kernel image is available for execution on the device" in message
+        or "invalid device function" in message
+        or "no cuda kernels are available" in message
+        or "cuda error" in message
+    )
+
+
+def _resolve_embed_device(device_name: Optional[str] = None) -> torch.device:
+    raw_device = (device_name or os.environ.get("EMBED_DEVICE", "cpu") or "cpu").strip()
+    if not raw_device:
+        raw_device = "cpu"
+    normalized = raw_device.lower()
+    if normalized.startswith("cuda") and not torch.cuda.is_available():
+        logger.warning("[embed] CUDA requested but unavailable; falling back to CPU.")
+        return torch.device("cpu")
+    if normalized.startswith("mps"):
+        mps_backend = getattr(torch.backends, "mps", None)
+        if mps_backend is None or not mps_backend.is_available():
+            logger.warning("[embed] MPS requested but unavailable; falling back to CPU.")
+            return torch.device("cpu")
+    return torch.device(raw_device)
+
+
 def _get_embedder(model_name: str, device_name: Optional[str] = None) -> Tuple[Any, Any, torch.device]:
-    if model_name in _embedder_cache:
-        return _embedder_cache[model_name]
+    device = _resolve_embed_device(device_name)
+    cache_key = (model_name, str(device))
+    if cache_key in _embedder_cache:
+        return _embedder_cache[cache_key]
     trust_remote_code = _should_trust_remote_code(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
     model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-    device = torch.device(device_name or os.environ.get("EMBED_DEVICE", "cpu"))
-    model.to(device)
+    try:
+        model.to(device)
+    except RuntimeError as exc:
+        if str(device).startswith("cuda") and _is_cuda_runtime_error(exc) and _is_embed_cpu_fallback_enabled():
+            logger.warning("[embed] CUDA model load failed (%s). Retrying on CPU.", exc)
+            device = torch.device("cpu")
+            model.to(device)
+            cache_key = (model_name, str(device))
+        else:
+            raise
     model.eval()
-    _embedder_cache[model_name] = (tokenizer, model, device)
+    _embedder_cache[cache_key] = (tokenizer, model, device)
     return tokenizer, model, device
 
 
@@ -572,8 +613,7 @@ def _encode_texts(model: Any, texts: List[str], device: torch.device) -> Optiona
     return [list(vec) for vec in encoded]
 
 
-def _embed_query(text: str, model_name: str) -> List[float]:
-    tokenizer, model, device = _get_embedder(model_name)
+def _embed_query_with_model(tokenizer: Any, model: Any, device: torch.device, text: str) -> List[float]:
     encoded = _encode_texts(model, [text], device)
     if encoded is not None:
         return encoded[0]
@@ -589,6 +629,19 @@ def _embed_query(text: str, model_name: str) -> List[float]:
         outputs = model(**encoded)
         embedding = _mean_pool(outputs.last_hidden_state, encoded["attention_mask"]).cpu().tolist()[0]
     return embedding
+
+
+def _embed_query(text: str, model_name: str) -> List[float]:
+    tokenizer, model, device = _get_embedder(model_name)
+    try:
+        return _embed_query_with_model(tokenizer, model, device, text)
+    except RuntimeError as exc:
+        if str(device).startswith("cuda") and _is_cuda_runtime_error(exc) and _is_embed_cpu_fallback_enabled():
+            logger.warning("[embed] CUDA inference failed (%s). Retrying on CPU.", exc)
+            _embedder_cache.pop((model_name, str(device)), None)
+            tokenizer_cpu, model_cpu, device_cpu = _get_embedder(model_name, device_name="cpu")
+            return _embed_query_with_model(tokenizer_cpu, model_cpu, device_cpu, text)
+        raise
 
 
 def _is_preload_enabled(raw: Optional[str]) -> bool:
@@ -607,8 +660,8 @@ def _preload_embedder_on_startup() -> None:
         return
     device_name = os.environ.get("EMBED_DEVICE", "cpu")
     print(f"[embed] preloading model at startup: model={model_name}, device={device_name}")
-    _get_embedder(model_name, device_name=device_name)
-    print("[embed] preload completed.")
+    _, _, resolved_device = _get_embedder(model_name, device_name=device_name)
+    print(f"[embed] preload completed on device={resolved_device}.")
 
 
 def _qdrant_search(
