@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 import signal
@@ -11,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 import logging
 
 import httpx
+import mcp.types as mcp_types
 import torch
 from fastmcp import FastMCP
 from neo4j.exceptions import Neo4jError
@@ -2677,14 +2679,115 @@ async def tool_list_mcp_functions() -> Dict[str, Any]:
         except Exception as e:
             logger.warning("Could not introspect tool %s: %s", name, e)
 
+    parameter_guidelines = {
+        "always_call_first": "list_mcp_functions",
+        "rules": [
+            "Use exact parameter names from each tool's inputs.",
+            "Always provide required parameters explicitly.",
+            "Prefer arrays for list-like parameters over comma-separated strings.",
+            "If a call returns invalid_parameters/missing_required_parameters, fix args then retry.",
+        ],
+    }
     return {
         "total_count": len(functions_metadata),
+        "parameter_guidelines": parameter_guidelines,
         "functions": functions_metadata,
         "server_name": MCP_NAME,
         "server_version": "2.2.0"
     }
 
 
+def _extract_call_payload(arguments: Any) -> Dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {}
+    merged = dict(arguments)
+    payload = arguments.get("payload")
+    if isinstance(payload, dict):
+        merged.update(payload)
+    return merged
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
+
+
+def _install_global_tool_error_wrapper() -> None:
+    if getattr(mcp_server, "_safe_tool_wrapper_installed", False):
+        return
+
+    discovered_tools = {
+        name.replace("tool_", "")
+        for name, obj in globals().items()
+        if name.startswith("tool_") and callable(obj)
+    }
+    catalog_entries = build_catalog(discovered_tools)
+    inputs_by_tool: Dict[str, List[Dict[str, Any]]] = {
+        str(item.get("name")): list(item.get("inputs") or [])
+        for item in catalog_entries
+        if item.get("name")
+    }
+    examples_by_tool: Dict[str, Any] = {
+        str(item.get("name")): item.get("example")
+        for item in catalog_entries
+        if item.get("name")
+    }
+    original_call_tool_mcp = mcp_server._call_tool_mcp
+
+    async def _safe_call_tool_mcp(key: str, arguments: Dict[str, Any]) -> Any:
+        try:
+            return await original_call_tool_mcp(key, arguments)
+        except Exception as exc:
+            provided = _extract_call_payload(arguments)
+            input_entries = inputs_by_tool.get(key, [])
+            required = [
+                str(entry.get("name"))
+                for entry in input_entries
+                if isinstance(entry, dict) and entry.get("required") and entry.get("name")
+            ]
+            accepted = [
+                str(entry.get("name"))
+                for entry in input_entries
+                if isinstance(entry, dict) and entry.get("name")
+            ]
+            missing = [name for name in required if _is_missing_value(provided.get(name))]
+            error_type = "tool_execution_error"
+            if missing:
+                error_type = "missing_required_parameters"
+            elif isinstance(exc, (ValueError, TypeError)):
+                error_type = "invalid_parameters"
+
+            payload: Dict[str, Any] = {
+                "ok": False,
+                "error": {
+                    "type": error_type,
+                    "tool": key,
+                    "backend": "fast",
+                    "message": str(exc),
+                    "missing_required_params": missing,
+                    "required_params": required,
+                    "accepted_params": accepted,
+                    "received_params": sorted([name for name in provided.keys() if not _is_missing_value(provided.get(name))]),
+                    "example": examples_by_tool.get(key),
+                    "next_step": "Call list_mcp_functions and retry with exact parameter names.",
+                },
+            }
+            return mcp_types.CallToolResult(
+                isError=True,
+                structuredContent=payload,
+                content=[mcp_types.TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
+            )
+
+    mcp_server._call_tool_mcp = _safe_call_tool_mcp
+    setattr(mcp_server, "_safe_tool_wrapper_installed", True)
+
+
+_install_global_tool_error_wrapper()
 
 
 def _normalize_http_path(path: str) -> str:
