@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import logging
 
 import httpx
+import mcp.types as mcp_types
 import torch
 from fastmcp import FastMCP
 from neo4j.exceptions import Neo4jError
@@ -2778,10 +2779,108 @@ _ANDROID_TOOL_NAMES: frozenset = frozenset({
 })
 
 _android_catalog = build_catalog(_ANDROID_TOOL_NAMES, overrides=ANDROID_OVERRIDES)
+_ANDROID_PARAMETER_GUIDELINES: Dict[str, Any] = {
+    "always_call_first": "list_mcp_functions",
+    "rules": [
+        "Use exact parameter names documented in tool inputs.",
+        "Provide all required params explicitly.",
+        "Prefer array values for list-like parameters.",
+        "On invalid_parameters/missing_required_parameters, fix arguments and retry.",
+    ],
+}
 _MCP_FUNCTIONS_JSON: str = json.dumps(
-    {"total_count": len(_android_catalog), "functions": _android_catalog},
+    {
+        "total_count": len(_android_catalog),
+        "parameter_guidelines": _ANDROID_PARAMETER_GUIDELINES,
+        "functions": _android_catalog,
+    },
     ensure_ascii=False,
 )
+
+
+def _extract_call_payload(arguments: Any) -> Dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {}
+    merged = dict(arguments)
+    payload = arguments.get("payload")
+    if isinstance(payload, dict):
+        merged.update(payload)
+    return merged
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
+
+
+def _install_global_tool_error_wrapper() -> None:
+    if getattr(mcp_server, "_safe_tool_wrapper_installed", False):
+        return
+
+    inputs_by_tool: Dict[str, List[Dict[str, Any]]] = {
+        str(item.get("name")): list(item.get("inputs") or [])
+        for item in _android_catalog
+        if item.get("name")
+    }
+    original_call_tool_mcp = mcp_server._call_tool_mcp
+
+    async def _safe_call_tool_mcp(key: str, arguments: Dict[str, Any]) -> Any:
+        try:
+            return await original_call_tool_mcp(key, arguments)
+        except Exception as exc:
+            provided = _extract_call_payload(arguments)
+            input_entries = inputs_by_tool.get(key, [])
+            required = [
+                str(entry.get("name"))
+                for entry in input_entries
+                if isinstance(entry, dict) and entry.get("required") and entry.get("name")
+            ]
+            accepted = [
+                str(entry.get("name"))
+                for entry in input_entries
+                if isinstance(entry, dict) and entry.get("name")
+            ]
+            missing = [name for name in required if _is_missing_value(provided.get(name))]
+            error_type = "tool_execution_error"
+            if missing:
+                error_type = "missing_required_parameters"
+            elif isinstance(exc, (ValueError, TypeError)):
+                error_type = "invalid_parameters"
+
+            example = None
+            for item in _android_catalog:
+                if item.get("name") == key:
+                    example = item.get("example")
+                    break
+
+            payload: Dict[str, Any] = {
+                "ok": False,
+                "error": {
+                    "type": error_type,
+                    "tool": key,
+                    "backend": "android",
+                    "message": str(exc),
+                    "missing_required_params": missing,
+                    "required_params": required,
+                    "accepted_params": accepted,
+                    "received_params": sorted([name for name in provided.keys() if not _is_missing_value(provided.get(name))]),
+                    "example": example,
+                    "next_step": "Call list_mcp_functions and retry with exact parameter names.",
+                },
+            }
+            return mcp_types.CallToolResult(
+                isError=True,
+                structuredContent=payload,
+                content=[mcp_types.TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
+            )
+
+    mcp_server._call_tool_mcp = _safe_call_tool_mcp
+    setattr(mcp_server, "_safe_tool_wrapper_installed", True)
 
 @mcp_server.tool(
     name="list_mcp_functions",
@@ -2806,6 +2905,9 @@ async def tool_list_parsers(payload: Optional[Dict[str, Any]] = None) -> Dict[st
     
     parsers.sort()
     return {"parsers": parsers}
+
+
+_install_global_tool_error_wrapper()
 
 
 def parse_args() -> argparse.Namespace:

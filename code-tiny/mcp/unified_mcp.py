@@ -80,8 +80,25 @@ _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     }
 )
 _unified_catalog = build_catalog(_UNIFIED_TOOL_NAMES)
+_CATALOG_BY_NAME: Dict[str, Dict[str, Any]] = {
+    item.get("name", ""): item for item in _unified_catalog if item.get("name")
+}
+_PARAMETER_GUIDELINES: Dict[str, Any] = {
+    "always_call_first": "list_mcp_functions",
+    "rules": [
+        "Use exact parameter names from tool metadata; avoid inventing aliases.",
+        "Send required fields explicitly, even if you set activate_project defaults.",
+        "Use either parser_type OR activate_project(parser_type=...) to select backend.",
+        "When list-like params are accepted, prefer arrays over comma-separated strings.",
+        "On error.invalid_parameters, follow required_params + example and retry once.",
+    ],
+}
 _MCP_FUNCTIONS_JSON: str = json.dumps(
-    {"total_count": len(_unified_catalog), "functions": _unified_catalog},
+    {
+        "total_count": len(_unified_catalog),
+        "parameter_guidelines": _PARAMETER_GUIDELINES,
+        "functions": _unified_catalog,
+    },
     ensure_ascii=False,
 )
 
@@ -261,6 +278,112 @@ def _unwrap_tool_callable(obj: Any) -> Any:
     return None
 
 
+def _catalog_inputs(tool_name: str) -> List[Dict[str, Any]]:
+    item = _CATALOG_BY_NAME.get(tool_name, {})
+    inputs = item.get("inputs")
+    if isinstance(inputs, list):
+        return [entry for entry in inputs if isinstance(entry, dict)]
+    return []
+
+
+def _required_params(tool_name: str) -> List[str]:
+    required: List[str] = []
+    for entry in _catalog_inputs(tool_name):
+        if entry.get("required"):
+            name = str(entry.get("name") or "").strip()
+            if name:
+                required.append(name)
+    return required
+
+
+def _accepted_params(tool_name: str) -> List[str]:
+    accepted: List[str] = []
+    for entry in _catalog_inputs(tool_name):
+        name = str(entry.get("name") or "").strip()
+        if name:
+            accepted.append(name)
+    return accepted
+
+
+def _is_missing_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) == 0
+    return False
+
+
+def _missing_required_params(tool_name: str, payload: Dict[str, Any]) -> List[str]:
+    missing: List[str] = []
+    for name in _required_params(tool_name):
+        if _is_missing_value(payload.get(name)):
+            missing.append(name)
+    return missing
+
+
+def _error_type_from_exception(exc: Exception, missing_required: List[str]) -> str:
+    if missing_required:
+        return "missing_required_parameters"
+    if isinstance(exc, ValueError):
+        return "invalid_parameters"
+    if isinstance(exc, TypeError):
+        return "invalid_parameters"
+    return "tool_execution_error"
+
+
+def _build_tool_error(
+    tool_name: str,
+    payload: Dict[str, Any],
+    exc: Exception,
+    backend_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    missing_required = _missing_required_params(tool_name, payload)
+    entry = _CATALOG_BY_NAME.get(tool_name, {})
+    received = sorted([key for key in payload.keys() if payload.get(key) is not None])
+    return {
+        "ok": False,
+        "error": {
+            "type": _error_type_from_exception(exc, missing_required),
+            "tool": tool_name,
+            "backend": backend_name,
+            "message": str(exc),
+            "missing_required_params": missing_required,
+            "required_params": _required_params(tool_name),
+            "accepted_params": _accepted_params(tool_name),
+            "received_params": received,
+            "example": entry.get("example"),
+            "next_step": "Call list_mcp_functions and retry with exact parameter names.",
+        },
+    }
+
+
+def _coerce_error_result(tool_name: str, payload: Dict[str, Any], result: Any, backend_name: str) -> Optional[Dict[str, Any]]:
+    if isinstance(result, dict) and isinstance(result.get("error"), str):
+        err = ValueError(result.get("error") or "Invalid tool arguments")
+        normalized = _build_tool_error(tool_name, payload, err, backend_name=backend_name)
+        details = result.get("details")
+        if isinstance(details, list):
+            normalized["error"]["details"] = details
+        return normalized
+    return None
+
+
+def _parse_positive_int(raw: Any, param_name: str) -> Tuple[Optional[int], Optional[str]]:
+    if raw is None:
+        return None, None
+    text = str(raw).strip()
+    if not text:
+        return None, None
+    if not text.isdigit():
+        return None, f"{param_name} must be a positive integer."
+    value = int(text)
+    if value <= 0:
+        return None, f"{param_name} must be greater than 0."
+    return value, None
+
+
 async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     merged = _apply_unified_defaults(payload)
     merged = _coerce_list_fields(merged)
@@ -268,9 +391,21 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     backend = BACKENDS[backend_name]
     fn = _unwrap_tool_callable(getattr(backend.module, f"tool_{tool_name}", None))
     if fn is None:
-        raise ValueError(f"Tool '{tool_name}' is not available in backend '{backend_name}'.")
-    result = await fn(payload=merged)
+        return _build_tool_error(
+            tool_name,
+            merged,
+            ValueError(f"Tool '{tool_name}' is not available in backend '{backend_name}'."),
+            backend_name=backend_name,
+        )
+    try:
+        result = await fn(payload=merged)
+    except Exception as exc:
+        return _build_tool_error(tool_name, merged, exc, backend_name=backend_name)
+    normalized_error = _coerce_error_result(tool_name, merged, result, backend_name)
+    if normalized_error is not None:
+        return normalized_error
     if isinstance(result, dict):
+        result.setdefault("ok", True)
         result.setdefault("backend", backend_name)
     return result
 
@@ -367,13 +502,28 @@ async def _dispatch_planner_tool(tool_name: str, payload: Dict[str, Any]) -> Any
     merged = _apply_unified_defaults(_coerce_list_fields(dict(payload)))
     fn = _unwrap_tool_callable(getattr(fast_backend, f"tool_{tool_name}", None))
     if fn is None:
-        raise ValueError(f"Planner tool '{tool_name}' is not available in fast backend.")
+        return _build_tool_error(
+            tool_name,
+            merged,
+            ValueError(f"Planner tool '{tool_name}' is not available in fast backend."),
+            backend_name="fast",
+        )
     params = inspect.signature(fn).parameters
     if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
         filtered = merged
     else:
         filtered = {k: v for k, v in merged.items() if k in params}
-    return await fn(**filtered)
+    try:
+        result = await fn(**filtered)
+    except Exception as exc:
+        return _build_tool_error(tool_name, filtered, exc, backend_name="fast")
+    normalized_error = _coerce_error_result(tool_name, filtered, result, "fast")
+    if normalized_error is not None:
+        return normalized_error
+    if isinstance(result, dict):
+        result.setdefault("ok", True)
+        result.setdefault("backend", "fast")
+    return result
 
 
 @mcp_server.tool(
@@ -646,15 +796,18 @@ async def tool_semantic_search(
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Semantic search over Qdrant embeddings."""
+    parsed_top_k, top_k_error = _parse_positive_int(top_k, "top_k")
     values = {
         "query": query if query else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "top_k": int(top_k) if top_k and top_k.isdigit() else None,
+        "top_k": parsed_top_k,
         "collection": collection if collection else None,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if top_k_error:
+        return _build_tool_error("semantic_search", merged, ValueError(top_k_error))
     result = await _dispatch_tool("semantic_search", merged)
     if result == []:
         return {"results": []}
@@ -671,18 +824,23 @@ async def tool_trace_flow_between_module(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths between modules."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "source_module": source_module if source_module else None,
         "target_module": target_module if target_module else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("trace_flow_between_module", merged, ValueError(limit_error))
     try:
         result = await _dispatch_tool("trace_flow_between_module", merged)
     except RuntimeError as exc:
@@ -708,18 +866,23 @@ async def tool_trace_flow(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths using configurable relationships."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "start_id": start_id if start_id else None,
         "direction": direction if direction else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("trace_flow", merged, ValueError(limit_error))
     try:
         result = await _dispatch_tool("trace_flow", merged)
     except RuntimeError as exc:
@@ -895,18 +1058,23 @@ async def tool_find_path_between_module(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Find call paths between modules."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "source_module": source_module if source_module else None,
         "target_module": target_module if target_module else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("find_path_between_module", merged, ValueError(limit_error))
     result = await _dispatch_tool("find_path_between_module", merged)
     if result == []:
         return {"paths": []}
@@ -923,22 +1091,27 @@ async def tool_find_paths(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Find call paths between two functions."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "start_function_id": start_function_id if start_function_id else None,
         "end_function_id": end_function_id if end_function_id else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("find_paths", merged, ValueError(limit_error))
     try:
         result = await _dispatch_tool("find_paths", merged)
     except RuntimeError as exc:
@@ -966,21 +1139,26 @@ async def tool_query_subgraph(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Return call graph context around a function ID."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "function_id": function_id if function_id else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("query_subgraph", merged, ValueError(limit_error))
     try:
         result = await _dispatch_tool("query_subgraph", merged)
     except RuntimeError as exc:
@@ -1031,17 +1209,22 @@ async def tool_list_possible_calls(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """List POSSIBLE_CALLS edges."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "function_id": function_id if function_id else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("list_possible_calls", merged, ValueError(limit_error))
     result = await _dispatch_tool("list_possible_calls", merged)
     if result == []:
         return {"calls": []}
@@ -1084,21 +1267,26 @@ async def tool_search_by_code(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Search nodes by matching text in code snippets."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "query": query if query else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("search_by_code", merged, ValueError(limit_error))
     result = await _dispatch_tool("search_by_code", merged)
     if result == []:
         return {"results": []}
@@ -1114,21 +1302,26 @@ async def tool_search_functions(
     parser_type: str = "",
     db: str = "neo4j",
     limit: str = "",
+    top_k: str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Search nodes by name/qualified_name."""
+    requested_limit = limit or top_k
+    parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "query": query if query else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
-        "limit": int(limit) if limit and limit.isdigit() else None,
+        "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
+    if limit_error:
+        return _build_tool_error("search_functions", merged, ValueError(limit_error))
     result = await _dispatch_tool("search_functions", merged)
     if result == []:
         return {"functions": []}
