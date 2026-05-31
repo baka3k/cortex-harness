@@ -781,6 +781,12 @@ def _venv_python(base_dir: Path) -> str:
     for candidate in [
         base_dir / ".venv" / "Scripts" / "python.exe",
         base_dir / ".venv" / "bin" / "python",
+        # Fall back to the cortex-harness repo venv, not sys.executable, so
+        # sub-projects without their own .venv still run in the correct
+        # environment (avoids picking up whatever Python is active in the
+        # shell, which may be a completely different project's virtualenv).
+        REPO_ROOT / ".venv" / "Scripts" / "python.exe",
+        REPO_ROOT / ".venv" / "bin" / "python",
     ]:
         if candidate.exists():
             return str(candidate)
