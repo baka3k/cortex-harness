@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/users/hieplq1.rpm/ai/cortex-harness/.venv/bin/python *)"
+    ]
+  },
+  "$version": 4
+}
