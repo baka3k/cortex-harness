@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/users/baka3k.rpm/ai/cortex-harness/.venv/bin/python *)"
+    ]
+  }
+}
