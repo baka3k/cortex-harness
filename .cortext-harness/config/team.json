@@ -1,5 +1,5 @@
 {
-  "active":false,
+  "active": false,
   "project": {
     "code": "xxx",
     "name": "projectname"
@@ -40,7 +40,8 @@
     "source": {
       "git": "",
       "folder": [
-        ""
+        "",
+        "frontend"
       ]
     }
   }
