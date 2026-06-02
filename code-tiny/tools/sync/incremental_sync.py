@@ -438,8 +438,24 @@ def _normalize_sha(root: str, ref: str) -> str:
     )
 
 
+# Well-known SHA-1 of an empty git tree object — same value in every repo
+# (sha1("tree 0\x00")). git diff accepts it as a tree-ish without the object
+# needing to exist in the database, so it's the standard way to express
+# "diff against nothing" when HEAD is a root commit with no parent.
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
 def _detect_default_before(root: str, after_sha: str) -> str:
-    return _normalize_sha(root, f"{after_sha}^")
+    """Return the parent of after_sha, or the empty tree if after_sha is the root commit.
+
+    Falling back to the empty tree makes the very first sync on a freshly
+    initialized repo (only one commit, no parent) behave the same as a full
+    bootstrap — every file in HEAD shows up as 'added' in the diff.
+    """
+    try:
+        return _normalize_sha(root, f"{after_sha}^")
+    except subprocess.CalledProcessError:
+        return _EMPTY_TREE_SHA
 
 
 async def _query_impacted_files(

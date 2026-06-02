@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+import gc
 import json
 import logging
 import os

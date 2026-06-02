@@ -464,6 +464,76 @@ def _git_status_since(folder_path: Path, since_commit: str) -> tuple:
         return [], []
 
 
+def _ensure_git_repo(folder_path: Path, auto_yes: bool = False) -> bool:
+    """Ensure folder_path is a git working tree.
+
+    incremental_sync.py is git-centric (uses `git diff before_sha after_sha`
+    and stores SHAs in its state). When the folder isn't a git repo, offer to
+    `git init` + create a baseline commit so the first sync has a HEAD to
+    diff against.
+
+    Returns True if the folder is (now) a git repo, False if the user declined
+    or init failed — callers should skip that folder in either case.
+    """
+    # Already a git repo?
+    try:
+        r = subprocess.run(
+            ["git", "-C", str(folder_path), "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if r.returncode == 0 and r.stdout.strip().lower() == "true":
+            return True
+    except FileNotFoundError:
+        click.echo("[error] git command not found on PATH — please install git first.", err=True)
+        return False
+    except Exception:
+        pass  # fall through to init prompt
+
+    click.echo(f"\n[info] '{folder_path}' is not a git repository.")
+    click.echo("       'dev sync code' uses git diff to detect incremental changes.")
+    if not auto_yes and not click.confirm(
+        "       Initialize git here and create a baseline commit?", default=True
+    ):
+        return False
+
+    # Seed .gitignore so the baseline commit excludes venv/node_modules/etc.
+    gi = folder_path / ".gitignore"
+    if not gi.exists():
+        gi.write_text("\n".join(sorted(_SCAN_EXCLUDE)) + "\n", encoding="utf-8")
+        click.echo("  [created] .gitignore")
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", "-C", str(folder_path), *args],
+            capture_output=True, text=True,
+        )
+
+    if _git("init", "-q").returncode != 0:
+        click.echo("  [error] git init failed", err=True)
+        return False
+    click.echo("  [ok] git init")
+
+    # Avoid commit failures when the user has no global git identity yet.
+    for key, val in (("user.email", "cortex-harness@local"),
+                     ("user.name",  "cortex-harness")):
+        if not _git("config", "--get", key).stdout.strip():
+            _git("config", key, val)
+
+    _git("add", "-A")
+    commit = _git("commit", "-q", "-m", "cortex-harness baseline")
+    if commit.returncode != 0:
+        # Empty folder (nothing to commit) — make an empty commit so HEAD exists.
+        empty = _git("commit", "-q", "--allow-empty",
+                     "-m", "cortex-harness baseline (empty)")
+        if empty.returncode != 0:
+            err = (empty.stderr or commit.stderr).strip()
+            click.echo(f"  [error] git commit failed: {err}", err=True)
+            return False
+
+    click.echo("  [ok] initial commit created — sync can now run")
+    return True
+
+
 def _mtime_changed_files(folder_path: Path, since_ts: float) -> tuple:
     """Return (changed_files, []) using mtime comparison. Paths relative to folder_path."""
     changed = []
@@ -1440,6 +1510,11 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run):
             click.echo(f"\n[warn] Folder not found: {folder} — skipping")
             continue
 
+        if not _ensure_git_repo(folder_path):
+            click.echo(f"[warn] Skipping {folder} — git repo required for incremental sync")
+            summaries.append({"folder": folder, "status": "skipped", "reason": "not git"})
+            continue
+
         cmd = [
             python, str(incremental_sync),
             "--root", str(folder_path),
@@ -1506,6 +1581,11 @@ def sync_code_all(ctx):
         folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
         if not folder_path.exists():
             click.echo(f"[warn] Folder not found: {folder} — skipping")
+            continue
+
+        if not _ensure_git_repo(folder_path):
+            click.echo(f"[warn] Skipping {folder} — git repo required for incremental sync")
+            summaries.append({"folder": folder, "status": "skipped", "reason": "not git"})
             continue
 
         cmd = [
