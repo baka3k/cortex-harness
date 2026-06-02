@@ -54,10 +54,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--incremental", action="store_true")
     parser.add_argument("--changed-files-manifest")
     parser.add_argument("--deleted-files-manifest")
-    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""))
-    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""))
-    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"))
-    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION"))
+    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""),
+                        help="Git commit SHA before changes (for incremental sync metadata)")
+    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""),
+                        help="Git commit SHA after changes (for incremental sync metadata)")
+    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"),
+                        help="Directory for message scan artifacts (default: ./.cache/message_scan_artifacts)")
+    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION", ""),
+                        help="Qdrant collection for message embeddings")
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
     parser.add_argument(
         "--ignore-cache",
