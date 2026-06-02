@@ -2096,6 +2096,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.set_defaults(enable_message_scan=True)
     p.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true", help="Enable message scan and sync (default)")
     p.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false", help="Disable message scan and sync")
+    p.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"),
+                   help="Directory for message scan artifacts (default: ./.cache/message_scan_artifacts)")
+    p.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION", ""),
+                   help="Qdrant collection for message embeddings")
+    p.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""),
+                   help="Git commit SHA before changes (for incremental sync metadata)")
+    p.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""),
+                   help="Git commit SHA after changes (for incremental sync metadata)")
     return p.parse_args(argv)
 
 
