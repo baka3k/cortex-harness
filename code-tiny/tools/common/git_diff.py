@@ -67,7 +67,87 @@ def collect_git_diff_entries(root: str, before_sha: str, after_sha: str) -> List
         parsed = parse_name_status_line(line)
         if parsed:
             entries.append(parsed)
+    entries.extend(_collect_submodule_diff_entries(root, before_sha, after_sha))
     return entries
+
+
+def _collect_submodule_diff_entries(
+    root: str, before_sha: str, after_sha: str
+) -> List[DiffEntry]:
+    submodules = _list_submodules(root)
+    if not submodules:
+        return []
+    extra: List[DiffEntry] = []
+    for sub_rel, sub_path in submodules:
+        old_sha = _submodule_sha_at(root, sub_rel, before_sha)
+        new_sha = _submodule_sha_at(root, sub_rel, after_sha)
+        if not old_sha or not new_sha or old_sha == new_sha:
+            continue
+        cmd = [
+            "git",
+            "-C",
+            sub_path,
+            "diff",
+            "--name-status",
+            "--find-renames",
+            old_sha,
+            new_sha,
+        ]
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, text=True)
+        except subprocess.CalledProcessError:
+            continue
+        for line in output.splitlines():
+            parsed = parse_name_status_line(line)
+            if not parsed:
+                continue
+            prefix = sub_rel.rstrip("/") + "/"
+            old = (prefix + parsed.old_path) if parsed.old_path else None
+            new = (prefix + parsed.new_path) if parsed.new_path else None
+            extra.append(DiffEntry(status=parsed.status, old_path=old, new_path=new))
+    return extra
+
+
+def _list_submodules(root: str) -> List[Tuple[str, str]]:
+    gitmodules = os.path.join(root, ".gitmodules")
+    if not os.path.isfile(gitmodules):
+        return []
+    try:
+        with open(gitmodules, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return []
+    results: List[Tuple[str, str]] = []
+    current_path: Optional[str] = None
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("path = "):
+            current_path = stripped[len("path = "):].strip()
+        elif stripped.startswith("[") and current_path:
+            abs_path = os.path.join(root, current_path)
+            if os.path.isdir(os.path.join(abs_path, ".git")) or os.path.isfile(
+                os.path.join(abs_path, ".git")
+            ):
+                results.append((_to_posix(current_path), os.path.realpath(abs_path)))
+            current_path = None
+    if current_path:
+        abs_path = os.path.join(root, current_path)
+        if os.path.isdir(os.path.join(abs_path, ".git")) or os.path.isfile(
+            os.path.join(abs_path, ".git")
+        ):
+            results.append((_to_posix(current_path), os.path.realpath(abs_path)))
+    return results
+
+
+def _submodule_sha_at(root: str, sub_path: str, commit: str) -> Optional[str]:
+    try:
+        return subprocess.check_output(
+            ["git", "-C", root, "ls-tree", commit, sub_path],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).split()[2]
+    except (subprocess.CalledProcessError, IndexError):
+        return None
 
 
 def collect_changed_and_deleted(entries: Sequence[DiffEntry]) -> Tuple[Set[str], Set[str]]:
