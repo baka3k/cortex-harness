@@ -1467,18 +1467,20 @@ def sync():
 @click.option("--preview", is_flag=True, help="Preview changed files before syncing.")
 @click.option("--verbose/--no-verbose", default=True, show_default=True)
 @click.option("--dry-run", is_flag=True)
+@click.option("--full-scan", is_flag=True, help="Force full rescan (ignore git state / baseline).")
 @click.pass_context
-def sync_code(ctx, project_dir, preview, verbose, dry_run):
+def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
     """Interactive: pick folders, auto-detect language, incremental if baseline exists.
 
     \b
     First run   -> full sync (no baseline)
     Next runs   -> incremental via analyzer --changed-files-manifest (built-in)
+    --full-scan -> force full rescan from scratch on every folder.
     Sub-command:
       all       Run ALL analyzers on all folders (incremental if baseline exists).
     """
     ctx.ensure_object(dict)
-    ctx.obj.update(project_dir=project_dir, preview=preview, verbose=verbose, dry_run=dry_run)
+    ctx.obj.update(project_dir=project_dir, preview=preview, verbose=verbose, dry_run=dry_run, full_scan=full_scan)
 
     if ctx.invoked_subcommand is not None:
         return
@@ -1524,6 +1526,8 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run):
             *_neo4j_args_code(env),
             "--qdrant-url", _env_to_qdrant_url(env),
         ]
+        if full_scan:
+            cmd.append("--full-scan")
         if dry_run:
             cmd.append("--verbose")
             click.echo(f"\n[dry-run] {' '.join(cmd)}")
@@ -1597,6 +1601,8 @@ def sync_code_all(ctx):
             *_neo4j_args_code(env),
             "--qdrant-url", _env_to_qdrant_url(env),
         ]
+        if o.get("full_scan"):
+            cmd.append("--full-scan")
         if o["dry_run"]:
             cmd.append("--verbose")
             click.echo(f"[dry-run] {' '.join(cmd)}")
