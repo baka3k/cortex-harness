@@ -630,6 +630,59 @@ def _write_summary(path: str, payload: Dict[str, object]) -> None:
     os.replace(tmp_path, path)
 
 
+_SOURCE_EXTENSIONS: Set[str] = {
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
+    ".pas", ".dpr", ".inc",
+    ".py",
+    ".js", ".jsx",
+    ".ts", ".tsx",
+    ".php",
+    ".cs",
+    ".sql",
+    ".pls", ".plsql", ".pks", ".pkb", ".pkg", ".pck", ".spc", ".spb", ".trg", ".fnc",
+    ".vb", ".vbproj", ".vbp", ".vbw", ".frx", ".bas", ".cls", ".frm", ".vbs", ".wsf", ".asp",
+    ".java", ".kt", ".kts",
+    ".xml", ".gradle",
+}
+
+_SKIP_DIRS: Set[str] = {
+    "node_modules", ".git", "__pycache__", ".tox", ".mypy_cache",
+    ".pytest_cache", ".venv", "venv", ".idea", ".vscode",
+    "dist", "build", ".next", ".nuxt", "target", "bin", "obj",
+    ".cache", ".gradle", ".dart_tool",
+}
+
+
+def _walk_all_source_files(root: str) -> Set[str]:
+    found: Set[str] = set()
+    root_abs = os.path.realpath(os.path.abspath(root))
+    for dirpath, dirnames, filenames in os.walk(root_abs, topdown=True):
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        for fname in filenames:
+            lower = fname.lower()
+            ext = os.path.splitext(lower)[1]
+            if ext not in _SOURCE_EXTENSIONS and not lower.endswith(".gradle.kts"):
+                continue
+            full = os.path.join(dirpath, fname)
+            try:
+                rel = os.path.relpath(full, root_abs).replace("\\", "/")
+            except ValueError:
+                continue
+            found.add(rel)
+    return found
+
+
+def _is_git_repo(root: str) -> bool:
+    try:
+        result = subprocess.check_output(
+            ["git", "-C", root, "rev-parse", "--is-inside-work-tree"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+        return result.lower() == "true"
+    except Exception:
+        return False
+
+
 async def _run_incremental(args: argparse.Namespace) -> int:
     started_monotonic = time.time()
     root = os.path.abspath(args.root)
@@ -676,16 +729,18 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     try:
         if not os.path.isdir(root):
             raise ValueError(f"Root not found: {root}")
-        try:
-            inside = subprocess.check_output(
-                ["git", "-C", root, "rev-parse", "--is-inside-work-tree"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except Exception as exc:  # pragma: no cover - depends on local git
-            raise ValueError(f"Root is not a git repository: {root}") from exc
-        if inside.lower() != "true":
-            raise ValueError(f"Root is not a git repository: {root}")
+
+        if not args.full_scan:
+            try:
+                inside = subprocess.check_output(
+                    ["git", "-C", root, "rev-parse", "--is-inside-work-tree"],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+            except Exception as exc:  # pragma: no cover - depends on local git
+                raise ValueError(f"Root is not a git repository: {root}") from exc
+            if inside.lower() != "true":
+                raise ValueError(f"Root is not a git repository: {root}")
 
         lock_root = safe_cache_root(args.cache_dir, "incremental_sync_locks", project_root=root)
         lock_path = os.path.join(lock_root, f"{_safe_segment(project_id)}.lock")
@@ -712,7 +767,6 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             "updated_at": state.updated_at,
         }
 
-        # Ensure Project + Repository nodes exist (idempotent MERGE).
         if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
             setup_script = os.path.join(_ROOT_DIR, "scripts", "setup_graph_project.py")
             if os.path.isfile(setup_script):
@@ -745,34 +799,50 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             if missing:
                 raise RuntimeError(f"strict mode missing required services: {', '.join(missing)}")
 
-        after_sha = _normalize_sha(root, args.after_sha or "HEAD")
-        before_sha = args.before_sha or state.last_good_sha
-        if not before_sha:
-            before_sha = _detect_default_before(root, after_sha)
-        before_sha = _normalize_sha(root, before_sha)
+        if args.full_scan:
+            after_sha = _normalize_sha(root, args.after_sha or "HEAD") if _is_git_repo(root) else "full_scan"
+            before_sha = "full_scan"
+            if args.verbose:
+                print("[full-scan] walking filesystem (git-independent)")
+            changed_paths = _normalize_project_paths(root, _walk_all_source_files(root))
+            deleted_paths: Set[str] = set()
+            summary["diff"] = {
+                "entries": len(changed_paths),
+                "changed": len(changed_paths),
+                "deleted": 0,
+            }
+            if args.verbose:
+                print("[full-scan] found %d source files" % len(changed_paths))
+        else:
+            after_sha = _normalize_sha(root, args.after_sha or "HEAD")
+            before_sha = args.before_sha or state.last_good_sha
+            if not before_sha:
+                before_sha = _detect_default_before(root, after_sha)
+            before_sha = _normalize_sha(root, before_sha)
+
+            if args.verbose:
+                print(
+                    "[state] dirty=%s last_good_sha=%s before=%s after=%s"
+                    % (state.dirty, state.last_good_sha or "-", before_sha[:12], after_sha[:12])
+                )
+
+            entries = collect_git_diff_entries(root, before_sha, after_sha)
+            changed_paths, deleted_paths = collect_changed_and_deleted(entries)
+            changed_paths = _normalize_project_paths(root, changed_paths)
+            deleted_paths = _normalize_project_paths(root, deleted_paths)
+            summary["diff"] = {
+                "entries": len(entries),
+                "changed": len(changed_paths),
+                "deleted": len(deleted_paths),
+            }
+            if args.verbose:
+                print(
+                    "[diff] entries=%d changed=%d deleted=%d"
+                    % (len(entries), len(changed_paths), len(deleted_paths))
+                )
+
         summary["before_sha"] = before_sha
         summary["after_sha"] = after_sha
-
-        if args.verbose:
-            print(
-                "[state] dirty=%s last_good_sha=%s before=%s after=%s"
-                % (state.dirty, state.last_good_sha or "-", before_sha[:12], after_sha[:12])
-            )
-
-        entries = collect_git_diff_entries(root, before_sha, after_sha)
-        changed_paths, deleted_paths = collect_changed_and_deleted(entries)
-        changed_paths = _normalize_project_paths(root, changed_paths)
-        deleted_paths = _normalize_project_paths(root, deleted_paths)
-        summary["diff"] = {
-            "entries": len(entries),
-            "changed": len(changed_paths),
-            "deleted": len(deleted_paths),
-        }
-        if args.verbose:
-            print(
-                "[diff] entries=%d changed=%d deleted=%d"
-                % (len(entries), len(changed_paths), len(deleted_paths))
-            )
 
         if not changed_paths and not deleted_paths:
             if state is not None:
@@ -795,7 +865,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             return 0
 
         impacted_paths: Set[str] = set()
-        if args.neo4j_uri and args.neo4j_user and args.neo4j_password and changed_paths:
+        if not args.full_scan and args.neo4j_uri and args.neo4j_user and args.neo4j_password and changed_paths:
             summary["services"]["impact_expansion_used"] = True
             impacted_paths = await _query_impacted_files(
                 neo4j_uri=args.neo4j_uri,
@@ -1075,6 +1145,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--message-qdrant-collection",
         default=os.environ.get("MESSAGE_QDRANT_COLLECTION"),
         help="Optional Qdrant collection override for messages (default: <project_scope>_mess)",
+    )
+    parser.add_argument(
+        "--full-scan",
+        action="store_true",
+        help="Scan all files from scratch (ignore git state / last_good_sha). Equivalent to diffing against an empty tree.",
     )
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
