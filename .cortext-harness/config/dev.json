@@ -1,8 +1,8 @@
 {
   "active": true,
   "project": {
-    "code": "cortex-harness",
-    "name": "cortex-harness"
+    "code": "cortex",
+    "name": "cortex"
   },
   "code": {
     "env": {
