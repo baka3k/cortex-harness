@@ -55,6 +55,7 @@ from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files
 from tools.common.semantic_inference import SemanticInferenceEngine
 from tools.graph import GraphDriverFactory, GraphProvider
+from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
 try:
@@ -2055,6 +2056,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     p.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     p.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
+    add_graph_provider_args(p)
     p.add_argument("--batch-size", type=int, default=4)
     p.add_argument("--neo4j-batch-size", type=int, default=500)
     p.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
@@ -2126,7 +2128,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
+    if prepare_graph_args(args):
         try:
             driver = await GraphDriverFactory.create_driver(
                 provider=GraphProvider.NEO4J,
@@ -2141,9 +2143,9 @@ async def main(argv: Optional[List[str]] = None) -> int:
                 verbose=args.verbose,
             )
             if args.verbose:
-                print(f"[backend-analyzer] Connected to Neo4j at {args.neo4j_uri}")
+                print(f"[backend-analyzer] Connected to graph store at {args.neo4j_uri}")
         except Exception as exc:
-            print(f"[backend-analyzer] Neo4j connection failed: {exc}", file=sys.stderr)
+            print(f"[backend-analyzer] graph connection failed: {exc}", file=sys.stderr)
 
     parse_cache = not args.disable_parse_cache
     if args.ignore_cache:

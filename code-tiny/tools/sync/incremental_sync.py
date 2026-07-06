@@ -36,6 +36,7 @@ from tools.common.incremental_sync_state import (
     state_file_path,
 )
 from tools.graph import GraphDriverFactory, GraphProvider
+from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.vb.vb_path_classifier import VBPathClassifier
 from tools.ts.ts_project_detector import detect_project_type as _detect_ts_project_type
 
@@ -534,6 +535,9 @@ def _selected_parsers(parsers_arg: str) -> Tuple[Set[str], bool]:
 
 def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
     env = dict(os.environ)
+    if getattr(args, "graph_provider", None):
+        env["CODE_GRAPH_PROVIDER"] = args.graph_provider
+        env["GRAPH_PROVIDER"] = args.graph_provider
     if args.neo4j_uri:
         env["NEO4J_URI"] = args.neo4j_uri
     if args.neo4j_user:
@@ -542,6 +546,20 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
         env["NEO4J_PASS"] = args.neo4j_password
     if args.neo4j_db:
         env["NEO4J_DB"] = args.neo4j_db
+    if getattr(args, "falkordb_uri", None):
+        env["FALKORDB_URI"] = args.falkordb_uri
+    if getattr(args, "falkordb_host", None):
+        env["FALKORDB_HOST"] = str(args.falkordb_host)
+    if getattr(args, "falkordb_port", None):
+        env["FALKORDB_PORT"] = str(args.falkordb_port)
+    if getattr(args, "falkordb_user", None):
+        env["FALKORDB_USER"] = str(args.falkordb_user)
+    if getattr(args, "falkordb_password", None):
+        env["FALKORDB_PASSWORD"] = str(args.falkordb_password)
+    if getattr(args, "falkordb_graph", None):
+        env["FALKORDB_GRAPH"] = str(args.falkordb_graph)
+    if getattr(args, "falkordb_ssl", False):
+        env["FALKORDB_SSL"] = "1"
     if args.qdrant_url:
         env["QDRANT_URL"] = args.qdrant_url
     if args.cache_dir:
@@ -688,6 +706,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     root = os.path.abspath(args.root)
     project_id = args.project_id or os.path.basename(root)
     project_name = args.project_name or project_id
+    graph_ready = prepare_graph_args(args)
     summary_path = args.summary_path or _default_summary_path(cache_dir=args.cache_dir, project_id=project_id, root=root)
     summary: Dict[str, object] = {
         "project_id": project_id,
@@ -703,7 +722,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "before_sha": "",
         "after_sha": "",
         "services": {
-            "neo4j_ready": bool(args.neo4j_uri and args.neo4j_user and args.neo4j_password),
+            "graph_ready": graph_ready,
+            "neo4j_ready": graph_ready,
             "qdrant_ready": bool(args.qdrant_url),
             "impact_expansion_used": False,
             "message_sync_enabled": bool(args.sync_messages),
@@ -767,7 +787,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             "updated_at": state.updated_at,
         }
 
-        if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
+        if graph_ready:
             setup_script = os.path.join(_ROOT_DIR, "scripts", "setup_graph_project.py")
             if os.path.isfile(setup_script):
                 repo_name = f"{project_name}/{os.path.basename(root)}"
@@ -792,8 +812,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
 
         if args.strict:
             missing: List[str] = []
-            if not (args.neo4j_uri and args.neo4j_user and args.neo4j_password):
-                missing.append("neo4j_credentials")
+            if not graph_ready:
+                missing.append("graph_store")
             if not args.qdrant_url:
                 missing.append("qdrant_url")
             if missing:
@@ -865,7 +885,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             return 0
 
         impacted_paths: Set[str] = set()
-        if not args.full_scan and args.neo4j_uri and args.neo4j_user and args.neo4j_password and changed_paths:
+        if not args.full_scan and graph_ready and changed_paths:
             summary["services"]["impact_expansion_used"] = True
             impacted_paths = await _query_impacted_files(
                 neo4j_uri=args.neo4j_uri,
@@ -877,7 +897,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             )
             impacted_paths = _normalize_project_paths(root, impacted_paths)
         elif args.verbose:
-            print("[impact] neo4j credentials missing; skip graph-based impact expansion")
+            print("[impact] graph store missing; skip graph-based impact expansion")
 
         summary["impact"] = {"expanded_impacted": len(impacted_paths)}
         if args.verbose:
@@ -1129,6 +1149,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
+    add_graph_provider_args(parser)
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument(
         "--sync-messages",
