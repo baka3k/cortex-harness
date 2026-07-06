@@ -72,6 +72,18 @@ Because the install is **editable** (`-e`), `git pull` automatically picks up an
 > Use `dev.sh` (macOS/Linux) or `dev.bat` (Windows) from the repo root directly,
 > or set an alias: `alias dev='/path/to/cortex-harness/dev.sh'`
 
+### Local MCP lifecycle with Make
+
+From the CortexHarness repo root, use the Makefile shortcuts to prepare and run the local MCP servers:
+
+```bash
+make build   # create/reuse .venv and install root, code-tiny, and doc-tiny dependencies
+make start   # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
+make stop    # stop MCP terminal/processes started by make start
+```
+
+`make start` uses the existing `code-tiny/mcp.sh` and `doc-tiny/mcp.sh` entrypoints. On Windows, install Git Bash or WSL so those shell scripts can run.
+
 
 ---
 
