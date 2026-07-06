@@ -1,0 +1,366 @@
+[CmdletBinding()]
+param(
+    [Parameter(Position = 0)]
+    [ValidateSet("build", "start", "stop", "help")]
+    [string]$Action = "help"
+)
+
+$ErrorActionPreference = "Stop"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
+$StateDir = Join-Path $Root ".cache\mcp"
+$PidFile = Join-Path $StateDir "pids.json"
+
+$Servers = @(
+    [pscustomobject]@{
+        Name = "code-tiny"
+        WorkDir = Join-Path $Root "code-tiny"
+        Script = Join-Path $Root "code-tiny\mcp.sh"
+        Port = 8788
+    },
+    [pscustomobject]@{
+        Name = "doc-tiny"
+        WorkDir = Join-Path $Root "doc-tiny"
+        Script = Join-Path $Root "doc-tiny\mcp.sh"
+        Port = 8789
+    }
+)
+
+function Write-Usage {
+    @"
+Usage:
+  make build   Create/sync virtualenvs and Python dependencies.
+  make start   Open each MCP server in a separate terminal window.
+  make stop    Stop MCP terminals/processes started by make start.
+
+Default MCP servers:
+  code-tiny  http://127.0.0.1:8788/mcp
+  doc-tiny   http://127.0.0.1:8789/mcp
+"@ | Write-Host
+}
+
+function Get-CommandPath {
+    param([string[]]$Names)
+
+    foreach ($name in $Names) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue
+        if ($cmd) {
+            return $cmd.Source
+        }
+    }
+
+    return $null
+}
+
+function Get-PythonLauncher {
+    $python = Get-CommandPath @("py.exe", "python.exe", "python")
+    if (-not $python) {
+        throw "Python was not found on PATH. Install Python 3.10+ before running make build."
+    }
+    return $python
+}
+
+function Get-RootVenvDir {
+    return (Join-Path $Root ".venv")
+}
+
+function Get-RootVenvPython {
+    $venvDir = Get-RootVenvDir
+    $windowsPython = Join-Path $venvDir "Scripts\python.exe"
+    $unixPython = Join-Path $venvDir "bin\python"
+
+    if (Test-Path -LiteralPath $windowsPython) {
+        return $windowsPython
+    }
+    if (Test-Path -LiteralPath $unixPython) {
+        return $unixPython
+    }
+
+    throw "Virtualenv Python not found under $venvDir."
+}
+
+function Install-Requirements {
+    param(
+        [string]$Python,
+        [string]$RequirementsPath
+    )
+
+    if (Test-Path -LiteralPath $RequirementsPath) {
+        Write-Host "[build] Installing requirements: $RequirementsPath"
+        & $Python -m pip install -r $RequirementsPath
+    }
+}
+
+function Invoke-Build {
+    $venvDir = Get-RootVenvDir
+    if (-not (Test-Path -LiteralPath $venvDir)) {
+        $launcher = Get-PythonLauncher
+        Write-Host "[build] Creating venv: $venvDir"
+        & $launcher -m venv $venvDir
+    }
+
+    $python = Get-RootVenvPython
+
+    Write-Host "[build] Upgrading pip in $venvDir"
+    & $python -m pip install --upgrade pip
+
+    Install-Requirements -Python $python -RequirementsPath (Join-Path $Root "requirements.txt")
+    Install-Requirements -Python $python -RequirementsPath (Join-Path $Root "code-tiny\requirements.txt")
+    Install-Requirements -Python $python -RequirementsPath (Join-Path $Root "doc-tiny\requirements.txt")
+
+    Write-Host "[build] Installing editable root package"
+    & $python -m pip install -e $Root
+
+    Write-Host "[build] Dependency sync complete."
+}
+
+function Get-ShellRunner {
+    $candidates = @(@(
+        $env:GIT_BASH,
+        (Join-Path ${env:ProgramFiles} "Git\bin\bash.exe"),
+        (Join-Path ${env:ProgramFiles(x86)} "Git\bin\bash.exe")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+
+    if ($candidates.Count -gt 0) {
+        return [pscustomobject]@{
+            Kind = "git-bash"
+            Command = $candidates[0]
+        }
+    }
+
+    $bash = Get-CommandPath @("bash.exe", "bash")
+    if ($bash -and $bash -notmatch "\\Windows\\System32\\bash(\.exe)?$") {
+        return [pscustomobject]@{
+            Kind = "git-bash"
+            Command = $bash
+        }
+    }
+
+    $wsl = Get-CommandPath @("wsl.exe", "wsl")
+    if ($wsl) {
+        return [pscustomobject]@{
+            Kind = "wsl"
+            Command = $wsl
+        }
+    }
+
+    if ($bash) {
+        return [pscustomobject]@{
+            Kind = "wsl"
+            Command = $bash
+        }
+    }
+
+    throw "bash was not found. Install Git for Windows or WSL to run mcp.sh scripts."
+}
+
+function Convert-ToShellPath {
+    param(
+        [string]$Path,
+        [ValidateSet("git-bash", "wsl")]
+        [string]$Kind
+    )
+
+    $resolved = [System.IO.Path]::GetFullPath($Path)
+    if ($resolved -match "^([A-Za-z]):\\(.*)$") {
+        $drive = $matches[1].ToLowerInvariant()
+        $rest = $matches[2] -replace "\\", "/"
+        if ($Kind -eq "wsl") {
+            return "/mnt/$drive/$rest"
+        }
+        return "/$drive/$rest"
+    }
+
+    return ($resolved -replace "\\", "/")
+}
+
+function Quote-Bash {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "'\''") + "'"
+}
+
+function Quote-PowerShell {
+    param([string]$Value)
+    return "'" + ($Value -replace "'", "''") + "'"
+}
+
+function Read-PidRecords {
+    if (-not (Test-Path -LiteralPath $PidFile)) {
+        return @()
+    }
+
+    $json = Get-Content -Raw -LiteralPath $PidFile
+    if ([string]::IsNullOrWhiteSpace($json)) {
+        return @()
+    }
+
+    return @($json | ConvertFrom-Json)
+}
+
+function Write-PidRecords {
+    param([object[]]$Records)
+
+    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+    $Records | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $PidFile -Encoding UTF8
+}
+
+function Stop-SavedProcesses {
+    $records = Read-PidRecords
+
+    foreach ($record in $records) {
+        $pidToStop = [int]$record.Pid
+        $proc = Get-Process -Id $pidToStop -ErrorAction SilentlyContinue
+        if (-not $proc) {
+            continue
+        }
+
+        $sameStart = $false
+        try {
+            if ($record.StartedAt) {
+                $recordedStart = ([datetime]$record.StartedAt).ToUniversalTime()
+                $actualStart = $proc.StartTime.ToUniversalTime()
+                $sameStart = ([math]::Abs(($actualStart - $recordedStart).TotalSeconds) -lt 5)
+            }
+        } catch {
+            $sameStart = $false
+        }
+
+        if ($sameStart) {
+            Write-Host "[stop] Stopping saved process $pidToStop ($($record.Name))"
+            Stop-Process -Id $pidToStop -Force -ErrorAction SilentlyContinue
+        } else {
+            Write-Host "[stop] Skipping stale PID record $pidToStop ($($record.Name))"
+        }
+    }
+}
+
+function Stop-MarkerProcesses {
+    $rootWin = $Root.ToLowerInvariant()
+    $rootGitBash = (Convert-ToShellPath -Path $Root -Kind "git-bash").ToLowerInvariant()
+    $rootWsl = (Convert-ToShellPath -Path $Root -Kind "wsl").ToLowerInvariant()
+    $allowedProcessNames = @(
+        "powershell.exe",
+        "pwsh.exe",
+        "bash.exe",
+        "sh.exe",
+        "python.exe",
+        "python3.exe",
+        "py.exe",
+        "wsl.exe"
+    )
+    $markers = @(
+        "code-tiny\mcp.sh",
+        "doc-tiny\mcp.sh",
+        "code-tiny/mcp.sh",
+        "doc-tiny/mcp.sh",
+        "mcp\unified_mcp.py",
+        "mcp/unified_mcp.py",
+        "mcp_graph_rag.py"
+    )
+
+    $processes = Get-CimInstance Win32_Process | Where-Object {
+        if (-not $_.CommandLine -or $_.ProcessId -eq $PID) {
+            return $false
+        }
+
+        if ($allowedProcessNames -notcontains $_.Name.ToLowerInvariant()) {
+            return $false
+        }
+
+        $cmd = $_.CommandLine.ToLowerInvariant()
+        $inRepo = $cmd.Contains($rootWin) -or $cmd.Contains($rootGitBash) -or $cmd.Contains($rootWsl)
+        $hasMarker = $false
+        foreach ($marker in $markers) {
+            if ($cmd.Contains($marker.ToLowerInvariant())) {
+                $hasMarker = $true
+                break
+            }
+        }
+
+        return ($inRepo -and $hasMarker)
+    }
+
+    foreach ($proc in $processes) {
+        Write-Host "[stop] Stopping MCP process $($proc.ProcessId): $($proc.Name)"
+        Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-Stop {
+    Stop-SavedProcesses
+    Stop-MarkerProcesses
+
+    if (Test-Path -LiteralPath $PidFile) {
+        Remove-Item -LiteralPath $PidFile -Force
+    }
+
+    Write-Host "[stop] MCP stop complete."
+}
+
+function Invoke-Start {
+    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+    Invoke-Stop
+
+    $runner = Get-ShellRunner
+    $records = @()
+
+    foreach ($server in $Servers) {
+        if (-not (Test-Path -LiteralPath $server.Script)) {
+            throw "MCP script not found: $($server.Script)"
+        }
+
+        $workDir = Quote-Bash (Convert-ToShellPath -Path $server.WorkDir -Kind $runner.Kind)
+        $rootVenv = Quote-Bash (Convert-ToShellPath -Path (Get-RootVenvDir) -Kind $runner.Kind)
+        $scriptName = Quote-Bash (Split-Path -Leaf $server.Script)
+        $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; cd $workDir && ./$scriptName"
+        $title = "MCP $($server.Name) :$($server.Port)"
+        $titleArg = Quote-PowerShell $title
+        $scriptArg = Quote-PowerShell $server.Script
+        $runnerArg = Quote-PowerShell $runner.Command
+        $bashCommandArg = Quote-PowerShell $bashCommand
+
+        if ($runner.Kind -eq "wsl") {
+            $invokeLine = "& $runnerArg bash -lc $bashCommandArg"
+        } else {
+            $invokeLine = "& $runnerArg -lc $bashCommandArg"
+        }
+
+        $terminalCommand = @"
+`$host.UI.RawUI.WindowTitle = $titleArg
+Write-Host '[start]' $titleArg
+Write-Host '[start]' $scriptArg
+$invokeLine
+Write-Host ''
+Write-Host '[start]' $titleArg 'exited.'
+"@
+
+        $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($terminalCommand))
+        $proc = Start-Process `
+            -FilePath "powershell.exe" `
+            -ArgumentList @("-NoExit", "-ExecutionPolicy", "Bypass", "-EncodedCommand", $encoded) `
+            -WorkingDirectory $Root `
+            -WindowStyle Normal `
+            -PassThru
+
+        $records += [pscustomobject]@{
+            Name = $server.Name
+            Pid = $proc.Id
+            Script = $server.Script
+            Port = $server.Port
+            StartedAt = $proc.StartTime.ToUniversalTime().ToString("o")
+        }
+
+        Write-Host "[start] Started $($server.Name) in terminal PID $($proc.Id)"
+    }
+
+    Write-PidRecords $records
+    Write-Host "[start] MCP terminals opened. Logs are visible in their own windows."
+}
+
+switch ($Action) {
+    "build" { Invoke-Build }
+    "start" { Invoke-Start }
+    "stop" { Invoke-Stop }
+    default { Write-Usage }
+}
