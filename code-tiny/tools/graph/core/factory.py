@@ -7,6 +7,7 @@ based on configuration.
 
 from typing import Any, Dict, Optional
 from tools.graph.core.base import GraphDriver, GraphProvider
+from tools.graph.driver.falkordb_driver import FalkorDBDriver
 from tools.graph.driver.neo4j_driver import Neo4jDriver
 
 
@@ -80,8 +81,16 @@ class GraphDriverFactory:
             # Future implementation
             raise NotImplementedError("Kuzu driver not yet implemented")
         elif provider == GraphProvider.FALKORDB:
-            # Future implementation
-            raise NotImplementedError("FalkorDB driver not yet implemented")
+            return FalkorDBDriver(
+                uri=config.get("uri") or config.get("url"),
+                user=config.get("user") or config.get("username"),
+                password=config.get("password"),
+                database=config.get("database") or config.get("graph"),
+                graph=config.get("graph"),
+                host=config.get("host"),
+                port=config.get("port"),
+                ssl=bool(config.get("ssl", False)),
+            )
         elif provider == GraphProvider.NEPTUNE:
             # Future implementation
             raise NotImplementedError("Neptune driver not yet implemented")
@@ -112,6 +121,19 @@ class GraphDriverFactory:
                 "user": os.getenv(f"{env_prefix}_USER", "neo4j"),
                 "password": os.getenv(f"{env_prefix}_PASSWORD", ""),
                 "database": os.getenv(f"{env_prefix}_DATABASE"),
+            }
+            return await GraphDriverFactory.create_driver(provider, config)
+        elif provider == GraphProvider.FALKORDB:
+            prefix = env_prefix if env_prefix != "NEO4J" else "FALKORDB"
+            config = {
+                "uri": os.getenv(f"{prefix}_URI") or os.getenv(f"{prefix}_URL"),
+                "host": os.getenv(f"{prefix}_HOST", "localhost"),
+                "port": int(os.getenv(f"{prefix}_PORT", "6379")),
+                "user": os.getenv(f"{prefix}_USER") or os.getenv(f"{prefix}_USERNAME"),
+                "password": os.getenv(f"{prefix}_PASSWORD", ""),
+                "database": os.getenv(f"{prefix}_GRAPH") or os.getenv(f"{prefix}_DATABASE", "neo4j"),
+                "graph": os.getenv(f"{prefix}_GRAPH"),
+                "ssl": os.getenv(f"{prefix}_SSL", "").lower() in {"1", "true", "yes", "on"},
             }
             return await GraphDriverFactory.create_driver(provider, config)
         else:
