@@ -4,12 +4,12 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List
 
-from neo4j import GraphDatabase
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
+from graph_store import add_graph_store_args, create_graph_store_from_args
 
 try:
     from dotenv import load_dotenv
@@ -167,6 +167,7 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--embedding-model", default=None)
     parser.add_argument("--embedding-device", default=None)
+    add_graph_store_args(parser)
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-pass", default=os.getenv("NEO4J_PASS", "password"))
@@ -208,9 +209,12 @@ def main() -> None:
         entity_ids.extend(hit.get("entity_ids") or [])
     entity_ids = list(dict.fromkeys(entity_ids))
 
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_pass))
-    subgraph = fetch_related_graph(driver, entity_ids)
-    graph_context = format_graph_context(subgraph)
+    driver = create_graph_store_from_args(args)
+    try:
+        subgraph = fetch_related_graph(driver, entity_ids)
+        graph_context = format_graph_context(subgraph)
+    finally:
+        driver.close()
 
     prompt = build_generation_prompt(args.query, graph_context, passages)
     answer = llm_generate(prompt, args.llm_model, args.langextract_model_url)

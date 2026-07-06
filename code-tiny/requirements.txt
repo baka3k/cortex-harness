@@ -1,5 +1,6 @@
 neo4j
 neo4j-graphrag
+falkordb
 # FastMCP dependencies
 fastmcp
 

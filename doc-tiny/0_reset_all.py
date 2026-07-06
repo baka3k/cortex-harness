@@ -1,15 +1,14 @@
 import argparse
 import os
 
-from neo4j import GraphDatabase
 from qdrant_client import QdrantClient
 
+from graph_store import add_graph_store_args, create_graph_store_from_args
 
-def reset_neo4j(uri: str, user: str, password: str) -> None:
-    driver = GraphDatabase.driver(uri, auth=(user, password))
-    with driver.session() as session:
+
+def reset_graph(store) -> None:
+    with store.session() as session:
         session.run("MATCH (n) DETACH DELETE n")
-    driver.close()
 
 
 def reset_qdrant(
@@ -32,7 +31,8 @@ def reset_qdrant(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Reset Neo4j data and Qdrant collection.")
+    parser = argparse.ArgumentParser(description="Reset graph data and Qdrant collection.")
+    add_graph_store_args(parser)
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-pass", default=os.getenv("NEO4J_PASS", "password"))
@@ -46,9 +46,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    print("Resetting Neo4j...")
-    reset_neo4j(args.neo4j_uri, args.neo4j_user, args.neo4j_pass)
-    print("Neo4j reset complete.")
+    store = create_graph_store_from_args(args)
+    print(f"Resetting {store.provider} graph...")
+    try:
+        reset_graph(store)
+    finally:
+        store.close()
+    print("Graph reset complete.")
 
     print("Resetting Qdrant collection...")
     reset_qdrant(
