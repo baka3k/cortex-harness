@@ -6,9 +6,16 @@ based on configuration.
 """
 
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 from tools.graph.core.base import GraphDriver, GraphProvider
 from tools.graph.driver.falkordb_driver import FalkorDBDriver
 from tools.graph.driver.neo4j_driver import Neo4jDriver
+
+
+def _is_falkordb_uri(uri: Optional[str]) -> bool:
+    if not uri or "://" not in uri:
+        return False
+    return urlparse(uri).scheme in {"falkor", "falkors", "redis", "rediss", "unix"}
 
 
 class GraphDriverFactory:
@@ -71,6 +78,17 @@ class GraphDriverFactory:
             }
 
         if provider == GraphProvider.NEO4J:
+            if _is_falkordb_uri(config.get("uri") or config.get("url")):
+                return FalkorDBDriver(
+                    uri=config.get("uri") or config.get("url"),
+                    user=config.get("user") or config.get("username"),
+                    password=config.get("password"),
+                    database=config.get("database") or config.get("graph"),
+                    graph=config.get("graph"),
+                    host=config.get("host"),
+                    port=config.get("port"),
+                    ssl=bool(config.get("ssl", False)),
+                )
             return Neo4jDriver(
                 uri=config["uri"],
                 user=config["user"],
