@@ -5,12 +5,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
-from neo4j import GraphDatabase
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
+from graph_store import create_graph_store_from_env
 
 
 MCP_NAME = "graph_rag"
@@ -93,7 +93,7 @@ def get_embedder() -> SentenceTransformer:
 def get_neo4j():
     global _neo4j_driver
     if _neo4j_driver is None:
-        _neo4j_driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
+        _neo4j_driver = create_graph_store_from_env()
     return _neo4j_driver
 
 

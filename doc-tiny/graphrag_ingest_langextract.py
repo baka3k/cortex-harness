@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-from neo4j import GraphDatabase
 from pypdf import PdfReader
 from docx import Document
 from pptx import Presentation
@@ -16,6 +15,7 @@ from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
+from graph_store import add_graph_store_args, create_graph_store_from_args
 
 try:
     from dotenv import load_dotenv
@@ -999,6 +999,7 @@ def main() -> None:
         default=50,
         help="Number of paragraphs to write per Neo4j batch.",
     )
+    add_graph_store_args(parser)
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-pass", default=os.getenv("NEO4J_PASS", "password"))
@@ -1056,7 +1057,7 @@ def main() -> None:
         )
     create_collection(qdrant, args.collection, vector_size=embedder.get_sentence_embedding_dimension())
 
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_pass))
+    driver = create_graph_store_from_args(args)
 
     if args.folder:
         folder_path = Path(args.folder)
