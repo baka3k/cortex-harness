@@ -48,6 +48,7 @@ from tools.common.url_normalizer import (
     normalize_http_method,
 )
 from tools.graph import GraphDriverFactory, GraphProvider
+from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
 _semantic_engine = SemanticInferenceEngine()
@@ -1921,6 +1922,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
+    add_graph_provider_args(parser)
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument(
         "--qdrant-collection",
@@ -2003,7 +2005,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
+    if prepare_graph_args(args):
         driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=args.neo4j_uri,

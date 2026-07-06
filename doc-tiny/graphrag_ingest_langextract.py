@@ -282,7 +282,7 @@ def _select_primary_mention(mentions: List[Dict[str, Any]]) -> Dict[str, Any]:
     return sorted_mentions[0]
 
 
-def ingest_to_neo4j(
+def ingest_to_graph(
     driver,
     nodes: Dict[str, Dict[str, str]],
     relations: List[Dict[str, str]],
@@ -363,7 +363,7 @@ def ingest_to_neo4j(
             )
 
 
-def ingest_to_neo4j_batch(driver, items: List[Dict[str, Any]]) -> None:
+def ingest_to_graph_batch(driver, items: List[Dict[str, Any]]) -> None:
     paragraphs = []
     entities = []
     relations = []
@@ -591,19 +591,19 @@ def process_text(
     normalize_mode = args.entity_normalize_mode
     if args.no_batch:
         args.gliner_batch_size = 1
-        args.neo4j_batch_size = 1
+        args.graph_batch_size = 1
 
     paragraphs = split_paragraphs(raw_text, args.max_paragraph_chars)
     print(f"Chunked into {len(paragraphs)} paragraphs.")
-    neo4j_batch: List[Dict[str, Any]] = []
+    graph_batch: List[Dict[str, Any]] = []
 
-    def flush_neo4j_batch() -> None:
-        if not neo4j_batch:
+    def flush_graph_batch() -> None:
+        if not graph_batch:
             return
-        print(f"Ingesting {len(neo4j_batch)} paragraphs to Neo4j (batch)...")
-        ingest_to_neo4j_batch(driver, neo4j_batch)
-        neo4j_batch.clear()
-        print("Neo4j batch ingestion complete.")
+        print(f"Ingesting {len(graph_batch)} paragraphs to graph store (batch)...")
+        ingest_to_graph_batch(driver, graph_batch)
+        graph_batch.clear()
+        print("Graph batch ingestion complete.")
 
     long_paragraphs: List[Tuple[int, str]] = []
     for idx, paragraph in enumerate(paragraphs):
@@ -614,7 +614,7 @@ def process_text(
                 print(
                     f"Paragraph {idx + 1}/{len(paragraphs)}: LLM skipped (len={len(paragraph)})"
                 )
-                neo4j_batch.append(
+                graph_batch.append(
                     {
                         "source_id": source_id,
                         "paragraph_id": idx,
@@ -624,8 +624,8 @@ def process_text(
                         "relations": [],
                     }
                 )
-                if len(neo4j_batch) >= args.neo4j_batch_size:
-                    flush_neo4j_batch()
+                if len(graph_batch) >= args.graph_batch_size:
+                    flush_graph_batch()
                 print("Ingesting to Qdrant...")
                 ingest_to_qdrant(qdrant, args.collection, paragraph, idx, embedder, {}, source_id)
                 print("Qdrant ingestion complete.")
@@ -657,7 +657,7 @@ def process_text(
                     normalize_mode=normalize_mode,
                 )
                 print(f"Paragraph {idx + 1}/{len(paragraphs)}: extracted {len(nodes)} entities.")
-                neo4j_batch.append(
+                graph_batch.append(
                     {
                         "source_id": source_id,
                         "paragraph_id": idx,
@@ -667,8 +667,8 @@ def process_text(
                         "relations": relations,
                     }
                 )
-                if len(neo4j_batch) >= args.neo4j_batch_size:
-                    flush_neo4j_batch()
+                if len(graph_batch) >= args.graph_batch_size:
+                    flush_graph_batch()
                 print("Ingesting to Qdrant...")
                 ingest_to_qdrant(qdrant, args.collection, paragraph, idx, embedder, nodes, source_id)
                 print("Qdrant ingestion complete.")
@@ -686,7 +686,7 @@ def process_text(
                 normalize_mode=normalize_mode,
             )
             print(f"Extracted {len(nodes)} entities, {len(relations)} relations.")
-            neo4j_batch.append(
+            graph_batch.append(
                 {
                     "source_id": source_id,
                     "paragraph_id": idx,
@@ -696,12 +696,12 @@ def process_text(
                     "relations": relations,
                 }
             )
-            if len(neo4j_batch) >= args.neo4j_batch_size:
-                flush_neo4j_batch()
+            if len(graph_batch) >= args.graph_batch_size:
+                flush_graph_batch()
             print("Ingesting to Qdrant...")
             ingest_to_qdrant(qdrant, args.collection, paragraph, idx, embedder, nodes, source_id)
             print("Qdrant ingestion complete.")
-    flush_neo4j_batch()
+    flush_graph_batch()
 
 
 def process_xlsx_structured(
@@ -739,13 +739,13 @@ def process_xlsx_structured(
     wb_values, wb_formula = load_workbooks(xlsx_path)
     sheets = [wb_values[args.xlsx_sheet]] if args.xlsx_sheet else list(wb_values.worksheets)
 
-    neo4j_batch: List[Dict[str, Any]] = []
+    graph_batch: List[Dict[str, Any]] = []
 
-    def flush_neo4j_batch() -> None:
-        if not neo4j_batch:
+    def flush_graph_batch() -> None:
+        if not graph_batch:
             return
-        ingest_to_neo4j_batch(driver, neo4j_batch)
-        neo4j_batch.clear()
+        ingest_to_graph_batch(driver, graph_batch)
+        graph_batch.clear()
 
     row_counter = 0
     for sheet in sheets:
@@ -837,7 +837,7 @@ def process_xlsx_structured(
                     source_id,
                     extra_payload=extra_payload,
                 )
-                neo4j_batch.append(
+                graph_batch.append(
                     {
                         "source_id": source_id,
                         "paragraph_id": row_counter,
@@ -848,9 +848,9 @@ def process_xlsx_structured(
                         "paragraph_props": paragraph_props,
                     }
                 )
-                if len(neo4j_batch) >= args.neo4j_batch_size:
-                    flush_neo4j_batch()
-    flush_neo4j_batch()
+                if len(graph_batch) >= args.graph_batch_size:
+                    flush_graph_batch()
+    flush_graph_batch()
 
 
 def main() -> None:
@@ -980,13 +980,13 @@ def main() -> None:
     parser.add_argument(
         "--no-batch",
         action="store_true",
-        help="Disable batching for GLiNER and Neo4j (sequential processing).",
+        help="Disable batching for GLiNER and graph-store (sequential processing).",
     )
     parser.add_argument(
         "--batch",
         action="store_false",
         dest="no_batch",
-        help="Enable batching for GLiNER and Neo4j.",
+        help="Enable batching for GLiNER and graph-store.",
     )
     parser.add_argument("--langextract-model-id", default=os.getenv("LANGEXTRACT_MODEL_ID"))
     parser.add_argument("--langextract-model-url", default=os.getenv("LANGEXTRACT_MODEL_URL"))
@@ -994,10 +994,12 @@ def main() -> None:
     parser.add_argument("--llm-retry-count", type=int, default=None)
     parser.add_argument("--llm-retry-backoff", type=float, default=None)
     parser.add_argument(
+        "--graph-batch-size",
         "--neo4j-batch-size",
+        dest="graph_batch_size",
         type=int,
         default=50,
-        help="Number of paragraphs to write per Neo4j batch.",
+        help="Number of paragraphs to write per graph-store batch.",
     )
     add_graph_store_args(parser)
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))

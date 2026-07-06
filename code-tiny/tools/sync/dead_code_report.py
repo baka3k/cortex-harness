@@ -19,6 +19,7 @@ if _ROOT_DIR not in sys.path:
 from tools.common.harness_config import load_harness_config
 
 from tools.graph import GraphDriverFactory, GraphProvider
+from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 
 _DEFAULT_ENTRY_NAMES = (
     "main",
@@ -61,6 +62,7 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB", "neo4j"))
+    add_graph_provider_args(parser)
     parser.add_argument(
         "--rel-types",
         default="CALLS,POSSIBLE_CALLS,CALLS_FUNCTION_POINTER",
@@ -199,8 +201,8 @@ def _build_seed_sample_query(rel_pattern: str, max_depth: int) -> str:
 
 
 async def _run_report(args: argparse.Namespace) -> Dict[str, Any]:
-    if not (args.neo4j_uri and args.neo4j_user and args.neo4j_password):
-        raise ValueError("Missing Neo4j credentials. Provide --neo4j-uri --neo4j-user --neo4j-password.")
+    if not prepare_graph_args(args):
+        raise ValueError("Missing graph store configuration.")
     if args.max_depth < 1 or args.max_depth > 50:
         raise ValueError("--max-depth must be in range [1, 50].")
     if args.limit < 1:
