@@ -10,8 +10,14 @@
 
 if [ -f ".venv/bin/activate" ]; then
     source .venv/bin/activate
-elif [ -f ".env" ]; then
+elif [ -f ".venv/Scripts/activate" ]; then
+    source .venv/Scripts/activate
+fi
+
+if [ -f ".env" ]; then
+    set -a
     source .env
+    set +a
 fi
 
 python mcp/unified_mcp.py --transport streamable-http --host 127.0.0.1 --port 8788 --path /mcp
