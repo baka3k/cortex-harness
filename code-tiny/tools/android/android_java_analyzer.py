@@ -19,6 +19,7 @@ from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, 
 from tools.common.git_diff import load_manifest_paths
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.graph import GraphDriverFactory, GraphProvider
+from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 from tools.android import android_common
 from tools.java import java_analyzer as java_base
@@ -736,6 +737,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
+    add_graph_provider_args(parser)
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument(
         "--qdrant-collection",
@@ -814,7 +816,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     code_writer: Optional[LanguageCodeWriter] = None
     driver = None
-    if args.neo4j_uri and args.neo4j_user and args.neo4j_password:
+    if prepare_graph_args(args):
         driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=args.neo4j_uri,

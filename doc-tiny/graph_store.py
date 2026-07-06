@@ -11,8 +11,6 @@ import os
 import sys
 from typing import Any, Dict, Optional
 
-from neo4j import GraphDatabase
-
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _CODE_TINY = os.path.join(_REPO_ROOT, "code-tiny")
@@ -93,6 +91,8 @@ class Neo4jGraphStore:
     provider = "neo4j"
 
     def __init__(self, uri: str, user: str, password: str):
+        from neo4j import GraphDatabase
+
         self._driver = GraphDatabase.driver(uri, auth=(user, password))
 
     def session(self):
