@@ -1,6 +1,6 @@
 # Neo4j to FalkorDB Migration Plan
 
-status: draft
+status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
@@ -184,6 +184,24 @@ Responsibilities:
    - Preserve GraphRAG ingest/query behavior.
    - Keep Qdrant integration unchanged.
 
+### 2026-07-06 Focus Update - Scan Scripts
+
+The current implementation already contains a FalkorDB driver and `doc-tiny`
+graph-store adapter. The remaining requested work is to stop scan entrypoints
+from deciding graph writes solely from `--neo4j-*` credentials.
+
+Implementation direction:
+- Add a shared `code-tiny/tools/graph/cli.py` helper for provider selection,
+  FalkorDB CLI/env options, and driver creation.
+- Keep existing `--neo4j-*` flags as compatibility aliases.
+- Add `--graph-provider falkordb` and `FALKORDB_*` support to analyzer and
+  message scan scripts under `code-tiny/tools`.
+- Treat the existing internal `neo4j_db` variable as the selected graph/database
+  name during the transition, so downstream writer code does not need a broad
+  rename.
+- Update `doc-tiny/graphrag_ingest_langextract.py` naming/logging so the ingest
+  path is graph-store neutral and can run against the existing FalkorDB adapter.
+
 6. Phase 06 - Data Migration And Backfill
    - Add or document export/import flow.
    - Validate labels, relationships, properties, and counts.
@@ -223,4 +241,3 @@ After review:
 ```powershell
 /hi-cook C:\ai\cortex-harness\plans\neo4j-to-falkordb-migration\plan.md --full
 ```
-
