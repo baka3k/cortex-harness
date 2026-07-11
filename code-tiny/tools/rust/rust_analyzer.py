@@ -46,6 +46,25 @@ _BRANCH_NODES = {
 }
 _LOOP_NODES = {"loop_expression", "while_expression", "for_expression"}
 
+_SCAN_SKIP_DIRS = {
+    # Version control
+    ".git", ".hg", ".svn",
+    # IDE
+    ".idea", ".vs", ".vscode", ".eclipse", ".settings",
+    # Build outputs (Rust/Cargo)
+    "target",
+    # Node / JS tooling
+    "node_modules", "dist",
+    # Cache
+    ".cache", ".parcel-cache", "__pycache__",
+    # Testing
+    "coverage", ".test-results", "test-results",
+    # Temporary
+    "tmp", "temp", ".tmp", "tmpdir",
+    # OS specific
+    ".DS_Store", "Thumbs.db",
+}
+
 
 @dataclass
 class FileDef:
@@ -127,6 +146,7 @@ class AliasDef:
     file_path: str
     start_line: int
     end_line: int
+    code: str = ""
 
 
 @dataclass
@@ -136,6 +156,7 @@ class TemplateDef:
     file_path: str
     start_line: int
     end_line: int
+    code: str = ""
 
 
 @dataclass
@@ -571,6 +592,7 @@ def _walk_tree(
                     file_path=rel_path,
                     start_line=template_node.start_point[0] + 1,
                     end_line=template_node.end_point[0] + 1,
+                    code=_node_text(template_node, source_bytes).strip(),
                 )
             )
             _record_relation(relations, template_id, "Template", type_id, "Type", "TEMPLATES")
@@ -679,6 +701,7 @@ def _walk_tree(
             file_path=rel_path,
             start_line=node.start_point[0] + 1,
             end_line=node.end_point[0] + 1,
+            code=_node_text(node, source_bytes),
         )
         aliases.append(alias)
         if target:
@@ -869,7 +892,7 @@ def _scan_rust_files(root: str, selected_rel_paths: Optional[Iterable[str]] = No
         dirnames[:] = [
             item
             for item in dirnames
-            if item not in {".git", "target", ".idea", ".vscode", "__pycache__"}
+            if item not in _SCAN_SKIP_DIRS
         ]
         for filename in filenames:
             if filename.endswith(_RUST_SOURCE_EXTENSIONS):
@@ -1226,6 +1249,10 @@ async def main(argv: Optional[List[str]] = None) -> int:
         print(f"[graph] written {counts}")
     if args.pretty or not counts:
         print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
+    _sr_fn = sum(len(p.get("functions") or []) for p in payloads)
+    _sr_cls = sum(len(p.get("types") or []) for p in payloads)
+    _sr_files = len(payloads)
+    print(f"[SCAN_RESULT] parser=rust files={_sr_files} functions={_sr_fn} classes={_sr_cls}", flush=True)
     return 0
 
 
