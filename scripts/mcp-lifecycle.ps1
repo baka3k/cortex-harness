@@ -17,12 +17,16 @@ $Servers = @(
         Name = "code-tiny"
         WorkDir = Join-Path $Root "code-tiny"
         Script = Join-Path $Root "code-tiny\mcp.sh"
+        PythonScript = "mcp/unified_mcp.py"
+        Arguments = @("--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8788", "--path", "/mcp")
         Port = 8788
     },
     [pscustomobject]@{
         Name = "doc-tiny"
         WorkDir = Join-Path $Root "doc-tiny"
         Script = Join-Path $Root "doc-tiny\mcp.sh"
+        PythonScript = "mcp_graph_rag.py"
+        Arguments = @("--host", "127.0.0.1", "--port", "8789", "--transport", "streamable-http", "--path", "/mcp")
         Port = 8789
     }
 )
@@ -72,9 +76,11 @@ function Get-CommandPath {
     param([string[]]$Names)
 
     foreach ($name in $Names) {
-        $cmd = Get-Command $name -ErrorAction SilentlyContinue
-        if ($cmd) {
-            return $cmd.Source
+        $commands = @(Get-Command $name -ErrorAction SilentlyContinue)
+        foreach ($cmd in $commands) {
+            if ($cmd.CommandType -eq "Application" -and $cmd.Source) {
+                return $cmd.Source
+            }
         }
     }
 
@@ -444,7 +450,9 @@ function Get-ShellRunner {
     }
 
     $bash = Get-CommandPath @("bash.exe", "bash")
-    if ($bash -and $bash -notmatch "\\Windows\\System32\\bash(\.exe)?$") {
+    if ($bash -and
+        $bash -notmatch "\\Windows\\System32\\bash(\.exe)?$" -and
+        $bash -notmatch "\\WindowsApps\\bash(\.exe)?$") {
         return [pscustomobject]@{
             Kind = "git-bash"
             Command = $bash
@@ -454,19 +462,22 @@ function Get-ShellRunner {
     $wsl = Get-CommandPath @("wsl.exe", "wsl")
     if ($wsl) {
         return [pscustomobject]@{
-            Kind = "wsl"
-            Command = $wsl
+            Kind = "powershell"
+            Command = "powershell.exe"
         }
     }
 
     if ($bash) {
         return [pscustomobject]@{
-            Kind = "wsl"
-            Command = $bash
+            Kind = "powershell"
+            Command = "powershell.exe"
         }
     }
 
-    throw "bash was not found. Install Git for Windows or WSL to run mcp.sh scripts."
+    return [pscustomobject]@{
+        Kind = "powershell"
+        Command = "powershell.exe"
+    }
 }
 
 function Convert-ToShellPath {
@@ -624,20 +635,42 @@ function Invoke-Start {
             throw "MCP script not found: $($server.Script)"
         }
 
-        $workDir = Quote-Bash (Convert-ToShellPath -Path $server.WorkDir -Kind $runner.Kind)
-        $rootVenv = Quote-Bash (Convert-ToShellPath -Path (Get-RootVenvDir) -Kind $runner.Kind)
-        $scriptName = Quote-Bash (Split-Path -Leaf $server.Script)
-        $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; cd $workDir && ./$scriptName"
         $title = "MCP $($server.Name) :$($server.Port)"
         $titleArg = Quote-PowerShell $title
         $scriptArg = Quote-PowerShell $server.Script
-        $runnerArg = Quote-PowerShell $runner.Command
-        $bashCommandArg = Quote-PowerShell $bashCommand
 
-        if ($runner.Kind -eq "wsl") {
-            $invokeLine = "& $runnerArg bash -lc $bashCommandArg"
-        } else {
+        if ($runner.Kind -eq "git-bash") {
+            $workDir = Quote-Bash (Convert-ToShellPath -Path $server.WorkDir -Kind $runner.Kind)
+            $rootVenv = Quote-Bash (Convert-ToShellPath -Path (Get-RootVenvDir) -Kind $runner.Kind)
+            $scriptName = Quote-Bash (Split-Path -Leaf $server.Script)
+            $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; cd $workDir && bash ./$scriptName"
+            $runnerArg = Quote-PowerShell $runner.Command
+            $bashCommandArg = Quote-PowerShell $bashCommand
             $invokeLine = "& $runnerArg -lc $bashCommandArg"
+        } else {
+            $pythonArg = Quote-PowerShell (Get-RootVenvPython)
+            $workDirArg = Quote-PowerShell $server.WorkDir
+            $pythonScriptArg = Quote-PowerShell $server.PythonScript
+            $argumentList = "@(" + (($server.Arguments | ForEach-Object { Quote-PowerShell $_ }) -join ", ") + ")"
+            $invokeLine = @"
+Set-Location -LiteralPath $workDirArg
+`$serverArgs = $argumentList
+`$envFile = Join-Path (Get-Location) '.env'
+if (Test-Path -LiteralPath `$envFile) {
+    Get-Content -LiteralPath `$envFile | ForEach-Object {
+        `$line = `$_.Trim()
+        if (-not `$line -or `$line.StartsWith('#') -or `$line -notmatch '=') { return }
+        if (`$line.StartsWith('export ')) { `$line = `$line.Substring(7).Trim() }
+        `$key, `$value = `$line.Split('=', 2)
+        `$value = `$value.Trim()
+        if ((`$value.StartsWith("'") -and `$value.EndsWith("'")) -or (`$value.StartsWith('"') -and `$value.EndsWith('"'))) {
+            `$value = `$value.Substring(1, `$value.Length - 2)
+        }
+        [Environment]::SetEnvironmentVariable(`$key.Trim(), `$value, 'Process')
+    }
+}
+& $pythonArg $pythonScriptArg @serverArgs
+"@
         }
 
         $terminalCommand = @"
