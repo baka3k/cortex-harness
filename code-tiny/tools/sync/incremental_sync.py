@@ -67,6 +67,7 @@ ANALYZERS: Dict[str, AnalyzerConfig] = {
     "vba": AnalyzerConfig("vba", os.path.join(_ROOT_DIR, "tools", "vb", "vba_analyzer.py"), True),
     "vbscript": AnalyzerConfig("vbscript", os.path.join(_ROOT_DIR, "tools", "vb", "vbscript_analyzer.py"), True),
     "python": AnalyzerConfig("python", os.path.join(_ROOT_DIR, "tools", "python", "python_analyzer.py"), True),
+    "rust": AnalyzerConfig("rust", os.path.join(_ROOT_DIR, "tools", "rust", "rust_analyzer.py"), True),
     "js": AnalyzerConfig("js", os.path.join(_ROOT_DIR, "tools", "js", "js_analyzer.py"), True),
     "ts": AnalyzerConfig("ts", os.path.join(_ROOT_DIR, "tools", "ts", "ts_analyzer.py"), True),
     "php": AnalyzerConfig("php", os.path.join(_ROOT_DIR, "tools", "php", "php_analyzer.py"), True),
