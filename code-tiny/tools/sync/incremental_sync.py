@@ -36,7 +36,7 @@ from tools.common.incremental_sync_state import (
     state_file_path,
 )
 from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, prepare_graph_args
+from tools.graph.cli import add_graph_provider_args, normalize_graph_provider, prepare_graph_args
 from tools.vb.vb_path_classifier import VBPathClassifier
 from tools.ts.ts_project_detector import detect_project_type as _detect_ts_project_type
 
@@ -106,12 +106,17 @@ def _resolve_ts_analyzer(root: str) -> AnalyzerConfig:
         script = _TS_BACKEND_SCRIPT
     else:
         script = _TS_FRONTEND_SCRIPT
-    print(f"[ts-detect] project_type={project_type} framework={result.framework} → {os.path.basename(script)}")
+    print(f"[ts-detect] project_type={project_type} framework={result.framework} -> {os.path.basename(script)}")
     return AnalyzerConfig("ts", script, True)
 
 
 def _safe_segment(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", (value or "").strip()).strip("._")
+    return cleaned or "project"
+
+
+def _normalize_slug(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-")
     return cleaned or "project"
 
 
@@ -623,6 +628,102 @@ def _build_analyzer_cmd(
     return cmd
 
 
+_PROJECT_REPOSITORY_SETUP_QUERY = """
+MERGE (p:Project {project_id: $project_id})
+ON CREATE SET
+    p.name       = $project_name,
+    p.slug       = $project_slug,
+    p.created_at = timestamp()
+ON MATCH SET
+    p.name       = $project_name,
+    p.slug       = $project_slug
+WITH p
+MERGE (r:Repository {name: $repo_name})
+ON CREATE SET
+    r.id          = $repo_name,
+    r.project_id  = $project_id,
+    r.created_at  = timestamp()
+ON MATCH SET
+    r.id          = $repo_name
+WITH p, r
+MERGE (p)-[:HAS_REPOSITORY]->(r)
+"""
+
+
+async def _ensure_project_repository_graph(
+    *,
+    args: argparse.Namespace,
+    root: str,
+    project_id: str,
+    project_name: str,
+) -> None:
+    provider = normalize_graph_provider(getattr(args, "graph_provider", None))
+    repo_name = f"{project_name}/{os.path.basename(root)}"
+
+    if provider == GraphProvider.NEO4J:
+        setup_script = os.path.join(_ROOT_DIR, "scripts", "setup_graph_project.py")
+        if not os.path.isfile(setup_script):
+            return
+        setup_cmd = [
+            sys.executable,
+            setup_script,
+            "--project-id",
+            project_id,
+            "--project-name",
+            project_name,
+            "--source-path",
+            root,
+            "--repo-name",
+            repo_name,
+            "--neo4j-uri",
+            args.neo4j_uri,
+            "--neo4j-user",
+            args.neo4j_user,
+            "--neo4j-password",
+            args.neo4j_password,
+            "--neo4j-db",
+            args.neo4j_db,
+        ]
+        subprocess.run(setup_cmd, cwd=_ROOT_DIR, check=True, capture_output=True, text=True)
+        return
+
+    driver = await GraphDriverFactory.create_driver(
+        provider,
+        {
+            "uri": getattr(args, "falkordb_uri", None),
+            "host": getattr(args, "falkordb_host", None),
+            "port": getattr(args, "falkordb_port", None),
+            "user": getattr(args, "falkordb_user", None),
+            "password": getattr(args, "falkordb_password", None),
+            "database": getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None),
+            "graph": getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None),
+            "ssl": bool(getattr(args, "falkordb_ssl", False)),
+        },
+    )
+    try:
+        await driver.create_indexes(
+            [
+                {"label": "Project", "property": "project_id"},
+                {"label": "Repository", "property": "name"},
+            ],
+            database=getattr(args, "neo4j_db", None),
+        )
+        await driver.execute_query(
+            _PROJECT_REPOSITORY_SETUP_QUERY,
+            {
+                "project_id": project_id,
+                "project_name": project_name,
+                "project_slug": _normalize_slug(project_name),
+                "repo_name": repo_name,
+            },
+            database=getattr(args, "neo4j_db", None),
+        )
+    finally:
+        close_result = driver.close()
+        if hasattr(close_result, "__await__"):
+            await close_result
+
+
 def _now_iso() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -788,27 +889,19 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         }
 
         if graph_ready:
-            setup_script = os.path.join(_ROOT_DIR, "scripts", "setup_graph_project.py")
-            if os.path.isfile(setup_script):
-                repo_name = f"{project_name}/{os.path.basename(root)}"
-                setup_cmd = [
-                    sys.executable, setup_script,
-                    "--project-id", project_id,
-                    "--project-name", project_name,
-                    "--source-path", root,
-                    "--repo-name", repo_name,
-                    "--neo4j-uri", args.neo4j_uri,
-                    "--neo4j-user", args.neo4j_user,
-                    "--neo4j-password", args.neo4j_password,
-                    "--neo4j-db", args.neo4j_db,
-                ]
-                try:
-                    subprocess.run(setup_cmd, cwd=_ROOT_DIR, check=True,
-                                   capture_output=True, text=True)
-                    if args.verbose:
-                        print("[setup] Project+Repository nodes ensured")
-                except subprocess.CalledProcessError as exc:
-                    print(f"[setup] WARNING: setup_graph_project failed (non-fatal): {exc.stderr}", file=sys.stderr)
+            try:
+                await _ensure_project_repository_graph(
+                    args=args,
+                    root=root,
+                    project_id=project_id,
+                    project_name=project_name,
+                )
+                if args.verbose:
+                    print("[setup] Project+Repository nodes ensured")
+            except subprocess.CalledProcessError as exc:
+                print(f"[setup] WARNING: setup_graph_project failed (non-fatal): {exc.stderr}", file=sys.stderr)
+            except Exception as exc:
+                print(f"[setup] WARNING: Project+Repository setup failed (non-fatal): {exc}", file=sys.stderr)
 
         if args.strict:
             missing: List[str] = []

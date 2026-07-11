@@ -8,6 +8,7 @@ record is a dictionary keyed by returned column name.
 
 import logging
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -22,9 +23,34 @@ def _cypher_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _prepare_falkordb_query(
+    query: str,
+    parameters: Optional[Dict[str, Any]],
+) -> Tuple[str, Dict[str, Any]]:
+    params = dict(parameters or {})
+    if "datetime()" not in query:
+        return query, params
+
+    param_name = "__falkordb_now"
+    while param_name in params:
+        param_name = f"_{param_name}"
+
+    return query.replace("datetime()", f"${param_name}"), {
+        **params,
+        param_name: _utc_timestamp(),
+    }
+
+
 def _result_key(header_item: Any) -> str:
     if isinstance(header_item, (list, tuple)) and header_item:
-        header_item = header_item[0]
+        header_item = next(
+            (item for item in header_item if isinstance(item, (str, bytes))),
+            header_item[0],
+        )
     if isinstance(header_item, bytes):
         return header_item.decode("utf-8")
     return str(header_item)
@@ -171,7 +197,8 @@ class FalkorDBDriver(Neo4jDriver):
         database: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], List[str], Any]:
         graph = self._graph_for(database)
-        result = graph.query(query, params=parameters or {})
+        query, params = _prepare_falkordb_query(query, parameters)
+        result = graph.query(query, params=params)
         keys = [_result_key(item) for item in result.header]
         records = [
             {
