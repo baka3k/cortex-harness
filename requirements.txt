@@ -29,6 +29,7 @@ torch
 transformers<5.0
 # Existing dependencies
 tree-sitter
+tree-sitter-rust
 tree-sitter-languages
 tree-sitter-kotlin
 tree-sitter-java
