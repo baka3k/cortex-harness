@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("build", "start", "stop", "help")]
+    [ValidateSet("build", "infra-up", "infra-down", "doctor", "start", "stop", "help")]
     [string]$Action = "help"
 )
 
@@ -27,16 +27,44 @@ $Servers = @(
     }
 )
 
+$InfraServices = @(
+    [pscustomobject]@{
+        Name = "qdrant"
+        Container = "cortex-qdrant"
+        Image = "qdrant/qdrant"
+        Ports = @("6333:6333")
+        Host = "127.0.0.1"
+        Port = 6333
+        ReadyUrl = "http://127.0.0.1:6333"
+    },
+    [pscustomobject]@{
+        Name = "falkordb"
+        Container = "cortex-falkordb"
+        Image = "falkordb/falkordb"
+        Ports = @("6379:6379")
+        Host = "127.0.0.1"
+        Port = 6379
+        ReadyUrl = ""
+    }
+)
+
 function Write-Usage {
     @"
 Usage:
-  make build   Create/sync virtualenvs and Python dependencies.
-  make start   Open each MCP server in a separate terminal window.
-  make stop    Stop MCP terminals/processes started by make start.
+  make build       Create/sync virtualenvs and Python dependencies.
+  make infra-up    Pull/start local Qdrant and FalkorDB Docker containers.
+  make infra-down  Stop the Docker containers started by make infra-up.
+  make doctor      Check Python deps, Docker, database ports, and MCP ports.
+  make start       Open each MCP server in a separate terminal window.
+  make stop        Stop MCP terminals/processes started by make start.
 
 Default MCP servers:
   code-tiny  http://127.0.0.1:8788/mcp
   doc-tiny   http://127.0.0.1:8789/mcp
+
+Default local infrastructure:
+  qdrant    http://127.0.0.1:6333
+  falkordb  redis://127.0.0.1:6379
 "@ | Write-Host
 }
 
@@ -51,6 +79,22 @@ function Get-CommandPath {
     }
 
     return $null
+}
+
+function Invoke-NativeQuiet {
+    param(
+        [string]$Command,
+        [string[]]$Arguments
+    )
+
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $Command @Arguments *> $null
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
 }
 
 function Get-PythonLauncher {
@@ -113,6 +157,276 @@ function Invoke-Build {
     & $python -m pip install -e $Root
 
     Write-Host "[build] Dependency sync complete."
+}
+
+function Get-DockerCommand {
+    $docker = Get-CommandPath @("docker.exe", "docker")
+    if (-not $docker) {
+        throw "Docker was not found on PATH. Install Docker Desktop before running make infra-up."
+    }
+
+    if ((Invoke-NativeQuiet -Command $docker -Arguments @("info")) -ne 0) {
+        throw "Docker was found, but the Docker daemon is not running. Start Docker Desktop and retry."
+    }
+
+    return $docker
+}
+
+function Test-TcpPort {
+    param(
+        [string]$HostName,
+        [int]$Port,
+        [int]$TimeoutMs = 1000
+    )
+
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $result = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $result.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
+            return $false
+        }
+        $client.EndConnect($result)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
+function Wait-TcpPort {
+    param(
+        [string]$HostName,
+        [int]$Port,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-TcpPort -HostName $HostName -Port $Port -TimeoutMs 1000) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    return $false
+}
+
+function Test-HttpReady {
+    param([string]$Url)
+
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        return $true
+    }
+
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
+        return ([int]$response.StatusCode -ge 200 -and [int]$response.StatusCode -lt 400)
+    } catch {
+        return $false
+    }
+}
+
+function Test-DockerContainerExists {
+    param(
+        [string]$Docker,
+        [string]$Container
+    )
+
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $names = & $Docker ps -a --filter "name=^/$Container$" --format "{{.Names}}" 2>$null
+        return (@($names) | Where-Object { $_ -eq $Container }).Count -gt 0
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+}
+
+function Test-DockerContainerRunning {
+    param(
+        [string]$Docker,
+        [string]$Container
+    )
+
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $running = & $Docker inspect -f "{{.State.Running}}" $Container 2>$null
+        return (($running | Select-Object -First 1) -eq "true")
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+}
+
+function Ensure-DockerImage {
+    param(
+        [string]$Docker,
+        [string]$Image
+    )
+
+    if ((Invoke-NativeQuiet -Command $Docker -Arguments @("image", "inspect", $Image)) -eq 0) {
+        return
+    }
+
+    Write-Host "[infra] Pulling image: $Image"
+    & $Docker pull $Image
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to pull Docker image: $Image"
+    }
+}
+
+function Start-InfraService {
+    param(
+        [string]$Docker,
+        [object]$Service
+    )
+
+    if (Test-DockerContainerExists -Docker $Docker -Container $Service.Container) {
+        if (Test-DockerContainerRunning -Docker $Docker -Container $Service.Container) {
+            Write-Host "[infra] $($Service.Container) is already running."
+        } else {
+            Write-Host "[infra] Starting existing container: $($Service.Container)"
+            & $Docker start $Service.Container | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to start Docker container: $($Service.Container)"
+            }
+        }
+    } else {
+        Ensure-DockerImage -Docker $Docker -Image $Service.Image
+
+        $args = @("run", "-d", "--name", $Service.Container, "--restart", "unless-stopped")
+        foreach ($port in @($Service.Ports)) {
+            $args += @("-p", $port)
+        }
+        $args += $Service.Image
+
+        Write-Host "[infra] Creating container: $($Service.Container)"
+        & $Docker @args | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create Docker container: $($Service.Container)"
+        }
+    }
+
+    if (-not (Wait-TcpPort -HostName $Service.Host -Port $Service.Port -TimeoutSeconds 30)) {
+        throw "$($Service.Name) did not open $($Service.Host):$($Service.Port) within 30 seconds."
+    }
+
+    if (-not (Test-HttpReady -Url $Service.ReadyUrl)) {
+        throw "$($Service.Name) is listening, but $($Service.ReadyUrl) did not return a healthy response."
+    }
+
+    Write-Host "[infra] $($Service.Name) ready on $($Service.Host):$($Service.Port)"
+}
+
+function Invoke-InfraUp {
+    $docker = Get-DockerCommand
+
+    foreach ($service in $InfraServices) {
+        Start-InfraService -Docker $docker -Service $service
+    }
+
+    Write-Host "[infra] Local infrastructure is ready."
+}
+
+function Invoke-InfraDown {
+    $docker = Get-DockerCommand
+
+    foreach ($service in $InfraServices) {
+        if (-not (Test-DockerContainerExists -Docker $docker -Container $service.Container)) {
+            Write-Host "[infra] Container not found, skipping: $($service.Container)"
+            continue
+        }
+
+        if (-not (Test-DockerContainerRunning -Docker $docker -Container $service.Container)) {
+            Write-Host "[infra] Container already stopped: $($service.Container)"
+            continue
+        }
+
+        Write-Host "[infra] Stopping container: $($service.Container)"
+        & $docker stop $service.Container | Out-Host
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to stop Docker container: $($service.Container)"
+        }
+    }
+
+    Write-Host "[infra] Local infrastructure stopped."
+}
+
+function Write-DoctorCheck {
+    param(
+        [string]$Name,
+        [bool]$Ok,
+        [string]$Message,
+        [bool]$Required = $true
+    )
+
+    if ($Ok) {
+        Write-Host "[doctor][ok]   $Name - $Message"
+        return
+    }
+
+    if ($Required) {
+        $script:DoctorFailures += 1
+        Write-Host "[doctor][fail] $Name - $Message"
+    } else {
+        Write-Host "[doctor][warn] $Name - $Message"
+    }
+}
+
+function Invoke-Doctor {
+    $script:DoctorFailures = 0
+    $python = $null
+
+    try {
+        $python = Get-RootVenvPython
+        Write-DoctorCheck -Name "python venv" -Ok $true -Message $python
+    } catch {
+        Write-DoctorCheck -Name "python venv" -Ok $false -Message $_.Exception.Message
+    }
+
+    if ($python) {
+        $depsOk = ((Invoke-NativeQuiet -Command $python -Arguments @("-c", "import neo4j, falkordb, qdrant_client, requests")) -eq 0)
+        Write-DoctorCheck -Name "python deps" -Ok $depsOk -Message "neo4j, falkordb, qdrant_client, requests"
+    }
+
+    $docker = Get-CommandPath @("docker.exe", "docker")
+    $dockerReady = $false
+    if ($docker) {
+        Write-DoctorCheck -Name "docker cli" -Ok $true -Message $docker
+        $dockerReady = ((Invoke-NativeQuiet -Command $docker -Arguments @("info")) -eq 0)
+        $dockerMessage = if ($dockerReady) { "Docker daemon reachable" } else { "Docker daemon not reachable" }
+        Write-DoctorCheck -Name "docker daemon" -Ok $dockerReady -Message $dockerMessage
+    } else {
+        Write-DoctorCheck -Name "docker cli" -Ok $false -Message "Docker not found on PATH"
+    }
+
+    foreach ($service in $InfraServices) {
+        $portOpen = Test-TcpPort -HostName $service.Host -Port $service.Port -TimeoutMs 1000
+        Write-DoctorCheck -Name "$($service.Name) port" -Ok $portOpen -Message "$($service.Host):$($service.Port)"
+
+        if ($service.ReadyUrl) {
+            $ready = Test-HttpReady -Url $service.ReadyUrl
+            Write-DoctorCheck -Name "$($service.Name) http" -Ok $ready -Message $service.ReadyUrl
+        }
+
+        if ($dockerReady) {
+            $exists = Test-DockerContainerExists -Docker $docker -Container $service.Container
+            $running = $exists -and (Test-DockerContainerRunning -Docker $docker -Container $service.Container)
+            Write-DoctorCheck -Name "$($service.Name) container" -Ok $running -Message $service.Container -Required $false
+        }
+    }
+
+    foreach ($server in $Servers) {
+        $open = Test-TcpPort -HostName "127.0.0.1" -Port $server.Port -TimeoutMs 1000
+        Write-DoctorCheck -Name "$($server.Name) mcp" -Ok $open -Message "127.0.0.1:$($server.Port)" -Required $false
+    }
+
+    if ($script:DoctorFailures -gt 0) {
+        throw "Doctor found $script:DoctorFailures required check(s) failing."
+    }
+
+    Write-Host "[doctor] Required checks passed."
 }
 
 function Get-ShellRunner {
@@ -358,9 +672,17 @@ Write-Host '[start]' $titleArg 'exited.'
     Write-Host "[start] MCP terminals opened. Logs are visible in their own windows."
 }
 
-switch ($Action) {
-    "build" { Invoke-Build }
-    "start" { Invoke-Start }
-    "stop" { Invoke-Stop }
-    default { Write-Usage }
+try {
+    switch ($Action) {
+        "build" { Invoke-Build }
+        "infra-up" { Invoke-InfraUp }
+        "infra-down" { Invoke-InfraDown }
+        "doctor" { Invoke-Doctor }
+        "start" { Invoke-Start }
+        "stop" { Invoke-Stop }
+        default { Write-Usage }
+    }
+} catch {
+    Write-Host "[error] $($_.Exception.Message)"
+    exit 1
 }
