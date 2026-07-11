@@ -30,7 +30,7 @@ class FakeRelationship:
 
 
 class FakeQueryResult:
-    header = [["n", 8], ["r", 7], ["count", 3]]
+    header = [[8, "n"], [7, "r"], [3, "count"]]
 
     def __init__(self):
         self.result_set = [
@@ -111,6 +111,24 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(records[0]["r"]["_end_id"], 2)
         self.assertEqual(records[0]["count"], 1)
         self.assertIsInstance(summary, FakeQueryResult)
+
+    async def test_execute_query_rewrites_neo4j_datetime_function(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+
+        driver.execute_query_sync(
+            "MATCH (n) SET n.updated_at = datetime() RETURN n",
+            {"id": "node-1"},
+        )
+
+        query, params = driver.graph.calls[-1]
+        self.assertNotIn("datetime()", query)
+        self.assertIn("$__falkordb_now", query)
+        self.assertEqual(params["id"], "node-1")
+        self.assertRegex(params["__falkordb_now"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
 
 
 if __name__ == "__main__":
