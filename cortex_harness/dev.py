@@ -36,6 +36,7 @@ LANG_ANALYZERS = {
     "csharp":         CODE_TINY / "tools/csharp/csharp_analyzer.py",
     "python":         CODE_TINY / "tools/python/python_analyzer.py",
     "rust":           CODE_TINY / "tools/rust/rust_analyzer.py",
+    "swift":          CODE_TINY / "tools/swift/swift_analyzer.py",
     "android_java":   CODE_TINY / "tools/android/android_java_analyzer.py",
     "android_kotlin": CODE_TINY / "tools/android/android_kotlin_analyzer.py",
     "android_mixed":  CODE_TINY / "tools/android/android_mixed_analyzer.py",
@@ -53,6 +54,7 @@ LANG_EXTENSIONS = {
     "csharp":  {".cs"},
     "python":  {".py"},
     "rust":    {".rs"},
+    "swift":   {".swift"},
 }
 
 SENSITIVE_PATTERNS = [
