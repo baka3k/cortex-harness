@@ -746,6 +746,59 @@ def _normalize_collections(value: Optional[Any]) -> List[str]:
     return [text] if text else []
 
 
+def _is_project_scope_collection(scope: str, collection: str) -> bool:
+    scope = (scope or "").strip()
+    collection = (collection or "").strip()
+    if not scope or not collection:
+        return False
+    if collection == f"{scope}_mess":
+        return True
+    return (
+        collection.startswith(f"{scope}_")
+        and "__" in collection
+        and collection.endswith("_functions")
+    )
+
+
+def _resolve_collection_scopes(tokens: List[str], available: List[str]) -> List[str]:
+    resolved: List[str] = []
+    for token in tokens:
+        if token in available:
+            candidates = [token]
+        else:
+            candidates = [
+                name for name in available
+                if _is_project_scope_collection(token, name)
+            ]
+        for candidate in candidates:
+            if candidate not in resolved:
+                resolved.append(candidate)
+    return resolved
+
+
+async def _resolve_base_collections(
+    collection: Optional[Any],
+    qdrant_url: str,
+) -> Tuple[List[str], bool]:
+    tokens = _normalize_collections(collection)
+    explicit = bool(tokens)
+    if not tokens:
+        tokens = _normalize_collections(os.environ.get("QDRANT_COLLECTION", ""))
+
+    payload = await _fetch_qdrant_collections(qdrant_url)
+    available = payload.get("collections", [])
+    if not available:
+        return tokens, explicit
+
+    if not tokens:
+        return available, explicit
+
+    resolved = _resolve_collection_scopes(tokens, available)
+    if resolved:
+        return resolved, explicit
+    return tokens if explicit else available, explicit
+
+
 def _merge_qdrant_results(
     collections: List[Tuple[str, Optional[str]]],
     vector: List[float],
@@ -1295,11 +1348,7 @@ async def tool_semantic_search(
     vector_len = len(vector)
     logger.info("[semantic_search] model=%s vector_len=%s", model_name, vector_len)
     print(f"[semantic_search] model={model_name} vector_len={vector_len}", flush=True)
-    base_collections = _normalize_collections(collection)
-    explicit_base = bool(base_collections)
-    if not base_collections:
-        payload = await _fetch_qdrant_collections(qdrant_url)
-        base_collections = payload.get("collections", [])
+    base_collections, explicit_base = await _resolve_base_collections(collection, qdrant_url)
     if not base_collections:
         raise ValueError("No Qdrant collections available. Use list_qdrant_collections to verify.")
     filtered_base, base_errors = await _filter_collections_for_vector(base_collections, vector_len, qdrant_url)

@@ -452,7 +452,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "db", "type": "str", "required": False,
              "description": "Neo4j database name"},
             {"name": "collection", "type": "str", "required": False,
-             "description": "Qdrant collection name"},
+             "description": "Qdrant collection name or project scope prefix"},
             {"name": "debug", "type": "bool", "required": False,
              "description": "Include per-signal score breakdown in results"},
         ],
@@ -486,7 +486,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "top_k", "type": "int", "required": False,
              "description": "Number of results (default: 10)"},
             {"name": "collection", "type": "str", "required": False,
-             "description": "Qdrant collection name"},
+             "description": "Qdrant collection name or project scope prefix"},
             {"name": "qdrant_url", "type": "str", "required": False},
             {"name": "expand_graph", "type": "bool", "required": False,
              "description": "When true, expand Qdrant seed hits through the configured graph database"},
@@ -500,7 +500,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
              "description": "Maximum graph-expanded nodes to return (default: 50)"},
         ],
         "output": "Dict with semantically similar code snippets and optional graph_expansion context",
-        "example": "semantic_search(query='allocate memory safely', top_k=5, expand_graph=true, graph_depth=2)",
+        "example": "semantic_search(query='allocate memory safely', top_k=5, collection='MYPROJECT', expand_graph=true, graph_depth=2)",
     },
     # --- IPC / Android -----------------------------------------------------------
     {
