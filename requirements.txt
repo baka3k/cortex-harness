@@ -30,6 +30,7 @@ transformers<5.0
 # Existing dependencies
 tree-sitter
 tree-sitter-rust
+tree-sitter-go
 tree-sitter-languages
 tree-sitter-kotlin
 tree-sitter-java
@@ -41,6 +42,7 @@ tree-sitter-php
 tree-sitter-python
 tree-sitter-sql
 tree-sitter-c-sharp
+tree-sitter-swift
 
 # Deep learning librariespip
 einops
