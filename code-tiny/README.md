@@ -1,6 +1,6 @@
 # Project Call Graph MCP (Tiny)
 
-Small repository containing an MCP server (FastMCP) that proxies to the Project Call Graph backend, plus Kotlin/Java/C#/C++/TypeScript/JavaScript/PHP/SQL/PL/SQL analyzers.
+Small repository containing an MCP server (FastMCP) that proxies to the Project Call Graph backend, plus Kotlin/Java/C#/C++/TypeScript/JavaScript/PHP/SQL/PL/SQL/Swift analyzers.
 The backend API/scan service is not in this repo and must run elsewhere.
 
 Supported languages:
@@ -13,6 +13,7 @@ Supported languages:
 - PHP
 - PL/SQL
 - SQL
+- Swift
 - TypeScript
 
 ## Main components
@@ -29,6 +30,7 @@ Supported languages:
   - PL/SQL: `tools/plsql/plsql_analyzer.py`
   - C/C++: `tools/cplus/cplus_analyzer.py`
   - C#: `tools/csharp/csharp_analyzer.py`
+  - Swift: `tools/swift/swift_analyzer.py`
 
 ## Setup
 

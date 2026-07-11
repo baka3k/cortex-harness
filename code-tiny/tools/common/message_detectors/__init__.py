@@ -28,6 +28,7 @@ _DETECTORS: Dict[str, BaseMessageDetector] = {
     "kotlin": KotlinMessageDetector(),
     "android": AndroidMessageDetector(),
     "python": PythonMessageDetector(),
+    "swift": GenericMessageDetector(),
     "js": JsMessageDetector(),
     "ts": TsMessageDetector(),
     "php": PhpMessageDetector(),
