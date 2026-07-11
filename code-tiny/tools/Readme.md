@@ -85,7 +85,42 @@ JUST parse & extract.
 
 ---
 
-# 2. Data Extraction Specification
+# 2. File Scanning (`_scan_c_family_files`)
+
+## Supported extensions
+
+```
+.c  .h  .hpp  .cpp  .cc  .cxx  .hh  .hxx
+```
+
+## Skipped directories (`_SCAN_SKIP_DIRS`)
+
+Directories matching any entry below are pruned before descent — they will **not** be scanned.
+
+| Category | Entries |
+|---|---|
+| Version control | `.git` `.hg` `.svn` |
+| IDE | `.idea` `.vs` `.vscode` `.eclipse` `.settings` |
+| Build outputs | `build` `out` `bin` `obj` `cmake-build-*` |
+| CMake cache | `CMakeFiles` `CMakeCache.txt` `cmake_install.cmake` `Makefile` |
+| Compiled artefacts | `*.o` `*.obj` `*.so` `*.dll` `*.dylib` `*.a` `*.lib` `*.exe` |
+| Precompiled headers | `*.gch` `*.pch` |
+| Gradle / Android NDK | `.gradle` `.externalNativeBuild` |
+| Node / JS tooling | `node_modules` `dist` `target` |
+| Qt generated | `moc_*` `ui_*` `qrc_*.cpp` |
+| Cache | `.cache` `.parcel-cache` `__pycache__` |
+| Test results | `coverage` `.test-results` `test-results` |
+| Temporary | `tmp` `temp` `.tmp` `tmpdir` |
+| OS specific | `.DS_Store` `Thumbs.db` |
+| Misc project files | `*.pro.user` `*.user` `*.suo` |
+
+> Note: matching is exact name comparison (`name not in _SCAN_SKIP_DIRS`).  
+> Glob-style entries (e.g. `cmake-build-*`, `moc_*`) are listed for documentation purposes  
+> but are **not** evaluated as globs at runtime — add fnmatch logic if wildcard support is needed.
+
+---
+
+# 3. Data Extraction Specification
 
 MUST TO GENERATE
 

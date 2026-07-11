@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import re
+import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from tree_sitter import Language, Parser
+
+_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if _ROOT_DIR not in sys.path:
+    sys.path.insert(0, _ROOT_DIR)
+
+from tools.common.git_diff import load_manifest_paths
+from tools.common.incremental_cleanup import cleanup_neo4j_for_files
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
+from tools.graph.writer.language_writer import LanguageCodeWriter
 
 try:
     from tree_sitter_languages import get_parser as ts_get_parser
@@ -851,7 +862,8 @@ def parse_rust_file(path: str, root: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def _scan_rust_files(root: str) -> List[str]:
+def _scan_rust_files(root: str, selected_rel_paths: Optional[Iterable[str]] = None) -> List[str]:
+    selected = {item.replace("\\", "/") for item in selected_rel_paths or [] if item}
     paths: List[str] = []
     for current_root, dirnames, filenames in os.walk(root):
         dirnames[:] = [
@@ -861,12 +873,20 @@ def _scan_rust_files(root: str) -> List[str]:
         ]
         for filename in filenames:
             if filename.endswith(_RUST_SOURCE_EXTENSIONS):
-                paths.append(os.path.join(current_root, filename))
+                path = os.path.join(current_root, filename)
+                rel_path = os.path.relpath(path, root).replace("\\", "/")
+                if selected and rel_path not in selected:
+                    continue
+                paths.append(path)
     return sorted(paths)
 
 
-def build_call_graph(root: str, output: Optional[str] = None) -> Dict[str, Any]:
-    files = _scan_rust_files(root)
+def build_call_graph(
+    root: str,
+    output: Optional[str] = None,
+    selected_rel_paths: Optional[Iterable[str]] = None,
+) -> Dict[str, Any]:
+    files = _scan_rust_files(root, selected_rel_paths)
     payloads = [parse_rust_file(path, root) for path in files]
     result = {"root": root, "files": payloads}
     if output:
@@ -875,29 +895,339 @@ def build_call_graph(root: str, output: Optional[str] = None) -> Dict[str, Any]:
     return result
 
 
+def _build_note(code: str, comment: str = "", summary: str = "") -> str:
+    parts: List[str] = []
+    if summary:
+        parts.append(f"Summary:\n{summary}")
+    if comment:
+        parts.append(f"Comment:\n{comment}")
+    if code:
+        parts.append(f"Code:\n{code}")
+    return "\n\n".join(parts)
+
+
+def _repo_name(project_name: str, root: str) -> str:
+    return f"{project_name}/{os.path.basename(os.path.abspath(root))}"
+
+
+def _with_common_fields(
+    row: Dict[str, Any],
+    *,
+    project_id: str,
+    project_name: str,
+    language: str,
+    repo: str,
+    build_system: str,
+) -> Dict[str, Any]:
+    row.setdefault("summary", row.get("comment", ""))
+    row.setdefault("note", _build_note(row.get("code", ""), row.get("comment", ""), row.get("summary", "")))
+    row["project_id"] = project_id
+    row["project_name"] = project_name
+    row["language"] = language
+    row["repo"] = repo
+    row["build_system"] = build_system
+    return row
+
+
+def _prepare_write_rows(
+    payloads: List[Dict[str, Any]],
+    *,
+    root: str,
+    project_id: str,
+    project_name: str,
+    language: str,
+    repo: str,
+    build_system: str,
+) -> Dict[str, List[Dict[str, Any]]]:
+    files: List[Dict[str, Any]] = []
+    namespaces: List[Dict[str, Any]] = []
+    types: List[Dict[str, Any]] = []
+    functions: List[Dict[str, Any]] = []
+    fields: List[Dict[str, Any]] = []
+    aliases: List[Dict[str, Any]] = []
+    templates: List[Dict[str, Any]] = []
+    relations: List[Dict[str, Any]] = []
+    calls: List[Dict[str, Any]] = []
+
+    for payload in payloads:
+        file_def = dict(payload.get("file_def") or {})
+        rel_path = (file_def.get("file_path") or "").replace("\\", "/")
+        file_row = {
+            "id": rel_path,
+            "path": rel_path,
+            "start_line": file_def.get("start_line", 1),
+            "end_line": file_def.get("end_line", 1),
+            "code": file_def.get("code", ""),
+            "comment": file_def.get("comment", ""),
+            "summary": file_def.get("summary", ""),
+        }
+        files.append(
+            _with_common_fields(
+                file_row,
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+            )
+        )
+
+        for item in payload.get("namespaces") or []:
+            row = dict(item)
+            row["id"] = row.pop("symbol_id", row.get("id", row.get("qualified_name")))
+            namespaces.append(
+                _with_common_fields(
+                    row,
+                    project_id=project_id,
+                    project_name=project_name,
+                    language=language,
+                    repo=repo,
+                    build_system=build_system,
+                )
+            )
+
+        for item in payload.get("types") or []:
+            row = dict(item)
+            row["id"] = row.pop("symbol_id", row.get("id", row.get("qualified_name")))
+            types.append(
+                _with_common_fields(
+                    row,
+                    project_id=project_id,
+                    project_name=project_name,
+                    language=language,
+                    repo=repo,
+                    build_system=build_system,
+                )
+            )
+
+        for item in payload.get("functions") or []:
+            row = dict(item)
+            row["id"] = row.pop("symbol_id", row.get("id", row.get("qualified_name")))
+            row.setdefault("class_name", row.get("scope_name"))
+            row.setdefault("package_name", None)
+            functions.append(
+                _with_common_fields(
+                    row,
+                    project_id=project_id,
+                    project_name=project_name,
+                    language=language,
+                    repo=repo,
+                    build_system=build_system,
+                )
+            )
+
+        for item in payload.get("fields") or []:
+            row = dict(item)
+            row["id"] = row.pop("symbol_id", row.get("id", row.get("qualified_name")))
+            fields.append(
+                _with_common_fields(
+                    row,
+                    project_id=project_id,
+                    project_name=project_name,
+                    language=language,
+                    repo=repo,
+                    build_system=build_system,
+                )
+            )
+
+        for item in payload.get("aliases") or []:
+            row = dict(item)
+            row["id"] = row.pop("symbol_id", row.get("id", row.get("qualified_name")))
+            row.setdefault("code", "")
+            aliases.append(
+                _with_common_fields(
+                    row,
+                    project_id=project_id,
+                    project_name=project_name,
+                    language=language,
+                    repo=repo,
+                    build_system=build_system,
+                )
+            )
+
+        for item in payload.get("templates") or []:
+            row = dict(item)
+            row["id"] = row.pop("symbol_id", row.get("id", row.get("name")))
+            row.setdefault("code", row.get("name", ""))
+            templates.append(
+                _with_common_fields(
+                    row,
+                    project_id=project_id,
+                    project_name=project_name,
+                    language=language,
+                    repo=repo,
+                    build_system=build_system,
+                )
+            )
+
+        for item in payload.get("relations") or []:
+            relations.append(dict(item))
+        for item in payload.get("calls") or []:
+            row = dict(item)
+            if row.get("callee_id"):
+                calls.append(row)
+
+    return {
+        "files": files,
+        "namespaces": namespaces,
+        "types": types,
+        "functions": functions,
+        "fields": fields,
+        "aliases": aliases,
+        "templates": templates,
+        "relations": relations,
+        "calls": calls,
+    }
+
+
+async def _write_graph(args: argparse.Namespace, payloads: List[Dict[str, Any]]) -> Dict[str, int]:
+    if not prepare_graph_args(args):
+        if args.verbose:
+            print("[graph] disabled; missing graph connection settings")
+        return {}
+
+    driver = await create_graph_driver_from_args(args)
+    if driver is None:
+        return {}
+    try:
+        writer = LanguageCodeWriter(
+            driver=driver,
+            database=args.neo4j_db,
+            batch_size=args.neo4j_batch_size,
+            verbose=args.verbose,
+        )
+        project_id = args.project_id or os.path.basename(os.path.abspath(args.root)) or "rust-project"
+        project_name = args.project_name or project_id
+        language = args.language or "rust"
+        repo = args.repo or _repo_name(project_name, args.root)
+        rows = _prepare_write_rows(
+            payloads,
+            root=args.root,
+            project_id=project_id,
+            project_name=project_name,
+            language=language,
+            repo=repo,
+            build_system=args.build_system or "",
+        )
+        cleanup_targets = sorted(
+            set(getattr(args, "_selected_rel_paths", []) or []) | set(getattr(args, "_deleted_rel_paths", []) or [])
+        )
+        if args.incremental and cleanup_targets:
+            await cleanup_neo4j_for_files(
+                driver=driver,
+                database=args.neo4j_db,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=args.verbose,
+            )
+        counts = await writer.write_all(
+            namespaces=rows["namespaces"],
+            files=rows["files"],
+            types=rows["types"],
+            functions=rows["functions"],
+            fields=rows["fields"],
+            aliases=rows["aliases"],
+            templates=rows["templates"],
+            relations=rows["relations"],
+            calls=rows["calls"],
+            use_full_writers=True,
+        )
+        return counts
+    finally:
+        close = getattr(driver, "close", None)
+        if close:
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Rust tree-sitter parser/extractor")
-    parser.add_argument("path", help="Rust source file or directory")
+    parser.add_argument("path", nargs="?", help="Rust source file or directory")
     parser.add_argument("--root", default=None, help="Project root for relative file paths")
     parser.add_argument("--output", "-o", default=None, help="Write JSON payload to this file")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON to stdout")
+    parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
+    parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
+    parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
+    parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
+    add_graph_provider_args(parser)
+    parser.add_argument("--neo4j-batch-size", type=int, default=1000)
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "rust_functions"))
+    parser.add_argument("--embed-model", default=os.environ.get("CODE_EMBEDDING_MODEL", ""))
+    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))
+    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", "4")))
+    parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", "4000")))
+    parser.add_argument("--qdrant-batch-size", type=int, default=128)
+    parser.add_argument("--qdrant-timeout", type=float, default=300.0)
+    parser.add_argument("--qdrant-retries", type=int, default=3)
+    parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
+    parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
+    parser.set_defaults(enable_message_scan=False)
+    parser.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true")
+    parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false")
+    parser.add_argument("--message-output-dir", default=os.environ.get("MESSAGE_OUTPUT_DIR"))
+    parser.add_argument("--message-qdrant-collection", default=os.environ.get("MESSAGE_QDRANT_COLLECTION", ""))
+    parser.add_argument("--project-id", dest="project_id", default=os.environ.get("PROJECT_ID"))
+    parser.add_argument("--project_id", dest="project_id")
+    parser.add_argument("--project-name", dest="project_name", default=os.environ.get("PROJECT_NAME"))
+    parser.add_argument("--project_name", dest="project_name")
+    parser.add_argument("--language", default=os.environ.get("PROJECT_LANGUAGE", "rust"))
+    parser.add_argument("--repo", default=os.environ.get("PROJECT_REPO"))
+    parser.add_argument("--build-system", dest="build_system", default=os.environ.get("PROJECT_BUILD_SYSTEM", "cargo"))
+    parser.add_argument("--build_system", dest="build_system")
+    parser.add_argument("--commit-sha-before", default=os.environ.get("GIT_COMMIT_SHA_BEFORE", ""))
+    parser.add_argument("--commit-sha-after", default=os.environ.get("GIT_COMMIT_SHA_AFTER", ""))
+    parser.add_argument("--incremental", action="store_true", help="Enable incremental ingestion mode")
+    parser.add_argument("--changed-files-manifest")
+    parser.add_argument("--deleted-files-manifest")
+    parser.add_argument("--ignore-cache", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true")
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+async def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    path = os.path.abspath(args.path)
+    if not args.path and not args.root:
+        print("Either path or --root is required", file=sys.stderr)
+        return 2
+    path = os.path.abspath(args.path or args.root)
     if os.path.isdir(path):
-        result = build_call_graph(path, args.output)
+        args.root = os.path.abspath(args.root or path)
+        selected_rel_paths: Optional[List[str]] = None
+        deleted_rel_paths: List[str] = []
+        if args.incremental:
+            if args.changed_files_manifest:
+                selected_rel_paths = sorted(load_manifest_paths(args.changed_files_manifest, args.root))
+            if args.deleted_files_manifest:
+                deleted_rel_paths = sorted(load_manifest_paths(args.deleted_files_manifest, args.root))
+            if selected_rel_paths is not None:
+                selected_rel_paths = [item for item in selected_rel_paths if item.endswith(_RUST_SOURCE_EXTENSIONS)]
+            deleted_rel_paths = [item for item in deleted_rel_paths if item.endswith(_RUST_SOURCE_EXTENSIONS)]
+        args._selected_rel_paths = selected_rel_paths or []
+        args._deleted_rel_paths = deleted_rel_paths
+        result = build_call_graph(args.root, args.output, selected_rel_paths)
+        payloads = result["files"]
     else:
         root = os.path.abspath(args.root) if args.root else os.path.dirname(path)
+        args.root = root
         result = parse_rust_file(path, root)
+        payloads = [result]
         if args.output:
             with open(args.output, "w", encoding="utf-8") as handle:
                 json.dump(result, handle, ensure_ascii=False, indent=2)
-    print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
+    if args.dry_run:
+        print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
+        return 0
+    counts = await _write_graph(args, payloads)
+    if counts and args.verbose:
+        print(f"[graph] written {counts}")
+    if args.pretty or not counts:
+        print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(asyncio.run(main()))
