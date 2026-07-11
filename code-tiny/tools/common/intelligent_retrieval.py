@@ -14,8 +14,8 @@ with four new signals:
 Architecture (pipeline per query)
 ───────────────────────────────────────────────────────────────────────
   1. classify_query   → intent string + weight profile
-  2. initial_retrieval → top-N seeds from Qdrant (semantic) + Neo4j (keyword)
-  3. graph_expansion  → neighbor nodes from Neo4j call graph
+  2. initial_retrieval → top-N seeds from Qdrant (semantic) + graph DB (keyword)
+  3. graph_expansion  → neighbor nodes from the configured graph DB
   4. signal_collection → normalise semantic, keyword, graph, freshness,
                           confidence, usage per candidate
   5. score_all        → RetrievalScorer.score_all() → ScoredResult list
@@ -27,7 +27,7 @@ Public API
 
   engine = IntelligentRetrievalEngine(
       qdrant_url="http://localhost:6333",
-      neo4j_driver=driver,          # sync neo4j.Driver
+      graph_driver=driver,          # GraphDriver / sync graph driver
       embedder=my_embedder,         # callable: str → List[float]
       collection="ts_functions",
   )
@@ -78,7 +78,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_QDRANT_URL   = "http://localhost:6333"
 DEFAULT_SEED_K       = 20   # initial Qdrant retrieval count
-DEFAULT_EXPAND_DEPTH = 2    # Neo4j expansion depth
+DEFAULT_EXPAND_DEPTH = 2    # Graph expansion depth
 DEFAULT_EXPAND_LIMIT = 50   # max graph-expanded candidates
 DEFAULT_TOP_K        = 10
 
@@ -227,20 +227,23 @@ def _qdrant_search_by_ids(
 
 
 # ─────────────────────────────────────────────────────────────
-# Neo4j keyword search helper
+# Graph keyword search helper
 # ─────────────────────────────────────────────────────────────
 
 
-def _neo4j_keyword_search(
-    neo4j_driver: Any,
+def _graph_keyword_search(
+    graph_driver: Any,
     query: str,
     database: str,
     limit: int,
 ) -> List[Dict[str, Any]]:
     """
-    Text search in Neo4j.  Returns a list of node property dicts.
+    Text search in the configured graph database.
+
+    Accepts the shared GraphDriver abstraction (Neo4j/FalkorDB) and falls back
+    to a raw Neo4j-style ``session`` only for older callers.
     """
-    if neo4j_driver is None:
+    if graph_driver is None:
         return []
     tokens = [t.strip().lower() for t in query.split() if t.strip()]
     if not tokens:
@@ -255,12 +258,27 @@ WHERE any(q IN $qs WHERE
 RETURN n LIMIT $limit
 """
     try:
-        with neo4j_driver.session(database=database) as session:
+        if hasattr(graph_driver, "execute_query_sync"):
+            records, _, _ = graph_driver.execute_query_sync(cypher, {"qs": tokens, "limit": limit}, database)
+            return [_node_record_to_dict(record.get("n")) for record in records if record.get("n")]
+        with graph_driver.session(database=database) as session:
             result = session.run(cypher, {"qs": tokens, "limit": limit})
-            return [dict(record["n"]) for record in result if record.get("n")]
+            return [_node_record_to_dict(record["n"]) for record in result if record.get("n")]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[intelligent_retrieval] Neo4j keyword search failed: %s", exc)
+        logger.warning("[intelligent_retrieval] graph keyword search failed: %s", exc)
         return []
+
+
+def _node_record_to_dict(node: Any) -> Dict[str, Any]:
+    if isinstance(node, dict):
+        return dict(node)
+    try:
+        return dict(node)
+    except Exception:
+        properties = getattr(node, "properties", None)
+        if isinstance(properties, dict):
+            return dict(properties)
+    return {}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -301,8 +319,8 @@ def _qdrant_hit_to_candidate(
     }
 
 
-def _neo4j_node_to_candidate(node: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert a Neo4j node property dict into a flat candidate dict."""
+def _graph_keyword_node_to_candidate(node: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a graph DB keyword hit into a flat candidate dict."""
     return {
         "node_id":        str(node.get("id") or ""),
         "name":           str(node.get("name") or ""),
@@ -321,7 +339,7 @@ def _neo4j_node_to_candidate(node: Dict[str, Any]) -> Dict[str, Any]:
         "return_type":    str(node.get("return_type") or ""),
         "project_id":     str(node.get("project_id") or ""),
         "language":       str(node.get("language") or ""),
-        "_source":        "neo4j_keyword",
+        "_source":        "graph_keyword",
     }
 
 
@@ -364,9 +382,10 @@ class IntelligentRetrievalEngine:
     qdrant_url   : Base URL for Qdrant REST API.
     collection   : Qdrant collection name.
     embedder     : Callable ``str → List[float]`` for query embedding.
-    neo4j_driver : Optional sync ``neo4j.Driver``.  If None, graph expansion
-                   and keyword search via Neo4j are skipped.
-    database     : Neo4j database name.
+    graph_driver : Optional graph driver. If None, graph expansion and graph
+                   keyword search are skipped. ``neo4j_driver`` is accepted as
+                   a legacy alias.
+    database     : Graph database name.
     freshness_map : Optional mapping of node_id → last_updated ISO string.
                    If not provided, freshness defaults to 0.5 (neutral).
     dirty_set     : Optional set of node_ids known to be dirty.
@@ -381,6 +400,7 @@ class IntelligentRetrievalEngine:
         collection: str = "",
         embedder: Optional[Callable[[str], List[float]]] = None,
         neo4j_driver: Optional[Any] = None,
+        graph_driver: Optional[Any] = None,
         database: str = "neo4j",
         freshness_map: Optional[Dict[str, str]] = None,
         dirty_set: Optional[set] = None,
@@ -393,12 +413,12 @@ class IntelligentRetrievalEngine:
         self._qdrant_url  = qdrant_url
         self._collection  = collection
         self._embedder    = embedder
-        self._neo4j       = neo4j_driver
+        self._graph       = graph_driver if graph_driver is not None else neo4j_driver
         self._database    = database
         self._freshness   = freshness_map or {}
         self._dirty       = dirty_set or set()
         self._seed_k      = seed_k
-        self._expander    = GraphExpander(neo4j_driver, database) if neo4j_driver else None
+        self._expander    = GraphExpander(self._graph, database) if self._graph else None
         self._expand_depth = expand_depth
         self._expand_limit = expand_limit
         self._bm25_ranker  = bm25_ranker
@@ -425,8 +445,8 @@ class IntelligentRetrievalEngine:
         top_k          : Number of results to return.
         debug          : When True, each ScoredResult includes per-signal
                          explanation and weighted contributions.
-        expand_graph   : When True and a Neo4j driver is configured, expand
-                         top seeds through the call graph.
+        expand_graph   : When True and a graph driver is configured, expand
+                         top seeds through the code graph.
         weight_override : Override weight dict.  Only the provided keys are
                           overridden; the intent-based profile fills the rest.
         collection     : Override the default Qdrant collection.
@@ -472,7 +492,7 @@ class IntelligentRetrievalEngine:
                 if nid in candidates:
                     candidates[nid]["bm25"] = bm25_score
                 else:
-                    # BM25 hit not in Qdrant/Neo4j seeds — add as candidate
+                    # BM25 hit not in Qdrant/graph DB seeds - add as candidate
                     candidates[nid] = {"node_id": nid, "bm25": bm25_score}
 
         # 3. Graph expansion
@@ -541,11 +561,11 @@ class IntelligentRetrievalEngine:
         query: str,
         top_k: int,
     ) -> List[Dict[str, Any]]:
-        """Run Neo4j keyword search."""
-        if not self._neo4j:
+        """Run graph DB keyword search."""
+        if not self._graph:
             return []
-        nodes = _neo4j_keyword_search(self._neo4j, query, self._database, top_k)
-        return [_neo4j_node_to_candidate(n) for n in nodes]
+        nodes = _graph_keyword_search(self._graph, query, self._database, top_k)
+        return [_graph_keyword_node_to_candidate(n) for n in nodes]
 
     def _inject_freshness(self, candidates: List[Dict[str, Any]]) -> None:
         """Compute and inject freshness scores in-place."""
