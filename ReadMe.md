@@ -74,15 +74,18 @@ Because the install is **editable** (`-e`), `git pull` automatically picks up an
 
 ### Local MCP lifecycle with Make
 
-From the CortexHarness repo root, use the Makefile shortcuts to prepare and run the local MCP servers:
+From the CortexHarness repo root, use the Makefile shortcuts to prepare local dependencies, infrastructure, and MCP servers:
 
 ```bash
-make build   # create/reuse .venv and install root, code-tiny, and doc-tiny dependencies
-make start   # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
-make stop    # stop MCP terminal/processes started by make start
+make build       # create/reuse .venv and install root, code-tiny, and doc-tiny dependencies
+make infra-up    # pull/start Qdrant (:6333) and FalkorDB (:6379) Docker containers
+make doctor      # check Python deps, Docker, database ports, and MCP ports
+make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
+make stop        # stop MCP terminal/processes started by make start
+make infra-down  # stop the Qdrant/FalkorDB containers managed by make infra-up
 ```
 
-`make start` uses the existing `code-tiny/mcp.sh` and `doc-tiny/mcp.sh` entrypoints. On Windows, install Git Bash or WSL so those shell scripts can run.
+`make start` uses the existing `code-tiny/mcp.sh` and `doc-tiny/mcp.sh` entrypoints. On Windows, install Git Bash or WSL so those shell scripts can run. `make infra-up` requires Docker Desktop and manages only the `cortex-qdrant` and `cortex-falkordb` containers.
 
 
 ---
