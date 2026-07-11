@@ -472,7 +472,10 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
     },
     {
         "name": "semantic_search",
-        "description": "Semantic code search using Qdrant vector embeddings. Find similar code/comments by meaning.",
+        "description": (
+            "Semantic code search using Qdrant vector embeddings. "
+            "Optionally expands vector hits through the configured graph database."
+        ),
         "use_cases": ["Find semantically similar code", "Search by natural language",
                       "Locate similar implementations", "Documentation search"],
         "inputs": [
@@ -485,9 +488,19 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "collection", "type": "str", "required": False,
              "description": "Qdrant collection name"},
             {"name": "qdrant_url", "type": "str", "required": False},
+            {"name": "expand_graph", "type": "bool", "required": False,
+             "description": "When true, expand Qdrant seed hits through the configured graph database"},
+            {"name": "graph_depth", "type": "int", "required": False,
+             "description": "Graph traversal depth for expanded neighbors (default: 2, max: 5)"},
+            {"name": "graph_direction", "type": "str", "required": False,
+             "description": "'out', 'in', or 'both' (default: both)"},
+            {"name": "graph_rel_types", "type": "str", "required": False,
+             "description": "Comma-separated relationship types for expansion"},
+            {"name": "graph_limit", "type": "int", "required": False,
+             "description": "Maximum graph-expanded nodes to return (default: 50)"},
         ],
-        "output": "Dict with semantically similar code snippets ranked by relevance",
-        "example": "semantic_search(query='allocate memory safely', mode='code', top_k=5)",
+        "output": "Dict with semantically similar code snippets and optional graph_expansion context",
+        "example": "semantic_search(query='allocate memory safely', top_k=5, expand_graph=true, graph_depth=2)",
     },
     # --- IPC / Android -----------------------------------------------------------
     {
