@@ -343,7 +343,6 @@ def _code_qdrant_collection(env: dict, project: dict) -> str:
     return str(
         env.get("QDRANT_COLLECTION")
         or project.get("code")
-        or project.get("name")
         or "project"
     ).strip()
 
@@ -1414,7 +1413,7 @@ def init(env, project_dir, path):
         if provider == "neo4j":
             graph_env.update({
                 "NEO4J_URI":  _p("NEO4J_URI",  [section, "env", "NEO4J_URI"],  "bolt://localhost:7687"),
-                "NEO4J_DB":   _p("NEO4J_DB",   [section, "env", "NEO4J_DB"],   "neo4j"),
+                "NEO4J_DB":   _p("NEO4J_DB",   [section, "env", "NEO4J_DB"],   graph_default),
                 "NEO4J_USER": _p("NEO4J_USER", [section, "env", "NEO4J_USER"], "neo4j"),
                 "NEO4J_PASS": _p("NEO4J_PASS", [section, "env", "NEO4J_PASS"], ""),
             })
