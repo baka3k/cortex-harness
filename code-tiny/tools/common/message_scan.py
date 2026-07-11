@@ -33,6 +33,7 @@ _PARSER_EXTENSIONS: Dict[str, Tuple[str, ...]] = {
     "vba": (".bas", ".cls", ".frm"),
     "vbscript": (".vbs", ".wsf", ".asp"),
     "python": (".py",),
+    "swift": (".swift",),
     "js": (".js", ".jsx", ".mjs", ".cjs"),
     "ts": (".ts", ".tsx", ".mts", ".cts"),
     "php": (".php",),
