@@ -42,7 +42,7 @@ This document summarizes the implementation progress of the 1-Click Context Menu
 - `HKEY_CLASSES_ROOT\Drive\shell\CortexHarness`
 
 ### 4. CLI Integration (Phase 5)
-- ✅ **Modified**: `cli/dev.py` - Added `dev installer` command group
+- ✅ **Modified**: `cortex_harness/dev.py` - Added `dev installer` command group
 - ✅ Three main commands:
   - `dev installer build` - Build platform-specific installers
   - `dev installer install` - Install context menu integration

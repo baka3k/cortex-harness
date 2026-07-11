@@ -33,7 +33,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "use_cases": ["Start of conversation", "Switch between projects", "Set context for multiple queries"],
         "inputs": [
             {"name": "parser_type", "type": "str", "required": False,
-             "description": "Parser type: cplus/cpp/c++/c/clang/delphi/pascal/java/kotlin/jvm/vbnet/vb6/vba/vbscript or android/android-kotlin"},
+             "description": "Parser type: cplus/cpp/c++/c/clang/delphi/pascal/java/kotlin/jvm/rust/vbnet/vb6/vba/vbscript or android/android-kotlin"},
             {"name": "database_name", "type": "str", "required": False,
              "description": "Neo4j database name (e.g., 'neo4j', 'sample_module', 'target_module')"},
         ],
@@ -575,7 +575,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "description": "List supported code parser types (languages/frameworks).",
         "use_cases": ["Check supported languages", "Discover parser options"],
         "inputs": [],
-        "output": "Dict with available parsers (e.g., cplus, java, kotlin, android, etc.)",
+        "output": "Dict with available parsers (e.g., cplus, java, kotlin, rust, android, etc.)",
         "example": "list_parsers()",
     },
     {

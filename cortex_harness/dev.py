@@ -35,6 +35,7 @@ LANG_ANALYZERS = {
     "cplus":          CODE_TINY / "tools/cplus/cplus_analyzer.py",
     "csharp":         CODE_TINY / "tools/csharp/csharp_analyzer.py",
     "python":         CODE_TINY / "tools/python/python_analyzer.py",
+    "rust":           CODE_TINY / "tools/rust/rust_analyzer.py",
     "android_java":   CODE_TINY / "tools/android/android_java_analyzer.py",
     "android_kotlin": CODE_TINY / "tools/android/android_kotlin_analyzer.py",
     "android_mixed":  CODE_TINY / "tools/android/android_mixed_analyzer.py",
@@ -51,6 +52,7 @@ LANG_EXTENSIONS = {
     "cplus":   {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"},
     "csharp":  {".cs"},
     "python":  {".py"},
+    "rust":    {".rs"},
 }
 
 SENSITIVE_PATTERNS = [
@@ -334,6 +336,70 @@ def _env_to_qdrant_url(env: dict) -> str:
     host = env.get("QDRANT_HOST", "localhost")
     port = env.get("QDRANT_PORT", "6333")
     return f"http://{host}:{port}"
+
+
+def _code_qdrant_collection(env: dict, project: dict) -> str:
+    """Return configured code collection, falling back to project code."""
+    return str(
+        env.get("QDRANT_COLLECTION")
+        or project.get("code")
+        or project.get("name")
+        or "project"
+    ).strip()
+
+
+def _code_env_for_process(cfg: dict) -> dict:
+    """Build process env values expected by code-tiny analyzers/MCP."""
+    project = cfg.get("project", {})
+    env = dict(cfg.get("code", {}).get("env", {}))
+    if not env:
+        return {}
+
+    collection = _code_qdrant_collection(env, project)
+    result = {k: str(v) for k, v in env.items() if v is not None}
+    result.setdefault("QDRANT_URL", _env_to_qdrant_url(env))
+    result.setdefault("QDRANT_COLLECTION", collection)
+    result.setdefault("QDRANT_COLLECTION_CODE", collection)
+    if env.get("EMBEDDING_MODEL"):
+        result.setdefault("CODE_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
+        result.setdefault("EMBED_MODEL", str(env["EMBEDDING_MODEL"]))
+    return result
+
+
+def _doc_env_for_process(cfg: dict) -> dict:
+    env = dict(cfg.get("doc", {}).get("env", {}))
+    if not env:
+        return {}
+    result = {k: str(v) for k, v in env.items() if v is not None}
+    result.setdefault("QDRANT_URL", _env_to_qdrant_url(env))
+    if env.get("EMBEDDING_MODEL"):
+        result.setdefault("DOC_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
+    return result
+
+
+def _mcp_env_from_config(project_dir: Path, service_name: str) -> dict:
+    try:
+        cfg_dir = _config_dir(project_dir)
+        configs = sorted(cfg_dir.glob("*.json")) if cfg_dir.exists() else []
+        if not configs:
+            return {}
+        cfg = None
+        for path in configs:
+            with open(path, encoding="utf-8") as f:
+                candidate = json.load(f)
+            if candidate.get("active"):
+                cfg = candidate
+                break
+        if cfg is None:
+            with open(configs[0], encoding="utf-8") as f:
+                cfg = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if service_name == "code-tiny":
+        return _code_env_for_process(cfg)
+    if service_name == "doc-tiny":
+        return _doc_env_for_process(cfg)
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -958,6 +1024,7 @@ def _run_analyzer(
     qdrant_url   = _env_to_qdrant_url(env)
     project_name = project.get("name", "project")
     project_id   = project.get("code", project_name)
+    qdrant_collection = _code_qdrant_collection(env, project)
     repo         = folder_path.name
 
     cmd = [
@@ -965,7 +1032,7 @@ def _run_analyzer(
         "--root",             str(folder_path),
         *_neo4j_args_code(env),
         "--qdrant-url",        qdrant_url,
-        "--qdrant-collection", project_name,
+        "--qdrant-collection", qdrant_collection,
         "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
         "--device",            env.get("device", "cpu"),
         "--batch-size",        env.get("BATCH_SIZE", "1"),
@@ -1199,7 +1266,7 @@ def _load_dotenv(path: Path) -> dict:
     return result
 
 
-def _mcp_start_one(name: str, svc: dict) -> dict:
+def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
     svc_dir: Path = svc["dir"]
     python        = _venv_python(svc_dir)
     entry_script  = svc_dir / svc["cmd"][0]
@@ -1210,8 +1277,8 @@ def _mcp_start_one(name: str, svc: dict) -> dict:
 
     cmd = [python, str(entry_script)] + svc["cmd"][1:]
 
-    # Inherit env and layer .env file on top
-    env = {**os.environ, **_load_dotenv(svc_dir / ".env")}
+    # Inherit env, layer service .env, then active harness config on top.
+    env = {**os.environ, **_load_dotenv(svc_dir / ".env"), **(extra_env or {})}
 
     MCP_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = MCP_LOG_DIR / f"dev-mcp-{name}.log"
@@ -1388,6 +1455,7 @@ def init(env, project_dir, path):
     code_provider, code_graph_env = _prompt_graph_env("code", "CODE_GRAPH_PROVIDER", project_code)
     code_qdrant_host = _p("QDRANT_HOST",     ["code", "env", "QDRANT_HOST"],     "localhost")
     code_qdrant_port = _p("QDRANT_PORT",     ["code", "env", "QDRANT_PORT"],     "6333")
+    code_qdrant_collection = _p("QDRANT_COLLECTION", ["code", "env", "QDRANT_COLLECTION"], project_code)
     code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], "jinaai/jina-embeddings-v3")
     code_batch_size  = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],      "1")
     code_max_chars   = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
@@ -1469,6 +1537,7 @@ def init(env, project_dir, path):
             "env": {
                 **code_graph_env,
                 "QDRANT_HOST":     code_qdrant_host, "QDRANT_PORT": code_qdrant_port,
+                "QDRANT_COLLECTION": code_qdrant_collection,
                 "EMBEDDING_MODEL": code_embed_model, "BATCH_SIZE": code_batch_size,
                 "MAX_EMBED_CHARS": code_max_chars,   "device": code_device,
             },
@@ -1534,6 +1603,8 @@ def status(project_dir):
         click.echo(f"\n[{section}]")
         click.echo(f"  Neo4j     : {env.get('NEO4J_URI')}  db={env.get('NEO4J_DB')}")
         click.echo(f"  Qdrant    : {env.get('QDRANT_HOST')}:{env.get('QDRANT_PORT')}")
+        if section == "code":
+            click.echo(f"  Collection: {_code_qdrant_collection(env, proj)}")
         click.echo(f"  Embedding : {env.get('EMBEDDING_MODEL')}  device={env.get('device')}")
         click.echo(f"  Projects  : {len(projects)}")
         for i, p in enumerate(projects, 1):
@@ -1944,7 +2015,9 @@ def mcp():
 @mcp.command("start")
 @click.option("--force-restart", is_flag=True,
               help="Kill existing instances before starting.")
-def mcp_start(force_restart):
+@click.option("--project-dir", default=".", show_default=True,
+              help="Project root containing .cortext-harness/config.")
+def mcp_start(force_restart, project_dir):
     """Start MCP servers for code-tiny (port 8788) and doc-tiny (port 8789).
 
     \b
@@ -1952,6 +2025,7 @@ def mcp_start(force_restart):
     If already running, displays PID and uptime — use --force-restart to reload.
     Logs: .cache/dev-mcp-<name>.log
     """
+    project_path = Path(project_dir).resolve()
     for name, svc in MCP_SERVICES.items():
         pattern = svc["pattern"]
         pids    = _mcp_pids(pattern)
@@ -1969,7 +2043,10 @@ def mcp_start(force_restart):
             click.echo(f"  [stopped]  killed {stopped} process(es)")
 
         click.echo(f"  [starting] {svc['cmd'][0]}")
-        result = _mcp_start_one(name, svc)
+        extra_env = _mcp_env_from_config(project_path, name)
+        if name == "code-tiny" and extra_env.get("QDRANT_COLLECTION"):
+            click.echo(f"  [env] QDRANT_COLLECTION={extra_env['QDRANT_COLLECTION']}")
+        result = _mcp_start_one(name, svc, extra_env=extra_env)
 
         if result["status"] == "started":
             click.echo(f"  [ok]  url={svc['url']}")
