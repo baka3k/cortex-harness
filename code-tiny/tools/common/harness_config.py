@@ -20,8 +20,16 @@ def load_harness_config(config_path: str) -> None:
         port = env.get("QDRANT_PORT", "")
         if host and port:
             os.environ["QDRANT_URL"] = f"http://{host}:{port}"
+    if "QDRANT_COLLECTION" not in os.environ:
+        collection = env.get("QDRANT_COLLECTION") or cfg.get("project", {}).get("code")
+        if collection:
+            os.environ["QDRANT_COLLECTION"] = str(collection)
+    if "QDRANT_COLLECTION_CODE" not in os.environ and "QDRANT_COLLECTION" in os.environ:
+        os.environ["QDRANT_COLLECTION_CODE"] = os.environ["QDRANT_COLLECTION"]
     if "CODE_EMBEDDING_MODEL" not in os.environ and "EMBEDDING_MODEL" in env:
         os.environ["CODE_EMBEDDING_MODEL"] = str(env["EMBEDDING_MODEL"])
+    if "EMBED_MODEL" not in os.environ and "EMBEDDING_MODEL" in env:
+        os.environ["EMBED_MODEL"] = str(env["EMBEDDING_MODEL"])
     if "EMBED_DEVICE" not in os.environ and "device" in env:
         os.environ["EMBED_DEVICE"] = str(env["device"])
     if "EMBED_BATCH_SIZE" not in os.environ and "BATCH_SIZE" in env:

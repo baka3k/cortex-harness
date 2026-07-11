@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add `dev harness` command group to `cli/dev.py`.
+Add `dev harness` command group to `cortex_harness/dev.py`.
 This wraps the harness orchestration layer (session lifecycle, context selection,
 verify gates) as a first-class CLI command group alongside `dev sync` and `dev mcp`.
 
@@ -69,7 +69,7 @@ dev harness
 
 ---
 
-## Function list (additions to cli/dev.py)
+## Function list (additions to cortex_harness/dev.py)
 
 ### Constants
 
