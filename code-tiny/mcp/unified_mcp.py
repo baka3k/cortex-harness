@@ -666,11 +666,11 @@ def _register_payload_tool(tool_name: str, description: str) -> None:
         include_raw_fields: bool = False,
         show_snippet: bool = False,
         show_comment: bool = False,
-        with_neo4j: bool = False,
-        neo4j_db: str = "",
-        neo4j_include_signature: bool = False,
-        neo4j_include_comment: bool = False,
-        neo4j_cache_path: str = "",
+        expand_graph: bool = False,
+        graph_depth: int = 0,
+        graph_direction: str = "",
+        graph_rel_types: str = "",
+        graph_limit: int = 0,
         node_id: str = "",
         node_ids: str = "",
         function_id: str = "",
@@ -719,11 +719,11 @@ def _register_payload_tool(tool_name: str, description: str) -> None:
             "include_raw_fields": include_raw_fields if include_raw_fields else None,
             "show_snippet": show_snippet if show_snippet else None,
             "show_comment": show_comment if show_comment else None,
-            "with_neo4j": with_neo4j if with_neo4j else None,
-            "neo4j_db": neo4j_db if neo4j_db else None,
-            "neo4j_include_signature": neo4j_include_signature if neo4j_include_signature else None,
-            "neo4j_include_comment": neo4j_include_comment if neo4j_include_comment else None,
-            "neo4j_cache_path": neo4j_cache_path if neo4j_cache_path else None,
+            "expand_graph": expand_graph if expand_graph else None,
+            "graph_depth": graph_depth if graph_depth > 0 else None,
+            "graph_direction": graph_direction if graph_direction else None,
+            "graph_rel_types": graph_rel_types if graph_rel_types else None,
+            "graph_limit": graph_limit if graph_limit > 0 else None,
             "node_id": node_id if node_id else None,
             "node_ids": node_ids if node_ids else None,
             "function_id": function_id if function_id else None,
@@ -794,9 +794,16 @@ async def tool_semantic_search(
     top_k: str = "",
     collection: str = "",
     project_id: str = "",
+    expand_graph: bool = False,
+    graph_depth: str = "",
+    graph_direction: str = "",
+    graph_rel_types: str = "",
+    graph_limit: str = "",
 ) -> Dict[str, Any]:
-    """Semantic search over Qdrant embeddings."""
+    """Semantic search over Qdrant embeddings with optional graph expansion."""
     parsed_top_k, top_k_error = _parse_positive_int(top_k, "top_k")
+    parsed_graph_depth, graph_depth_error = _parse_positive_int(graph_depth, "graph_depth")
+    parsed_graph_limit, graph_limit_error = _parse_positive_int(graph_limit, "graph_limit")
     values = {
         "query": query if query else None,
         "parser_type": parser_type if parser_type else None,
@@ -804,10 +811,19 @@ async def tool_semantic_search(
         "top_k": parsed_top_k,
         "collection": collection if collection else None,
         "project_id": project_id if project_id else None,
+        "expand_graph": expand_graph,
+        "graph_depth": parsed_graph_depth,
+        "graph_direction": graph_direction if graph_direction else None,
+        "graph_rel_types": graph_rel_types if graph_rel_types else None,
+        "graph_limit": parsed_graph_limit,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if top_k_error:
         return _build_tool_error("semantic_search", merged, ValueError(top_k_error))
+    if graph_depth and graph_depth_error:
+        return _build_tool_error("semantic_search", merged, ValueError(graph_depth_error))
+    if graph_limit and graph_limit_error:
+        return _build_tool_error("semantic_search", merged, ValueError(graph_limit_error))
     result = await _dispatch_tool("semantic_search", merged)
     if result == []:
         return {"results": []}

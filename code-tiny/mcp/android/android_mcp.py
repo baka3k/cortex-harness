@@ -28,6 +28,7 @@ if _MCP_DIR not in sys.path:
 
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
+from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog, ANDROID_OVERRIDES
 
 
@@ -1328,7 +1329,7 @@ async def _enrich_with_infra_community(
     description=(
         "Semantic search over Qdrant embeddings. Supports content_mode/include_raw_fields. "
         "Use list_qdrant_collections first to discover available collections. "
-        "Set with_neo4j=true to auto-attach InfraNode community context to each result."
+        "Set expand_graph=true to expand vector hits through the configured graph database."
     ),
     output_schema=None
 )
@@ -1345,11 +1346,11 @@ async def tool_semantic_search(
     include_raw_fields: bool = False,
     show_snippet: bool = False,
     show_comment: bool = False,
-    with_neo4j: bool = False,
-    neo4j_db: Optional[str] = None,
-    neo4j_include_signature: bool = False,
-    neo4j_include_comment: bool = False,
-    neo4j_cache_path: Optional[str] = None,
+    expand_graph: bool = False,
+    graph_depth: int = 2,
+    graph_direction: str = "both",
+    graph_rel_types: Optional[Any] = None,
+    graph_limit: int = 50,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Any:
     payload = _merge_payload(
@@ -1367,11 +1368,11 @@ async def tool_semantic_search(
             "include_raw_fields": include_raw_fields,
             "show_snippet": show_snippet,
             "show_comment": show_comment,
-            "with_neo4j": with_neo4j,
-            "neo4j_db": neo4j_db,
-            "neo4j_include_signature": neo4j_include_signature,
-            "neo4j_include_comment": neo4j_include_comment,
-            "neo4j_cache_path": neo4j_cache_path,
+            "expand_graph": expand_graph,
+            "graph_depth": graph_depth,
+            "graph_direction": graph_direction,
+            "graph_rel_types": graph_rel_types,
+            "graph_limit": graph_limit,
         },
     )
     query = payload.get("query")
@@ -1386,11 +1387,13 @@ async def tool_semantic_search(
     include_raw_fields = payload.get("include_raw_fields", False)
     show_snippet = payload.get("show_snippet", False)
     show_comment = payload.get("show_comment", False)
-    with_neo4j = payload.get("with_neo4j", False)
-    neo4j_db = payload.get("neo4j_db")
-    neo4j_include_signature = payload.get("neo4j_include_signature", False)
-    neo4j_include_comment = payload.get("neo4j_include_comment", False)
-    neo4j_cache_path = payload.get("neo4j_cache_path")
+    expand_graph = payload.get("expand_graph", False)
+    graph_depth = payload.get("graph_depth", 2)
+    graph_direction = payload.get("graph_direction", "both")
+    graph_rel_types = payload.get("graph_rel_types")
+    graph_limit = payload.get("graph_limit", 50)
+    db = payload.get("db")
+    project_id = payload.get("project_id")
     query = (query or "").strip()
     if not query:
         raise ValueError("query is required.")
@@ -1453,8 +1456,17 @@ async def tool_semantic_search(
                 payload_item["content"] = _select_content(payload_item, node_id, selected_mode)
                 if not include_raw_fields:
                     _prune_content_fields(payload_item)
-        if with_neo4j:
-            await _enrich_with_infra_community(results["results"], _resolve_db_candidates(neo4j_db))
+        await expand_semantic_results(
+            results,
+            run_cypher_first=_run_cypher_first,
+            db_candidates=_resolve_db_candidates(db),
+            expand_graph=expand_graph,
+            graph_depth=graph_depth,
+            graph_direction=graph_direction,
+            graph_rel_types=graph_rel_types,
+            graph_limit=graph_limit,
+            project_id=project_id,
+        )
         return results
     if mode == "code":
         items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url)
@@ -1470,8 +1482,17 @@ async def tool_semantic_search(
                 payload_item["content"] = _select_content(payload_item, node_id, selected_mode)
                 if not include_raw_fields:
                     _prune_content_fields(payload_item)
-        if with_neo4j:
-            await _enrich_with_infra_community(results["results"], _resolve_db_candidates(neo4j_db))
+        await expand_semantic_results(
+            results,
+            run_cypher_first=_run_cypher_first,
+            db_candidates=_resolve_db_candidates(db),
+            expand_graph=expand_graph,
+            graph_depth=graph_depth,
+            graph_direction=graph_direction,
+            graph_rel_types=graph_rel_types,
+            graph_limit=graph_limit,
+            project_id=project_id,
+        )
         return results
     combined_map = {(col, name) for col, name in filtered_base}
     combined_map.update(comment_collections)
@@ -1490,8 +1511,17 @@ async def tool_semantic_search(
             payload["content"] = _select_content(payload, node_id, selected_mode)
             if not include_raw_fields:
                 _prune_content_fields(payload)
-    if with_neo4j:
-        await _enrich_with_infra_community(results["results"], _resolve_db_candidates(neo4j_db))
+    await expand_semantic_results(
+        results,
+        run_cypher_first=_run_cypher_first,
+        db_candidates=_resolve_db_candidates(db),
+        expand_graph=expand_graph,
+        graph_depth=graph_depth,
+        graph_direction=graph_direction,
+        graph_rel_types=graph_rel_types,
+        graph_limit=graph_limit,
+        project_id=project_id,
+    )
     return results
 
 
