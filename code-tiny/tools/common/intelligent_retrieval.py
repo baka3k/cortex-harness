@@ -206,6 +206,75 @@ def _qdrant_search(
         return []
 
 
+def _normalize_collection_tokens(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        return [part.strip() for part in text.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _qdrant_collection_names(qdrant_url: str, timeout: float = 10.0) -> List[str]:
+    url = f"{qdrant_url.rstrip('/')}/collections"
+    try:
+        resp = httpx.get(url, timeout=timeout)
+        resp.raise_for_status()
+        collections = resp.json().get("result", {}).get("collections", [])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[intelligent_retrieval] list collections failed: %s", exc)
+        return []
+    names: List[str] = []
+    for item in collections:
+        if isinstance(item, dict) and isinstance(item.get("name"), str):
+            names.append(item["name"])
+    return names
+
+
+def _is_project_scope_collection(scope: str, collection: str) -> bool:
+    scope = (scope or "").strip()
+    collection = (collection or "").strip()
+    if not scope or not collection:
+        return False
+    if collection == f"{scope}_mess":
+        return True
+    return (
+        collection.startswith(f"{scope}_")
+        and "__" in collection
+        and collection.endswith("_functions")
+    )
+
+
+def _resolve_qdrant_collections(qdrant_url: str, collection: Any) -> List[str]:
+    """Resolve exact collection names or project scopes to Qdrant collections."""
+    tokens = _normalize_collection_tokens(collection)
+    available = _qdrant_collection_names(qdrant_url)
+    if not tokens:
+        return available
+    if not available:
+        return tokens
+
+    resolved: List[str] = []
+    for token in tokens:
+        if token in available:
+            candidates = [token]
+        else:
+            candidates = [
+                name for name in available
+                if _is_project_scope_collection(token, name)
+            ]
+        for candidate in candidates:
+            if candidate not in resolved:
+                resolved.append(candidate)
+
+    return resolved or tokens
+
+
 def _qdrant_search_by_ids(
     qdrant_url: str,
     collection: str,
@@ -546,11 +615,23 @@ class IntelligentRetrievalEngine:
         top_k: int,
     ) -> List[Dict[str, Any]]:
         """Embed query and run Qdrant vector search."""
-        if not self._embedder or not collection:
+        if not self._embedder:
             return []
         try:
             vector = self._embedder(query)
-            hits   = _qdrant_search(self._qdrant_url, collection, vector, top_k)
+            collections = _resolve_qdrant_collections(self._qdrant_url, collection)
+            merged: Dict[str, Dict[str, Any]] = {}
+            for col in collections:
+                for hit in _qdrant_search(self._qdrant_url, col, vector, top_k):
+                    payload = hit.get("payload") or {}
+                    node_id = str(payload.get("symbol_id") or hit.get("id") or "")
+                    if not node_id:
+                        continue
+                    score = float(hit.get("score") or 0.0)
+                    existing = merged.get(node_id)
+                    if existing is None or score > float(existing.get("score") or 0.0):
+                        merged[node_id] = {**hit, "_qdrant_collection": col}
+            hits = sorted(merged.values(), key=lambda h: float(h.get("score") or 0.0), reverse=True)[:top_k]
             return [_qdrant_hit_to_candidate(h, float(h.get("score") or 0.0)) for h in hits]
         except Exception as exc:  # noqa: BLE001
             logger.warning("[IR] Qdrant retrieval error: %s", exc)
