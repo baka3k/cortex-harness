@@ -362,7 +362,7 @@ DEFAULT_FLOW_REL_TYPES_GENERIC = [
 ]
 
 PARSER_ALIASES_ANDROID = {"android", "android-kotlin", "kotlin-android"}
-PARSER_ALIASES_CPLUS = {"cplus", "cpp", "c++", "c", "clang", "delphi", "pascal", "vbnet", "vb6", "vba", "vbscript"}
+PARSER_ALIASES_CPLUS = {"cplus", "cpp", "c++", "c", "clang", "swift", "delphi", "pascal", "vbnet", "vb6", "vba", "vbscript"}
 PARSER_ALIASES_JVM = {"java", "kotlin", "jvm"}
 
 
