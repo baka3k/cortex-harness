@@ -1,11 +1,11 @@
 """
 graph_expander.py
 ─────────────────
-Graph-aware seed expansion and proximity scoring via Neo4j.
+Graph-aware seed expansion and proximity scoring via the configured graph DB.
 
 Given a set of seed node IDs (from initial vector/keyword retrieval), this
 module expands the candidate set by following call-graph and type-usage edges
-in Neo4j, then computes a **graph_proximity** score in [0, 1] for each
+in the graph database, then computes a **graph_proximity** score in [0, 1] for each
 candidate.
 
 Public API
@@ -39,8 +39,7 @@ Proximity is inversely proportional to shortest hop-distance from any seed:
   - distance n (n ≥ depth)  → decay formula: max(0, 1 - n * 0.20)
 
 The module is sync-first and supports async execution via a thin async wrapper
-when a Neo4j AsyncDriver is provided.  Pass a sync ``neo4j.Driver`` for
-synchronous access.
+when an async-compatible graph driver is provided.
 """
 
 from __future__ import annotations
@@ -164,13 +163,13 @@ LIMIT 1
 
 class GraphExpander:
     """
-    Expand a set of seed node IDs via Neo4j call-graph relationships and
+    Expand a set of seed node IDs via graph call-graph relationships and
     compute graph_proximity scores for all discovered neighbors.
 
     Parameters
     ──────────
-    driver   : neo4j.Driver (sync)  *or*  neo4j.AsyncDriver (async)
-    database : Neo4j database name (default: "neo4j")
+    driver   : GraphDriver or Neo4j-style driver.
+    database : Graph database name (default: "neo4j")
     """
 
     def __init__(
@@ -332,11 +331,14 @@ RETURN
     ) -> List[Dict[str, Any]]:
         """Execute a Cypher query and return rows as plain dicts."""
         try:
+            if hasattr(self._driver, "execute_query_sync"):
+                records, _, _ = self._driver.execute_query_sync(cypher, params, self._database)
+                return [dict(record) for record in records]
             with self._driver.session(database=self._database) as session:
                 result = session.run(cypher, params)
                 return [dict(record) for record in result]
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[GraphExpander] Neo4j query failed: %s", exc)
+            logger.warning("[GraphExpander] graph query failed: %s", exc)
             return []
 
 
@@ -349,7 +351,7 @@ class AsyncGraphExpander:
     """
     Async variant of GraphExpander for use in async MCP server contexts.
 
-    Wraps an ``neo4j.AsyncDriver``.
+    Wraps an async graph driver or Neo4j AsyncDriver.
     """
 
     def __init__(self, driver: Any, database: str = "neo4j") -> None:
@@ -463,9 +465,12 @@ RETURN
         params: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         try:
+            if hasattr(self._driver, "execute_query"):
+                records, _, _ = await self._driver.execute_query(cypher, params, self._database)
+                return [dict(record) for record in records]
             async with self._driver.session(database=self._database) as session:
                 result = await session.run(cypher, params)
                 return [dict(record) async for record in result]
         except Exception as exc:  # noqa: BLE001
-            logger.warning("[AsyncGraphExpander] Neo4j query failed: %s", exc)
+            logger.warning("[AsyncGraphExpander] graph query failed: %s", exc)
             return []

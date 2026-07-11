@@ -47,6 +47,7 @@ import asyncio
 import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger("project_call_graph.mcp.explore")
 
@@ -61,6 +62,11 @@ _DEFAULT_NEO4J_URI   = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 _DEFAULT_NEO4J_USER  = os.environ.get("NEO4J_USER", "")
 _DEFAULT_NEO4J_PASS  = os.environ.get("NEO4J_PASS", "")
 _DEFAULT_NEO4J_DB    = os.environ.get("NEO4J_DB", "neo4j")
+_DEFAULT_GRAPH_PROVIDER = (
+    os.environ.get("CODE_GRAPH_PROVIDER")
+    or os.environ.get("GRAPH_PROVIDER")
+    or ""
+).strip().lower()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lazy imports (avoid hard failure at import time if libraries missing)
@@ -84,26 +90,59 @@ def _make_embedder(model_name: str) -> Optional[Callable[[str], List[float]]]:
         return None
 
 
-def _make_neo4j_driver(
+def _is_falkordb_uri(uri: str) -> bool:
+    if not uri or "://" not in uri:
+        return False
+    return urlparse(uri).scheme in {"falkor", "falkors", "redis", "rediss", "unix"}
+
+
+async def _make_graph_driver(
     uri: str,
     user: str,
     password: str,
+    database: str,
 ) -> Optional[Any]:
     """
-    Build a raw neo4j sync Driver.
-    Returns None if neo4j library unavailable or credentials missing.
+    Build a graph driver using the shared GraphDriverFactory.
+
+    Despite the legacy NEO4J_* environment variable names, the factory may
+    return a Neo4jDriver or a FalkorDBDriver depending on provider/URI config.
     """
-    if not (user and password):
+    provider_text = _DEFAULT_GRAPH_PROVIDER
+    use_falkor = provider_text in {"falkor", "falkordb"} or _is_falkordb_uri(uri)
+    if not use_falkor and not (user and password):
         logger.info(
-            "[explore_service] Neo4j keyword search and graph expansion disabled "
+            "[explore_service] Graph keyword search and expansion disabled "
             "(NEO4J_USER / NEO4J_PASS not set)."
         )
         return None
     try:
-        import neo4j  # type: ignore
-        return neo4j.GraphDatabase.driver(uri, auth=(user, password))
+        from tools.graph import GraphDriverFactory, GraphProvider
+
+        if use_falkor:
+            falkor_uri = (
+                os.environ.get("FALKORDB_URI")
+                or os.environ.get("FALKORDB_URL")
+                or (uri if _is_falkordb_uri(uri) else None)
+            )
+            config = {
+                "uri": falkor_uri,
+                "host": os.environ.get("FALKORDB_HOST", "localhost"),
+                "port": int(os.environ.get("FALKORDB_PORT", "6379")),
+                "user": os.environ.get("FALKORDB_USER") or os.environ.get("FALKORDB_USERNAME") or user,
+                "password": os.environ.get("FALKORDB_PASSWORD", password or ""),
+                "database": os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or database,
+                "graph": os.environ.get("FALKORDB_GRAPH"),
+                "ssl": os.environ.get("FALKORDB_SSL", "").lower() in {"1", "true", "yes", "on"},
+            }
+            return await GraphDriverFactory.create_driver(GraphProvider.FALKORDB, config)
+
+        return await GraphDriverFactory.create_driver(
+            GraphProvider.NEO4J,
+            {"uri": uri, "user": user, "password": password, "database": database},
+        )
     except Exception as exc:
-        logger.warning("[explore_service] Could not connect to Neo4j: %s", exc)
+        logger.warning("[explore_service] Could not connect to graph database: %s", exc)
         return None
 
 
@@ -210,10 +249,10 @@ class ExploreService:
             understanding.entities[:5],
         )
 
-        # 2. Build embedder + neo4j driver
+        # 2. Build embedder + graph driver
         embedder = _make_embedder(self._model_name)
-        neo4j_driver = (
-            _make_neo4j_driver(self._neo4j_uri, self._neo4j_user, self._neo4j_pass)
+        graph_driver = (
+            await _make_graph_driver(self._neo4j_uri, self._neo4j_user, self._neo4j_pass, active_db)
             if mode != MODE_SEMANTIC
             else None
         )
@@ -222,7 +261,7 @@ class ExploreService:
         scored_results = await self._run_retrieval(
             understanding  = understanding,
             embedder       = embedder,
-            neo4j_driver   = neo4j_driver,
+            graph_driver   = graph_driver,
             database       = active_db,
             collection     = active_collection,
             top_k          = top_k,
@@ -252,7 +291,7 @@ class ExploreService:
         self,
         understanding:  Any,
         embedder:       Optional[Callable],
-        neo4j_driver:   Optional[Any],
+        graph_driver:   Optional[Any],
         database:       str,
         collection:     str,
         top_k:          int,
@@ -262,7 +301,7 @@ class ExploreService:
         """
         Build an ``IntelligentRetrievalEngine`` and run the search.
 
-        The engine's ``search()`` method is synchronous (uses sync neo4j Driver
+        The engine's ``search()`` method is synchronous (uses sync graph Driver
         and blocking HTTP).  We offload it to a thread pool to avoid blocking
         the event loop.
         """
@@ -278,7 +317,7 @@ class ExploreService:
             qdrant_url   = self._qdrant_url,
             collection   = collection,
             embedder     = embedder,
-            neo4j_driver = neo4j_driver,
+            graph_driver = graph_driver,
             database     = database,
         )
 
