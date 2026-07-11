@@ -277,18 +277,50 @@ def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
             pass
 
 
+def _graph_provider(env: dict, scoped_key: str) -> str:
+    provider = (env.get(scoped_key) or env.get("GRAPH_PROVIDER") or "neo4j").strip().lower()
+    return "falkordb" if provider in {"falkor", "falkordb"} else "neo4j"
+
+
 def _env_to_neo4j_args(env: dict) -> list:
-    """For doc-tiny ingestor (uses --neo4j-pass, no --neo4j-db support)."""
-    return [
+    """For doc-tiny ingestor. Includes FalkorDB flags when selected."""
+    provider = _graph_provider(env, "DOC_GRAPH_PROVIDER")
+    args = ["--graph-provider", provider]
+    if provider == "falkordb":
+        args += [
+            "--falkordb-uri", env.get("FALKORDB_URI", ""),
+            "--falkordb-host", env.get("FALKORDB_HOST", "localhost"),
+            "--falkordb-port", str(env.get("FALKORDB_PORT", "6379")),
+            "--falkordb-user", env.get("FALKORDB_USER", ""),
+            "--falkordb-pass", env.get("FALKORDB_PASSWORD", ""),
+            "--falkordb-graph", env.get("FALKORDB_GRAPH", "project_graph"),
+        ]
+        if str(env.get("FALKORDB_SSL", "")).lower() in {"1", "true", "yes", "on"}:
+            args.append("--falkordb-ssl")
+    args += [
         "--neo4j-uri",  env.get("NEO4J_URI",  "bolt://localhost:7687"),
         "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
         "--neo4j-pass", env.get("NEO4J_PASS", ""),
     ]
+    return args
 
 
 def _neo4j_args_code(env: dict) -> list:
-    """For code-tiny analyzers (uses --neo4j-password)."""
-    args = [
+    """For code-tiny analyzers. Includes provider-neutral graph flags."""
+    provider = _graph_provider(env, "CODE_GRAPH_PROVIDER")
+    args = ["--graph-provider", provider]
+    if provider == "falkordb":
+        args += [
+            "--falkordb-uri", env.get("FALKORDB_URI", ""),
+            "--falkordb-host", env.get("FALKORDB_HOST", "localhost"),
+            "--falkordb-port", str(env.get("FALKORDB_PORT", "6379")),
+            "--falkordb-user", env.get("FALKORDB_USER", ""),
+            "--falkordb-password", env.get("FALKORDB_PASSWORD", ""),
+            "--falkordb-graph", env.get("FALKORDB_GRAPH", "project_graph"),
+        ]
+        if str(env.get("FALKORDB_SSL", "")).lower() in {"1", "true", "yes", "on"}:
+            args.append("--falkordb-ssl")
+    args += [
         "--neo4j-uri",      env.get("NEO4J_URI",  "bolt://localhost:7687"),
         "--neo4j-user",     env.get("NEO4J_USER", "neo4j"),
         "--neo4j-password", env.get("NEO4J_PASS", ""),
@@ -1284,22 +1316,76 @@ def init(env, project_dir, path):
     else:
         click.echo(f"[info] Creating new {env} config: {config_path}\n")
 
-    def _p(label, keys: list, default=""):
+    def _p(label, keys: list, default="", **kwargs):
         cur = existing
         for k in keys:
             cur = cur.get(k, {}) if isinstance(cur, dict) else {}
         cur_val = cur if isinstance(cur, str) else default
-        return click.prompt(label, default=cur_val or default)
+        return click.prompt(label, default=cur_val or default, **kwargs)
+
+    def _provider_default(section: str, scoped_key: str, default="falkordb") -> str:
+        env_values = existing.get(section, {}).get("env", {})
+        if isinstance(env_values, dict):
+            value = env_values.get(scoped_key) or env_values.get("GRAPH_PROVIDER") or default
+        else:
+            value = default
+        value = str(value).strip().lower()
+        return "falkordb" if value in {"falkor", "falkordb"} else "neo4j"
+
+    def _prompt_graph_env(
+        section: str,
+        scoped_key: str,
+        graph_default: str,
+        provider_default: str = "falkordb",
+    ) -> tuple[str, dict]:
+        provider = click.prompt(
+            "GRAPH_PROVIDER",
+            default=_provider_default(section, scoped_key, provider_default),
+            type=click.Choice(["neo4j", "falkordb"], case_sensitive=False),
+        ).lower()
+        graph_env = {"GRAPH_PROVIDER": provider, scoped_key: provider}
+        if provider == "neo4j":
+            graph_env.update({
+                "NEO4J_URI":  _p("NEO4J_URI",  [section, "env", "NEO4J_URI"],  "bolt://localhost:7687"),
+                "NEO4J_DB":   _p("NEO4J_DB",   [section, "env", "NEO4J_DB"],   "neo4j"),
+                "NEO4J_USER": _p("NEO4J_USER", [section, "env", "NEO4J_USER"], "neo4j"),
+                "NEO4J_PASS": _p("NEO4J_PASS", [section, "env", "NEO4J_PASS"], ""),
+            })
+            return provider, graph_env
+
+        falkordb_host = _p("FALKORDB_HOST", [section, "env", "FALKORDB_HOST"], "localhost")
+        falkordb_port = _p("FALKORDB_PORT", [section, "env", "FALKORDB_PORT"], "6379")
+        falkordb_ssl = _p("FALKORDB_SSL", [section, "env", "FALKORDB_SSL"], "false")
+        falkordb_uri = _p(
+            "FALKORDB_URI",
+            [section, "env", "FALKORDB_URI"],
+            f"redis://{falkordb_host}:{falkordb_port}",
+        )
+        falkordb_graph = _p("FALKORDB_GRAPH", [section, "env", "FALKORDB_GRAPH"], graph_default)
+        falkordb_user = _p("FALKORDB_USER", [section, "env", "FALKORDB_USER"], "")
+        falkordb_pass = _p("FALKORDB_PASSWORD", [section, "env", "FALKORDB_PASSWORD"], "")
+        graph_env.update({
+            "FALKORDB_URI": falkordb_uri,
+            "FALKORDB_HOST": falkordb_host,
+            "FALKORDB_PORT": falkordb_port,
+            "FALKORDB_USER": falkordb_user,
+            "FALKORDB_PASSWORD": falkordb_pass,
+            "FALKORDB_GRAPH": falkordb_graph,
+            "FALKORDB_SSL": falkordb_ssl,
+            # Legacy aliases used by analyzers still accepting neo4j-* flags.
+            "NEO4J_URI": falkordb_uri,
+            "NEO4J_DB": falkordb_graph,
+            "NEO4J_USER": falkordb_user,
+            "NEO4J_PASS": falkordb_pass,
+        })
+        return provider, graph_env
 
     click.echo("─── Project ────────────────────────────────")
     project_code = _p("Project code (short ID)", ["project", "code"], "my_project")
     project_name = _p("Project name",            ["project", "name"], project_code)
 
-    click.echo("\n─── Code — Neo4j + Qdrant + Embedding ──────")
-    code_neo4j_uri   = _p("NEO4J_URI",       ["code", "env", "NEO4J_URI"],       "bolt://localhost:7687")
-    code_neo4j_db    = _p("NEO4J_DB",        ["code", "env", "NEO4J_DB"],        "neo4j")
-    code_neo4j_user  = _p("NEO4J_USER",      ["code", "env", "NEO4J_USER"],      "neo4j")
-    code_neo4j_pass  = _p("NEO4J_PASS",      ["code", "env", "NEO4J_PASS"],      "")
+    click.echo("\n─── Code — Graph + Qdrant + Embedding ──────")
+    code_provider, code_graph_env = _prompt_graph_env("code", "CODE_GRAPH_PROVIDER", project_code)
     code_qdrant_host = _p("QDRANT_HOST",     ["code", "env", "QDRANT_HOST"],     "localhost")
     code_qdrant_port = _p("QDRANT_PORT",     ["code", "env", "QDRANT_PORT"],     "6333")
     code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], "jinaai/jina-embeddings-v3")
@@ -1307,11 +1393,13 @@ def init(env, project_dir, path):
     code_max_chars   = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
     code_device      = _p("device",          ["code", "env", "device"],          "cpu")
 
-    click.echo("\n─── Doc — Neo4j + Qdrant + Embedding ───────")
-    doc_neo4j_uri   = _p("NEO4J_URI",       ["doc", "env", "NEO4J_URI"],       code_neo4j_uri)
-    doc_neo4j_db    = _p("NEO4J_DB",        ["doc", "env", "NEO4J_DB"],        code_neo4j_db)
-    doc_neo4j_user  = _p("NEO4J_USER",      ["doc", "env", "NEO4J_USER"],      code_neo4j_user)
-    doc_neo4j_pass  = _p("NEO4J_PASS",      ["doc", "env", "NEO4J_PASS"],      code_neo4j_pass)
+    click.echo("\n─── Doc — Graph + Qdrant + Embedding ───────")
+    _, doc_graph_env = _prompt_graph_env(
+        "doc",
+        "DOC_GRAPH_PROVIDER",
+        project_code,
+        provider_default=code_provider,
+    )
     doc_qdrant_host = _p("QDRANT_HOST",     ["doc", "env", "QDRANT_HOST"],     code_qdrant_host)
     doc_qdrant_port = _p("QDRANT_PORT",     ["doc", "env", "QDRANT_PORT"],     code_qdrant_port)
     doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], "BAAI/bge-m3")
@@ -1379,8 +1467,7 @@ def init(env, project_dir, path):
         "project": {"code": project_code, "name": project_name},
         "code": {
             "env": {
-                "NEO4J_URI":       code_neo4j_uri,   "NEO4J_DB":   code_neo4j_db,
-                "NEO4J_USER":      code_neo4j_user,  "NEO4J_PASS": code_neo4j_pass,
+                **code_graph_env,
                 "QDRANT_HOST":     code_qdrant_host, "QDRANT_PORT": code_qdrant_port,
                 "EMBEDDING_MODEL": code_embed_model, "BATCH_SIZE": code_batch_size,
                 "MAX_EMBED_CHARS": code_max_chars,   "device": code_device,
@@ -1389,8 +1476,7 @@ def init(env, project_dir, path):
         },
         "doc": {
             "env": {
-                "NEO4J_URI":       doc_neo4j_uri,   "NEO4J_DB":   doc_neo4j_db,
-                "NEO4J_USER":      doc_neo4j_user,  "NEO4J_PASS": doc_neo4j_pass,
+                **doc_graph_env,
                 "QDRANT_HOST":     doc_qdrant_host, "QDRANT_PORT": doc_qdrant_port,
                 "EMBEDDING_MODEL": doc_embed_model, "BATCH_SIZE": doc_batch_size,
                 "MAX_EMBED_CHARS": doc_max_chars,   "device": doc_device,
