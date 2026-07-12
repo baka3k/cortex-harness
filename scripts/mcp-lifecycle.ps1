@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("build", "infra-up", "infra-down", "doctor", "start", "stop", "help")]
+    [ValidateSet("build", "install", "uninstall", "infra-up", "infra-down", "doctor", "start", "stop", "help")]
     [string]$Action = "help"
 )
 
@@ -9,14 +9,14 @@ $ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = (Resolve-Path (Join-Path $ScriptDir "..")).Path
-$StateDir = Join-Path $Root ".cache\mcp"
+$StateDir = Join-Path (Join-Path $Root ".cache") "mcp"
 $PidFile = Join-Path $StateDir "pids.json"
 
 $Servers = @(
     [pscustomobject]@{
         Name = "code-tiny"
         WorkDir = Join-Path $Root "code-tiny"
-        Script = Join-Path $Root "code-tiny\mcp.sh"
+        Script = Join-Path (Join-Path $Root "code-tiny") "mcp.sh"
         PythonScript = "mcp/unified_mcp.py"
         Arguments = @("--transport", "streamable-http", "--host", "127.0.0.1", "--port", "8788", "--path", "/mcp")
         Port = 8788
@@ -24,7 +24,7 @@ $Servers = @(
     [pscustomobject]@{
         Name = "doc-tiny"
         WorkDir = Join-Path $Root "doc-tiny"
-        Script = Join-Path $Root "doc-tiny\mcp.sh"
+        Script = Join-Path (Join-Path $Root "doc-tiny") "mcp.sh"
         PythonScript = "mcp_graph_rag.py"
         Arguments = @("--host", "127.0.0.1", "--port", "8789", "--transport", "streamable-http", "--path", "/mcp")
         Port = 8789
@@ -56,6 +56,8 @@ function Write-Usage {
     @"
 Usage:
   make build       Create/sync virtualenvs and Python dependencies.
+  make install     Run build and install the global dev command.
+  make uninstall   Remove the global dev command installed by make install.
   make infra-up    Pull/start local Qdrant and FalkorDB Docker containers.
   make infra-down  Stop the Docker containers started by make infra-up.
   make doctor      Check Python deps, Docker, database ports, and MCP ports.
@@ -70,6 +72,14 @@ Default local infrastructure:
   qdrant    http://127.0.0.1:6333
   falkordb  redis://127.0.0.1:6379
 "@ | Write-Host
+}
+
+function Test-IsWindows {
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        return $IsWindows
+    }
+
+    return $true
 }
 
 function Get-CommandPath {
@@ -104,7 +114,7 @@ function Invoke-NativeQuiet {
 }
 
 function Get-PythonLauncher {
-    $python = Get-CommandPath @("py.exe", "python.exe", "python")
+    $python = Get-CommandPath @("py.exe", "python.exe", "python3", "python")
     if (-not $python) {
         throw "Python was not found on PATH. Install Python 3.10+ before running make build."
     }
@@ -156,13 +166,163 @@ function Invoke-Build {
     & $python -m pip install --upgrade pip
 
     Install-Requirements -Python $python -RequirementsPath (Join-Path $Root "requirements.txt")
-    Install-Requirements -Python $python -RequirementsPath (Join-Path $Root "code-tiny\requirements.txt")
-    Install-Requirements -Python $python -RequirementsPath (Join-Path $Root "doc-tiny\requirements.txt")
+    Install-Requirements -Python $python -RequirementsPath (Join-Path (Join-Path $Root "code-tiny") "requirements.txt")
+    Install-Requirements -Python $python -RequirementsPath (Join-Path (Join-Path $Root "doc-tiny") "requirements.txt")
 
     Write-Host "[build] Installing editable root package"
     & $python -m pip install -e $Root
 
     Write-Host "[build] Dependency sync complete."
+}
+
+function Get-UserBinDir {
+    if (-not (Test-IsWindows) -and $env:HOME) {
+        return (Join-Path (Join-Path $env:HOME ".local") "bin")
+    }
+
+    if ($env:USERPROFILE) {
+        return (Join-Path (Join-Path $env:USERPROFILE ".local") "bin")
+    }
+
+    throw "Neither HOME nor USERPROFILE is set; cannot choose a user-local install directory."
+}
+
+function Test-PathListContains {
+    param(
+        [string]$PathList,
+        [string]$Directory
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PathList)) {
+        return $false
+    }
+
+    $separator = if (Test-IsWindows) { ";" } else { ":" }
+    $trimChars = [char[]]@("\", "/")
+    $target = [System.IO.Path]::GetFullPath($Directory).TrimEnd($trimChars)
+    foreach ($entry in ($PathList -split [regex]::Escape($separator))) {
+        if ([string]::IsNullOrWhiteSpace($entry)) {
+            continue
+        }
+
+        try {
+            $normalized = [System.IO.Path]::GetFullPath($entry).TrimEnd($trimChars)
+            if ([string]::Equals($normalized, $target, [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        } catch {
+            if ([string]::Equals($entry.TrimEnd($trimChars), $Directory.TrimEnd($trimChars), [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
+function Add-UserPathEntry {
+    param([string]$Directory)
+
+    if (-not (Test-IsWindows)) {
+        if (-not (Test-PathListContains -PathList $env:PATH -Directory $Directory)) {
+            $env:PATH = $env:PATH.TrimEnd(":") + ":" + $Directory
+            Write-Host "[install] Add this to your shell profile if needed: export PATH=`"$Directory`":`$PATH"
+            return $true
+        }
+
+        return $false
+    }
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if (Test-PathListContains -PathList $userPath -Directory $Directory) {
+        return $false
+    }
+
+    $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) {
+        $Directory
+    } else {
+        $userPath.TrimEnd(";") + ";" + $Directory
+    }
+
+    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+
+    if (-not (Test-PathListContains -PathList $env:Path -Directory $Directory)) {
+        $env:Path = $env:Path.TrimEnd(";") + ";" + $Directory
+    }
+
+    return $true
+}
+
+function Install-DevCommand {
+    $binDir = Get-UserBinDir
+    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+
+    if (Test-IsWindows) {
+        $source = Join-Path $Root "dev-global.cmd"
+        $target = Join-Path $binDir "dev.cmd"
+
+        if (-not (Test-Path -LiteralPath $source)) {
+            throw "Global dev wrapper not found: $source"
+        }
+
+        Copy-Item -LiteralPath $source -Destination $target -Force
+    } else {
+        $target = Join-Path $binDir "dev"
+        $rootForShell = $Root -replace "'", "'\''"
+        $content = @"
+#!/usr/bin/env bash
+set -euo pipefail
+CORTEX_HARNESS_DIR='$rootForShell'
+PYTHON_EXE="`${CORTEX_HARNESS_DIR}/.venv/bin/python"
+if [ ! -x "`$PYTHON_EXE" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_EXE="`$(command -v python3)"
+  else
+    PYTHON_EXE="`$(command -v python)"
+  fi
+fi
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+exec "`$PYTHON_EXE" "`${CORTEX_HARNESS_DIR}/cortex_harness/dev.py" "`$@"
+"@
+        Set-Content -LiteralPath $target -Value $content -NoNewline -Encoding UTF8
+        $chmod = Get-CommandPath @("chmod")
+        if ($chmod) {
+            & $chmod +x $target
+        }
+    }
+
+    $pathAdded = Add-UserPathEntry -Directory $binDir
+
+    Write-Host "[install] Installed dev command: $target"
+    if ($pathAdded) {
+        Write-Host "[install] Added $binDir to User PATH. Open a new terminal if the current one does not see dev."
+    }
+
+    $command = Get-Command dev -ErrorAction SilentlyContinue
+    if ($command) {
+        Write-Host "[install] dev resolves to: $($command.Source)"
+    } else {
+        Write-Host "[install] dev will be available after opening a new terminal."
+    }
+}
+
+function Invoke-Install {
+    Invoke-Build
+    Install-DevCommand
+}
+
+function Invoke-Uninstall {
+    $commandName = if (Test-IsWindows) { "dev.cmd" } else { "dev" }
+    $target = Join-Path (Get-UserBinDir) $commandName
+    if (Test-Path -LiteralPath $target) {
+        Remove-Item -LiteralPath $target -Force
+        Write-Host "[uninstall] Removed dev command: $target"
+    } else {
+        Write-Host "[uninstall] dev command was not installed at: $target"
+    }
+
+    Write-Host "[uninstall] User PATH was left unchanged."
 }
 
 function Get-DockerCommand {
@@ -708,6 +868,8 @@ Write-Host '[start]' $titleArg 'exited.'
 try {
     switch ($Action) {
         "build" { Invoke-Build }
+        "install" { Invoke-Install }
+        "uninstall" { Invoke-Uninstall }
         "infra-up" { Invoke-InfraUp }
         "infra-down" { Invoke-InfraDown }
         "doctor" { Invoke-Doctor }
