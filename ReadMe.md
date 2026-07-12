@@ -44,17 +44,27 @@ The goal is to provide a foundational layer for building reliable AI-native syst
 
 Clone the repo once, install the `dev` command globally — no aliases, no path prefixes needed.
 
+On macOS/Linux, install PowerShell Core first if `pwsh` is not already available:
+
+```bash
+brew install --cask powershell
+```
+
 ```bash
 git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
-make build       # create/reuse .venv and install root, code-tiny, and doc-tiny dependencies
+make install     # create/reuse .venv, install dependencies, and install global dev command
+make build       # create/reuse .venv and install root, code-tiny, and doc-tiny dependencies only
 make infra-up    # pull/start Qdrant (:6333) and FalkorDB (:6379) Docker containers
 make doctor      # check Python deps, Docker, database ports, and MCP ports
 make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
 make stop        # stop MCP terminal/processes started by make start
 make infra-down  # stop the Qdrant/FalkorDB containers managed by make infra-up
+make uninstall   # remove the global dev command installed by make install
 ```
+
+`make install` installs `dev.cmd` to `%USERPROFILE%\.local\bin` on Windows and `dev` to `~/.local/bin` on macOS/Linux. Make sure that directory is on your shell `PATH`.
 
 Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.
 
