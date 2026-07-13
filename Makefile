@@ -1,35 +1,35 @@
 ifeq ($(OS),Windows_NT)
-POWERSHELL ?= powershell.exe
+LIFECYCLE := powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/mcp-lifecycle.ps1
 else
-POWERSHELL ?= pwsh
+PYTHON ?= python3
+LIFECYCLE := $(PYTHON) scripts/mcp-lifecycle.py
 endif
-LIFECYCLE := scripts/mcp-lifecycle.ps1
 
 .PHONY: help build install uninstall infra-up infra-down doctor start stop
 
 help:
-	@$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) help
+	@$(LIFECYCLE) help
 
 build:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) build
+	$(LIFECYCLE) build
 
 install:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) install
+	$(LIFECYCLE) install
 
 uninstall:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) uninstall
+	$(LIFECYCLE) uninstall
 
 infra-up:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) infra-up
+	$(LIFECYCLE) infra-up
 
 infra-down:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) infra-down
+	$(LIFECYCLE) infra-down
 
 doctor:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) doctor
+	$(LIFECYCLE) doctor
 
 start:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) start
+	$(LIFECYCLE) start
 
 stop:
-	$(POWERSHELL) -NoProfile -ExecutionPolicy Bypass -File $(LIFECYCLE) stop
+	$(LIFECYCLE) stop

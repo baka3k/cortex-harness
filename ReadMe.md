@@ -44,11 +44,7 @@ The goal is to provide a foundational layer for building reliable AI-native syst
 
 Clone the repo once, install the `dev` command globally — no aliases, no path prefixes needed.
 
-On macOS/Linux, install PowerShell Core first if `pwsh` is not already available:
-
-```bash
-brew install --cask powershell
-```
+The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windows. Python 3.10+ is required.
 
 ```bash
 git clone https://github.com/baka3k/cortex-harness.git
