@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
-import resource
 import sys
 import time
 from dataclasses import replace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+try:
+    import resource
+except ModuleNotFoundError:  # pragma: no cover - Windows has no resource module
+    resource = None
 
 from tools.servlet_jsp.detector import ServletJspProjectDetector
 from tools.servlet_jsp.java_identity import JavaIdentityProvider
@@ -420,6 +424,8 @@ def _check_operational_budgets(started_at: float, budgets: ResourceBudgets) -> N
     if budgets.max_wall_time_seconds > 0 and time.monotonic() - started_at > budgets.max_wall_time_seconds:
         raise RuntimeError(f"Servlet/JSP wall-time limit {budgets.max_wall_time_seconds:g}s exceeded")
     if budgets.max_peak_rss_bytes <= 0:
+        return
+    if resource is None:
         return
     usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     peak_bytes = int(usage if sys.platform == "darwin" else usage * 1024)
