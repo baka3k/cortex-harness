@@ -9,12 +9,16 @@ The user approved overriding the `neo4j-to-falkordb-migration` dependency and pr
 
 ## Automated Tests
 
-- `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`: 44 passed.
-- `.venv/bin/python -m py_compile ...`: all changed integration modules compiled.
+- `.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"`: 38 tests ran, 7 skipped, OK.
+- `.\.venv\Scripts\python.exe -m unittest tests.test_framework_analyzer_imports tests.test_framework_fixture_analysis tests.test_framework_graph_contract tests.test_framework_mcp_routing tests.test_incremental_sync_framework_overlays`: 11 framework-focused tests passed.
+- `.\.venv\Scripts\python.exe -m py_compile ...`: all changed integration modules and framework tests compiled.
 - `git diff --check`: passed.
-- `make doctor`: Python environment, dependencies, Qdrant, FalkorDB, code MCP, and doc MCP passed; Docker CLI was unavailable.
+- `make doctor`: Python venv, Python dependencies, and Docker CLI passed. Docker daemon, Qdrant, and FalkorDB were not running in the current Windows environment; code-tiny and doc-tiny MCP ports were warnings.
+- `incremental_sync.py --full-scan --parsers spring,servlet_jsp,mybatis` against `tests/fixtures/framework-java-app`: attempted, but the Java primary analyzer failed during Qdrant cleanup because local Qdrant on `127.0.0.1:6333` was unavailable. The graphless analyzer fixture test above is the current reproducible coverage until local services are running.
 
 The test set covers analyzer imports, writer validation/cleanup/generation behavior, overlay detection and prerequisite routing, parser discovery, framework search filters, traversal defaults, endpoint/persistence query shapes, project scoping, and Servlet/JSP active-generation filtering.
+
+Current follow-up validation also fixed a Windows import failure in `tools.servlet_jsp.pipeline` by treating the POSIX-only `resource` module as optional for peak-RSS enforcement, declared the missing `tree-sitter-language-pack` runtime dependency required by MyBatis parser gates, restored tracked test visibility by removing the `tests/**` ignore rule, and added the compact `tests/fixtures/framework-java-app` mixed-framework fixture used by graphless analyzer coverage.
 
 ## Full-Scan Validation
 
