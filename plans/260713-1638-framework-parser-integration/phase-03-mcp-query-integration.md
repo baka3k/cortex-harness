@@ -117,14 +117,14 @@ Only add direct framework embeddings in a follow-up if test queries cannot reach
 
 ## Todo
 
-- [ ] `list_parsers` preserves old aliases and adds all three frameworks.
-- [ ] Framework name search returns nodes even when base-language hits also exist.
-- [ ] Semantic search can reach framework nodes through graph expansion.
-- [ ] XML-only facts have a documented retrieval path.
-- [ ] Full-stack endpoint flows work for Spring and Servlet/JSP.
-- [ ] Persistence flows reach MyBatis SQL/table facts.
-- [ ] Inactive Servlet/JSP generations never leak.
-- [ ] Neo4j/FalkorDB compatibility tests cover every new query shape.
+- [x] `list_parsers` preserves old aliases and adds all three frameworks.
+- [x] Framework name search returns nodes even when base-language hits also exist.
+- [x] Semantic search can reach framework nodes through graph expansion.
+- [x] XML-only facts have a documented retrieval path.
+- [x] Full-stack endpoint flows work for Spring and Servlet/JSP.
+- [x] Persistence flows reach MyBatis SQL/table facts.
+- [x] Inactive Servlet/JSP generations never leak.
+- [ ] Neo4j/FalkorDB compatibility tests cover every new query shape. Query-shape tests pass, but live cross-provider MCP execution awaits the active provider migration.
 
 ## Risks
 
@@ -139,4 +139,3 @@ Only add direct framework embeddings in a follow-up if test queries cannot reach
 - New framework routing/search/flow tests pass against both graph providers where supported.
 - Representative natural-language semantic searches return canonical code seeds plus relevant framework neighbors.
 - Query results are project-scoped, generation-safe, bounded, and explainable.
-

@@ -90,12 +90,12 @@ If `provider_runtime.py` is retained, `tools.graph.cli` should delegate to it or
 
 ## Todo
 
-- [ ] Analyzer imports succeed.
-- [ ] Writer API tests pin every method used by analyzers.
-- [ ] Relationship types are allow-listed and safely interpolated.
-- [ ] Canonical language nodes are never overwritten by overlay cleanup.
-- [ ] Servlet/JSP promotion is atomic or fails closed.
-- [ ] Schema setup is idempotent for both providers.
+- [x] Analyzer imports succeed.
+- [x] Writer API tests pin the analyzer-facing write, cleanup, stage, and promote contract.
+- [x] Relationship types are allow-listed and safely interpolated.
+- [x] Canonical language nodes are never overwritten by overlay cleanup.
+- [x] Servlet/JSP promotion is atomic or fails closed.
+- [ ] Schema setup is idempotent for both providers. Neo4j definitions are versioned/idempotent; FalkorDB schema CLI support remains part of the active provider migration.
 
 ## Risks
 
@@ -110,4 +110,3 @@ If `provider_runtime.py` is retained, `tools.graph.cli` should delegate to it or
 - Fake-driver tests prove expected queries, parameters, batches, and cleanup scoping.
 - Provider integration tests write the same logical graph shape in Neo4j and FalkorDB.
 - Failed Servlet/JSP staging leaves the previously active generation queryable.
-

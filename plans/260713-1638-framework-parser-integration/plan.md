@@ -1,10 +1,12 @@
 # Framework Parser Scan and MCP Integration Plan
 
-status: pending
+status: complete-with-exclusions
 created: 2026-07-13
+completed: 2026-07-13
 mode: hi-plan --fast
 scope: code-tiny framework analyzers, incremental scan orchestration, graph schema, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
+dependencyOverride: user approved implementation before the migration completed
 
 ## Overview
 
@@ -175,10 +177,13 @@ Excluded:
 - Servlet/JSP queries never return inactive generations.
 - Existing MCP, incremental sync, graph-provider, and Qdrant tests remain green.
 
+## Completion Notes
+
+Implementation and FalkorDB validation are complete. Live Neo4j write/query parity and live FalkorDB MCP execution remain excluded because the overridden `neo4j-to-falkordb-migration` dependency has not yet converted `setup_constraints.py` and the general C++/JVM MCP graph connection. See [reports/validation-report.md](reports/validation-report.md) for commands, counts, timings, and exclusions.
+
 ## Evidence Coverage
 
 - `mind_mcp`: used; unavailable for project context because the configured `documents` collection does not exist.
 - `graph_mcp.semantic_search`: used; identified the upstream HyperGraph framework parser and MCP integration areas through Qdrant. Neo4j relationship expansion was unavailable because port 7687 was down.
 - Serena: unavailable in this session.
 - `rg`/direct file inspection: used to verify local call paths, imports, diffs, graph contracts, and test coverage.
-
