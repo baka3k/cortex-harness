@@ -92,8 +92,8 @@ DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
 DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
 DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "neo4j"
-FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft"
-FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft"
+FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
+FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 IPC_MESSAGES_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "temp", "ipc_messages.json")
 
 

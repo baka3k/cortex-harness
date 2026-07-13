@@ -320,31 +320,87 @@ INDEXES: list[tuple[str, str]] = [
     ),
 ]
 
+# Framework overlays merge by stable ``id`` and always query within a project.
+# Build these definitions from allow-listed labels so the same schema contract
+# is deterministic and idempotent across reruns.
+SPRING_LABELS: tuple[str, ...] = (
+    "SpringModule", "SpringApplication", "SpringConfiguration", "SpringBean", "JpaEntity",
+    "TransactionBoundary", "MessageDestination", "ScheduledTask", "AsyncBoundary",
+    "ApplicationEvent", "SecurityFilterChain", "SecurityRule", "Authority", "Aspect",
+    "Advice", "Pointcut", "ValidationConstraint", "CacheRegion", "CacheOperation",
+)
+MYBATIS_LABELS: tuple[str, ...] = (
+    "MyBatisModule", "MyBatisArtifact", "MyBatisMapper", "MyBatisMapperMethod",
+    "MyBatisParameter", "MyBatisJavaProperty", "MyBatisXmlDocument", "MyBatisStatement",
+    "MyBatisSqlFragment", "MyBatisResultMap", "MyBatisResultMapping", "MyBatisInclude",
+    "MyBatisDynamicNode", "MyBatisConfig", "MyBatisSqlStatement", "DatabaseTable",
+    "DatabaseColumn", "MyBatisSqlJoin", "MyBatisSqlParameter", "MyBatisSqlProvider",
+    "MyBatisSpringBridge", "MyBatisExtension", "MyBatisCache",
+)
+SERVLET_JSP_LABELS: tuple[str, ...] = (
+    "ServletJspModule", "WebDescriptor", "Servlet", "Filter", "Listener", "ServletMapping",
+    "FilterMapping", "JSPView", "JspExpression", "JspTag", "StateSlot", "LifecycleEvent",
+    "ErrorPage", "WelcomePage", "SecurityConstraint", "WebTarget", "WebConfiguration",
+)
+for _framework, _labels in (
+    ("spring", SPRING_LABELS),
+    ("mybatis", MYBATIS_LABELS),
+    ("servlet_jsp", SERVLET_JSP_LABELS),
+):
+    for _label in _labels:
+        _token = re.sub(r"(?<!^)(?=[A-Z])", "_", _label).lower()
+        CONSTRAINTS.append((
+            f"unique_{_framework}_{_token}_id",
+            f"CREATE CONSTRAINT unique_{_framework}_{_token}_id IF NOT EXISTS FOR (n:{_label}) REQUIRE n.id IS UNIQUE",
+        ))
+        INDEXES.append((
+            f"{_framework}_{_token}_project_lookup",
+            f"CREATE INDEX {_framework}_{_token}_project_lookup IF NOT EXISTS FOR (n:{_label}) ON (n.project_id)",
+        ))
+        if _framework == "servlet_jsp":
+            INDEXES.append((
+                f"servlet_jsp_{_token}_active_lookup",
+                f"CREATE INDEX servlet_jsp_{_token}_active_lookup IF NOT EXISTS FOR (n:{_label}) ON (n.project_id, n.module_id, n.generation_id)",
+            ))
+
+CONSTRAINTS.append((
+    "unique_servlet_jsp_analysis_state_id",
+    "CREATE CONSTRAINT unique_servlet_jsp_analysis_state_id IF NOT EXISTS FOR (s:ServletJspAnalysisState) REQUIRE s.id IS UNIQUE",
+))
+INDEXES.append((
+    "servlet_jsp_analysis_state_active_lookup",
+    "CREATE INDEX servlet_jsp_analysis_state_active_lookup IF NOT EXISTS FOR (s:ServletJspAnalysisState) ON (s.project_id, s.module_id, s.active_generation)",
+))
+
+_CORE_FULLTEXT_LABELS = (
+    "Function", "Class", "Type", "Namespace", "Package", "File", "Field", "Alias", "Template",
+    "FunctionType", "Event", "Project", "Property", "Interface", "Enum", "Constant", "Variable",
+    "UnknownFunction", "Message", "MessageEndpoint", "AndroidManifest", "AndroidComponent",
+    "AndroidResource", "GradleModule", "GradleDependency", "AndroidAnnotation", "AndroidNavRoute",
+    "AndroidIntentAction", "AndroidHandlerMessage", "ApiEndpoint", "ApiCall", "Controller", "Service",
+    "Database", "DataRepository", "Middleware",
+)
+_FULLTEXT_LABELS = tuple(dict.fromkeys((*_CORE_FULLTEXT_LABELS, *SPRING_LABELS, *MYBATIS_LABELS, *SERVLET_JSP_LABELS)))
+_FULLTEXT_LABEL_CYPHER = "|".join(_FULLTEXT_LABELS)
+
 FULLTEXT_INDEXES: list[tuple[str, str]] = [
     (
-        "mcp_symbol_text_ft",
+        "mcp_symbol_text_ft_v2",
         (
-            "CREATE FULLTEXT INDEX mcp_symbol_text_ft IF NOT EXISTS "
-            "FOR (n:Function|Class|Type|Namespace|Package|File|Field|Alias|Template|FunctionType|Event|Project|"
-            "Property|Interface|Enum|Constant|Variable|UnknownFunction|Message|MessageEndpoint|"
-            "AndroidManifest|AndroidComponent|AndroidResource|GradleModule|GradleDependency|AndroidAnnotation|"
-            "AndroidNavRoute|AndroidIntentAction|AndroidHandlerMessage|ApiEndpoint|ApiCall|Controller|Service|"
-            "Database|DataRepository|Middleware) "
+            "CREATE FULLTEXT INDEX mcp_symbol_text_ft_v2 IF NOT EXISTS "
+            f"FOR (n:{_FULLTEXT_LABEL_CYPHER}) "
             "ON EACH [n.name, n.qualified_name, n.file_path, n.path, n.package_name, n.class_name, n.module_path, "
             "n.namespace, n.application_id, n.coordinate, n.group, n.artifact, n.version, n.res_type, "
-            "n.component_type, n.route, n.action, n.token, n.http_method, n.url_pattern]"
+            "n.component_type, n.route, n.action, n.token, n.http_method, n.url_pattern, n.raw_url_pattern, "
+            "n.raw_value, n.resolved_value, n.sql]"
         ),
     ),
     (
-        "mcp_symbol_code_ft",
+        "mcp_symbol_code_ft_v2",
         (
-            "CREATE FULLTEXT INDEX mcp_symbol_code_ft IF NOT EXISTS "
-            "FOR (n:Function|Class|Type|Namespace|Package|File|Field|Alias|Template|FunctionType|Event|Project|"
-            "Property|Interface|Enum|Constant|Variable|UnknownFunction|Message|"
-            "AndroidManifest|AndroidComponent|AndroidResource|GradleModule|GradleDependency|AndroidAnnotation|"
-            "AndroidNavRoute|AndroidIntentAction|AndroidHandlerMessage|ApiEndpoint|ApiCall|Controller|Service|"
-            "Database|DataRepository|Middleware) "
-            "ON EACH [n.code, n.comment, n.summary, n.note, n.payload, n.response, n.explanation]"
+            "CREATE FULLTEXT INDEX mcp_symbol_code_ft_v2 IF NOT EXISTS "
+            f"FOR (n:{_FULLTEXT_LABEL_CYPHER}) "
+            "ON EACH [n.code, n.sql, n.comment, n.summary, n.note, n.payload, n.response, n.explanation]"
         ),
     ),
 ]
