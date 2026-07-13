@@ -1,0 +1,14 @@
+<web-app xmlns="https://jakarta.ee/xml/ns/jakartaee" version="6.0">
+  <display-name>Framework Java App</display-name>
+  <servlet>
+    <servlet-name>legacyCatalog</servlet-name>
+    <servlet-class>com.example.catalog.LegacyCatalogServlet</servlet-class>
+  </servlet>
+  <servlet-mapping>
+    <servlet-name>legacyCatalog</servlet-name>
+    <url-pattern>/legacy/catalog</url-pattern>
+  </servlet-mapping>
+  <welcome-file-list>
+    <welcome-file>catalog.jsp</welcome-file>
+  </welcome-file-list>
+</web-app>
