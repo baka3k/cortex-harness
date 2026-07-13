@@ -26,6 +26,7 @@ from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
+from framework_registry import servlet_active_generation_predicate
 
 
 
@@ -105,8 +106,8 @@ DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
 DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
 DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "neo4j"
-FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft"
-FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft"
+FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
+FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 
 
 MCP_NAME = "Project Call Graph"
@@ -2378,39 +2379,58 @@ async def tool_search_functions(
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
     expand_search: bool = False,
+    framework: Optional[str] = None,
+    kinds: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
+    framework = str(framework or "").strip().lower() or None
+    kinds = _normalize_string_list(kinds) if kinds else None
+    if framework and framework not in {"spring", "servlet_jsp", "mybatis"}:
+        raise ValueError("framework must be spring, servlet_jsp, or mybatis")
     fallback_cypher = (
-        "MATCH (n) WHERE (n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package) "
-        "AND any(q IN $qs WHERE toLower(n.name) CONTAINS q OR toLower(n.qualified_name) CONTAINS q) "
+        "MATCH (n) WHERE (n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package "
+        "OR n.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
+        "AND any(q IN $qs WHERE toLower(coalesce(n.name, '')) CONTAINS q "
+        "OR toLower(coalesce(n.qualified_name, '')) CONTAINS q "
+        "OR toLower(coalesce(n.file_path, '')) CONTAINS q "
+        "OR toLower(coalesce(n.path, '')) CONTAINS q "
+        "OR toLower(coalesce(n.raw_value, '')) CONTAINS q "
+        "OR toLower(coalesce(n.resolved_value, '')) CONTAINS q) "
         "AND ($project_id IS NULL OR n.project_id = $project_id) "
+        "AND ($framework IS NULL OR n.framework = $framework) "
+        "AND ($kinds IS NULL OR size($kinds) = 0 OR n.kind IN $kinds) "
+        f"AND {servlet_active_generation_predicate('n')} "
         "RETURN n LIMIT $limit"
     )
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
-        "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package) "
+        "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package "
+        "OR node.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
         "AND ($project_id IS NULL OR node.project_id = $project_id) "
+        "AND ($framework IS NULL OR node.framework = $framework) "
+        "AND ($kinds IS NULL OR size($kinds) = 0 OR node.kind IN $kinds) "
+        f"AND {servlet_active_generation_predicate('node')} "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
             fulltext_cypher,
-            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id},
+            {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "framework": framework, "kinds": kinds},
             db_candidates,
         )
         if not results:
             used_db, results = await _run_cypher_first(
                 fallback_cypher,
-                {"qs": qs, "limit": int(limit), "project_id": project_id},
+                {"qs": qs, "limit": int(limit), "project_id": project_id, "framework": framework, "kinds": kinds},
                 db_candidates,
             )
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
-            {"qs": qs, "limit": int(limit), "project_id": project_id},
+            {"qs": qs, "limit": int(limit), "project_id": project_id, "framework": framework, "kinds": kinds},
             db_candidates,
         )
     mode = _normalize_content_mode(content_mode)
