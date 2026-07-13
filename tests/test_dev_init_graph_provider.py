@@ -86,6 +86,23 @@ class DevInitGraphProviderTests(unittest.TestCase):
             self.assertEqual(code_env["NEO4J_DB"], "SHOP")
             self.assertEqual(_mcp_env_from_config(project_path, "code-tiny")["QDRANT_COLLECTION"], "SHOP")
 
+    def test_init_dot_defaults_code_source_to_current_directory(self):
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with runner.isolated_filesystem(temp_dir):
+                project_path = Path.cwd()
+                result = runner.invoke(cli, ["init", "."], input="\n" * 60)
+
+                self.assertEqual(result.exit_code, 0, result.output)
+
+                config_path = project_path / ".cortext-harness" / "config" / "dev.json"
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                code_projects = config["code"]["source"]["projects"]
+
+                self.assertEqual(code_projects[0]["git"], "")
+                self.assertEqual(code_projects[0]["folder"], ["."])
+
 
 if __name__ == "__main__":
     unittest.main()

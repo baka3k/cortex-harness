@@ -1379,6 +1379,7 @@ def init(env, project_dir, path):
 
     PATH can be passed positionally, e.g. 'dev init .' to use the current directory.
     """
+    path_is_current_dir = path is not None and Path(path) == Path(".")
     project_path = Path(path or project_dir or ".").resolve()
     config_path  = _config_path(project_path, env)
 
@@ -1493,10 +1494,14 @@ def init(env, project_dir, path):
             click.echo(f"    [{i}] git={p.get('git') or '(local)'}  folders={p.get('folder', [])}")
         click.echo("  (Run 'dev sync code add' to add more; editing here updates project #1 only)")
 
+    code_folders_default = ", ".join(f for f in first_code.get("folder", []) if f)
+    if not code_folders_default and path_is_current_dir:
+        code_folders_default = "."
+
     code_git     = click.prompt("  Git URL (blank = local)", default=first_code.get("git", "") or "")
     code_folders_raw = click.prompt(
         "  Source folders (comma-separated, blank = auto-scaffold)",
-        default=", ".join(f for f in first_code.get("folder", []) if f) or "",
+        default=code_folders_default,
     )
 
     # ── Doc source — first project ────────────────────────────────────────────
