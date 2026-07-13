@@ -83,13 +83,13 @@ For full scans, framework analyzers receive the whole project through their norm
 
 ## Todo
 
-- [ ] A `.java` file can feed Java, Spring, Servlet/JSP, and MyBatis when evidence warrants it.
-- [ ] XML files can feed multiple framework overlays without changing primary ownership.
-- [ ] Non-framework projects do not pay full analyzer cost.
-- [ ] Full and incremental modes both work.
-- [ ] Explicit parser selection has deterministic prerequisite behavior.
-- [ ] Dirty sync state captures overlay failures.
-- [ ] CLI output distinguishes primary and overlay work.
+- [x] A `.java` file can feed Java, Spring, Servlet/JSP, and MyBatis when evidence warrants it.
+- [x] XML files can feed multiple framework overlays without changing primary ownership.
+- [x] Non-framework projects do not pay full analyzer cost.
+- [x] Full and incremental modes both work.
+- [x] Explicit parser selection has deterministic prerequisite behavior.
+- [x] Dirty sync state captures overlay failures.
+- [x] CLI output distinguishes primary and overlay work.
 
 ## Risks
 
@@ -104,4 +104,3 @@ For full scans, framework analyzers receive the whole project through their norm
 - Deleting a mapper XML, JSP, controller, or Spring config removes only the affected framework facts.
 - Non-framework Java fixtures run no overlay subprocesses after lightweight detection.
 - Re-running without changes executes no analyzers and keeps the sync state clean.
-

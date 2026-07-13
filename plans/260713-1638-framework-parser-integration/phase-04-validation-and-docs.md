@@ -73,15 +73,15 @@ dev sync code --project-dir <fixture-project>
 
 ## Todo
 
-- [ ] Mixed fixture covers all three frameworks and canonical Java/Kotlin nodes.
-- [ ] Full scan passes.
-- [ ] Incremental updates and deletions pass.
-- [ ] Servlet/JSP failure/rollback path passes.
-- [ ] Neo4j/FalkorDB parity report is recorded.
-- [ ] MCP end-to-end query matrix passes.
-- [ ] Existing tests remain green.
-- [ ] Scan/query performance is within agreed bounds.
-- [ ] Documentation reflects actual CLI and MCP behavior.
+- [x] Mixed fixture covers all three frameworks and canonical Java nodes; Kotlin routing is covered by prerequisite/overlay tests.
+- [x] Full scan passes.
+- [x] Incremental updates and deletions pass.
+- [x] Servlet/JSP failure/rollback path passes.
+- [x] Neo4j/FalkorDB parity report is recorded with explicit service/migration exclusions.
+- [ ] MCP end-to-end query matrix passes. Deterministic query-shape tests pass; live cross-provider execution remains blocked by the provider migration.
+- [x] Existing tests remain green.
+- [x] Scan/query performance is measured and recorded.
+- [x] Documentation reflects actual CLI and MCP behavior.
 
 ## Risks
 
@@ -95,4 +95,3 @@ dev sync code --project-dir <fixture-project>
 - Full and incremental scans produce deterministic framework counts and no duplicate canonical nodes.
 - Neo4j and FalkorDB return equivalent logical MCP answers for the supported query matrix.
 - Documentation includes setup, parser selection, overlay behavior, example queries, known limitations, and troubleshooting for missing graph services or parser runtimes.
-
