@@ -43,9 +43,12 @@
 2. **Execution:** For each selected folder:
 * **Full Mode:** Send the entire codebase to the `code-tiny` pipeline for ingestion into Neo4j + Qdrant.
 * **Incremental Mode:** Identify modified files (via `git diff` or timestamp comparison) and only send those specific files.
+* **Framework overlays:** Preserve exclusive primary-language ownership, then route the global changed/deleted/impacted set through Spring, Servlet/JSP, and MyBatis detectors. Overlays execute in that order and receive their own manifests.
 
 
 3. **Persistence:** Record sync metadata (timestamp, synced file list, mode) to serve as a baseline for future incremental runs.
+
+Framework failures mark sync state dirty but do not roll back successful canonical language ingestion. Non-framework projects skip overlay subprocesses after detection. Framework summary entries report prerequisites, detector evidence, vector-writing capability, semantic seed collections, duration, and failure state.
 
 ## Integration with code-tiny
 

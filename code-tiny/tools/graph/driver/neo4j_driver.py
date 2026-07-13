@@ -111,8 +111,8 @@ _FIND_NODE_BY_ID_QUERY = _build_id_lookup_query(for_multiple=False, labels=_FAST
 _FIND_NODES_BY_IDS_QUERY = _build_id_lookup_query(for_multiple=True, labels=_FAST_ID_LOOKUP_LABELS)
 _FALLBACK_FIND_NODE_BY_ID_QUERY = _build_id_lookup_query(for_multiple=False, labels=_FALLBACK_ID_LOOKUP_LABELS)
 _FALLBACK_FIND_NODES_BY_IDS_QUERY = _build_id_lookup_query(for_multiple=True, labels=_FALLBACK_ID_LOOKUP_LABELS)
-_FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft"
-_FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft"
+_FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
+_FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 
 
 class Neo4jDriver(GraphDriver):
@@ -427,6 +427,19 @@ class Neo4jDriver(GraphDriver):
         if records:
             node = records[0].get("n")
             if node and (project_id is None or node.get("project_id") == project_id):
+                if node.get("framework") == "servlet_jsp":
+                    active_records, _, _ = await self.execute_query(
+                        "MATCH (s:ServletJspAnalysisState {project_id: $project_id, module_id: $module_id}) "
+                        "WHERE s.active_generation = $generation_id RETURN s.id AS id LIMIT 1",
+                        {
+                            "project_id": node.get("project_id"),
+                            "module_id": node.get("module_id"),
+                            "generation_id": node.get("generation_id"),
+                        },
+                        database,
+                    )
+                    if not active_records:
+                        return None
                 return node
         return None
     
@@ -458,6 +471,17 @@ class Neo4jDriver(GraphDriver):
         # Filter by project_id in Python (since queries are pre-built UNION queries)
         if project_id is not None:
             nodes = [n for n in nodes if n.get("project_id") == project_id]
+        servlet_nodes = [n for n in nodes if n.get("framework") == "servlet_jsp"]
+        if servlet_nodes:
+            active_records, _, _ = await self.execute_query(
+                "UNWIND $rows AS row "
+                "MATCH (s:ServletJspAnalysisState {project_id: row.project_id, module_id: row.module_id}) "
+                "WHERE s.active_generation = row.generation_id RETURN row.id AS id",
+                {"rows": servlet_nodes},
+                database,
+            )
+            active_ids = {str(row.get("id")) for row in active_records if row.get("id")}
+            nodes = [n for n in nodes if n.get("framework") != "servlet_jsp" or str(n.get("id")) in active_ids]
         return nodes
     
     async def search_functions(

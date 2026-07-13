@@ -41,6 +41,13 @@ cplus_backend = _load_module("cplus_backend", ROOT_DIR / "cplus" / "cplus_mcp.py
 fast_backend = _load_module("fast_backend", ROOT_DIR / "fastmcp_server.py")
 
 from tool_metadata import build_catalog  # noqa: E402
+from framework_registry import (  # noqa: E402
+    default_relationships,
+    framework_for_parser,
+    parser_aliases,
+    servlet_active_generation_predicate,
+)
+from tools.graph import GraphDriverFactory, GraphProvider  # noqa: E402
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
@@ -116,6 +123,7 @@ Routing:
 - Parser mapping:
   - android/android-kotlin/kotlin-android -> Android backend
   - cplus/cpp/c++/c/clang/java/kotlin/jvm/rust/swift/delphi/pascal/vbnet/vb6/vba/vbscript -> C++ backend
+  - spring/servlet_jsp/mybatis (and aliases) -> C++ backend with framework-aware traversal defaults
 
 Tool families available in unified MCP:
 - Symbol/graph queries: search/get/subgraph/paths/module-path/entrypoint
@@ -175,7 +183,7 @@ PARSER_ALIASES_CPLUS = {
     "vb6",
     "vba",
     "vbscript",
-}
+} | set(parser_aliases())
 
 active_project: Dict[str, Optional[str]] = {
     "parser_type": None,
@@ -389,6 +397,17 @@ def _parse_positive_int(raw: Any, param_name: str) -> Tuple[Optional[int], Optio
 async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     merged = _apply_unified_defaults(payload)
     merged = _coerce_list_fields(merged)
+    framework = framework_for_parser(merged.get("parser_type"))
+    if framework:
+        relationship_defaults = list(default_relationships(framework.name))
+        if tool_name in {"query_subgraph", "find_paths", "trace_flow", "find_path_between_module", "trace_flow_between_module"}:
+            if not merged.get("relationship_types") and not merged.get("rel_types"):
+                merged["relationship_types"] = relationship_defaults
+                merged["rel_types"] = relationship_defaults
+        if tool_name in {"semantic_search", "explore_graph"} and not merged.get("graph_rel_types"):
+            merged["graph_rel_types"] = ",".join(relationship_defaults)
+            if tool_name == "semantic_search" and "expand_graph" not in merged:
+                merged["expand_graph"] = True
     backend_name = _resolve_backend_name(merged.get("parser_type"))
     backend = BACKENDS[backend_name]
     fn = _unwrap_tool_callable(getattr(backend.module, f"tool_{tool_name}", None))
@@ -461,7 +480,7 @@ async def tool_list_parsers() -> Dict[str, Any]:
             parser_text = str(parser).strip()
             if parser_text and parser_text not in parser_values:
                 parser_values.append(parser_text)
-    for extra in ["android", "android-kotlin", "cplus", "cpp", "java", "kotlin", "jvm", "rust", "swift", "vbnet", "vb6", "vba", "vbscript"]:
+    for extra in ["android", "android-kotlin", "cplus", "cpp", "java", "kotlin", "jvm", "rust", "swift", "vbnet", "vb6", "vba", "vbscript", *sorted(parser_aliases())]:
         if extra not in parser_values:
             parser_values.append(extra)
     return {
@@ -1324,6 +1343,8 @@ async def tool_search_functions(
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
+    framework: str = "",
+    kinds: str = "",
 ) -> Dict[str, Any]:
     """Search nodes by name/qualified_name."""
     requested_limit = limit or top_k
@@ -1336,6 +1357,8 @@ async def tool_search_functions(
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
+        "framework": framework if framework else None,
+        "kinds": _normalize_string_list(kinds) if kinds else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -1499,16 +1522,51 @@ async def tool_reconstruct_flow(
 
 # ── Frontend → Backend API Contract Bridge tools ──────────────────────────────
 
-import neo4j as _neo4j  # noqa: E402  (already in venv)
-
 
 def _get_bridge_driver() -> Any:
-    uri  = os.environ.get("NEO4J_URI",  "bolt://localhost:7687")
+    """Legacy session driver retained for workflow tools not yet adapter-based."""
+
+    import neo4j as _neo4j
+
+    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
     user = os.environ.get("NEO4J_USER", "")
-    pwd  = os.environ.get("NEO4J_PASS", "")
-    if user and pwd:
-        return _neo4j.GraphDatabase.driver(uri, auth=(user, pwd))
-    return _neo4j.GraphDatabase.driver(uri)
+    password = os.environ.get("NEO4J_PASS", "")
+    return _neo4j.GraphDatabase.driver(uri, auth=(user, password)) if user and password else _neo4j.GraphDatabase.driver(uri)
+
+
+async def _run_bridge_query(cypher: str, params: Dict[str, Any], database: str) -> List[Dict[str, Any]]:
+    provider_name = (
+        os.environ.get("CODE_GRAPH_PROVIDER")
+        or os.environ.get("GRAPH_PROVIDER")
+        or ("falkordb" if os.environ.get("NEO4J_URI", "").startswith(("redis://", "rediss://")) else "neo4j")
+    ).strip().lower()
+    provider = GraphProvider.FALKORDB if provider_name in {"falkor", "falkordb"} else GraphProvider.NEO4J
+    if provider == GraphProvider.FALKORDB:
+        config = {
+            "uri": os.environ.get("FALKORDB_URI") or os.environ.get("NEO4J_URI"),
+            "host": os.environ.get("FALKORDB_HOST", "localhost"),
+            "port": int(os.environ.get("FALKORDB_PORT", "6379")),
+            "user": os.environ.get("FALKORDB_USER", ""),
+            "password": os.environ.get("FALKORDB_PASSWORD", ""),
+            "graph": database,
+            "database": database,
+            "ssl": os.environ.get("FALKORDB_SSL", "").lower() in {"1", "true", "yes", "on"},
+        }
+    else:
+        config = {
+            "uri": os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
+            "user": os.environ.get("NEO4J_USER", ""),
+            "password": os.environ.get("NEO4J_PASS", ""),
+            "database": database,
+        }
+    driver = await GraphDriverFactory.create_driver(provider, config)
+    try:
+        records, _, _ = await driver.execute_query(cypher, params, database)
+        return records
+    finally:
+        close_result = driver.close()
+        if hasattr(close_result, "__await__"):
+            await close_result
 
 
 def _format_props(props: List[str]) -> str:
@@ -1592,6 +1650,7 @@ async def tool_find_callers_of_endpoint(
     cypher = "\n".join(
         endpoint_match_lines
         + [
+            f"WITH ep WHERE {servlet_active_generation_predicate('ep')}",
             api_call_match,
             "MATCH (f:Function)-[:CALLS_API]->(ac)",
             "RETURN f.name          AS function_name,",
@@ -1607,11 +1666,7 @@ async def tool_find_callers_of_endpoint(
         ]
     )
     try:
-        drv = _get_bridge_driver()
-        with drv.session(database=database) as session:
-            result = session.run(cypher, params)
-            callers = [dict(r) for r in result]
-        drv.close()
+        callers = await _run_bridge_query(cypher, params, database)
         return {"endpoint_path": endpoint_path, "callers": callers, "total": len(callers)}
     except Exception as exc:
         return {"endpoint_path": endpoint_path, "callers": [], "total": 0, "error": str(exc)}
@@ -1676,7 +1731,9 @@ RETURN fe.name        AS fe_component,
        ctrl.name      AS be_controller,
        svc.name       AS be_service,
        repo.name      AS be_repository,
-       dbnode.name    AS be_database
+       dbnode.name    AS be_database,
+       persistence.name AS persistence_fact,
+       table.name     AS database_table
 ORDER BY m.confidence DESC
 LIMIT 30
 """
@@ -1694,7 +1751,9 @@ RETURN caller.name    AS fe_component,
        ctrl.name      AS be_controller,
        svc.name       AS be_service,
        repo.name      AS be_repository,
-       dbnode.name    AS be_database
+       dbnode.name    AS be_database,
+       persistence.name AS persistence_fact,
+       table.name     AS database_table
 ORDER BY m.confidence DESC
 LIMIT 30
 """
@@ -1720,9 +1779,16 @@ LIMIT 30
                 f"MATCH (fe:Function {_format_props(fe_props)})",
                 f"MATCH (fe)-[:CALLS*0..{_depth}]->(caller:Function)",
                 endpoint_match,
-                "OPTIONAL MATCH (ep)-[:HANDLES]->(ctrl:Controller)",
+                f"WITH fe, caller, ac, m, ep WHERE {servlet_active_generation_predicate('ep')}",
+                "OPTIONAL MATCH (ep)-[:HANDLES]->(forwardCtrl:Controller)",
+                "OPTIONAL MATCH (reverseCtrl:Controller)-[:HANDLES]->(ep)",
+                "OPTIONAL MATCH (ep)-[:SEMANTIC_OF]->(servletHandler:Function)",
+                "WITH fe, caller, ac, m, ep, coalesce(forwardCtrl, reverseCtrl, servletHandler) AS ctrl",
                 "OPTIONAL MATCH (ctrl)-[:CALLS*0..3]->(svc:Service)",
-                "OPTIONAL MATCH (svc)-[:CALLS*0..2]->(repo:Repository)",
+                "OPTIONAL MATCH (ctrl)-[:CALLS*0..5]->(repo)",
+                "WHERE repo:Repository OR repo:DataRepository OR repo:MyBatisMapper OR repo:MyBatisMapperMethod",
+                "OPTIONAL MATCH (repo)-[:DECLARES_QUERY|DERIVES_QUERY|QUERIES|BINDS_STATEMENT|DECLARES_STATEMENT*0..3]-(persistence)",
+                "OPTIONAL MATCH (persistence)-[:READS_FROM|WRITES_TO|REFERENCES_TABLE]->(table:DatabaseTable)",
                 "OPTIONAL MATCH (repo)-[:QUERIES]->(dbnode:Database)",
                 component_return.strip(),
             ]
@@ -1743,23 +1809,26 @@ LIMIT 30
         cypher = "\n".join(
             [
                 f"MATCH (ep:ApiEndpoint {_format_props(ep_props)})",
+                f"WITH ep WHERE {servlet_active_generation_predicate('ep')}",
                 api_call_match,
                 "MATCH (caller:Function)-[:CALLS_API]->(ac)",
                 "WITH caller, ac, m, ep",
-                "OPTIONAL MATCH (ep)-[:HANDLES]->(ctrl:Controller)",
+                "OPTIONAL MATCH (ep)-[:HANDLES]->(forwardCtrl:Controller)",
+                "OPTIONAL MATCH (reverseCtrl:Controller)-[:HANDLES]->(ep)",
+                "OPTIONAL MATCH (ep)-[:SEMANTIC_OF]->(servletHandler:Function)",
+                "WITH caller, ac, m, ep, coalesce(forwardCtrl, reverseCtrl, servletHandler) AS ctrl",
                 "OPTIONAL MATCH (ctrl)-[:CALLS*0..3]->(svc:Service)",
-                "OPTIONAL MATCH (svc)-[:CALLS*0..2]->(repo:Repository)",
+                "OPTIONAL MATCH (ctrl)-[:CALLS*0..5]->(repo)",
+                "WHERE repo:Repository OR repo:DataRepository OR repo:MyBatisMapper OR repo:MyBatisMapperMethod",
+                "OPTIONAL MATCH (repo)-[:DECLARES_QUERY|DERIVES_QUERY|QUERIES|BINDS_STATEMENT|DECLARES_STATEMENT*0..3]-(persistence)",
+                "OPTIONAL MATCH (persistence)-[:READS_FROM|WRITES_TO|REFERENCES_TABLE]->(table:DatabaseTable)",
                 "OPTIONAL MATCH (repo)-[:QUERIES]->(dbnode:Database)",
                 endpoint_return.strip(),
             ]
         )
 
     try:
-        drv = _get_bridge_driver()
-        with drv.session(database=database) as session:
-            result = session.run(cypher, params)
-            rows = [dict(r) for r in result]
-        drv.close()
+        rows = await _run_bridge_query(cypher, params, database)
         chains = [
             {
                 "fe_component":    r.get("fe_component"),
@@ -1779,6 +1848,8 @@ LIMIT 30
                 "be_service":    r.get("be_service"),
                 "be_repository": r.get("be_repository"),
                 "be_database":   r.get("be_database"),
+                "persistence_fact": r.get("persistence_fact"),
+                "database_table": r.get("database_table"),
             }
             for r in rows
         ]
