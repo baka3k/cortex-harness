@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
+from framework_registry import servlet_active_generation_predicate
+
 
 RunCypherFirst = Callable[[str, Dict[str, Any], List[str]], Awaitable[Tuple[str, List[Dict[str, Any]]]]]
 
@@ -137,6 +139,7 @@ async def expand_semantic_results(
     WHERE neighbor.id IS NOT NULL
       AND NOT neighbor.id IN $seed_ids
       {project_filter}
+      AND {servlet_active_generation_predicate('neighbor')}
     WITH sid, neighbor, min(length(p)) AS hops
     ORDER BY hops ASC
     LIMIT $limit
@@ -144,7 +147,9 @@ async def expand_semantic_results(
            neighbor.id AS node_id,
            neighbor.name AS name,
            coalesce(neighbor.qualified_name, neighbor.name) AS qualified_name,
-           coalesce(labels(neighbor)[0], 'Node') AS kind,
+           coalesce(neighbor.kind, labels(neighbor)[0], 'Node') AS kind,
+           neighbor.framework AS framework,
+           neighbor.resolution_status AS resolution_status,
            coalesce(neighbor.file_path, '') AS file_path,
            neighbor.start_line AS start_line,
            neighbor.end_line AS end_line,
@@ -181,6 +186,8 @@ async def expand_semantic_results(
                 "name": row.get("name") or "",
                 "qualified_name": row.get("qualified_name") or "",
                 "kind": row.get("kind") or "Node",
+                "framework": row.get("framework") or "",
+                "resolution_status": row.get("resolution_status") or "",
                 "file_path": row.get("file_path") or "",
                 "start_line": row.get("start_line"),
                 "end_line": row.get("end_line"),

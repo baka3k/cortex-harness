@@ -4,6 +4,11 @@ status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
+blocks: [260713-1638-framework-parser-integration]
+
+## Cross-Plan Dependency
+
+The framework parser integration plan at `plans/260713-1638-framework-parser-integration/plan.md` depends on this migration stabilizing the provider argument/runtime contract, `GraphDriverFactory` configuration, provider-neutral query results, and schema/index setup. That plan will add MyBatis, Servlet/JSP, and Spring writers and MCP queries on top of these interfaces. Changes to `code-tiny/tools/graph`, `code-tiny/scripts/setup_constraints.py`, and `code-tiny/mcp/unified_mcp.py` must be coordinated across both plans.
 
 ## Objective
 

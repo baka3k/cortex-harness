@@ -281,7 +281,17 @@ class FalkorDBDriver(Neo4jDriver):
             {"id": node_id, "project_id": project_id},
             database,
         )
-        return records[0].get("n") if records else None
+        node = records[0].get("n") if records else None
+        if node and node.get("framework") == "servlet_jsp":
+            active_records, _, _ = await self.execute_query(
+                "MATCH (s:ServletJspAnalysisState {project_id: $project_id, module_id: $module_id}) "
+                "WHERE s.active_generation = $generation_id RETURN s.id AS id LIMIT 1",
+                {"project_id": node.get("project_id"), "module_id": node.get("module_id"), "generation_id": node.get("generation_id")},
+                database,
+            )
+            if not active_records:
+                return None
+        return node
 
     async def find_nodes_by_ids(
         self,
@@ -302,7 +312,19 @@ class FalkorDBDriver(Neo4jDriver):
             {"ids": node_ids, "project_id": project_id},
             database,
         )
-        return [record.get("n") for record in records if record.get("n")]
+        nodes = [record.get("n") for record in records if record.get("n")]
+        servlet_nodes = [n for n in nodes if n.get("framework") == "servlet_jsp"]
+        if servlet_nodes:
+            active_records, _, _ = await self.execute_query(
+                "UNWIND $rows AS row "
+                "MATCH (s:ServletJspAnalysisState {project_id: row.project_id, module_id: row.module_id}) "
+                "WHERE s.active_generation = row.generation_id RETURN row.id AS id",
+                {"rows": servlet_nodes},
+                database,
+            )
+            active_ids = {str(row.get("id")) for row in active_records if row.get("id")}
+            nodes = [n for n in nodes if n.get("framework") != "servlet_jsp" or str(n.get("id")) in active_ids]
+        return nodes
 
     async def search_functions(
         self,

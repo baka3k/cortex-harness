@@ -16,6 +16,14 @@ Supported languages:
 - Swift
 - TypeScript
 
+Framework overlays for Java/Kotlin projects:
+
+- Spring (`spring`)
+- Servlet/JSP (`servlet_jsp`, aliases `servlet-jsp`, `servlet`, `jsp`)
+- MyBatis (`mybatis`)
+
+These are enrichers, not file owners. `dev sync code` runs detected overlays after Java/Kotlin and keeps their facts in the graph store. Semantic search continues to use canonical language vectors and expands through framework edges such as `SEMANTIC_OF`, `HANDLES`, `DECLARES_QUERY`, and `BINDS_STATEMENT`.
+
 ## Main components
 
 - MCP server: `mcp/fastmcp_server.py` (FastMCP proxy to backend).

@@ -56,6 +56,16 @@ class AnalyzerConfig:
     incremental_supported: bool
 
 
+@dataclass(frozen=True)
+class FrameworkAnalyzerConfig:
+    framework: str
+    script_path: str
+    incremental_supported: bool
+    prerequisite_parsers: Tuple[str, ...]
+    order: int
+    writes_vectors: bool = False
+
+
 ANALYZERS: Dict[str, AnalyzerConfig] = {
     "cplus": AnalyzerConfig("cplus", os.path.join(_ROOT_DIR, "tools", "cplus", "cplus_analyzer.py"), True),
     "delphi": AnalyzerConfig("delphi", os.path.join(_ROOT_DIR, "tools", "delphi", "delphi_analyzer.py"), True),
@@ -76,6 +86,31 @@ ANALYZERS: Dict[str, AnalyzerConfig] = {
     "csharp": AnalyzerConfig("csharp", os.path.join(_ROOT_DIR, "tools", "csharp", "csharp_analyzer.py"), True),
     "sql": AnalyzerConfig("sql", os.path.join(_ROOT_DIR, "tools", "sql", "sql_analyzer.py"), True),
     "plsql": AnalyzerConfig("plsql", os.path.join(_ROOT_DIR, "tools", "plsql", "plsql_analyzer.py"), True),
+}
+
+FRAMEWORK_ANALYZERS: Dict[str, FrameworkAnalyzerConfig] = {
+    "spring": FrameworkAnalyzerConfig(
+        "spring", os.path.join(_ROOT_DIR, "tools", "spring", "spring_analyzer.py"), True,
+        ("java", "kotlin"), 10,
+    ),
+    "servlet_jsp": FrameworkAnalyzerConfig(
+        "servlet_jsp", os.path.join(_ROOT_DIR, "tools", "servlet_jsp", "servlet_jsp_analyzer.py"), True,
+        ("java",), 20,
+    ),
+    "mybatis": FrameworkAnalyzerConfig(
+        "mybatis", os.path.join(_ROOT_DIR, "tools", "mybatis", "mybatis_analyzer.py"), True,
+        ("java", "kotlin"), 30,
+    ),
+}
+
+_FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
+    "spring": {".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml", ".json", ".gradle"},
+    "servlet_jsp": {".java", ".jsp", ".jspx", ".jspf", ".tag", ".tagx", ".xml", ".properties", ".gradle"},
+    "mybatis": {".java", ".kt", ".kts", ".xml", ".gradle"},
+}
+
+_FRAMEWORK_BUILD_FILES = {
+    "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts",
 }
 
 MESSAGE_ENABLED_PARSERS: Set[str] = {
@@ -438,6 +473,79 @@ def _group_paths_by_parser(paths: Iterable[str], *, root: str) -> Dict[str, Set[
     return grouped
 
 
+def _is_framework_candidate(framework: str, path: str) -> bool:
+    lower = path.replace("\\", "/").lower()
+    name = os.path.basename(lower)
+    ext = os.path.splitext(lower)[1]
+    return name in _FRAMEWORK_BUILD_FILES or ext in _FRAMEWORK_CANDIDATE_EXTENSIONS[framework]
+
+
+def _path_in_module(path: str, module_root: str) -> bool:
+    normalized = path.replace("\\", "/").strip("/")
+    module = (module_root or ".").replace("\\", "/").strip("/")
+    return module in {"", "."} or normalized == module or normalized.startswith(module + "/")
+
+
+def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[str, Set[str]], Dict[str, List[str]]]:
+    """Route candidate paths to every detected framework overlay.
+
+    Primary ownership remains exclusive.  Framework routing is deliberately
+    many-to-many and uses each framework detector as the final authority.
+    """
+
+    normalized_paths = {path.replace("\\", "/") for path in paths if path}
+    grouped: Dict[str, Set[str]] = {name: set() for name in FRAMEWORK_ANALYZERS}
+    evidence: Dict[str, List[str]] = {name: [] for name in FRAMEWORK_ANALYZERS}
+    if not normalized_paths:
+        return grouped, evidence
+
+    from tools.mybatis.detector import MyBatisProjectDetector
+    from tools.servlet_jsp.detector import ServletJspProjectDetector
+    from tools.spring.detector import SpringProjectDetector
+
+    detectors = {
+        "spring": SpringProjectDetector(root),
+        "servlet_jsp": ServletJspProjectDetector(root),
+        "mybatis": MyBatisProjectDetector(root),
+    }
+    for framework, detector in detectors.items():
+        candidates = {path for path in normalized_paths if _is_framework_candidate(framework, path)}
+        if not candidates:
+            continue
+        modules = detector.discover_modules()
+        module_roots = [str(item.get("rel_path") or ".") for item in modules]
+        for item in modules:
+            evidence[framework].extend(str(value) for value in item.get("evidence", ()) if value)
+        for path in candidates:
+            if any(_path_in_module(path, module) for module in module_roots):
+                grouped[framework].add(path)
+                continue
+            result = detector.detect_path(path)
+            detected = bool(
+                getattr(result, "is_spring", False)
+                or getattr(result, "is_servlet_jsp", False)
+                or getattr(result, "is_mybatis", False)
+            )
+            if detected:
+                grouped[framework].add(path)
+                evidence[framework].extend(str(value) for value in getattr(result, "evidence", ()) if value)
+
+        # Deleted artifacts cannot be read. Strong framework-specific names
+        # still need to reach the analyzer so it can apply cleanup/tombstones.
+        for path in candidates - grouped[framework]:
+            name = os.path.basename(path).lower()
+            if (
+                (framework == "mybatis" and (name.endswith("mapper.xml") or "mybatis" in name))
+                or (framework == "servlet_jsp" and (name == "web.xml" or name.endswith((".jsp", ".jspx", ".jspf", ".tag", ".tagx"))))
+                or (framework == "spring" and name.startswith("application") and name.endswith((".properties", ".yml", ".yaml")))
+            ):
+                grouped[framework].add(path)
+                evidence[framework].append(f"{path}:strong-candidate")
+
+        evidence[framework] = list(dict.fromkeys(evidence[framework]))
+    return grouped, evidence
+
+
 def _run(cmd: List[str], *, cwd: str, verbose: bool, env: Optional[Dict[str, str]] = None) -> None:
     if verbose:
         print("[upsert] exec:", " ".join(cmd))
@@ -536,11 +644,14 @@ async def _query_impacted_files(
 def _selected_parsers(parsers_arg: str) -> Tuple[Set[str], bool]:
     text = (parsers_arg or "auto").strip().lower()
     if text == "auto":
-        return set(ANALYZERS.keys()), True
+        return set(ANALYZERS) | set(FRAMEWORK_ANALYZERS), True
     values = {item.strip() for item in text.split(",") if item.strip()}
-    unsupported = sorted(values - set(ANALYZERS.keys()))
+    supported = set(ANALYZERS) | set(FRAMEWORK_ANALYZERS)
+    unsupported = sorted(values - supported)
     if unsupported:
         raise ValueError(f"Unsupported parser(s): {', '.join(unsupported)}")
+    for framework in sorted(values & set(FRAMEWORK_ANALYZERS)):
+        values.update(FRAMEWORK_ANALYZERS[framework].prerequisite_parsers)
     return values, False
 
 
@@ -589,7 +700,7 @@ def _build_analyzer_cmd(
     after_sha: str,
     changed_manifest: Optional[str],
     deleted_manifest: Optional[str],
-    qdrant_collection: str,
+    qdrant_collection: Optional[str],
     message_scan_enabled: bool,
     message_output_dir: Optional[str],
     message_qdrant_collection: Optional[str],
@@ -610,9 +721,9 @@ def _build_analyzer_cmd(
         before_sha,
         "--commit-sha-after",
         after_sha,
-        "--qdrant-collection",
-        qdrant_collection,
     ]
+    if qdrant_collection:
+        cmd.extend(["--qdrant-collection", qdrant_collection])
     if incremental:
         cmd.append("--incremental")
         if changed_manifest:
@@ -769,6 +880,8 @@ _SOURCE_EXTENSIONS: Set[str] = {
     ".vb", ".vbproj", ".vbp", ".vbw", ".frx", ".bas", ".cls", ".frm", ".vbs", ".wsf", ".asp",
     ".java", ".kt", ".kts",
     ".xml", ".gradle",
+    ".properties", ".yml", ".yaml", ".json",
+    ".jsp", ".jspx", ".jspf", ".tag", ".tagx",
 }
 
 _SKIP_DIRS: Set[str] = {
@@ -840,6 +953,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "diff": {"entries": 0, "changed": 0, "deleted": 0},
         "impact": {"expanded_impacted": 0},
         "parsers": [],
+        "primary_parsers": [],
+        "framework_overlays": [],
         "state_before": {},
         "state_after": {},
         "dirty_marked": False,
@@ -1007,6 +1122,17 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         changed_by_parser = _group_paths_by_parser(changed_paths, root=root)
         deleted_by_parser = _group_paths_by_parser(deleted_paths, root=root)
         impacted_by_parser = _group_paths_by_parser(impacted_paths, root=root)
+        framework_grouped, framework_evidence = _group_paths_by_framework(
+            changed_paths | deleted_paths | impacted_paths,
+            root=root,
+        )
+        if not parser_auto_mode:
+            for framework in parser_filter & set(FRAMEWORK_ANALYZERS):
+                framework_grouped[framework].update(
+                    path
+                    for path in changed_paths | deleted_paths | impacted_paths
+                    if _is_framework_candidate(framework, path)
+                )
 
         manifest_root = safe_cache_root(args.cache_dir, "incremental_sync_manifests", project_root=root)
         message_output_dir = args.message_output_dir or safe_cache_root(
@@ -1140,7 +1266,105 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 parser_info["finished_at"] = _now_iso()
                 parser_info["duration_seconds"] = round(time.time() - parser_started, 6)
 
-        summary["parsers"] = parser_summaries
+        framework_summaries: List[Dict[str, object]] = []
+        for framework, framework_config in sorted(
+            FRAMEWORK_ANALYZERS.items(), key=lambda item: (item[1].order, item[0])
+        ):
+            if framework not in parser_filter:
+                continue
+            routed = set(framework_grouped.get(framework, set()))
+            framework_changed = routed & changed_paths
+            framework_deleted = routed & deleted_paths
+            framework_impacted = routed & impacted_paths
+            framework_scan = framework_changed | framework_impacted
+            framework_info: Dict[str, object] = {
+                "parser": framework,
+                "framework": framework,
+                "role": "overlay",
+                "changed": len(framework_changed),
+                "impacted": len(framework_impacted),
+                "scan": len(framework_scan),
+                "deleted": len(framework_deleted),
+                "incremental_supported": framework_config.incremental_supported,
+                "prerequisite_parsers": list(framework_config.prerequisite_parsers),
+                "writes_vectors": framework_config.writes_vectors,
+                "qdrant_collection": "",
+                "semantic_seed_collections": [
+                    _code_collection_name(project_id, root, parser, project_code=args.project_code)
+                    for parser in framework_config.prerequisite_parsers
+                    if parser in {"java", "kotlin"}
+                ],
+                "detector_evidence": framework_evidence.get(framework, []),
+                "status": "pending",
+                "error": "",
+                "started_at": _now_iso(),
+                "finished_at": None,
+                "duration_seconds": None,
+            }
+            framework_summaries.append(framework_info)
+            if not framework_scan and not framework_deleted:
+                framework_info["status"] = "skipped"
+                framework_info["skip_reason"] = "no framework evidence in changed/deleted paths"
+                framework_info["finished_at"] = _now_iso()
+                framework_info["duration_seconds"] = 0.0
+                continue
+
+            changed_manifest = os.path.join(manifest_root, f"{framework}_changed_{after_sha[:12]}.json")
+            deleted_manifest = os.path.join(manifest_root, f"{framework}_deleted_{after_sha[:12]}.json")
+            write_manifest_paths(changed_manifest, framework_scan)
+            write_manifest_paths(deleted_manifest, framework_deleted)
+            framework_info["changed_manifest"] = changed_manifest
+            framework_info["deleted_manifest"] = deleted_manifest
+            print(
+                "[overlay] framework=%s changed=%d impacted=%d scan=%d deleted=%d"
+                % (
+                    framework,
+                    len(framework_changed),
+                    len(framework_impacted),
+                    len(framework_scan),
+                    len(framework_deleted),
+                )
+            )
+            cmd = _build_analyzer_cmd(
+                python_bin=args.python_bin,
+                analyzer=AnalyzerConfig(
+                    framework,
+                    framework_config.script_path,
+                    framework_config.incremental_supported,
+                ),
+                root=root,
+                project_id=project_id,
+                project_name=project_name,
+                before_sha=before_sha,
+                after_sha=after_sha,
+                changed_manifest=changed_manifest if not args.full_scan else None,
+                deleted_manifest=deleted_manifest if not args.full_scan else None,
+                qdrant_collection=None,
+                message_scan_enabled=False,
+                message_output_dir=None,
+                message_qdrant_collection=None,
+                incremental=not args.full_scan,
+                verbose=args.verbose,
+                ignore_cache=bool(args.ignore_cache),
+            )
+            framework_info["command"] = cmd
+            framework_started = time.time()
+            try:
+                _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=env)
+            except Exception as exc:
+                framework_info["status"] = "failed"
+                framework_info["error"] = str(exc)
+                raise
+            else:
+                framework_info["status"] = "success"
+                executed_parsers.append(framework)
+            finally:
+                framework_info["finished_at"] = _now_iso()
+                framework_info["duration_seconds"] = round(time.time() - framework_started, 6)
+
+        summary["primary_parsers"] = parser_summaries
+        summary["framework_overlays"] = framework_summaries
+        summary["parsers"] = parser_summaries + framework_summaries
         mark_clean(
             state_path,
             state,

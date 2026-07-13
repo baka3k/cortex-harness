@@ -166,6 +166,16 @@ dev sync doc      # Syncs modified files only (git diff → hash → mtime)
 
 Incremental sync runs automatically once a baseline exists from the initial sync. No extra flags are needed.
 
+### Java Framework Overlays
+
+Java/Kotlin remain the canonical owners of files, classes, functions, and `CALLS` edges. During the same `dev sync code` run, lightweight detectors may additionally run these non-exclusive overlays after the language analyzers:
+
+1. Spring
+2. Servlet/JSP
+3. MyBatis
+
+The overlays reuse canonical Java/Kotlin Qdrant collections as semantic seeds and do not create separate vector collections. Explicit selection such as `--parsers java,spring` is supported by the underlying incremental command; selecting only a framework automatically includes its primary-language prerequisites. The sync JSON separates `primary_parsers` from `framework_overlays` and records detector evidence, skipped overlays, and failures.
+
 ### Adding New Folders to the Project
 
 ```bash

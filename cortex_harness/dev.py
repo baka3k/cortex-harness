@@ -42,6 +42,12 @@ LANG_ANALYZERS = {
     "android_mixed":  CODE_TINY / "tools/android/android_mixed_analyzer.py",
 }
 
+FRAMEWORK_ANALYZERS = {
+    "spring":      CODE_TINY / "tools/spring/spring_analyzer.py",
+    "servlet_jsp": CODE_TINY / "tools/servlet_jsp/servlet_jsp_analyzer.py",
+    "mybatis":     CODE_TINY / "tools/mybatis/mybatis_analyzer.py",
+}
+
 LANG_EXTENSIONS = {
     "kotlin":  {".kt", ".kts"},
     "java":    {".java"},
@@ -1720,8 +1726,8 @@ def sync_code_all(ctx):
     """Run ALL available analyzers on every configured folder.
 
     \b
-    - Every tool in LANG_ANALYZERS that exists on disk is invoked.
-    - Each analyzer filters its own file types internally.
+    - Every primary language analyzer and detected framework overlay is considered.
+    - Framework overlays are detector-gated by incremental_sync.
     - Incremental if a sync baseline exists, full sync on first run.
     - Changed/deleted files are passed via --changed-files-manifest
       to the analyzer's built-in incremental engine.
@@ -1738,7 +1744,7 @@ def sync_code_all(ctx):
         click.echo("[warn] No source folders configured. Run 'dev init' or 'dev sync code add'.")
         return
 
-    available = [l for l, p in LANG_ANALYZERS.items() if p.exists()]
+    available = [l for l, p in {**LANG_ANALYZERS, **FRAMEWORK_ANALYZERS}.items() if p.exists()]
     click.echo(f"\n[sync-code all]  folders={len(folders)}  analyzers={len(available)}")
     click.echo(f"  tools: {', '.join(available)}")
 

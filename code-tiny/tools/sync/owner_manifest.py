@@ -14,6 +14,10 @@ _ANDROID_PLUGIN_MARKERS = (
     "com.android.instantapp",
 )
 
+# Canonical file ownership is intentionally limited to primary language
+# parsers. Spring, Servlet/JSP, and MyBatis are many-to-many overlays routed
+# by incremental_sync.FRAMEWORK_ANALYZERS and must never own or delete the
+# Java/Kotlin source nodes they enrich.
 SUPPORTED_PARSERS: Set[str] = {
     "cplus",
     "delphi",

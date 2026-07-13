@@ -22,6 +22,10 @@ Cortex Harness uses two main database groups:
 * `--falkordb-*` flags when FalkorDB is selected
 * `--neo4j-*` flags are retained as compatibility aliases for legacy commands
 
+Framework graph writers use the same `GraphDriver` factory for Neo4j and FalkorDB. Spring, Servlet/JSP, and MyBatis facts merge by stable ID, carry `project_id` and `framework`, and never delete canonical Java/Kotlin nodes. Servlet/JSP facts are generation-scoped; only the generation named by `ServletJspAnalysisState.active_generation` is queryable, and failed staging leaves the prior generation active.
+
+Run `code-tiny/scripts/setup_constraints.py` after adding framework support to create the v2 full-text indexes and framework ID/project/generation indexes. The schema definitions are idempotent. When a graph service is unavailable, deterministic fake-driver tests still validate the provider-neutral query and parameter contract; live parity tests should be run before production rollout.
+
 `doc-tiny` uses its own adapter `doc-tiny/graph_store.py`:
 
 * `DOC_GRAPH_PROVIDER` or `GRAPH_PROVIDER`
