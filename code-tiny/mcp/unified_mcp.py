@@ -383,12 +383,21 @@ def _coerce_error_result(tool_name: str, payload: Dict[str, Any], result: Any, b
 def _parse_positive_int(raw: Any, param_name: str) -> Tuple[Optional[int], Optional[str]]:
     if raw is None:
         return None, None
-    text = str(raw).strip()
-    if not text:
-        return None, None
-    if not text.isdigit():
+    if isinstance(raw, bool):
         return None, f"{param_name} must be a positive integer."
-    value = int(text)
+    if isinstance(raw, int):
+        value = raw
+    elif isinstance(raw, float):
+        if not raw.is_integer():
+            return None, f"{param_name} must be a positive integer."
+        value = int(raw)
+    else:
+        text = str(raw).strip()
+        if not text:
+            return None, None
+        if not text.isdigit():
+            return None, f"{param_name} must be a positive integer."
+        value = int(text)
     if value <= 0:
         return None, f"{param_name} must be greater than 0."
     return value, None
@@ -812,14 +821,14 @@ async def tool_semantic_search(
     query: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    top_k: str = "",
+    top_k: int | float | str = "",
     collection: str = "",
     project_id: str = "",
     expand_graph: bool = False,
-    graph_depth: str = "",
+    graph_depth: int | float | str = "",
     graph_direction: str = "",
     graph_rel_types: str = "",
-    graph_limit: str = "",
+    graph_limit: int | float | str = "",
 ) -> Dict[str, Any]:
     """Semantic search over Qdrant embeddings with optional graph expansion."""
     parsed_top_k, top_k_error = _parse_positive_int(top_k, "top_k")
@@ -860,8 +869,8 @@ async def tool_trace_flow_between_module(
     target_module: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths between modules."""
@@ -902,8 +911,8 @@ async def tool_trace_flow(
     direction: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths using configurable relationships."""
@@ -1094,8 +1103,8 @@ async def tool_find_path_between_module(
     target_module: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Find call paths between modules."""
@@ -1127,8 +1136,8 @@ async def tool_find_paths(
     end_function_id: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
@@ -1175,8 +1184,8 @@ async def tool_query_subgraph(
     function_id: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
@@ -1245,8 +1254,8 @@ async def tool_list_possible_calls(
     function_id: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """List POSSIBLE_CALLS edges."""
@@ -1303,8 +1312,8 @@ async def tool_search_by_code(
     query: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
@@ -1338,8 +1347,8 @@ async def tool_search_functions(
     query: str = "",
     parser_type: str = "",
     db: str = "neo4j",
-    limit: str = "",
-    top_k: str = "",
+    limit: int | float | str = "",
+    top_k: int | float | str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
@@ -1417,7 +1426,7 @@ async def tool_get_ipc_message(
 async def tool_explore_graph(
     query:      str  = "",
     mode:       str  = "hybrid",
-    top_k:      str  = "",
+    top_k:      int | float | str  = "",
     db:         str  = "",
     collection: str  = "",
     debug:      bool = False,
@@ -1454,7 +1463,14 @@ async def tool_explore_graph(
             "query_analysis": {}, "mode": mode,
         }
 
-    k = int(top_k) if str(top_k).isdigit() else 10
+    parsed_top_k, top_k_error = _parse_positive_int(top_k, "top_k")
+    if top_k_error:
+        return _build_tool_error(
+            "explore_graph",
+            {"query": q, "top_k": top_k},
+            ValueError(top_k_error),
+        )
+    k = parsed_top_k or 10
     service = get_explore_service()
     return await service.explore(
         query      = q,
