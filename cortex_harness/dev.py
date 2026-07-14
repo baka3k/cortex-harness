@@ -1362,7 +1362,52 @@ def cli():
       dev sync code         # interactive: pick folders, auto incremental/full
       dev sync code all     # ALL analyzers on all folders (incremental if baseline)
       dev sync doc          # ingest documents -> Neo4j + Qdrant
+      dev infra-up          # start Qdrant + FalkorDB from any directory
+      dev doctor            # check local infrastructure from any directory
     """
+
+
+def _run_lifecycle(action: str) -> None:
+    """Run a repository lifecycle action independently of the caller's cwd."""
+    if sys.platform == "win32":
+        lifecycle = REPO_ROOT / "scripts" / "mcp-lifecycle.ps1"
+        powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+        if not powershell:
+            raise click.ClickException("PowerShell was not found on PATH.")
+        command = [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(lifecycle),
+            action,
+        ]
+    else:
+        lifecycle = REPO_ROOT / "scripts" / "mcp-lifecycle.py"
+        command = [sys.executable, str(lifecycle), action]
+
+    if not lifecycle.is_file():
+        raise click.ClickException(f"Lifecycle script not found: {lifecycle}")
+
+    result = subprocess.run(
+        command,
+        cwd=str(REPO_ROOT),
+    )
+    if result.returncode:
+        raise click.exceptions.Exit(result.returncode)
+
+
+@cli.command("infra-up")
+def infra_up():
+    """Start the local Qdrant and FalkorDB containers."""
+    _run_lifecycle("infra-up")
+
+
+@cli.command()
+def doctor():
+    """Check Python, Docker, databases, and MCP ports."""
+    _run_lifecycle("doctor")
 
 
 # ---------------------------------------------------------------------------

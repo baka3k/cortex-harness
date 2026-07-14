@@ -62,6 +62,13 @@ make uninstall   # remove the global dev command installed by make install
 
 `make install` installs `dev.cmd` to `%USERPROFILE%\.local\bin` on Windows and `dev` to `~/.local/bin` on macOS/Linux. Make sure that directory is on your shell `PATH`.
 
+After installation, infrastructure commands can be run from any directory:
+
+```bash
+dev infra-up
+dev doctor
+```
+
 Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.
 
 ---
