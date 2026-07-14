@@ -91,7 +91,15 @@ class MakeLifecycleTests(unittest.TestCase):
             for server in LIFECYCLE.SERVERS:
                 launcher = state_dir / f"start-{server['name']}.command"
                 self.assertTrue(launcher.is_file())
-                self.assertIn(str(server["script"]), launcher.read_text(encoding="utf-8"))
+                content = launcher.read_text(encoding="utf-8")
+                self.assertIn(str(server["script"]), content)
+                self.assertIn('export GRAPH_PROVIDER="${GRAPH_PROVIDER:-falkordb}"', content)
+                self.assertIn('export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"', content)
+                scoped_provider = "DOC_GRAPH_PROVIDER" if server["name"] == "doc-tiny" else "CODE_GRAPH_PROVIDER"
+                self.assertIn(
+                    f'export {scoped_provider}="${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}"',
+                    content,
+                )
 
     def test_macos_terminal_command_uses_osascript(self):
         wrapper = Path("/tmp/cortex launcher.command")
