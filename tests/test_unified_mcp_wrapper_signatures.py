@@ -94,3 +94,10 @@ def test_graph_backends_honor_configured_falkordb_provider():
         assert "DEFAULT_GRAPH_PROVIDER" in source, backend
         assert "GraphProvider.FALKORDB" in source, backend
         assert "DEFAULT_GRAPH_DB" in source, backend
+
+
+def test_graph_backends_default_to_falkordb_hyper_graph():
+    for backend in GRAPH_BACKENDS:
+        source = backend.read_text(encoding="utf-8")
+        assert '(value or "falkordb")' in source, backend
+        assert 'or "hyper_graph"' in source, backend

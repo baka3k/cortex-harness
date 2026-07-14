@@ -5,13 +5,24 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from cortex_harness.dev import cli, _mcp_env_from_config
+from cortex_harness.dev import cli, _env_to_neo4j_args, _mcp_env_from_config, _neo4j_args_code
 
 
 class DevInitGraphProviderTests(unittest.TestCase):
     def test_mcp_env_without_config_is_empty(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             self.assertEqual(_mcp_env_from_config(Path(temp_dir), "code-tiny"), {})
+
+    def test_graph_args_fallback_to_falkordb_hyper_graph(self):
+        self.assertIn("--graph-provider", _neo4j_args_code({}))
+        self.assertIn("falkordb", _neo4j_args_code({}))
+        self.assertIn("--falkordb-graph", _neo4j_args_code({}))
+        self.assertIn("hyper_graph", _neo4j_args_code({}))
+
+        self.assertIn("--graph-provider", _env_to_neo4j_args({}))
+        self.assertIn("falkordb", _env_to_neo4j_args({}))
+        self.assertIn("--falkordb-graph", _env_to_neo4j_args({}))
+        self.assertIn("hyper_graph", _env_to_neo4j_args({}))
 
     def test_init_defaults_to_falkordb_graph_provider(self):
         runner = CliRunner()

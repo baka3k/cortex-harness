@@ -105,7 +105,7 @@ DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "kotlin_function
 
 
 def _normalize_graph_provider(value: Optional[str]) -> str:
-    normalized = (value or "neo4j").strip().lower()
+    normalized = (value or "falkordb").strip().lower()
     if normalized in {"falkor", "falkordb", "falkor-db"}:
         return "falkordb"
     return "neo4j"
@@ -119,12 +119,12 @@ DEFAULT_GRAPH_PROVIDER = _normalize_graph_provider(
 DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
 DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
-DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "neo4j"
+DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "hyper_graph"
 DEFAULT_FALKORDB_HOST = os.environ.get("FALKORDB_HOST") or os.environ.get("MCP_FALKORDB_HOST") or "127.0.0.1"
 DEFAULT_FALKORDB_PORT = int(os.environ.get("FALKORDB_PORT") or os.environ.get("MCP_FALKORDB_PORT") or "6379")
 DEFAULT_FALKORDB_USERNAME = os.environ.get("FALKORDB_USER") or os.environ.get("FALKORDB_USERNAME") or ""
 DEFAULT_FALKORDB_PASSWORD = os.environ.get("FALKORDB_PASSWORD") or ""
-DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "neo4j"
+DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
 DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
