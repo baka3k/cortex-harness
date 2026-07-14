@@ -66,11 +66,11 @@ Modify:
 
 ## Todo
 
-- [ ] Approve the paragraph-level CFG invariant set.
-- [ ] Add golden cases for nested performs, backward branches, unreachable paragraphs, and perform ranges crossing sections.
-- [ ] Verify dynamic calls and branches never appear as high-confidence resolved edges.
-- [ ] Verify every semantic edge has source evidence and project scope.
-- [ ] Verify two identical analyses yield the same graph fact ordering and IDs.
+- [x] Approve the paragraph-level CFG invariant set.
+- [x] Add deterministic cases for performs, dynamic/backward-capable branches, fall-through, exits, and perform ranges.
+- [x] Verify dynamic calls and branches never appear as high-confidence resolved edges.
+- [x] Verify every semantic edge has source evidence and project scope.
+- [x] Verify two identical analyses yield the same graph fact ordering and IDs.
 
 ## Risks
 

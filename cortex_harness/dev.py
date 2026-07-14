@@ -25,6 +25,7 @@ HARNESS_CONFIG_DIR = ".cortext-harness/config"
 SYNC_STATE_DIR = ".cortext-harness/sync-state"
 
 LANG_ANALYZERS = {
+    "cobol":          CODE_TINY / "tools/cobol/cobol_analyzer.py",
     "kotlin":         CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
     "java":           CODE_TINY / "tools/java/java_analyzer.py",
     "ts":             CODE_TINY / "tools/ts/ts_analyzer.py",
@@ -49,6 +50,7 @@ FRAMEWORK_ANALYZERS = {
 }
 
 LANG_EXTENSIONS = {
+    "cobol":   {".cbl", ".cob", ".cpy", ".copy"},
     "kotlin":  {".kt", ".kts"},
     "java":    {".java"},
     "ts":      {".ts", ".tsx"},

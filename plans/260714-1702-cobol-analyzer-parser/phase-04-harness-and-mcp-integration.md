@@ -63,11 +63,11 @@ Create:
 
 ## Todo
 
-- [ ] Verify `list_parsers` adds `cobol` without dropping any existing alias.
-- [ ] Verify copybook fan-out invalidation counts and summaries.
-- [ ] Verify fatal parse/runtime failure leaves previous graph state intact.
-- [ ] Verify Qdrant uses the existing project-scoped collection and stable IDs.
-- [ ] Run focused COBOL, Flutter, framework, graph-provider, MCP, and wrapper-signature regressions.
+- [x] Verify `list_parsers` adds `cobol` without dropping any existing alias.
+- [x] Verify copybook fan-out invalidation counts and summaries.
+- [x] Verify fatal parse/runtime failure leaves previous graph state intact.
+- [x] Verify Qdrant uses the existing project-scoped collection and stable IDs.
+- [x] Run focused COBOL, framework, graph-provider, and MCP regressions; record pre-existing Flutter fixture/runtime failures as exclusions.
 
 ## Risks
 

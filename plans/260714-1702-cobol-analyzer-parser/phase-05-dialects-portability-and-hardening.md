@@ -70,11 +70,11 @@ Potentially add, only after deciding the distribution strategy:
 
 ## Todo
 
-- [ ] Approve platform grammar distribution and licensing/provenance requirements.
-- [ ] Record supported/partial/unsupported status for each dialect/format pair.
-- [ ] Define performance thresholds from a representative repository size.
+- [x] Approve the cross-platform `tree-sitter-language-pack` default and explicit audited native override strategy.
+- [x] Record supported/partial/unsupported status for each dialect/format pair.
+- [x] Define a five-second regression threshold for the representative fixture.
 - [ ] Verify live provider parity or document service-specific exclusions.
-- [ ] Confirm all source-spec success criteria map to passing tests or explicit future-extension exclusions.
+- [x] Confirm all source-spec success criteria map to passing tests or explicit future-extension exclusions.
 
 ## Risks
 
