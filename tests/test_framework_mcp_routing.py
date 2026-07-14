@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,12 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
         self.assertIn("ServletJspAnalysisState", predicate)
         self.assertIn("state.active_generation = node.generation_id", predicate)
         self.assertIn("node.project_id", predicate)
+
+    def test_falkordb_freshness_predicate_avoids_exists_subquery(self):
+        with patch.dict("os.environ", {"CODE_GRAPH_PROVIDER": "falkordb"}):
+            predicate = servlet_active_generation_predicate("node")
+
+        self.assertEqual(predicate, "true")
 
 
 if __name__ == "__main__":

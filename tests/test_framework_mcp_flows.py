@@ -15,6 +15,14 @@ import unified_mcp
 
 
 class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_neo4j_only_bridge_does_not_connect_in_falkordb_mode(self):
+        with patch.dict(os.environ, {"CODE_GRAPH_PROVIDER": "falkordb"}):
+            with patch("neo4j.GraphDatabase.driver") as neo4j_driver:
+                with self.assertRaisesRegex(RuntimeError, "Neo4j-only"):
+                    unified_mcp._get_bridge_driver()
+
+        neo4j_driver.assert_not_called()
+
     async def test_api_chain_supports_endpoint_directions_servlet_bridge_and_mybatis_tables(self):
         captured = {}
 
