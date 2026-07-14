@@ -1363,6 +1363,7 @@ def cli():
       dev sync code all     # ALL analyzers on all folders (incremental if baseline)
       dev sync doc          # ingest documents -> Neo4j + Qdrant
       dev infra-up          # start Qdrant + FalkorDB from any directory
+      dev start             # open code-tiny + doc-tiny from any directory
       dev doctor            # check local infrastructure from any directory
     """
 
@@ -1402,6 +1403,12 @@ def _run_lifecycle(action: str) -> None:
 def infra_up():
     """Start the local Qdrant and FalkorDB containers."""
     _run_lifecycle("infra-up")
+
+
+@cli.command()
+def start():
+    """Open the code-tiny and doc-tiny MCP servers in terminal windows."""
+    _run_lifecycle("start")
 
 
 @cli.command()
