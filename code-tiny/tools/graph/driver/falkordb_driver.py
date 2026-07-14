@@ -233,13 +233,21 @@ class FalkorDBDriver(Neo4jDriver):
                     graph.create_node_range_index(label, *props)
                 logger.info("Created FalkorDB %s index on %s(%s)", idx_type, label, ", ".join(props))
             except Exception as exc:
-                logger.warning(
-                    "Failed to create FalkorDB %s index on %s(%s): %s",
-                    idx_type,
-                    label,
-                    ", ".join(props),
-                    exc,
-                )
+                if "already indexed" in str(exc).lower():
+                    logger.debug(
+                        "FalkorDB %s index already exists on %s(%s)",
+                        idx_type,
+                        label,
+                        ", ".join(props),
+                    )
+                else:
+                    logger.warning(
+                        "Failed to create FalkorDB %s index on %s(%s): %s",
+                        idx_type,
+                        label,
+                        ", ".join(props),
+                        exc,
+                    )
 
     async def list_databases(self) -> List[str]:
         try:
