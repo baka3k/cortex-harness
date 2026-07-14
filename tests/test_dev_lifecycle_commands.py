@@ -67,6 +67,30 @@ class DevLifecycleCommandTests(unittest.TestCase):
             cwd=str(REPO_ROOT),
         )
 
+    def test_every_make_lifecycle_target_is_exposed_by_dev(self):
+        makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+        phony = next(line for line in makefile.splitlines() if line.startswith(".PHONY:"))
+        make_targets = set(phony.removeprefix(".PHONY:").split())
+        self.assertEqual(make_targets - set(cli.commands), set())
+
+    def test_all_lifecycle_commands_dispatch_the_matching_action(self):
+        actions = (
+            "help",
+            "build",
+            "install",
+            "uninstall",
+            "infra-up",
+            "infra-down",
+            "doctor",
+            "start",
+            "stop",
+        )
+        for action in actions:
+            with self.subTest(action=action), mock.patch("cortex_harness.dev._run_lifecycle") as run:
+                result = self.runner.invoke(cli, [action])
+                self.assertEqual(result.exit_code, 0, result.output)
+                run.assert_called_once_with(action)
+
     def test_lifecycle_failure_exit_code_is_preserved(self):
         completed = subprocess.CompletedProcess([], 7)
         with mock.patch("cortex_harness.dev.subprocess.run", return_value=completed):
