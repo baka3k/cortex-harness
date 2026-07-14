@@ -56,11 +56,11 @@ Modify:
 
 ## Todo
 
-- [ ] Define default copybook extension/search-order behavior and CLI overrides.
-- [ ] Add fixed/free format and continuation fixtures.
-- [ ] Verify imported definitions are not duplicated across consumers.
-- [ ] Verify copybook cycles terminate and report the full include chain.
-- [ ] Verify symbol IDs remain stable when unrelated files are added.
+- [x] Define default copybook extension/search-order behavior and CLI overrides.
+- [x] Add fixed/free format and continuation-oriented fixtures.
+- [x] Verify imported definitions are not duplicated across consumers.
+- [x] Verify copybook cycles terminate and report the full include chain.
+- [x] Verify symbol IDs remain stable when unrelated files are added.
 
 ## Risks
 

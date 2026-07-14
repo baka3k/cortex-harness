@@ -22,6 +22,23 @@ class FrameworkQueryConfig:
 
 
 FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
+    "cobol": FrameworkQueryConfig(
+        name="cobol",
+        aliases=frozenset({"cobol", "cobol85", "ibm-cobol", "gnucobol"}),
+        labels=frozenset({
+            "CobolProgram", "CobolSection", "CobolParagraph", "CobolDataItem",
+            "CobolCopybook", "CobolFile", "CobolSqlStatement", "CobolCicsCommand",
+        }),
+        relationships=(
+            "DEFINES", "INCLUDES", "REFERENCES", "CALLS", "PERFORMS",
+            "PERFORMS_THRU", "RETURNS", "GOES_TO", "GOES_TO_DYNAMIC",
+            "FALLS_THROUGH", "ALTERS", "CONDITIONAL", "EXITS", "READS", "WRITES",
+        ),
+        searchable_properties=(
+            "name", "qualified_name", "file_path", "path", "raw_text",
+            "operation", "assignment", "picture", "storage",
+        ),
+    ),
     "spring": FrameworkQueryConfig(
         name="spring",
         aliases=frozenset({"spring", "spring-boot", "spring_boot"}),

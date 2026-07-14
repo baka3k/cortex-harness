@@ -648,3 +648,6 @@ dev harness context task-001 --output ctx.md   # save context
 dev harness verify                       # run verify gate
 
 ```
+## COBOL source analysis
+
+COBOL is a primary code parser for `.cbl`, `.cob`, `.cpy`, and `.copy`. Run `dev sync code --parsers cobol` to select it explicitly, or rely on normal extension detection. The portable default grammar comes from `tree-sitter-language-pack`; use `COBOL_LANGUAGE_LIBRARY` or `--cobol-language-library` for a tested native override. Copybook roots can be supplied with repeated `--copybook-root` options when invoking the analyzer directly. See [the COBOL analyzer specification](specs/cobol-analyzer.md) for graph labels, incremental invalidation, compatibility, and limitations.

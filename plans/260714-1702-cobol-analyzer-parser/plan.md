@@ -1,12 +1,14 @@
 ---
 title: "COBOL Analyzer Parser Tool Plan"
-status: pending
+status: complete-with-exclusions
 created: 2026-07-14
+completed: 2026-07-14
 mode: hi-plan --fast
 source: /Users/yourcacc/Desktop/COBOL_Analyzer_Design_Spec_v2.md
 target: /Users/yourcacc/AI/cortex-harness/code-tiny/tools/cobol
 scope: COBOL parsing, copybook and symbol resolution, control/data semantics, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
+dependencyOverride: implementation completed against the current provider-neutral contract; live Neo4j/FalkorDB parity remains excluded
 relatedPlans:
   [
     260713-1638-framework-parser-integration,
