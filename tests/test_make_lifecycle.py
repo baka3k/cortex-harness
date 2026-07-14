@@ -65,6 +65,16 @@ class MakeLifecycleTests(unittest.TestCase):
                 self.assertTrue(target.is_file())
                 self.assertTrue(os.access(target, os.X_OK))
                 self.assertIn("cortex_harness/dev.py", target.read_text(encoding="utf-8"))
+                result = subprocess.run(
+                    [str(target), "--help"],
+                    cwd=home,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("Commands:", result.stdout)
+                self.assertIn("stop", result.stdout)
 
                 LIFECYCLE.invoke_uninstall()
                 self.assertFalse(target.exists())
