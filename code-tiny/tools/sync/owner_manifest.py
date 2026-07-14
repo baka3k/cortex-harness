@@ -19,6 +19,7 @@ _ANDROID_PLUGIN_MARKERS = (
 # by incremental_sync.FRAMEWORK_ANALYZERS and must never own or delete the
 # Java/Kotlin source nodes they enrich.
 SUPPORTED_PARSERS: Set[str] = {
+    "cobol",
     "cplus",
     "delphi",
     "java",
@@ -191,6 +192,8 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
     name = os.path.basename(lower)
     ext = os.path.splitext(lower)[1]
 
+    if ext in {".cbl", ".cob", ".cpy", ".copy"}:
+        return "cobol"
     if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}:
         return "cplus"
     if ext in {".pas", ".dpr", ".inc"}:

@@ -67,6 +67,3 @@ cortex_harness/CLAUDE.md
 # Ignore local memory/context notes in app folders
 frontend/**/CLAUDE.md
 backendjs/**/CLAUDE.md
-
-tests/fixtures/**
-tests/fixtures/
