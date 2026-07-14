@@ -88,10 +88,30 @@ DEFAULT_MODEL = (
 PRELOAD_EMBEDDER_ON_STARTUP = os.environ.get("MCP_PRELOAD_EMBEDDER", "1")
 DEFAULT_QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
 DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "android_kotlin_functions")
+
+
+def _normalize_graph_provider(value: Optional[str]) -> str:
+    normalized = (value or "neo4j").strip().lower()
+    if normalized in {"falkor", "falkordb", "falkor-db"}:
+        return "falkordb"
+    return "neo4j"
+
+
+DEFAULT_GRAPH_PROVIDER = _normalize_graph_provider(
+    os.environ.get("CODE_GRAPH_PROVIDER")
+    or os.environ.get("GRAPH_PROVIDER")
+    or os.environ.get("MCP_GRAPH_PROVIDER")
+)
 DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
 DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
 DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "neo4j"
+DEFAULT_FALKORDB_HOST = os.environ.get("FALKORDB_HOST") or os.environ.get("MCP_FALKORDB_HOST") or "127.0.0.1"
+DEFAULT_FALKORDB_PORT = int(os.environ.get("FALKORDB_PORT") or os.environ.get("MCP_FALKORDB_PORT") or "6379")
+DEFAULT_FALKORDB_USERNAME = os.environ.get("FALKORDB_USER") or os.environ.get("FALKORDB_USERNAME") or ""
+DEFAULT_FALKORDB_PASSWORD = os.environ.get("FALKORDB_PASSWORD") or ""
+DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "neo4j"
+DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 IPC_MESSAGES_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "temp", "ipc_messages.json")
@@ -153,6 +173,16 @@ async def _get_graph_driver() -> GraphDriver:
     global _graph_driver
     if _graph_driver is not None:
         return _graph_driver
+    if DEFAULT_GRAPH_PROVIDER == "falkordb":
+        config = {
+            "host": DEFAULT_FALKORDB_HOST,
+            "port": DEFAULT_FALKORDB_PORT,
+            "username": DEFAULT_FALKORDB_USERNAME,
+            "password": DEFAULT_FALKORDB_PASSWORD,
+            "graph": DEFAULT_FALKORDB_GRAPH,
+        }
+        _graph_driver = await GraphDriverFactory.create_driver(GraphProvider.FALKORDB, config)
+        return _graph_driver
     if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
         raise RuntimeError("NEO4J_USER and NEO4J_PASS must be set.")
     config = {
@@ -191,7 +221,7 @@ async def _select_database_name(requested: Optional[str]) -> Optional[str]:
             normalized,
             ", ".join(available),
         )
-        default_db = _normalize_db_name(DEFAULT_NEO4J_DB)
+        default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
         if default_db in available:
             logger.warning("Falling back to default database: %s", default_db)
             return default_db
@@ -218,7 +248,7 @@ def _resolve_db_candidates(db: Optional[str]) -> List[str]:
         normalized = _normalize_db_name(cached)
         if normalized not in candidates:
             candidates.append(normalized)
-    default_db = _normalize_db_name(DEFAULT_NEO4J_DB)
+    default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
     if default_db and default_db not in candidates:
         candidates.append(default_db)
     return candidates
@@ -1083,7 +1113,7 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
             )
         candidates = [db for db in candidates if db in available]
         if not candidates:
-            default_db = _normalize_db_name(DEFAULT_NEO4J_DB)
+            default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
             if default_db in available:
                 logger.warning("Falling back to default database: %s", default_db)
                 candidates = [default_db]
@@ -1097,7 +1127,7 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
                 continue
             raise
     if last_error and _is_db_not_found(last_error):
-        default_db = _normalize_db_name(DEFAULT_NEO4J_DB)
+        default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
         raise RuntimeError(
             "Database not found. Use list_databases to inspect available DBs and "
             f"activate_project(database_name=...) to switch. Available: {available}. "
@@ -1109,6 +1139,8 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 
 
 async def _list_databases() -> List[str]:
+    if DEFAULT_GRAPH_PROVIDER == "falkordb":
+        return [_normalize_db_name(DEFAULT_GRAPH_DB)]
     driver = await _get_graph_driver()
     records, summary, keys = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
     names: List[str] = []
@@ -1199,7 +1231,7 @@ async def _query_ipc_messages_from_graph(
 async def tool_list_databases(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     _coerce_payload(payload)
     names = await _list_databases()
-    default_db = _normalize_db_name(DEFAULT_NEO4J_DB)
+    default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
     return {"databases": names, "default": default_db}
 
 
@@ -1322,7 +1354,7 @@ async def tool_activate_project(
         db_text = str(database_name).strip()
         db_name = await _select_database_name(db_text)
     if not any([parser_type, db_name]):
-        db_name = await _select_database_name(DEFAULT_NEO4J_DB)
+        db_name = await _select_database_name(DEFAULT_GRAPH_DB)
     response = {
         "parser_type": parser_type,
         "database_name": db_name,
