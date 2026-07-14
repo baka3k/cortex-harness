@@ -1,2 +1,0 @@
-       COPY CYCLE-B.
-       01 CYCLE-A-FIELD PIC X.
