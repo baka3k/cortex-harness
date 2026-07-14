@@ -54,15 +54,15 @@ $InfraServices = @(
 
 function Write-Usage {
     @"
-Usage:
-  make build       Create/sync virtualenvs and Python dependencies.
-  make install     Run build and install the global dev command.
-  make uninstall   Remove the global dev command installed by make install.
-  make infra-up    Pull/start local Qdrant and FalkorDB Docker containers.
-  make infra-down  Stop the Docker containers started by make infra-up.
-  make doctor      Check Python deps, Docker, database ports, and MCP ports.
-  make start       Open each MCP server in a separate terminal window.
-  make stop        Stop MCP terminals/processes started by make start.
+Usage (equivalent forms):
+  make build       | dev build       Create/sync virtualenvs and Python dependencies.
+  make install     | dev install     Run build and install the global dev command.
+  make uninstall   | dev uninstall   Remove the global dev command.
+  make infra-up    | dev infra-up    Pull/start local Qdrant and FalkorDB containers.
+  make infra-down  | dev infra-down  Stop the containers started by infra-up.
+  make doctor      | dev doctor      Check Python deps, Docker, databases, and MCP ports.
+  make start       | dev start       Open each MCP server in a separate terminal window.
+  make stop        | dev stop        Stop MCP terminals/processes started by start.
 
 Default MCP servers:
   code-tiny  http://127.0.0.1:8788/mcp
