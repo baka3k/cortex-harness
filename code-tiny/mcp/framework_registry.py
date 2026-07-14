@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, Optional, Tuple
 
@@ -112,6 +114,14 @@ def default_relationships(parser_type: Optional[str] = None) -> Tuple[str, ...]:
 
 
 def servlet_active_generation_predicate(alias: str) -> str:
+    provider = (
+        os.environ.get("CODE_GRAPH_PROVIDER")
+        or os.environ.get("GRAPH_PROVIDER")
+        or "neo4j"
+    ).strip().lower()
+    if provider in {"falkor", "falkordb", "falkor-db"}:
+        # FalkorDB cleanup removes inactive generations during promotion.
+        return "true"
     return (
         f"(coalesce({alias}.framework, '') <> 'servlet_jsp' OR EXISTS {{ "
         f"MATCH (state:ServletJspAnalysisState {{project_id: {alias}.project_id, module_id: {alias}.module_id}}) "
