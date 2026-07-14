@@ -35,7 +35,9 @@ tree-sitter-sql
 tree-sitter-c-sharp
 tree-sitter-swift
 tree-sitter-language-pack
+tree-sitter-dart>=0.1.0,<0.2
 # Deep learning librariespip
 einops
 sentence-transformers
 dotenv
+PyYAML>=6.0
