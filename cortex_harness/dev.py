@@ -1496,7 +1496,7 @@ def init(env, project_dir, path):
 
     code_folders_default = ", ".join(f for f in first_code.get("folder", []) if f)
     if not code_folders_default and path_is_current_dir:
-        code_folders_default = "."
+        code_folders_default = str(project_path)
 
     code_git     = click.prompt("  Git URL (blank = local)", default=first_code.get("git", "") or "")
     code_folders_raw = click.prompt(

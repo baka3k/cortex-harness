@@ -935,6 +935,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "root": root,
         "strict_mode": bool(args.strict),
         "ignore_cache": bool(args.ignore_cache),
+        "full_scan": bool(args.full_scan),
+        "bootstrap_full_scan": False,
         "started_at": _now_iso(),
         "finished_at": None,
         "duration_seconds": None,
@@ -969,11 +971,12 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     state_path = ""
     before_sha = str(args.before_sha or "")
     after_sha = str(args.after_sha or "")
+    full_scan = bool(args.full_scan)
     try:
         if not os.path.isdir(root):
             raise ValueError(f"Root not found: {root}")
 
-        if not args.full_scan:
+        if not full_scan:
             try:
                 inside = subprocess.check_output(
                     ["git", "-C", root, "rev-parse", "--is-inside-work-tree"],
@@ -1010,6 +1013,13 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             "updated_at": state.updated_at,
         }
 
+        if not full_scan and not args.before_sha and not state.last_good_sha:
+            full_scan = True
+            summary["full_scan"] = True
+            summary["bootstrap_full_scan"] = True
+            if args.verbose:
+                print("[bootstrap] no incremental baseline; scanning all source files")
+
         if graph_ready:
             try:
                 await _ensure_project_repository_graph(
@@ -1034,7 +1044,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             if missing:
                 raise RuntimeError(f"strict mode missing required services: {', '.join(missing)}")
 
-        if args.full_scan:
+        if full_scan:
             after_sha = _normalize_sha(root, args.after_sha or "HEAD") if _is_git_repo(root) else "full_scan"
             before_sha = "full_scan"
             if args.verbose:
@@ -1100,7 +1110,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             return 0
 
         impacted_paths: Set[str] = set()
-        if not args.full_scan and graph_ready and changed_paths:
+        if not full_scan and graph_ready and changed_paths:
             summary["services"]["impact_expansion_used"] = True
             impacted_paths = await _query_impacted_files(
                 neo4j_uri=args.neo4j_uri,
@@ -1337,13 +1347,13 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 project_name=project_name,
                 before_sha=before_sha,
                 after_sha=after_sha,
-                changed_manifest=changed_manifest if not args.full_scan else None,
-                deleted_manifest=deleted_manifest if not args.full_scan else None,
+                changed_manifest=changed_manifest if not full_scan else None,
+                deleted_manifest=deleted_manifest if not full_scan else None,
                 qdrant_collection=None,
                 message_scan_enabled=False,
                 message_output_dir=None,
                 message_qdrant_collection=None,
-                incremental=not args.full_scan,
+                incremental=not full_scan,
                 verbose=args.verbose,
                 ignore_cache=bool(args.ignore_cache),
             )
