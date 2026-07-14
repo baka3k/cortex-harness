@@ -67,6 +67,7 @@ class FrameworkAnalyzerConfig:
 
 
 ANALYZERS: Dict[str, AnalyzerConfig] = {
+    "cobol": AnalyzerConfig("cobol", os.path.join(_ROOT_DIR, "tools", "cobol", "cobol_analyzer.py"), True),
     "cplus": AnalyzerConfig("cplus", os.path.join(_ROOT_DIR, "tools", "cplus", "cplus_analyzer.py"), True),
     "delphi": AnalyzerConfig("delphi", os.path.join(_ROOT_DIR, "tools", "delphi", "delphi_analyzer.py"), True),
     "java": AnalyzerConfig("java", os.path.join(_ROOT_DIR, "tools", "java", "java_analyzer.py"), True),
@@ -427,6 +428,8 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
     name = os.path.basename(lower)
     ext = os.path.splitext(lower)[1]
 
+    if ext in {".cbl", ".cob", ".cpy", ".copy"}:
+        return "cobol"
     if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}:
         return "cplus"
     if ext in {".pas", ".dpr", ".inc"}:
@@ -867,6 +870,7 @@ def _write_summary(path: str, payload: Dict[str, object]) -> None:
 
 
 _SOURCE_EXTENSIONS: Set[str] = {
+    ".cbl", ".cob", ".cpy", ".copy",
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
     ".pas", ".dpr", ".inc",
     ".py",

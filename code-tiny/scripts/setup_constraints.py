@@ -116,6 +116,34 @@ CONSTRAINTS: list[tuple[str, str]] = [
 
 INDEXES: list[tuple[str, str]] = [
     (
+        "cobol_program_project_name_idx",
+        (
+            "CREATE INDEX cobol_program_project_name_idx IF NOT EXISTS "
+            "FOR (n:CobolProgram) ON (n.project_id, n.name)"
+        ),
+    ),
+    (
+        "cobol_paragraph_project_name_idx",
+        (
+            "CREATE INDEX cobol_paragraph_project_name_idx IF NOT EXISTS "
+            "FOR (n:CobolParagraph) ON (n.project_id, n.name)"
+        ),
+    ),
+    (
+        "cobol_data_item_project_name_idx",
+        (
+            "CREATE INDEX cobol_data_item_project_name_idx IF NOT EXISTS "
+            "FOR (n:CobolDataItem) ON (n.project_id, n.name)"
+        ),
+    ),
+    (
+        "cobol_copybook_project_name_idx",
+        (
+            "CREATE INDEX cobol_copybook_project_name_idx IF NOT EXISTS "
+            "FOR (n:CobolCopybook) ON (n.project_id, n.name)"
+        ),
+    ),
+    (
         "type_id_lookup",
         (
             "CREATE INDEX type_id_lookup IF NOT EXISTS "

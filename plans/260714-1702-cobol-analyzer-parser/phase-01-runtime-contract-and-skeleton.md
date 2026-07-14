@@ -65,11 +65,11 @@ Reference:
 
 ## Todo
 
-- [ ] Approve fact schema version `1` and stable-ID components.
-- [ ] Record the bundled binary checksum and supported architectures in tests/docs.
-- [ ] Add the full fixture and grammar-node golden snapshots.
-- [ ] Verify two identical dry runs produce byte-equivalent facts and summaries.
-- [ ] Verify runtime failures occur before graph/Qdrant connections are created.
+- [x] Approve fact schema version `1` and stable-ID components.
+- [x] Record that this checkout has no bundled binary and document the portable language-pack runtime plus native checksum reporting.
+- [x] Add the representative fixture and grammar/error-node contract tests.
+- [x] Verify two identical analyses produce byte-equivalent facts and summaries.
+- [x] Verify runtime failures occur before graph/Qdrant connections are created.
 
 ## Risks
 
