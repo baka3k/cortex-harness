@@ -272,8 +272,11 @@ def _apply_unified_defaults(payload: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(payload)
     if merged.get("parser_type") is None and active_project.get("parser_type"):
         merged["parser_type"] = active_project["parser_type"]
-    if merged.get("db") is None and active_project.get("database_name"):
-        merged["db"] = active_project["database_name"]
+    if not merged.get("db"):
+        if active_project.get("database_name"):
+            merged["db"] = active_project["database_name"]
+        else:
+            merged.pop("db", None)
     return merged
 
 
@@ -514,7 +517,7 @@ async def tool_list_databases(
 )
 async def tool_list_qdrant_collections(
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     qdrant_url: str = "http://localhost:6333",
     include_vectors: bool = False,
 ) -> Dict[str, Any]:
@@ -798,8 +801,9 @@ async def tool_annotate_node(
     note: str = "",
     tags: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     project_id: str = "",
+    severity: str = "",
 ) -> Dict[str, Any]:
     """Add or update annotations for a node."""
     values = {
@@ -809,6 +813,7 @@ async def tool_annotate_node(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "project_id": project_id if project_id else None,
+        "severity": severity if severity else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("annotate_node", merged)
@@ -820,7 +825,7 @@ async def tool_annotate_node(
 async def tool_semantic_search(
     query: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     top_k: int | float | str = "",
     collection: str = "",
     project_id: str = "",
@@ -829,6 +834,8 @@ async def tool_semantic_search(
     graph_direction: str = "",
     graph_rel_types: str = "",
     graph_limit: int | float | str = "",
+    mode: str = "",
+    qdrant_url: str = "",
 ) -> Dict[str, Any]:
     """Semantic search over Qdrant embeddings with optional graph expansion."""
     parsed_top_k, top_k_error = _parse_positive_int(top_k, "top_k")
@@ -846,6 +853,8 @@ async def tool_semantic_search(
         "graph_direction": graph_direction if graph_direction else None,
         "graph_rel_types": graph_rel_types if graph_rel_types else None,
         "graph_limit": parsed_graph_limit,
+        "mode": mode if mode else None,
+        "qdrant_url": qdrant_url if qdrant_url else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if top_k_error:
@@ -867,22 +876,30 @@ async def tool_semantic_search(
 async def tool_trace_flow_between_module(
     source_module: str = "",
     target_module: str = "",
+    source_modules: Optional[List[str]] = None,
+    target_modules: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
+    rel_types: Optional[List[str]] = None,
+    max_depth: int | float | str = "",
+    direction: str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths between modules."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
-        "source_module": source_module if source_module else None,
-        "target_module": target_module if target_module else None,
+        "source_modules": source_modules or _normalize_string_list(source_module),
+        "target_modules": target_modules or _normalize_string_list(target_module),
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
+        "rel_types": rel_types,
+        "max_depth": max_depth if max_depth != "" else None,
+        "direction": direction if direction else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -908,23 +925,29 @@ async def tool_trace_flow_between_module(
 @mcp_server.tool(name="trace_flow", description="Trace flow paths using configurable relationships.", output_schema=None)
 async def tool_trace_flow(
     start_id: str = "",
+    end_id: str = "",
     direction: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
+    rel_types: Optional[List[str]] = None,
+    max_depth: int | float | str = "",
 ) -> Dict[str, Any]:
     """Trace flow paths using configurable relationships."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "start_id": start_id if start_id else None,
+        "end_id": end_id if end_id else None,
         "direction": direction if direction else None,
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
+        "rel_types": rel_types,
+        "max_depth": max_depth if max_depth != "" else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -986,10 +1009,11 @@ async def tool_find_screen_workflows(
 # Define list_up_entrypoint separately with specific parameters
 @mcp_server.tool(name="list_up_entrypoint", description="List entrypoint functions called from outside modules.", output_schema=None)
 async def tool_list_up_entrypoint(
-    modules: str = "",
+    modules: str | List[str] = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     project_id: str = "",
+    limit: int | float | str = "",
 ) -> Dict[str, Any]:
     """List entrypoint functions called from outside modules."""
     values = {
@@ -997,6 +1021,7 @@ async def tool_list_up_entrypoint(
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "project_id": project_id if project_id else None,
+        "limit": limit if limit != "" else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("list_up_entrypoint", merged)
@@ -1011,13 +1036,14 @@ async def tool_list_up_entrypoint(
 @mcp_server.tool(name="listup_class_matching_path", description="List functions for classes/types by name.", output_schema=None)
 async def tool_listup_class_matching_path(
     class_name: str = "",
+    class_names: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """List functions for classes/types by name."""
     values = {
-        "class_name": class_name if class_name else None,
+        "class_names": class_names or _normalize_string_list(class_name),
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "project_id": project_id if project_id else None,
@@ -1047,8 +1073,10 @@ async def tool_listup_symbols_matching_file_path(
     modules: Optional[List[str]] = None,
     node_types: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     project_id: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     """List symbols by file path token.
 
@@ -1079,6 +1107,8 @@ async def tool_listup_symbols_matching_file_path(
         "modules": tokens,
         "db": db,
         "project_id": project_id if project_id else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
     }
     if parser_type:
         values["parser_type"] = parser_type
@@ -1101,22 +1131,32 @@ async def tool_listup_symbols_matching_file_path(
 async def tool_find_path_between_module(
     source_module: str = "",
     target_module: str = "",
+    source_modules: Optional[List[str]] = None,
+    target_modules: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
+    max_depth: int | float | str = "",
+    direction: str = "",
+    include_possible: bool = False,
+    include_fp: bool = False,
 ) -> Dict[str, Any]:
     """Find call paths between modules."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
-        "source_module": source_module if source_module else None,
-        "target_module": target_module if target_module else None,
+        "source_modules": source_modules or _normalize_string_list(source_module),
+        "target_modules": target_modules or _normalize_string_list(target_module),
         "parser_type": parser_type if parser_type else None,
         "db": db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
+        "max_depth": max_depth if max_depth != "" else None,
+        "direction": direction if direction else None,
+        "include_possible": include_possible,
+        "include_fp": include_fp,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -1135,12 +1175,16 @@ async def tool_find_paths(
     start_function_id: str = "",
     end_function_id: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
+    max_depth: int | float | str = "",
+    relationship_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Find call paths between two functions."""
     requested_limit = limit or top_k
@@ -1154,6 +1198,10 @@ async def tool_find_paths(
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
+        "max_depth": max_depth if max_depth != "" else None,
+        "relationship_types": relationship_types,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -1183,12 +1231,17 @@ async def tool_find_paths(
 async def tool_query_subgraph(
     function_id: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
+    max_depth: int | float | str = "",
+    relationship_types: Optional[List[str]] = None,
+    direction: str = "",
 ) -> Dict[str, Any]:
     """Return call graph context around a function ID."""
     requested_limit = limit or top_k
@@ -1201,6 +1254,11 @@ async def tool_query_subgraph(
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
+        "max_depth": max_depth if max_depth != "" else None,
+        "relationship_types": relationship_types,
+        "direction": direction if direction else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -1225,11 +1283,13 @@ async def tool_query_subgraph(
 # Define get_node_details separately with specific parameters
 @mcp_server.tool(name="get_node_details", description="Fetch metadata for multiple node IDs.", output_schema=None)
 async def tool_get_node_details(
-    node_ids: str = "",
+    node_ids: str | List[str] = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     node_type: str = "",
     project_id: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     """Fetch metadata for multiple node IDs."""
     values = {
@@ -1238,6 +1298,8 @@ async def tool_get_node_details(
         "db": db,
         "node_type": node_type if node_type else None,
         "project_id": project_id if project_id else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     result = await _dispatch_tool("get_node_details", merged)
@@ -1253,10 +1315,12 @@ async def tool_get_node_details(
 async def tool_list_possible_calls(
     function_id: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     """List POSSIBLE_CALLS edges."""
     requested_limit = limit or top_k
@@ -1267,6 +1331,8 @@ async def tool_list_possible_calls(
         "db": db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -1284,9 +1350,11 @@ async def tool_list_possible_calls(
 async def tool_get_symbol(
     node_id: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     node_type: str = "",
     project_id: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     """Retrieve metadata for a specific node by id."""
     values = {
@@ -1295,6 +1363,8 @@ async def tool_get_symbol(
         "db": db,
         "node_type": node_type if node_type else None,
         "project_id": project_id if project_id else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     try:
@@ -1311,12 +1381,14 @@ async def tool_get_symbol(
 async def tool_search_by_code(
     query: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
     expand_search: bool = False,
     project_id: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     """Search nodes by matching text in code snippets."""
     requested_limit = limit or top_k
@@ -1329,6 +1401,8 @@ async def tool_search_by_code(
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
         "project_id": project_id if project_id else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -1346,7 +1420,7 @@ async def tool_search_by_code(
 async def tool_search_functions(
     query: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
@@ -1354,6 +1428,8 @@ async def tool_search_functions(
     project_id: str = "",
     framework: str = "",
     kinds: str = "",
+    content_mode: str = "",
+    include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
     """Search nodes by name/qualified_name."""
     requested_limit = limit or top_k
@@ -1368,6 +1444,8 @@ async def tool_search_functions(
         "project_id": project_id if project_id else None,
         "framework": framework if framework else None,
         "kinds": _normalize_string_list(kinds) if kinds else None,
+        "content_mode": content_mode if content_mode else None,
+        "include_raw_fields": include_raw_fields if include_raw_fields else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
     if limit_error:
@@ -1386,7 +1464,7 @@ async def tool_get_ipc_message(
     sender: str = "",
     receiver: str = "",
     parser_type: str = "",
-    db: str = "neo4j",
+    db: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
     """Query IPC messages by sender/receiver."""
@@ -1541,6 +1619,16 @@ async def tool_reconstruct_flow(
 
 def _get_bridge_driver() -> Any:
     """Legacy session driver retained for workflow tools not yet adapter-based."""
+
+    provider = (
+        os.environ.get("CODE_GRAPH_PROVIDER")
+        or os.environ.get("GRAPH_PROVIDER")
+        or "neo4j"
+    ).strip().lower()
+    if provider in {"falkor", "falkordb", "falkor-db"}:
+        raise RuntimeError(
+            "Neo4j-only workflow tool is unavailable while FalkorDB is configured."
+        )
 
     import neo4j as _neo4j
 
@@ -1893,7 +1981,7 @@ _EXTERNAL_MARKERS = ("third_party", "external", "vendor", "/usr", "node_modules"
 )
 async def tool_analyze_workflow_impact(
     function_id: str,
-    db: str = "neo4j",
+    db: str = "",
     direction: str = "downstream",
     max_depth: int = 4,
 ) -> Dict[str, Any]:
@@ -2025,7 +2113,7 @@ async def tool_analyze_workflow_impact(
 )
 async def tool_find_workflows_containing(
     function_id: str,
-    db: str = "neo4j",
+    db: str = "",
     include_indirect: bool = True,
     max_depth: int = 4,
 ) -> Dict[str, Any]:
