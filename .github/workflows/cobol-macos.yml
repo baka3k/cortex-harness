@@ -1,0 +1,56 @@
+---
+name: COBOL macOS compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cobol-macos.yml"
+      - "code-tiny/tools/cobol/**"
+      - "tests/test_cobol*.py"
+      - "tests/fixtures/cobol-*/**"
+  push:
+    branches: [develop]
+    paths:
+      - ".github/workflows/cobol-macos.yml"
+      - "code-tiny/tools/cobol/**"
+      - "tests/test_cobol*.py"
+      - "tests/fixtures/cobol-*/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Intel
+            os: macos-15-intel
+            architecture: x86_64
+            python: "3.10"
+          - name: Apple-Silicon
+            os: macos-15
+            architecture: arm64
+            python: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install analyzer runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . "tree-sitter>=0.25,<0.26" "tree-sitter-language-pack>=1.12,<2"
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.architecture }}"
+      - name: Run COBOL preflight
+        run: python code-tiny/tools/cobol/cobol_analyzer.py --root tests/fixtures/cobol-application --preflight
+      - name: Run COBOL suite
+        run: python -m unittest discover -s tests -p 'test_cobol*.py' -v
