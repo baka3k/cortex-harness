@@ -288,7 +288,7 @@ def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
 
 
 def _graph_provider(env: dict, scoped_key: str) -> str:
-    provider = (env.get(scoped_key) or env.get("GRAPH_PROVIDER") or "neo4j").strip().lower()
+    provider = (env.get(scoped_key) or env.get("GRAPH_PROVIDER") or "falkordb").strip().lower()
     return "falkordb" if provider in {"falkor", "falkordb"} else "neo4j"
 
 
@@ -303,7 +303,7 @@ def _env_to_neo4j_args(env: dict) -> list:
             "--falkordb-port", str(env.get("FALKORDB_PORT", "6379")),
             "--falkordb-user", env.get("FALKORDB_USER", ""),
             "--falkordb-pass", env.get("FALKORDB_PASSWORD", ""),
-            "--falkordb-graph", env.get("FALKORDB_GRAPH", "project_graph"),
+            "--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph"),
         ]
         if str(env.get("FALKORDB_SSL", "")).lower() in {"1", "true", "yes", "on"}:
             args.append("--falkordb-ssl")
@@ -326,7 +326,7 @@ def _neo4j_args_code(env: dict) -> list:
             "--falkordb-port", str(env.get("FALKORDB_PORT", "6379")),
             "--falkordb-user", env.get("FALKORDB_USER", ""),
             "--falkordb-password", env.get("FALKORDB_PASSWORD", ""),
-            "--falkordb-graph", env.get("FALKORDB_GRAPH", "project_graph"),
+            "--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph"),
         ]
         if str(env.get("FALKORDB_SSL", "")).lower() in {"1", "true", "yes", "on"}:
             args.append("--falkordb-ssl")
