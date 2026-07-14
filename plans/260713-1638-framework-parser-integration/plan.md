@@ -6,6 +6,7 @@ completed: 2026-07-13
 mode: hi-plan --fast
 scope: code-tiny framework analyzers, incremental scan orchestration, graph schema, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
+relatedPlans: [260714-1603-flutter-analyzer-parser]
 dependencyOverride: user approved implementation before the migration completed
 
 ## Overview
@@ -25,7 +26,7 @@ This avoids assigning a `.java`, `.kt`, or `.xml` file to only one parser, which
 
 ### Parser packages
 
-- The three parser directories in `code-tiny/tools/` are byte-equivalent to the copies under `/Users/hieplq1.rpm/Desktop/testnewmcp`, excluding generated `__pycache__` directories.
+- The three parser directories in `code-tiny/tools/` are byte-equivalent to the copies under `/Users/account/Desktop/testnewmcp`, excluding generated `__pycache__` directories.
 - Each analyzer already exposes incremental manifest arguments:
   - `--incremental`
   - `--changed-files-manifest`
@@ -56,7 +57,7 @@ This avoids assigning a `.java`, `.kt`, or `.xml` file to only one parser, which
 
 ### Reference MCP changes
 
-The files in `/Users/hieplq1.rpm/Desktop/testnewmcp/mcp` are useful as a **patch source**, not as full-file replacements:
+The files in `/Users/account/Desktop/testnewmcp/mcp` are useful as a **patch source**, not as full-file replacements:
 
 - Useful changes:
   - add Servlet/JSP labels to `search_functions`;

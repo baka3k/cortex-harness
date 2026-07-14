@@ -4,11 +4,13 @@ status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
-blocks: [260713-1638-framework-parser-integration]
+blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser]
 
 ## Cross-Plan Dependency
 
 The framework parser integration plan at `plans/260713-1638-framework-parser-integration/plan.md` depends on this migration stabilizing the provider argument/runtime contract, `GraphDriverFactory` configuration, provider-neutral query results, and schema/index setup. That plan will add MyBatis, Servlet/JSP, and Spring writers and MCP queries on top of these interfaces. Changes to `code-tiny/tools/graph`, `code-tiny/scripts/setup_constraints.py`, and `code-tiny/mcp/unified_mcp.py` must be coordinated across both plans.
+
+The Flutter analyzer parser plan at `plans/260714-1603-flutter-analyzer-parser/plan.md` also depends on the provider-neutral writer and schema contract for its Dart canonical graph and Flutter semantic overlay. Its protocol/parser foundation can proceed independently, but provider-parity acceptance and changes to `code-tiny/tools/graph`, `code-tiny/scripts/setup_constraints.py`, and `code-tiny/mcp/unified_mcp.py` must be coordinated with this migration.
 
 ## Objective
 
