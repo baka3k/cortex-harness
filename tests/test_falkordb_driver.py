@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -129,6 +129,24 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("$__falkordb_now", query)
         self.assertEqual(params["id"], "node-1")
         self.assertRegex(params["__falkordb_now"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
+
+    async def test_existing_index_is_logged_as_idempotent_skip(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+
+        driver.graph.create_node_range_index = Mock(
+            side_effect=RuntimeError("Attribute 'project_id' is already indexed")
+        )
+
+        with patch("tools.graph.driver.falkordb_driver.logger.warning") as warning:
+            await driver.create_indexes(
+                [{"label": "Project", "property": "project_id"}]
+            )
+
+        warning.assert_not_called()
 
 
 if __name__ == "__main__":
