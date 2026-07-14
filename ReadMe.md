@@ -66,8 +66,11 @@ After installation, infrastructure commands can be run from any directory:
 
 ```bash
 dev infra-up
+dev start
 dev doctor
 ```
+
+`dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory.
 
 Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.
 
