@@ -11,9 +11,9 @@ Resolution order:
 1. `--cobol-language-library PATH`;
 2. `COBOL_LANGUAGE_LIBRARY`;
 3. a compatible artifact in `tools/cobol/lib`;
-4. `tree-sitter-language-pack`.
+4. `tree-sitter-language-pack` (also used automatically when the bundled artifact cannot load).
 
-An explicit native library must export `tree_sitter_cobol`. Preflight validates loading, the Tree-sitter binding/grammar ABI, and a minimal parse before any graph or Qdrant connection is created.
+An explicit native library must export `tree_sitter_cobol`; explicit CLI/environment overrides fail closed and never silently fall back. Preflight validates loading, the Tree-sitter binding/grammar ABI, and a minimal parse before any graph or Qdrant connection is created. The committed Darwin artifact is a universal Mach-O containing both `x86_64` and `arm64`; GitHub Actions runs the COBOL suite on Intel and Apple Silicon macOS runners.
 
 Native grammar overrides and embedding models are executable-code trust boundaries. Use only artifacts/models approved by the project operator; the preflight records the native library SHA-256 for auditability. Qdrant targets must be absolute HTTP(S) URLs without embedded credentials, and collection names are restricted to safe path characters.
 

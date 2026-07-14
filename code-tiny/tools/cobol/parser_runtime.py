@@ -119,28 +119,39 @@ def _native_parser(path: Path):
 
 def load_parser(language_library: str | None = None):
     """Load an override/bundled native grammar, otherwise the portable language pack."""
+    requested = language_library or os.environ.get("COBOL_LANGUAGE_LIBRARY")
+    bundled_error: CobolRuntimeError | None = None
     path = resolve_language_library(language_library)
     if path is not None:
-        parser, language = _native_parser(path)
-        info = RuntimeInfo(
-            provider="native-library",
-            platform=platform.system(),
-            architecture=platform.machine(),
-            tree_sitter_version=_package_version("tree-sitter"),
-            grammar_abi=_grammar_abi(language),
-            library_path=str(path),
-            library_sha256=_sha256(path),
-        )
-        return parser, info
+        try:
+            parser, language = _native_parser(path)
+        except CobolRuntimeError as exc:
+            if requested:
+                raise
+            bundled_error = exc
+        else:
+            info = RuntimeInfo(
+                provider="native-library",
+                platform=platform.system(),
+                architecture=platform.machine(),
+                tree_sitter_version=_package_version("tree-sitter"),
+                grammar_abi=_grammar_abi(language),
+                library_path=str(path),
+                library_sha256=_sha256(path),
+            )
+            return parser, info
     try:
         from tree_sitter_language_pack import get_language, get_parser
 
         language = get_language("cobol")
         parser = get_parser("cobol")
     except (ImportError, LookupError, RuntimeError) as exc:
+        detail = "install tree-sitter-language-pack or pass --cobol-language-library"
+        if bundled_error is not None:
+            detail = f"bundled grammar failed ({bundled_error.code}); {detail}"
         raise CobolRuntimeError(
             "COBOL_RUNTIME_UNAVAILABLE",
-            "install tree-sitter-language-pack or pass --cobol-language-library",
+            detail,
         ) from exc
     info = RuntimeInfo(
         provider="tree-sitter-language-pack",
