@@ -6,7 +6,7 @@ completed: 2026-07-13
 mode: hi-plan --fast
 scope: code-tiny framework analyzers, incremental scan orchestration, graph schema, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260714-1603-flutter-analyzer-parser]
+relatedPlans: [260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser]
 dependencyOverride: user approved implementation before the migration completed
 
 ## Overview
