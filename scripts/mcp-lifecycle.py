@@ -395,6 +395,20 @@ def terminal_command(wrapper: Path) -> list[str]:
     raise RuntimeError("No supported terminal emulator found (gnome-terminal, x-terminal-emulator, or xterm).")
 
 
+def default_graph_env_exports(server_name: str) -> str:
+    scoped_provider = "DOC_GRAPH_PROVIDER" if server_name == "doc-tiny" else "CODE_GRAPH_PROVIDER"
+    return (
+        "# Default local graph backend for make start.\n"
+        'export GRAPH_PROVIDER="${GRAPH_PROVIDER:-falkordb}"\n'
+        f'export {scoped_provider}="${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}"\n'
+        'export FALKORDB_HOST="${FALKORDB_HOST:-localhost}"\n'
+        'export FALKORDB_PORT="${FALKORDB_PORT:-6379}"\n'
+        'export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"\n'
+        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-neo4j}"\n'
+        'export FALKORDB_PASSWORD="${FALKORDB_PASSWORD:-}"\n'
+    )
+
+
 def invoke_start() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     invoke_stop()
@@ -412,6 +426,7 @@ def invoke_start() -> None:
             f"if [ -f {shlex.quote(str(VENV_DIR / 'bin' / 'activate'))} ]; then\n"
             f"  source {shlex.quote(str(VENV_DIR / 'bin' / 'activate'))}\n"
             "fi\n"
+            f"{default_graph_env_exports(str(server['name']))}"
             f"cd {shlex.quote(str(server['work_dir']))}\n"
             f"exec bash {shlex.quote(str(script))}\n",
             encoding="utf-8",

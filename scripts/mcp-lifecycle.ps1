@@ -783,6 +783,36 @@ function Invoke-Stop {
     Write-Host "[stop] MCP stop complete."
 }
 
+function Get-DefaultGraphEnvBash {
+    param([string]$ServerName)
+
+    $scopedProvider = if ($ServerName -eq "doc-tiny") { "DOC_GRAPH_PROVIDER" } else { "CODE_GRAPH_PROVIDER" }
+    return @(
+        'export GRAPH_PROVIDER="${GRAPH_PROVIDER:-falkordb}"',
+        ('export ' + $scopedProvider + '="${' + $scopedProvider + ':-${GRAPH_PROVIDER}}"'),
+        'export FALKORDB_HOST="${FALKORDB_HOST:-localhost}"',
+        'export FALKORDB_PORT="${FALKORDB_PORT:-6379}"',
+        'export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"',
+        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-neo4j}"',
+        'export FALKORDB_PASSWORD="${FALKORDB_PASSWORD:-}"'
+    ) -join "; "
+}
+
+function Get-DefaultGraphEnvPowerShell {
+    param([string]$ServerName)
+
+    $scopedProvider = if ($ServerName -eq "doc-tiny") { "DOC_GRAPH_PROVIDER" } else { "CODE_GRAPH_PROVIDER" }
+    return @"
+if (-not `$env:GRAPH_PROVIDER) { `$env:GRAPH_PROVIDER = 'falkordb' }
+if (-not [Environment]::GetEnvironmentVariable('$scopedProvider', 'Process')) { [Environment]::SetEnvironmentVariable('$scopedProvider', `$env:GRAPH_PROVIDER, 'Process') }
+if (-not `$env:FALKORDB_HOST) { `$env:FALKORDB_HOST = 'localhost' }
+if (-not `$env:FALKORDB_PORT) { `$env:FALKORDB_PORT = '6379' }
+if (-not `$env:FALKORDB_URI) { `$env:FALKORDB_URI = "redis://`$(`$env:FALKORDB_HOST):`$(`$env:FALKORDB_PORT)" }
+if (-not `$env:FALKORDB_GRAPH) { `$env:FALKORDB_GRAPH = 'neo4j' }
+if (-not `$env:FALKORDB_PASSWORD) { `$env:FALKORDB_PASSWORD = '' }
+"@
+}
+
 function Invoke-Start {
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
     Invoke-Stop
@@ -803,7 +833,8 @@ function Invoke-Start {
             $workDir = Quote-Bash (Convert-ToShellPath -Path $server.WorkDir -Kind $runner.Kind)
             $rootVenv = Quote-Bash (Convert-ToShellPath -Path (Get-RootVenvDir) -Kind $runner.Kind)
             $scriptName = Quote-Bash (Split-Path -Leaf $server.Script)
-            $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; cd $workDir && bash ./$scriptName"
+            $graphEnv = Get-DefaultGraphEnvBash -ServerName $server.Name
+            $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; $graphEnv cd $workDir && bash ./$scriptName"
             $runnerArg = Quote-PowerShell $runner.Command
             $bashCommandArg = Quote-PowerShell $bashCommand
             $invokeLine = "& $runnerArg -lc $bashCommandArg"
@@ -812,9 +843,11 @@ function Invoke-Start {
             $workDirArg = Quote-PowerShell $server.WorkDir
             $pythonScriptArg = Quote-PowerShell $server.PythonScript
             $argumentList = "@(" + (($server.Arguments | ForEach-Object { Quote-PowerShell $_ }) -join ", ") + ")"
+            $graphEnv = Get-DefaultGraphEnvPowerShell -ServerName $server.Name
             $invokeLine = @"
 Set-Location -LiteralPath $workDirArg
 `$serverArgs = $argumentList
+$graphEnv
 `$envFile = Join-Path (Get-Location) '.env'
 if (Test-Path -LiteralPath `$envFile) {
     Get-Content -LiteralPath `$envFile | ForEach-Object {
