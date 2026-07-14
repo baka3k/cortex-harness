@@ -1,0 +1,67 @@
+---
+name: Lifecycle macOS compatibility
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/lifecycle-macos.yml"
+      - "Makefile"
+      - "pyproject.toml"
+      - "cortex_harness/dev.py"
+      - "scripts/mcp-lifecycle.py"
+      - "tests/test_dev_lifecycle_commands.py"
+      - "tests/test_make_lifecycle.py"
+  push:
+    branches: [develop]
+    paths:
+      - ".github/workflows/lifecycle-macos.yml"
+      - "Makefile"
+      - "pyproject.toml"
+      - "cortex_harness/dev.py"
+      - "scripts/mcp-lifecycle.py"
+      - "tests/test_dev_lifecycle_commands.py"
+      - "tests/test_make_lifecycle.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.name }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Intel
+            os: macos-15-intel
+            architecture: x86_64
+            python: "3.10"
+          - name: Apple-Silicon
+            os: macos-15
+            architecture: arm64
+            python: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install lightweight CLI runtime
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install click
+          python -m pip install --no-deps -e .
+      - name: Verify macOS runner tools
+        run: |
+          test "$(uname -m)" = "${{ matrix.architecture }}"
+          test -x /usr/bin/osascript
+          command -v make
+          command -v dev
+      - name: Smoke test global lifecycle help
+        run: |
+          cd "$(mktemp -d)"
+          dev help
+      - name: Run lifecycle suite
+        run: python -m unittest tests.test_make_lifecycle tests.test_dev_lifecycle_commands -v

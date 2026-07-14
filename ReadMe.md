@@ -78,6 +78,8 @@ dev stop
 
 For example, `dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory. The same one-to-one mapping applies to `build`, `install`, `uninstall`, `infra-up`, `infra-down`, `doctor`, `stop`, and `help`.
 
+Lifecycle compatibility is gated in GitHub Actions on both Intel and Apple Silicon macOS runners. The gate executes the installed `~/.local/bin/dev` wrapper from outside the repository and validates Make/dev parity, Terminal launcher construction, and start/stop state handling.
+
 Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.
 
 ---
