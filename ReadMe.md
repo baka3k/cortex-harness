@@ -62,15 +62,21 @@ make uninstall   # remove the global dev command installed by make install
 
 `make install` installs `dev.cmd` to `%USERPROFILE%\.local\bin` on Windows and `dev` to `~/.local/bin` on macOS/Linux. Make sure that directory is on your shell `PATH`.
 
-After installation, infrastructure commands can be run from any directory:
+After installation, every root Make lifecycle target has a matching global `dev` command and can be run from any directory:
 
 ```bash
+dev help
+dev build
+dev install
+dev uninstall
 dev infra-up
-dev start
+dev infra-down
 dev doctor
+dev start
+dev stop
 ```
 
-`dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory.
+For example, `dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory. The same one-to-one mapping applies to `build`, `install`, `uninstall`, `infra-up`, `infra-down`, `doctor`, `stop`, and `help`.
 
 Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.
 

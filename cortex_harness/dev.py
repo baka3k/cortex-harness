@@ -1362,8 +1362,10 @@ def cli():
       dev sync code         # interactive: pick folders, auto incremental/full
       dev sync code all     # ALL analyzers on all folders (incremental if baseline)
       dev sync doc          # ingest documents -> Neo4j + Qdrant
+      dev build             # create/sync the repository virtualenv
       dev infra-up          # start Qdrant + FalkorDB from any directory
       dev start             # open code-tiny + doc-tiny from any directory
+      dev stop              # stop MCP processes started by dev/make start
       dev doctor            # check local infrastructure from any directory
     """
 
@@ -1399,16 +1401,52 @@ def _run_lifecycle(action: str) -> None:
         raise click.exceptions.Exit(result.returncode)
 
 
+@cli.command("help")
+def lifecycle_help():
+    """Show the repository lifecycle command reference."""
+    _run_lifecycle("help")
+
+
+@cli.command()
+def build():
+    """Create or synchronize the repository virtual environment."""
+    _run_lifecycle("build")
+
+
+@cli.command()
+def install():
+    """Build dependencies and install the global dev command."""
+    _run_lifecycle("install")
+
+
+@cli.command()
+def uninstall():
+    """Remove the global dev command installed by the lifecycle script."""
+    _run_lifecycle("uninstall")
+
+
 @cli.command("infra-up")
 def infra_up():
     """Start the local Qdrant and FalkorDB containers."""
     _run_lifecycle("infra-up")
 
 
+@cli.command("infra-down")
+def infra_down():
+    """Stop the local Qdrant and FalkorDB containers."""
+    _run_lifecycle("infra-down")
+
+
 @cli.command()
 def start():
     """Open the code-tiny and doc-tiny MCP servers in terminal windows."""
     _run_lifecycle("start")
+
+
+@cli.command()
+def stop():
+    """Stop MCP processes started by dev start or make start."""
+    _run_lifecycle("stop")
 
 
 @cli.command()
