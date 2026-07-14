@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Global `dev` and Make lifecycle parity](2026-07-14-dev-make-lifecycle-parity.md)
 - [Global `dev start` lifecycle command](2026-07-14-global-dev-start.md)
 - [COBOL macOS portability hardening](2026-07-14-cobol-macos-portability.md)
 - [COBOL analyzer parser implementation](2026-07-14-cobol-analyzer-parser.md)
