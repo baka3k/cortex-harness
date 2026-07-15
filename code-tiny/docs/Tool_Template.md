@@ -1,14 +1,8 @@
 # Analyzer Tool Design and Implementation Template
 
-Use this document when designing or implementing a new analyzer under `code-tiny/tools/<tool_name>/`. Replace every `<placeholder>`, delete sections that are explicitly not applicable, and record the reason whenever a mandatory contract cannot be met.
+Use when designing or implementing a new analyzer under `code-tiny/tools/<tool_name>/`. Replace every `<placeholder>`, delete inapplicable sections, and record the reason when a mandatory contract cannot be met. This template generalizes the semantic-analysis structure from the Struts Analyzer Design Specification v2 and the production contracts used by the repository's Struts, Servlet/JSP, Spring, MyBatis, and language analyzers.
 
-This template generalizes the semantic-analysis structure from the Struts Analyzer Design Specification v2 and the production contracts used by the repository's Struts, Servlet/JSP, Spring, MyBatis, and language analyzers.
-
-Normative terms:
-
-- **MUST**: required for acceptance.
-- **SHOULD**: expected unless a documented constraint justifies another design.
-- **MAY**: optional.
+**MUST**: required for acceptance. **SHOULD**: expected unless a documented constraint justifies otherwise. **MAY**: optional.
 
 ## 1. Tool Identity
 
@@ -29,15 +23,11 @@ Normative terms:
 
 ### 2.1 Purpose
 
-Describe the modernization or reverse-engineering question the tool answers.
-
 > The `<Tool Name> Analyzer` reconstructs `<framework/domain>` semantics from `<source artifacts>` so downstream graph, search, AI, and migration workflows can understand `<routes, execution flows, data mappings, state, dependencies, etc.>`.
 
-The objective MUST be semantic reconstruction, not merely file enumeration or raw AST export.
+The objective MUST be semantic reconstruction, not file enumeration or raw AST export.
 
 ### 2.2 Supported scope
-
-List concrete features the analyzer commits to support.
 
 - `<feature 1>`
 - `<feature 2>`
@@ -48,8 +38,6 @@ List concrete features the analyzer commits to support.
 
 ### 2.3 Non-goals
 
-State boundaries explicitly so partial coverage is visible instead of silently incorrect.
-
 - Runtime execution or dynamic instrumentation
 - Generic analysis already owned by another tool
 - `<unsupported framework version or feature>`
@@ -57,25 +45,16 @@ State boundaries explicitly so partial coverage is visible instead of silently i
 
 ### 2.4 Success criteria
 
-The analyzer is complete only when it can deterministically reconstruct:
-
-- Entry points and their source evidence
-- Framework/domain entities as first-class semantic facts
-- Ordered execution or resolution flows
-- Cross-file and cross-language relationships
-- Unresolved, ambiguous, truncated, and unsupported cases as diagnostics
-- Migration-relevant meaning, not only syntax
-
-Define tool-specific outcomes:
+Deterministically reconstruct:
 
 1. `<input>` resolves to `<semantic entity>`.
 2. `<entry point>` traces through `<ordered steps>` to `<outcome>`.
 3. `<configuration inheritance>` produces `<effective configuration>`.
 4. Repeated runs over identical inputs produce byte-stable normalized output.
 
-## 3. Evidence and Requirements
+Required outputs: entry points with source evidence, framework/domain entities as first-class semantic facts, ordered execution/resolution flows, cross-file and cross-language relationships, unresolved/ambiguous/truncated/unsupported cases as diagnostics, and migration-relevant meaning (not only syntax).
 
-Before implementation, create a traceable evidence table.
+## 3. Evidence and Requirements
 
 | Requirement | Source | Implementation owner | Test evidence | Status |
 | --- | --- | --- | --- | --- |
@@ -83,12 +62,10 @@ Before implementation, create a traceable evidence table.
 | `<graph node/edge>` | `<spec/docs/code>` | `<resolver>` | `<contract test>` | planned |
 | `<error behavior>` | `<repository contract>` | `<pipeline>` | `<recovery test>` | planned |
 
-Rules:
-
 - Repository code and authoritative framework documentation are evidence; assumptions are not.
 - Conflicting requirements MUST be recorded and resolved before implementation.
 - Unsupported but detected behavior MUST produce a capability or coverage diagnostic.
-- Never fabricate relationships when evidence is absent. Use `unresolved`, `ambiguous`, or `partial` states.
+- Never fabricate relationships when evidence is absent — use `unresolved`, `ambiguous`, or `partial` states.
 
 ## 4. Technical Context
 
@@ -106,7 +83,7 @@ Rules:
 
 ### 4.1 Parser strategy
 
-Framework analyzers MUST reuse existing language parsers whenever the framework is embedded in a general-purpose language.
+Framework analyzers MUST reuse existing language parsers whenever the framework is embedded in a general-purpose language. Do not create a dedicated grammar unless the framework defines an actual language and existing parsers cannot represent it. The semantic layer owns framework interpretation.
 
 ```text
 Language source ──> shared language parser ──> language AST/symbols ──┐
@@ -116,11 +93,7 @@ Build metadata ──> detector ────────────────
                                                                      semantic graph
 ```
 
-Do not create a dedicated grammar for a framework unless it defines an actual language and existing parsers cannot represent it. The semantic layer owns framework interpretation.
-
 ## 5. Source Artifact Inventory
-
-Complete this table before coding.
 
 | Artifact group | Extensions/names | Detection rule | Parser | Semantic output | Mandatory |
 | --- | --- | --- | --- | --- | --- |
@@ -132,18 +105,11 @@ Complete this table before coding.
 | Build metadata | `<pom.xml/etc.>` | `<rule>` | `<detector>` | `<plugins/modules/capabilities>` | yes |
 | Static resources | `<patterns>` | `<rule>` | `<scanner>` | `<only if semantically required>` | no |
 
-For every artifact type, specify:
-
-- Encoding policy
-- Maximum accepted size
-- Malformed-input behavior
-- Include/import resolution rules
-- Path containment requirements
-- Whether missing parser support is fatal or partial
+For every artifact type, specify: encoding policy, maximum accepted size, malformed-input behavior, include/import resolution rules, path containment requirements, and whether missing parser support is fatal or partial.
 
 ## 6. High-Level Architecture
 
-The default architecture is a deterministic, side-effect-free analysis core with optional output adapters.
+The default architecture is a deterministic, side-effect-free analysis core with optional output adapters. Core analysis MUST NOT require Neo4j, FalkorDB, Qdrant, network access, or credentials. Persistence is an adapter invoked after a valid result exists.
 
 ```text
 Project root
@@ -178,11 +144,9 @@ Validated analysis result
    └──> incremental snapshot/cache
 ```
 
-Core analysis MUST NOT require Neo4j, FalkorDB, Qdrant, network access, or credentials. Persistence is an adapter invoked after a valid result exists.
-
 ## 7. Required Package Layout
 
-Start with the smallest layout that preserves clear ownership.
+Start with the smallest layout that preserves clear ownership. Optional modules SHOULD be added only when their responsibility is real — avoid empty architectural layers.
 
 ```text
 code-tiny/tools/<tool_name>/
@@ -208,8 +172,6 @@ tests/
 └── test_<tool_name>_error_recovery.py
 ```
 
-Optional modules such as `cache.py`, specialized parsers, graph adapters, or extractors SHOULD be added only when their responsibility is real. Avoid empty architectural layers.
-
 ### 7.1 Responsibility boundaries
 
 | Module | Owns | Must not own |
@@ -222,21 +184,14 @@ Optional modules such as `cache.py`, specialized parsers, graph adapters, or ext
 | analyzer CLI | argument validation, outputs, exit codes | framework semantic rules |
 | graph writer | batches, generations, transactions, cleanup | parsing |
 
-## 8. Discovery and Scan Policy
-
-Scanning MUST be bounded, deterministic, and explicit.
+## 8. Bounded Deterministic Scan
 
 ### 8.1 Scan configuration
 
-Define separate directory and file patterns.
-
 ```python
 IGNORED_DIR_PATTERNS = {
-    # Version control and IDE metadata
     ".git", ".hg", ".svn", ".idea", ".vscode", ".settings",
-    # Build outputs and generated artifacts
     "build", "dist", "out", "target", "bin", "generated", "generated-sources",
-    # Dependencies, caches, reports, and temporary directories
     "node_modules", ".gradle", ".cache", "__pycache__", "coverage",
     "test-results", "tmp", "temp", ".venv", "venv",
 }
@@ -248,7 +203,7 @@ IGNORED_FILE_PATTERNS = {
 }
 ```
 
-Customize these sets for the target ecosystem. Do not exclude real source directories such as `src/test` merely because they contain tests unless the tool's documented scope requires it.
+Customize for the target ecosystem. Do not exclude real source directories like `src/test` unless the tool's documented scope requires it.
 
 ### 8.2 Scanner skeleton
 
@@ -282,27 +237,18 @@ def iter_source_files(root: Path) -> Iterable[Path]:
 - Define symlink behavior; default to not following directory symlinks.
 - Filter unsupported extensions before reading file contents.
 - Apply size budgets before reading/parsing.
-- Preserve explicitly declared includes/imports when they are valid and inside the root, even if the file was not found by broad discovery.
+- Preserve explicitly declared includes/imports when valid and inside the root.
 - `selected_paths` narrows work but must not make identities depend on selection order.
 
 ### 8.4 Optional ignore file
 
-If custom exclusions are required, expose `--ignore-file <path>` and define one syntax rather than silently interpreting arbitrary files.
+Expose `--ignore-file <path>` when custom exclusions are required. Recommended syntax: UTF-8 text, one project-relative glob per line; blank lines and `#`-prefixed lines ignored; `/` separates path segments on every platform; `!` negation unsupported unless tested and documented; invalid or outside-root paths produce diagnostics; built-in safety exclusions cannot be negated.
 
-Recommended syntax:
-
-- UTF-8 text, one project-relative glob per line
-- Blank lines and lines beginning with `#` are ignored
-- `/` separates path segments on every platform
-- `!` negation is unsupported unless tested and documented
-- Invalid or outside-root paths produce diagnostics
-- Built-in safety exclusions cannot be negated
-
-Do not automatically treat `.gitignore` as the analyzer contract unless the repository explicitly standardizes that behavior; build outputs and analyzer semantics may differ from version-control policy.
+Do not automatically treat `.gitignore` as the analyzer contract unless the repository standardizes that behavior — build outputs and analyzer semantics may differ from version-control policy.
 
 ## 9. Parser Capabilities
 
-The result SHOULD report parser availability so downstream systems can distinguish an empty project from degraded analysis.
+Report parser availability so downstream systems can distinguish an empty project from degraded analysis.
 
 ```python
 @dataclass(frozen=True)
@@ -318,8 +264,6 @@ class ParserCapability:
     message: str = ""
 ```
 
-Rules:
-
 - Mandatory parser unavailable: analysis is `partial` or fails according to CLI policy.
 - Optional parser unavailable: continue and emit a warning/capability record.
 - Parser selection MUST be explicit and testable; do not branch on graph-provider availability.
@@ -330,7 +274,7 @@ Rules:
 
 ### 10.1 Domain entities
 
-Every framework concept that changes behavior SHOULD be a first-class fact rather than an unstructured property.
+Every framework concept that changes behavior SHOULD be a first-class fact.
 
 | Entity kind | Identity inputs | Required properties | Evidence source |
 | --- | --- | --- | --- |
@@ -351,7 +295,7 @@ Every framework concept that changes behavior SHOULD be a first-class fact rathe
 | `<RESOLVES_TO>` | `<Outcome>` | `<View/target>` | type | `<rule>` |
 | `<VALIDATES_WITH>` | `<Handler>` | `<ValidationRule>` | phase | `<rule>` |
 
-Relationship direction and spelling MUST match existing graph conventions. Preserve execution order as an explicit property or ordered intermediary node; never infer order from storage order.
+Direction and spelling MUST match existing graph conventions. Preserve execution order as an explicit property or ordered intermediary node; never infer order from storage order.
 
 ### 10.3 Semantic modeling rules
 
@@ -362,7 +306,7 @@ Relationship direction and spelling MUST match existing graph conventions. Prese
 - Represent validation when it can alter control flow or outcomes.
 - Represent plugin/convention-derived behavior with its extraction method.
 - Attach confidence, extraction method, resolution status, reason, and source evidence.
-- Do not create an edge to a missing generated node; emit an unresolved anchor diagnostic.
+- Do not create an edge to a missing generated node — emit an unresolved anchor diagnostic.
 
 ## 11. Common Data Contracts
 
@@ -482,26 +426,15 @@ def stable_semantic_id(kind: str, project_id: str, module_id: str, *parts: objec
     return f"<tool_name>::{safe_kind}::{stable_digest(project_id, module_id, *parts)}"
 ```
 
-Identity inputs MUST:
-
-- Use semantic coordinates such as qualified names, routes, config keys, and source-relative paths.
-- Exclude absolute roots, timestamps, random UUIDs, iteration order, credentials, graph generation IDs, wall-time/RSS guards, and output destinations.
-- Normalize separators, case only where the domain is case-insensitive, and default values consistently.
-- Remain stable across checkout location and repeated runs.
+Identity inputs MUST use semantic coordinates (qualified names, routes, config keys, source-relative paths), excluding absolute roots, timestamps, random UUIDs, iteration order, credentials, graph generation IDs, wall-time/RSS guards, and output destinations. Normalize separators, case only where domain is case-insensitive, and default values consistently. Identities MUST remain stable across checkout location and repeated runs.
 
 Graph storage IDs MAY include a generation ID, but `semantic_id` MUST remain generation-independent.
 
-Deterministic output requires:
-
-- Sorted discovery, facts, relationships, dependencies, and diagnostics
-- Stable deduplication keys
-- Canonical JSON serialization
-- Explicit ordering properties for semantic sequences
-- A test comparing normalized output from at least two identical runs
+Deterministic output requires: sorted discovery, facts, relationships, dependencies, and diagnostics; stable deduplication keys; canonical JSON serialization; explicit ordering properties for semantic sequences; and a test comparing normalized output from at least two identical runs.
 
 ## 13. Analysis Pipeline
 
-Implement phases explicitly.
+Implement phases explicitly:
 
 1. Validate and resolve the project root.
 2. Discover modules and artifacts with evidence/confidence.
@@ -577,39 +510,21 @@ Create a resolution matrix before implementation.
 | `<outcome>` | `<view/redirect>` | `<normalized target>` | `<rule>` | diagnostic | external target fact or unresolved |
 | `<component>` | `<validation config>` | `<class/method/field>` | `<rule>` | diagnostic | no fabricated edge |
 
-Rules:
-
 - Normalize keys once and reuse the same function in parsers and resolvers.
-- Record source precedence, such as local override over inherited default.
+- Record source precedence (local override over inherited default).
 - Preserve all candidates when ambiguity matters; never choose based on filesystem order.
 - Bound recursive includes, inheritance, stack expansion, and dependency closure.
 - Detect cycles and report them with the complete relevant path when feasible.
 
 ## 15. Dependency Index and Incremental Analysis
 
-Incremental mode is a semantic feature, not only a file filter.
+Incremental mode is a semantic feature, not only a file filter. The dependency index SHOULD map: files to imported/included files, configuration keys to consumers, symbols to referencing symbols, entry points to handlers and outcomes, and domain entities to affected relationships.
 
-The dependency index SHOULD map:
-
-- Files to imported/included files
-- Configuration keys to consumers
-- Symbols to referencing symbols
-- Entry points to handlers and outcomes
-- Domain entities to affected relationships
-
-CLI inputs:
-
-- `--incremental`
-- `--changed-files-manifest`
-- `--deleted-files-manifest`
-- `--commit-sha-before`
-- `--commit-sha-after`
-
-Requirements:
+CLI inputs: `--incremental`, `--changed-files-manifest`, `--deleted-files-manifest`, `--commit-sha-before`, `--commit-sha-after`.
 
 - Manifest paths MUST be normalized and root-contained.
 - Changed files MUST expand through the dependency closure required for correctness.
-- Deleted files MUST create tombstones or graph-cleanup work; a diagnostic alone is insufficient for a persistent incremental writer.
+- Deleted files MUST create tombstones or graph-cleanup work; a diagnostic alone is insufficient.
 - Incremental output for an affected module MUST match the corresponding portion of a clean full run.
 - Cache hits MUST not bypass dependency or deletion logic.
 
@@ -637,17 +552,10 @@ class ResourceBudgets:
 Choose values from fixtures and realistic project measurements; do not copy another tool's numbers blindly.
 
 Distinguish:
+- **Accepted-output budgets**: may change the semantic result and belong in cache/generation fingerprints.
+- **Operational abort guards** (wall time, peak RSS): decide success but should not alter successful semantic identity.
 
-- **Accepted-output budgets**, which may change the semantic result and therefore belong in cache/generation fingerprints.
-- **Operational abort guards**, such as wall time and peak RSS, which decide success but should not alter successful semantic identity.
-
-When a budget is reached:
-
-1. Emit a stable diagnostic.
-2. Increment `truncation_count`.
-3. Set coverage to `partial`.
-4. Preserve deterministic prefix/selection behavior.
-5. Remove relationships whose generated endpoints were truncated.
+When a budget is reached: emit a stable diagnostic, increment `truncation_count`, set coverage to `partial`, preserve deterministic prefix/selection behavior, and remove relationships whose generated endpoints were truncated.
 
 ## 17. Diagnostics and Coverage
 
@@ -656,7 +564,7 @@ When a budget is reached:
 | State | Meaning |
 | --- | --- |
 | `empty` | No relevant supported inputs were found. |
-| `complete` | Mandatory capabilities were available and no known truncation/error prevented promised coverage. |
+| `complete` | Mandatory capabilities available and no known truncation/error prevented promised coverage. |
 | `partial` | Relevant inputs exist, but a parser, feature, anchor, budget, or error prevented full promised coverage. |
 
 Warnings do not automatically imply `partial`; define which warning codes represent real coverage loss.
@@ -674,7 +582,7 @@ Warnings do not automatically imply `partial`; define which warning codes repres
 - Incremental deletion/cleanup failure
 - Persistence/provider failure
 
-Diagnostics MUST be deduplicated and sorted by a stable tuple such as `(file_path, start_line, code, message)`.
+Diagnostics MUST be deduplicated and sorted by a stable tuple: `(file_path, start_line, code, message)`.
 
 ## 18. Security and Data Hygiene
 
@@ -683,29 +591,16 @@ Diagnostics MUST be deduplicated and sorted by a stable tuple such as `(file_pat
 - Do not follow untrusted symlinks outside the root.
 - Never execute analyzed code, build scripts, plugins, macros, or templates.
 - Treat archives and binaries as unsupported unless a bounded, explicit parser is required.
-- Redact secrets from fact properties, diagnostics, previews, logs, caches, and graph rows.
-- Secret-like keys include passwords, tokens, credentials, private keys, authorization headers, and connection strings.
+- Redact secrets (passwords, tokens, credentials, private keys, authorization headers, connection strings) from fact properties, diagnostics, previews, logs, caches, and graph rows.
 - Do not print provider credentials or full command environments.
 - Bound recursion, token counts, decompression, regex work, and collection sizes.
 - Use parameterized graph queries and validated relationship/label allowlists.
 
 ## 19. Cache Contract
 
-Cache keys SHOULD include:
+Cache keys SHOULD include: project-relative file path, content digest, parser version and parser ABI/package version, accepted-output budget fingerprint, and tool-specific semantic options.
 
-- Project-relative file path
-- Content digest
-- Parser version and parser ABI/package version
-- Accepted-output budget fingerprint
-- Tool-specific semantic options
-
-Cache keys MUST exclude:
-
-- Absolute checkout root
-- Output paths
-- Credentials/provider endpoints
-- Wall-time and RSS abort guards
-- Timestamps and random values
+Cache keys MUST exclude: absolute checkout root, output paths, credentials/provider endpoints, wall-time and RSS abort guards, timestamps, and random values.
 
 Expose `--cache-dir` and `--ignore-cache` when caching is implemented. Corrupt or incompatible cache entries MUST be ignored safely and diagnosed at most once per relevant scope.
 
@@ -732,21 +627,13 @@ Use `argparse.ArgumentParser(..., allow_abbrev=False)`.
 
 ### 20.2 Incremental and cache arguments
 
-- `--incremental`
-- `--changed-files-manifest`
-- `--deleted-files-manifest`
-- `--commit-sha-before`
-- `--commit-sha-after`
-- `--cache-dir`
-- `--ignore-cache`
+`--incremental`, `--changed-files-manifest`, `--deleted-files-manifest`, `--commit-sha-before`, `--commit-sha-after`, `--cache-dir`, `--ignore-cache`
 
 ### 20.3 Persistence arguments
 
 Reuse the shared graph-provider arguments and `--require-neo4j` contract. Accept provider/vector/message arguments required by shared invocations even when the tool deliberately does not use a corresponding output, and document that decision.
 
 ### 20.4 Failure policy
-
-Support explicit automation gates where appropriate:
 
 ```text
 --fail-on error       nonzero when an error diagnostic exists
@@ -760,43 +647,15 @@ Document stable exit codes. Argument errors, analysis-policy failures, and persi
 
 ### 21.1 JSON result
 
-The preview output MUST include:
-
-- Project identity and normalized root
-- Parser/tool version
-- Module and artifact inventory
-- Parser capabilities
-- Semantic facts and relationships
-- Dependency index
-- Diagnostics
-- Coverage and quality counters
-
-The same logical result MUST serialize identically across checkout roots after root normalization.
+The preview output MUST include: project identity and normalized root, parser/tool version, module and artifact inventory, parser capabilities, semantic facts and relationships, dependency index, diagnostics, and coverage and quality counters. The same logical result MUST serialize identically across checkout roots after root normalization.
 
 ### 21.2 Graph node fields
 
-Every generated fact SHOULD provide:
-
-- `id` storage identity
-- `semantic_id` and `symbol_id`
-- `generation_id`
-- `kind`, `name`, `framework`, `language`
-- `project_id`, `project_name`, `module_id`
-- Source path and span
-- `confidence`, `extraction_method`, `resolution_status`
-- `parser_version`
-- Redacted, graph-safe properties
+Every generated fact SHOULD provide: `id` (storage identity), `semantic_id`, `symbol_id`, `generation_id`, `kind`, `name`, `framework`, `language`, `project_id`, `project_name`, `module_id`, source path and span, `confidence`, `extraction_method`, `resolution_status`, `parser_version`, and redacted graph-safe properties.
 
 ### 21.3 Graph relationship fields
 
-Every relationship SHOULD provide:
-
-- Stable semantic and generation-aware storage identities
-- `from_id`, `to_id`, source/target labels, and type
-- Project/module/generation scope
-- Source evidence
-- Confidence, resolution status, and reason
-- Typed, redacted properties
+Every relationship SHOULD provide: stable semantic and generation-aware storage identities, `from_id`, `to_id`, source/target labels and type, project/module/generation scope, source evidence, confidence, resolution status, reason, and typed redacted properties.
 
 ### 21.4 Persistence invariants
 
@@ -851,19 +710,7 @@ Internal parser and resolver helpers remain private until another in-repository 
 
 ### 23.2 Fixture requirements
 
-The primary fixture SHOULD contain:
-
-- One minimal happy-path flow
-- One inherited/default configuration
-- One local override
-- One cross-file reference
-- One ordered chain
-- One missing or ambiguous reference
-- One malformed optional artifact
-- One unsupported-but-detected feature
-- One ignored build/generated copy to prevent duplicate scanning
-
-Prefer small hand-authored fixtures over copied production repositories.
+The primary fixture SHOULD contain: one minimal happy-path flow, one inherited/default configuration, one local override, one cross-file reference, one ordered chain, one missing or ambiguous reference, one malformed optional artifact, one unsupported-but-detected feature, and one ignored build/generated copy to prevent duplicate scanning. Prefer small hand-authored fixtures over copied production repositories.
 
 ### 23.3 Contract assertions
 
@@ -879,21 +726,7 @@ self.assertEqual(result_a.to_dict(), result_b.to_dict())
 
 ## 24. README Template
 
-Each tool README MUST contain:
-
-1. Purpose and supported semantics
-2. Supported and unsupported features
-3. Parser strategy and required/optional capabilities
-4. Artifact types
-5. Scan exclusions and custom ignore behavior
-6. Public Python API
-7. CLI example and important flags
-8. Output/coverage meaning
-9. Incremental/cache behavior
-10. Test command and fixture location
-11. Known limitations and future extensions
-
-Example:
+Each tool README MUST contain: purpose and supported semantics, supported and unsupported features, parser strategy and required/optional capabilities, artifact types, scan exclusions and custom ignore behavior, public Python API, CLI example and important flags, output/coverage meaning, incremental/cache behavior, test command and fixture location, and known limitations and future extensions.
 
 ```bash
 PYTHONPATH=code-tiny python -m tools.<tool_name>.<tool_name>_analyzer \
@@ -907,47 +740,25 @@ PYTHONPATH=code-tiny python -m tools.<tool_name>.<tool_name>_analyzer \
 ## 25. Implementation Phases
 
 ### Phase 1: Foundation
-
-- Package layout and public API
-- Immutable models and stable identities
-- Detector and bounded scanner
-- Parser capability reporting
-- CLI dry-run and deterministic JSON
+Package layout and public API, immutable models and stable identities, detector and bounded scanner, parser capability reporting, CLI dry-run and deterministic JSON.
 
 ### Phase 2: Core parsers
-
-- Mandatory language/config parsers
-- Source spans and bounded diagnostics
-- Normalized intermediate representations
-- Parser unit fixtures
+Mandatory language/config parsers, source spans and bounded diagnostics, normalized intermediate representations, parser unit fixtures.
 
 ### Phase 3: Semantic resolution
-
-- Indexes and precedence rules
-- Cross-file references
-- Ordered execution flows
-- Missing/ambiguous/cycle handling
+Indexes and precedence rules, cross-file references, ordered execution flows, missing/ambiguous/cycle handling.
 
 ### Phase 4: Graph and operations
-
-- Graph contract and provider adapter
-- Generation-safe persistence
-- Dependency index and incremental cleanup
-- Cache, budgets, redaction, and automation failure policy
+Graph contract and provider adapter, generation-safe persistence, dependency index and incremental cleanup, cache, budgets, redaction, and automation failure policy.
 
 ### Phase 5: Hardening
+Determinism and checkout-independence, malformed/large/untrusted input, performance measurement, complete documentation and acceptance evidence.
 
-- Determinism and checkout-independence
-- Malformed/large/untrusted input
-- Performance measurement
-- Complete documentation and acceptance evidence
-
-Each phase MUST end with passing focused tests. Do not defer correctness contracts such as stable IDs, path normalization, or diagnostics until the final phase.
+Each phase MUST end with passing focused tests. Do not defer correctness contracts (stable IDs, path normalization, diagnostics) until the final phase.
 
 ## 26. Definition of Done
 
 ### Design
-
 - [ ] Purpose, scope, non-goals, and success criteria are specific.
 - [ ] Artifact inventory and parser strategy are complete.
 - [ ] Entity and relationship tables define identity and direction.
@@ -955,7 +766,6 @@ Each phase MUST end with passing focused tests. Do not defer correctness contrac
 - [ ] Unsupported detected features have an explicit coverage policy.
 
 ### Implementation
-
 - [ ] Package follows the smallest justified layout.
 - [ ] Scanner has separate ignored directory/file patterns and deterministic ordering.
 - [ ] Root containment, size limits, and safe parser modes are enforced.
@@ -967,7 +777,6 @@ Each phase MUST end with passing focused tests. Do not defer correctness contrac
 - [ ] Coverage and quality counters are accurate.
 
 ### Incremental and persistence
-
 - [ ] Changed-file dependency closure is correct.
 - [ ] Deleted entities are cleaned up or tombstoned.
 - [ ] Graph writes are batched, idempotent, and generation-safe.
@@ -975,7 +784,6 @@ Each phase MUST end with passing focused tests. Do not defer correctness contrac
 - [ ] Provider selection does not change analysis semantics.
 
 ### Verification
-
 - [ ] Scanner, parser, resolver, graph-contract, and CLI tests pass.
 - [ ] Representative fixture reconstructs the promised end-to-end flow.
 - [ ] Repeated runs and different checkout roots produce equal normalized output.
@@ -985,8 +793,6 @@ Each phase MUST end with passing focused tests. Do not defer correctness contrac
 - [ ] `git diff --check` passes and only intended files changed.
 
 ## 27. Design Review Record
-
-Complete before implementation approval.
 
 | Review question | Decision/evidence |
 | --- | --- |
@@ -1003,13 +809,13 @@ Complete before implementation approval.
 
 ## 28. Reference Basis
 
-This template was derived from these local design and implementation patterns:
+Derived from these local design and implementation patterns:
 
-- `Struts_Analyzer_Design_Spec_v2.md`: semantic-first architecture, source artifacts, framework entities, ordered request flow, cross-file resolution, parser reuse, MVP, and success criteria.
-- `code-tiny/tools/struts/`: XML-first semantic pipeline, resolver separation, deterministic result model, and explicit scan filtering.
-- `code-tiny/tools/servlet_jsp/`: parser capabilities, resource budgets, stable/generation identities, dependency indexes, redaction, coverage counters, incremental operation, and automation failure policies.
-- `code-tiny/tools/spring/`: detector/adapters/extractors, safe relative paths, incremental manifests, and semantic deduplication.
-- `code-tiny/tools/mybatis/`: rich intermediate models, parser capability contracts, analyzer configuration, and CLI parity.
+- `Struts_Analyzer_Design_Spec_v2.md`: semantic-first architecture, source artifacts, framework entities, ordered request flow, cross-file resolution, parser reuse, MVP, success criteria.
+- `code-tiny/tools/struts/`: XML-first semantic pipeline, resolver separation, deterministic result model, explicit scan filtering.
+- `code-tiny/tools/servlet_jsp/`: parser capabilities, resource budgets, stable/generation identities, dependency indexes, redaction, coverage counters, incremental operation, automation failure policies.
+- `code-tiny/tools/spring/`: detector/adapters/extractors, safe relative paths, incremental manifests, semantic deduplication.
+- `code-tiny/tools/mybatis/`: rich intermediate models, parser capability contracts, analyzer configuration, CLI parity.
 - `code-tiny/tools/java/`: shared language parsing and glob-aware source scanning.
 
 When this template conflicts with a newer repository-wide contract, follow the newer verified contract and update this template in the same change.
