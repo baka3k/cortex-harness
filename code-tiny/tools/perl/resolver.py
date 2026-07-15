@@ -43,6 +43,9 @@ _PERL_BUILTINS = {
     "unshift",
     "values",
     "warn",
+    "__FILE__",
+    "__LINE__",
+    "__PACKAGE__",
 }
 
 
