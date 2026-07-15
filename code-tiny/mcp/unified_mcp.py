@@ -10,7 +10,7 @@ import sys
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -42,6 +42,8 @@ fast_backend = _load_module("fast_backend", ROOT_DIR / "fastmcp_server.py")
 
 from tool_metadata import build_catalog  # noqa: E402
 from framework_registry import (  # noqa: E402
+    capability_catalog,
+    capability_for_parser,
     default_relationships,
     framework_for_parser,
     parser_aliases,
@@ -116,6 +118,7 @@ INSTRUCTIONS = """Unified MCP for multi-language code graphs (single server/port
 
 Discovery first:
 - Call `list_mcp_functions` at session start to get the exact, current tool set and parameter docs.
+- Call `list_parsers` to inspect canonical profiles, aliases, backends, support levels, and feature gates.
 
 Routing:
 - Use `activate_project(parser_type=..., database_name=...)` to set defaults.
@@ -124,6 +127,8 @@ Routing:
   - android/android-kotlin/kotlin-android -> Android backend
   - cplus/cpp/c++/c/clang/java/kotlin/jvm/go/perl/rust/swift/delphi/pascal/vbnet/vb6/vba/vbscript -> C++ backend
   - cobol/spring/servlet_jsp/mybatis/struts/dart/flutter/aspnet_core/aspnet_framework (and aliases) -> C++ backend with parser-aware traversal defaults
+- A parser profile describes graph capabilities; it does not imply a separate MCP server.
+- Provider schema filtering is reported through capability_diagnostics when relationships are omitted.
 
 Tool families available in unified MCP:
 - Symbol/graph queries: search/get/subgraph/paths/module-path/entrypoint
@@ -165,27 +170,8 @@ DEFAULT_BACKEND = os.environ.get("MCP_UNIFIED_DEFAULT_BACKEND", "cplus").strip()
 if DEFAULT_BACKEND not in BACKENDS:
     DEFAULT_BACKEND = "cplus"
 
-PARSER_ALIASES_ANDROID = {"android", "android-kotlin", "kotlin-android"}
-PARSER_ALIASES_CPLUS = {
-    "cplus",
-    "cpp",
-    "c++",
-    "c",
-    "clang",
-    "java",
-    "kotlin",
-    "jvm",
-    "go",
-    "perl",
-    "rust",
-    "swift",
-    "delphi",
-    "pascal",
-    "vbnet",
-    "vb6",
-    "vba",
-    "vbscript",
-} | set(parser_aliases())
+PARSER_ALIASES_ANDROID = set(parser_aliases("android"))
+PARSER_ALIASES_CPLUS = set(parser_aliases("cplus"))
 
 active_project: Dict[str, Optional[str]] = {
     "parser_type": None,
@@ -263,11 +249,100 @@ def _normalize_parser_type(value: Optional[str]) -> Optional[str]:
 
 def _resolve_backend_name(parser_type: Optional[str]) -> str:
     parser = _normalize_parser_type(parser_type) or _normalize_parser_type(active_project.get("parser_type"))
-    if parser in PARSER_ALIASES_ANDROID:
-        return "android"
-    if parser in PARSER_ALIASES_CPLUS:
-        return "cplus"
+    capability = capability_for_parser(parser)
+    if capability:
+        return capability.backend
     return DEFAULT_BACKEND
+
+
+def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[str, Any]:
+    parser = _normalize_parser_type(parser_type)
+    capability = capability_for_parser(parser)
+    if capability:
+        return {
+            "requested_parser": parser,
+            "canonical_parser": capability.name,
+            "backend": capability.backend,
+            "support_level": capability.support_level,
+            "features": sorted(capability.features),
+            "labels": sorted(capability.labels),
+            "searchable_properties": list(capability.searchable_properties),
+        }
+    return {
+        "requested_parser": parser,
+        "canonical_parser": None,
+        "backend": backend_name,
+        "support_level": "generic",
+        "features": [],
+        "labels": [],
+        "searchable_properties": [],
+        "warning": (
+            f"Parser '{parser}' is not registered; generic backend behavior is being used."
+            if parser else "No parser selected; generic backend behavior is being used."
+        ),
+    }
+
+
+async def _resolve_direct_capability_context(
+    tool_name: str,
+    parser_type: Optional[str],
+    db: Optional[str],
+    required_relationships: Optional[Iterable[str]] = None,
+    error_payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[
+    Optional[str], List[str], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]
+]:
+    selected_parser = (
+        _normalize_parser_type(parser_type)
+        or _normalize_parser_type(active_project.get("parser_type"))
+    )
+    backend_name = _resolve_backend_name(selected_parser)
+    routing = _capability_summary(selected_parser, backend_name)
+    capability = capability_for_parser(selected_parser)
+    relationships: List[str] = []
+    diagnostics: Optional[Dict[str, Any]] = None
+    if capability and backend_name != "android":
+        relationships, diagnostics = await cplus_backend._resolve_rel_types_with_diagnostics(
+            list(default_relationships(capability.name, tool_name)),
+            selected_parser,
+            cplus_backend._resolve_db_candidates(db or None),
+            explicit=False,
+        )
+        routing["default_relationships_applied"] = relationships
+        required = list(dict.fromkeys(required_relationships or ()))
+        missing_required = [value for value in required if value not in relationships]
+        schema_available = diagnostics.get("schema_status") == "available" if diagnostics else False
+        if diagnostics is not None:
+            diagnostics["required_relationships"] = required
+            diagnostics["missing_required_relationships"] = missing_required if schema_available else []
+        if not relationships or (schema_available and missing_required):
+            missing_text = (
+                " Missing required relationships: " + ", ".join(missing_required) + "."
+                if missing_required else ""
+            )
+            error = _build_tool_error(
+                tool_name,
+                {
+                    "parser_type": selected_parser,
+                    "db": db,
+                    **(error_payload or {}),
+                },
+                ValueError(
+                    f"Parser '{selected_parser}' cannot execute '{tool_name}' on the active provider."
+                    + missing_text
+                ),
+                backend_name=backend_name,
+            )
+            error["error"]["type"] = "unsupported_capability"
+            error["capability"] = routing
+            error["capability_diagnostics"] = diagnostics
+            return selected_parser, relationships, routing, diagnostics, error
+    return selected_parser, relationships, routing, diagnostics, None
+
+
+def _relationship_pattern(relationships: List[str], fallback: str = "CALLS") -> str:
+    values = relationships or [fallback]
+    return "|".join(dict.fromkeys(values))
 
 
 def _apply_unified_defaults(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -378,9 +453,13 @@ def _coerce_error_result(tool_name: str, payload: Dict[str, Any], result: Any, b
     if isinstance(result, dict) and isinstance(result.get("error"), str):
         err = ValueError(result.get("error") or "Invalid tool arguments")
         normalized = _build_tool_error(tool_name, payload, err, backend_name=backend_name)
+        if result.get("error_type"):
+            normalized["error"]["type"] = str(result["error_type"])
         details = result.get("details")
         if isinstance(details, list):
             normalized["error"]["details"] = details
+        if isinstance(result.get("capability_diagnostics"), dict):
+            normalized["capability_diagnostics"] = result["capability_diagnostics"]
         return normalized
     return None
 
@@ -411,18 +490,32 @@ def _parse_positive_int(raw: Any, param_name: str) -> Tuple[Optional[int], Optio
 async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     merged = _apply_unified_defaults(payload)
     merged = _coerce_list_fields(merged)
+    backend_name = _resolve_backend_name(merged.get("parser_type"))
+    capability = capability_for_parser(merged.get("parser_type"))
     framework = framework_for_parser(merged.get("parser_type"))
-    if framework:
-        relationship_defaults = list(default_relationships(framework.name))
-        if tool_name in {"query_subgraph", "find_paths", "trace_flow", "find_path_between_module", "trace_flow_between_module"}:
+    relationships_applied: List[str] = []
+    if capability and backend_name != "android":
+        relationship_defaults = list(default_relationships(capability.name, tool_name))
+        if tool_name in {
+            "query_subgraph", "find_paths", "trace_flow",
+            "find_path_between_module", "trace_flow_between_module",
+            "find_screen_workflows",
+        }:
             if not merged.get("relationship_types") and not merged.get("rel_types"):
                 merged["relationship_types"] = relationship_defaults
                 merged["rel_types"] = relationship_defaults
-        if tool_name in {"semantic_search", "explore_graph"} and not merged.get("graph_rel_types"):
+                merged["_capability_default_relationships"] = True
+                relationships_applied = relationship_defaults
+        if tool_name == "semantic_search" and not merged.get("graph_rel_types"):
             merged["graph_rel_types"] = ",".join(relationship_defaults)
-            if tool_name == "semantic_search" and "expand_graph" not in merged:
+            merged["_capability_default_relationships"] = True
+            relationships_applied = relationship_defaults
+            if framework and "expand_graph" not in merged:
                 merged["expand_graph"] = True
-    backend_name = _resolve_backend_name(merged.get("parser_type"))
+        if tool_name == "search_functions" and framework and not merged.get("framework"):
+            merged["framework"] = framework.name
+    routing = _capability_summary(merged.get("parser_type"), backend_name)
+    routing["default_relationships_applied"] = relationships_applied
     backend = BACKENDS[backend_name]
     fn = _unwrap_tool_callable(getattr(backend.module, f"tool_{tool_name}", None))
     if fn is None:
@@ -438,10 +531,12 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
         return _build_tool_error(tool_name, merged, exc, backend_name=backend_name)
     normalized_error = _coerce_error_result(tool_name, merged, result, backend_name)
     if normalized_error is not None:
+        normalized_error["capability"] = routing
         return normalized_error
     if isinstance(result, dict):
         result.setdefault("ok", True)
         result.setdefault("backend", backend_name)
+        result.setdefault("capability", routing)
     return result
 
 
@@ -470,6 +565,9 @@ async def tool_activate_project(
     if not isinstance(response, dict):
         response = {"parser_type": parser, "database_name": db_name}
     response["backend"] = backend_name
+    response["capability"] = _capability_summary(parser, backend_name)
+    response["canonical_parser"] = response["capability"].get("canonical_parser")
+    response["support_level"] = response["capability"].get("support_level")
     return response
 
 
@@ -484,25 +582,16 @@ async def tool_list_mcp_functions() -> str:
 
 @mcp_server.tool(name="list_parsers", description="List available parser types supported by unified MCP.", output_schema=None)
 async def tool_list_parsers() -> Dict[str, Any]:
-    parser_values: List[str] = []
-    for backend in BACKENDS.values():
-        fn = _unwrap_tool_callable(getattr(backend.module, "tool_list_parsers", None))
-        if fn is None:
-            continue
-        result = await fn(payload={})
-        for parser in result.get("parsers", []):
-            parser_text = str(parser).strip()
-            if parser_text in {"sync", "vb"}:
-                continue
-            if parser_text and parser_text not in parser_values:
-                parser_values.append(parser_text)
-    for extra in ["android", "android-kotlin", "cplus", "cpp", "java", "kotlin", "jvm", "go", "perl", "rust", "swift", "delphi", "vbnet", "vb6", "vba", "vbscript", *sorted(parser_aliases())]:
-        if extra not in parser_values:
-            parser_values.append(extra)
+    capabilities = list(capability_catalog())
     return {
-        "parsers": sorted(parser_values),
+        "parsers": sorted(parser_aliases()),
+        "capabilities": capabilities,
         "default_backend": DEFAULT_BACKEND,
         "active_parser_type": active_project.get("parser_type"),
+        "active_capability": _capability_summary(
+            active_project.get("parser_type"),
+            _resolve_backend_name(active_project.get("parser_type")),
+        ),
     }
 
 
@@ -1512,6 +1601,7 @@ async def tool_explore_graph(
     db:         str  = "",
     collection: str  = "",
     debug:      bool = False,
+    parser_type: str = "",
 ) -> Dict[str, Any]:
     """
     Intent-aware graph search combining semantic + keyword + graph expansion.
@@ -1553,15 +1643,53 @@ async def tool_explore_graph(
             ValueError(top_k_error),
         )
     k = parsed_top_k or 10
+    selected_parser = (
+        _normalize_parser_type(parser_type)
+        or _normalize_parser_type(active_project.get("parser_type"))
+    )
+    backend_name = _resolve_backend_name(selected_parser)
+    capability = capability_for_parser(selected_parser)
+    relationship_types: Optional[List[str]] = None
+    capability_diagnostics: Optional[Dict[str, Any]] = None
+    if capability and backend_name != "android" and (mode or "hybrid") != "semantic":
+        relationship_types, capability_diagnostics = (
+            await cplus_backend._resolve_rel_types_with_diagnostics(
+                list(default_relationships(capability.name, "explore_graph")),
+                selected_parser,
+                cplus_backend._resolve_db_candidates(db or None),
+                explicit=False,
+            )
+        )
+        if not relationship_types:
+            result = _build_tool_error(
+                "explore_graph",
+                {"query": q, "parser_type": selected_parser},
+                ValueError(
+                    f"Parser '{selected_parser}' has no relationships available in the active provider."
+                ),
+                backend_name=backend_name,
+            )
+            result["error"]["type"] = "unsupported_capability"
+            result["capability"] = _capability_summary(selected_parser, backend_name)
+            result["capability_diagnostics"] = capability_diagnostics
+            return result
     service = get_explore_service()
-    return await service.explore(
+    result = await service.explore(
         query      = q,
         top_k      = k,
         mode       = mode or "hybrid",
         db         = db or None,
         collection = collection or None,
         debug      = debug,
+        graph_rel_types= relationship_types,
+        searchable_labels= sorted(capability.labels) if capability else None,
+        searchable_properties= list(capability.searchable_properties) if capability else None,
     )
+    result["backend"] = backend_name
+    result["capability"] = _capability_summary(selected_parser, backend_name)
+    if capability_diagnostics:
+        result["capability_diagnostics"] = capability_diagnostics
+    return result
 
 
 # ── Unified Flow Reconstructor ────────────────────────────────────────────────
@@ -1696,6 +1824,7 @@ async def tool_find_callers_of_endpoint(
     be_project_id: str = "",
     fe_project_id: str = "",
     db:            str = "",
+    parser_type:   str = "",
 ) -> Dict[str, Any]:
     """
     Args:
@@ -1721,6 +1850,15 @@ async def tool_find_callers_of_endpoint(
                 "error": "endpoint_path is required"}
 
     database = db or os.environ.get("NEO4J_DB", "neo4j")
+    _, _, routing, capability_diagnostics, capability_error = (
+        await _resolve_direct_capability_context(
+            "find_callers_of_endpoint", parser_type, database,
+            required_relationships=("CALLS_API", "MATCHES"),
+            error_payload={"endpoint_path": endpoint_path},
+        )
+    )
+    if capability_error:
+        return capability_error
     method_filter = (http_method.strip().upper() or "")
     params: Dict[str, Any] = {"path": endpoint_path}
     ep_props = ["path: $path"]
@@ -1775,9 +1913,13 @@ async def tool_find_callers_of_endpoint(
     )
     try:
         callers = await _run_bridge_query(cypher, params, database)
-        return {"endpoint_path": endpoint_path, "callers": callers, "total": len(callers)}
+        result = {"endpoint_path": endpoint_path, "callers": callers, "total": len(callers)}
     except Exception as exc:
-        return {"endpoint_path": endpoint_path, "callers": [], "total": 0, "error": str(exc)}
+        result = {"endpoint_path": endpoint_path, "callers": [], "total": 0, "error": str(exc)}
+    result["capability"] = routing
+    if capability_diagnostics:
+        result["capability_diagnostics"] = capability_diagnostics
+    return result
 
 
 @mcp_server.tool(
@@ -1796,6 +1938,7 @@ async def tool_get_api_call_chain(
     be_project_id:  str = "",
     max_depth:      str = "5",
     db:             str = "",
+    parser_type:    str = "",
 ) -> Dict[str, Any]:
     """
     Args:
@@ -1825,6 +1968,27 @@ async def tool_get_api_call_chain(
 
     if not component_name and not endpoint_path:
         return {"chains": [], "total": 0, "error": "component_name or endpoint_path required"}
+
+    selected_parser, relationships, routing, capability_diagnostics, capability_error = (
+        await _resolve_direct_capability_context(
+            "get_api_call_chain", parser_type, database,
+            required_relationships=("CALLS", "CALLS_API", "MATCHES"),
+            error_payload={
+                "component_name": component_name,
+                "endpoint_path": endpoint_path,
+            },
+        )
+    )
+    if capability_error:
+        return capability_error
+    selected_capability = capability_for_parser(selected_parser)
+    flow_defaults = set(
+        default_relationships(selected_capability.name)
+        if selected_capability else ("CALLS",)
+    )
+    flow_relationships = _relationship_pattern([
+        relationship for relationship in relationships if relationship in flow_defaults
+    ])
 
     component_return = """
 RETURN fe.name        AS fe_component,
@@ -1885,15 +2049,15 @@ LIMIT 30
         cypher = "\n".join(
             [
                 f"MATCH (fe:Function {_format_props(fe_props)})",
-                f"MATCH (fe)-[:CALLS*0..{_depth}]->(caller:Function)",
+                f"MATCH (fe)-[:{flow_relationships}*0..{_depth}]->(caller:Function)",
                 endpoint_match,
                 f"WITH fe, caller, ac, m, ep WHERE {servlet_active_generation_predicate('ep')}",
                 "OPTIONAL MATCH (ep)-[:HANDLES]->(forwardCtrl:Controller)",
                 "OPTIONAL MATCH (reverseCtrl:Controller)-[:HANDLES]->(ep)",
                 "OPTIONAL MATCH (ep)-[:SEMANTIC_OF]->(servletHandler:Function)",
                 "WITH fe, caller, ac, m, ep, coalesce(forwardCtrl, reverseCtrl, servletHandler) AS ctrl",
-                "OPTIONAL MATCH (ctrl)-[:CALLS*0..3]->(svc:Service)",
-                "OPTIONAL MATCH (ctrl)-[:CALLS*0..5]->(repo)",
+                f"OPTIONAL MATCH (ctrl)-[:{flow_relationships}*0..3]->(svc:Service)",
+                f"OPTIONAL MATCH (ctrl)-[:{flow_relationships}*0..5]->(repo)",
                 "WHERE repo:Repository OR repo:DataRepository OR repo:MyBatisMapper OR repo:MyBatisMapperMethod",
                 "OPTIONAL MATCH (repo)-[:DECLARES_QUERY|DERIVES_QUERY|QUERIES|BINDS_STATEMENT|DECLARES_STATEMENT*0..3]-(persistence)",
                 "OPTIONAL MATCH (persistence)-[:READS_FROM|WRITES_TO|REFERENCES_TABLE]->(table:DatabaseTable)",
@@ -1925,8 +2089,8 @@ LIMIT 30
                 "OPTIONAL MATCH (reverseCtrl:Controller)-[:HANDLES]->(ep)",
                 "OPTIONAL MATCH (ep)-[:SEMANTIC_OF]->(servletHandler:Function)",
                 "WITH caller, ac, m, ep, coalesce(forwardCtrl, reverseCtrl, servletHandler) AS ctrl",
-                "OPTIONAL MATCH (ctrl)-[:CALLS*0..3]->(svc:Service)",
-                "OPTIONAL MATCH (ctrl)-[:CALLS*0..5]->(repo)",
+                f"OPTIONAL MATCH (ctrl)-[:{flow_relationships}*0..3]->(svc:Service)",
+                f"OPTIONAL MATCH (ctrl)-[:{flow_relationships}*0..5]->(repo)",
                 "WHERE repo:Repository OR repo:DataRepository OR repo:MyBatisMapper OR repo:MyBatisMapperMethod",
                 "OPTIONAL MATCH (repo)-[:DECLARES_QUERY|DERIVES_QUERY|QUERIES|BINDS_STATEMENT|DECLARES_STATEMENT*0..3]-(persistence)",
                 "OPTIONAL MATCH (persistence)-[:READS_FROM|WRITES_TO|REFERENCES_TABLE]->(table:DatabaseTable)",
@@ -1961,9 +2125,13 @@ LIMIT 30
             }
             for r in rows
         ]
-        return {"chains": chains, "total": len(chains)}
+        result = {"chains": chains, "total": len(chains)}
     except Exception as exc:
-        return {"chains": [], "total": 0, "error": str(exc)}
+        result = {"chains": [], "total": 0, "error": str(exc)}
+    result["capability"] = routing
+    if capability_diagnostics:
+        result["capability_diagnostics"] = capability_diagnostics
+    return result
 
 
 # ── Workflow-Aware Impact Assessment tools ────────────────────────────────────
@@ -1988,6 +2156,7 @@ async def tool_analyze_workflow_impact(
     db: str = "",
     direction: str = "downstream",
     max_depth: int = 4,
+    parser_type: str = "",
 ) -> Dict[str, Any]:
     """
     Args:
@@ -2027,9 +2196,14 @@ async def tool_analyze_workflow_impact(
             "db": database,
             "direction": direction,
             "max_depth": capped,
+            "parser_type": parser_type or None,
         })
     except Exception as exc:
         subgraph = {"error": str(exc)}
+
+    subgraph_error = subgraph.get("error")
+    if isinstance(subgraph_error, dict) and subgraph_error.get("type") == "unsupported_capability":
+        return subgraph
 
     nodes: List[Dict[str, Any]] = subgraph.get("nodes") or subgraph.get("subgraph") or []
     edges: List[Dict[str, Any]] = subgraph.get("edges", [])
@@ -2048,7 +2222,13 @@ async def tool_analyze_workflow_impact(
              "file": n.get("file"), "depth": n.get("depth")}
             for n in nodes
         ],
+        "capability": subgraph.get("capability") or _capability_summary(
+            parser_type or active_project.get("parser_type"),
+            _resolve_backend_name(parser_type or active_project.get("parser_type")),
+        ),
     }
+    if subgraph.get("capability_diagnostics"):
+        base_result["capability_diagnostics"] = subgraph["capability_diagnostics"]
 
     if subgraph.get("error"):
         base_result["subgraph_error"] = subgraph["error"]
@@ -2056,6 +2236,31 @@ async def tool_analyze_workflow_impact(
     # 3. Workflow impact layer — direct Neo4j, same pattern as bridge tools
     if os.environ.get("WORKFLOW_IMPACT_DISABLED", "").strip() == "1":
         return base_result
+
+    selected_parser, workflow_relationships, routing, workflow_diagnostics, capability_error = (
+        await _resolve_direct_capability_context(
+            "analyze_workflow_impact",
+            parser_type,
+            database,
+            required_relationships=("HAS_STEP", "CALLS"),
+            error_payload={"function_id": function_id},
+        )
+    )
+    if capability_error:
+        return capability_error
+    selected_capability = capability_for_parser(selected_parser)
+    flow_defaults = set(
+        default_relationships(selected_capability.name)
+        if selected_capability else ("CALLS",)
+    )
+    workflow_flow_relationships = [
+        relationship
+        for relationship in workflow_relationships
+        if relationship in flow_defaults
+    ]
+    base_result["capability"] = routing
+    if workflow_diagnostics:
+        base_result["capability_diagnostics"] = workflow_diagnostics
 
     try:
         # Ensure the hyper-graph root is importable
@@ -2066,7 +2271,12 @@ async def tool_analyze_workflow_impact(
         from tools.common.workflow_impact_scorer import WorkflowImpactScorer  # noqa: PLC0415
 
         drv = _get_bridge_driver()
-        scorer = WorkflowImpactScorer(drv, database=database)
+        scorer = WorkflowImpactScorer(
+            drv,
+            database=database,
+            flow_relationships=workflow_flow_relationships,
+            workflow_relationship="HAS_STEP",
+        )
         wf_impact = await scorer.score(function_id, nodes, max_depth=capped)
         drv.close()
 
@@ -2120,6 +2330,7 @@ async def tool_find_workflows_containing(
     db: str = "",
     include_indirect: bool = True,
     max_depth: int = 4,
+    parser_type: str = "",
 ) -> Dict[str, Any]:
     """
     Args:
@@ -2138,6 +2349,25 @@ async def tool_find_workflows_containing(
     """
     database = db or os.environ.get("NEO4J_DB", "neo4j")
     capped = min(int(max_depth), 4)
+    selected_parser, relationships, routing, capability_diagnostics, capability_error = (
+        await _resolve_direct_capability_context(
+            "find_workflows_containing", parser_type, database,
+            required_relationships=(
+                ("HAS_STEP", "CALLS") if include_indirect else ("HAS_STEP",)
+            ),
+            error_payload={"function_id": function_id},
+        )
+    )
+    if capability_error:
+        return capability_error
+    selected_capability = capability_for_parser(selected_parser)
+    flow_defaults = set(
+        default_relationships(selected_capability.name)
+        if selected_capability else ("CALLS",)
+    )
+    flow_relationships = _relationship_pattern([
+        relationship for relationship in relationships if relationship in flow_defaults
+    ])
 
     direct_cypher = """
 MATCH (w:Workflow)-[s:HAS_STEP]->(f:Function)
@@ -2153,7 +2383,7 @@ ORDER BY w.confidence DESC
     # integer interpolation after capping at 4 to prevent injection.
     indirect_cypher = f"""
 MATCH (w:Workflow)-[:HAS_STEP]->(entry:Function)
-MATCH path = (entry)-[:CALLS*1..{capped}]->(f:Function)
+MATCH path = (entry)-[:{flow_relationships}*1..{capped}]->(f:Function)
 WHERE (f.symbol_id = $id OR f.file_path = $id)
   AND NOT w.workflow_id IN $direct_ids
 RETURN DISTINCT
@@ -2178,20 +2408,24 @@ LIMIT 30
                     for r in session.run(indirect_cypher, {"id": function_id, "direct_ids": direct_ids})
                 ]
         drv.close()
-        return {
+        result = {
             "function_id": function_id,
             "direct_workflows": direct_rows,
             "indirect_workflows": indirect_rows,
             "total": len(direct_rows) + len(indirect_rows),
         }
     except Exception as exc:
-        return {
+        result = {
             "function_id": function_id,
             "direct_workflows": [],
             "indirect_workflows": [],
             "total": 0,
             "error": str(exc),
         }
+    result["capability"] = routing
+    if capability_diagnostics:
+        result["capability_diagnostics"] = capability_diagnostics
+    return result
 
 
 # ===========================================================================

@@ -305,6 +305,8 @@ def _graph_keyword_search(
     query: str,
     database: str,
     limit: int,
+    labels: Optional[List[str]] = None,
+    properties: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Text search in the configured graph database.
@@ -317,15 +319,24 @@ def _graph_keyword_search(
     tokens = [t.strip().lower() for t in query.split() if t.strip()]
     if not tokens:
         return []
-    cypher = """
-MATCH (n)
-WHERE any(q IN $qs WHERE
-    toLower(coalesce(n.name, '')) CONTAINS q
-    OR toLower(coalesce(n.qualified_name, '')) CONTAINS q
-    OR toLower(coalesce(n.comment, '')) CONTAINS q
-)
-RETURN n LIMIT $limit
-"""
+    safe_labels = [value for value in (labels or []) if value.replace("_", "").isalnum()]
+    safe_properties = [
+        value for value in (properties or ["name", "qualified_name", "comment"])
+        if value.replace("_", "").isalnum()
+    ]
+    label_clause = (
+        "(" + " OR ".join(f"n:{label}" for label in safe_labels) + ") AND "
+        if safe_labels else ""
+    )
+    property_clause = " OR ".join(
+        f"toLower(coalesce(n.{property_name}, '')) CONTAINS q"
+        for property_name in safe_properties
+    )
+    cypher = (
+        "MATCH (n) WHERE " + label_clause
+        + "any(q IN $qs WHERE " + property_clause + ") "
+        + "RETURN n LIMIT $limit"
+    )
     try:
         if hasattr(graph_driver, "execute_query_sync"):
             records, _, _ = graph_driver.execute_query_sync(cypher, {"qs": tokens, "limit": limit}, database)
@@ -504,6 +515,9 @@ class IntelligentRetrievalEngine:
         expand_graph: bool = True,
         weight_override: Optional[Dict[str, float]] = None,
         collection: Optional[str] = None,
+        graph_rel_types: Optional[List[str]] = None,
+        searchable_labels: Optional[List[str]] = None,
+        searchable_properties: Optional[List[str]] = None,
     ) -> List[ScoredResult]:
         """
         Execute context-aware retrieval for *query*.
@@ -536,7 +550,12 @@ class IntelligentRetrievalEngine:
         # 2. Initial retrieval
         col = collection or self._collection
         seeds_qdrant = self._retrieve_qdrant(q, col, self._seed_k)
-        seeds_kw     = self._retrieve_keyword(q, self._seed_k)
+        seeds_kw     = self._retrieve_keyword(
+            q,
+            self._seed_k,
+            labels=searchable_labels,
+            properties=searchable_properties,
+        )
 
         # Merge into candidate dict  node_id → candidate
         candidates: Dict[str, Dict[str, Any]] = {}
@@ -569,6 +588,7 @@ class IntelligentRetrievalEngine:
             graph_nodes = self._expander.expand(
                 seed_ids  = seed_ids[:min(len(seed_ids), 10)],  # top-10 seeds only
                 depth     = self._expand_depth,
+                rel_types = graph_rel_types,
                 limit     = self._expand_limit,
                 include_seeds = False,
             )
@@ -641,11 +661,21 @@ class IntelligentRetrievalEngine:
         self,
         query: str,
         top_k: int,
+        *,
+        labels: Optional[List[str]] = None,
+        properties: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Run graph DB keyword search."""
         if not self._graph:
             return []
-        nodes = _graph_keyword_search(self._graph, query, self._database, top_k)
+        nodes = _graph_keyword_search(
+            self._graph,
+            query,
+            self._database,
+            top_k,
+            labels=labels,
+            properties=properties,
+        )
         return [_graph_keyword_node_to_candidate(n) for n in nodes]
 
     def _inject_freshness(self, candidates: List[Dict[str, Any]]) -> None:
