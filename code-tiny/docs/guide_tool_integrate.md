@@ -22,7 +22,7 @@ Use `tools.graph.cli.create_graph_driver_from_args` and the writers under `tools
 | Type                    | Ownership                                                                                 | Examples                         |
 | ----------------------- | ----------------------------------------------------------------------------------------- | -------------------------------- |
 | Primary language parser | Exclusively owns matching source files and handles deletion                               | COBOL, Go, Rust, Dart            |
-| Framework overlay       | Enriches facts owned by one or more primary parsers; never owns their source nodes        | Spring, Struts, Flutter, MyBatis |
+| Framework overlay       | Enriches facts owned by one or more primary parsers; never owns their source nodes        | Spring, Struts, Flutter, MyBatis, ASP.NET |
 | Backend specialization  | Uses a distinct MCP backend only when generic graph queries cannot represent its behavior | Android                          |
 
 ## Required Integration File Map
@@ -86,6 +86,11 @@ Update `tools/sync/incremental_sync.py`:
 - Add the parser to `MESSAGE_ENABLED_PARSERS` only when a matching detector exists under `tools/common/message_detectors/`.
 
 An overlay must run after its prerequisite primary parsers. Caller-supplied parser selection remains authoritative; auto mode must remain detector-gated.
+
+ASP.NET Framework and ASP.NET Core are separate `csharp` overlays because a
+mixed solution may contain both module types. They share a Roslyn evidence
+contract and graph vocabulary, but retain independent detectors, generations,
+and cleanup scopes.
 
 ### 4. Primary owner manifests
 

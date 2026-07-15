@@ -1,0 +1,2 @@
+<%@ Master Language="C#" Inherits="LegacyWeb.SiteMaster" %>
+<asp:ContentPlaceHolder ID="MainContent" runat="server" />

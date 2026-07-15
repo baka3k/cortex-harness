@@ -123,7 +123,7 @@ Routing:
 - Parser mapping:
   - android/android-kotlin/kotlin-android -> Android backend
   - cplus/cpp/c++/c/clang/java/kotlin/jvm/go/perl/rust/swift/delphi/pascal/vbnet/vb6/vba/vbscript -> C++ backend
-  - cobol/spring/servlet_jsp/mybatis/struts/dart/flutter (and aliases) -> C++ backend with parser-aware traversal defaults
+  - cobol/spring/servlet_jsp/mybatis/struts/dart/flutter/aspnet_core/aspnet_framework (and aliases) -> C++ backend with parser-aware traversal defaults
 
 Tool families available in unified MCP:
 - Symbol/graph queries: search/get/subgraph/paths/module-path/entrypoint

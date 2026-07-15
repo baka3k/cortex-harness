@@ -25,6 +25,8 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
         self.assertEqual(framework_for_parser("my-batis").name, "mybatis")
         self.assertEqual(framework_for_parser("struts2").name, "struts")
         self.assertEqual(framework_for_parser("dart").name, "flutter")
+        self.assertEqual(framework_for_parser("aspnet-core").name, "aspnet_core")
+        self.assertEqual(framework_for_parser("asp.net-framework").name, "aspnet_framework")
         self.assertIn("spring_boot", parser_aliases())
         self.assertIn("apache-struts", parser_aliases())
         self.assertIn("flutter", parser_aliases())
@@ -41,6 +43,8 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
         self.assertIn("MyBatisStatement", searchable_labels("mybatis"))
         self.assertIn("Action", searchable_labels("struts"))
         self.assertIn("Function", searchable_labels("flutter"))
+        self.assertIn("HttpEndpoint", searchable_labels("aspnet_core"))
+        self.assertIn("WebFormPage", searchable_labels("aspnet_framework"))
 
         predicate = servlet_active_generation_predicate("node")
         self.assertIn("ServletJspAnalysisState", predicate)

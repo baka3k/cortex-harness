@@ -374,11 +374,17 @@ STRUTS_LABELS: tuple[str, ...] = (
     "StrutsFact", "Plugin", "Package", "Action", "HttpEndpoint", "InterceptorStack",
     "Interceptor", "Result", "ResultType", "View", "ExceptionMapping", "ValidationRule",
 )
+ASPNET_LABELS: tuple[str, ...] = (
+    "Route", "RazorPage", "PageHandler", "WebFormPage", "HttpHandler", "HttpModule",
+    "Layout", "PartialView", "Repository", "Model", "ViewModel", "ConfigurationKey",
+    "SessionState", "AuthenticationScheme", "AuthorizationPolicy",
+)
 for _framework, _labels in (
     ("spring", SPRING_LABELS),
     ("mybatis", MYBATIS_LABELS),
     ("servlet_jsp", SERVLET_JSP_LABELS),
     ("struts", STRUTS_LABELS),
+    ("aspnet", ASPNET_LABELS),
 ):
     for _label in _labels:
         _token = re.sub(r"(?<!^)(?=[A-Z])", "_", _label).lower()
@@ -404,6 +410,14 @@ INDEXES.append((
     "servlet_jsp_analysis_state_active_lookup",
     "CREATE INDEX servlet_jsp_analysis_state_active_lookup IF NOT EXISTS FOR (s:ServletJspAnalysisState) ON (s.project_id, s.module_id, s.active_generation)",
 ))
+CONSTRAINTS.append((
+    "unique_aspnet_analysis_state_id",
+    "CREATE CONSTRAINT unique_aspnet_analysis_state_id IF NOT EXISTS FOR (s:AspNetAnalysisState) REQUIRE s.id IS UNIQUE",
+))
+INDEXES.append((
+    "aspnet_analysis_state_active_lookup",
+    "CREATE INDEX aspnet_analysis_state_active_lookup IF NOT EXISTS FOR (s:AspNetAnalysisState) ON (s.project_id, s.module_id, s.framework, s.active_generation)",
+))
 
 _CORE_FULLTEXT_LABELS = (
     "Function", "Class", "Type", "Namespace", "Package", "File", "Field", "Alias", "Template",
@@ -413,7 +427,14 @@ _CORE_FULLTEXT_LABELS = (
     "AndroidIntentAction", "AndroidHandlerMessage", "ApiEndpoint", "ApiCall", "Controller", "Service",
     "Database", "DataRepository", "Middleware",
 )
-_FULLTEXT_LABELS = tuple(dict.fromkeys((*_CORE_FULLTEXT_LABELS, *SPRING_LABELS, *MYBATIS_LABELS, *SERVLET_JSP_LABELS)))
+_FULLTEXT_LABELS = tuple(dict.fromkeys((
+    *_CORE_FULLTEXT_LABELS,
+    *SPRING_LABELS,
+    *MYBATIS_LABELS,
+    *SERVLET_JSP_LABELS,
+    *STRUTS_LABELS,
+    *ASPNET_LABELS,
+)))
 _FULLTEXT_LABEL_CYPHER = "|".join(_FULLTEXT_LABELS)
 
 FULLTEXT_INDEXES: list[tuple[str, str]] = [

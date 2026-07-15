@@ -128,6 +128,52 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
             "name", "qualified_name", "file_path", "path", "package_name", "class_name", "code", "comment",
         ),
     ),
+    "aspnet_framework": FrameworkQueryConfig(
+        name="aspnet_framework",
+        aliases=frozenset({
+            "aspnet_framework", "aspnet-framework", "asp.net-framework", "aspnetframework",
+        }),
+        labels=frozenset({
+            "HttpEndpoint", "Route", "Middleware", "Controller", "Action", "RazorPage",
+            "PageHandler", "WebFormPage", "HttpHandler", "HttpModule", "Filter", "Result",
+            "View", "Layout", "PartialView", "Service", "Repository", "Model", "ViewModel",
+            "ValidationRule", "ConfigurationKey", "SessionState", "ApplicationEvent",
+            "AuthenticationScheme", "AuthorizationPolicy",
+        }),
+        relationships=(
+            "SEMANTIC_OF", "MAPPED_TO", "HANDLED_BY", "PASSES_THROUGH", "INVOKES", "INJECTS",
+            "VALIDATES_WITH", "RENDERS", "REDIRECTS_TO", "FORWARDS_TO", "LOADS_FROM",
+            "DEPENDS_ON", "READS_CONFIG", "WRITES_SESSION", "POSTS_BACK_TO", "INITIALIZES",
+            "RETURNS_RESULT",
+        ),
+        searchable_properties=(
+            "name", "qualified_name", "file_path", "path", "route", "http_method",
+            "config_key", "resolution_status", "framework",
+        ),
+        generation_scoped=True,
+    ),
+    "aspnet_core": FrameworkQueryConfig(
+        name="aspnet_core",
+        aliases=frozenset({"aspnet_core", "aspnet-core", "asp.net-core", "aspnetcore"}),
+        labels=frozenset({
+            "HttpEndpoint", "Route", "Middleware", "Controller", "Action", "RazorPage",
+            "PageHandler", "WebFormPage", "HttpHandler", "HttpModule", "Filter", "Result",
+            "View", "Layout", "PartialView", "Service", "Repository", "Model", "ViewModel",
+            "ValidationRule", "ConfigurationKey", "SessionState", "ApplicationEvent",
+            "AuthenticationScheme", "AuthorizationPolicy",
+        }),
+        relationships=(
+            "SEMANTIC_OF", "MAPPED_TO", "HANDLED_BY", "PASSES_THROUGH", "INVOKES", "INJECTS",
+            "VALIDATES_WITH", "RENDERS", "REDIRECTS_TO", "FORWARDS_TO", "LOADS_FROM",
+            "DEPENDS_ON", "READS_CONFIG", "WRITES_SESSION", "POSTS_BACK_TO", "INITIALIZES",
+            "RETURNS_RESULT",
+        ),
+        searchable_properties=(
+            "name", "qualified_name", "file_path", "path", "route", "http_method",
+            "config_key", "resolution_status", "framework", "position", "lifetime",
+        ),
+        generation_scoped=True,
+    ),
 }
 
 
