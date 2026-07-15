@@ -6,7 +6,7 @@ mode: hi-plan --fast
 source: /Users/account/Downloads/Flutter_Analyzer_Design_Spec.md
 scope: Dart parsing, Flutter semantic analysis, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260713-1638-framework-parser-integration, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers]
+relatedPlans: [260713-1638-framework-parser-integration, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260715-2200-mcp-capability-routing]
 ---
 
 # Flutter Analyzer Parser Tool Plan
