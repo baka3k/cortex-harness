@@ -117,6 +117,20 @@ FRAMEWORK_ANALYZERS: Dict[str, FrameworkAnalyzerConfig] = {
         "flutter", os.path.join(_ROOT_DIR, "tools", "flutter", "flutter_analyzer.py"), True,
         ("dart",), 50, False, ("--mode", "flutter"),
     ),
+    "aspnet_framework": FrameworkAnalyzerConfig(
+        "aspnet_framework",
+        os.path.join(_ROOT_DIR, "tools", "aspnet_framework", "aspnet_framework_analyzer.py"),
+        True,
+        ("csharp",),
+        60,
+    ),
+    "aspnet_core": FrameworkAnalyzerConfig(
+        "aspnet_core",
+        os.path.join(_ROOT_DIR, "tools", "aspnet_core", "aspnet_core_analyzer.py"),
+        True,
+        ("csharp",),
+        70,
+    ),
 }
 
 _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
@@ -128,6 +142,11 @@ _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
         ".dart", ".arb", ".json", ".xml", ".plist", ".gradle", ".properties", ".yml", ".yaml",
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ttf", ".otf",
     },
+    "aspnet_framework": {
+        ".cs", ".csproj", ".sln", ".config", ".asax", ".aspx", ".ascx", ".master",
+        ".asmx", ".ashx", ".cshtml", ".resx",
+    },
+    "aspnet_core": {".cs", ".csproj", ".sln", ".cshtml", ".razor", ".json", ".config"},
 }
 
 _FRAMEWORK_BUILD_FILES = {
@@ -620,6 +639,34 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
         strong = {path for path in flutter_candidates if os.path.basename(path).lower() == "pubspec.yaml"}
         grouped["flutter"].update(strong)
         evidence["flutter"] = [f"{path}:strong-candidate" for path in sorted(strong)]
+
+    from tools.aspnet_core.detector import AspNetCoreDetector, is_strong_deleted_candidate as is_core_deleted
+    from tools.aspnet_framework.detector import (
+        AspNetFrameworkDetector,
+        is_strong_deleted_candidate as is_framework_deleted,
+    )
+
+    aspnet_detectors = {
+        "aspnet_framework": (AspNetFrameworkDetector(root), is_framework_deleted),
+        "aspnet_core": (AspNetCoreDetector(root), is_core_deleted),
+    }
+    for framework, (detector, deleted_candidate) in aspnet_detectors.items():
+        candidates = {path for path in normalized_paths if _is_framework_candidate(framework, path)}
+        modules = detector.discover_modules()
+        for module in modules:
+            evidence[framework].extend((*module.evidence, *module.supporting_evidence))
+            grouped[framework].update(
+                path for path in candidates if _path_in_module(path, module.module_path)
+            )
+        for path in candidates - grouped[framework]:
+            detection = detector.detect_path(path)
+            if detection is not None:
+                grouped[framework].add(path)
+                evidence[framework].extend((*detection.evidence, *detection.supporting_evidence))
+            elif deleted_candidate(path) and not os.path.exists(os.path.join(root, path)):
+                grouped[framework].add(path)
+                evidence[framework].append(f"{path}:strong-candidate")
+        evidence[framework] = list(dict.fromkeys(evidence[framework]))
     return grouped, evidence
 
 

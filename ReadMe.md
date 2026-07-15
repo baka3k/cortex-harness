@@ -201,3 +201,16 @@ cuda 12.8
 cuda_available True
 gpu NVIDIA GeForce RTX 5060 Ti
 ```
+
+## ASP.NET Semantic Overlays
+
+`dev sync code` supports detector-gated `aspnet_framework` and `aspnet_core`
+overlays. Both require the canonical `csharp` analyzer and preserve exclusive
+`.cs` ownership. The overlays add routes, request pipelines, controllers,
+pages/views, services, configuration, state, validation, and result semantics
+through one migration-oriented graph contract.
+
+Use `aspnet-framework`, `asp.net-framework`, `aspnet-core`, or `asp.net-core`
+as unified MCP parser aliases. Roslyn workspace loading is attempted in
+`auto` mode; unavailable legacy reference assemblies or SDK workloads produce
+explicit partial coverage.

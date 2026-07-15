@@ -2546,3 +2546,19 @@ python testtool/mcp_tester.py --tool search_functions --project-id my_project
   services, as noted in `requirements.txt`.
 - If `java/java_mcp.py` should become active through the unified server, add it
   to `BACKENDS` and update the parser routing table in this README.
+
+## ASP.NET Framework Profiles
+
+The unified server exposes two parser-aware profiles through the shared C++
+backend:
+
+- `aspnet_core`, `aspnet-core`, `asp.net-core`, and `aspnetcore`
+- `aspnet_framework`, `aspnet-framework`, `asp.net-framework`, and
+  `aspnetframework`
+
+Both profiles search the shared migration labels (`HttpEndpoint`, `Route`,
+`Middleware`, `Controller`, `Action`, `RazorPage`, `WebFormPage`, `Service`,
+`ConfigurationKey`, and related labels) and traverse the normalized ASP.NET
+relationship vocabulary. Facts are framework-, project-, module-, and
+generation-scoped; canonical C# nodes are linked with `SEMANTIC_OF` and remain
+owned by the `csharp` analyzer.
