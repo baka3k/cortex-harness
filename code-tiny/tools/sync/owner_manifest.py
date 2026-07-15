@@ -32,6 +32,7 @@ SUPPORTED_PARSERS: Set[str] = {
     "vbscript",
     "python",
     "go",
+    "perl",
     "rust",
     "js",
     "ts",
@@ -204,6 +205,8 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "python"
     if ext == ".go":
         return "go"
+    if ext in {".pl", ".pm", ".t"}:
+        return "perl"
     if ext == ".rs":
         return "rust"
     if ext == ".swift":
