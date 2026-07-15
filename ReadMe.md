@@ -110,7 +110,7 @@ The CLI has **two independent command groups** serving different roles:
 | `dev sync code add` | Add a new source project (git URL + folders) to the active config |
 
 > **First run:** always a full sync (no baseline).
-> Support: C#, C/C++, Java, JavaScript, Kotlin, PHP, PL/SQL, Swift, TypeScript, TypeScript, Android Kotlin, Android Java, Python, Go, Rust, Delphi 
+> Support: C#, C/C++, Java, JavaScript, Kotlin, PHP, PL/SQL, Swift, TypeScript, Android Kotlin, Android Java, Python, Go, Perl 5 (`.pl`, `.pm`, `.t`), Rust, Delphi
 
 ### Sync — Documentation
 
