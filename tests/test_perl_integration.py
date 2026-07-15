@@ -1,4 +1,5 @@
 import asyncio
+import importlib.util
 import sys
 import tempfile
 import unittest
@@ -77,7 +78,15 @@ class PerlIntegrationTest(unittest.TestCase):
         )
 
     def test_unified_mcp_routes_and_lists_perl(self):
-        import mcp.unified_mcp as unified
+        mcp_dir = CODE_TINY / "mcp"
+        if str(mcp_dir) not in sys.path:
+            sys.path.insert(0, str(mcp_dir))
+        spec = importlib.util.spec_from_file_location("cortex_unified_mcp", mcp_dir / "unified_mcp.py")
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        unified = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = unified
+        spec.loader.exec_module(unified)
 
         self.assertEqual(unified._resolve_backend_name("perl"), "cplus")
         tool = unified.tool_list_parsers

@@ -68,7 +68,7 @@ def build_graph_rows(
     fields: List[Dict[str, Any]] = []
     relations: List[Dict[str, Any]] = []
     calls: List[Dict[str, Any]] = []
-    package_ids: Dict[str, str] = {}
+    package_ids: Dict[Tuple[str, str], str] = {}
 
     for record in result.files:
         files.append(
@@ -106,7 +106,7 @@ def build_graph_rows(
             **common,
         }
         if symbol.kind == "package":
-            package_ids[symbol.fq_name] = symbol.symbol_id
+            package_ids[(symbol.fq_name, symbol.file_path)] = symbol.symbol_id
             namespaces.append(base)
         elif symbol.kind == "subroutine":
             functions.append(
@@ -148,7 +148,7 @@ def build_graph_rows(
     for symbol in result.symbols:
         if symbol.kind not in {"subroutine", "variable"}:
             continue
-        package_id = package_ids.get(symbol.package)
+        package_id = package_ids.get((symbol.package, symbol.file_path))
         if package_id:
             relations.append(
                 {

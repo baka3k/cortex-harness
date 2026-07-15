@@ -52,6 +52,8 @@ class PerlParserTest(unittest.TestCase):
         self.assertIn("App::Model", package_names)
         self.assertIn("App::Secondary", package_names)
         self.assertIn("App::Util::helper", sub_names)
+        greet = next(item for item in result.symbols if item.fq_name == "App::Model::greet")
+        self.assertIn(":lvalue", greet.attributes)
         self.assertTrue(any(value.startswith("my:lexical") for value in declaration_kinds))
         self.assertTrue(any(value.startswith("our:package") for value in declaration_kinds))
         self.assertTrue(any(value.startswith("local:dynamic-local") for value in declaration_kinds))
@@ -73,6 +75,23 @@ class PerlParserTest(unittest.TestCase):
         payload = json.loads(one)
         self.assertEqual(payload["normalized_root"], ".")
         self.assertNotIn(str(FIXTURE), one)
+
+    def test_budgets_and_secret_redaction_are_deterministic(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as cache:
+            root = Path(directory)
+            source = "# password=supersecret\npackage Secret;\nsub reveal { my $password = 'supersecret'; }\n"
+            (root / "Secret.pm").write_text(source, encoding="utf-8")
+            result = run_perl_analysis(
+                str(root),
+                project_id="secret",
+                cache_dir=cache,
+                include_docs=True,
+                max_file_bytes=64,
+            )
+        payload = result.to_json()
+        self.assertNotIn("supersecret", payload)
+        self.assertEqual(result.coverage, "partial")
+        self.assertTrue(any(item.code == "perl.scan.file_byte_budget" for item in result.diagnostics))
 
 
 if __name__ == "__main__":

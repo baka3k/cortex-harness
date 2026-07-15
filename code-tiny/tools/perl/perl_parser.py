@@ -179,7 +179,9 @@ class _Collector:
         qualified = name if "::" in name else f"{package}::{name}"
         scope = "::".join((package, *outer_scope))
         prototype_node = _first_descendant(node, ("prototype", "signature"))
-        attributes_node = node.child_by_field_name("attributes") or _first_descendant(node, ("attrlist",))
+        attributes_node = node.child_by_field_name("attributes")
+        if attributes_node is None:
+            attributes_node = _first_descendant(node, ("attrlist",))
         attributes = tuple(
             sorted(
                 {
@@ -315,7 +317,9 @@ class _Collector:
         reason = "runtime target"
 
         if node.type in {"function_call_expression", "ambiguous_function_call_expression", "func0op_call_expression"}:
-            function_node = node.child_by_field_name("function") or _first_descendant(node, ("function", "bareword"))
+            function_node = node.child_by_field_name("function")
+            if function_node is None:
+                function_node = _first_descendant(node, ("function", "bareword"))
             target_name = _node_text(function_node, self.source).strip()
             if target_name:
                 kind = "qualified" if "::" in target_name else "direct"
@@ -323,7 +327,9 @@ class _Collector:
                 status = "unresolved"
                 reason = "awaiting project-local resolution"
         elif node.type == "method_call_expression":
-            method_node = node.child_by_field_name("method") or _first_descendant(node, ("method",))
+            method_node = node.child_by_field_name("method")
+            if method_node is None:
+                method_node = _first_descendant(node, ("method",))
             invocant_node = node.child_by_field_name("invocant")
             method = _node_text(method_node, self.source).strip()
             invocant = _node_text(invocant_node, self.source).strip()
@@ -484,7 +490,9 @@ class PerlTreeSitterParser:
         package_seen = False
         for child in root.children:
             if child.type == "package_statement":
-                name_node = child.child_by_field_name("name") or _first_descendant(child, ("package",))
+                name_node = child.child_by_field_name("name")
+                if name_node is None:
+                    name_node = _first_descendant(child, ("package",))
                 package = _normalized_package(_node_text(name_node, source))
                 collector.add_package(child, package)
                 package_seen = True
