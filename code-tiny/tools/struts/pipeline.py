@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set
@@ -18,13 +19,52 @@ from tools.struts.validation_parser import parse_validation_xml_file
 from tools.struts.web_xml_parser import parse_web_xml_file
 
 
-_IGNORED_DIRS = {".git", ".gradle", ".idea", ".mvn", ".venv", "build", "node_modules", "out", "target", "venv"}
+_IGNORED_DIR_PATTERNS = {
+    # Version control
+    ".git", ".hg", ".svn",
+    # IDE metadata
+    ".eclipse", ".idea", ".settings", ".vs", ".vscode",
+    # Java build outputs and generated sources
+    "bin", "build", "buildSrc", "classes", "generated", "generated-sources",
+    "generated-test-sources", "out", "target",
+    # Build tools and mixed frontend projects
+    ".gradle", ".mvn", "dist", "node_modules",
+    # Caches and test reports
+    ".cache", ".parcel-cache", "__pycache__", "coverage", "failsafe-reports",
+    "junit", "surefire-reports", "test-results",
+    # Virtual environments and temporary directories
+    ".tmp", ".venv", "env", "temp", "tmp", "tmpdir", "venv", "virtualenv",
+    # Common generated metadata in mixed-language repositories
+    "*.egg-info",
+}
+
+_IGNORED_FILE_PATTERNS = {
+    # Compiled Java artifacts and packaged applications
+    "*.class", "*.ear", "*.jar", "*.war",
+    # IDE files
+    "*.iml", "*.ipr", "*.iws", "*.swo", "*.swp",
+    # Logs, temporary files, and editor backups
+    "*.bak", "*.log", "*.orig", "*.rej", "*.tmp", "*~",
+    # Operating-system metadata
+    ".DS_Store", "Thumbs.db",
+}
+
+
+def _matches_pattern(name: str, patterns: Set[str]) -> bool:
+    normalized = name.casefold()
+    return any(fnmatch.fnmatchcase(normalized, pattern.casefold()) for pattern in patterns)
 
 
 def _iter_files(root: Path) -> Iterable[Path]:
-    for current_root, dirs, files in os.walk(root):
-        dirs[:] = sorted(item for item in dirs if item not in _IGNORED_DIRS and not item.startswith("."))
+    for current_root, dirs, files in os.walk(root, topdown=True):
+        dirs[:] = sorted(
+            item
+            for item in dirs
+            if not item.startswith(".") and not _matches_pattern(item, _IGNORED_DIR_PATTERNS)
+        )
         for name in sorted(files):
+            if _matches_pattern(name, _IGNORED_FILE_PATTERNS):
+                continue
             yield Path(current_root) / name
 
 
