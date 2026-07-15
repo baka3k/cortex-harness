@@ -85,6 +85,7 @@ ANALYZERS: Dict[str, AnalyzerConfig] = {
     "vbscript": AnalyzerConfig("vbscript", os.path.join(_ROOT_DIR, "tools", "vb", "vbscript_analyzer.py"), True),
     "python": AnalyzerConfig("python", os.path.join(_ROOT_DIR, "tools", "python", "python_analyzer.py"), True),
     "go": AnalyzerConfig("go", os.path.join(_ROOT_DIR, "tools", "go", "go_analyzer.py"), True),
+    "perl": AnalyzerConfig("perl", os.path.join(_ROOT_DIR, "tools", "perl", "perl_analyzer.py"), True),
     "rust": AnalyzerConfig("rust", os.path.join(_ROOT_DIR, "tools", "rust", "rust_analyzer.py"), True),
     "swift": AnalyzerConfig("swift", os.path.join(_ROOT_DIR, "tools", "swift", "swift_analyzer.py"), True),
     "js": AnalyzerConfig("js", os.path.join(_ROOT_DIR, "tools", "js", "js_analyzer.py"), True),
@@ -457,6 +458,8 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "python"
     if ext == ".go":
         return "go"
+    if ext in {".pl", ".pm", ".t"}:
+        return "perl"
     if ext == ".rs":
         return "rust"
     if ext == ".swift":
@@ -947,6 +950,7 @@ _SOURCE_EXTENSIONS: Set[str] = {
     ".pas", ".dpr", ".inc",
     ".py",
     ".go",
+    ".pl", ".pm", ".t",
     ".rs", ".swift", ".dart", ".arb",
     ".js", ".jsx",
     ".ts", ".tsx",
