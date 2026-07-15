@@ -6,7 +6,7 @@ mode: hi-plan --fast
 source: /Users/hieplq1.rpm/Downloads/Analyzer_Design_Spec_Perl_Tree_Sitter.md
 scope: Perl 5 primary parsing, normalized structural facts, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260714-1603-flutter-analyzer-parser]
+relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers]
 ---
 
 # Perl Tree-sitter Analyzer Parser Plan
@@ -86,6 +86,7 @@ No `framework_registry.py` profile or schema/index change is expected unless imp
 
 - `neo4j-to-falkordb-migration` blocks provider-parity acceptance because the Perl analyzer will write canonical language facts through the same provider-neutral graph abstraction and exercise the same provider CLI/runtime contract. Phases 01-03 can proceed independently; Phase 04 graph persistence and Phase 05 provider-parity gates require the stabilized contract.
 - `260714-1603-flutter-analyzer-parser` is not a functional blocker, but both plans change `code-tiny/requirements.txt`, analyzer registries, owner manifests, root CLI mappings, unified MCP routing/instructions, documentation, and common registry tests. Keep all edits additive and merge registry expectations rather than replacing either parser family.
+- `260715-2011-aspnet-roslyn-analyzers` is not a functional blocker, but it overlaps root/framework analyzer registries, unified MCP routing/instructions, documentation, and common registry/MCP tests. Keep parser and alias expectations additive and preserve primary-versus-overlay ownership.
 
 ## Target File Map
 
@@ -135,4 +136,3 @@ No `framework_registry.py` profile or schema/index change is expected unless imp
 | Registry edits conflict with Flutter/provider work | Coordinate additive changes through the common registry test and bidirectional plan dependencies. |
 | Provider failure leaves partial generations | Stage validated results, write through shared provider APIs, and apply cleanup/publish only after successful writes. |
 | POD/comments or large files inflate output | Make documentation extraction optional, enforce per-file/total budgets, and report deterministic truncation. |
-

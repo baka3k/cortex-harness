@@ -6,7 +6,7 @@ mode: hi-plan --fast
 source: /Users/account/Downloads/Flutter_Analyzer_Design_Spec.md
 scope: Dart parsing, Flutter semantic analysis, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260713-1638-framework-parser-integration, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser]
+relatedPlans: [260713-1638-framework-parser-integration, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers]
 ---
 
 # Flutter Analyzer Parser Tool Plan
@@ -124,6 +124,7 @@ Every node and edge must carry project scope, source evidence, stable IDs, confi
 - `260713-1638-framework-parser-integration` is a completed implementation pattern, not a blocker. Reuse its primary-parser-plus-overlay model and shared MCP registry instead of creating Flutter-only orchestration.
 - `260714-1702-cobol-analyzer-parser` is not a functional blocker, but it overlaps the analyzer registries, owner manifests, requirements, schema setup, unified MCP routing, query-profile registry, and root tests. Coordinate additive edits so both parser families and aliases remain registered.
 - `260715-1629-perl-analyzer-parser` is not a functional blocker, but it overlaps the Tree-sitter requirements, primary analyzer registries, owner manifests, unified MCP routing/instructions, documentation, and common registry tests. Coordinate additive edits so Dart/Flutter and Perl remain independently discoverable.
+- `260715-2011-aspnet-roslyn-analyzers` is not a functional blocker, but it overlaps framework analyzer registries, root CLI mappings, unified MCP routing/instructions, query-profile registration, documentation, and common registry/MCP tests. Keep shared edits additive and preserve independent detector gating.
 - Phases 01 and 02 can proceed while the graph migration is active; Phase 03 writes and Phase 04/05 parity gates must use the stabilized provider contract.
 
 ## Validation Strategy
