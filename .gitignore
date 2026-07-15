@@ -68,3 +68,4 @@ cortex_harness/CLAUDE.md
 frontend/**/CLAUDE.md
 backendjs/**/CLAUDE.md
 tests/fixtures/**
+!code-tiny/tools/cobol/lib/cobol.cpython-310-darwin.so
