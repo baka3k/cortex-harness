@@ -102,6 +102,32 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
             "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value", "sql",
         ),
     ),
+    "struts": FrameworkQueryConfig(
+        name="struts",
+        aliases=frozenset({"struts", "struts2", "apache-struts", "apache_struts"}),
+        labels=frozenset({
+            "StrutsFact", "Plugin", "Package", "Action", "HttpEndpoint", "InterceptorStack",
+            "Interceptor", "Result", "ResultType", "View", "ExceptionMapping", "ValidationRule",
+        }),
+        relationships=(
+            "CONTAINS", "EXTENDS", "MAPPED_TO", "PASSES_THROUGH", "USES_INTERCEPTOR_STACK",
+            "RETURNS_RESULT", "INSTANCE_OF", "RESOLVES_TO", "CHAINS_TO", "REDIRECTS_TO",
+            "HANDLES_EXCEPTION", "VALIDATES_WITH",
+        ),
+        searchable_properties=(
+            "name", "qualified_name", "file_path", "path", "route", "class_name", "method",
+            "namespace", "result_type", "location", "validator_type",
+        ),
+    ),
+    "flutter": FrameworkQueryConfig(
+        name="flutter",
+        aliases=frozenset({"dart", "flutter", "flutter-dart", "flutter_dart"}),
+        labels=frozenset({"File", "Class", "Type", "Function", "Field"}),
+        relationships=("CONTAINS", "IMPORTS", "EXPORTS", "EXTENDS", "CALLS"),
+        searchable_properties=(
+            "name", "qualified_name", "file_path", "path", "package_name", "class_name", "code", "comment",
+        ),
+    ),
 }
 
 
