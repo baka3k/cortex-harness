@@ -1,26 +1,35 @@
 # Project Call Graph MCP (Tiny)
 
-Small repository containing an MCP server (FastMCP) that proxies to the Project Call Graph backend, plus Kotlin/Java/C#/C++/TypeScript/JavaScript/PHP/SQL/PL/SQL/Swift analyzers.
+Small repository containing a unified MCP server plus analyzers for the languages and framework overlays listed below.
 The backend API/scan service is not in this repo and must run elsewhere.
 
 Supported languages:
 
 - C#
 - C/C++
+- COBOL
+- Dart
+- Delphi/Pascal
+- Go
 - Java
 - JavaScript
 - Kotlin
 - PHP
 - PL/SQL
+- Python
+- Rust
 - SQL
 - Swift
 - TypeScript
+- VB.NET, VB6, VBA, and VBScript
 
 Framework overlays for Java/Kotlin projects:
 
 - Spring (`spring`)
 - Servlet/JSP (`servlet_jsp`, aliases `servlet-jsp`, `servlet`, `jsp`)
 - MyBatis (`mybatis`)
+- Apache Struts 2 (`struts`, aliases `struts2`, `apache-struts`)
+- Flutter (`flutter`; Dart projects use the primary `dart` parser)
 
 These are enrichers, not file owners. `dev sync code` runs detected overlays after Java/Kotlin and keeps their facts in the graph store. Semantic search continues to use canonical language vectors and expands through framework edges such as `SEMANTIC_OF`, `HANDLES`, `DECLARES_QUERY`, and `BINDS_STATEMENT`.
 
@@ -39,6 +48,13 @@ These are enrichers, not file owners. `dev sync code` runs detected overlays aft
   - C/C++: `tools/cplus/cplus_analyzer.py`
   - C#: `tools/csharp/csharp_analyzer.py`
   - Swift: `tools/swift/swift_analyzer.py`
+  - COBOL: `tools/cobol/cobol_analyzer.py`
+  - Dart/Flutter: `tools/flutter/flutter_analyzer.py`
+  - Delphi/Pascal: `tools/delphi/delphi_analyzer.py`
+  - Go: `tools/go/go_analyzer.py`
+  - Python: `tools/python/python_analyzer.py`
+  - Rust: `tools/rust/rust_analyzer.py`
+  - Visual Basic variants: `tools/vb/*_analyzer.py`
 
 ## Setup
 

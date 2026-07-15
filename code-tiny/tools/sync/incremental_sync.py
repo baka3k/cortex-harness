@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 try:
@@ -54,6 +55,7 @@ class AnalyzerConfig:
     parser: str
     script_path: str
     incremental_supported: bool
+    extra_args: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,10 +66,14 @@ class FrameworkAnalyzerConfig:
     prerequisite_parsers: Tuple[str, ...]
     order: int
     writes_vectors: bool = False
+    extra_args: Tuple[str, ...] = ()
 
 
 ANALYZERS: Dict[str, AnalyzerConfig] = {
     "cobol": AnalyzerConfig("cobol", os.path.join(_ROOT_DIR, "tools", "cobol", "cobol_analyzer.py"), True),
+    "dart": AnalyzerConfig(
+        "dart", os.path.join(_ROOT_DIR, "tools", "flutter", "flutter_analyzer.py"), True, ("--mode", "dart")
+    ),
     "cplus": AnalyzerConfig("cplus", os.path.join(_ROOT_DIR, "tools", "cplus", "cplus_analyzer.py"), True),
     "delphi": AnalyzerConfig("delphi", os.path.join(_ROOT_DIR, "tools", "delphi", "delphi_analyzer.py"), True),
     "java": AnalyzerConfig("java", os.path.join(_ROOT_DIR, "tools", "java", "java_analyzer.py"), True),
@@ -102,12 +108,25 @@ FRAMEWORK_ANALYZERS: Dict[str, FrameworkAnalyzerConfig] = {
         "mybatis", os.path.join(_ROOT_DIR, "tools", "mybatis", "mybatis_analyzer.py"), True,
         ("java", "kotlin"), 30,
     ),
+    "struts": FrameworkAnalyzerConfig(
+        "struts", os.path.join(_ROOT_DIR, "tools", "struts", "struts_analyzer.py"), True,
+        ("java",), 40,
+    ),
+    "flutter": FrameworkAnalyzerConfig(
+        "flutter", os.path.join(_ROOT_DIR, "tools", "flutter", "flutter_analyzer.py"), True,
+        ("dart",), 50, False, ("--mode", "flutter"),
+    ),
 }
 
 _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
     "spring": {".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml", ".json", ".gradle"},
     "servlet_jsp": {".java", ".jsp", ".jspx", ".jspf", ".tag", ".tagx", ".xml", ".properties", ".gradle"},
     "mybatis": {".java", ".kt", ".kts", ".xml", ".gradle"},
+    "struts": {".java", ".xml", ".properties", ".yml", ".yaml", ".gradle"},
+    "flutter": {
+        ".dart", ".arb", ".json", ".xml", ".plist", ".gradle", ".properties", ".yml", ".yaml",
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ttf", ".otf",
+    },
 }
 
 _FRAMEWORK_BUILD_FILES = {
@@ -438,6 +457,12 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "python"
     if ext == ".go":
         return "go"
+    if ext == ".rs":
+        return "rust"
+    if ext == ".swift":
+        return "swift"
+    if ext == ".dart":
+        return "dart"
     if ext in {".js", ".jsx"}:
         return "js"
     if ext in {".ts", ".tsx"}:
@@ -546,6 +571,52 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
                 evidence[framework].append(f"{path}:strong-candidate")
 
         evidence[framework] = list(dict.fromkeys(evidence[framework]))
+
+    struts_candidates = {path for path in normalized_paths if _is_framework_candidate("struts", path)}
+    struts_evidence: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS and not name.startswith(".")]
+        for filename in filenames:
+            lower_name = filename.lower()
+            full_path = os.path.join(dirpath, filename)
+            rel_path = os.path.relpath(full_path, root).replace("\\", "/")
+            if lower_name == "struts.xml" or lower_name == "struts-plugin.xml" or (
+                lower_name.startswith("struts-") and lower_name.endswith(".xml")
+            ):
+                struts_evidence.append(f"{rel_path}:struts-config")
+            elif lower_name in _FRAMEWORK_BUILD_FILES:
+                try:
+                    content = Path(full_path).read_text(encoding="utf-8", errors="ignore").lower()
+                except OSError:
+                    continue
+                if "struts2" in content or "org.apache.struts" in content:
+                    struts_evidence.append(f"{rel_path}:struts-dependency")
+    if struts_evidence:
+        grouped["struts"].update(struts_candidates)
+        evidence["struts"] = list(dict.fromkeys(struts_evidence))
+    else:
+        strong = {
+            path for path in struts_candidates
+            if os.path.basename(path).lower() in {"struts.xml", "struts-plugin.xml"}
+            or os.path.basename(path).lower().endswith("-validation.xml")
+        }
+        grouped["struts"].update(strong)
+        evidence["struts"] = [f"{path}:strong-candidate" for path in sorted(strong)]
+
+    flutter_candidates = {path for path in normalized_paths if _is_framework_candidate("flutter", path)}
+    from tools.flutter.detector import detect_flutter_project
+
+    try:
+        flutter_project = detect_flutter_project(Path(root))
+    except (OSError, ValueError):
+        flutter_project = None
+    if flutter_project is not None:
+        grouped["flutter"].update(flutter_candidates)
+        evidence["flutter"] = list(getattr(flutter_project, "evidence", ()))
+    else:
+        strong = {path for path in flutter_candidates if os.path.basename(path).lower() == "pubspec.yaml"}
+        grouped["flutter"].update(strong)
+        evidence["flutter"] = [f"{path}:strong-candidate" for path in sorted(strong)]
     return grouped, evidence
 
 
@@ -725,6 +796,7 @@ def _build_analyzer_cmd(
         "--commit-sha-after",
         after_sha,
     ]
+    cmd.extend(analyzer.extra_args)
     if qdrant_collection:
         cmd.extend(["--qdrant-collection", qdrant_collection])
     if incremental:
@@ -875,6 +947,7 @@ _SOURCE_EXTENSIONS: Set[str] = {
     ".pas", ".dpr", ".inc",
     ".py",
     ".go",
+    ".rs", ".swift", ".dart", ".arb",
     ".js", ".jsx",
     ".ts", ".tsx",
     ".php",
@@ -1345,6 +1418,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     framework,
                     framework_config.script_path,
                     framework_config.incremental_supported,
+                    framework_config.extra_args,
                 ),
                 root=root,
                 project_id=project_id,

@@ -23,7 +23,11 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
         self.assertEqual(framework_for_parser("spring-boot").name, "spring")
         self.assertEqual(framework_for_parser("servlet").name, "servlet_jsp")
         self.assertEqual(framework_for_parser("my-batis").name, "mybatis")
+        self.assertEqual(framework_for_parser("struts2").name, "struts")
+        self.assertEqual(framework_for_parser("dart").name, "flutter")
         self.assertIn("spring_boot", parser_aliases())
+        self.assertIn("apache-struts", parser_aliases())
+        self.assertIn("flutter", parser_aliases())
 
         spring_relationships = default_relationships("spring")
         self.assertIn("CALLS", spring_relationships)
@@ -35,6 +39,8 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
         self.assertIn("ApiEndpoint", searchable_labels("spring"))
         self.assertIn("JSPView", searchable_labels("servlet_jsp"))
         self.assertIn("MyBatisStatement", searchable_labels("mybatis"))
+        self.assertIn("Action", searchable_labels("struts"))
+        self.assertIn("Function", searchable_labels("flutter"))
 
         predicate = servlet_active_generation_predicate("node")
         self.assertIn("ServletJspAnalysisState", predicate)
