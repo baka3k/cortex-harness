@@ -36,6 +36,7 @@ tree-sitter-c-sharp
 tree-sitter-swift
 tree-sitter-language-pack
 tree-sitter-dart>=0.1.0,<0.2
+tree-sitter-perl==1.2.1
 # Deep learning librariespip
 einops
 sentence-transformers

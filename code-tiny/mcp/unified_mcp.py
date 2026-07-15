@@ -122,7 +122,7 @@ Routing:
 - Most tools also accept `parser_type` directly.
 - Parser mapping:
   - android/android-kotlin/kotlin-android -> Android backend
-  - cplus/cpp/c++/c/clang/java/kotlin/jvm/go/rust/swift/delphi/pascal/vbnet/vb6/vba/vbscript -> C++ backend
+  - cplus/cpp/c++/c/clang/java/kotlin/jvm/go/perl/rust/swift/delphi/pascal/vbnet/vb6/vba/vbscript -> C++ backend
   - cobol/spring/servlet_jsp/mybatis/struts/dart/flutter (and aliases) -> C++ backend with parser-aware traversal defaults
 
 Tool families available in unified MCP:
@@ -176,6 +176,7 @@ PARSER_ALIASES_CPLUS = {
     "kotlin",
     "jvm",
     "go",
+    "perl",
     "rust",
     "swift",
     "delphi",
@@ -495,7 +496,7 @@ async def tool_list_parsers() -> Dict[str, Any]:
                 continue
             if parser_text and parser_text not in parser_values:
                 parser_values.append(parser_text)
-    for extra in ["android", "android-kotlin", "cplus", "cpp", "java", "kotlin", "jvm", "go", "rust", "swift", "delphi", "vbnet", "vb6", "vba", "vbscript", *sorted(parser_aliases())]:
+    for extra in ["android", "android-kotlin", "cplus", "cpp", "java", "kotlin", "jvm", "go", "perl", "rust", "swift", "delphi", "vbnet", "vb6", "vba", "vbscript", *sorted(parser_aliases())]:
         if extra not in parser_values:
             parser_values.append(extra)
     return {
