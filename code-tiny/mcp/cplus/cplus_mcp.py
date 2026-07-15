@@ -30,7 +30,14 @@ from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
-from framework_registry import parser_aliases, servlet_active_generation_predicate
+from framework_registry import (
+    capability_for_parser,
+    default_relationships,
+    parser_aliases,
+    searchable_labels,
+    searchable_properties,
+    servlet_active_generation_predicate,
+)
 
 
 def _load_env_file(env_path: str) -> None:
@@ -348,43 +355,8 @@ def _build_rel_match(rel_types: List[str], depth: int, direction: str) -> str:
     return f"-[{rel_token}*1..{depth}]->"
 
 
-DEFAULT_FLOW_REL_TYPES_ANDROID = [
-    "CALLS",
-    "DECLARES",
-    "CONTAINS",
-    "USES_RESOURCE",
-    "DECLARES_ROUTE",
-    "STARTS_WITH_ROUTE",
-    "ROUTE_CALLS",
-    "DECLARES_COMPONENT",
-    "STARTS_COMPONENT",
-    "STARTS_INTENT",
-    "SENDS_BROADCAST",
-    "REGISTERS_RECEIVER",
-    "DECLARES_INTENT_ACTION",
-    "SENDS_HANDLER_MESSAGE",
-    "ACTION_TARGETS_COMPONENT",
-    "EMITS_EVENT",
-    "HANDLES_EVENT",
-    "ANNOTATED_WITH",
-    "DEPENDS_ON",
-    "TAKES_FUNCTION",
-    "IMPLEMENTS",
-    "EXTENDS",
-]
-
-DEFAULT_FLOW_REL_TYPES_CPLUS = [
-    "CALLS",
-    "POSSIBLE_CALLS",
-    "CALLS_FUNCTION_POINTER",
-    "DECLARES",
-    "CONTAINS",
-    "USES_RESOURCE",
-    "BINDS_CONTROL",
-    "HANDLES_CONTROL",
-    "OWNS_DIALOG",
-    "DEPENDS_ON",
-]
+DEFAULT_FLOW_REL_TYPES_ANDROID = list(default_relationships("android"))
+DEFAULT_FLOW_REL_TYPES_CPLUS = list(default_relationships("cplus"))
 
 DEFAULT_FLOW_REL_TYPES_GENERIC = [
     "CALLS",
@@ -393,9 +365,9 @@ DEFAULT_FLOW_REL_TYPES_GENERIC = [
     "DEPENDS_ON",
 ]
 
-PARSER_ALIASES_ANDROID = {"android", "android-kotlin", "kotlin-android"}
-PARSER_ALIASES_CPLUS = {"cplus", "cpp", "c++", "c", "clang", "swift", "delphi", "pascal", "vbnet", "vb6", "vba", "vbscript"}
-PARSER_ALIASES_JVM = {"java", "kotlin", "jvm"} | set(parser_aliases())
+PARSER_ALIASES_ANDROID = set(parser_aliases("android"))
+PARSER_ALIASES_CPLUS = set(parser_aliases("cplus"))
+PARSER_ALIASES_JVM = set(capability_for_parser("jvm").aliases)
 
 
 def _normalize_parser_type(value: Optional[str]) -> str:
@@ -407,12 +379,9 @@ def _get_default_flow_rel_types(parser_type: Optional[str]) -> List[str]:
     parser = _normalize_parser_type(parser_type)
     if not parser:
         return list(DEFAULT_FLOW_REL_TYPES_CPLUS)
-    if parser in PARSER_ALIASES_CPLUS:
-        return list(DEFAULT_FLOW_REL_TYPES_CPLUS)
-    if parser in PARSER_ALIASES_ANDROID:
-        return list(DEFAULT_FLOW_REL_TYPES_ANDROID)
-    if parser in PARSER_ALIASES_JVM:
-        return list(DEFAULT_FLOW_REL_TYPES_ANDROID)
+    capability = capability_for_parser(parser)
+    if capability:
+        return list(default_relationships(capability.name))
     return list(DEFAULT_FLOW_REL_TYPES_GENERIC)
 
 
@@ -1072,6 +1041,60 @@ async def _resolve_trace_rel_types(
     return default_filtered or rel_types
 
 
+async def _resolve_rel_types_with_diagnostics(
+    rel_types_input: Any,
+    parser_type: Optional[str],
+    db_candidates: List[str],
+    *,
+    defaults: Optional[List[str]] = None,
+    explicit: bool = False,
+) -> Tuple[List[str], Dict[str, Any]]:
+    requested = _normalize_rel_types(
+        rel_types_input,
+        default=defaults or _get_default_flow_rel_types(parser_type),
+    )
+    available = await _list_relationship_types(db_candidates)
+    if not available:
+        return requested, {
+            "schema_status": "unavailable",
+            "requested_relationships": requested,
+            "used_relationships": requested,
+            "omitted_relationships": [],
+            "explicit_request": explicit,
+            "message": "Provider relationship schema could not be inspected; requested relationships were retained.",
+        }
+
+    available_set = set(available)
+    used = [item for item in requested if item in available_set]
+    omitted = [item for item in requested if item not in available_set]
+    status = "supported" if not omitted else ("partial" if used else "unsupported")
+    return used, {
+        "schema_status": "available",
+        "support_status": status,
+        "requested_relationships": requested,
+        "used_relationships": used,
+        "omitted_relationships": omitted,
+        "available_relationships": available,
+        "explicit_request": explicit,
+    }
+
+
+def _unsupported_relationship_result(
+    parser_type: Optional[str],
+    diagnostics: Dict[str, Any],
+) -> Dict[str, Any]:
+    parser = _normalize_parser_type(parser_type) or "generic"
+    requested = diagnostics.get("requested_relationships") or []
+    return {
+        "error": (
+            f"Parser '{parser}' requested relationships that are unavailable in the active provider: "
+            + ", ".join(requested)
+        ),
+        "error_type": "unsupported_capability",
+        "capability_diagnostics": diagnostics,
+    }
+
+
 async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
     last_error: Optional[Exception] = None
     candidates = [db for db in dbs if db]
@@ -1459,6 +1482,21 @@ async def tool_semantic_search(
     graph_limit = payload.get("graph_limit", 50)
     db = payload.get("db")
     project_id = payload.get("project_id")
+    capability_diagnostics: Optional[Dict[str, Any]] = None
+    if expand_graph:
+        graph_rel_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
+            graph_rel_types,
+            payload.get("parser_type"),
+            _resolve_db_candidates(db),
+            explicit=(
+                graph_rel_types is not None
+                and not bool(payload.get("_capability_default_relationships"))
+            ),
+        )
+        if not graph_rel_types:
+            return _unsupported_relationship_result(
+                payload.get("parser_type"), capability_diagnostics,
+            )
     query = (query or "").strip()
     if not query:
         raise ValueError("query is required.")
@@ -1528,6 +1566,8 @@ async def tool_semantic_search(
             graph_limit=graph_limit,
             project_id=project_id,
         )
+        if capability_diagnostics:
+            results["capability_diagnostics"] = capability_diagnostics
         return results
     if mode == "code":
         items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url)
@@ -1554,6 +1594,8 @@ async def tool_semantic_search(
             graph_limit=graph_limit,
             project_id=project_id,
         )
+        if capability_diagnostics:
+            results["capability_diagnostics"] = capability_diagnostics
         return results
     combined_map = {(col, name) for col, name in filtered_base}
     combined_map.update(comment_collections)
@@ -1583,6 +1625,8 @@ async def tool_semantic_search(
         graph_limit=graph_limit,
         project_id=project_id,
     )
+    if capability_diagnostics:
+        results["capability_diagnostics"] = capability_diagnostics
     return results
 
 
@@ -1807,7 +1851,25 @@ async def tool_query_subgraph(
     function_id = str(function_id)
     depth = _normalize_depth(max_depth, default=2, max_limit=10)
     direction = direction.lower()
-    rel_types = await _resolve_call_rel_types(include_possible, include_fp, parser_type, candidates)
+    rel_input = payload.get("relationship_types")
+    if rel_input is None:
+        rel_input = payload.get("rel_types")
+    if rel_input is None:
+        rel_input = ["CALLS"]
+        if include_possible:
+            rel_input.append("POSSIBLE_CALLS")
+        if include_fp:
+            rel_input.append("CALLS_FUNCTION_POINTER")
+        if not include_possible and not include_fp:
+            rel_input = _get_default_flow_rel_types(parser_type)
+    rel_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
+        rel_input,
+        parser_type,
+        candidates,
+        explicit=not bool(payload.get("_capability_default_relationships")),
+    )
+    if not rel_types:
+        return _unsupported_relationship_result(parser_type, capability_diagnostics)
     
     driver = await _get_graph_driver()
     last_error: Optional[Exception] = None
@@ -1828,6 +1890,7 @@ async def tool_query_subgraph(
                     include_raw_fields=include_raw_fields,
                 )
                 graph["db"] = candidate
+                graph["capability_diagnostics"] = capability_diagnostics
                 return graph
         except Exception as exc:
             last_error = exc
@@ -1841,6 +1904,7 @@ async def tool_query_subgraph(
         "nodes": [],
         "edges": [],
         "reason": "no_subgraph",
+        "capability_diagnostics": capability_diagnostics,
     }
 
 
@@ -1894,7 +1958,25 @@ async def tool_find_paths(
     start_id = str(start_function_id)
     end_id = str(end_function_id)
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
-    rel_types = await _resolve_call_rel_types(include_possible, include_fp, parser_type, candidates)
+    rel_input = payload.get("relationship_types")
+    if rel_input is None:
+        rel_input = payload.get("rel_types")
+    if rel_input is None:
+        rel_input = ["CALLS"]
+        if include_possible:
+            rel_input.append("POSSIBLE_CALLS")
+        if include_fp:
+            rel_input.append("CALLS_FUNCTION_POINTER")
+        if not include_possible and not include_fp:
+            rel_input = _get_default_flow_rel_types(parser_type)
+    rel_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
+        rel_input,
+        parser_type,
+        candidates,
+        explicit=not bool(payload.get("_capability_default_relationships")),
+    )
+    if not rel_types:
+        return _unsupported_relationship_result(parser_type, capability_diagnostics)
     
     driver = await _get_graph_driver()
     for db_candidate in candidates:
@@ -1914,6 +1996,7 @@ async def tool_find_paths(
                     include_raw_fields=include_raw_fields,
                 )
                 graph["db"] = db_candidate
+                graph["capability_diagnostics"] = capability_diagnostics
                 return graph
         except Exception as exc:
             if _is_db_not_found(exc):
@@ -1983,7 +2066,25 @@ async def tool_find_path_between_module(
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
-    rel_types = await _resolve_call_rel_types(include_possible, include_fp, parser_type, db_candidates)
+    rel_input = payload.get("relationship_types")
+    if rel_input is None:
+        rel_input = payload.get("rel_types")
+    if rel_input is None:
+        rel_input = ["CALLS"]
+        if include_possible:
+            rel_input.append("POSSIBLE_CALLS")
+        if include_fp:
+            rel_input.append("CALLS_FUNCTION_POINTER")
+        if not include_possible and not include_fp:
+            rel_input = _get_default_flow_rel_types(parser_type)
+    rel_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
+        rel_input,
+        parser_type,
+        db_candidates,
+        explicit=not bool(payload.get("_capability_default_relationships")),
+    )
+    if not rel_types:
+        return _unsupported_relationship_result(parser_type, capability_diagnostics)
     
     driver = await _get_graph_driver()
     for db_candidate in db_candidates:
@@ -2005,6 +2106,7 @@ async def tool_find_path_between_module(
                     include_raw_fields=include_raw_fields,
                 )
                 graph["db"] = db_candidate
+                graph["capability_diagnostics"] = capability_diagnostics
                 return graph
         except Exception as exc:
             if _is_db_not_found(exc):
@@ -2014,7 +2116,8 @@ async def tool_find_path_between_module(
     return {
         "db": db_candidates[0] if db_candidates else None,
         "nodes": [],
-        "edges": []
+        "edges": [],
+        "capability_diagnostics": capability_diagnostics,
     }
 
 
@@ -2273,7 +2376,17 @@ async def tool_trace_flow(
     rel_value = payload.get("rel_types")
     if rel_value is None:
         rel_value = payload.get("relationship_types")
-    rel_types = await _resolve_trace_rel_types(rel_value, parser_type, candidates)
+    rel_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
+        rel_value,
+        parser_type,
+        candidates,
+        explicit=(
+            rel_value is not None
+            and not bool(payload.get("_capability_default_relationships"))
+        ),
+    )
+    if not rel_types:
+        return _unsupported_relationship_result(parser_type, capability_diagnostics)
     depth = _normalize_depth(max_depth, default=6, max_limit=20)
     rel_match = _build_rel_match(rel_types, depth, direction)
     start_id = str(start_id)
@@ -2303,6 +2416,7 @@ async def tool_trace_flow(
                     "rel_types": rel_types,
                     "max_depth": depth,
                     "reason": "no_path",
+                    "capability_diagnostics": capability_diagnostics,
                 }
             raise RuntimeError("No path found in any db.")
         paths = [row["p"] for row in result]
@@ -2327,6 +2441,7 @@ async def tool_trace_flow(
                 "rel_types": rel_types,
                 "max_depth": depth,
                 "reason": "no_path",
+                "capability_diagnostics": capability_diagnostics,
             }
         paths = [row["p"] for row in result]
 
@@ -2339,6 +2454,7 @@ async def tool_trace_flow(
     graph["direction"] = direction
     graph["rel_types"] = rel_types
     graph["max_depth"] = depth
+    graph["capability_diagnostics"] = capability_diagnostics
     return graph
 
 
@@ -2414,7 +2530,17 @@ async def tool_trace_flow_between_module(
     rel_value = payload.get("rel_types")
     if rel_value is None:
         rel_value = payload.get("relationship_types")
-    rel_types = await _resolve_trace_rel_types(rel_value, parser_type, db_candidates)
+    rel_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
+        rel_value,
+        parser_type,
+        db_candidates,
+        explicit=(
+            rel_value is not None
+            and not bool(payload.get("_capability_default_relationships"))
+        ),
+    )
+    if not rel_types:
+        return _unsupported_relationship_result(parser_type, capability_diagnostics)
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
     rel_match = _build_rel_match(rel_types, depth, direction)
     query = (
@@ -2475,6 +2601,7 @@ async def tool_trace_flow_between_module(
     graph["direction"] = direction
     graph["rel_types"] = rel_types
     graph["max_depth"] = depth
+    graph["capability_diagnostics"] = capability_diagnostics
     return graph
 
 
@@ -2520,40 +2647,61 @@ async def tool_search_functions(
     include_raw_fields = payload.get("include_raw_fields", False)
     framework = str(payload.get("framework") or "").strip().lower() or None
     kinds = _normalize_string_list(payload.get("kinds"))
-    if framework and framework not in {"spring", "servlet_jsp", "mybatis"}:
-        raise ValueError("framework must be spring, servlet_jsp, or mybatis")
+    capability = capability_for_parser(framework or payload.get("parser_type"))
+    if framework and (not capability or "framework_query" not in capability.features):
+        raise ValueError(f"framework '{framework}' is not a registered framework capability")
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query is required.")
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
+    profile_labels = searchable_labels(capability.name) if capability and framework else ()
+    profile_properties = searchable_properties(capability.name) if capability and framework else ()
+    label_predicate = (
+        "(" + " OR ".join(f"n:{label}" for label in profile_labels) + ")"
+        if profile_labels
+        else (
+            "(n:Function OR n:Type OR n:Namespace OR n:File OR n:Field "
+            "OR n:Alias OR n:Template OR n:FunctionType OR n:Event OR n:Project OR n:Resource OR n:UIControl "
+            "OR n.framework IN ['spring', 'servlet_jsp', 'mybatis'])"
+        )
+    )
+    property_names = profile_properties or (
+        "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value",
+        "caption", "text", "summary",
+    )
+    property_predicate = " OR ".join(
+        f"toLower(coalesce(n.{property_name}, '')) CONTAINS q"
+        for property_name in property_names
+    )
     fallback_cypher = (
-        "MATCH (n) WHERE (n:Function OR n:Type OR n:Namespace OR n:File OR n:Field "
-        "OR n:Alias OR n:Template OR n:FunctionType OR n:Event OR n:Project OR n:Resource OR n:UIControl "
-        "OR n.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
-        "AND any(q IN $qs WHERE toLower(coalesce(n.name, '')) CONTAINS q "
-        "OR toLower(coalesce(n.qualified_name, '')) CONTAINS q "
-        "OR toLower(coalesce(n.file_path, '')) CONTAINS q "
-        "OR toLower(coalesce(n.path, '')) CONTAINS q "
-        "OR toLower(coalesce(n.raw_value, '')) CONTAINS q "
-        "OR toLower(coalesce(n.resolved_value, '')) CONTAINS q "
-        "OR toLower(coalesce(n.caption, '')) CONTAINS q "
-        "OR toLower(coalesce(n.text, '')) CONTAINS q "
-        "OR toLower(coalesce(n.summary, '')) CONTAINS q) "
+        f"MATCH (n) WHERE {label_predicate} "
+        f"AND any(q IN $qs WHERE {property_predicate}) "
         "AND ($project_id IS NULL OR n.project_id = $project_id) "
-        "AND ($framework IS NULL OR n.framework = $framework) "
+        "AND ($framework IS NULL OR n.framework = $framework OR n.framework IS NULL) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR n.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('n')} "
         "RETURN n LIMIT $limit"
     )
     fulltext_query = " OR ".join(qs)
+    node_profile_predicate = (
+        "(" + " OR ".join(f"node:{label}" for label in profile_labels) + ")"
+        if profile_labels else "false"
+    )
+    legacy_node_predicate = (
+        "(node:Function OR node:Type OR node:Namespace OR node:File OR node:Field "
+        "OR node:Alias OR node:Template OR node:FunctionType OR node:Event OR node:Project OR node:Resource OR node:UIControl "
+        "OR node.framework IN ['spring', 'servlet_jsp', 'mybatis'])"
+    )
+    fulltext_node_predicate = (
+        f"({legacy_node_predicate} OR {node_profile_predicate})"
+        if profile_labels else legacy_node_predicate
+    )
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
-        "WHERE (node:Function OR node:Type OR node:Namespace OR node:File OR node:Field "
-        "OR node:Alias OR node:Template OR node:FunctionType OR node:Event OR node:Project OR node:Resource OR node:UIControl "
-        "OR node.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
+        f"WHERE {fulltext_node_predicate} "
         "AND ($project_id IS NULL OR node.project_id = $project_id) "
-        "AND ($framework IS NULL OR node.framework = $framework) "
+        f"AND ($framework IS NULL OR node.framework = $framework OR {node_profile_predicate}) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR node.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('node')} "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
@@ -2564,12 +2712,21 @@ async def tool_search_functions(
             {"index_name": FULLTEXT_SYMBOL_TEXT_INDEX, "query": fulltext_query, "limit": int(limit), "project_id": project_id, "framework": framework, "kinds": kinds},
             db_candidates,
         )
-        if not results:
-            used_db, results = await _run_cypher_first(
+        if framework or not results:
+            fallback_db, fallback_results = await _run_cypher_first(
                 fallback_cypher,
                 {"qs": qs, "limit": int(limit), "project_id": project_id, "framework": framework, "kinds": kinds},
                 db_candidates,
             )
+            used_db = used_db or fallback_db
+            by_id = {
+                str(_record_node(row.get("n"), "auto", False).get("id") or index): row
+                for index, row in enumerate(results)
+            }
+            for index, row in enumerate(fallback_results, start=len(by_id)):
+                key = str(_record_node(row.get("n"), "auto", False).get("id") or index)
+                by_id.setdefault(key, row)
+            results = list(by_id.values())[: int(limit)]
     except Exception:
         used_db, results = await _run_cypher_first(
             fallback_cypher,
@@ -2891,12 +3048,32 @@ async def tool_find_screen_workflows(
     )
     from services.workflow_service import run_find_screen_workflows
 
+    parser_type = payload.get("parser_type")
+    rel_value = payload.get("relationship_types")
+    if rel_value is None:
+        rel_value = payload.get("rel_types")
+    relationship_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
+        rel_value,
+        parser_type,
+        _resolve_db_candidates(payload.get("db")),
+        explicit=(
+            rel_value is not None
+            and not bool(payload.get("_capability_default_relationships"))
+        ),
+    )
+    if not relationship_types:
+        return _unsupported_relationship_result(parser_type, capability_diagnostics)
+    payload["relationship_types"] = relationship_types
+
     driver = await _get_graph_driver()
 
     async def _provider() -> Any:
         return driver
 
-    return await run_find_screen_workflows(_provider, payload)
+    result = await run_find_screen_workflows(_provider, payload)
+    if isinstance(result, dict):
+        result["capability_diagnostics"] = capability_diagnostics
+    return result
 
 
 _install_global_tool_error_wrapper()
