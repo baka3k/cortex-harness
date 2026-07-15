@@ -50,9 +50,9 @@ The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windo
 git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
-make install     # create/reuse .venv, install dependencies, and install global dev command
-make build       # create/reuse .venv and install root, code-tiny, and doc-tiny dependencies only
+make build       # MUST RUN FIRST  - create/reuse .venv and install root, code-tiny, and doc-tiny dependencies only
 make infra-up    # pull/start Qdrant (:6333) and FalkorDB (:6379) Docker containers
+make install     # create/reuse .venv, install dependencies, and install global dev command
 make doctor      # check Python deps, Docker, database ports, and MCP ports
 make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
 make stop        # stop MCP terminal/processes started by make start
