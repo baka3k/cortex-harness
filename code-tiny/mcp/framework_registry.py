@@ -1,27 +1,162 @@
-"""Shared query contract for framework overlay graph facts."""
+"""Canonical parser capabilities shared by Unified MCP backends."""
 
 from __future__ import annotations
 
 import os
+import re
 
-from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, Optional, Tuple
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
 
 
 CORE_RELATIONSHIPS = ("CALLS", "USES_TYPE", "REFERENCES", "INHERITS")
+GENERIC_LABELS = frozenset({"File", "Namespace", "Class", "Type", "Function", "Field"})
+GENERIC_SEARCHABLE_PROPERTIES = (
+    "name", "qualified_name", "file_path", "path", "code", "comment",
+)
+GENERIC_RELATIONSHIPS = ("CALLS", "DECLARES", "CONTAINS", "DEPENDS_ON")
+CPLUS_RELATIONSHIPS = (
+    "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "DECLARES", "CONTAINS",
+    "USES_RESOURCE", "BINDS_CONTROL", "HANDLES_CONTROL", "OWNS_DIALOG", "DEPENDS_ON",
+)
+ANDROID_RELATIONSHIPS = (
+    "CALLS", "DECLARES", "CONTAINS", "USES_RESOURCE", "DECLARES_ROUTE",
+    "STARTS_WITH_ROUTE", "ROUTE_CALLS", "DECLARES_COMPONENT", "STARTS_COMPONENT",
+    "STARTS_INTENT", "SENDS_BROADCAST", "REGISTERS_RECEIVER",
+    "DECLARES_INTENT_ACTION", "SENDS_HANDLER_MESSAGE", "ACTION_TARGETS_COMPONENT",
+    "EMITS_EVENT", "HANDLES_EVENT", "ANNOTATED_WITH", "DEPENDS_ON",
+    "TAKES_FUNCTION", "IMPLEMENTS", "EXTENDS",
+)
+
+GENERIC_FEATURES = frozenset({
+    "graph_search", "graph_paths", "graph_flow", "semantic_search",
+    "graph_exploration", "dependency_planning",
+})
+FRAMEWORK_FEATURES = GENERIC_FEATURES | frozenset({
+    "framework_query", "profile_labels", "profile_relationships",
+})
+_ALLOWED_BACKENDS = frozenset({"android", "cplus"})
+_ALLOWED_SUPPORT_LEVELS = frozenset({"full", "partial", "generic"})
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 @dataclass(frozen=True)
 class FrameworkQueryConfig:
+    """Backward-compatible name for a canonical parser capability profile."""
+
     name: str
     aliases: FrozenSet[str]
     labels: FrozenSet[str]
     relationships: Tuple[str, ...]
     searchable_properties: Tuple[str, ...]
     generation_scoped: bool = False
+    backend: str = "cplus"
+    support_level: str = "full"
+    default_query_profiles: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
+    features: FrozenSet[str] = GENERIC_FEATURES
+
+    def __post_init__(self) -> None:
+        name = self.name.strip().lower()
+        aliases = frozenset(str(alias).strip().lower() for alias in self.aliases if str(alias).strip())
+        profiles = {
+            str(profile).strip(): tuple(dict.fromkeys(relationships))
+            for profile, relationships in self.default_query_profiles.items()
+            if str(profile).strip()
+        }
+        default_relationships = tuple(dict.fromkeys((*CORE_RELATIONSHIPS, *self.relationships)))
+        profiles.setdefault("default", default_relationships)
+        profiles.setdefault("find_callers_of_endpoint", ("CALLS_API", "MATCHES"))
+        profiles.setdefault(
+            "get_api_call_chain",
+            tuple(dict.fromkeys((
+                *default_relationships, "CALLS_API", "MATCHES", "HANDLES", "SEMANTIC_OF",
+                "DECLARES_QUERY", "DERIVES_QUERY", "QUERIES", "BINDS_STATEMENT",
+                "DECLARES_STATEMENT", "READS_FROM", "WRITES_TO", "REFERENCES_TABLE",
+            ))),
+        )
+        profiles.setdefault("find_screen_workflows", ("NAVIGATE",))
+        profiles.setdefault(
+            "find_workflows_containing",
+            tuple(dict.fromkeys(("HAS_STEP", *default_relationships))),
+        )
+        profiles.setdefault(
+            "analyze_workflow_impact",
+            tuple(dict.fromkeys((*default_relationships, "HAS_STEP", "NAVIGATE"))),
+        )
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "aliases", aliases)
+        object.__setattr__(self, "backend", self.backend.strip().lower())
+        object.__setattr__(self, "support_level", self.support_level.strip().lower())
+        object.__setattr__(self, "default_query_profiles", MappingProxyType(profiles))
+
+    def relationships_for(self, tool_name: Optional[str] = None) -> Tuple[str, ...]:
+        key = str(tool_name or "").strip()
+        return self.default_query_profiles.get(key, self.default_query_profiles["default"])
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "canonical_parser": self.name,
+            "aliases": sorted(self.aliases),
+            "backend": self.backend,
+            "support_level": self.support_level,
+            "labels": sorted(self.labels),
+            "relationships": list(self.relationships_for()),
+            "searchable_properties": list(self.searchable_properties),
+            "default_query_profiles": {
+                name: list(relationships)
+                for name, relationships in sorted(self.default_query_profiles.items())
+            },
+            "features": sorted(self.features),
+            "generation_scoped": self.generation_scoped,
+        }
 
 
-FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
+def _generic_profile(
+    name: str,
+    aliases: Iterable[str],
+    *,
+    relationships: Tuple[str, ...] = GENERIC_RELATIONSHIPS,
+    backend: str = "cplus",
+    support_level: str = "generic",
+    features: FrozenSet[str] = GENERIC_FEATURES,
+) -> FrameworkQueryConfig:
+    return FrameworkQueryConfig(
+        name=name,
+        aliases=frozenset(aliases),
+        backend=backend,
+        support_level=support_level,
+        labels=GENERIC_LABELS,
+        relationships=relationships,
+        searchable_properties=GENERIC_SEARCHABLE_PROPERTIES,
+        default_query_profiles={"default": relationships},
+        features=features,
+    )
+
+
+CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
+    "android": _generic_profile(
+        "android",
+        {"android", "android-kotlin", "kotlin-android"},
+        relationships=ANDROID_RELATIONSHIPS,
+        backend="android",
+        support_level="full",
+        features=GENERIC_FEATURES | frozenset({"android_queries"}),
+    ),
+    "cplus": _generic_profile(
+        "cplus", {"cplus", "cpp", "c++", "c", "clang"},
+        relationships=CPLUS_RELATIONSHIPS, support_level="full",
+    ),
+    "jvm": _generic_profile("jvm", {"jvm", "java", "kotlin"}, relationships=ANDROID_RELATIONSHIPS),
+    "go": _generic_profile("go", {"go"}),
+    "perl": _generic_profile("perl", {"perl"}),
+    "rust": _generic_profile("rust", {"rust"}),
+    "swift": _generic_profile("swift", {"swift"}),
+    "delphi": _generic_profile("delphi", {"delphi", "pascal"}),
+    "vbnet": _generic_profile("vbnet", {"vbnet"}),
+    "visual_basic": _generic_profile(
+        "visual_basic", {"visual_basic", "vb6", "vba", "vbscript"}
+    ),
     "cobol": FrameworkQueryConfig(
         name="cobol",
         aliases=frozenset({"cobol", "cobol85", "ibm-cobol", "gnucobol"}),
@@ -38,6 +173,7 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
             "name", "qualified_name", "file_path", "path", "raw_text",
             "operation", "assignment", "picture", "storage",
         ),
+        features=FRAMEWORK_FEATURES,
     ),
     "spring": FrameworkQueryConfig(
         name="spring",
@@ -59,6 +195,7 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
         searchable_properties=(
             "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value",
         ),
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "servlet_jsp": FrameworkQueryConfig(
         name="servlet_jsp",
@@ -78,6 +215,7 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
             "url_pattern", "http_method",
         ),
         generation_scoped=True,
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "mybatis": FrameworkQueryConfig(
         name="mybatis",
@@ -101,6 +239,7 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
         searchable_properties=(
             "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value", "sql",
         ),
+        features=FRAMEWORK_FEATURES | frozenset({"persistence_queries"}),
     ),
     "struts": FrameworkQueryConfig(
         name="struts",
@@ -118,6 +257,7 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
             "name", "qualified_name", "file_path", "path", "route", "class_name", "method",
             "namespace", "result_type", "location", "validator_type",
         ),
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "flutter": FrameworkQueryConfig(
         name="flutter",
@@ -127,6 +267,7 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
         searchable_properties=(
             "name", "qualified_name", "file_path", "path", "package_name", "class_name", "code", "comment",
         ),
+        features=FRAMEWORK_FEATURES,
     ),
     "aspnet_framework": FrameworkQueryConfig(
         name="aspnet_framework",
@@ -151,6 +292,7 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
             "config_key", "resolution_status", "framework",
         ),
         generation_scoped=True,
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "aspnet_core": FrameworkQueryConfig(
         name="aspnet_core",
@@ -173,33 +315,102 @@ FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
             "config_key", "resolution_status", "framework", "position", "lifetime",
         ),
         generation_scoped=True,
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
 }
 
 
-def framework_for_parser(parser_type: Optional[str]) -> Optional[FrameworkQueryConfig]:
+def validate_capability_registry(
+    capabilities: Optional[Mapping[str, FrameworkQueryConfig]] = None,
+) -> Dict[str, FrameworkQueryConfig]:
+    """Validate registry invariants and return its deterministic alias index."""
+
+    registry = capabilities or CAPABILITIES
+    aliases: Dict[str, FrameworkQueryConfig] = {}
+    errors = []
+    for key, config in registry.items():
+        if key != config.name:
+            errors.append(f"Registry key '{key}' must equal canonical name '{config.name}'.")
+        if config.name not in config.aliases:
+            errors.append(f"Canonical parser '{config.name}' must be one of its aliases.")
+        if config.backend not in _ALLOWED_BACKENDS:
+            errors.append(f"Parser '{config.name}' references unsupported backend '{config.backend}'.")
+        if config.support_level not in _ALLOWED_SUPPORT_LEVELS:
+            errors.append(f"Parser '{config.name}' has invalid support level '{config.support_level}'.")
+        identifiers = (
+            *config.labels,
+            *config.relationships,
+            *config.searchable_properties,
+            *(relationship for values in config.default_query_profiles.values() for relationship in values),
+        )
+        invalid = sorted({value for value in identifiers if not _IDENTIFIER_RE.match(value)})
+        if invalid:
+            errors.append(f"Parser '{config.name}' has invalid graph identifiers: {invalid}.")
+        for alias in config.aliases:
+            previous = aliases.get(alias)
+            if previous and previous.name != config.name:
+                errors.append(
+                    f"Parser alias '{alias}' collides between '{previous.name}' and '{config.name}'."
+                )
+            aliases[alias] = config
+    if errors:
+        raise ValueError("Invalid MCP capability registry: " + " ".join(errors))
+    return aliases
+
+
+_ALIAS_INDEX = validate_capability_registry()
+FRAMEWORKS: Dict[str, FrameworkQueryConfig] = {
+    name: config
+    for name, config in CAPABILITIES.items()
+    if "framework_query" in config.features
+}
+
+
+def capability_for_parser(parser_type: Optional[str]) -> Optional[FrameworkQueryConfig]:
     parser = str(parser_type or "").strip().lower()
-    for config in FRAMEWORKS.values():
-        if parser in config.aliases:
-            return config
-    return None
+    return _ALIAS_INDEX.get(parser)
 
 
-def parser_aliases() -> FrozenSet[str]:
-    return frozenset(alias for config in FRAMEWORKS.values() for alias in config.aliases)
+def framework_for_parser(parser_type: Optional[str]) -> Optional[FrameworkQueryConfig]:
+    config = capability_for_parser(parser_type)
+    return config if config and "framework_query" in config.features else None
 
 
-def searchable_labels(framework: Optional[str] = None) -> Tuple[str, ...]:
-    if framework:
-        config = FRAMEWORKS.get(framework.strip().lower())
+def parser_aliases(backend: Optional[str] = None) -> FrozenSet[str]:
+    backend_name = str(backend or "").strip().lower()
+    return frozenset(
+        alias
+        for alias, config in _ALIAS_INDEX.items()
+        if not backend_name or config.backend == backend_name
+    )
+
+
+def searchable_labels(parser_type: Optional[str] = None) -> Tuple[str, ...]:
+    if parser_type:
+        config = capability_for_parser(parser_type)
         return tuple(sorted(config.labels)) if config else ()
-    return tuple(sorted({label for config in FRAMEWORKS.values() for label in config.labels}))
+    return tuple(sorted({label for config in CAPABILITIES.values() for label in config.labels}))
 
 
-def default_relationships(parser_type: Optional[str] = None) -> Tuple[str, ...]:
-    config = framework_for_parser(parser_type)
-    values: Iterable[str] = CORE_RELATIONSHIPS if config is None else (*CORE_RELATIONSHIPS, *config.relationships)
-    return tuple(dict.fromkeys(values))
+def searchable_properties(parser_type: Optional[str] = None) -> Tuple[str, ...]:
+    if parser_type:
+        config = capability_for_parser(parser_type)
+        return config.searchable_properties if config else ()
+    return tuple(dict.fromkeys(
+        prop for config in CAPABILITIES.values() for prop in config.searchable_properties
+    ))
+
+
+def default_relationships(
+    parser_type: Optional[str] = None,
+    tool_name: Optional[str] = None,
+) -> Tuple[str, ...]:
+    config = capability_for_parser(parser_type)
+    return config.relationships_for(tool_name) if config else CORE_RELATIONSHIPS
+
+
+def capability_catalog() -> Tuple[Dict[str, object], ...]:
+    return tuple(CAPABILITIES[name].to_dict() for name in sorted(CAPABILITIES))
 
 
 def servlet_active_generation_predicate(alias: str) -> str:
@@ -219,6 +430,8 @@ def servlet_active_generation_predicate(alias: str) -> str:
 
 
 __all__ = [
-    "CORE_RELATIONSHIPS", "FRAMEWORKS", "FrameworkQueryConfig", "default_relationships",
-    "framework_for_parser", "parser_aliases", "searchable_labels", "servlet_active_generation_predicate",
+    "ANDROID_RELATIONSHIPS", "CAPABILITIES", "CORE_RELATIONSHIPS", "CPLUS_RELATIONSHIPS",
+    "FRAMEWORKS", "FrameworkQueryConfig", "capability_catalog", "capability_for_parser",
+    "default_relationships", "framework_for_parser", "parser_aliases", "searchable_labels",
+    "searchable_properties", "servlet_active_generation_predicate", "validate_capability_registry",
 ]
