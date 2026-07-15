@@ -52,6 +52,13 @@ try:
 except Exception:
     _clang_parser = None  # type: ignore[assignment]
 
+from tools.cplus.windows_resource_parser import (
+    WINDOWS_RESOURCE_EXTENSIONS,
+    is_windows_resource_file,
+    parse_windows_resource_file,
+    read_windows_resource_text,
+)
+
 # Number of tree-sitter error nodes that triggers the optional libclang fallback.
 # Set to 0 to always prefer libclang (when available); set very high to disable.
 _CLANG_FALLBACK_BASE_THRESHOLD: int = 50
@@ -66,7 +73,7 @@ def _effective_fallback_threshold(file_size: int) -> int:
     return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
-_PARSE_CACHE_VERSION = "cplus-v2026-03-06-1"
+_PARSE_CACHE_VERSION = "cplus-v2026-07-15-1"
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -2457,7 +2464,10 @@ def _scan_c_family_files(root: str) -> List[str]:
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
         for name in filenames:
-            if name.endswith((".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx")):
+            if name.lower().endswith(
+                (".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx")
+                + WINDOWS_RESOURCE_EXTENSIONS
+            ):
                 files.append(os.path.join(dirpath, name))
     return sorted(files)
 
@@ -2545,8 +2555,12 @@ def _collect_include_graph(
     deps_by_file: Dict[str, List[str]] = {}
     for rel_path, abs_path in rel_to_abs.items():
         try:
-            with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
-                includes = _extract_includes(handle.read())
+            if is_windows_resource_file(abs_path):
+                source_text, _encoding = read_windows_resource_text(abs_path)
+            else:
+                with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+                    source_text = handle.read()
+            includes = _extract_includes(source_text)
         except OSError:
             deps_by_file[rel_path] = []
             continue
@@ -2722,13 +2736,15 @@ def _load_or_parse_payload(
         return payload
 
     rel_path = os.path.relpath(file_path, root)
-    is_cpp = _is_cpp_file(file_path, root, compile_db_index)
+    is_resource = is_windows_resource_file(file_path)
+    is_cpp = False if is_resource else _is_cpp_file(file_path, root, compile_db_index)
+    parser_language = "windows-resource" if is_resource else ("cpp" if is_cpp else "c")
     cached_payload = None
     signature = None
     if parse_cache:
         file_sig = file_signature(file_path)
         if file_sig is not None:
-            signature = f"{file_sig}|lang:{'cpp' if is_cpp else 'c'}|schema:{_PARSE_CACHE_VERSION}"
+            signature = f"{file_sig}|lang:{parser_language}|schema:{_PARSE_CACHE_VERSION}"
         cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         cached_calls = cached_payload.get("calls")
@@ -2744,6 +2760,11 @@ def _load_or_parse_payload(
         )
         if not missing_call_metadata:
             return normalize_cached_payload(cached_payload)
+    if is_resource:
+        payload = normalize_cached_payload(parse_windows_resource_file(file_path, root))
+        if parse_cache and signature is not None:
+            write_parse_cache(parse_cache_root, rel_path, signature, payload)
+        return payload
     (
         file_functions,
         file_calls,
