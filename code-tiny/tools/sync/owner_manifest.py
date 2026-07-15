@@ -21,6 +21,7 @@ _ANDROID_PLUGIN_MARKERS = (
 SUPPORTED_PARSERS: Set[str] = {
     "cobol",
     "cplus",
+    "dart",
     "delphi",
     "java",
     "kotlin",
@@ -31,6 +32,7 @@ SUPPORTED_PARSERS: Set[str] = {
     "vbscript",
     "python",
     "go",
+    "rust",
     "js",
     "ts",
     "php",
@@ -202,8 +204,12 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "python"
     if ext == ".go":
         return "go"
+    if ext == ".rs":
+        return "rust"
     if ext == ".swift":
         return "swift"
+    if ext == ".dart":
+        return "dart"
     if ext in {".js", ".jsx", ".mjs", ".cjs"}:
         return "js"
     if ext in {".ts", ".tsx", ".mts", ".cts"}:

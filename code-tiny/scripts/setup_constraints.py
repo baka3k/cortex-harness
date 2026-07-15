@@ -370,10 +370,15 @@ SERVLET_JSP_LABELS: tuple[str, ...] = (
     "FilterMapping", "JSPView", "JspExpression", "JspTag", "StateSlot", "LifecycleEvent",
     "ErrorPage", "WelcomePage", "SecurityConstraint", "WebTarget", "WebConfiguration",
 )
+STRUTS_LABELS: tuple[str, ...] = (
+    "StrutsFact", "Plugin", "Package", "Action", "HttpEndpoint", "InterceptorStack",
+    "Interceptor", "Result", "ResultType", "View", "ExceptionMapping", "ValidationRule",
+)
 for _framework, _labels in (
     ("spring", SPRING_LABELS),
     ("mybatis", MYBATIS_LABELS),
     ("servlet_jsp", SERVLET_JSP_LABELS),
+    ("struts", STRUTS_LABELS),
 ):
     for _label in _labels:
         _token = re.sub(r"(?<!^)(?=[A-Z])", "_", _label).lower()

@@ -2,7 +2,7 @@
 
 * Provide two CLI commands to manage and integrate MCP for `doc-tiny` and `code-tiny`.
 
-The unified code MCP accepts `spring`, `servlet_jsp`, and `mybatis` parser types while retaining all existing aliases. Framework selection keeps the C++/JVM-compatible backend but changes default graph relationships. `search_functions` accepts optional `framework` and `kinds` filters; symbol lookup, semantic graph expansion, endpoint callers, and API chains filter inactive Servlet/JSP generations. Spring controller/service/repository facts and MyBatis statement/table edges participate in full-stack persistence flows.
+The unified code MCP exposes every registered primary parser and overlay through one endpoint. This includes COBOL, Go, Rust, Swift, Dart/Flutter, Delphi, VB variants, Spring, Struts, Servlet/JSP, and MyBatis while retaining existing aliases. Parser selection keeps the compatible shared backend but changes default graph relationships when a parser profile exists. `search_functions` accepts optional `framework` and `kinds` filters; symbol lookup, semantic graph expansion, endpoint callers, and API chains filter inactive Servlet/JSP generations. Spring controller/service/repository facts, Struts action routes, and MyBatis statement/table edges participate in shared graph queries.
 
 ### Commands
 
