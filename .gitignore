@@ -68,4 +68,14 @@ cortex_harness/CLAUDE.md
 frontend/**/CLAUDE.md
 backendjs/**/CLAUDE.md
 tests/fixtures/**
+!tests/fixtures/aspnet-core-application/
+!tests/fixtures/aspnet-core-application/**
+!tests/fixtures/aspnet-framework-application/
+!tests/fixtures/aspnet-framework-application/**
+tests/fixtures/aspnet-core-application/**/bin/
+tests/fixtures/aspnet-core-application/**/obj/
+tests/fixtures/aspnet-framework-application/**/bin/
+tests/fixtures/aspnet-framework-application/**/obj/
+code-tiny/tools/common/aspnet/roslyn_worker/bin/
+code-tiny/tools/common/aspnet/roslyn_worker/obj/
 !code-tiny/tools/cobol/lib/cobol.cpython-310-darwin.so

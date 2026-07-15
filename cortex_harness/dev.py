@@ -57,6 +57,8 @@ FRAMEWORK_ANALYZERS = {
     "mybatis":     CODE_TINY / "tools/mybatis/mybatis_analyzer.py",
     "struts":      CODE_TINY / "tools/struts/struts_analyzer.py",
     "flutter":     CODE_TINY / "tools/flutter/flutter_analyzer.py",
+    "aspnet_framework": CODE_TINY / "tools/aspnet_framework/aspnet_framework_analyzer.py",
+    "aspnet_core": CODE_TINY / "tools/aspnet_core/aspnet_core_analyzer.py",
 }
 
 LANG_EXTENSIONS = {

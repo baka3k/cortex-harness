@@ -51,6 +51,7 @@
 
 * Utilize the exact ingestion endpoints and formats defined by **doc-tiny** (supporting both bulk and file-based ingestion).
 * Refer to **doc-tiny** specs to align metadata mapping, batch sizes, and retry policies.
+* ASP.NET project, Razor, Web Forms, and configuration artifacts are code-semantic inputs and belong to `dev sync code`; ordinary ASP.NET design documents continue through this document pipeline.
 
 ## UX & Status
 
