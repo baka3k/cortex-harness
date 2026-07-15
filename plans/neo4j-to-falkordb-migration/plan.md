@@ -4,7 +4,7 @@ status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
-blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser]
+blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers]
 
 ## Cross-Plan Dependency
 
@@ -15,6 +15,8 @@ The Flutter analyzer parser plan at `plans/260714-1603-flutter-analyzer-parser/p
 The COBOL analyzer parser plan at `plans/260714-1702-cobol-analyzer-parser/plan.md` depends on the same provider-neutral writer, schema, and query contract for namespaced COBOL semantic facts. Its parser, copybook resolver, and CFG phases can proceed independently, but provider-parity acceptance and changes to `code-tiny/tools/graph`, `code-tiny/scripts/setup_constraints.py`, and `code-tiny/mcp/unified_mcp.py` must be coordinated with this migration.
 
 The Perl analyzer parser plan at `plans/260715-1629-perl-analyzer-parser/plan.md` depends on the provider-neutral writer and provider CLI/runtime contract for canonical Perl language facts. Its grammar, normalized extraction, and conservative incremental-resolution phases can proceed independently, but graph persistence and Neo4j/FalkorDB parity acceptance must be coordinated with this migration.
+
+The ASP.NET Roslyn analyzers plan at `plans/260715-2011-aspnet-roslyn-analyzers/plan.md` depends on provider-neutral generation writes, cleanup, schema/index behavior, and MCP traversal for its shared migration semantic graph. Contract, Roslyn, and framework extraction phases can proceed independently, but graph persistence and Neo4j/FalkorDB parity acceptance must use the stabilized provider contract.
 
 ## Objective
 

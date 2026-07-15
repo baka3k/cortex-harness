@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Perl analyzer parser implementation](2026-07-15-perl-analyzer-parser.md)
 - [Lifecycle commands macOS CI gate](2026-07-14-lifecycle-macos-ci.md)
 - [Global `dev` and Make lifecycle parity](2026-07-14-dev-make-lifecycle-parity.md)
 - [Global `dev start` lifecycle command](2026-07-14-global-dev-start.md)
