@@ -55,6 +55,22 @@ class PerlIncrementalTest(unittest.TestCase):
         self.assertEqual(result.files, ())
         self.assertEqual(result.deleted_paths, ("lib/App/Old.pm",))
 
+    def test_scanner_skips_symlinked_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "Target.pm"
+            target.write_text("package Target;\n", encoding="utf-8")
+            link = root / "Linked.pm"
+            try:
+                link.symlink_to(target)
+            except OSError:
+                self.skipTest("symlinks are unavailable")
+            from tools.perl.pipeline import scan_perl_files
+
+            paths, diagnostics = scan_perl_files(str(root))
+        self.assertEqual(paths, ("Target.pm",))
+        self.assertTrue(any(item.code == "perl.scan.symlink_skipped" for item in diagnostics))
+
 
 if __name__ == "__main__":
     unittest.main()
