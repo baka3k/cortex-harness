@@ -40,7 +40,15 @@ EXPECTED_PRIMARY = {
     "vbscript",
 }
 
-EXPECTED_OVERLAYS = {"flutter", "mybatis", "servlet_jsp", "spring", "struts"}
+EXPECTED_OVERLAYS = {
+    "aspnet_core",
+    "aspnet_framework",
+    "flutter",
+    "mybatis",
+    "servlet_jsp",
+    "spring",
+    "struts",
+}
 
 
 class CommonAnalyzerRegistryTest(unittest.TestCase):

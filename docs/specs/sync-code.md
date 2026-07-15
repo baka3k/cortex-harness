@@ -44,7 +44,7 @@
 * **Full Mode:** Send the entire codebase to the `code-tiny` pipeline for ingestion into Neo4j + Qdrant.
 * **Incremental Mode:** Identify modified files (via `git diff` or timestamp comparison) and only send those specific files.
 * **Primary ownership:** Perl `.pl`, `.pm`, and `.t` files are routed exclusively to the `perl` analyzer. Standalone `.pod` files and extensionless shebang scripts remain unowned until content-based classification is introduced.
-* **Framework overlays:** Preserve exclusive primary-language ownership, then route the global changed/deleted/impacted set through Spring, Servlet/JSP, and MyBatis detectors. Overlays execute in that order and receive their own manifests.
+* **Framework overlays:** Preserve exclusive primary-language ownership, then route the global changed/deleted/impacted set through Spring, Servlet/JSP, MyBatis, Struts, Flutter, ASP.NET Framework, and ASP.NET Core detectors. ASP.NET overlays require the canonical `csharp` analyzer, are detected per project module, and never claim `.cs` ownership.
 
 
 3. **Persistence:** Record sync metadata (timestamp, synced file list, mode) to serve as a baseline for future incremental runs.
@@ -56,6 +56,7 @@ Framework failures mark sync state dirty but do not roll back successful canonic
 * Utilize the exact ingestion endpoints and formats defined by **code-tiny** (supporting both bulk and file-based ingestion).
 * Refer to **code-tiny** specs to align metadata mapping, batch sizes, and retry policies.
 * The Perl analyzer supports full and changed/deleted manifest runs, deterministic parse caching, service-free JSON previews, and canonical `File`/`Namespace`/`Function`/`Field` graph facts. Dynamic Perl dispatch remains explicitly unresolved.
+* The ASP.NET Framework and ASP.NET Core analyzers use a shared Roslyn evidence protocol, safe bounded config/view parsers, redaction, module-scoped incremental invalidation, and one migration vocabulary. Workspace failures in `auto` mode remain explicit partial coverage rather than resolved semantic edges.
 
 ## UX & Status
 
