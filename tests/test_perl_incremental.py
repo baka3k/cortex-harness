@@ -71,6 +71,14 @@ class PerlIncrementalTest(unittest.TestCase):
         self.assertEqual(paths, ("Target.pm",))
         self.assertTrue(any(item.code == "perl.scan.symlink_skipped" for item in diagnostics))
 
+    def test_corrupt_cache_is_rebuilt_without_semantic_drift(self):
+        with tempfile.TemporaryDirectory() as cache:
+            expected = run_perl_analysis(str(FIXTURE), project_id="p", cache_dir=cache).to_json()
+            cache_file = next(Path(cache).rglob("*.json"))
+            cache_file.write_text("{not-json", encoding="utf-8")
+            actual = run_perl_analysis(str(FIXTURE), project_id="p", cache_dir=cache).to_json()
+        self.assertEqual(actual, expected)
+
 
 if __name__ == "__main__":
     unittest.main()

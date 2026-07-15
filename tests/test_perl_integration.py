@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import importlib.util
+import io
 import sys
 import tempfile
 import unittest
@@ -12,7 +14,7 @@ if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
 from cortex_harness.dev import LANG_ANALYZERS, LANG_EXTENSIONS, _detect_langs  # noqa: E402
-from tools.perl.perl_analyzer import build_graph_rows, parse_args  # noqa: E402
+from tools.perl.perl_analyzer import build_graph_rows, main, parse_args  # noqa: E402
 from tools.perl.pipeline import run_perl_analysis  # noqa: E402
 from tools.sync.incremental_sync import ANALYZERS, _group_paths_by_parser  # noqa: E402
 from tools.sync.owner_manifest import SUPPORTED_PARSERS, build_owner_maps  # noqa: E402
@@ -76,6 +78,36 @@ class PerlIntegrationTest(unittest.TestCase):
             {(item["caller_id"], item["callee_id"]) for item in rows["calls"]},
             resolved_pairs,
         )
+
+    def test_cli_dry_run_and_partial_failure_exit_policy(self):
+        with tempfile.TemporaryDirectory() as cache:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                ok = asyncio.run(
+                    main(
+                        [
+                            "--root", str(FIXTURE),
+                            "--project-id", "p",
+                            "--cache-dir", cache,
+                            "--dry-run",
+                        ]
+                    )
+                )
+            with contextlib.redirect_stdout(io.StringIO()):
+                partial = asyncio.run(
+                    main(
+                        [
+                            "--root", str(FIXTURE),
+                            "--project-id", "p",
+                            "--cache-dir", cache,
+                            "--dry-run",
+                            "--fail-on-partial",
+                        ]
+                    )
+                )
+        self.assertEqual(ok, 0)
+        self.assertEqual(partial, 3)
+        self.assertIn('"project_id":"p"', stdout.getvalue())
 
     def test_unified_mcp_routes_and_lists_perl(self):
         mcp_dir = CODE_TINY / "mcp"

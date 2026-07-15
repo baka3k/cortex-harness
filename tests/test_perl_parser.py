@@ -1,4 +1,5 @@
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -52,8 +53,8 @@ class PerlParserTest(unittest.TestCase):
         self.assertIn("App::Model", package_names)
         self.assertIn("App::Secondary", package_names)
         self.assertIn("App::Util::helper", sub_names)
-        greet = next(item for item in result.symbols if item.fq_name == "App::Model::greet")
-        self.assertIn(":lvalue", greet.attributes)
+        mutable = next(item for item in result.symbols if item.fq_name == "App::Model::mutable")
+        self.assertIn("lvalue", mutable.attributes)
         self.assertTrue(any(value.startswith("my:lexical") for value in declaration_kinds))
         self.assertTrue(any(value.startswith("our:package") for value in declaration_kinds))
         self.assertTrue(any(value.startswith("local:dynamic-local") for value in declaration_kinds))
@@ -75,6 +76,14 @@ class PerlParserTest(unittest.TestCase):
         payload = json.loads(one)
         self.assertEqual(payload["normalized_root"], ".")
         self.assertNotIn(str(FIXTURE), one)
+        with tempfile.TemporaryDirectory() as left, tempfile.TemporaryDirectory() as right:
+            left_root = Path(left) / "checkout"
+            right_root = Path(right) / "checkout"
+            shutil.copytree(FIXTURE, left_root)
+            shutil.copytree(FIXTURE, right_root)
+            left_json = run_perl_analysis(str(left_root), project_id="p", cache_dir=left).to_json()
+            right_json = run_perl_analysis(str(right_root), project_id="p", cache_dir=right).to_json()
+        self.assertEqual(left_json, right_json)
 
     def test_budgets_and_secret_redaction_are_deterministic(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as cache:

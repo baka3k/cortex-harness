@@ -670,7 +670,7 @@ Current unified routing:
 | `parser_type` values                                                                                                      | Backend                                                |
 | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `android`, `android-kotlin`, `kotlin-android`                                                                             | `android/android_mcp.py`                               |
-| `cplus`, `cpp`, `c++`, `c`, `clang`, `java`, `kotlin`, `jvm`, `delphi`, `pascal`, `vbnet`, `vb6`, `vba`, `vbscript`, `st` | `cplus/cplus_mcp.py`                                   |
+| `cplus`, `cpp`, `c++`, `c`, `clang`, `java`, `kotlin`, `jvm`, `go`, `perl`, `rust`, `swift`, `delphi`, `pascal`, `vbnet`, `vb6`, `vba`, `vbscript`, `st` | `cplus/cplus_mcp.py` |
 | Empty or unknown                                                                                                          | `MCP_UNIFIED_DEFAULT_BACKEND`, falling back to `cplus` |
 
 ## Recommended Query Workflow
@@ -740,7 +740,7 @@ Input:
 
 | Field           | Required | Type  | Meaning                                                                             |
 | --------------- | -------- | ----- | ----------------------------------------------------------------------------------- |
-| `parser_type`   | No       | `str` | Parser/backend alias, for example `cplus`, `android`, `java`, `kotlin`.             |
+| `parser_type`   | No       | `str` | Parser/backend alias, for example `cplus`, `android`, `java`, `kotlin`, or `perl`.  |
 | `database_name` | No       | `str` | FalkorDB graph name or Neo4j database name. Current runtime default: `hyper_graph`. |
 
 Output: Dict with `parser_type`, `database_name`, `activated` or backend
@@ -756,7 +756,7 @@ Example:
 
 ```json
 {
-  "parser_type": "cplus",
+  "parser_type": "perl",
   "database_name": "hyper_graph"
 }
 ```
