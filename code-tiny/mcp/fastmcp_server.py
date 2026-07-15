@@ -307,6 +307,7 @@ def _normalize_string_list(value: Any) -> List[str]:
 _CODE_LABELS = {
     "Project", "Repository", "Directory", "File", "Class", "Function", "Method",
     "Namespace", "Interface", "Enum", "Type", "Package", "Alias", "Template",
+    "Resource", "UIControl",
 }
 
 _DOC_LABELS = {
@@ -2307,7 +2308,7 @@ async def tool_listup_symbols_matching_file_path(
         types = _normalize_string_list(node_types)
         type_conditions = " OR ".join([f"n:{t}" for t in types])
     else:
-        type_conditions = "n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package OR n:File"
+        type_conditions = "n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package OR n:File OR n:Resource OR n:UIControl"
     
     cypher = (
         f"MATCH (n) WHERE ({type_conditions}) "
@@ -2422,14 +2423,17 @@ async def tool_search_functions(
     if framework and framework not in {"spring", "servlet_jsp", "mybatis"}:
         raise ValueError("framework must be spring, servlet_jsp, or mybatis")
     fallback_cypher = (
-        "MATCH (n) WHERE (n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package "
+        "MATCH (n) WHERE (n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package OR n:Resource OR n:UIControl "
         "OR n.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
         "AND any(q IN $qs WHERE toLower(coalesce(n.name, '')) CONTAINS q "
         "OR toLower(coalesce(n.qualified_name, '')) CONTAINS q "
         "OR toLower(coalesce(n.file_path, '')) CONTAINS q "
         "OR toLower(coalesce(n.path, '')) CONTAINS q "
         "OR toLower(coalesce(n.raw_value, '')) CONTAINS q "
-        "OR toLower(coalesce(n.resolved_value, '')) CONTAINS q) "
+        "OR toLower(coalesce(n.resolved_value, '')) CONTAINS q "
+        "OR toLower(coalesce(n.caption, '')) CONTAINS q "
+        "OR toLower(coalesce(n.text, '')) CONTAINS q "
+        "OR toLower(coalesce(n.summary, '')) CONTAINS q) "
         "AND ($project_id IS NULL OR n.project_id = $project_id) "
         "AND ($framework IS NULL OR n.framework = $framework) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR n.kind IN $kinds) "
@@ -2439,7 +2443,7 @@ async def tool_search_functions(
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
-        "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package "
+        "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package OR node:Resource OR node:UIControl "
         "OR node.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
         "AND ($project_id IS NULL OR node.project_id = $project_id) "
         "AND ($framework IS NULL OR node.framework = $framework) "

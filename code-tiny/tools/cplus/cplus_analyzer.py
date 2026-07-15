@@ -42,6 +42,12 @@ from tools.common.message_scan import default_message_collection_name, run_messa
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
+from tools.cplus.rc_parser import (
+    extract_message_map_handlers,
+    extract_resource_tokens,
+    parse_rc_file,
+    read_rc_text,
+)
 try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
@@ -52,12 +58,7 @@ try:
 except Exception:
     _clang_parser = None  # type: ignore[assignment]
 
-from tools.cplus.windows_resource_parser import (
-    WINDOWS_RESOURCE_EXTENSIONS,
-    is_windows_resource_file,
-    parse_windows_resource_file,
-    read_windows_resource_text,
-)
+from tools.cplus.windows_resource_parser import is_windows_resource_file
 
 # Number of tree-sitter error nodes that triggers the optional libclang fallback.
 # Set to 0 to always prefer libclang (when available); set very high to disable.
@@ -73,7 +74,7 @@ def _effective_fallback_threshold(file_size: int) -> int:
     return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
-_PARSE_CACHE_VERSION = "cplus-v2026-07-15-1"
+_PARSE_CACHE_VERSION = "cplus-v2026-07-15-rc1"
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -2466,7 +2467,7 @@ def _scan_c_family_files(root: str) -> List[str]:
         for name in filenames:
             if name.lower().endswith(
                 (".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx")
-                + WINDOWS_RESOURCE_EXTENSIONS
+                + (".rc", ".rc2")
             ):
                 files.append(os.path.join(dirpath, name))
     return sorted(files)
@@ -2556,7 +2557,7 @@ def _collect_include_graph(
     for rel_path, abs_path in rel_to_abs.items():
         try:
             if is_windows_resource_file(abs_path):
-                source_text, _encoding = read_windows_resource_text(abs_path)
+                source_text, _encoding, _lossy = read_rc_text(abs_path)
             else:
                 with open(abs_path, "r", encoding="utf-8", errors="ignore") as handle:
                     source_text = handle.read()
@@ -2688,6 +2689,20 @@ def _load_or_parse_payload(
             for item in templates:
                 if isinstance(item, dict):
                     ensure_text_fields(item)
+        resources = payload.get("resources")
+        if resources is None:
+            payload["resources"] = []
+        elif isinstance(resources, list):
+            for item in resources:
+                if isinstance(item, dict):
+                    ensure_text_fields(item)
+        resource_elements = payload.get("resource_elements")
+        if resource_elements is None:
+            payload["resource_elements"] = []
+        elif isinstance(resource_elements, list):
+            for item in resource_elements:
+                if isinstance(item, dict):
+                    ensure_text_fields(item)
         function_types = payload.get("function_types")
         if isinstance(function_types, list):
             for item in function_types:
@@ -2761,7 +2776,7 @@ def _load_or_parse_payload(
         if not missing_call_metadata:
             return normalize_cached_payload(cached_payload)
     if is_resource:
-        payload = normalize_cached_payload(parse_windows_resource_file(file_path, root))
+        payload = normalize_cached_payload(parse_rc_file(file_path, root))
         if parse_cache and signature is not None:
             write_parse_cache(parse_cache_root, rel_path, signature, payload)
         return payload
@@ -2839,6 +2854,8 @@ def _load_or_parse_payload(
         "fields": [asdict(item) for item in file_fields],
         "aliases": [asdict(item) for item in file_aliases],
         "templates": [asdict(item) for item in file_templates],
+        "resources": [],
+        "resource_elements": [],
         "file_def": asdict(file_def),
         "using_namespaces": file_using_namespaces,
         "using_imports": file_using_imports,
@@ -2931,7 +2948,7 @@ async def build_call_graph(
                 )
             )
             print(f"[impact] impacted_by_includes={impacted_by_includes_count}")
-        print(f"[scan] Found {len(all_file_paths)} C/C++ files under {root}")
+        print(f"[scan] Found {len(all_file_paths)} C/C++/resource files under {root}")
     total_files = len(all_file_paths)
 
     cleanup_targets = sorted(changed_set | deleted_set)
@@ -2971,12 +2988,16 @@ async def build_call_graph(
     includes_by_file: Dict[str, List[str]] = {}
     macros_by_file: Dict[str, Dict[str, str]] = {}
     alias_targets_by_name: Dict[str, str] = {}
+    resource_index_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
     event_nodes: List[Dict[str, Any]] = []
     event_relations: List[Dict[str, Any]] = []
     possible_call_relations: List[Dict[str, Any]] = []
     class_methods: Dict[str, List[Dict[str, Any]]] = {}
     base_relations: List[Tuple[str, str]] = []
     expected_points = 0
+    function_count = 0
+    type_count = 0
+    resource_count = 0
     parse_error_file_count = 0
     parse_error_node_total = 0
     parse_error_examples: List[str] = []
@@ -3024,8 +3045,19 @@ async def build_call_graph(
             target = alias.get("target_name")
             if name and target:
                 alias_targets_by_name[name] = target
+        for resource in payload.get("resources", []):
+            expected_points += 1
+            resource_count += 1
+            symbol = str(resource.get("resource_symbol") or "")
+            if symbol:
+                resource_index_by_symbol.setdefault(symbol, []).append(resource)
+        for element in payload.get("resource_elements", []):
+            symbol = str(element.get("resource_symbol") or "")
+            if symbol and symbol != "IDC_STATIC":
+                resource_index_by_symbol.setdefault(symbol, []).append(element)
         for func in payload["functions"]:
             expected_points += 1
+            function_count += 1
             entry = {
                 "symbol_id": func["symbol_id"],
                 "qualified_name": func["qualified_name"],
@@ -3051,6 +3083,8 @@ async def build_call_graph(
                 ).append(entry)
             if func.get("scope_name"):
                 class_methods.setdefault(func.get("scope_name"), []).append(entry)
+
+        type_count += len(payload.get("types", []))
 
         for rel in payload.get("relations", []):
             if (
@@ -3179,6 +3213,68 @@ async def build_call_graph(
         using_imports_by_file[file_path] = im
         macros_by_file[file_path] = ma
 
+    known_resource_symbols = set(resource_index_by_symbol)
+
+    def resolve_resource_node(symbol: str, source_file: str = "") -> Optional[Dict[str, Any]]:
+        candidates = resource_index_by_symbol.get(symbol) or []
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return candidates[0]
+        source_dir = os.path.dirname(source_file)
+        kind_priority = {
+            "ui_control": 100,
+            "dialogex": 90,
+            "dialog": 90,
+            "string": 80,
+            "icon": 70,
+            "bitmap": 70,
+            "menu": 70,
+            "menuex": 70,
+            "afx_dialog_layout": 10,
+            "designinfo": 5,
+            "textinclude": 1,
+        }
+        return max(
+            candidates,
+            key=lambda item: (
+                kind_priority.get(str(item.get("kind") or ""), 50),
+                os.path.dirname(str(item.get("file_path") or "")) == source_dir,
+                str(item.get("language") or ""),
+                str(item.get("file_path") or ""),
+                str(item.get("symbol_id") or ""),
+            ),
+        )
+
+    def resource_numeric_id(item: Dict[str, Any]) -> Optional[int]:
+        symbol = str(item.get("resource_symbol") or "")
+        file_path = str(item.get("file_path") or "")
+        expansion = str(macros_by_file.get(file_path, {}).get(symbol) or "").strip()
+        match = re.match(r"^(0[xX][0-9A-Fa-f]+|\d+)(?:[uUlL]*)\b", expansion)
+        if not match:
+            return None
+        try:
+            return int(match.group(1), 0)
+        except ValueError:
+            return None
+
+    def resolve_resource_handler(handler: str, file_path: str) -> Optional[Dict[str, Any]]:
+        normalized = handler.lstrip("&")
+        exact = function_index_by_qualified.get(normalized)
+        if exact:
+            return exact
+        short_name = normalized.split("::")[-1]
+        same_file = function_index_by_file_name.get((file_path, short_name), [])
+        if len(same_file) == 1:
+            return same_file[0]
+        candidates = function_index_by_name.get(short_name, [])
+        if "::" in normalized:
+            scope = normalized.rsplit("::", 1)[0]
+            scoped = [item for item in candidates if item.get("scope_name") == scope]
+            if len(scoped) == 1:
+                return scoped[0]
+        return candidates[0] if len(candidates) == 1 else None
+
     base_to_derived: Dict[str, List[str]] = {}
     for derived, base in base_relations:
         if not derived or not base:
@@ -3306,6 +3402,8 @@ async def build_call_graph(
         buf_fields: List[Dict[str, Any]] = []
         buf_aliases: List[Dict[str, Any]] = []
         buf_templates: List[Dict[str, Any]] = []
+        buf_resources: List[Dict[str, Any]] = []
+        buf_resource_elements: List[Dict[str, Any]] = []
         buf_relations: List[Dict[str, Any]] = []
         buf_calls: List[Dict[str, Any]] = []
         buf_unknown_calls: List[Dict[str, Any]] = []
@@ -3335,13 +3433,83 @@ MERGE (caller)-[r:UNKNOWN_CALL {site_id: row.site_id}]->(unknown)
 SET r += row.props
 RETURN count(r) AS count
 """
+        _RESOURCES_CYPHER = """UNWIND $rows AS row
+MERGE (r:Resource {id: row.id})
+SET r.node_type = 'code',
+    r.name = row.name,
+    r.qualified_name = row.qualified_name,
+    r.kind = row.kind,
+    r.resource_symbol = row.resource_symbol,
+    r.numeric_id = row.numeric_id,
+    r.language = row.language,
+    r.resource_language = row.resource_language,
+    r.caption = row.caption,
+    r.style = row.style,
+    r.asset_path = row.asset_path,
+    r.condition = row.condition,
+    r.encoding = row.encoding,
+    r.metadata_json = row.metadata_json,
+    r.file_path = row.file_path,
+    r.start_line = row.start_line,
+    r.end_line = row.end_line,
+    r.code = row.code,
+    r.comment = row.comment,
+    r.summary = row.summary,
+    r.note = row.note,
+    r.project_id = row.project_id,
+    r.project_name = row.project_name,
+    r.repo = row.repo,
+    r.build_system = row.build_system,
+    r.updated_at = datetime()
+"""
+        _RESOURCE_ELEMENTS_CYPHER = """UNWIND $rows AS row
+MERGE (c:UIControl {id: row.id})
+SET c.node_type = 'code',
+    c.name = row.name,
+    c.qualified_name = row.qualified_name,
+    c.kind = row.kind,
+    c.control_type = row.control_type,
+    c.resource_symbol = row.resource_symbol,
+    c.numeric_id = row.numeric_id,
+    c.resource_ref = row.resource_ref,
+    c.dialog_id = row.dialog_id,
+    c.dialog_symbol = row.dialog_symbol,
+    c.text = row.text,
+    c.style = row.style,
+    c.x = row.x,
+    c.y = row.y,
+    c.width = row.width,
+    c.height = row.height,
+    c.condition = row.condition,
+    c.file_path = row.file_path,
+    c.start_line = row.start_line,
+    c.end_line = row.end_line,
+    c.code = row.code,
+    c.comment = row.comment,
+    c.summary = row.summary,
+    c.note = row.note,
+    c.project_id = row.project_id,
+    c.project_name = row.project_name,
+    c.language = row.language,
+    c.repo = row.repo,
+    c.build_system = row.build_system,
+    c.updated_at = datetime()
+"""
 
         async def _flush_write_buffers() -> None:
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
-            nonlocal buf_fields, buf_aliases, buf_templates, buf_relations, buf_calls, buf_unknown_calls
+            nonlocal buf_fields, buf_aliases, buf_templates, buf_resources, buf_resource_elements
+            nonlocal buf_relations, buf_calls, buf_unknown_calls
             nonlocal _files_in_buf, _total_files_written, _total_calls_written, _total_unknown_calls_written
+            if buf_resources:
+                await code_writer.write_nodes_batch("resources", _RESOURCES_CYPHER, buf_resources)
+            if buf_resource_elements:
+                await code_writer.write_nodes_batch(
+                    "resource_elements", _RESOURCE_ELEMENTS_CYPHER, buf_resource_elements
+                )
             has_nodes = any([buf_files, buf_namespaces, buf_types, buf_function_types,
-                             buf_functions, buf_fields, buf_aliases, buf_templates])
+                             buf_functions, buf_fields, buf_aliases, buf_templates,
+                             buf_resources, buf_resource_elements])
             if has_nodes or buf_relations:
                 await code_writer.write_all(
                     files=buf_files or None,
@@ -3375,6 +3543,7 @@ RETURN count(r) AS count
                 _total_unknown_calls_written += len(buf_unknown_calls)
             buf_files = []; buf_namespaces = []; buf_types = []; buf_function_types = []
             buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
+            buf_resources = []; buf_resource_elements = []
             buf_relations = []; buf_calls = []; buf_unknown_calls = []
             _files_in_buf = 0
 
@@ -3392,6 +3561,10 @@ RETURN count(r) AS count
             "HANDLES_EVENT",
             "CALLS_FUNCTION_POINTER",
             "POSSIBLE_CALLS",
+            "USES_RESOURCE",
+            "BINDS_CONTROL",
+            "HANDLES_CONTROL",
+            "OWNS_DIALOG",
         }
 
         def resolve_callee_id(
@@ -3515,6 +3688,34 @@ RETURN count(r) AS count
         call_stats_resolved = 0
         call_stats_by_file: Dict[str, Tuple[int, int]] = {}
         call_stats_macro_resolved = 0
+        resource_reference_relations: List[Dict[str, Any]] = []
+        resource_reference_keys: set[Tuple[str, str, str]] = set()
+
+        def add_resource_relation(
+            source_label: str,
+            source_id: str,
+            rel_type: str,
+            target: Dict[str, Any],
+            properties: Dict[str, Any],
+        ) -> None:
+            target_id = str(target.get("symbol_id") or "")
+            if not source_id or not target_id:
+                return
+            key = (source_id, rel_type, target_id)
+            if key in resource_reference_keys:
+                return
+            resource_reference_keys.add(key)
+            resource_reference_relations.append(
+                {
+                    "source_label": source_label,
+                    "target_label": "UIControl" if target.get("kind") == "ui_control" else "Resource",
+                    "rel_type": rel_type,
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "properties": properties,
+                }
+            )
+
         unresolved_handle = None
         if unresolved_calls_path:
             os.makedirs(os.path.dirname(os.path.abspath(unresolved_calls_path)), exist_ok=True)
@@ -3624,6 +3825,68 @@ RETURN count(r) AS count
                     "repo": repo,
                     "build_system": build_system,
                 })
+                for resource_symbol in extract_resource_tokens(
+                    func.get("code") or "", known_resource_symbols
+                ):
+                    target = resolve_resource_node(resource_symbol, file_def["file_path"])
+                    if not target:
+                        continue
+                    bind_pattern = (
+                        rf"\bDDX_[A-Za-z0-9_]+\s*\([^;]*\b{re.escape(resource_symbol)}\b"
+                    )
+                    rel_type = (
+                        "BINDS_CONTROL"
+                        if re.search(bind_pattern, func.get("code") or "", re.MULTILINE)
+                        else "USES_RESOURCE"
+                    )
+                    add_resource_relation(
+                        "Function",
+                        func["symbol_id"],
+                        rel_type,
+                        target,
+                        {"file_path": file_def["file_path"], "evidence": "identifier_reference"},
+                    )
+                    if (
+                        target.get("kind") in {"dialog", "dialogex"}
+                        and func.get("scope_name")
+                        and re.search(
+                            rf"\b(?:CDialog|CDialogEx)\s*\([^;]*\b{re.escape(resource_symbol)}\b",
+                            func.get("code") or "",
+                            re.MULTILINE,
+                        )
+                    ):
+                        add_resource_relation(
+                            "Type",
+                            _type_id(None, func["scope_name"]),
+                            "OWNS_DIALOG",
+                            target,
+                            {
+                                "file_path": file_def["file_path"],
+                                "evidence": "dialog_constructor",
+                            },
+                        )
+            for handler_spec in extract_message_map_handlers(
+                file_def.get("code") or "", known_resource_symbols
+            ):
+                target = resolve_resource_node(
+                    handler_spec["resource_symbol"], file_def["file_path"]
+                )
+                handler = resolve_resource_handler(
+                    handler_spec["handler"], file_def["file_path"]
+                )
+                if target and handler:
+                    add_resource_relation(
+                        "Function",
+                        handler["symbol_id"],
+                        "HANDLES_CONTROL",
+                        target,
+                        {
+                            "file_path": file_def["file_path"],
+                            "line": handler_spec["line"],
+                            "macro": handler_spec["macro"],
+                            "evidence": "mfc_message_map",
+                        },
+                    )
             for field in payload["fields"]:
                 buf_fields.append({
                     "id": field["symbol_id"],
@@ -3672,6 +3935,66 @@ RETURN count(r) AS count
                     "repo": repo,
                     "build_system": build_system,
                 })
+            for resource in payload.get("resources", []):
+                buf_resources.append({
+                    "id": resource["symbol_id"],
+                    "name": resource["name"],
+                    "qualified_name": resource["qualified_name"],
+                    "kind": resource["kind"],
+                    "resource_symbol": resource["resource_symbol"],
+                    "numeric_id": resource_numeric_id(resource),
+                    "language": language,
+                    "resource_language": resource.get("language") or "",
+                    "caption": resource.get("caption") or "",
+                    "style": resource.get("style") or "",
+                    "asset_path": resource.get("asset_path") or "",
+                    "condition": resource.get("condition") or "",
+                    "encoding": resource.get("encoding") or "",
+                    "metadata_json": resource.get("metadata_json") or "{}",
+                    "file_path": resource["file_path"],
+                    "start_line": resource["start_line"],
+                    "end_line": resource["end_line"],
+                    "code": resource["code"],
+                    "comment": resource.get("comment") or "",
+                    "summary": resource.get("summary") or "",
+                    "note": resource.get("note") or "",
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "repo": repo,
+                    "build_system": build_system,
+                })
+            for element in payload.get("resource_elements", []):
+                buf_resource_elements.append({
+                    "id": element["symbol_id"],
+                    "name": element["name"],
+                    "qualified_name": element["qualified_name"],
+                    "kind": element["kind"],
+                    "control_type": element.get("control_type") or "",
+                    "resource_symbol": element.get("resource_symbol") or "",
+                    "numeric_id": resource_numeric_id(element),
+                    "resource_ref": element.get("resource_ref") or "",
+                    "dialog_id": element.get("dialog_id") or "",
+                    "dialog_symbol": element.get("dialog_symbol") or "",
+                    "text": element.get("text") or "",
+                    "style": element.get("style") or "",
+                    "x": element.get("x"),
+                    "y": element.get("y"),
+                    "width": element.get("width"),
+                    "height": element.get("height"),
+                    "condition": element.get("condition") or "",
+                    "file_path": element["file_path"],
+                    "start_line": element["start_line"],
+                    "end_line": element["end_line"],
+                    "code": element["code"],
+                    "comment": element.get("comment") or "",
+                    "summary": element.get("summary") or "",
+                    "note": element.get("note") or "",
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                })
 
             # Add relations for project containment
             file_id = file_def["file_path"]
@@ -3701,6 +4024,15 @@ RETURN count(r) AS count
                     "rel_type": "CONTAINS",
                     "source_id": file_id,
                     "target_id": ns["symbol_id"],
+                    "properties": {},
+                })
+            for resource in payload.get("resources", []):
+                buf_relations.append({
+                    "source_label": "File",
+                    "target_label": "Resource",
+                    "rel_type": "CONTAINS",
+                    "source_id": file_id,
+                    "target_id": resource["symbol_id"],
                     "properties": {},
                 })
             for type_def in payload["types"]:
@@ -3897,7 +4229,7 @@ RETURN count(r) AS count
         await _flush_write_buffers()
 
         # Add event and possible-call relations (small, built during Pass 1)
-        tail_relations: List[Dict[str, Any]] = []
+        tail_relations: List[Dict[str, Any]] = list(resource_reference_relations)
         for event_rel in event_relations:
             tail_relations.append({
                 "source_label": "Function",
@@ -4026,6 +4358,8 @@ RETURN count(r) AS count
         index_queries = [
             "CREATE INDEX function_id_lookup IF NOT EXISTS FOR (f:Function) ON (f.id)",
             "CREATE INDEX file_id_lookup IF NOT EXISTS FOR (f:File) ON (f.id)",
+            "CREATE INDEX resource_id_lookup IF NOT EXISTS FOR (r:Resource) ON (r.id)",
+            "CREATE INDEX ui_control_id_lookup IF NOT EXISTS FOR (c:UIControl) ON (c.id)",
             "CREATE INDEX unknown_function_id_lookup IF NOT EXISTS FOR (u:UnknownFunction) ON (u.id)",
             "CREATE INDEX parse_run_id_lookup IF NOT EXISTS FOR (r:ParseRun) ON (r.id)",
         ]
@@ -4143,6 +4477,14 @@ RETURN count(r) AS count
 
         state = read_qdrant_state()
         cached_points = state.get("total_points")
+
+        def iter_vector_items(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+            yield from payload.get("functions", [])
+            for resource in payload.get("resources", []):
+                item = dict(resource)
+                item["node_type"] = "resource"
+                yield item
+
         if not os.path.exists(points_path) or cached_points != expected_points:
             if verbose:
                 print(f"[cache] Building Qdrant cache at {points_path}")
@@ -4151,7 +4493,7 @@ RETURN count(r) AS count
                 batch_index = 0
                 total_batches = max(1, (expected_points + batch_size - 1) // batch_size)
                 for payload in iter_payloads(log_parse=False):
-                    for func in payload["functions"]:
+                    for func in iter_vector_items(payload):
                         batch_funcs.append(func)
                         if len(batch_funcs) < batch_size:
                             continue
@@ -4169,13 +4511,13 @@ RETURN count(r) AS count
                                     "qualified_name": func_item["qualified_name"],
                                     "name": func_item["name"],
                                     "kind": func_item["kind"],
-                                    "scope_name": func_item["scope_name"],
+                                    "scope_name": func_item.get("scope_name"),
                                     "file_path": func_item["file_path"],
                                     "start_byte": int(func_item.get("start_byte") or 0),
                                     "end_byte": int(func_item.get("end_byte") or 0),
                                     "start_line": func_item["start_line"],
                                     "end_line": func_item["end_line"],
-                                    "arity": func_item["arity"],
+                                    "arity": int(func_item.get("arity") or 0),
                                     "code": func_item["code"],
                                     "comment": func_item["comment"],
                                     "summary": func_item["summary"],
@@ -4185,6 +4527,7 @@ RETURN count(r) AS count
                                     "language": language,
                                     "repo": repo,
                                     "build_system": build_system,
+                                    "node_type": func_item.get("node_type") or "function",
                                 },
                             }
                             handle.write(json.dumps(point, ensure_ascii=True) + "\n")
@@ -4207,13 +4550,13 @@ RETURN count(r) AS count
                                 "qualified_name": func_item["qualified_name"],
                                 "name": func_item["name"],
                                 "kind": func_item["kind"],
-                                "scope_name": func_item["scope_name"],
+                                "scope_name": func_item.get("scope_name"),
                                 "file_path": func_item["file_path"],
                                 "start_byte": int(func_item.get("start_byte") or 0),
                                 "end_byte": int(func_item.get("end_byte") or 0),
                                 "start_line": func_item["start_line"],
                                 "end_line": func_item["end_line"],
-                                "arity": func_item["arity"],
+                                "arity": int(func_item.get("arity") or 0),
                                 "code": func_item["code"],
                                 "comment": func_item["comment"],
                                 "summary": func_item["summary"],
@@ -4223,6 +4566,7 @@ RETURN count(r) AS count
                                 "language": language,
                                 "repo": repo,
                                 "build_system": build_system,
+                                "node_type": func_item.get("node_type") or "function",
                             },
                         }
                         handle.write(json.dumps(point, ensure_ascii=True) + "\n")
@@ -4270,10 +4614,12 @@ RETURN count(r) AS count
                 os.remove(state_path)
             except OSError:
                 pass
-    _sr_fn = len(func_metas) if 'func_metas' in vars() else 0
-    _sr_cls = len(infer_type_ids) if 'infer_type_ids' in vars() else 0
     _sr_files = total_files if 'total_files' in vars() else 0
-    print(f"[SCAN_RESULT] parser=cplus files={_sr_files} functions={_sr_fn} classes={_sr_cls}", flush=True)
+    print(
+        f"[SCAN_RESULT] parser=cplus files={_sr_files} functions={function_count} "
+        f"classes={type_count} resources={resource_count}",
+        flush=True,
+    )
     if verbose:
         elapsed = time.time() - start_time
         print(f"[done] Total time: {elapsed:.2f}s")
