@@ -151,7 +151,8 @@ most common follow-up call.
 | `tool_metadata.py`       | Shared catalog for `list_mcp_functions`: descriptions, use cases, input fields, outputs, and examples.                                    |
 | `fastmcp_server.py`      | Generic graph backend plus dependency-planning, workflow, and Living Docs tools.                                                          |
 | `android/android_mcp.py` | Android-oriented backend. Used when `parser_type` is `android`, `android-kotlin`, or `kotlin-android`.                                    |
-| `cplus/cplus_mcp.py`     | C/C++-family backend. In the unified server this also receives `java`, `kotlin`, `jvm`, `delphi`, `pascal`, and VB-family parser aliases. |
+| `framework_registry.py`  | Canonical capability registry for parser aliases, backend assignment, support level, graph profiles, and feature discovery.              |
+| `cplus/cplus_mcp.py`     | Generic graph backend used by C/C++, JVM, COBOL, framework, Flutter, ASP.NET, Perl, and other compatible capability profiles.           |
 | `java/java_mcp.py`       | Standalone Java backend implementation. It is present in this directory, but the current unified router does not add it to `BACKENDS`.    |
 | `services/*`             | Shared services for symbol lookup, graph exploration, flow reconstruction, workflow discovery, and impact analysis.                       |
 
@@ -230,6 +231,19 @@ Select tool `activate_project` and send:
 
 Use `android` for the Android backend. Java, Kotlin, C/C++, Delphi, Pascal, and
 VB-family aliases currently route through the `cplus` backend.
+
+`parser_type` selects a capability profile, not a separate MCP server. Call
+`list_parsers` to inspect each canonical parser's aliases, physical backend,
+support level (`full`, `partial`, or `generic`), labels, relationships,
+searchable properties, and feature flags. `activate_project` returns the same
+capability summary for the selected alias. Android remains on its specialized
+backend; compatible language and framework profiles share `cplus` while using
+their own query defaults.
+
+When the active graph provider exposes only part of a profile's relationship
+set, graph results include `capability_diagnostics` with used and omitted
+relationships. If none of the requested relationships exist, the tool returns
+an `unsupported_capability` error instead of an unexplained empty result.
 
 ### 5. Find A Symbol
 
@@ -2505,8 +2519,10 @@ Then call `topological_sort` with the same nodes and edges:
 5. Check whether the tool is marked Neo4j-only in this guide.
 6. Call `list_mcp_functions` to verify that your client is using the live input
    schema rather than a cached schema.
-7. Treat an empty array as a valid no-match result; treat connection errors and
-   schema-validation errors as configuration/client failures.
+7. Treat an empty array as a valid no-match result only when
+   `capability_diagnostics` does not report omitted or unsupported
+   relationships; treat connection and schema-validation errors as
+   configuration/client failures.
 
 ## Testing Tools Manually
 

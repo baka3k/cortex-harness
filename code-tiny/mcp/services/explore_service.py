@@ -212,6 +212,9 @@ class ExploreService:
         db:         Optional[str] = None,
         collection: Optional[str] = None,
         debug:      bool = False,
+        graph_rel_types: Optional[list[str]] = None,
+        searchable_labels: Optional[list[str]] = None,
+        searchable_properties: Optional[list[str]] = None,
     ) -> Dict[str, Any]:
         """
         Run intent-aware multi-strategy search.
@@ -267,6 +270,9 @@ class ExploreService:
             top_k          = top_k,
             mode           = mode,
             debug          = debug,
+            graph_rel_types= graph_rel_types,
+            searchable_labels= searchable_labels,
+            searchable_properties= searchable_properties,
         )
 
         # 4. Package results
@@ -297,6 +303,9 @@ class ExploreService:
         top_k:          int,
         mode:           str,
         debug:          bool,
+        graph_rel_types: Optional[list[str]],
+        searchable_labels: Optional[list[str]],
+        searchable_properties: Optional[list[str]],
     ) -> list:
         """
         Build an ``IntelligentRetrievalEngine`` and run the search.
@@ -329,6 +338,9 @@ class ExploreService:
                 expand_graph   = expand_graph,
                 weight_override= weight_override if weight_override else None,
                 collection     = collection,
+                graph_rel_types= graph_rel_types,
+                searchable_labels= searchable_labels,
+                searchable_properties= searchable_properties,
             )
 
         try:

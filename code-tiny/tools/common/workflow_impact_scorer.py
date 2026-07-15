@@ -205,9 +205,23 @@ class WorkflowImpactScorer:
     existing MCP pattern in unified_mcp.py.
     """
 
-    def __init__(self, neo4j_driver: Any, database: str = "neo4j") -> None:
+    def __init__(
+        self,
+        neo4j_driver: Any,
+        database: str = "neo4j",
+        flow_relationships: Optional[List[str]] = None,
+        workflow_relationship: str = "HAS_STEP",
+    ) -> None:
         self._driver = neo4j_driver
         self._database = database
+        safe_flow_relationships = [
+            value for value in (flow_relationships or ["CALLS"])
+            if isinstance(value, str) and value.isidentifier()
+        ]
+        self._flow_relationships = tuple(dict.fromkeys(safe_flow_relationships)) or ("CALLS",)
+        self._workflow_relationship = (
+            workflow_relationship if workflow_relationship.isidentifier() else "HAS_STEP"
+        )
 
     def _run_sync(self, cypher: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
         with self._driver.session(database=self._database) as session:
@@ -242,7 +256,7 @@ class WorkflowImpactScorer:
         # 1. Direct workflow membership ────────────────────────────────────────
         direct_rows = await self._query(
             f"""
-            MATCH (w:Workflow)-[s:HAS_STEP]->(f:Function)
+            MATCH (w:Workflow)-[s:{self._workflow_relationship}]->(f:Function)
             WHERE f.symbol_id = $id OR f.file_path = $id
             RETURN w.workflow_id                 AS workflow_id,
                    w.name                        AS workflow_name,
@@ -282,8 +296,8 @@ class WorkflowImpactScorer:
         # Neo4j does not allow parameterised path lengths; use safe integer interpolation.
         indirect_rows = await self._query(
             f"""
-            MATCH (w:Workflow)-[:HAS_STEP]->(entry:Function)
-            MATCH path = (entry)-[:CALLS*1..{capped_depth}]->(f:Function)
+            MATCH (w:Workflow)-[:{self._workflow_relationship}]->(entry:Function)
+            MATCH path = (entry)-[:{'|'.join(self._flow_relationships)}*1..{capped_depth}]->(f:Function)
             WHERE (f.symbol_id = $id OR f.file_path = $id)
               AND NOT w.workflow_id IN $direct_ids
             RETURN DISTINCT
@@ -349,7 +363,7 @@ class WorkflowImpactScorer:
         # 4. Shared-screen cascade (function is a screen used in multiple workflows)
         cascade_rows = await self._query(
             f"""
-            MATCH (w1:Workflow)-[:HAS_STEP]->(s:Function)<-[:HAS_STEP]-(w2:Workflow)
+            MATCH (w1:Workflow)-[:{self._workflow_relationship}]->(s:Function)<-[:{self._workflow_relationship}]-(w2:Workflow)
             WHERE (s.symbol_id = $id OR s.file_path = $id)
               AND w1.workflow_id < w2.workflow_id
             RETURN DISTINCT
