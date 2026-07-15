@@ -26,6 +26,9 @@ SYNC_STATE_DIR = ".cortext-harness/sync-state"
 
 LANG_ANALYZERS = {
     "cobol":          CODE_TINY / "tools/cobol/cobol_analyzer.py",
+    "dart":           CODE_TINY / "tools/flutter/flutter_analyzer.py",
+    "delphi":         CODE_TINY / "tools/delphi/delphi_analyzer.py",
+    "go":             CODE_TINY / "tools/go/go_analyzer.py",
     "kotlin":         CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
     "java":           CODE_TINY / "tools/java/java_analyzer.py",
     "ts":             CODE_TINY / "tools/ts/ts_analyzer.py",
@@ -38,6 +41,10 @@ LANG_ANALYZERS = {
     "python":         CODE_TINY / "tools/python/python_analyzer.py",
     "rust":           CODE_TINY / "tools/rust/rust_analyzer.py",
     "swift":          CODE_TINY / "tools/swift/swift_analyzer.py",
+    "vbnet":          CODE_TINY / "tools/vb/vbnet_analyzer.py",
+    "vb6":            CODE_TINY / "tools/vb/vb6_analyzer.py",
+    "vba":            CODE_TINY / "tools/vb/vba_analyzer.py",
+    "vbscript":       CODE_TINY / "tools/vb/vbscript_analyzer.py",
     "android_java":   CODE_TINY / "tools/android/android_java_analyzer.py",
     "android_kotlin": CODE_TINY / "tools/android/android_kotlin_analyzer.py",
     "android_mixed":  CODE_TINY / "tools/android/android_mixed_analyzer.py",
@@ -47,10 +54,15 @@ FRAMEWORK_ANALYZERS = {
     "spring":      CODE_TINY / "tools/spring/spring_analyzer.py",
     "servlet_jsp": CODE_TINY / "tools/servlet_jsp/servlet_jsp_analyzer.py",
     "mybatis":     CODE_TINY / "tools/mybatis/mybatis_analyzer.py",
+    "struts":      CODE_TINY / "tools/struts/struts_analyzer.py",
+    "flutter":     CODE_TINY / "tools/flutter/flutter_analyzer.py",
 }
 
 LANG_EXTENSIONS = {
     "cobol":   {".cbl", ".cob", ".cpy", ".copy"},
+    "dart":    {".dart"},
+    "delphi": {".pas", ".dpr", ".inc"},
+    "go":      {".go"},
     "kotlin":  {".kt", ".kts"},
     "java":    {".java"},
     "ts":      {".ts", ".tsx"},
@@ -63,6 +75,10 @@ LANG_EXTENSIONS = {
     "python":  {".py"},
     "rust":    {".rs"},
     "swift":   {".swift"},
+    "vbnet":   {".vb", ".vbproj"},
+    "vb6":     {".vbp", ".vbw", ".frx"},
+    "vba":     {".bas", ".cls", ".frm"},
+    "vbscript": {".vbs", ".wsf", ".asp"},
 }
 
 SENSITIVE_PATTERNS = [

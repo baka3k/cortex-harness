@@ -33,7 +33,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "use_cases": ["Start of conversation", "Switch between projects", "Set context for multiple queries"],
         "inputs": [
             {"name": "parser_type", "type": "str", "required": False,
-             "description": "Parser type including spring, servlet_jsp, mybatis, existing C++/JVM aliases, or android/android-kotlin"},
+             "description": "Parser type including COBOL, Go, Dart/Flutter, Spring, Struts, Servlet/JSP, MyBatis, C++/JVM aliases, or Android"},
             {"name": "database_name", "type": "str", "required": False,
              "description": "Neo4j database name (e.g., 'neo4j', 'sample_module', 'target_module')"},
         ],
@@ -60,7 +60,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
               {"name": "expand_search", "type": "bool", "required": False,
                "description": "When true, allow cross-domain traversal and keep non-requested nodes compact."},
               {"name": "framework", "type": "str", "required": False,
-               "description": "Optional framework filter: spring, servlet_jsp, or mybatis."},
+               "description": "Optional framework filter: spring, struts, servlet_jsp, mybatis, or flutter."},
               {"name": "kinds", "type": "List[str]", "required": False,
                "description": "Optional framework node-kind filters."},
         ],
