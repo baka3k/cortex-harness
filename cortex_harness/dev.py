@@ -13,6 +13,7 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import click
 
@@ -368,6 +369,15 @@ def _env_to_qdrant_url(env: dict) -> str:
     return f"http://{host}:{port}"
 
 
+def _configured_qdrant_url(env: dict) -> str:
+    """Return a Qdrant URL only when vector storage was explicitly configured."""
+    if env.get("QDRANT_URL"):
+        return str(env["QDRANT_URL"])
+    if env.get("QDRANT_HOST") or env.get("QDRANT_PORT"):
+        return _env_to_qdrant_url(env)
+    return ""
+
+
 def _code_qdrant_collection(env: dict, project: dict) -> str:
     """Return configured code collection, falling back to project code."""
     return str(
@@ -386,12 +396,22 @@ def _code_env_for_process(cfg: dict) -> dict:
 
     collection = _code_qdrant_collection(env, project)
     result = {k: str(v) for k, v in env.items() if v is not None}
-    result.setdefault("QDRANT_URL", _env_to_qdrant_url(env))
+    qdrant_url = _configured_qdrant_url(env)
+    if qdrant_url:
+        result.setdefault("QDRANT_URL", qdrant_url)
     result.setdefault("QDRANT_COLLECTION", collection)
     result.setdefault("QDRANT_COLLECTION_CODE", collection)
     if env.get("EMBEDDING_MODEL"):
         result.setdefault("CODE_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
         result.setdefault("EMBED_MODEL", str(env["EMBEDDING_MODEL"]))
+    if env.get("device"):
+        result.setdefault("EMBED_DEVICE", str(env["device"]))
+    if env.get("BATCH_SIZE"):
+        result.setdefault("EMBED_BATCH_SIZE", str(env["BATCH_SIZE"]))
+    if env.get("MAX_EMBED_CHARS"):
+        result.setdefault("MAX_EMBED_CHARS", str(env["MAX_EMBED_CHARS"]))
+    if env.get("CACHE_DIR"):
+        result.setdefault("QDRANT_CACHE_DIR", str(env["CACHE_DIR"]))
     return result
 
 
@@ -990,14 +1010,23 @@ def _venv_python(base_dir: Path) -> str:
     return sys.executable
 
 
-def _run_with_retry(cmd: list, max_retries: int = 3, dry_run: bool = False) -> int:
+def _run_with_retry(
+    cmd: list,
+    max_retries: int = 3,
+    dry_run: bool = False,
+    env: Optional[dict] = None,
+) -> int:
     display = " ".join(str(c) for c in cmd)
     click.echo(f"  $ {display}")
     if dry_run:
         click.echo("  [dry-run] skipped")
         return 0
     for attempt in range(1, max_retries + 1):
-        rc = subprocess.run([str(c) for c in cmd]).returncode
+        process_env = None
+        if env is not None:
+            process_env = dict(os.environ)
+            process_env.update({str(key): str(value) for key, value in env.items()})
+        rc = subprocess.run([str(c) for c in cmd], env=process_env).returncode
         if rc == 0:
             return 0
         if attempt < max_retries:
@@ -1777,6 +1806,7 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
     cfg, _   = _load_active_config(project_path)
     code_cfg = cfg.get("code", {})
     env      = code_cfg.get("env", {})
+    process_env = _code_env_for_process(cfg)
     project  = cfg.get("project", {})
     folders  = _source_folders(code_cfg.get("source", {}))
 
@@ -1811,9 +1841,12 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
             "--project-id", project.get("code", project.get("name", "project")),
             "--project-name", project.get("name", "project"),
             "--python-bin", python,
+            "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
             *_neo4j_args_code(env),
-            "--qdrant-url", _env_to_qdrant_url(env),
         ]
+        qdrant_url = _configured_qdrant_url(env)
+        if qdrant_url:
+            cmd += ["--qdrant-url", qdrant_url]
         if full_scan:
             cmd.append("--full-scan")
         if dry_run:
@@ -1825,7 +1858,7 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
             cmd.append("--verbose")
 
         start = time.time()
-        rc = _run_with_retry(cmd, dry_run=False)
+        rc = _run_with_retry(cmd, dry_run=False, env=process_env)
         elapsed = time.time() - start
         summaries.append({
             "folder": folder,
@@ -1854,6 +1887,7 @@ def sync_code_all(ctx):
     cfg, _       = _load_active_config(project_path)
     code_cfg     = cfg.get("code", {})
     env          = code_cfg.get("env", {})
+    process_env  = _code_env_for_process(cfg)
     project      = cfg.get("project", {})
     folders      = _source_folders(code_cfg.get("source", {}))
 
@@ -1887,9 +1921,12 @@ def sync_code_all(ctx):
             "--project-id", project.get("code", project.get("name", "project")),
             "--project-name", project.get("name", "project"),
             "--python-bin", python,
+            "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
             *_neo4j_args_code(env),
-            "--qdrant-url", _env_to_qdrant_url(env),
         ]
+        qdrant_url = _configured_qdrant_url(env)
+        if qdrant_url:
+            cmd += ["--qdrant-url", qdrant_url]
         if o.get("full_scan"):
             cmd.append("--full-scan")
         if o["dry_run"]:
@@ -1901,7 +1938,7 @@ def sync_code_all(ctx):
             cmd.append("--verbose")
 
         start = time.time()
-        rc = _run_with_retry(cmd, dry_run=False)
+        rc = _run_with_retry(cmd, dry_run=False, env=process_env)
         elapsed = time.time() - start
         summaries.append({
             "folder": folder,

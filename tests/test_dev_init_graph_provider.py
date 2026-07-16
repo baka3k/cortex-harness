@@ -2,13 +2,59 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from cortex_harness.dev import cli, _env_to_neo4j_args, _mcp_env_from_config, _neo4j_args_code
+from cortex_harness.dev import (
+    _code_env_for_process,
+    _configured_qdrant_url,
+    _env_to_neo4j_args,
+    _mcp_env_from_config,
+    _neo4j_args_code,
+    _run_with_retry,
+    cli,
+)
 
 
 class DevInitGraphProviderTests(unittest.TestCase):
+    def test_code_process_environment_normalizes_embedding_aliases(self):
+        cfg = {
+            "project": {"code": "SHOP"},
+            "code": {
+                "env": {
+                    "QDRANT_HOST": "localhost",
+                    "QDRANT_PORT": "6333",
+                    "EMBEDDING_MODEL": "fixture-model",
+                    "device": "mps",
+                    "BATCH_SIZE": "6",
+                    "MAX_EMBED_CHARS": "700",
+                    "CACHE_DIR": "/tmp/code-cache",
+                }
+            },
+        }
+        env = _code_env_for_process(cfg)
+        self.assertEqual(env["CODE_EMBEDDING_MODEL"], "fixture-model")
+        self.assertEqual(env["EMBED_DEVICE"], "mps")
+        self.assertEqual(env["EMBED_BATCH_SIZE"], "6")
+        self.assertEqual(env["MAX_EMBED_CHARS"], "700")
+        self.assertEqual(env["QDRANT_CACHE_DIR"], "/tmp/code-cache")
+
+    def test_code_process_environment_does_not_enable_unconfigured_qdrant(self):
+        cfg = {"project": {"code": "SHOP"}, "code": {"env": {"GRAPH_PROVIDER": "falkordb"}}}
+
+        env = _code_env_for_process(cfg)
+
+        self.assertNotIn("QDRANT_URL", env)
+        self.assertEqual(_configured_qdrant_url(cfg["code"]["env"]), "")
+
+    def test_retry_runner_passes_supplied_environment(self):
+        with patch("cortex_harness.dev.subprocess.run", return_value=SimpleNamespace(returncode=0)) as run:
+            result = _run_with_retry(["python", "worker.py"], env={"EMBED_DEVICE": "cpu"})
+        self.assertEqual(result, 0)
+        self.assertEqual(run.call_args.kwargs["env"]["EMBED_DEVICE"], "cpu")
+
     def test_mcp_env_without_config_is_empty(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             self.assertEqual(_mcp_env_from_config(Path(temp_dir), "code-tiny"), {})
