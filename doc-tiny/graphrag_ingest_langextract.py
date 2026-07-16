@@ -538,14 +538,18 @@ def _stringify_values(values: Dict[str, Any]) -> Dict[str, Any]:
 def _iter_input_files(folder: Path) -> List[Path]:
     files = []
     for path in folder.rglob("*"):
-        if path.is_file() and path.suffix.lower() in {
-            ".pdf",
-            ".txt",
-            ".md",
-            ".docx",
-            ".pptx",
-            ".xlsx",
-        }:
+        if (
+            path.is_file()
+            and not path.name.startswith("~$")
+            and path.suffix.lower() in {
+                ".pdf",
+                ".txt",
+                ".md",
+                ".docx",
+                ".pptx",
+                ".xlsx",
+            }
+        ):
             files.append(path)
     return sorted(files)
 
