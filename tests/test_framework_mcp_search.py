@@ -52,6 +52,45 @@ class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["kinds"], ["MyBatisStatement"])
         self.assertEqual(result["ids"], ["statement-1"])
 
+    async def test_struts_query_uses_framework_filtered_property_fallback(self):
+        calls = []
+
+        async def fake_run(query, params, dbs):
+            calls.append((query, params))
+            if "fulltext.queryNodes" in query:
+                return dbs[0], []
+            return dbs[0], [
+                {
+                    "n": {
+                        "id": "struts-action-1",
+                        "name": "checkout",
+                        "kind": "StrutsAction",
+                        "framework": "struts",
+                        "project_id": "fixture",
+                        "file_path": "src/main/resources/struts.xml",
+                    }
+                }
+            ]
+
+        tool = getattr(cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions)
+        with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
+            result = await tool(
+                query="checkout action",
+                db="neo4j",
+                framework="struts",
+                include_raw_fields=True,
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertIn("fulltext.queryNodes", calls[0][0])
+        self.assertIn("n.name", calls[1][0])
+        self.assertEqual(calls[1][1]["framework"], "struts")
+        self.assertEqual(result["ids"], ["struts-action-1"])
+        self.assertEqual(
+            result["results"][0]["properties"]["file_path"],
+            "src/main/resources/struts.xml",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

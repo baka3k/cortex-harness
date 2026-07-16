@@ -22,6 +22,11 @@ except Exception:  # pragma: no cover
     load_manifest_paths = None
 
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files
+from tools.common.primary_vector_sync import (
+    documents_from_rows,
+    sync_vector_documents,
+    vector_configured,
+)
 from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
@@ -1225,6 +1230,48 @@ async def _write_graph(args: argparse.Namespace, payloads: List[Dict[str, Any]])
                 await result
 
 
+def _sync_vectors(args: argparse.Namespace, payloads: List[Dict[str, Any]]) -> int:
+    if not vector_configured(args.qdrant_url):
+        return 0
+    project_id = args.project_id or os.path.basename(os.path.abspath(args.root)) or "go-project"
+    project_name = args.project_name or project_id
+    repo = args.repo or _repo_name(project_name, args.root)
+    rows = _prepare_write_rows(
+        payloads,
+        root=args.root,
+        project_id=project_id,
+        project_name=project_name,
+        language=args.language or "go",
+        repo=repo,
+        build_system=args.build_system or "",
+    )
+    documents = documents_from_rows(rows, parser="go", root_scope=repo, max_chars=args.max_embed_chars)
+    cleanup_targets = sorted(
+        set(getattr(args, "_selected_rel_paths", []) or [])
+        | set(getattr(args, "_deleted_rel_paths", []) or [])
+    )
+    if not getattr(args, "_scanned_directory", False) and not cleanup_targets:
+        cleanup_targets = sorted({item.payload["file_path"] for item in documents})
+    return sync_vector_documents(
+        documents,
+        url=args.qdrant_url,
+        collection=args.qdrant_collection,
+        model_name=args.embed_model or "jinaai/jina-embeddings-v3",
+        device=args.device,
+        embed_batch_size=args.batch_size,
+        qdrant_batch_size=args.qdrant_batch_size,
+        parser="go",
+        project_id=project_id,
+        root_scope=repo,
+        cleanup_paths=cleanup_targets,
+        full_replace=not args.incremental and getattr(args, "_scanned_directory", False),
+        timeout=args.qdrant_timeout,
+        retries=args.qdrant_retries,
+        retry_sleep=args.qdrant_retry_sleep,
+        verbose=args.verbose,
+    )
+
+
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Go tree-sitter parser/extractor")
     parser.add_argument("path", nargs="?", help="Go source file or directory")
@@ -1278,6 +1325,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
         print("Either path or --root is required", file=sys.stderr)
         return 2
     path = os.path.abspath(args.path or args.root)
+    args._scanned_directory = os.path.isdir(path)
     if os.path.isdir(path):
         args.root = os.path.abspath(args.root or path)
         selected_rel_paths: Optional[List[str]] = None
@@ -1320,15 +1368,25 @@ async def main(argv: Optional[List[str]] = None) -> int:
     if args.dry_run:
         print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
         return 0
-    counts = await _write_graph(args, payloads)
+    try:
+        counts = await _write_graph(args, payloads)
+    except Exception as exc:
+        print(f"Go graph persistence failed: {exc}", file=sys.stderr)
+        return 3
     if counts and args.verbose:
         print(f"[graph] written {counts}")
+    try:
+        vector_count = _sync_vectors(args, payloads)
+    except Exception as exc:
+        print(f"Go vector persistence failed: {exc}", file=sys.stderr)
+        return 4
     if args.pretty or not counts:
         print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
     total_functions = sum(len(payload.get("functions") or []) for payload in payloads)
     total_types = sum(len(payload.get("types") or []) for payload in payloads)
     print(
-        f"[SCAN_RESULT] parser=go files={len(payloads)} functions={total_functions} classes={total_types}",
+        f"[SCAN_RESULT] parser=go files={len(payloads)} functions={total_functions} classes={total_types} "
+        f"vectors={vector_count} vector_status={'success' if vector_configured(args.qdrant_url) else 'disabled'}",
         flush=True,
     )
     return 0

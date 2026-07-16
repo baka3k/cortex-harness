@@ -73,6 +73,9 @@ class IncrementalSyncBootstrapTests(unittest.TestCase):
             self.assertEqual(summary["diff"], {"entries": 1, "changed": 1, "deleted": 0})
             self.assertEqual([item["parser"] for item in summary["primary_parsers"]], ["cplus"])
             self.assertEqual(len(commands), 1)
+            self.assertNotIn("--incremental", commands[0])
+            self.assertNotIn("--changed-files-manifest", commands[0])
+            self.assertNotIn("--deleted-files-manifest", commands[0])
 
 
 if __name__ == "__main__":

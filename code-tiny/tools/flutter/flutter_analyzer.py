@@ -17,9 +17,14 @@ if __package__ in {None, ""}:
 from tools.flutter.cache import DependencyIndex, select_incremental_facts  # noqa: E402
 from tools.flutter.dart_parser import analyze_project, create_parser, parser_version  # noqa: E402
 from tools.flutter.detector import detect_flutter_project, project_package_name  # noqa: E402
-from tools.flutter.normalizer import normalize_facts  # noqa: E402
+from tools.flutter.normalizer import normalize_facts, qdrant_payloads  # noqa: E402
 from tools.flutter.pipeline import write_canonical_batch  # noqa: E402
 from tools.flutter.protocol import ProtocolError, parse_jsonl, record_to_dict, serialize_records  # noqa: E402
+from tools.common.primary_vector_sync import (  # noqa: E402
+    documents_from_payloads,
+    sync_vector_documents,
+    vector_configured,
+)
 from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args  # noqa: E402
 from tools.graph.writer.language_writer import LanguageCodeWriter  # noqa: E402
 
@@ -113,6 +118,45 @@ async def write_graph(args: argparse.Namespace, facts, cleanup_paths: Sequence[s
         await _close_driver(driver)
 
 
+def sync_vectors(args: argparse.Namespace, facts, cleanup_paths: Sequence[str]) -> int:
+    """Persist only primary Dart symbols; Flutter overlay facts remain graph-only."""
+    if args.mode != "dart" or not vector_configured(args.qdrant_url):
+        return 0
+    project_id = facts.header.project_id
+    project_name = args.project_name or project_id
+    repo = args.repo or f"{project_name}/{Path(args.root).resolve().name}"
+    batch = normalize_facts(
+        facts,
+        project_name=project_name,
+        repo=repo,
+        build_system=args.build_system or "flutter",
+    )
+    documents = documents_from_payloads(
+        qdrant_payloads(batch),
+        parser="dart",
+        root_scope=repo,
+        max_chars=args.max_embed_chars,
+    )
+    return sync_vector_documents(
+        documents,
+        url=args.qdrant_url,
+        collection=args.qdrant_collection,
+        model_name=args.embed_model or "jinaai/jina-embeddings-v3",
+        device=args.device,
+        embed_batch_size=args.batch_size,
+        qdrant_batch_size=args.qdrant_batch_size,
+        parser="dart",
+        project_id=project_id,
+        root_scope=repo,
+        cleanup_paths=cleanup_paths,
+        full_replace=not args.incremental,
+        timeout=args.qdrant_timeout,
+        retries=args.qdrant_retries,
+        retry_sleep=args.qdrant_retry_sleep,
+        verbose=args.verbose,
+    )
+
+
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Dart and Flutter semantic analyzer", allow_abbrev=False)
     parser.add_argument("--root", required=True)
@@ -134,6 +178,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--ignore-cache", action="store_true")
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION"))
+    parser.add_argument("--embed-model", default=os.environ.get("CODE_EMBEDDING_MODEL", ""))
+    parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))
+    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", "4")))
+    parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", "4000")))
+    parser.add_argument("--qdrant-batch-size", type=int, default=int(os.environ.get("QDRANT_BATCH_SIZE", "128")))
+    parser.add_argument("--qdrant-timeout", type=float, default=float(os.environ.get("QDRANT_TIMEOUT", "300")))
+    parser.add_argument("--qdrant-retries", type=int, default=int(os.environ.get("QDRANT_RETRIES", "3")))
+    parser.add_argument("--qdrant-retry-sleep", type=float, default=float(os.environ.get("QDRANT_RETRY_SLEEP", "2")))
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER"))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
@@ -224,11 +276,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"[flutter] ERROR: graph write failed after staged analysis: {exc}", file=sys.stderr)
         return 3
     try:
+        vector_count = sync_vectors(args, facts, cleanup_paths)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[flutter] ERROR: vector write failed after graph persistence: {exc}", file=sys.stderr)
+        return 4
+    try:
         updated_dependency_index.save(dependency_cache)
     except OSError as exc:
         print(f"[flutter] WARNING: dependency cache was not updated: {exc}", file=sys.stderr)
     print(
-        "[SCAN_RESULT] parser=%s files=%d nodes=%d edges=%d diagnostics=%d graph=%s artifact=%s"
+        "[SCAN_RESULT] parser=%s files=%d nodes=%d edges=%d diagnostics=%d graph=%s "
+        "vectors=%d vector_status=%s artifact=%s"
         % (
             args.mode,
             facts.summary.processed_files,
@@ -236,6 +294,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             len(facts.edges),
             len(facts.diagnostics),
             sum(counts.values()),
+            vector_count,
+            "success" if args.mode == "dart" and vector_configured(args.qdrant_url) else "disabled",
             output,
         )
     )
