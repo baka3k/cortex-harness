@@ -58,6 +58,53 @@ class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expansion["edges"][0]["type"], "CALLS")
         self.assertEqual(calls[0][1]["seed_ids"], ["seed-function"])
 
+    async def test_named_framework_queries_expand_from_primary_language_seeds(self):
+        cases = (
+            ("spring order service transaction", "java-order-service", "spring-bean", "SpringBean"),
+            ("servlet login endpoint", "java-login-servlet", "servlet-endpoint", "ServletEndpoint"),
+            ("mybatis catalog statement", "java-catalog-repository", "mybatis-statement", "MyBatisStatement"),
+            ("flutter home route", "dart-home-widget", "flutter-route", "FlutterRoute"),
+            ("aspnet core orders endpoint", "csharp-orders-controller", "aspnet-core-endpoint", "HttpEndpoint"),
+            ("aspnet framework home endpoint", "csharp-home-controller", "aspnet-framework-endpoint", "HttpEndpoint"),
+        )
+        for query, seed_id, node_id, kind in cases:
+            with self.subTest(query=query):
+                async def fake_run_cypher_first(cypher, params, dbs):
+                    if "MATCH p =" in cypher:
+                        return "neo4j", [
+                            {
+                                "seed_id": seed_id,
+                                "node_id": node_id,
+                                "name": query,
+                                "qualified_name": node_id,
+                                "kind": kind,
+                                "file_path": "fixture/source",
+                                "hop_distance": 1,
+                            }
+                        ]
+                    return "neo4j", [
+                        {
+                            "source": seed_id,
+                            "target": node_id,
+                            "type": "FRAMEWORK_RELATION",
+                            "confidence": 1.0,
+                            "call_depth": 1,
+                        }
+                    ]
+
+                result = await expand_semantic_results(
+                    {"results": [{"payload": {"symbol_id": seed_id, "query": query}}]},
+                    run_cypher_first=fake_run_cypher_first,
+                    db_candidates=["neo4j"],
+                    expand_graph=True,
+                    graph_depth=2,
+                )
+
+                expansion = result["graph_expansion"]
+                self.assertEqual(expansion["seed_ids"], [seed_id])
+                self.assertEqual(expansion["results"][0]["node_id"], node_id)
+                self.assertEqual(expansion["results"][0]["kind"], kind)
+
 
 if __name__ == "__main__":
     unittest.main()

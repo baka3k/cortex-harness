@@ -12,7 +12,7 @@ if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
 from tools.flutter.detector import detect_flutter_project, project_package_name  # noqa: E402
-from tools.flutter.dart_parser import create_parser, parser_version  # noqa: E402
+from tools.flutter.dart_parser import analyze_project, create_parser, parser_version  # noqa: E402
 from tools.flutter.flutter_analyzer import main  # noqa: E402
 
 
@@ -37,6 +37,30 @@ class FlutterProjectDetectionTest(unittest.TestCase):
         tree = parser.parse(b"void main() {}")
         self.assertFalse(tree.root_node.has_error)
         self.assertNotEqual(parser_version(), "unknown")
+
+    def test_flutter_overlay_reuses_primary_dart_symbol_identities(self):
+        dart = analyze_project(
+            FIXTURE,
+            project_id="fixture",
+            package_name="cortex_flutter_fixture",
+            mode="dart",
+        )
+        flutter = analyze_project(
+            FIXTURE,
+            project_id="fixture",
+            package_name="cortex_flutter_fixture",
+            mode="flutter",
+        )
+
+        self.assertEqual(
+            {node.identity for node in dart.nodes},
+            {node.identity for node in flutter.nodes},
+        )
+        self.assertEqual(
+            {(edge.source, edge.target, edge.relationship) for edge in dart.edges},
+            {(edge.source, edge.target, edge.relationship) for edge in flutter.edges},
+        )
+        self.assertTrue(all(node.evidence.file for node in flutter.nodes))
 
     def test_all_mode_still_analyzes_a_pure_dart_package(self):
         with tempfile.TemporaryDirectory() as directory:
