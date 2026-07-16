@@ -5,7 +5,7 @@ created: 2026-07-15
 mode: hi-plan --fast
 scope: ASP.NET Core and ASP.NET Framework semantic overlays, shared Roslyn frontend, migration model, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2200-mcp-capability-routing]
+relatedPlans: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2200-mcp-capability-routing, 260716-1615-primary-vector-ingestion-completion]
 sources:
   - /Users/hieplq1.rpm/Desktop/ASPNet_Migration_Package/ASP.NET_Core_Analyzer_Design_Spec.md
   - /Users/hieplq1.rpm/Desktop/ASPNet_Migration_Package/ASP.NET_Framework_Analyzer_Design_Spec.md
@@ -27,6 +27,12 @@ authentication/authorization, injection, result, and configuration-consumer
 resolution are not yet fully reconstructed. Live provider parity is also gated
 on the repository's external graph services. These are represented as explicit
 partial/unresolved output rather than fabricated edges.
+
+Vector review on 2026-07-16 confirmed that both ASP.NET analyzers are intentional
+graph-only overlays (`writes_vectors=False`) over the vector-producing C# primary
+analyzer. Plan `260716-1615-primary-vector-ingestion-completion` will validate
+C# semantic seeds plus graph expansion and will add direct ASP.NET vectors only
+if a representative unanchored framework fact cannot be retrieved.
 
 Verification evidence: worker Release build passes; ASP.NET plus shared registry,
 sync, and MCP tests pass; the full repository run reaches 141 passing tests. The

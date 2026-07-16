@@ -6,7 +6,7 @@ mode: hi-plan --fast
 source: /Users/hieplq1.rpm/Downloads/Analyzer_Design_Spec_Perl_Tree_Sitter.md
 scope: Perl 5 primary parsing, normalized structural facts, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers]
+relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260716-1615-primary-vector-ingestion-completion]
 ---
 
 # Perl Tree-sitter Analyzer Parser Plan
@@ -37,6 +37,7 @@ Perl files
 - `code-tiny/mcp/unified_mcp.py` routes generic language parsers to the C++ backend and discovers tool directory names for `list_parsers`; Perl must be added to the routing contract and routing instructions.
 - Perl does not require a framework overlay or a language-specific MCP server for the syntax-level scope in the supplied specification.
 - `docs/development-rules.md` is absent. The supplied root instructions, `code-tiny/docs/guide_tool_integrate.md`, `code-tiny/docs/Tool_Template.md`, and existing repository conventions govern this plan.
+- Vector completion review on 2026-07-16 found that `perl_analyzer.py` accepts Qdrant settings but currently persists only graph rows. `260716-1615-primary-vector-ingestion-completion` owns the missing optional embedding, incremental vector cleanup, and acceptance tests required by this plan.
 
 ## Scope and Decisions
 

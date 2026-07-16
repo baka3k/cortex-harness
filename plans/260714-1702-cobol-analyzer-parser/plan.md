@@ -13,6 +13,7 @@ relatedPlans:
   [
     260713-1638-framework-parser-integration,
     260714-1603-flutter-analyzer-parser,
+    260716-1615-primary-vector-ingestion-completion,
   ]
 ---
 
@@ -37,6 +38,8 @@ dev sync code
 ```
 
 ## Verified Project Context
+
+- Vector completion review on 2026-07-16 confirmed that COBOL already calls `sync_qdrant()`, performs incremental cleanup, reports vector counts, and has focused Qdrant contract tests. It is a reference implementation for `260716-1615-primary-vector-ingestion-completion`, not a missing vector writer.
 
 - `code-tiny/tools/cobol/` currently contains only `lib/cobol.cpython-310-darwin.so`; no COBOL Python analyzer or tests exist.
 - The supplied library is a 2.8 MB universal Mach-O bundle for `x86_64` and `arm64`, exports `tree_sitter_cobol`, and successfully parses a minimal COBOL program with the project Python 3.10 runtime.
