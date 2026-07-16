@@ -6,7 +6,7 @@ mode: hi-plan --fast
 source: /Users/account/Downloads/Flutter_Analyzer_Design_Spec.md
 scope: Dart parsing, Flutter semantic analysis, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260713-1638-framework-parser-integration, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260715-2200-mcp-capability-routing]
+relatedPlans: [260713-1638-framework-parser-integration, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260715-2200-mcp-capability-routing, 260716-1615-primary-vector-ingestion-completion]
 ---
 
 # Flutter Analyzer Parser Tool Plan
@@ -42,6 +42,7 @@ dev sync code
 - Existing Android and framework analyzers provide the closest integration patterns, but Flutter needs resolved Dart semantics rather than name-only pattern matching.
 - `tree-sitter-dart` publishes Python wheels, covers Dart/Flutter syntax, and exposes the standard `py-tree-sitter` parser API without requiring a Dart or Flutter SDK.
 - `docs/development-rules.md` is absent; the supplied root instructions and existing repository conventions govern this plan.
+- Vector completion review on 2026-07-16 found that Dart primary mode already accepts Qdrant settings and produces normalized Qdrant payloads, but `flutter_analyzer.py::main` stops after graph persistence. `260716-1615-primary-vector-ingestion-completion` now owns that missing primary-vector execution and keeps the Flutter overlay graph-only unless retrieval validation proves direct embeddings necessary.
 
 ## Scope Model
 
