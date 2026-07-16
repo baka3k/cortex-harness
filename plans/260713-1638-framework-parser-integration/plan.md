@@ -6,7 +6,7 @@ completed: 2026-07-13
 mode: hi-plan --fast
 scope: code-tiny framework analyzers, incremental scan orchestration, graph schema, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser]
+relatedPlans: [260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260716-1615-primary-vector-ingestion-completion]
 dependencyOverride: user approved implementation before the migration completed
 
 ## Overview
@@ -38,6 +38,7 @@ This avoids assigning a `.java`, `.kt`, or `.xml` file to only one parser, which
   - `code-tiny/tools/graph/writer/spring_writer.py`
   - `add_require_neo4j_argument` and `resolve_require_neo4j` exports from `tools.graph`
 - The analyzers accept Qdrant-related arguments, but the inspected execution paths do not write framework facts to Qdrant. Servlet/JSP explicitly documents that it creates no separate vector collection.
+- The 2026-07-16 primary-vector review preserves this graph-only overlay decision. Plan `260716-1615-primary-vector-ingestion-completion` adds missing primary-language writes and validates framework retrieval through primary semantic seeds before any direct framework collection is considered.
 
 ### Main scan flow
 
