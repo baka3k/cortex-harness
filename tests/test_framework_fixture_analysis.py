@@ -50,6 +50,32 @@ class FrameworkFixtureAnalysisTest(unittest.TestCase):
         self.assertIn("MyBatisStatement", mybatis_kinds)
         self.assertIn("DatabaseTable", mybatis_kinds)
 
+        for framework, result in (
+            ("spring", spring),
+            ("servlet_jsp", servlet),
+            ("mybatis", mybatis),
+        ):
+            with self.subTest(framework=framework):
+                anchored_facts = [
+                    fact for fact in result.semantic_facts
+                    if getattr(fact, "source_symbol_id", "")
+                ]
+                semantic_targets = {
+                    relationship.to_id
+                    for relationship in result.relationships
+                    if relationship.type == "SEMANTIC_OF"
+                }
+                self.assertTrue(anchored_facts)
+                self.assertTrue(
+                    {fact.source_symbol_id for fact in anchored_facts} & semantic_targets
+                )
+                self.assertTrue(
+                    all(fact.project_id == "fixture" for fact in anchored_facts)
+                )
+                self.assertTrue(
+                    all(fact.source.file_path for fact in anchored_facts)
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

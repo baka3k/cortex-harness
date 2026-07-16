@@ -56,6 +56,8 @@ class AnalyzerConfig:
     script_path: str
     incremental_supported: bool
     extra_args: Tuple[str, ...] = ()
+    writes_vectors: bool = True
+    seeded_by: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -172,6 +174,9 @@ MESSAGE_ENABLED_PARSERS: Set[str] = {
     "sql",
     "plsql",
 }
+
+_SHARED_VECTOR_CLI_PARSERS: Set[str] = {"dart", "go", "perl", "rust", "swift"}
+_SCAN_RESULT_VECTORS_RE = re.compile(r"(?m)^\[SCAN_RESULT\].*\bvectors=(\d+)\b")
 
 _TS_BACKEND_SCRIPT = os.path.join(_ROOT_DIR, "tools", "ts", "ts_backend_analyzer.py")
 _TS_FRONTEND_SCRIPT = os.path.join(_ROOT_DIR, "tools", "ts", "ts_analyzer.py")
@@ -670,10 +675,42 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
     return grouped, evidence
 
 
-def _run(cmd: List[str], *, cwd: str, verbose: bool, env: Optional[Dict[str, str]] = None) -> None:
+def _run(cmd: List[str], *, cwd: str, verbose: bool, env: Optional[Dict[str, str]] = None) -> str:
     if verbose:
         print("[upsert] exec:", " ".join(cmd))
-    subprocess.run(cmd, cwd=cwd, check=True, env=env)
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    scan_result = ""
+    output_tail = ""
+    max_output_tail_chars = 65_536
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="")
+            if "[SCAN_RESULT]" in line:
+                scan_result = line[-max_output_tail_chars:]
+            output_tail = (output_tail + line[-max_output_tail_chars:])[-max_output_tail_chars:]
+    except BaseException:
+        process.terminate()
+        process.wait()
+        raise
+    return_code = process.wait()
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, cmd, output=output_tail)
+    return scan_result
+
+
+def _scan_result_vector_count(output: Optional[str]) -> Optional[int]:
+    """Extract the analyzer-reported vector count without parsing general logs."""
+    match = _SCAN_RESULT_VECTORS_RE.search(output or "")
+    return int(match.group(1)) if match else None
 
 
 def _normalize_sha(root: str, ref: str) -> str:
@@ -810,6 +847,15 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
         env["QDRANT_URL"] = args.qdrant_url
     if args.cache_dir:
         env["QDRANT_CACHE_DIR"] = args.cache_dir
+    if args.embed_model:
+        env["CODE_EMBEDDING_MODEL"] = args.embed_model
+        env["EMBED_MODEL"] = args.embed_model
+    if args.embed_device:
+        env["EMBED_DEVICE"] = args.embed_device
+    if args.embed_batch_size:
+        env["EMBED_BATCH_SIZE"] = str(args.embed_batch_size)
+    if args.max_embed_chars:
+        env["MAX_EMBED_CHARS"] = str(args.max_embed_chars)
     return env
 
 
@@ -831,6 +877,10 @@ def _build_analyzer_cmd(
     incremental: bool,
     verbose: bool,
     ignore_cache: bool = False,
+    embed_model: Optional[str] = None,
+    embed_device: Optional[str] = None,
+    embed_batch_size: Optional[int] = None,
+    max_embed_chars: Optional[int] = None,
 ) -> List[str]:
     cmd = [
         python_bin,
@@ -847,6 +897,15 @@ def _build_analyzer_cmd(
         after_sha,
     ]
     cmd.extend(analyzer.extra_args)
+    if analyzer.parser in _SHARED_VECTOR_CLI_PARSERS:
+        if embed_model:
+            cmd.extend(["--embed-model", embed_model])
+        if embed_device:
+            cmd.extend(["--device", embed_device])
+        if embed_batch_size:
+            cmd.extend(["--batch-size", str(embed_batch_size)])
+        if max_embed_chars:
+            cmd.extend(["--max-embed-chars", str(max_embed_chars)])
     if qdrant_collection:
         cmd.extend(["--qdrant-collection", qdrant_collection])
     if incremental:
@@ -1306,6 +1365,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
 
             parser_info: Dict[str, object] = {
                 "parser": parser,
+                "role": "primary",
                 "changed": len(parser_changed),
                 "impacted": len(parser_impacted),
                 "scan": len(parser_scan),
@@ -1321,6 +1381,12 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "qdrant_collection": _code_collection_name(
                     project_id, root, parser, project_code=args.project_code
                 ),
+                "writes_vectors": config.writes_vectors,
+                "seeded_by": list(config.seeded_by),
+                "vector_status": (
+                    "pending" if config.writes_vectors and bool(args.qdrant_url) else "disabled"
+                ),
+                "vector_count": 0 if not args.qdrant_url else None,
                 "message_scan_enabled": bool(args.sync_messages and parser in MESSAGE_ENABLED_PARSERS),
                 "ignore_cache": bool(args.ignore_cache),
                 "message_qdrant_collection": (
@@ -1351,7 +1417,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     f"parser '{parser}' has no incremental mode yet; rerun with --allow-full-fallback or exclude parser."
                 )
 
-            if config.incremental_supported:
+            run_incrementally = bool(config.incremental_supported and not full_scan)
+            if run_incrementally:
                 cmd = _build_analyzer_cmd(
                     python_bin=args.python_bin,
                     analyzer=config,
@@ -1369,9 +1436,14 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     incremental=True,
                     verbose=args.verbose,
                     ignore_cache=bool(args.ignore_cache),
+                    embed_model=args.embed_model,
+                    embed_device=args.embed_device,
+                    embed_batch_size=args.embed_batch_size,
+                    max_embed_chars=args.max_embed_chars,
                 )
             else:
-                print(f"[upsert] parser={parser} fallback=full")
+                reason = "requested" if full_scan else "fallback"
+                print(f"[upsert] parser={parser} mode=full reason={reason}")
                 cmd = _build_analyzer_cmd(
                     python_bin=args.python_bin,
                     analyzer=config,
@@ -1389,16 +1461,27 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     incremental=False,
                     verbose=args.verbose,
                     ignore_cache=bool(args.ignore_cache),
+                    embed_model=args.embed_model,
+                    embed_device=args.embed_device,
+                    embed_batch_size=args.embed_batch_size,
+                    max_embed_chars=args.max_embed_chars,
                 )
             parser_info["command"] = cmd
             try:
-                _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=env)
+                analyzer_output = _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=env)
             except Exception as exc:
                 parser_info["status"] = "failed"
                 parser_info["error"] = str(exc)
+                if parser_info["vector_status"] == "pending":
+                    parser_info["vector_status"] = "failed"
                 raise
             else:
                 parser_info["status"] = "success"
+                reported_vector_count = _scan_result_vector_count(analyzer_output)
+                if reported_vector_count is not None:
+                    parser_info["vector_count"] = reported_vector_count
+                if parser_info["vector_status"] == "pending":
+                    parser_info["vector_status"] = "success"
                 executed_parsers.append(parser)
             finally:
                 parser_info["finished_at"] = _now_iso()
@@ -1430,8 +1513,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "semantic_seed_collections": [
                     _code_collection_name(project_id, root, parser, project_code=args.project_code)
                     for parser in framework_config.prerequisite_parsers
-                    if parser in {"java", "kotlin"}
                 ],
+                "vector_status": "disabled",
                 "detector_evidence": framework_evidence.get(framework, []),
                 "status": "pending",
                 "error": "",
@@ -1614,6 +1697,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument(
+        "--embed-model",
+        default=os.environ.get("CODE_EMBEDDING_MODEL") or os.environ.get("EMBED_MODEL"),
+    )
+    parser.add_argument("--embed-device", default=os.environ.get("EMBED_DEVICE", "cpu"))
+    parser.add_argument(
+        "--embed-batch-size",
+        type=int,
+        default=int(os.environ.get("EMBED_BATCH_SIZE", "4")),
+    )
+    parser.add_argument(
+        "--max-embed-chars",
+        type=int,
+        default=int(os.environ.get("MAX_EMBED_CHARS", "4000")),
+    )
     parser.add_argument(
         "--sync-messages",
         action=argparse.BooleanOptionalAction,

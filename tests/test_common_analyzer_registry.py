@@ -68,6 +68,11 @@ class CommonAnalyzerRegistryTest(unittest.TestCase):
         self.assertEqual(set(DEV_LANG_ANALYZERS), expected_dev_languages)
         self.assertEqual(set(DEV_FRAMEWORK_ANALYZERS), EXPECTED_OVERLAYS)
 
+    def test_every_analyzer_has_an_explicit_vector_strategy(self):
+        self.assertTrue(all(config.writes_vectors for config in ANALYZERS.values()))
+        self.assertTrue(all(not config.writes_vectors for config in FRAMEWORK_ANALYZERS.values()))
+        self.assertTrue(all(config.prerequisite_parsers for config in FRAMEWORK_ANALYZERS.values()))
+
     def test_primary_file_ownership_includes_previously_unrouted_analyzers(self):
         with tempfile.TemporaryDirectory() as tmp:
             grouped = _group_paths_by_parser(

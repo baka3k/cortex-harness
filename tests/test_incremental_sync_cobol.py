@@ -47,7 +47,7 @@ class IncrementalSyncCobolTest(unittest.TestCase):
             incremental=True,
             verbose=True,
         )
-        self.assertIn("tools\\cobol\\cobol_analyzer.py", config.script_path)
+        self.assertTrue(Path(config.script_path).as_posix().endswith("tools/cobol/cobol_analyzer.py"))
         self.assertIn("--incremental", command)
         self.assertIn("changed.json", command)
         self.assertIn("deleted.json", command)

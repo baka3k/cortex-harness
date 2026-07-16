@@ -17,6 +17,11 @@ if _ROOT_DIR not in sys.path:
 
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files
+from tools.common.primary_vector_sync import (
+    documents_from_rows,
+    sync_vector_documents,
+    vector_configured,
+)
 from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 from tools.perl.models import AnalysisResult, Diagnostic, SymbolRecord, _to_primitive
@@ -256,6 +261,46 @@ async def _write_graph(args: argparse.Namespace, result: AnalysisResult) -> Dict
                 await closed
 
 
+def _sync_vectors(args: argparse.Namespace, result: AnalysisResult) -> int:
+    if not vector_configured(args.qdrant_url):
+        return 0
+    project_name = args.project_name or result.project_id
+    repo = args.repo or f"{project_name}/{os.path.basename(args.root)}"
+    rows = build_graph_rows(
+        result,
+        project_name=project_name,
+        repo=repo,
+        build_system=args.build_system or "perl",
+    )
+    documents = documents_from_rows(
+        rows,
+        parser="perl",
+        root_scope=repo,
+        max_chars=args.max_embed_chars,
+    )
+    cleanup_targets = sorted(set(result.changed_paths) | set(result.deleted_paths))
+    if not getattr(args, "_scanned_directory", False) and not cleanup_targets:
+        cleanup_targets = sorted({item.payload["file_path"] for item in documents})
+    return sync_vector_documents(
+        documents,
+        url=args.qdrant_url,
+        collection=args.qdrant_collection,
+        model_name=args.embed_model or "jinaai/jina-embeddings-v3",
+        device=args.device,
+        embed_batch_size=args.batch_size,
+        qdrant_batch_size=args.qdrant_batch_size,
+        parser="perl",
+        project_id=result.project_id,
+        root_scope=repo,
+        cleanup_paths=cleanup_targets,
+        full_replace=not args.incremental and getattr(args, "_scanned_directory", False),
+        timeout=args.qdrant_timeout,
+        retries=args.qdrant_retries,
+        retry_sleep=args.qdrant_retry_sleep,
+        verbose=args.verbose,
+    )
+
+
 def _output_path(root: str, raw_path: str) -> str:
     root_real = os.path.realpath(os.path.abspath(root))
     candidate = raw_path if os.path.isabs(raw_path) else os.path.join(root_real, raw_path)
@@ -317,12 +362,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "perl_functions"))
     parser.add_argument("--embed-model", default=os.environ.get("CODE_EMBEDDING_MODEL", ""))
     parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--max-embed-chars", type=int, default=4000)
-    parser.add_argument("--qdrant-batch-size", type=int, default=128)
-    parser.add_argument("--qdrant-timeout", type=float, default=300.0)
-    parser.add_argument("--qdrant-retries", type=int, default=3)
-    parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
+    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", "4")))
+    parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", "4000")))
+    parser.add_argument("--qdrant-batch-size", type=int, default=int(os.environ.get("QDRANT_BATCH_SIZE", "128")))
+    parser.add_argument("--qdrant-timeout", type=float, default=float(os.environ.get("QDRANT_TIMEOUT", "300")))
+    parser.add_argument("--qdrant-retries", type=int, default=int(os.environ.get("QDRANT_RETRIES", "3")))
+    parser.add_argument("--qdrant-retry-sleep", type=float, default=float(os.environ.get("QDRANT_RETRY_SLEEP", "2")))
     parser.set_defaults(enable_message_scan=False)
     parser.add_argument("--enable-message-scan", dest="enable_message_scan", action="store_true")
     parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false")
@@ -338,6 +383,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
         print("Either path or --root is required.", file=sys.stderr)
         return 2
     path = os.path.realpath(os.path.abspath(raw_root))
+    args._scanned_directory = os.path.isdir(path)
     if os.path.isfile(path):
         args.root = os.path.dirname(path)
         implicit_changed: Optional[Iterable[str]] = [os.path.basename(path)]
@@ -396,14 +442,23 @@ async def main(argv: Optional[List[str]] = None) -> int:
         try:
             counts = await _write_graph(args, result)
         except Exception as exc:
-            print(f"Perl persistence failed: {exc}", file=sys.stderr)
+            print(f"Perl graph persistence failed: {exc}", file=sys.stderr)
             return 4
+        try:
+            vector_count = _sync_vectors(args, result)
+        except Exception as exc:
+            print(f"Perl vector persistence failed: {exc}", file=sys.stderr)
+            return 5
+    else:
+        vector_count = 0
     if args.dry_run or args.pretty or not counts:
         print(payload)
     print(
         f"[SCAN_RESULT] parser=perl files={len(result.files)} "
         f"functions={sum(1 for item in result.symbols if item.kind == 'subroutine')} "
-        f"classes={sum(1 for item in result.symbols if item.kind == 'package')}",
+        f"classes={sum(1 for item in result.symbols if item.kind == 'package')} "
+        f"vectors={vector_count} vector_status="
+        f"{'success' if vector_configured(args.qdrant_url) and not args.dry_run else 'disabled'}",
         flush=True,
     )
     return 0
