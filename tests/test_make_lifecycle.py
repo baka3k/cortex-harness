@@ -100,11 +100,18 @@ class MakeLifecycleTests(unittest.TestCase):
             self.assertEqual([record["name"] for record in records], ["code-tiny", "doc-tiny"])
             for server in LIFECYCLE.SERVERS:
                 launcher = state_dir / f"start-{server['name']}.command"
+                runtime_env = state_dir / f"{server['name']}.active.env"
                 self.assertTrue(launcher.is_file())
+                self.assertTrue(runtime_env.is_file())
                 content = launcher.read_text(encoding="utf-8")
+                active_content = runtime_env.read_text(encoding="utf-8")
                 self.assertIn(str(server["script"]), content)
+                self.assertIn(f"export CORTEX_HARNESS_ENV_FILE={runtime_env}", content)
                 self.assertIn('export GRAPH_PROVIDER="${GRAPH_PROVIDER:-falkordb}"', content)
                 self.assertIn('export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"', content)
+                self.assertIn("export FALKORDB_GRAPH=cortext", active_content)
+                self.assertIn("export NEO4J_DB=cortext", active_content)
+                self.assertIn("export QDRANT_URL=http://localhost:6333", active_content)
                 scoped_provider = "DOC_GRAPH_PROVIDER" if server["name"] == "doc-tiny" else "CODE_GRAPH_PROVIDER"
                 self.assertIn(
                     f'export {scoped_provider}="${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}"',
