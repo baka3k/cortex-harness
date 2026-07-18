@@ -50,7 +50,9 @@ class EmptyDetector:
 
 class IncrementalSyncFrameworkOverlaysTest(unittest.TestCase):
     def test_selecting_framework_auto_adds_base_language_prerequisites(self):
-        selected, auto_mode = incremental_sync._selected_parsers("spring,mybatis,struts,flutter")
+        selected, auto_mode = incremental_sync._selected_parsers(
+            "spring,mybatis,struts,flutter,fastapi_django,express_js,laravel,database_sql,database_plsql"
+        )
 
         self.assertFalse(auto_mode)
         self.assertIn("spring", selected)
@@ -60,6 +62,50 @@ class IncrementalSyncFrameworkOverlaysTest(unittest.TestCase):
         self.assertIn("struts", selected)
         self.assertIn("flutter", selected)
         self.assertIn("dart", selected)
+        self.assertIn("python", selected)
+        self.assertIn("js", selected)
+        self.assertIn("php", selected)
+        self.assertIn("sql", selected)
+        self.assertIn("plsql", selected)
+
+    def test_database_sources_route_to_dialect_specific_overlays(self):
+        fixture = ROOT / "tests" / "fixtures" / "database-schema-application"
+        paths = ["schema.sql", "audit.pkb"]
+        with patch("tools.spring.detector.SpringProjectDetector", EmptyDetector), patch(
+            "tools.servlet_jsp.detector.ServletJspProjectDetector", EmptyDetector
+        ), patch("tools.mybatis.detector.MyBatisProjectDetector", EmptyDetector):
+            overlays, evidence = incremental_sync._group_paths_by_framework(
+                paths, root=str(fixture),
+            )
+
+        self.assertEqual(overlays["database_sql"], {"schema.sql"})
+        self.assertEqual(overlays["database_plsql"], {"audit.pkb"})
+        self.assertTrue(evidence["database_sql"])
+        self.assertTrue(evidence["database_plsql"])
+
+    def test_web_framework_sources_route_to_nonexclusive_overlays(self):
+        fixture = ROOT / "tests" / "fixtures" / "web-framework-application"
+        paths = [
+            "python/fastapi_app.py",
+            "python/django_views.py",
+            "python/urls.py",
+            "js/app.js",
+            "php/routes.php",
+            "php/UserController.php",
+        ]
+        with patch("tools.spring.detector.SpringProjectDetector", EmptyDetector), patch(
+            "tools.servlet_jsp.detector.ServletJspProjectDetector", EmptyDetector
+        ), patch("tools.mybatis.detector.MyBatisProjectDetector", EmptyDetector):
+            overlays, evidence = incremental_sync._group_paths_by_framework(
+                paths, root=str(fixture),
+            )
+
+        self.assertEqual(overlays["fastapi_django"], set(paths[:3]))
+        self.assertEqual(overlays["express_js"], {"js/app.js"})
+        self.assertEqual(overlays["laravel"], {"php/routes.php", "php/UserController.php"})
+        self.assertTrue(evidence["fastapi_django"])
+        self.assertTrue(evidence["express_js"])
+        self.assertTrue(evidence["laravel"])
 
     def test_struts_and_flutter_projects_route_overlay_candidates(self):
         with tempfile.TemporaryDirectory() as root:

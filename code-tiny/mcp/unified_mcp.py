@@ -47,6 +47,7 @@ from framework_registry import (  # noqa: E402
     default_relationships,
     framework_for_parser,
     parser_aliases,
+    query_engine_for_backend,
     servlet_active_generation_predicate,
 )
 from tools.graph import GraphDriverFactory, GraphProvider  # noqa: E402
@@ -97,7 +98,7 @@ _PARAMETER_GUIDELINES: Dict[str, Any] = {
     "rules": [
         "Use exact parameter names from tool metadata; avoid inventing aliases.",
         "Send required fields explicitly, even if you set activate_project defaults.",
-        "Use either parser_type OR activate_project(parser_type=...) to select backend.",
+        "Use either parser_type OR activate_project(parser_type=...) to select a query profile.",
         "When list-like params are accepted, prefer arrays over comma-separated strings.",
         "On error.invalid_parameters, follow required_params + example and retry once.",
     ],
@@ -118,15 +119,14 @@ INSTRUCTIONS = """Unified MCP for multi-language code graphs (single server/port
 
 Discovery first:
 - Call `list_mcp_functions` at session start to get the exact, current tool set and parameter docs.
-- Call `list_parsers` to inspect canonical profiles, aliases, backends, support levels, and feature gates.
+- Call `list_parsers` to inspect canonical profiles, aliases, query engines, dimensional support, and feature gates.
 
 Routing:
 - Use `activate_project(parser_type=..., database_name=...)` to set defaults.
 - Most tools also accept `parser_type` directly.
 - Parser mapping:
-  - android/android-kotlin/kotlin-android -> Android backend
-  - cplus/cpp/c++/c/clang/java/kotlin/jvm/go/perl/rust/swift/delphi/pascal/vbnet/vb6/vba/vbscript -> C++ backend
-  - cobol/spring/servlet_jsp/mybatis/struts/dart/flutter/aspnet_core/aspnet_framework (and aliases) -> C++ backend with parser-aware traversal defaults
+  - android/android-kotlin/kotlin-android -> android_graph query engine
+  - Other registered profiles -> graph_generic query engine with parser-aware labels and traversal defaults
 - A parser profile describes graph capabilities; it does not imply a separate MCP server.
 - Provider schema filtering is reported through capability_diagnostics when relationships are omitted.
 
@@ -262,8 +262,9 @@ def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[s
         return {
             "requested_parser": parser,
             "canonical_parser": capability.name,
-            "backend": capability.backend,
+            "query_engine": query_engine_for_backend(capability.backend),
             "support_level": capability.support_level,
+            "support": dict(capability.support),
             "features": sorted(capability.features),
             "labels": sorted(capability.labels),
             "searchable_properties": list(capability.searchable_properties),
@@ -271,14 +272,20 @@ def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[s
     return {
         "requested_parser": parser,
         "canonical_parser": None,
-        "backend": backend_name,
+        "query_engine": query_engine_for_backend(backend_name),
         "support_level": "generic",
+        "support": {
+            "symbols": "generic",
+            "calls": "generic",
+            "endpoints": "none",
+            "database": "none",
+        },
         "features": [],
         "labels": [],
         "searchable_properties": [],
         "warning": (
-            f"Parser '{parser}' is not registered; generic backend behavior is being used."
-            if parser else "No parser selected; generic backend behavior is being used."
+            f"Parser '{parser}' is not registered; generic query behavior is being used."
+            if parser else "No parser selected; generic query behavior is being used."
         ),
     }
 
@@ -288,6 +295,7 @@ async def _resolve_direct_capability_context(
     parser_type: Optional[str],
     db: Optional[str],
     required_relationships: Optional[Iterable[str]] = None,
+    required_labels: Optional[Iterable[str]] = None,
     error_payload: Optional[Dict[str, Any]] = None,
 ) -> Tuple[
     Optional[str], List[str], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]
@@ -299,26 +307,68 @@ async def _resolve_direct_capability_context(
     backend_name = _resolve_backend_name(selected_parser)
     routing = _capability_summary(selected_parser, backend_name)
     capability = capability_for_parser(selected_parser)
+    if selected_parser and capability is None:
+        error = _unsupported_parser_result(
+            tool_name,
+            {"parser_type": selected_parser, "db": db, **(error_payload or {})},
+            selected_parser,
+        )
+        return selected_parser, [], routing, None, error
     relationships: List[str] = []
     diagnostics: Optional[Dict[str, Any]] = None
     if capability and backend_name != "android":
+        db_candidates = cplus_backend._resolve_db_candidates(db or None)
         relationships, diagnostics = await cplus_backend._resolve_rel_types_with_diagnostics(
             list(default_relationships(capability.name, tool_name)),
             selected_parser,
-            cplus_backend._resolve_db_candidates(db or None),
+            db_candidates,
             explicit=False,
         )
         routing["default_relationships_applied"] = relationships
         required = list(dict.fromkeys(required_relationships or ()))
         missing_required = [value for value in required if value not in relationships]
+        labels_required = list(dict.fromkeys(required_labels or ()))
+        available_labels = (
+            await cplus_backend._list_node_labels(db_candidates)
+            if labels_required else []
+        )
+        label_schema_available = available_labels is not None
+        missing_labels = (
+            [value for value in labels_required if value not in set(available_labels or [])]
+            if label_schema_available else []
+        )
         schema_available = diagnostics.get("schema_status") == "available" if diagnostics else False
         if diagnostics is not None:
             diagnostics["required_relationships"] = required
             diagnostics["missing_required_relationships"] = missing_required if schema_available else []
-        if not relationships or (schema_available and missing_required):
+            diagnostics["required_labels"] = labels_required
+            diagnostics["available_labels"] = available_labels or []
+            diagnostics["missing_required_labels"] = missing_labels
+            diagnostics["label_schema_status"] = (
+                "available" if label_schema_available else "unavailable"
+            )
+        label_gate_failed = bool(
+            labels_required and (not label_schema_available or missing_labels)
+        )
+        relationship_gate_failed = bool(
+            required and (not schema_available or missing_required)
+        )
+        if not relationships or relationship_gate_failed or label_gate_failed:
             missing_text = (
                 " Missing required relationships: " + ", ".join(missing_required) + "."
                 if missing_required else ""
+            )
+            missing_label_text = (
+                " Missing required labels: " + ", ".join(missing_labels) + "."
+                if missing_labels else ""
+            )
+            inspection_text = (
+                " Provider label schema could not be inspected."
+                if labels_required and not label_schema_available else ""
+            )
+            relationship_inspection_text = (
+                " Provider relationship schema could not be inspected."
+                if required and not schema_available else ""
             )
             error = _build_tool_error(
                 tool_name,
@@ -329,11 +379,12 @@ async def _resolve_direct_capability_context(
                 },
                 ValueError(
                     f"Parser '{selected_parser}' cannot execute '{tool_name}' on the active provider."
-                    + missing_text
+                    + missing_text + missing_label_text + inspection_text
+                    + relationship_inspection_text
                 ),
                 backend_name=backend_name,
             )
-            error["error"]["type"] = "unsupported_capability"
+            error["error"]["type"] = "capability_unavailable"
             error["capability"] = routing
             error["capability_diagnostics"] = diagnostics
             return selected_parser, relationships, routing, diagnostics, error
@@ -434,10 +485,11 @@ def _build_tool_error(
     received = sorted([key for key in payload.keys() if payload.get(key) is not None])
     return {
         "ok": False,
+        "query_engine": query_engine_for_backend(backend_name),
         "error": {
             "type": _error_type_from_exception(exc, missing_required),
             "tool": tool_name,
-            "backend": backend_name,
+            "query_engine": query_engine_for_backend(backend_name),
             "message": str(exc),
             "missing_required_params": missing_required,
             "required_params": _required_params(tool_name),
@@ -447,6 +499,30 @@ def _build_tool_error(
             "next_step": "Call list_mcp_functions and retry with exact parameter names.",
         },
     }
+
+
+def _unsupported_parser_result(
+    tool_name: str,
+    payload: Dict[str, Any],
+    parser_type: str,
+) -> Dict[str, Any]:
+    parser = _normalize_parser_type(parser_type) or ""
+    error = _build_tool_error(
+        tool_name,
+        payload,
+        ValueError(f"Parser '{parser}' is not registered."),
+        backend_name=DEFAULT_BACKEND,
+    )
+    error["error"].update(
+        {
+            "type": "unsupported_parser",
+            "parser_type": parser,
+            "supported_parsers": sorted(capability["canonical_parser"] for capability in capability_catalog()),
+            "supported_aliases": sorted(parser_aliases()),
+            "next_step": "Call list_parsers and retry with a canonical parser or registered alias.",
+        }
+    )
+    return error
 
 
 def _coerce_error_result(tool_name: str, payload: Dict[str, Any], result: Any, backend_name: str) -> Optional[Dict[str, Any]]:
@@ -490,8 +566,11 @@ def _parse_positive_int(raw: Any, param_name: str) -> Tuple[Optional[int], Optio
 async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     merged = _apply_unified_defaults(payload)
     merged = _coerce_list_fields(merged)
-    backend_name = _resolve_backend_name(merged.get("parser_type"))
-    capability = capability_for_parser(merged.get("parser_type"))
+    selected_parser = _normalize_parser_type(merged.get("parser_type"))
+    capability = capability_for_parser(selected_parser)
+    if selected_parser and capability is None:
+        return _unsupported_parser_result(tool_name, merged, selected_parser)
+    backend_name = _resolve_backend_name(selected_parser)
     framework = framework_for_parser(merged.get("parser_type"))
     relationships_applied: List[str] = []
     if capability and backend_name != "android":
@@ -522,7 +601,10 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
         return _build_tool_error(
             tool_name,
             merged,
-            ValueError(f"Tool '{tool_name}' is not available in backend '{backend_name}'."),
+            ValueError(
+                f"Tool '{tool_name}' is not available in query engine "
+                f"'{query_engine_for_backend(backend_name)}'."
+            ),
             backend_name=backend_name,
         )
     try:
@@ -535,7 +617,8 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
         return normalized_error
     if isinstance(result, dict):
         result.setdefault("ok", True)
-        result.setdefault("backend", backend_name)
+        result.pop("backend", None)
+        result.setdefault("query_engine", query_engine_for_backend(backend_name))
         result.setdefault("capability", routing)
     return result
 
@@ -551,7 +634,10 @@ async def tool_activate_project(
 ) -> Dict[str, Optional[str]]:
     values = {"parser_type": parser_type if parser_type else None, "database_name": database_name if database_name else None}
     merged = {k: v for k, v in values.items() if v is not None}
-    backend_name = _resolve_backend_name(merged.get("parser_type"))
+    selected_parser = _normalize_parser_type(merged.get("parser_type"))
+    if selected_parser and capability_for_parser(selected_parser) is None:
+        return _unsupported_parser_result("activate_project", merged, selected_parser)
+    backend_name = _resolve_backend_name(selected_parser)
     fn = _unwrap_tool_callable(getattr(BACKENDS[backend_name].module, "tool_activate_project", None))
     if fn is None:
         raise ValueError(f"Backend '{backend_name}' does not expose activate_project.")
@@ -564,7 +650,8 @@ async def tool_activate_project(
         active_project["database_name"] = str(db_name)
     if not isinstance(response, dict):
         response = {"parser_type": parser, "database_name": db_name}
-    response["backend"] = backend_name
+    response.pop("backend", None)
+    response["query_engine"] = query_engine_for_backend(backend_name)
     response["capability"] = _capability_summary(parser, backend_name)
     response["canonical_parser"] = response["capability"].get("canonical_parser")
     response["support_level"] = response["capability"].get("support_level")
@@ -586,7 +673,7 @@ async def tool_list_parsers() -> Dict[str, Any]:
     return {
         "parsers": sorted(parser_aliases()),
         "capabilities": capabilities,
-        "default_backend": DEFAULT_BACKEND,
+        "default_query_engine": query_engine_for_backend(DEFAULT_BACKEND),
         "active_parser_type": active_project.get("parser_type"),
         "active_capability": _capability_summary(
             active_project.get("parser_type"),
@@ -626,12 +713,15 @@ async def tool_list_qdrant_collections(
 
 async def _dispatch_planner_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     merged = _apply_unified_defaults(_coerce_list_fields(dict(payload)))
+    selected_parser = _normalize_parser_type(merged.get("parser_type"))
+    if selected_parser and capability_for_parser(selected_parser) is None:
+        return _unsupported_parser_result(tool_name, merged, selected_parser)
     fn = _unwrap_tool_callable(getattr(fast_backend, f"tool_{tool_name}", None))
     if fn is None:
         return _build_tool_error(
             tool_name,
             merged,
-            ValueError(f"Planner tool '{tool_name}' is not available in fast backend."),
+            ValueError(f"Planner tool '{tool_name}' is not available in the fast query engine."),
             backend_name="fast",
         )
     params = inspect.signature(fn).parameters
@@ -648,7 +738,8 @@ async def _dispatch_planner_tool(tool_name: str, payload: Dict[str, Any]) -> Any
         return normalized_error
     if isinstance(result, dict):
         result.setdefault("ok", True)
-        result.setdefault("backend", "fast")
+        result.pop("backend", None)
+        result.setdefault("query_engine", query_engine_for_backend("fast"))
     return result
 
 
@@ -1647,6 +1738,12 @@ async def tool_explore_graph(
         _normalize_parser_type(parser_type)
         or _normalize_parser_type(active_project.get("parser_type"))
     )
+    if selected_parser and capability_for_parser(selected_parser) is None:
+        return _unsupported_parser_result(
+            "explore_graph",
+            {"query": q, "parser_type": selected_parser},
+            selected_parser,
+        )
     backend_name = _resolve_backend_name(selected_parser)
     capability = capability_for_parser(selected_parser)
     relationship_types: Optional[List[str]] = None
@@ -1685,7 +1782,8 @@ async def tool_explore_graph(
         searchable_labels= sorted(capability.labels) if capability else None,
         searchable_properties= list(capability.searchable_properties) if capability else None,
     )
-    result["backend"] = backend_name
+    result.pop("backend", None)
+    result["query_engine"] = query_engine_for_backend(backend_name)
     result["capability"] = _capability_summary(selected_parser, backend_name)
     if capability_diagnostics:
         result["capability_diagnostics"] = capability_diagnostics
@@ -1854,6 +1952,7 @@ async def tool_find_callers_of_endpoint(
         await _resolve_direct_capability_context(
             "find_callers_of_endpoint", parser_type, database,
             required_relationships=("CALLS_API", "MATCHES"),
+            required_labels=("ApiEndpoint", "ApiCall"),
             error_payload={"endpoint_path": endpoint_path},
         )
     )
@@ -1972,7 +2071,8 @@ async def tool_get_api_call_chain(
     selected_parser, relationships, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(
             "get_api_call_chain", parser_type, database,
-            required_relationships=("CALLS", "CALLS_API", "MATCHES"),
+            required_relationships=("CALLS", "CALLS_API", "MATCHES", "HANDLES"),
+            required_labels=("ApiEndpoint",),
             error_payload={
                 "component_name": component_name,
                 "endpoint_path": endpoint_path,
