@@ -17,6 +17,7 @@ fastmcp
 lxml
 gliner
 pandas
+portalocker>=3.2,<4
 # FastMCP dependencies
 # New C/C++ analysis tools
 networkx

@@ -105,11 +105,13 @@ The CLI has **two independent command groups** serving different roles:
 
 | Command | Description |
 | --- | --- |
-| `dev sync code` | Interactive folder picker; auto-detects languages; incremental if baseline exists |
-| `dev sync code all` | Run **all** available analyzers on every configured folder |
+| `dev sync code` | Interactive folder picker; reliable hybrid incremental scan by default |
+| `dev sync code all` | Run all analyzers on every non-overlapping configured root; still incremental unless `--full-scan` is set |
 | `dev sync code add` | Add a new source project (git URL + folders) to the active config |
 
 > **First run:** always a full sync (no baseline).
+> **Later runs:** Git supplies committed/staged/unstaged/untracked candidates and SHA-256 inventory confirms content changes. Initialized submodules are discovered recursively. Non-Git roots automatically use hash mode.
+> Use `--change-detection hash` or `--reconcile` for a full content check, `--submodules off` to disable recursive submodule coverage, and `--lock-timeout-seconds N` to control same-scope contention.
 > Support: C#, C/C++, Java, JavaScript, Kotlin, PHP, PL/SQL, Swift, TypeScript, Android Kotlin, Android Java, Python, Go, Perl 5 (`.pl`, `.pm`, `.t`), Rust, Delphi
 
 ### Sync — Documentation
