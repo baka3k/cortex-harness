@@ -35,6 +35,18 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
             set(CAPABILITIES),
         )
 
+        catalog = {item["canonical_parser"]: item for item in capability_catalog()}
+        self.assertEqual(catalog["python"]["query_engine"], "graph_generic")
+        self.assertNotIn("backend", catalog["python"])
+        self.assertEqual(
+            set(catalog["python"]["support"]),
+            {"symbols", "calls", "endpoints", "database"},
+        )
+        self.assertEqual(catalog["python"]["support"]["endpoints"], "partial")
+        self.assertEqual(catalog["python"]["support"]["database"], "none")
+        self.assertEqual(catalog["typescript"]["support"]["endpoints"], "none")
+        self.assertEqual(catalog["cplus"]["support"]["endpoints"], "none")
+
     def test_primary_language_analyzers_have_query_capabilities(self):
         expected = {
             "python": "python",
@@ -44,7 +56,7 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
             "javascript": "javascript",
             "ts": "typescript",
             "typescript": "typescript",
-            "express": "typescript",
+            "express": "javascript",
             "nestjs": "typescript",
             "php": "php",
             "laravel": "php",
@@ -74,6 +86,19 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
         self.assertIn("ApiCall", typescript.labels)
         self.assertIn("CALLS_API", default_relationships("typescript", "find_callers_of_endpoint"))
         self.assertIn("MATCHES", default_relationships("typescript", "find_callers_of_endpoint"))
+
+    def test_sql_profiles_expose_database_semantics(self):
+        for parser in ("sql", "plsql"):
+            with self.subTest(parser=parser):
+                capability = capability_for_parser(parser)
+                self.assertTrue({"Table", "View", "Procedure"}.issubset(capability.labels))
+                self.assertTrue(
+                    {"READS_FROM", "WRITES_TO", "REFERENCES_TABLE"}.issubset(
+                        default_relationships(parser)
+                    )
+                )
+                self.assertEqual(capability.support["database"], "full")
+                self.assertEqual(capability.support["calls"], "none")
 
     def test_framework_aliases_resolve_without_losing_core_relationships(self):
         self.assertEqual(framework_for_parser("spring-boot").name, "spring")

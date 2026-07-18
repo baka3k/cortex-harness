@@ -54,6 +54,11 @@ EXPECTED_OVERLAYS = {
     "servlet_jsp",
     "spring",
     "struts",
+    "fastapi_django",
+    "express_js",
+    "laravel",
+    "database_sql",
+    "database_plsql",
 }
 
 
