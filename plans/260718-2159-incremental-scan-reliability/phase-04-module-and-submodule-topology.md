@@ -50,12 +50,12 @@ Each repository scope has its own canonical root, relative prefix, current `HEAD
 
 ## Todo
 
-- [ ] Nested monorepo roots produce correct relative manifests.
-- [ ] Out-of-module changes are excluded.
-- [ ] Dirty and independently committed submodules scan without a parent commit.
-- [ ] Nested submodules are covered.
-- [ ] Partial coverage is explicit and strict-mode fatal.
-- [ ] Overlapping configured roots cannot double-ingest the same tree.
+- [x] Nested monorepo roots produce correct relative manifests.
+- [x] Out-of-module changes are excluded.
+- [x] Dirty and independently committed submodules scan without a parent commit.
+- [x] Nested submodules are covered.
+- [x] Partial coverage is explicit and strict-mode fatal.
+- [x] Overlapping configured roots cannot double-ingest the same tree.
 
 ## Risks
 

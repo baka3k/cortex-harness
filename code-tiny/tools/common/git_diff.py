@@ -177,20 +177,20 @@ def collect_worktree_entries(root: str) -> List[DiffEntry]:
     return entries
 
 
-def _submodule_paths(repo_root: str) -> List[str]:
+def _submodule_paths(repo_root: str) -> Tuple[List[str], Optional[dict]]:
     gitmodules = os.path.join(repo_root, ".gitmodules")
     if not os.path.isfile(gitmodules):
-        return []
+        return [], None
     try:
         output = _git_text(repo_root, "config", "--file", gitmodules, "--get-regexp", r"^submodule\..*\.path$")
     except subprocess.CalledProcessError:
-        return []
+        return [], {"code": "gitmodules_unreadable", "path": gitmodules}
     results: List[str] = []
     for line in output.splitlines():
         parts = line.split(None, 1)
         if len(parts) == 2:
             results.append(parts[1])
-    return results
+    return results, None
 
 
 def discover_repository_scopes(root: str, recursive: bool = True) -> Tuple[List[RepositoryScope], List[dict]]:
@@ -207,7 +207,10 @@ def discover_repository_scopes(root: str, recursive: bool = True) -> Tuple[List[
     visited = {os.path.normcase(git_root)}
     while queue:
         parent = queue.pop(0)
-        for relative in _submodule_paths(parent):
+        submodule_paths, gitmodules_warning = _submodule_paths(parent)
+        if gitmodules_warning:
+            warnings.append(gitmodules_warning)
+        for relative in submodule_paths:
             child = os.path.realpath(os.path.join(parent, relative))
             child_key = os.path.normcase(child)
             try:
@@ -224,9 +227,17 @@ def discover_repository_scopes(root: str, recursive: bool = True) -> Tuple[List[
             if child_key in visited:
                 warnings.append({"code": "submodule_cycle", "path": prefix})
                 continue
+            try:
+                child_git_root, _ = _repository_context(child)
+                if os.path.normcase(child_git_root) != child_key:
+                    raise subprocess.CalledProcessError(128, ["git", "rev-parse"])
+                _git_text(child, "rev-parse", "HEAD")
+            except subprocess.CalledProcessError:
+                warnings.append({"code": "submodule_unreadable", "path": prefix})
+                continue
             visited.add(child_key)
-            scopes.append(RepositoryScope(prefix, child, child, "."))
-            queue.append(child)
+            scopes.append(RepositoryScope(prefix, child, child_git_root, "."))
+            queue.append(child_git_root)
     scopes.sort(key=lambda item: (item.source_prefix != ".", item.source_prefix))
     return scopes, warnings
 

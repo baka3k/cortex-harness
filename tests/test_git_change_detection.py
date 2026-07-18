@@ -109,6 +109,12 @@ class GitChangeDetectionTests(unittest.TestCase):
             self.assertEqual([item.source_prefix for item in scopes], ["."])
             self.assertTrue(any(item["code"] == "submodule_uninitialized" for item in warnings))
 
+            git_marker = parent / "vendor" / "child" / ".git"
+            git_marker.mkdir()
+            scopes, warnings = discover_repository_scopes(str(parent), recursive=True)
+            self.assertEqual([item.source_prefix for item in scopes], ["."])
+            self.assertTrue(any(item["code"] == "submodule_unreadable" for item in warnings))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -42,12 +42,12 @@ Use three validation layers:
 
 ## Todo
 
-- [ ] Focused and affected regression suites pass.
-- [ ] Windows and POSIX crash-recovery evidence is recorded.
-- [ ] Mid-run drift cannot mark clean.
-- [ ] Performance budgets are met or explicitly tuned.
-- [ ] Rollback/migration procedure is verified.
-- [ ] Validation report is complete.
+- [x] Focused and affected regression suites pass.
+- [x] Windows and POSIX crash-recovery evidence is recorded.
+- [x] Mid-run drift cannot mark clean.
+- [x] Performance budgets are met or explicitly tuned.
+- [x] Rollback/migration procedure is verified.
+- [x] Validation report is complete.
 
 ## Risks
 
