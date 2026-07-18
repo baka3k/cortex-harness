@@ -98,6 +98,25 @@ class DevLifecycleCommandTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 7)
 
+    def test_windows_start_applies_active_config_after_service_env(self):
+        lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
+
+        helper_offset = lifecycle.index("mcp_runtime_config.py")
+        service_env_offset = lifecycle.index("$envFile = Join-Path")
+        active_env_offset = lifecycle.index("$runtimeEnvironment = Get-Content")
+        self.assertLess(helper_offset, service_env_offset)
+        self.assertLess(service_env_offset, active_env_offset)
+        self.assertIn("export CORTEX_HARNESS_ENV_FILE=$runtimeEnvFile", lifecycle)
+        self.assertIn("[Environment]::SetEnvironmentVariable(`$_.Name", lifecycle)
+        self.assertIn("RuntimeConfig = $runtimeJsonPath", lifecycle)
+
+    def test_git_bash_does_not_rewrite_the_mcp_route(self):
+        for relative_path in ("code-tiny/mcp.sh", "doc-tiny/mcp.sh"):
+            with self.subTest(script=relative_path):
+                script = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertIn("MSYS_NO_PATHCONV=1 python", script)
+                self.assertIn("--path /mcp", script)
+
 
 if __name__ == "__main__":
     unittest.main()
