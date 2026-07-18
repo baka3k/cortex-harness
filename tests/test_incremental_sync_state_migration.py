@@ -15,10 +15,17 @@ from tools.common.incremental_sync_state import (  # noqa: E402
     backup_legacy_state,
     load_sync_state,
     mark_clean,
+    state_file_path,
 )
 
 
 class IncrementalSyncStateMigrationTests(unittest.TestCase):
+    def test_shared_cache_namespaces_state_by_project_and_root(self):
+        with tempfile.TemporaryDirectory() as cache, tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
+            first_path = state_file_path(cache, "same-project", first)
+            second_path = state_file_path(cache, "same-project", second)
+            self.assertNotEqual(first_path, second_path)
+
     def test_v1_state_requires_conservative_bootstrap_and_retains_sha(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root, "state.json")

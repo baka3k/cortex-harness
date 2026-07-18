@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 import sys
 import tempfile
 import unittest
@@ -53,6 +54,20 @@ class SourceInventoryTests(unittest.TestCase):
             self.assertEqual(target, second_target)
             self.assertEqual(load_inventory_generation(target), inventory)
 
+    def test_same_generation_can_publish_concurrently(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "main.py").write_text("print('ok')\n", encoding="utf-8")
+            inventory = capture_source_inventory(root, {"main.py"})
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                paths = list(
+                    pool.map(
+                        lambda _index: write_inventory_generation(Path(root, ".cache"), inventory),
+                        range(8),
+                    )
+                )
+            self.assertEqual(len(set(paths)), 1)
+            self.assertEqual(load_inventory_generation(paths[0]), inventory)
+
     def test_validation_rejects_mid_run_change(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root, "main.py")
@@ -79,6 +94,14 @@ class SourceInventoryTests(unittest.TestCase):
             )
             changed, _ = diff_source_inventories(before, after)
             self.assertEqual(changed, {"main.py"})
+
+    def test_inventory_never_reads_outside_root(self):
+        with tempfile.TemporaryDirectory() as parent:
+            root = Path(parent, "root")
+            root.mkdir()
+            Path(parent, "secret.py").write_text("secret\n", encoding="utf-8")
+            inventory = capture_source_inventory(str(root), {"../secret.py"})
+            self.assertEqual(inventory.entries, {})
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 ---
 title: "Incremental Code Scan Reliability Upgrade"
-status: pending
+status: complete
 created: 2026-07-18
 mode: hi-plan --full
 scope: cross-platform run locking, hybrid Git/content change detection, monorepo module roots, recursive Git submodules, state migration, observability, and regression coverage

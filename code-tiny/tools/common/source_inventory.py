@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Set, Tuple
@@ -76,7 +77,10 @@ def capture_source_inventory(
     forced = {_to_posix(item) for item in (force_hash_paths or ())}
     entries: Dict[str, InventoryEntry] = {}
     for raw_path in sorted({_to_posix(item) for item in paths if item}):
-        full_path = root_path / Path(raw_path)
+        relative_path = Path(raw_path)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            continue
+        full_path = root_path / relative_path
         if not full_path.is_file():
             continue
         prior = previous.entries.get(raw_path) if previous else None
@@ -97,6 +101,31 @@ def diff_source_inventories(
     return changed, deleted
 
 
+def preserve_inventory_prefixes(
+    current: SourceInventory,
+    previous: Optional[SourceInventory],
+    prefixes: Iterable[str],
+) -> SourceInventory:
+    """Carry forward unavailable topology without treating it as deletion."""
+    if previous is None:
+        return current
+    normalized_prefixes = tuple(
+        _to_posix(prefix).rstrip("/") + "/" for prefix in prefixes if prefix
+    )
+    if not normalized_prefixes:
+        return current
+    entries = dict(current.entries)
+    for path, entry in previous.entries.items():
+        if path.startswith(normalized_prefixes):
+            entries[path] = entry
+    return SourceInventory(
+        entries=entries,
+        snapshot_id=_snapshot_id(entries, current.filter_version),
+        schema_version=current.schema_version,
+        filter_version=current.filter_version,
+    )
+
+
 def _payload(inventory: SourceInventory) -> dict:
     return {
         "schema_version": inventory.schema_version,
@@ -112,12 +141,23 @@ def write_inventory_generation(cache_dir: os.PathLike[str] | str, inventory: Sou
     target = directory / f"{inventory.snapshot_id}.json"
     serialized = json.dumps(_payload(inventory), ensure_ascii=True, indent=2) + "\n"
     if target.exists():
-        if target.read_text(encoding="utf-8") != serialized:
+        existing = None
+        for attempt in range(10):
+            try:
+                existing = target.read_text(encoding="utf-8")
+                break
+            except (FileNotFoundError, PermissionError):
+                if attempt == 9:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
+        if existing != serialized:
             raise ValueError(f"inventory generation collision: {target}")
         return str(target)
-    temp = target.with_suffix(".json.tmp")
+    temp = target.with_name(
+        f"{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
     temp.write_text(serialized, encoding="utf-8")
-    for attempt in range(5):
+    for attempt in range(10):
         try:
             os.replace(temp, target)
             break
@@ -125,9 +165,9 @@ def write_inventory_generation(cache_dir: os.PathLike[str] | str, inventory: Sou
             temp.unlink(missing_ok=True)
             break
         except PermissionError:
-            if attempt == 4:
+            if attempt == 9:
                 raise
-            time.sleep(0.02 * (attempt + 1))
+            time.sleep(0.01 * (attempt + 1))
     return str(target)
 
 

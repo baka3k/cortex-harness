@@ -40,11 +40,11 @@ Keep one orchestrator summary as the machine-readable contract and render a conc
 
 ## Todo
 
-- [ ] Existing CLI invocations remain valid.
-- [ ] Summary reason codes are covered by tests.
-- [ ] Lock/no-change/partial/failure output is distinguishable.
-- [ ] Legacy migration is visible and recoverable.
-- [ ] Documentation matches tests and `--help` output.
+- [x] Existing CLI invocations remain valid.
+- [x] Summary reason codes are covered by tests.
+- [x] Lock/no-change/partial/failure output is distinguishable.
+- [x] Legacy migration is visible and recoverable.
+- [x] Documentation matches tests and `--help` output.
 
 ## Risks
 
