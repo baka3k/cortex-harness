@@ -2,9 +2,11 @@
 
 Implementation and maintenance records, newest first:
 
+- [MCP query capability hardening](2026-07-19-mcp-query-capability-hardening.md)
 - [Incremental scan reliability upgrade](2026-07-18-incremental-scan-reliability.md)
 - [Code-Tiny README refresh](2026-07-17-code-tiny-readme-refresh.md)
 - [Primary vector ingestion completion](2026-07-16-primary-vector-ingestion.md)
+- [MCP capability routing](2026-07-15-mcp-capability-routing.md)
 - [Perl analyzer parser implementation](2026-07-15-perl-analyzer-parser.md)
 - [Lifecycle commands macOS CI gate](2026-07-14-lifecycle-macos-ci.md)
 - [Global `dev` and Make lifecycle parity](2026-07-14-dev-make-lifecycle-parity.md)

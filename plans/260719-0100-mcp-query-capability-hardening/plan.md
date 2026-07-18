@@ -1,6 +1,6 @@
 ---
 title: "MCP Query Capability Hardening and Semantic Overlays"
-status: in_progress
+status: complete
 created: 2026-07-19
 mode: hi-plan --fast
 scope: unified MCP routing, schema gates, web/database overlays, and fixture-backed acceptance
@@ -122,3 +122,11 @@ Reviewed before implementation under the `hi-craft` hard gate.
 - Main residual risk is provider parity; FalkorDB is the active acceptance target
   and Neo4j parity stays explicitly blocked by the migration plan.
 
+## Completion
+
+- Focused MCP/overlay regression: 69 tests passed.
+- Lifecycle/provider regression: 21 passed, 7 environment-dependent tests skipped.
+- Post-review fixture suite: 39 tests passed.
+- Python compilation and `git diff --check` passed.
+- Full unittest discovery was stopped after approximately 60 seconds without
+  output; no embedding or full ingestion sync was run.
