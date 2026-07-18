@@ -15,6 +15,7 @@ from tools.common.sync_scope import (  # noqa: E402
     LockBusyError,
     ProjectRunLock,
     resolve_sync_cache_dir,
+    read_lock_metadata,
     scan_scope_id,
 )
 
@@ -47,6 +48,7 @@ class IncrementalSyncLockTests(unittest.TestCase):
             )
             first.acquire()
             try:
+                self.assertEqual(read_lock_metadata(str(lock_path))["scope_id"], "scope")
                 with self.assertRaises(LockBusyError):
                     second.acquire()
             finally:

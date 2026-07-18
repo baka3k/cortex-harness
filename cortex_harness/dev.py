@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1056,10 +1057,20 @@ def _run_with_retry(
     return rc
 
 
-def _code_sync_summary_path(folder_path: Path, project_id: str) -> Path:
+def _code_sync_summary_path(
+    folder_path: Path,
+    project_id: str,
+    cache_dir: Optional[str] = None,
+) -> Path:
     identity = f"{project_id}\0{os.path.normcase(os.path.realpath(folder_path))}"
     token = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
-    return folder_path / ".cache" / "incremental_sync_summaries" / f"dev_{token}.json"
+    cache_root = (
+        Path(os.path.abspath(os.path.expanduser(cache_dir)))
+        if cache_dir
+        else folder_path / ".cache"
+    )
+    invocation = f"{os.getpid()}_{uuid.uuid4().hex}"
+    return cache_root / "incremental_sync_summaries" / f"dev_{token}_{invocation}.json"
 
 
 def _read_code_sync_summary(path: Path) -> dict:
@@ -1833,7 +1844,7 @@ def sync():
 @click.option("--reconcile", is_flag=True, help="Force full SHA-256 reconciliation.")
 @click.option(
     "--submodules",
-    type=click.Choice(["recursive", "off"]),
+    type=click.Choice(["recursive", "ignore", "off"]),
     default="recursive",
     show_default=True,
 )
@@ -1904,7 +1915,9 @@ def sync_code(
             continue
 
         project_id = project.get("code", project.get("name", "project"))
-        child_summary_path = _code_sync_summary_path(folder_path, project_id)
+        child_summary_path = _code_sync_summary_path(
+            folder_path, project_id, process_env.get("QDRANT_CACHE_DIR")
+        )
         cmd = [
             python, str(incremental_sync),
             "--root", str(folder_path),
@@ -1996,7 +2009,9 @@ def sync_code_all(ctx):
             continue
 
         project_id = project.get("code", project.get("name", "project"))
-        child_summary_path = _code_sync_summary_path(folder_path, project_id)
+        child_summary_path = _code_sync_summary_path(
+            folder_path, project_id, process_env.get("QDRANT_CACHE_DIR")
+        )
         cmd = [
             python, str(incremental_sync),
             "--root", str(folder_path),

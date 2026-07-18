@@ -46,11 +46,11 @@ SyncStateV2
 
 ## Todo
 
-- [ ] Behavioral matrix is executable and initially fails for every confirmed gap.
-- [ ] State v2 schema and v1 migration contract are reviewed.
-- [ ] Existing summary/CLI compatibility assertions are present.
-- [ ] Fixtures are deterministic on Windows and POSIX.
-- [ ] No test depends on live graph/vector services.
+- [x] Behavioral matrix is executable and initially fails for every confirmed gap.
+- [x] State v2 schema and v1 migration contract are reviewed.
+- [x] Existing summary/CLI compatibility assertions are present.
+- [x] Fixtures are deterministic on Windows and POSIX.
+- [x] No test depends on live graph/vector services.
 
 ## Risks
 
