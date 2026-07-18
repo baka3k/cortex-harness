@@ -595,6 +595,8 @@ if __name__ == "__main__":
         host=args.host,
         port=args.port,
         streamable_http_path=args.stream_path,
+        stateless_http=True,
+        json_response=True,
     )
     register_tools(mcp)
     transport = args.transport

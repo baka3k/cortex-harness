@@ -104,6 +104,7 @@ dev init C:\projects\digital_key
 dev sync code --project-dir C:\projects\digital_key
 dev sync code --project-dir C:\projects\digital_key all
 dev sync code --project-dir C:\projects\digital_key --full-scan
+dev sync code --project-dir C:\projects\digital_key --change-detection hash --reconcile
 ```
 
 The underlying orchestrator can also be called directly:
@@ -125,7 +126,9 @@ python tools/sync/incremental_sync.py `
   --verbose
 ```
 
-Use `--full-scan` for a scoped full replacement. Without it, the orchestrator uses the last clean Git baseline and passes changed/deleted manifests to incremental-capable analyzers.
+Use `--full-scan` for a scoped full replacement. Without it, the default `hybrid` detector combines committed, staged, unstaged, and untracked Git candidates with a versioned SHA-256 inventory. An initialized submodule has its own Git baseline and is mapped back into the configured source root. A non-Git root falls back to content-hash comparison instead of being initialized or skipped.
+
+The sync control state lives under `<source-root>/.cache` unless `--cache-dir`/`QDRANT_CACHE_DIR` is set. Lock files contain diagnostics only; ownership is enforced by an OS lock. Useful controls are `--change-detection {hybrid,committed,hash}`, `--reconcile`, `--submodules {recursive,off}`, and `--lock-timeout-seconds`. `committed` mode requires a clean worktree.
 
 ## Direct analyzer configuration
 

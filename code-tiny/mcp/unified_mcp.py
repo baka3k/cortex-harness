@@ -2492,6 +2492,7 @@ def main() -> None:
             kwargs["path"] = stream_path
     if transport == "streamable-http":
         kwargs["stateless_http"] = True
+        kwargs["json_response"] = True
     mcp_server.run(**kwargs)
 
 

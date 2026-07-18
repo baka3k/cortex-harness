@@ -6,7 +6,7 @@ mode: hi-plan --fast
 source: /Users/hieplq1.rpm/Downloads/Analyzer_Design_Spec_Perl_Tree_Sitter.md
 scope: Perl 5 primary parsing, normalized structural facts, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260716-1615-primary-vector-ingestion-completion]
+relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260716-1615-primary-vector-ingestion-completion, 260718-2159-incremental-scan-reliability]
 ---
 
 # Perl Tree-sitter Analyzer Parser Plan

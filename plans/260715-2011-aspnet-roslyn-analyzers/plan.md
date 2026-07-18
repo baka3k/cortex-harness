@@ -5,7 +5,7 @@ created: 2026-07-15
 mode: hi-plan --fast
 scope: ASP.NET Core and ASP.NET Framework semantic overlays, shared Roslyn frontend, migration model, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2200-mcp-capability-routing, 260716-1615-primary-vector-ingestion-completion]
+relatedPlans: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2200-mcp-capability-routing, 260716-1615-primary-vector-ingestion-completion, 260718-2159-incremental-scan-reliability]
 sources:
   - /Users/hieplq1.rpm/Desktop/ASPNet_Migration_Package/ASP.NET_Core_Analyzer_Design_Spec.md
   - /Users/hieplq1.rpm/Desktop/ASPNet_Migration_Package/ASP.NET_Framework_Analyzer_Design_Spec.md

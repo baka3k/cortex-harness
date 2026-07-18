@@ -13,11 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-try:
-    import fcntl
-except Exception:  # pragma: no cover - non-posix environments
-    fcntl = None
-
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
@@ -28,13 +23,30 @@ from tools.common.analyzer_cache import safe_cache_root
 from tools.common.git_diff import (
     collect_changed_and_deleted,
     collect_git_diff_entries,
+    collect_worktree_entries,
+    discover_repository_scopes,
     write_manifest_paths,
 )
 from tools.common.incremental_sync_state import (
+    backup_legacy_state,
     load_sync_state,
     mark_clean,
     mark_dirty,
     state_file_path,
+)
+from tools.common.source_inventory import (
+    SourceChangedError,
+    capture_source_inventory,
+    diff_source_inventories,
+    load_inventory_generation,
+    validate_inventory_unchanged,
+    write_inventory_generation,
+)
+from tools.common.sync_scope import (
+    LockBusyError,
+    ProjectRunLock,
+    resolve_sync_cache_dir,
+    scan_scope_id,
 )
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, normalize_graph_provider, prepare_graph_args
@@ -335,60 +347,6 @@ def _normalize_project_paths(root: str, paths: Iterable[str]) -> Set[str]:
         if rel:
             normalized.add(rel)
     return normalized
-
-
-class _ProjectRunLock:
-    def __init__(self, lock_path: str, description: str) -> None:
-        self.lock_path = lock_path
-        self.description = description
-        self._handle = None
-        self._exclusive_created = False
-
-    def acquire(self) -> None:
-        os.makedirs(os.path.dirname(self.lock_path), exist_ok=True)
-        if fcntl:
-            handle = open(self.lock_path, "a+", encoding="utf-8")
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                handle.close()
-                raise RuntimeError(
-                    f"another incremental sync is running for {self.description} (lock: {self.lock_path})"
-                ) from exc
-            handle.seek(0)
-            handle.truncate()
-            handle.write(f"pid={os.getpid()} started_at={time.time():.0f}\n")
-            handle.flush()
-            self._handle = handle
-            return
-
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        try:
-            fd = os.open(self.lock_path, flags, 0o644)
-        except FileExistsError as exc:
-            raise RuntimeError(
-                f"another incremental sync is running for {self.description} (lock: {self.lock_path})"
-            ) from exc
-        os.write(fd, f"pid={os.getpid()} started_at={time.time():.0f}\n".encode("utf-8"))
-        self._handle = fd
-        self._exclusive_created = True
-
-    def release(self) -> None:
-        if self._handle is None:
-            return
-        if fcntl and hasattr(self._handle, "fileno"):
-            try:
-                fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
-            finally:
-                self._handle.close()
-        else:
-            os.close(int(self._handle))
-            if self._exclusive_created:
-                try:
-                    os.remove(self.lock_path)
-                except FileNotFoundError:
-                    pass
-        self._handle = None
 
 
 class _AndroidPathClassifier:
@@ -1035,7 +993,7 @@ def _default_summary_path(
     project_id: str,
     root: str,
 ) -> str:
-    summary_root = safe_cache_root(cache_dir, "incremental_sync_summaries", project_root=root)
+    summary_root = os.path.join(resolve_sync_cache_dir(cache_dir, root), "incremental_sync_summaries")
     return os.path.join(summary_root, f"{_safe_segment(project_id)}_{int(time.time())}.json")
 
 
@@ -1047,7 +1005,14 @@ def _write_summary(path: str, payload: Dict[str, object]) -> None:
 
         json.dump(payload, handle, ensure_ascii=True, indent=2)
         handle.write("\n")
-    os.replace(tmp_path, path)
+    for attempt in range(5):
+        try:
+            os.replace(tmp_path, path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.02 * (attempt + 1))
 
 
 _SOURCE_EXTENSIONS: Set[str] = {
@@ -1111,11 +1076,13 @@ def _is_git_repo(root: str) -> bool:
 
 async def _run_incremental(args: argparse.Namespace) -> int:
     started_monotonic = time.time()
-    root = os.path.abspath(args.root)
+    root = os.path.realpath(os.path.abspath(args.root))
     project_id = args.project_id or os.path.basename(root)
     project_name = args.project_name or project_id
+    control_cache_dir = resolve_sync_cache_dir(args.cache_dir, root)
+    scope_id = scan_scope_id(project_id, root)
     graph_ready = prepare_graph_args(args)
-    summary_path = args.summary_path or _default_summary_path(cache_dir=args.cache_dir, project_id=project_id, root=root)
+    summary_path = args.summary_path or _default_summary_path(cache_dir=control_cache_dir, project_id=project_id, root=root)
     summary: Dict[str, object] = {
         "project_id": project_id,
         "project_name": project_name,
@@ -1128,6 +1095,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "finished_at": None,
         "duration_seconds": None,
         "status": "running",
+        "outcome": "running",
         "error": "",
         "before_sha": "",
         "after_sha": "",
@@ -1147,11 +1115,18 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "state_before": {},
         "state_after": {},
         "dirty_marked": False,
+        "scope": {"id": scope_id, "root": root, "cache_dir": control_cache_dir},
+        "lock": {},
+        "change_detection": args.change_detection,
+        "change_sources": {"committed": 0, "staged": 0, "unstaged": 0, "untracked": 0, "inventory": 0},
+        "repositories": [],
+        "coverage_warnings": [],
+        "reconciliation": {"requested": bool(args.reconcile), "performed": False},
     }
     if args.verbose and args.ignore_cache:
         print("[cache] ignore-cache enabled: analyzers will run with isolated cache scope")
 
-    run_lock: Optional[_ProjectRunLock] = None
+    run_lock: Optional[ProjectRunLock] = None
     lock_path = ""
     lock_acquired = False
     state = None
@@ -1159,53 +1134,77 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     before_sha = str(args.before_sha or "")
     after_sha = str(args.after_sha or "")
     full_scan = bool(args.full_scan)
+    current_inventory = None
+    previous_inventory = None
+    repository_state: Dict[str, Dict[str, object]] = {}
+    working_tree_paths: Set[str] = set()
     try:
         if not os.path.isdir(root):
             raise ValueError(f"Root not found: {root}")
 
-        if not full_scan:
-            try:
-                inside = subprocess.check_output(
-                    ["git", "-C", root, "rev-parse", "--is-inside-work-tree"],
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-            except Exception as exc:  # pragma: no cover - depends on local git
-                raise ValueError(f"Root is not a git repository: {root}") from exc
-            if inside.lower() != "true":
-                raise ValueError(f"Root is not a git repository: {root}")
-
-        lock_root = safe_cache_root(args.cache_dir, "incremental_sync_locks", project_root=root)
-        lock_path = os.path.join(lock_root, f"{_safe_segment(project_id)}.lock")
-        run_lock = _ProjectRunLock(lock_path, f"project_id={project_id}")
+        lock_root = os.path.join(control_cache_dir, "incremental_sync_locks")
+        lock_path = os.path.join(lock_root, f"{scope_id}.lock")
+        run_lock = ProjectRunLock(
+            lock_path,
+            f"project_id={project_id}",
+            scope_id,
+            root,
+            timeout_seconds=args.lock_timeout_seconds,
+        )
         try:
             run_lock.acquire()
             lock_acquired = True
+            summary["lock"] = {"path": lock_path, "acquired": True}
             if args.verbose:
                 print(f"[state] lock acquired: {lock_path}")
-        except RuntimeError as exc:
+        except LockBusyError as exc:
             summary["status"] = "lock_busy"
+            summary["outcome"] = "lock_busy"
+            summary["lock"] = {"path": lock_path, "acquired": False}
             summary["error"] = str(exc)
             print(f"[state] lock busy: {exc}", file=sys.stderr)
             return 2
 
-        state_path = state_file_path(args.cache_dir, project_id, root)
+        state_path = state_file_path(control_cache_dir, project_id, root)
         state = load_sync_state(state_path, project_id, root)
+        if state.migration_required:
+            backup = backup_legacy_state(state_path, state)
+            summary["migration"] = {
+                "from": state.migrated_from,
+                "backup": backup,
+                "strategy": "conservative_full_bootstrap",
+            }
         summary["state_before"] = {
+            "schema_version": state.schema_version,
             "dirty": bool(state.dirty),
             "last_good_sha": state.last_good_sha,
+            "snapshot_id": state.snapshot_id,
+            "inventory_path": state.inventory_path,
+            "migration_required": state.migration_required,
             "last_error": state.last_error,
             "last_run_before": state.last_run_before,
             "last_run_after": state.last_run_after,
             "updated_at": state.updated_at,
         }
 
-        if not full_scan and not args.before_sha and not state.last_good_sha:
+        if state.inventory_path:
+            try:
+                previous_inventory = load_inventory_generation(state.inventory_path)
+            except (OSError, ValueError, KeyError) as exc:
+                summary["coverage_warnings"].append(
+                    {"code": "inventory_unavailable", "path": state.inventory_path, "error": str(exc)}
+                )
+
+        if not full_scan and (
+            state.migration_required
+            or previous_inventory is None
+            or (not args.before_sha and not state.last_good_sha and _is_git_repo(root))
+        ):
             full_scan = True
             summary["full_scan"] = True
             summary["bootstrap_full_scan"] = True
             if args.verbose:
-                print("[bootstrap] no incremental baseline; scanning all source files")
+                print("[bootstrap] no trustworthy content baseline; scanning all source files")
 
         if graph_ready:
             try:
@@ -1231,68 +1230,222 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             if missing:
                 raise RuntimeError(f"strict mode missing required services: {', '.join(missing)}")
 
+        git_available = _is_git_repo(root)
+        effective_detection = args.change_detection
+        if effective_detection == "hybrid" and not git_available:
+            effective_detection = "hash"
+            summary["coverage_warnings"].append(
+                {"code": "git_unavailable_hash_fallback", "path": root}
+            )
+        if effective_detection == "committed" and not git_available:
+            raise ValueError("--change-detection=committed requires a Git repository")
+        summary["change_detection_effective"] = effective_detection
+
+        scopes = []
+        topology_warnings: List[dict] = []
+        if git_available:
+            scopes, topology_warnings = discover_repository_scopes(
+                root, recursive=args.submodules == "recursive"
+            )
+            summary["coverage_warnings"].extend(topology_warnings)
+            if topology_warnings and args.strict:
+                codes = ", ".join(sorted({item["code"] for item in topology_warnings}))
+                raise RuntimeError(f"strict mode repository coverage warning: {codes}")
+
+        committed_candidates: Set[str] = set()
+        worktree_candidates: Set[str] = set()
+        committed_deleted: Set[str] = set()
+        worktree_deleted: Set[str] = set()
+        candidates_by_source: Dict[str, Set[str]] = {
+            "committed": set(),
+            "staged": set(),
+            "unstaged": set(),
+            "untracked": set(),
+        }
+        git_entry_count = 0
+
+        def _scope_path(prefix: str, path: str) -> str:
+            return path if prefix == "." else f"{prefix.rstrip('/')}/{path}"
+
+        summary_rel_path = _normalize_project_path(root, summary_path)
+
+        def _is_source_candidate(path: str) -> bool:
+            normalized = path.replace("\\", "/")
+            if summary_rel_path and normalized == summary_rel_path:
+                return False
+            parts = normalized.split("/")
+            if any(part in _SKIP_DIRS or part.startswith(".") for part in parts[:-1]):
+                return False
+            lower = normalized.lower()
+            return Path(lower).suffix in _SOURCE_EXTENSIONS or lower.endswith(".gradle.kts")
+
+        for scope in scopes:
+            current_sha = _normalize_sha(scope.root, "HEAD")
+            prior_repo = state.repositories.get(scope.source_prefix, {})
+            prior_sha = str(prior_repo.get("last_good_sha") or "")
+            if scope.source_prefix == ".":
+                prior_sha = str(args.before_sha or prior_sha or state.last_good_sha or "")
+                after_sha = current_sha
+            repository_state[scope.source_prefix] = {
+                "root": scope.root,
+                "git_root": scope.git_root,
+                "git_pathspec": scope.git_pathspec,
+                "last_good_sha": current_sha,
+            }
+            scope_summary = {
+                "source_prefix": scope.source_prefix,
+                "root": scope.root,
+                "git_root": scope.git_root,
+                "git_pathspec": scope.git_pathspec,
+                "before_sha": prior_sha,
+                "after_sha": current_sha,
+            }
+            summary["repositories"].append(scope_summary)
+
+            if not full_scan and effective_detection in {"hybrid", "committed"} and prior_sha:
+                committed_entries = collect_git_diff_entries(scope.root, prior_sha, current_sha)
+                git_entry_count += len(committed_entries)
+                changed, deleted = collect_changed_and_deleted(committed_entries)
+                mapped_changed = {_scope_path(scope.source_prefix, item) for item in changed}
+                mapped_deleted = {_scope_path(scope.source_prefix, item) for item in deleted}
+                committed_candidates.update(mapped_changed)
+                committed_deleted.update(mapped_deleted)
+                candidates_by_source["committed"].update(mapped_changed | mapped_deleted)
+
+            work_entries = collect_worktree_entries(scope.root)
+            work_entries = [
+                item
+                for item in work_entries
+                if (item.new_path or item.old_path)
+                and _is_source_candidate(
+                    _scope_path(scope.source_prefix, item.new_path or item.old_path or "")
+                )
+            ]
+            if scope.source_prefix == "." and args.submodules == "recursive":
+                submodule_prefixes = [
+                    item.source_prefix.rstrip("/") + "/"
+                    for item in scopes
+                    if item.source_prefix != "."
+                ]
+                work_entries = [
+                    item
+                    for item in work_entries
+                    if not any(
+                        (item.new_path or item.old_path or "").startswith(prefix)
+                        for prefix in submodule_prefixes
+                    )
+                ]
+            if effective_detection == "committed" and work_entries:
+                raise RuntimeError(
+                    "committed change detection requires a clean worktree; use --change-detection=hybrid"
+                )
+            if effective_detection == "hybrid":
+                git_entry_count += len(work_entries)
+                changed, deleted = collect_changed_and_deleted(work_entries)
+                mapped_changed = {_scope_path(scope.source_prefix, item) for item in changed}
+                mapped_deleted = {_scope_path(scope.source_prefix, item) for item in deleted}
+                for item in work_entries:
+                    raw_path = item.new_path or item.old_path
+                    if raw_path:
+                        candidates_by_source[item.source].add(
+                            _scope_path(scope.source_prefix, raw_path)
+                        )
+                worktree_candidates.update(mapped_changed)
+                worktree_deleted.update(mapped_deleted)
+                working_tree_paths.update(mapped_changed | mapped_deleted)
+
+        if git_available and not after_sha:
+            after_sha = _normalize_sha(root, "HEAD")
+        if not git_available:
+            after_sha = "full_scan"
+        before_sha = "full_scan" if full_scan else str(args.before_sha or state.last_good_sha or after_sha)
+
+        all_source_paths = _normalize_project_paths(root, _walk_all_source_files(root))
+        if summary_rel_path:
+            all_source_paths.discard(summary_rel_path)
+        eligible_paths = set(all_source_paths)
+        if previous_inventory is not None:
+            eligible_paths.update(previous_inventory.entries)
+        committed_candidates.intersection_update(eligible_paths)
+        committed_deleted.intersection_update(eligible_paths)
+        worktree_candidates.intersection_update(eligible_paths)
+        worktree_deleted.intersection_update(eligible_paths)
+        working_tree_paths.intersection_update(eligible_paths)
+        for source, paths in candidates_by_source.items():
+            paths.intersection_update(eligible_paths)
+            summary["change_sources"][source] = len(paths)
+        prior_worktree_paths = set(state.working_tree_paths) & eligible_paths
+        force_hash_paths = set(committed_candidates) | set(worktree_candidates) | prior_worktree_paths
+        if full_scan or effective_detection == "hash" or args.reconcile or state.dirty:
+            force_hash_paths = set(all_source_paths)
+            summary["reconciliation"]["performed"] = bool(
+                args.reconcile or state.dirty or effective_detection == "hash"
+            )
+        current_inventory = capture_source_inventory(
+            root,
+            all_source_paths,
+            previous=previous_inventory,
+            force_hash_paths=force_hash_paths,
+        )
+        inventory_changed, inventory_deleted = diff_source_inventories(
+            previous_inventory, current_inventory
+        )
+        summary["change_sources"]["inventory"] = len(inventory_changed) + len(inventory_deleted)
+
         if full_scan:
-            after_sha = _normalize_sha(root, args.after_sha or "HEAD") if _is_git_repo(root) else "full_scan"
-            before_sha = "full_scan"
-            if args.verbose:
-                print("[full-scan] walking filesystem (git-independent)")
-            changed_paths = _normalize_project_paths(root, _walk_all_source_files(root))
+            changed_paths = set(all_source_paths)
             deleted_paths: Set[str] = set()
-            summary["diff"] = {
-                "entries": len(changed_paths),
-                "changed": len(changed_paths),
-                "deleted": 0,
-            }
-            if args.verbose:
-                print("[full-scan] found %d source files" % len(changed_paths))
+        elif effective_detection in {"hybrid", "hash"}:
+            changed_paths = set(inventory_changed)
+            deleted_paths = set(inventory_deleted)
         else:
-            after_sha = _normalize_sha(root, args.after_sha or "HEAD")
-            before_sha = args.before_sha or state.last_good_sha
-            if not before_sha:
-                before_sha = _detect_default_before(root, after_sha)
-            before_sha = _normalize_sha(root, before_sha)
+            changed_paths = set(committed_candidates)
+            deleted_paths = set(committed_deleted)
 
-            if args.verbose:
-                print(
-                    "[state] dirty=%s last_good_sha=%s before=%s after=%s"
-                    % (state.dirty, state.last_good_sha or "-", before_sha[:12], after_sha[:12])
-                )
-
-            entries = collect_git_diff_entries(root, before_sha, after_sha)
-            changed_paths, deleted_paths = collect_changed_and_deleted(entries)
-            changed_paths = _normalize_project_paths(root, changed_paths)
-            deleted_paths = _normalize_project_paths(root, deleted_paths)
-            summary["diff"] = {
-                "entries": len(entries),
-                "changed": len(changed_paths),
-                "deleted": len(deleted_paths),
-            }
-            if args.verbose:
-                print(
-                    "[diff] entries=%d changed=%d deleted=%d"
-                    % (len(entries), len(changed_paths), len(deleted_paths))
-                )
+        summary["diff"] = {
+            "entries": git_entry_count,
+            "changed": len(changed_paths),
+            "deleted": len(deleted_paths),
+        }
+        if args.verbose:
+            print(
+                "[diff] mode=%s entries=%d changed=%d deleted=%d"
+                % (effective_detection, git_entry_count, len(changed_paths), len(deleted_paths))
+            )
 
         summary["before_sha"] = before_sha
         summary["after_sha"] = after_sha
 
         if not changed_paths and not deleted_paths:
-            if state is not None:
-                mark_clean(
-                    state_path,
-                    state,
-                    last_good_sha=after_sha,
-                    before_sha=before_sha,
-                    after_sha=after_sha,
-                )
-                summary["state_after"] = {
-                    "dirty": False,
-                    "last_good_sha": after_sha,
-                    "last_error": "",
-                    "last_run_before": before_sha,
-                    "last_run_after": after_sha,
-                }
+            validate_inventory_unchanged(root, current_inventory, force_hash_paths)
+            unchanged_paths = _normalize_project_paths(root, _walk_all_source_files(root))
+            if summary_rel_path:
+                unchanged_paths.discard(summary_rel_path)
+            if unchanged_paths != set(current_inventory.entries):
+                raise SourceChangedError("source file set changed during no-change verification")
+            inventory_path = write_inventory_generation(control_cache_dir, current_inventory)
+            mark_clean(
+                state_path,
+                state,
+                last_good_sha=after_sha if git_available else state.last_good_sha,
+                before_sha=before_sha,
+                after_sha=after_sha,
+                snapshot_id=current_inventory.snapshot_id,
+                inventory_path=inventory_path,
+                repositories=repository_state,
+                working_tree_paths=sorted(working_tree_paths),
+            )
+            summary["state_after"] = {
+                "dirty": False,
+                "last_good_sha": state.last_good_sha,
+                "snapshot_id": current_inventory.snapshot_id,
+                "inventory_path": inventory_path,
+                "last_error": "",
+                "last_run_before": before_sha,
+                "last_run_after": after_sha,
+            }
             summary["status"] = "success"
+            summary["outcome"] = "no_changes"
             print("[state] no changes detected; state marked clean")
             return 0
 
@@ -1331,9 +1484,10 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     if _is_framework_candidate(framework, path)
                 )
 
-        manifest_root = safe_cache_root(args.cache_dir, "incremental_sync_manifests", project_root=root)
+        artifact_token = current_inventory.snapshot_id[:12]
+        manifest_root = safe_cache_root(control_cache_dir, "incremental_sync_manifests", project_root=root)
         message_output_dir = args.message_output_dir or safe_cache_root(
-            args.cache_dir,
+            control_cache_dir,
             "message_scan_artifacts",
             project_root=root,
         )
@@ -1358,8 +1512,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             if not parser_scan and not parser_deleted:
                 continue
 
-            changed_manifest = os.path.join(manifest_root, f"{parser}_changed_{after_sha[:12]}.json")
-            deleted_manifest = os.path.join(manifest_root, f"{parser}_deleted_{after_sha[:12]}.json")
+            changed_manifest = os.path.join(manifest_root, f"{parser}_changed_{artifact_token}.json")
+            deleted_manifest = os.path.join(manifest_root, f"{parser}_deleted_{artifact_token}.json")
             write_manifest_paths(changed_manifest, parser_scan)
             write_manifest_paths(deleted_manifest, parser_deleted)
 
@@ -1530,8 +1684,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 framework_info["duration_seconds"] = 0.0
                 continue
 
-            changed_manifest = os.path.join(manifest_root, f"{framework}_changed_{after_sha[:12]}.json")
-            deleted_manifest = os.path.join(manifest_root, f"{framework}_deleted_{after_sha[:12]}.json")
+            changed_manifest = os.path.join(manifest_root, f"{framework}_changed_{artifact_token}.json")
+            deleted_manifest = os.path.join(manifest_root, f"{framework}_deleted_{artifact_token}.json")
             write_manifest_paths(changed_manifest, framework_scan)
             write_manifest_paths(deleted_manifest, framework_deleted)
             framework_info["changed_manifest"] = changed_manifest
@@ -1587,21 +1741,40 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         summary["primary_parsers"] = parser_summaries
         summary["framework_overlays"] = framework_summaries
         summary["parsers"] = parser_summaries + framework_summaries
+        verification_paths = (
+            set(current_inventory.entries)
+            if full_scan or effective_detection == "hash" or args.reconcile
+            else (changed_paths | impacted_paths)
+        )
+        validate_inventory_unchanged(root, current_inventory, verification_paths)
+        post_source_paths = _normalize_project_paths(root, _walk_all_source_files(root))
+        if summary_rel_path:
+            post_source_paths.discard(summary_rel_path)
+        if post_source_paths != set(current_inventory.entries):
+            raise SourceChangedError("source file set changed during scan")
+        inventory_path = write_inventory_generation(control_cache_dir, current_inventory)
         mark_clean(
             state_path,
             state,
-            last_good_sha=after_sha,
+            last_good_sha=after_sha if git_available else state.last_good_sha,
             before_sha=before_sha,
             after_sha=after_sha,
+            snapshot_id=current_inventory.snapshot_id,
+            inventory_path=inventory_path,
+            repositories=repository_state,
+            working_tree_paths=sorted(working_tree_paths),
         )
         summary["state_after"] = {
             "dirty": False,
-            "last_good_sha": after_sha,
+            "last_good_sha": state.last_good_sha,
+            "snapshot_id": current_inventory.snapshot_id,
+            "inventory_path": inventory_path,
             "last_error": "",
             "last_run_before": before_sha,
             "last_run_after": after_sha,
         }
         summary["status"] = "success"
+        summary["outcome"] = "scanned"
         print(
             "[state] summary changed=%d deleted=%d impacted=%d parsers=%d"
             % (len(changed_paths), len(deleted_paths), len(impacted_paths), len(executed_parsers))
@@ -1610,6 +1783,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         return 0
     except Exception as exc:
         summary["status"] = "failed"
+        summary["outcome"] = "source_changed" if isinstance(exc, SourceChangedError) else "failed"
         summary["error"] = str(exc)
         dirty_marked = False
         if lock_acquired and state is not None and state_path:
@@ -1650,7 +1824,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Incremental Neo4j/Qdrant sync driven by git diff")
+    parser = argparse.ArgumentParser(description="Reliable incremental Neo4j/Qdrant sync using Git candidates plus SHA-256 inventory")
     parser.add_argument("--root", required=True, help="Repository root")
     parser.add_argument("--config", default=None, help="Path to harness dev.json config (default: <root>/.cortext-harness/config/dev.json)")
     parser.add_argument("--project-id", default=os.environ.get("PROJECT_ID"))
@@ -1670,6 +1844,29 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--parsers", default="auto", help="auto or comma-separated parser list")
     parser.add_argument("--python-bin", default=sys.executable)
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
+    parser.add_argument(
+        "--change-detection",
+        choices=("hybrid", "committed", "hash"),
+        default=os.environ.get("INCREMENTAL_CHANGE_DETECTION", "hybrid"),
+        help="hybrid (default): Git candidates + SHA-256 verification; committed: clean Git commits only; hash: full content comparison",
+    )
+    parser.add_argument(
+        "--lock-timeout-seconds",
+        type=float,
+        default=float(os.environ.get("INCREMENTAL_LOCK_TIMEOUT_SECONDS", "10")),
+        help="Seconds to wait for the same project/root scan scope lock (exit 2 when busy)",
+    )
+    parser.add_argument(
+        "--reconcile",
+        action="store_true",
+        help="Force a full SHA-256 reconciliation without forcing full analyzer mode",
+    )
+    parser.add_argument(
+        "--submodules",
+        choices=("recursive", "off"),
+        default=os.environ.get("INCREMENTAL_SUBMODULES", "recursive"),
+        help="Recursively scan initialized Git submodules or disable topology discovery",
+    )
     parser.add_argument(
         "--ignore-cache",
         action="store_true",
