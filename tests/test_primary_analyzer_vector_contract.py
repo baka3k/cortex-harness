@@ -96,20 +96,24 @@ class PrimaryAnalyzerVectorContractTests(unittest.TestCase):
         self.assertEqual(result, 0)
         perl_sync.assert_called_once()
 
-        dart_fixture = ROOT / "tests" / "fixtures" / "flutter-app"
-        with (
-            patch.object(flutter_analyzer, "write_graph", new=AsyncMock(return_value={})),
-            patch.object(flutter_analyzer, "sync_vectors", return_value=1) as dart_sync,
-        ):
-            result = flutter_analyzer.main(
-                [
-                    "--root", str(dart_fixture),
-                    "--mode", "dart",
-                    "--project-id", "project-a",
-                    "--qdrant-url", "http://qdrant:6333",
-                    "--qdrant-collection", "project_vectors",
-                ]
-            )
+        with tempfile.TemporaryDirectory() as directory:
+            dart_fixture = Path(directory)
+            (dart_fixture / "lib").mkdir()
+            (dart_fixture / "pubspec.yaml").write_text("name: vector_contract\n", encoding="utf-8")
+            (dart_fixture / "lib" / "main.dart").write_text("void main() {}\n", encoding="utf-8")
+            with (
+                patch.object(flutter_analyzer, "write_graph", new=AsyncMock(return_value={})),
+                patch.object(flutter_analyzer, "sync_vectors", return_value=1) as dart_sync,
+            ):
+                result = flutter_analyzer.main(
+                    [
+                        "--root", str(dart_fixture),
+                        "--mode", "dart",
+                        "--project-id", "project-a",
+                        "--qdrant-url", "http://qdrant:6333",
+                        "--qdrant-collection", "project_vectors",
+                    ]
+                )
         self.assertEqual(result, 0)
         dart_sync.assert_called_once()
 
