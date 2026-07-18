@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from tools.common.sync_scope import resolve_sync_cache_dir
+from tools.common.sync_scope import resolve_sync_cache_dir, scan_scope_id
 
 
 STATE_SCHEMA_VERSION = 2
@@ -95,6 +95,12 @@ def _safe_project_id(project_id: str) -> str:
 
 
 def state_file_path(cache_dir: Optional[str], project_id: str, root: str) -> str:
+    cache_root = os.path.join(resolve_sync_cache_dir(cache_dir, root), "incremental_sync")
+    scope = scan_scope_id(project_id, root)
+    return os.path.join(cache_root, f"{_safe_project_id(project_id)}_{scope}.json")
+
+
+def legacy_state_file_path(cache_dir: Optional[str], project_id: str, root: str) -> str:
     cache_root = os.path.join(resolve_sync_cache_dir(cache_dir, root), "incremental_sync")
     return os.path.join(cache_root, f"{_safe_project_id(project_id)}.json")
 

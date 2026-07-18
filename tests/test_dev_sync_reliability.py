@@ -4,10 +4,18 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cortex_harness.dev import _dedupe_scan_roots, _run_with_retry
+from cortex_harness.dev import _code_sync_summary_path, _dedupe_scan_roots, _run_with_retry
 
 
 class DevSyncReliabilityTests(unittest.TestCase):
+    def test_child_summary_paths_are_scoped_and_unique(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            first = _code_sync_summary_path(root, "project")
+            second = _code_sync_summary_path(root, "project")
+            self.assertNotEqual(first, second)
+            self.assertEqual(first.parent, root / ".cache" / "incremental_sync_summaries")
+
     def test_parent_scan_root_covers_configured_child(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

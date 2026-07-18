@@ -29,6 +29,17 @@ def resolve_sync_cache_dir(cache_dir: Optional[str], root: str) -> str:
     return os.path.join(os.path.realpath(os.path.abspath(root)), ".cache")
 
 
+def read_lock_metadata(path: str) -> dict:
+    for candidate in (Path(path + ".metadata.json"), Path(path)):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError):
+            continue
+    return {}
+
+
 class ProjectRunLock:
     """OS-backed project lock; the on-disk JSON is diagnostic metadata only."""
 
@@ -78,15 +89,26 @@ class ProjectRunLock:
             "root": self.root,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
-        handle.seek(0)
-        handle.truncate()
-        json.dump(metadata, handle, ensure_ascii=True)
-        handle.write("\n")
-        handle.flush()
         try:
-            os.fsync(handle.fileno())
-        except OSError:
-            pass
+            handle.seek(0)
+            handle.truncate()
+            json.dump(metadata, handle, ensure_ascii=True)
+            handle.write("\n")
+            handle.flush()
+            try:
+                os.fsync(handle.fileno())
+            except OSError:
+                pass
+            metadata_path = Path(self.path + ".metadata.json")
+            metadata_temp = metadata_path.with_suffix(metadata_path.suffix + ".tmp")
+            metadata_temp.write_text(
+                json.dumps(metadata, ensure_ascii=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(metadata_temp, metadata_path)
+        except Exception:
+            self.release()
+            raise
 
     def release(self) -> None:
         if self._lock is None:

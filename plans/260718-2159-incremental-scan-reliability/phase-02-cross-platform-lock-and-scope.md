@@ -39,11 +39,11 @@ Introduce a focused `ProjectRunLock`/`ScanScope` helper using a direct `portaloc
 
 ## Todo
 
-- [ ] Stale lock files are harmless on Windows and POSIX.
-- [ ] Live contention still excludes a second writer.
-- [ ] Same root from different CWDs resolves one scope.
-- [ ] Lock metadata is diagnostic and never authoritative.
-- [ ] Generic retry behavior does not hide or delay lock-busy failures.
+- [x] Stale lock files are harmless on Windows and POSIX.
+- [x] Live contention still excludes a second writer.
+- [x] Same root from different CWDs resolves one scope.
+- [x] Lock metadata is diagnostic and never authoritative.
+- [x] Generic retry behavior does not hide or delay lock-busy failures.
 
 ## Risks
 

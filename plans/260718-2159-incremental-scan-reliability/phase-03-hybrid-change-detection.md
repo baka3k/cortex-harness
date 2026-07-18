@@ -50,11 +50,11 @@ Git collection uses the saved commit baseline plus index/worktree/untracked evid
 
 ## Todo
 
-- [ ] Every working-tree state has a passing test.
-- [ ] Unchanged dirty files do not repeatedly invoke analyzers.
-- [ ] Reverted and re-edited files are detected.
-- [ ] Non-Git roots support incremental hash mode.
-- [ ] Mid-run changes cannot advance a clean baseline.
+- [x] Every working-tree state has a passing test.
+- [x] Unchanged dirty files do not repeatedly invoke analyzers.
+- [x] Reverted and re-edited files are detected.
+- [x] Non-Git roots support incremental hash mode.
+- [x] Mid-run changes cannot advance a clean baseline.
 
 ## Risks
 

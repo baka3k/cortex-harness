@@ -29,6 +29,39 @@ def init_repo(root: Path) -> None:
 
 
 class IncrementalSyncSubmoduleTests(unittest.TestCase):
+    def test_ignore_mode_excludes_submodule_files_from_first_inventory(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            child = base / "child"
+            parent = base / "parent"
+            child.mkdir()
+            parent.mkdir()
+            init_repo(child)
+            (child / "main.cpp").write_text("int child = 1;\n", encoding="utf-8")
+            git(child, "add", "-A")
+            git(child, "commit", "-q", "-m", "initial")
+            init_repo(parent)
+            subprocess.run(
+                [
+                    "git", "-c", "protocol.file.allow=always", "-C", str(parent),
+                    "submodule", "add", "-q", str(child), "vendor/child",
+                ],
+                check=True,
+            )
+            git(parent, "commit", "-q", "-am", "add child")
+            args = incremental_sync.parse_args(
+                [
+                    "--root", str(parent),
+                    "--project-id", "ignore-submodule-test",
+                    "--parsers", "cplus",
+                    "--submodules", "ignore",
+                    "--no-sync-messages",
+                ]
+            )
+            with patch.object(incremental_sync, "_run", return_value="") as run:
+                self.assertEqual(asyncio.run(incremental_sync._run_incremental(args)), 0)
+                self.assertEqual(run.call_count, 0)
+
     def test_dirty_initialized_submodule_is_scanned_once(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             base = Path(temp_dir)
@@ -110,6 +143,41 @@ class IncrementalSyncSubmoduleTests(unittest.TestCase):
             ):
                 self.assertEqual(asyncio.run(incremental_sync._run_incremental(args)), 0)
             self.assertEqual(len(commands), 1)
+
+            subprocess.run(
+                ["git", "-C", str(parent), "submodule", "deinit", "-q", "-f", "vendor/child"],
+                check=True,
+            )
+            commands.clear()
+            with patch.object(
+                incremental_sync,
+                "_run",
+                side_effect=lambda command, **_kwargs: commands.append(command) or "",
+            ):
+                self.assertEqual(asyncio.run(incremental_sync._run_incremental(args)), 0)
+            self.assertEqual(commands, [])
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["outcome"], "partial_coverage")
+            self.assertTrue(
+                any(
+                    item["code"] == "submodule_uninitialized"
+                    for item in summary["coverage_warnings"]
+                )
+            )
+
+            parent_source = parent / "parent.cpp"
+            parent_source.write_text("int parent_value = 1;\n", encoding="utf-8")
+            args.reconcile = True
+            commands.clear()
+            with patch.object(
+                incremental_sync,
+                "_run",
+                side_effect=lambda command, **_kwargs: commands.append(command) or "",
+            ):
+                self.assertEqual(asyncio.run(incremental_sync._run_incremental(args)), 0)
+            self.assertEqual(len(commands), 1)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["outcome"], "partial_coverage")
 
 
 if __name__ == "__main__":
