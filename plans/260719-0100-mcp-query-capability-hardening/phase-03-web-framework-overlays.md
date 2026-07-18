@@ -37,10 +37,10 @@ three overlay configurations with prerequisite parsers and deterministic order.
 
 ## Todo
 
-- [ ] Add fixtures and failing extraction tests.
-- [ ] Implement shared facts/extractors.
-- [ ] Implement writer/orchestration.
-- [ ] Verify incremental manifests.
+- [x] Add fixtures and failing extraction tests.
+- [x] Implement shared facts/extractors.
+- [x] Implement writer/orchestration.
+- [x] Verify incremental manifests.
 
 ## Risks
 
@@ -51,4 +51,3 @@ three overlay configurations with prerequisite parsers and deterministic order.
 
 - Each target framework fixture yields queryable endpoint and handler facts linked
   to canonical source symbols.
-

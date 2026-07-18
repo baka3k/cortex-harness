@@ -68,5 +68,9 @@ class WebAnalysisResult:
     def graph_rows(self) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
         return (
             [item.node_row() for item in self.endpoints],
-            [item.relationship_row() for item in self.endpoints],
+            [
+                item.relationship_row()
+                for item in self.endpoints
+                if item.resolution_status == "resolved" and item.handler_file
+            ],
         )
