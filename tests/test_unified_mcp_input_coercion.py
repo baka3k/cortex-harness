@@ -75,11 +75,17 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_resolve_rel_types_with_diagnostics",
             resolver,
         ):
-            selected, relationships, routing, returned_diagnostics, error = (
-                await unified_mcp._resolve_direct_capability_context(
-                    "find_callers_of_endpoint", "spring-boot", "graph",
+            with patch.object(
+                unified_mcp.cplus_backend,
+                "_list_node_labels",
+                AsyncMock(return_value=["ApiEndpoint", "ApiCall"]),
+            ):
+                selected, relationships, routing, returned_diagnostics, error = (
+                    await unified_mcp._resolve_direct_capability_context(
+                        "find_callers_of_endpoint", "spring-boot", "graph",
+                        required_labels=("ApiEndpoint",),
+                    )
                 )
-            )
 
         requested = resolver.await_args.args[0]
         self.assertEqual(selected, "spring-boot")
@@ -100,18 +106,108 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_resolve_rel_types_with_diagnostics",
             AsyncMock(return_value=(["CALLS_API"], diagnostics)),
         ):
-            *_, error = await unified_mcp._resolve_direct_capability_context(
-                "find_callers_of_endpoint",
-                "spring",
-                "graph",
-                required_relationships=("CALLS_API", "MATCHES"),
-            )
+            with patch.object(
+                unified_mcp.cplus_backend,
+                "_list_node_labels",
+                AsyncMock(return_value=["ApiEndpoint", "ApiCall"]),
+            ):
+                *_, error = await unified_mcp._resolve_direct_capability_context(
+                    "find_callers_of_endpoint",
+                    "spring",
+                    "graph",
+                    required_relationships=("CALLS_API", "MATCHES"),
+                    required_labels=("ApiEndpoint", "ApiCall"),
+                )
 
-        self.assertEqual(error["error"]["type"], "unsupported_capability")
+        self.assertEqual(error["error"]["type"], "capability_unavailable")
         self.assertEqual(
             error["capability_diagnostics"]["missing_required_relationships"],
             ["MATCHES"],
         )
+
+    async def test_direct_context_rejects_missing_required_endpoint_label(self):
+        diagnostics = {
+            "schema_status": "available",
+            "support_status": "supported",
+            "available_relationships": ["CALLS_API", "MATCHES"],
+        }
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_resolve_rel_types_with_diagnostics",
+            AsyncMock(return_value=(["CALLS_API", "MATCHES"], diagnostics)),
+        ), patch.object(
+            unified_mcp.cplus_backend,
+            "_list_node_labels",
+            AsyncMock(return_value=["Function", "ApiCall"]),
+        ):
+            *_, error = await unified_mcp._resolve_direct_capability_context(
+                "find_callers_of_endpoint",
+                "typescript",
+                "graph",
+                required_relationships=("CALLS_API", "MATCHES"),
+                required_labels=("ApiEndpoint", "ApiCall"),
+            )
+
+        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        self.assertEqual(
+            error["capability_diagnostics"]["missing_required_labels"],
+            ["ApiEndpoint"],
+        )
+
+    async def test_direct_context_fails_closed_when_label_schema_is_unavailable(self):
+        diagnostics = {
+            "schema_status": "available",
+            "support_status": "supported",
+            "available_relationships": ["HANDLES"],
+        }
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_resolve_rel_types_with_diagnostics",
+            AsyncMock(return_value=(["HANDLES"], diagnostics)),
+        ), patch.object(
+            unified_mcp.cplus_backend,
+            "_list_node_labels",
+            AsyncMock(return_value=None),
+        ):
+            *_, error = await unified_mcp._resolve_direct_capability_context(
+                "get_api_call_chain",
+                "typescript",
+                "graph",
+                required_relationships=("HANDLES",),
+                required_labels=("ApiEndpoint",),
+            )
+
+        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        self.assertEqual(
+            error["capability_diagnostics"]["label_schema_status"],
+            "unavailable",
+        )
+
+    async def test_direct_context_fails_closed_when_relationship_schema_is_unavailable(self):
+        diagnostics = {
+            "schema_status": "unavailable",
+            "support_status": "unknown",
+            "available_relationships": [],
+        }
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_resolve_rel_types_with_diagnostics",
+            AsyncMock(return_value=(["HANDLES"], diagnostics)),
+        ), patch.object(
+            unified_mcp.cplus_backend,
+            "_list_node_labels",
+            AsyncMock(return_value=["ApiEndpoint"]),
+        ):
+            *_, error = await unified_mcp._resolve_direct_capability_context(
+                "get_api_call_chain",
+                "spring",
+                "graph",
+                required_relationships=("HANDLES",),
+                required_labels=("ApiEndpoint",),
+            )
+
+        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        self.assertIn("relationship schema", error["error"]["message"])
 
     async def test_endpoint_chain_and_workflow_queries_use_profile_relationships(self):
         context = (
@@ -213,9 +309,30 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("SEMANTIC_OF", captured["rel_types"])
         self.assertTrue(captured["_capability_default_relationships"])
-        self.assertEqual(result["backend"], "cplus")
+        self.assertEqual(result["query_engine"], "graph_generic")
+        self.assertNotIn("backend", result)
         self.assertEqual(result["capability"]["canonical_parser"], "spring")
         self.assertEqual(result["capability"]["support_level"], "full")
+
+    async def test_dispatch_rejects_unknown_nonempty_parser(self):
+        result = await unified_mcp._dispatch_tool(
+            "trace_flow",
+            {"parser_type": "pyhton", "start_id": "entry"},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "unsupported_parser")
+        self.assertEqual(result["error"]["parser_type"], "pyhton")
+        self.assertIn("python", result["error"]["supported_parsers"])
+        self.assertEqual(result["query_engine"], "graph_generic")
+
+    async def test_activate_project_rejects_unknown_parser(self):
+        tool = getattr(unified_mcp.tool_activate_project, "fn", unified_mcp.tool_activate_project)
+        result = await tool(parser_type="laravle", database_name="graph")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "unsupported_parser")
+        self.assertEqual(result["error"]["parser_type"], "laravle")
 
     async def test_provider_relationship_filter_reports_partial_and_unsupported(self):
         resolver = unified_mcp.cplus_backend._resolve_rel_types_with_diagnostics
@@ -242,8 +359,13 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         result = await tool()
 
         profiles = {item["canonical_parser"]: item for item in result["capabilities"]}
-        self.assertEqual(profiles["android"]["backend"], "android")
-        self.assertEqual(profiles["spring"]["backend"], "cplus")
+        self.assertEqual(profiles["android"]["query_engine"], "android_graph")
+        self.assertEqual(profiles["spring"]["query_engine"], "graph_generic")
+        self.assertNotIn("backend", profiles["spring"])
+        self.assertEqual(
+            set(profiles["spring"]["support"]),
+            {"symbols", "calls", "endpoints", "database"},
+        )
         self.assertEqual(profiles["perl"]["support_level"], "generic")
         self.assertIn("asp.net-framework", result["parsers"])
 

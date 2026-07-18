@@ -15,6 +15,11 @@ class DevFrameworkParserDiscoveryTests(unittest.TestCase):
                 "mybatis",
                 "struts",
                 "flutter",
+                "fastapi_django",
+                "express_js",
+                "laravel",
+                "database_sql",
+                "database_plsql",
             },
         )
         self.assertTrue(set(FRAMEWORK_ANALYZERS).isdisjoint(LANG_ANALYZERS))

@@ -61,6 +61,11 @@ FRAMEWORK_ANALYZERS = {
     "flutter":     CODE_TINY / "tools/flutter/flutter_analyzer.py",
     "aspnet_framework": CODE_TINY / "tools/aspnet_framework/aspnet_framework_analyzer.py",
     "aspnet_core": CODE_TINY / "tools/aspnet_core/aspnet_core_analyzer.py",
+    "fastapi_django": CODE_TINY / "tools/web_framework/web_framework_analyzer.py",
+    "express_js": CODE_TINY / "tools/web_framework/web_framework_analyzer.py",
+    "laravel": CODE_TINY / "tools/web_framework/web_framework_analyzer.py",
+    "database_sql": CODE_TINY / "tools/database_schema/database_schema_analyzer.py",
+    "database_plsql": CODE_TINY / "tools/database_schema/database_schema_analyzer.py",
 }
 
 LANG_EXTENSIONS = {
