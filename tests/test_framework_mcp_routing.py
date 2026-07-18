@@ -35,6 +35,46 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
             set(CAPABILITIES),
         )
 
+    def test_primary_language_analyzers_have_query_capabilities(self):
+        expected = {
+            "python": "python",
+            "fastapi": "python",
+            "django": "python",
+            "js": "javascript",
+            "javascript": "javascript",
+            "ts": "typescript",
+            "typescript": "typescript",
+            "express": "typescript",
+            "nestjs": "typescript",
+            "php": "php",
+            "laravel": "php",
+            "csharp": "csharp",
+            "c#": "csharp",
+            "sql": "sql",
+            "plsql": "plsql",
+        }
+        for alias, canonical in expected.items():
+            with self.subTest(alias=alias):
+                capability = capability_for_parser(alias)
+                self.assertIsNotNone(capability)
+                self.assertEqual(capability.name, canonical)
+
+    def test_web_capabilities_expose_endpoint_graph_contracts(self):
+        for parser in ("fastapi", "django", "express", "nestjs", "laravel"):
+            with self.subTest(parser=parser):
+                capability = capability_for_parser(parser)
+                self.assertIn("endpoint_queries", capability.features)
+                self.assertTrue(
+                    {"ApiEndpoint", "HttpEndpoint"} & set(capability.labels),
+                    capability.labels,
+                )
+                self.assertIn("HANDLES", default_relationships(parser, "get_api_call_chain"))
+
+        typescript = capability_for_parser("typescript")
+        self.assertIn("ApiCall", typescript.labels)
+        self.assertIn("CALLS_API", default_relationships("typescript", "find_callers_of_endpoint"))
+        self.assertIn("MATCHES", default_relationships("typescript", "find_callers_of_endpoint"))
+
     def test_framework_aliases_resolve_without_losing_core_relationships(self):
         self.assertEqual(framework_for_parser("spring-boot").name, "spring")
         self.assertEqual(framework_for_parser("servlet").name, "servlet_jsp")

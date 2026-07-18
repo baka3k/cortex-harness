@@ -28,6 +28,18 @@ ANDROID_RELATIONSHIPS = (
     "EMITS_EVENT", "HANDLES_EVENT", "ANNOTATED_WITH", "DEPENDS_ON",
     "TAKES_FUNCTION", "IMPLEMENTS", "EXTENDS",
 )
+WEB_LABELS = GENERIC_LABELS | frozenset({
+    "ApiCall", "ApiEndpoint", "HttpEndpoint", "Route", "Controller",
+    "Service", "Repository", "Middleware", "Database",
+})
+WEB_RELATIONSHIPS = tuple(dict.fromkeys((
+    *GENERIC_RELATIONSHIPS, "CALLS_API", "MATCHES", "HANDLES", "HANDLED_BY",
+    "MAPPED_TO", "USES", "QUERIES", "RETURNS", "INJECTS",
+)))
+WEB_SEARCHABLE_PROPERTIES = tuple(dict.fromkeys((
+    *GENERIC_SEARCHABLE_PROPERTIES, "route", "path", "url_pattern",
+    "http_method", "framework", "handler_name", "controller_name",
+)))
 
 GENERIC_FEATURES = frozenset({
     "graph_search", "graph_paths", "graph_flow", "semantic_search",
@@ -146,6 +158,50 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "cplus": _generic_profile(
         "cplus", {"cplus", "cpp", "c++", "c", "clang"},
         relationships=CPLUS_RELATIONSHIPS, support_level="full",
+    ),
+    "python": FrameworkQueryConfig(
+        name="python",
+        aliases=frozenset({"python", "py", "fastapi", "django", "flask"}),
+        labels=WEB_LABELS,
+        relationships=WEB_RELATIONSHIPS,
+        searchable_properties=WEB_SEARCHABLE_PROPERTIES,
+        support_level="partial",
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
+    ),
+    "javascript": FrameworkQueryConfig(
+        name="javascript",
+        aliases=frozenset({"javascript", "js", "node", "nodejs"}),
+        labels=WEB_LABELS,
+        relationships=WEB_RELATIONSHIPS,
+        searchable_properties=WEB_SEARCHABLE_PROPERTIES,
+        support_level="partial",
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
+    ),
+    "typescript": FrameworkQueryConfig(
+        name="typescript",
+        aliases=frozenset({"typescript", "ts", "tsx", "express", "nestjs", "nest.js"}),
+        labels=WEB_LABELS,
+        relationships=WEB_RELATIONSHIPS,
+        searchable_properties=WEB_SEARCHABLE_PROPERTIES,
+        support_level="full",
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
+    ),
+    "php": FrameworkQueryConfig(
+        name="php",
+        aliases=frozenset({"php", "laravel", "symfony"}),
+        labels=WEB_LABELS,
+        relationships=WEB_RELATIONSHIPS,
+        searchable_properties=WEB_SEARCHABLE_PROPERTIES,
+        support_level="partial",
+        features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
+    ),
+    "csharp": _generic_profile(
+        "csharp", {"csharp", "c#", "cs", "dotnet", ".net"},
+        support_level="full",
+    ),
+    "sql": _generic_profile("sql", {"sql"}, support_level="full"),
+    "plsql": _generic_profile(
+        "plsql", {"plsql", "pl/sql", "oracle-plsql"}, support_level="full",
     ),
     "jvm": _generic_profile("jvm", {"jvm", "java", "kotlin"}, relationships=ANDROID_RELATIONSHIPS),
     "go": _generic_profile("go", {"go"}),

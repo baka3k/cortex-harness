@@ -14,6 +14,12 @@ from cortex_harness.dev import LANG_ANALYZERS as DEV_LANG_ANALYZERS  # noqa: E40
 from tools.sync.incremental_sync import ANALYZERS, FRAMEWORK_ANALYZERS, _group_paths_by_parser  # noqa: E402
 from tools.sync.owner_manifest import SUPPORTED_PARSERS  # noqa: E402
 
+MCP_DIR = CODE_TINY / "mcp"
+if str(MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(MCP_DIR))
+
+from framework_registry import capability_for_parser  # noqa: E402
+
 
 EXPECTED_PRIMARY = {
     "android",
@@ -85,6 +91,10 @@ class CommonAnalyzerRegistryTest(unittest.TestCase):
         self.assertEqual(grouped["rust"], {"src/lib.rs"})
         self.assertEqual(grouped["swift"], {"src/app.swift"})
         self.assertEqual(grouped["dart"], {"lib/main.dart"})
+
+    def test_every_primary_analyzer_resolves_to_an_mcp_capability(self):
+        missing = sorted(parser for parser in EXPECTED_PRIMARY if capability_for_parser(parser) is None)
+        self.assertEqual(missing, [])
 
 
 if __name__ == "__main__":

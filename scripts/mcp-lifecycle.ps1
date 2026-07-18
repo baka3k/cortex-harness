@@ -828,13 +828,28 @@ function Invoke-Start {
         $title = "MCP $($server.Name) :$($server.Port)"
         $titleArg = Quote-PowerShell $title
         $scriptArg = Quote-PowerShell $server.Script
+        $runtimeConfigScript = Join-Path $Root "scripts\mcp_runtime_config.py"
+        $runtimeJsonPath = Join-Path $StateDir "$($server.Name).active.json"
+        $runtimeBashPath = Join-Path $StateDir "$($server.Name).active.env"
+        $rootPython = Get-RootVenvPython
+        $runtimeJson = & $rootPython $runtimeConfigScript --root $Root --server $server.Name --format json
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to resolve active MCP environment for $($server.Name)."
+        }
+        $runtimeBash = & $rootPython $runtimeConfigScript --root $Root --server $server.Name --format bash
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to render active MCP environment for $($server.Name)."
+        }
+        [System.IO.File]::WriteAllText($runtimeJsonPath, ($runtimeJson -join [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($runtimeBashPath, (($runtimeBash -join [Environment]::NewLine) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
 
         if ($runner.Kind -eq "git-bash") {
             $workDir = Quote-Bash (Convert-ToShellPath -Path $server.WorkDir -Kind $runner.Kind)
             $rootVenv = Quote-Bash (Convert-ToShellPath -Path (Get-RootVenvDir) -Kind $runner.Kind)
             $scriptName = Quote-Bash (Split-Path -Leaf $server.Script)
+            $runtimeEnvFile = Quote-Bash (Convert-ToShellPath -Path $runtimeBashPath -Kind $runner.Kind)
             $graphEnv = Get-DefaultGraphEnvBash -ServerName $server.Name
-            $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; $graphEnv cd $workDir && bash ./$scriptName"
+            $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; $graphEnv; export CORTEX_HARNESS_ENV_FILE=$runtimeEnvFile; cd $workDir && bash ./$scriptName"
             $runnerArg = Quote-PowerShell $runner.Command
             $bashCommandArg = Quote-PowerShell $bashCommand
             $invokeLine = "& $runnerArg -lc $bashCommandArg"
@@ -842,6 +857,7 @@ function Invoke-Start {
             $pythonArg = Quote-PowerShell (Get-RootVenvPython)
             $workDirArg = Quote-PowerShell $server.WorkDir
             $pythonScriptArg = Quote-PowerShell $server.PythonScript
+            $runtimeJsonArg = Quote-PowerShell $runtimeJsonPath
             $argumentList = "@(" + (($server.Arguments | ForEach-Object { Quote-PowerShell $_ }) -join ", ") + ")"
             $graphEnv = Get-DefaultGraphEnvPowerShell -ServerName $server.Name
             $invokeLine = @"
@@ -861,6 +877,10 @@ if (Test-Path -LiteralPath `$envFile) {
         }
         [Environment]::SetEnvironmentVariable(`$key.Trim(), `$value, 'Process')
     }
+}
+`$runtimeEnvironment = Get-Content -Raw -LiteralPath $runtimeJsonArg | ConvertFrom-Json
+`$runtimeEnvironment.PSObject.Properties | ForEach-Object {
+    [Environment]::SetEnvironmentVariable(`$_.Name, [string]`$_.Value, 'Process')
 }
 & $pythonArg $pythonScriptArg @serverArgs
 "@
@@ -888,6 +908,7 @@ Write-Host '[start]' $titleArg 'exited.'
             Pid = $proc.Id
             Script = $server.Script
             Port = $server.Port
+            RuntimeConfig = $runtimeJsonPath
             StartedAt = $proc.StartTime.ToUniversalTime().ToString("o")
         }
 

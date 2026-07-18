@@ -17,6 +17,13 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from mcp_runtime_config import format_bash_exports, runtime_environment  # noqa: E402
+
+
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
@@ -419,6 +426,13 @@ def invoke_start() -> None:
             raise RuntimeError(f"MCP script not found: {script}")
         wrapper = STATE_DIR / f"start-{server['name']}.command"
         pid_path = STATE_DIR / f"{server['name']}.pid"
+        runtime_env_path = STATE_DIR / f"{server['name']}.active.env"
+        runtime_env = runtime_environment(ROOT, str(server["name"]))
+        runtime_env_path.write_text(
+            format_bash_exports(runtime_env) + ("\n" if runtime_env else ""),
+            encoding="utf-8",
+        )
+        runtime_env_path.chmod(0o600)
         wrapper.write_text(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
@@ -427,6 +441,7 @@ def invoke_start() -> None:
             f"  source {shlex.quote(str(VENV_DIR / 'bin' / 'activate'))}\n"
             "fi\n"
             f"{default_graph_env_exports(str(server['name']))}"
+            f"export CORTEX_HARNESS_ENV_FILE={shlex.quote(str(runtime_env_path))}\n"
             f"cd {shlex.quote(str(server['work_dir']))}\n"
             f"exec bash {shlex.quote(str(script))}\n",
             encoding="utf-8",
