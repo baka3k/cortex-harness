@@ -291,6 +291,23 @@ def _source_folders(source: dict) -> list:
     return result
 
 
+def _dedupe_scan_roots(folders: list, project_path: Path) -> list:
+    """Remove canonical duplicates and descendants already covered by a parent scan."""
+    selected: list[tuple[str, Path]] = []
+    for folder in folders:
+        candidate = Path(folder) if Path(folder).is_absolute() else project_path / folder
+        canonical = Path(os.path.normcase(os.path.realpath(candidate)))
+        if any(canonical == existing or canonical.is_relative_to(existing) for _, existing in selected):
+            continue
+        selected = [
+            (raw, existing)
+            for raw, existing in selected
+            if not existing.is_relative_to(canonical)
+        ]
+        selected.append((folder, canonical))
+    return [raw for raw, _ in selected]
+
+
 def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
     cfg_dir = _config_dir(project_dir)
     if not cfg_dir.exists():
@@ -1015,6 +1032,7 @@ def _run_with_retry(
     max_retries: int = 3,
     dry_run: bool = False,
     env: Optional[dict] = None,
+    non_retryable_exit_codes: Optional[set[int]] = None,
 ) -> int:
     display = " ".join(str(c) for c in cmd)
     click.echo(f"  $ {display}")
@@ -1029,11 +1047,27 @@ def _run_with_retry(
         rc = subprocess.run([str(c) for c in cmd], env=process_env).returncode
         if rc == 0:
             return 0
+        if rc in (non_retryable_exit_codes or set()):
+            return rc
         if attempt < max_retries:
             wait = 2 ** attempt
             click.echo(f"  [retry {attempt}/{max_retries - 1}] exit={rc}, retrying in {wait}s…")
             time.sleep(wait)
     return rc
+
+
+def _code_sync_summary_path(folder_path: Path, project_id: str) -> Path:
+    identity = f"{project_id}\0{os.path.normcase(os.path.realpath(folder_path))}"
+    token = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return folder_path / ".cache" / "incremental_sync_summaries" / f"dev_{token}.json"
+
+
+def _read_code_sync_summary(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -1258,12 +1292,15 @@ def _print_summary(summaries: list, total_elapsed: float) -> None:
         status  = s.get("status", "?")
         folder  = s.get("folder", "?")
         mode    = s.get("mode", "")
+        outcome = s.get("outcome", "")
         elapsed = s.get("elapsed", 0)
         reason  = s.get("reason", "")
         icon    = {"ok": "✓", "skipped": "↷", "cancelled": "–", "error": "✗"}.get(status, "?")
         parts   = [f"  {icon} {folder}"]
         if mode:
             parts.append(f"[{mode}]")
+        if outcome and outcome != "unknown":
+            parts.append(f"[{outcome}]")
         if elapsed:
             parts.append(f"{elapsed:.1f}s")
         if reason:
@@ -1785,8 +1822,34 @@ def sync():
 @click.option("--verbose/--no-verbose", default=True, show_default=True)
 @click.option("--dry-run", is_flag=True)
 @click.option("--full-scan", is_flag=True, help="Force full rescan (ignore git state / baseline).")
+@click.option(
+    "--change-detection",
+    type=click.Choice(["hybrid", "committed", "hash"]),
+    default="hybrid",
+    show_default=True,
+    help="Git+SHA hybrid, committed-only, or full SHA comparison.",
+)
+@click.option("--lock-timeout-seconds", type=float, default=10.0, show_default=True)
+@click.option("--reconcile", is_flag=True, help="Force full SHA-256 reconciliation.")
+@click.option(
+    "--submodules",
+    type=click.Choice(["recursive", "off"]),
+    default="recursive",
+    show_default=True,
+)
 @click.pass_context
-def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
+def sync_code(
+    ctx,
+    project_dir,
+    preview,
+    verbose,
+    dry_run,
+    full_scan,
+    change_detection,
+    lock_timeout_seconds,
+    reconcile,
+    submodules,
+):
     """Interactive: pick folders, auto-detect language, incremental if baseline exists.
 
     \b
@@ -1797,7 +1860,17 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
       all       Run ALL analyzers on all folders (incremental if baseline exists).
     """
     ctx.ensure_object(dict)
-    ctx.obj.update(project_dir=project_dir, preview=preview, verbose=verbose, dry_run=dry_run, full_scan=full_scan)
+    ctx.obj.update(
+        project_dir=project_dir,
+        preview=preview,
+        verbose=verbose,
+        dry_run=dry_run,
+        full_scan=full_scan,
+        change_detection=change_detection,
+        lock_timeout_seconds=lock_timeout_seconds,
+        reconcile=reconcile,
+        submodules=submodules,
+    )
 
     if ctx.invoked_subcommand is not None:
         return
@@ -1814,7 +1887,7 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
         click.echo("[warn] No source folders configured. Run 'dev init' or 'dev sync code add'.")
         return
 
-    selected = _select_folders_interactive(folders)
+    selected = _dedupe_scan_roots(_select_folders_interactive(folders), project_path)
     if not selected:
         click.echo("[info] No folders selected.")
         return
@@ -1830,18 +1903,19 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
             click.echo(f"\n[warn] Folder not found: {folder} — skipping")
             continue
 
-        if not _ensure_git_repo(folder_path):
-            click.echo(f"[warn] Skipping {folder} — git repo required for incremental sync")
-            summaries.append({"folder": folder, "status": "skipped", "reason": "not git"})
-            continue
-
+        project_id = project.get("code", project.get("name", "project"))
+        child_summary_path = _code_sync_summary_path(folder_path, project_id)
         cmd = [
             python, str(incremental_sync),
             "--root", str(folder_path),
-            "--project-id", project.get("code", project.get("name", "project")),
+            "--project-id", project_id,
             "--project-name", project.get("name", "project"),
             "--python-bin", python,
             "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+            "--change-detection", change_detection,
+            "--lock-timeout-seconds", str(lock_timeout_seconds),
+            "--submodules", submodules,
+            "--summary-path", str(child_summary_path),
             *_neo4j_args_code(env),
         ]
         qdrant_url = _configured_qdrant_url(env)
@@ -1849,6 +1923,8 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
             cmd += ["--qdrant-url", qdrant_url]
         if full_scan:
             cmd.append("--full-scan")
+        if reconcile:
+            cmd.append("--reconcile")
         if dry_run:
             cmd.append("--verbose")
             click.echo(f"\n[dry-run] {' '.join(cmd)}")
@@ -1858,13 +1934,22 @@ def sync_code(ctx, project_dir, preview, verbose, dry_run, full_scan):
             cmd.append("--verbose")
 
         start = time.time()
-        rc = _run_with_retry(cmd, dry_run=False, env=process_env)
+        rc = _run_with_retry(
+            cmd,
+            dry_run=False,
+            env=process_env,
+            non_retryable_exit_codes={2},
+        )
         elapsed = time.time() - start
+        child_summary = _read_code_sync_summary(child_summary_path)
         summaries.append({
             "folder": folder,
             "status": "ok" if rc == 0 else "error",
             "elapsed": elapsed,
             "exit_code": rc,
+            "outcome": child_summary.get("outcome", "unknown"),
+            "change_sources": child_summary.get("change_sources", {}),
+            "coverage_warnings": child_summary.get("coverage_warnings", []),
         })
 
     _print_summary(summaries, time.time() - total_start)
@@ -1889,7 +1974,7 @@ def sync_code_all(ctx):
     env          = code_cfg.get("env", {})
     process_env  = _code_env_for_process(cfg)
     project      = cfg.get("project", {})
-    folders      = _source_folders(code_cfg.get("source", {}))
+    folders      = _dedupe_scan_roots(_source_folders(code_cfg.get("source", {})), project_path)
 
     if not folders:
         click.echo("[warn] No source folders configured. Run 'dev init' or 'dev sync code add'.")
@@ -1910,18 +1995,19 @@ def sync_code_all(ctx):
             click.echo(f"[warn] Folder not found: {folder} — skipping")
             continue
 
-        if not _ensure_git_repo(folder_path):
-            click.echo(f"[warn] Skipping {folder} — git repo required for incremental sync")
-            summaries.append({"folder": folder, "status": "skipped", "reason": "not git"})
-            continue
-
+        project_id = project.get("code", project.get("name", "project"))
+        child_summary_path = _code_sync_summary_path(folder_path, project_id)
         cmd = [
             python, str(incremental_sync),
             "--root", str(folder_path),
-            "--project-id", project.get("code", project.get("name", "project")),
+            "--project-id", project_id,
             "--project-name", project.get("name", "project"),
             "--python-bin", python,
             "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+            "--change-detection", o["change_detection"],
+            "--lock-timeout-seconds", str(o["lock_timeout_seconds"]),
+            "--submodules", o["submodules"],
+            "--summary-path", str(child_summary_path),
             *_neo4j_args_code(env),
         ]
         qdrant_url = _configured_qdrant_url(env)
@@ -1929,6 +2015,8 @@ def sync_code_all(ctx):
             cmd += ["--qdrant-url", qdrant_url]
         if o.get("full_scan"):
             cmd.append("--full-scan")
+        if o.get("reconcile"):
+            cmd.append("--reconcile")
         if o["dry_run"]:
             cmd.append("--verbose")
             click.echo(f"[dry-run] {' '.join(cmd)}")
@@ -1938,13 +2026,22 @@ def sync_code_all(ctx):
             cmd.append("--verbose")
 
         start = time.time()
-        rc = _run_with_retry(cmd, dry_run=False, env=process_env)
+        rc = _run_with_retry(
+            cmd,
+            dry_run=False,
+            env=process_env,
+            non_retryable_exit_codes={2},
+        )
         elapsed = time.time() - start
+        child_summary = _read_code_sync_summary(child_summary_path)
         summaries.append({
             "folder": folder,
             "status": "ok" if rc == 0 else "error",
             "elapsed": elapsed,
             "exit_code": rc,
+            "outcome": child_summary.get("outcome", "unknown"),
+            "change_sources": child_summary.get("change_sources", {}),
+            "coverage_warnings": child_summary.get("coverage_warnings", []),
         })
 
     _print_summary(summaries, time.time() - total_start)
