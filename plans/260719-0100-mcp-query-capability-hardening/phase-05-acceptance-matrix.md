@@ -37,7 +37,7 @@ claim to a fixture-backed evidence assertion.
 - [x] Add failing matrix coverage test.
 - [x] Connect fixture-backed evidence.
 - [x] Run regression suite and compile checks.
-- [ ] Update docs/log and finalize.
+- [x] Update docs/log and finalize.
 
 ## Risks
 
