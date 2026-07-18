@@ -67,7 +67,7 @@ def _validate_relationships(rows: Sequence[Dict[str, Any]]) -> None:
     for row in rows:
         if row.get("type") != "HANDLES" or row.get("handler_label") not in _HANDLER_LABELS:
             raise ValueError("unsupported web framework relationship")
-        if any(not row.get(key) for key in ("id", "endpoint_id", "project_id", "handler_name")):
+        if any(not row.get(key) for key in ("id", "endpoint_id", "project_id", "handler_name", "handler_file")):
             raise ValueError("web relationship row is missing identity or handler")
 
 

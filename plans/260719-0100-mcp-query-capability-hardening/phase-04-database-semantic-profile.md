@@ -35,10 +35,10 @@ before relationship extraction.
 
 ## Todo
 
-- [ ] Add SQL/PLSQL fixtures and failing semantic tests.
-- [ ] Implement extractor/writer.
-- [ ] Register profiles/overlay.
-- [ ] Verify database capability queries.
+- [x] Add SQL/PLSQL fixtures and failing semantic tests.
+- [x] Implement extractor/writer.
+- [x] Register profiles/overlay.
+- [x] Verify database capability queries.
 
 ## Risks
 
@@ -48,4 +48,3 @@ before relationship extraction.
 
 - Fixture procedures/views produce deterministic database nodes and read/write
   lineage edges without false references from comments or string literals.
-

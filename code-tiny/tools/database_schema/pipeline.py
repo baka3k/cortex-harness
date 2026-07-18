@@ -21,6 +21,10 @@ _OBJECT_RE = re.compile(
     rf"\bcreate\s+(?:or\s+replace\s+)?(?P<kind>table|view|procedure|proc|function)\s+(?P<name>{_IDENTIFIER})",
     re.IGNORECASE,
 )
+_PLSQL_ROUTINE_RE = re.compile(
+    rf"\b(?P<kind>procedure|function)\s+(?P<name>{_IDENTIFIER})\b[^;]*?\b(?:is|as)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _READ_RE = re.compile(rf"\b(?:from|join)\s+(?P<name>{_IDENTIFIER})", re.IGNORECASE)
 _WRITE_RE = re.compile(rf"\b(?:insert\s+into|update|delete\s+from|merge\s+into)\s+(?P<name>{_IDENTIFIER})", re.IGNORECASE)
 _REFERENCE_RE = re.compile(rf"\breferences\s+(?P<name>{_IDENTIFIER})", re.IGNORECASE)
@@ -93,6 +97,9 @@ def analyze_project(
         raw = path.read_text(encoding="utf-8", errors="ignore")
         code = _mask_non_code(raw)
         matches = list(_OBJECT_RE.finditer(code))
+        if dialect == "plsql":
+            matches.extend(_PLSQL_ROUTINE_RE.finditer(code))
+            matches.sort(key=lambda item: (item.start(), item.end()))
         for index, match in enumerate(matches):
             kind = match.group("kind").lower()
             schema, name = normalize_identifier(match.group("name"))

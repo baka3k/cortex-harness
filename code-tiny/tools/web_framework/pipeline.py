@@ -77,6 +77,9 @@ def _symbol_index(root: Path, files: Sequence[Path]) -> Dict[str, List[_Symbol]]
             for match in re.finditer(r"(?m)^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(", text):
                 symbol = _Symbol(match.group(1), "", rel)
                 index.setdefault(symbol.name, []).append(symbol)
+            for match in re.finditer(r"(?m)^\s*class\s+([A-Za-z_]\w*)\b", text):
+                symbol = _Symbol(match.group(1), "", rel, "Class")
+                index.setdefault(symbol.name, []).append(symbol)
         elif suffix in {".js", ".jsx"}:
             patterns = (
                 r"(?m)^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(",
@@ -164,6 +167,8 @@ def analyze_project(
             if "django" in framework_set:
                 for match in _DJANGO_RE.finditer(text):
                     raw_handler = match.group("handler")
+                    if raw_handler.endswith(".as_view"):
+                        raw_handler = raw_handler[:-len(".as_view")]
                     endpoints.append(_endpoint(
                         project_id=project_id, framework="django", method="ALL",
                         route=match.group("path"), rel=rel, line=_line(text, match.start()),
