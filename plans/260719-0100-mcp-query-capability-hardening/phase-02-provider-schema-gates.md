@@ -33,9 +33,9 @@ relationship requirements through Unified MCP's direct capability context.
 
 ## Todo
 
-- [ ] Write missing-label and missing-edge tests.
-- [ ] Implement schema probe/gate.
-- [ ] Verify supported schemas still execute.
+- [x] Write missing-label and missing-edge tests.
+- [x] Implement schema probe/gate.
+- [x] Verify supported schemas still execute.
 
 ## Risks
 
@@ -46,4 +46,3 @@ relationship requirements through Unified MCP's direct capability context.
 
 - A graph without `ApiEndpoint` or `HANDLES` cannot produce a successful endpoint
   response.
-

@@ -49,10 +49,27 @@ class WebFrameworkOverlayTest(unittest.TestCase):
 
         fastapi = endpoints[("fastapi", "GET", "/users/{user_id}")]
         django = endpoints[("django", "ALL", "/health/")]
+        django_class = endpoints[("django", "ALL", "/users/")]
         self.assertEqual(fastapi.handler_name, "get_user")
         self.assertEqual(fastapi.resolution_status, "resolved")
         self.assertEqual(django.handler_name, "health")
         self.assertTrue(django.handler_file.endswith("django_views.py"))
+        self.assertEqual(django_class.handler_name, "UserListView")
+        self.assertEqual(django_class.handler_label, "Class")
+        self.assertEqual(django_class.resolution_status, "resolved")
+
+    def test_unresolved_handler_does_not_emit_false_handles_edge(self):
+        from tools.web_framework.models import EndpointFact, WebAnalysisResult
+
+        endpoint = EndpointFact(
+            endpoint_id="endpoint", project_id="fixture", framework="django",
+            http_method="GET", path="/missing", file_path="urls.py", start_line=1,
+            handler_name="MissingView", resolution_status="unresolved",
+        )
+        nodes, relationships = WebAnalysisResult("fixture", (endpoint,)).graph_rows()
+
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(relationships, [])
 
     def test_express_js_extracts_named_handler(self):
         result = analyze_project(FIXTURE, "fixture", ("express_js",))

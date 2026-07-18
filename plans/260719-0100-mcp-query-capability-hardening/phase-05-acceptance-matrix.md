@@ -34,9 +34,9 @@ claim to a fixture-backed evidence assertion.
 
 ## Todo
 
-- [ ] Add failing matrix coverage test.
-- [ ] Connect fixture-backed evidence.
-- [ ] Run regression suite and compile checks.
+- [x] Add failing matrix coverage test.
+- [x] Connect fixture-backed evidence.
+- [x] Run regression suite and compile checks.
 - [ ] Update docs/log and finalize.
 
 ## Risks
@@ -48,4 +48,3 @@ claim to a fixture-backed evidence assertion.
 
 - No advertised profile exists without an acceptance row.
 - Modified profile claims are proven by parsed source facts, not alias resolution.
-

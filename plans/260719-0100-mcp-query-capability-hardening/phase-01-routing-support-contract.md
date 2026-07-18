@@ -33,9 +33,9 @@ mapping serialized by `list_parsers` and every routed response.
 
 ## Todo
 
-- [ ] Write failing contract tests.
-- [ ] Implement registry/public routing changes.
-- [ ] Run focused MCP tests.
+- [x] Write failing contract tests.
+- [x] Implement registry/public routing changes.
+- [x] Run focused MCP tests.
 
 ## Risks
 
@@ -46,4 +46,3 @@ mapping serialized by `list_parsers` and every routed response.
 
 - Typos cannot return generic query results.
 - Discovery and normal tool responses expose the same engine/support schema.
-
