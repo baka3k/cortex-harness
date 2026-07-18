@@ -4,7 +4,7 @@ status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
-blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers]
+blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening]
 
 ## Cross-Plan Dependency
 
@@ -17,6 +17,12 @@ The COBOL analyzer parser plan at `plans/260714-1702-cobol-analyzer-parser/plan.
 The Perl analyzer parser plan at `plans/260715-1629-perl-analyzer-parser/plan.md` depends on the provider-neutral writer and provider CLI/runtime contract for canonical Perl language facts. Its grammar, normalized extraction, and conservative incremental-resolution phases can proceed independently, but graph persistence and Neo4j/FalkorDB parity acceptance must be coordinated with this migration.
 
 The ASP.NET Roslyn analyzers plan at `plans/260715-2011-aspnet-roslyn-analyzers/plan.md` depends on provider-neutral generation writes, cleanup, schema/index behavior, and MCP traversal for its shared migration semantic graph. Contract, Roslyn, and framework extraction phases can proceed independently, but graph persistence and Neo4j/FalkorDB parity acceptance must use the stabilized provider contract.
+
+The MCP query capability hardening plan at
+`plans/260719-0100-mcp-query-capability-hardening/plan.md` extends provider schema
+inspection to node labels, adds provider-neutral web/database overlay writers, and
+uses FalkorDB as the active acceptance target. Its live Neo4j parity remains gated
+by this migration.
 
 ## Objective
 

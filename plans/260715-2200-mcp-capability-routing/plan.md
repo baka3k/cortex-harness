@@ -6,7 +6,7 @@ mode: hi-plan --fast
 scope: unified MCP discovery, aliases, capability profiles, parser-aware routing, validation, and tests
 blockedBy: [neo4j-to-falkordb-migration]
 dependencyOverride: implementation completed against the current provider-neutral contract; live Neo4j/FalkorDB parity remains gated
-relatedPlans: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers]
+relatedPlans: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening]
 ---
 
 # Unified MCP Capability and Parser Routing Upgrade
@@ -87,6 +87,11 @@ Unified MCP dispatch ─┴─> android backend or generic cplus backend
 | Provider-specific relationship differences | Filter profiles against relationships present in the active provider and report omissions. |
 
 ## Completion notes
+
+- Follow-up plan `260719-0100-mcp-query-capability-hardening` replaces silent
+  unknown-parser fallback, introduces public query-engine naming and dimensional
+  support, strengthens provider schema gates, and adds web/database semantic
+  overlays. This completed plan remains the registry/routing foundation.
 
 - The canonical registry now owns aliases, backend assignment, support level,
   labels, relationships, searchable properties, query profiles, and feature

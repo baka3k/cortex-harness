@@ -40,6 +40,13 @@ WEB_SEARCHABLE_PROPERTIES = tuple(dict.fromkeys((
     *GENERIC_SEARCHABLE_PROPERTIES, "route", "path", "url_pattern",
     "http_method", "framework", "handler_name", "controller_name",
 )))
+DATABASE_LABELS = GENERIC_LABELS | frozenset({"Table", "View", "Procedure"})
+DATABASE_RELATIONSHIPS = tuple(dict.fromkeys((
+    *GENERIC_RELATIONSHIPS, "READS_FROM", "WRITES_TO", "REFERENCES_TABLE",
+)))
+DATABASE_SEARCHABLE_PROPERTIES = tuple(dict.fromkeys((
+    *GENERIC_SEARCHABLE_PROPERTIES, "schema_name", "dialect", "object_kind", "declared",
+)))
 
 GENERIC_FEATURES = frozenset({
     "graph_search", "graph_paths", "graph_flow", "semantic_search",
@@ -50,6 +57,13 @@ FRAMEWORK_FEATURES = GENERIC_FEATURES | frozenset({
 })
 _ALLOWED_BACKENDS = frozenset({"android", "cplus"})
 _ALLOWED_SUPPORT_LEVELS = frozenset({"full", "partial", "generic"})
+_ALLOWED_DIMENSION_LEVELS = frozenset({"full", "partial", "generic", "none"})
+SUPPORT_DIMENSIONS = ("symbols", "calls", "endpoints", "database")
+PUBLIC_QUERY_ENGINES = MappingProxyType({
+    "android": "android_graph",
+    "cplus": "graph_generic",
+    "fast": "fast_graph",
+})
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -67,6 +81,7 @@ class FrameworkQueryConfig:
     support_level: str = "full"
     default_query_profiles: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
     features: FrozenSet[str] = GENERIC_FEATURES
+    support: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         name = self.name.strip().lower()
@@ -96,11 +111,43 @@ class FrameworkQueryConfig:
             "analyze_workflow_impact",
             tuple(dict.fromkeys((*default_relationships, "HAS_STEP", "NAVIGATE"))),
         )
+        legacy_level = self.support_level.strip().lower()
+        default_symbol_level = "generic" if legacy_level == "generic" else "full"
+        default_call_level = (
+            "generic" if legacy_level == "generic"
+            else "partial" if legacy_level == "partial"
+            else "full"
+        )
+        endpoint_level = (
+            "none" if "endpoint_queries" not in self.features
+            else "full" if legacy_level == "full"
+            else "partial"
+        )
+        database_semantics = bool(
+            {"Table", "View", "Procedure", "Database", "DataRepository"} & set(self.labels)
+            or {"READS_FROM", "WRITES_TO", "REFERENCES_TABLE", "QUERIES"} & set(self.relationships)
+        )
+        database_level = (
+            "none" if not database_semantics
+            else "full" if legacy_level == "full"
+            else "partial"
+        )
+        support = {
+            "symbols": default_symbol_level,
+            "calls": default_call_level,
+            "endpoints": endpoint_level,
+            "database": database_level,
+            **{
+                str(key).strip().lower(): str(value).strip().lower()
+                for key, value in self.support.items()
+            },
+        }
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "aliases", aliases)
         object.__setattr__(self, "backend", self.backend.strip().lower())
-        object.__setattr__(self, "support_level", self.support_level.strip().lower())
+        object.__setattr__(self, "support_level", legacy_level)
         object.__setattr__(self, "default_query_profiles", MappingProxyType(profiles))
+        object.__setattr__(self, "support", MappingProxyType(support))
 
     def relationships_for(self, tool_name: Optional[str] = None) -> Tuple[str, ...]:
         key = str(tool_name or "").strip()
@@ -110,8 +157,9 @@ class FrameworkQueryConfig:
         return {
             "canonical_parser": self.name,
             "aliases": sorted(self.aliases),
-            "backend": self.backend,
+            "query_engine": query_engine_for_backend(self.backend),
             "support_level": self.support_level,
+            "support": dict(self.support),
             "labels": sorted(self.labels),
             "relationships": list(self.relationships_for()),
             "searchable_properties": list(self.searchable_properties),
@@ -122,6 +170,12 @@ class FrameworkQueryConfig:
             "features": sorted(self.features),
             "generation_scoped": self.generation_scoped,
         }
+
+
+def query_engine_for_backend(backend: Optional[str]) -> str:
+    """Return the public query-engine name for an internal dispatch backend."""
+    internal_name = str(backend or "cplus").strip().lower() or "cplus"
+    return PUBLIC_QUERY_ENGINES.get(internal_name, "graph_generic")
 
 
 def _generic_profile(
@@ -166,24 +220,27 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
         relationships=WEB_RELATIONSHIPS,
         searchable_properties=WEB_SEARCHABLE_PROPERTIES,
         support_level="partial",
+        support={"symbols": "full", "calls": "partial", "endpoints": "partial", "database": "none"},
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "javascript": FrameworkQueryConfig(
         name="javascript",
-        aliases=frozenset({"javascript", "js", "node", "nodejs"}),
+        aliases=frozenset({"javascript", "js", "node", "nodejs", "express", "express.js"}),
         labels=WEB_LABELS,
         relationships=WEB_RELATIONSHIPS,
         searchable_properties=WEB_SEARCHABLE_PROPERTIES,
         support_level="partial",
+        support={"symbols": "full", "calls": "partial", "endpoints": "partial", "database": "none"},
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "typescript": FrameworkQueryConfig(
         name="typescript",
-        aliases=frozenset({"typescript", "ts", "tsx", "express", "nestjs", "nest.js"}),
+        aliases=frozenset({"typescript", "ts", "tsx", "nestjs", "nest.js"}),
         labels=WEB_LABELS,
         relationships=WEB_RELATIONSHIPS,
         searchable_properties=WEB_SEARCHABLE_PROPERTIES,
         support_level="full",
+        support={"symbols": "full", "calls": "full", "endpoints": "none", "database": "none"},
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "php": FrameworkQueryConfig(
@@ -193,15 +250,32 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
         relationships=WEB_RELATIONSHIPS,
         searchable_properties=WEB_SEARCHABLE_PROPERTIES,
         support_level="partial",
+        support={"symbols": "full", "calls": "partial", "endpoints": "partial", "database": "none"},
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "csharp": _generic_profile(
         "csharp", {"csharp", "c#", "cs", "dotnet", ".net"},
         support_level="full",
     ),
-    "sql": _generic_profile("sql", {"sql"}, support_level="full"),
-    "plsql": _generic_profile(
-        "plsql", {"plsql", "pl/sql", "oracle-plsql"}, support_level="full",
+    "sql": FrameworkQueryConfig(
+        name="sql",
+        aliases=frozenset({"sql"}),
+        labels=DATABASE_LABELS,
+        relationships=DATABASE_RELATIONSHIPS,
+        searchable_properties=DATABASE_SEARCHABLE_PROPERTIES,
+        support_level="full",
+        support={"symbols": "full", "calls": "none", "database": "full", "endpoints": "none"},
+        features=GENERIC_FEATURES | frozenset({"database_queries"}),
+    ),
+    "plsql": FrameworkQueryConfig(
+        name="plsql",
+        aliases=frozenset({"plsql", "pl/sql", "oracle-plsql"}),
+        labels=DATABASE_LABELS,
+        relationships=DATABASE_RELATIONSHIPS,
+        searchable_properties=DATABASE_SEARCHABLE_PROPERTIES,
+        support_level="full",
+        support={"symbols": "full", "calls": "none", "database": "full", "endpoints": "none"},
+        features=GENERIC_FEATURES | frozenset({"database_queries"}),
     ),
     "jvm": _generic_profile("jvm", {"jvm", "java", "kotlin"}, relationships=ANDROID_RELATIONSHIPS),
     "go": _generic_profile("go", {"go"}),
@@ -393,6 +467,19 @@ def validate_capability_registry(
             errors.append(f"Parser '{config.name}' references unsupported backend '{config.backend}'.")
         if config.support_level not in _ALLOWED_SUPPORT_LEVELS:
             errors.append(f"Parser '{config.name}' has invalid support level '{config.support_level}'.")
+        if set(config.support) != set(SUPPORT_DIMENSIONS):
+            errors.append(
+                f"Parser '{config.name}' must declare support for {SUPPORT_DIMENSIONS}."
+            )
+        invalid_support = {
+            key: value
+            for key, value in config.support.items()
+            if value not in _ALLOWED_DIMENSION_LEVELS
+        }
+        if invalid_support:
+            errors.append(
+                f"Parser '{config.name}' has invalid dimensional support {invalid_support}."
+            )
         identifiers = (
             *config.labels,
             *config.relationships,
@@ -487,7 +574,8 @@ def servlet_active_generation_predicate(alias: str) -> str:
 
 __all__ = [
     "ANDROID_RELATIONSHIPS", "CAPABILITIES", "CORE_RELATIONSHIPS", "CPLUS_RELATIONSHIPS",
-    "FRAMEWORKS", "FrameworkQueryConfig", "capability_catalog", "capability_for_parser",
+    "FRAMEWORKS", "PUBLIC_QUERY_ENGINES", "SUPPORT_DIMENSIONS", "FrameworkQueryConfig",
+    "capability_catalog", "capability_for_parser", "query_engine_for_backend",
     "default_relationships", "framework_for_parser", "parser_aliases", "searchable_labels",
     "searchable_properties", "servlet_active_generation_predicate", "validate_capability_registry",
 ]

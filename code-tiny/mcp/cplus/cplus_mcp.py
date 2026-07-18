@@ -998,6 +998,30 @@ async def _list_relationship_types(dbs: List[str]) -> List[str]:
     return []
 
 
+async def _list_node_labels(dbs: List[str]) -> Optional[List[str]]:
+    """Return provider node labels, or ``None`` when schema inspection fails."""
+    query_call = "CALL db.labels() YIELD label RETURN label"
+    query_show = "SHOW NODE LABELS YIELD label RETURN label"
+    for db in [item for item in dbs if item]:
+        try:
+            try:
+                rows = await _run_cypher(query_call, {}, db)
+            except Exception:
+                rows = await _run_cypher(query_show, {}, db)
+            labels: List[str] = []
+            for row in rows:
+                label = row.get("label")
+                if isinstance(label, str) and label not in labels:
+                    labels.append(label)
+            return labels
+        except Exception as exc:
+            if _is_db_not_found(exc):
+                continue
+            logger.warning("Unable to list node labels from %s: %s", db, exc)
+            break
+    return None
+
+
 async def _resolve_call_rel_types(
     include_possible: bool,
     include_fp: bool,

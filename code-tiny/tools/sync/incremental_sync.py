@@ -149,6 +149,51 @@ FRAMEWORK_ANALYZERS: Dict[str, FrameworkAnalyzerConfig] = {
         ("csharp",),
         70,
     ),
+    "fastapi_django": FrameworkAnalyzerConfig(
+        "fastapi_django",
+        os.path.join(_ROOT_DIR, "tools", "web_framework", "web_framework_analyzer.py"),
+        True,
+        ("python",),
+        80,
+        False,
+        ("--framework", "fastapi_django"),
+    ),
+    "express_js": FrameworkAnalyzerConfig(
+        "express_js",
+        os.path.join(_ROOT_DIR, "tools", "web_framework", "web_framework_analyzer.py"),
+        True,
+        ("js",),
+        81,
+        False,
+        ("--framework", "express_js"),
+    ),
+    "laravel": FrameworkAnalyzerConfig(
+        "laravel",
+        os.path.join(_ROOT_DIR, "tools", "web_framework", "web_framework_analyzer.py"),
+        True,
+        ("php",),
+        82,
+        False,
+        ("--framework", "laravel"),
+    ),
+    "database_sql": FrameworkAnalyzerConfig(
+        "database_sql",
+        os.path.join(_ROOT_DIR, "tools", "database_schema", "database_schema_analyzer.py"),
+        True,
+        ("sql",),
+        90,
+        False,
+        ("--dialect", "sql"),
+    ),
+    "database_plsql": FrameworkAnalyzerConfig(
+        "database_plsql",
+        os.path.join(_ROOT_DIR, "tools", "database_schema", "database_schema_analyzer.py"),
+        True,
+        ("plsql",),
+        91,
+        False,
+        ("--dialect", "plsql"),
+    ),
 }
 
 _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
@@ -165,6 +210,11 @@ _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
         ".asmx", ".ashx", ".cshtml", ".resx",
     },
     "aspnet_core": {".cs", ".csproj", ".sln", ".cshtml", ".razor", ".json", ".config"},
+    "fastapi_django": {".py"},
+    "express_js": {".js", ".jsx"},
+    "laravel": {".php"},
+    "database_sql": {".sql", ".ddl", ".dml", ".psql"},
+    "database_plsql": {".pls", ".plsql", ".pks", ".pkb", ".pkg", ".pck", ".spc", ".spb", ".trg", ".fnc"},
 }
 
 _FRAMEWORK_BUILD_FILES = {
@@ -634,6 +684,57 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
                 grouped[framework].add(path)
                 evidence[framework].append(f"{path}:strong-candidate")
         evidence[framework] = list(dict.fromkeys(evidence[framework]))
+
+    web_specs = {
+        "fastapi_django": (
+            (".py",),
+            ("fastapi", "django.", "django ", "urlpatterns", "@app.get", "@router.get"),
+            ("urls.py",),
+        ),
+        "express_js": (
+            (".js", ".jsx"),
+            ("express", "app.get(", "router.get(", "app.post(", "router.post("),
+            ("routes.js", "router.js"),
+        ),
+        "laravel": (
+            (".php",),
+            ("illuminate\\", "route::", "extends controller"),
+            ("routes.php", "web.php", "api.php"),
+        ),
+    }
+    for framework, (extensions, markers, strong_names) in web_specs.items():
+        candidates = {
+            path for path in normalized_paths
+            if os.path.splitext(path)[1].lower() in extensions
+        }
+        detected_evidence: List[str] = []
+        for path in sorted(candidates):
+            absolute = os.path.join(root, path)
+            if not os.path.isfile(absolute):
+                if os.path.basename(path).lower() in strong_names:
+                    detected_evidence.append(f"{path}:strong-candidate")
+                continue
+            try:
+                content = Path(absolute).read_text(encoding="utf-8", errors="ignore").lower()
+            except OSError:
+                continue
+            if any(marker in content for marker in markers):
+                detected_evidence.append(f"{path}:{framework}")
+        if detected_evidence:
+            grouped[framework].update(candidates)
+            evidence[framework] = list(dict.fromkeys(detected_evidence))
+
+    database_extensions = {
+        "database_sql": _FRAMEWORK_CANDIDATE_EXTENSIONS["database_sql"],
+        "database_plsql": _FRAMEWORK_CANDIDATE_EXTENSIONS["database_plsql"],
+    }
+    for framework, extensions in database_extensions.items():
+        candidates = {
+            path for path in normalized_paths
+            if os.path.splitext(path)[1].lower() in extensions
+        }
+        grouped[framework].update(candidates)
+        evidence[framework] = [f"{path}:{framework}" for path in sorted(candidates)]
     return grouped, evidence
 
 
