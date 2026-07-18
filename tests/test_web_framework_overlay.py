@@ -101,8 +101,8 @@ class WebFrameworkOverlayTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(summary["nodes"], 4)
-        self.assertEqual(summary["relationships"], 4)
+        self.assertEqual(summary["nodes"], len(node_rows))
+        self.assertEqual(summary["relationships"], len(relationship_rows))
         self.assertTrue(all(row["project_id"] == "fixture" for row in node_rows))
         self.assertTrue(all(row["type"] == "HANDLES" for row in relationship_rows))
         combined_queries = "\n".join(query for query, _, _ in driver.calls)
