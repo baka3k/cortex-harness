@@ -1,3 +1,0 @@
-- Log entries in `docs/logs/` use a `YYYY-MM-DD-short-title.md` filename so they sort chronologically and can be referenced by date.
-- Each log entry begins with a short summary header and lists concrete changes rather than narrative prose, keeping entries scannable from the index.
-- Specs under `docs/specs/` follow a consistent structure with Objective, Commands, Technical Implementation Details, UX & Safety, Examples, and Implementation Notes sections.

@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: scripts
-title: MCP Dev Lifecycle & Runtime Environment Scripts
-scope:
-    - scripts/
-source_files: []
-depends_on: []
-related_to: []

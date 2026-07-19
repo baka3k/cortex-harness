@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: doc_tiny
-title: MCP GraphRAG Ingestion & Query Service (LangExtract)
-scope:
-    - doc-tiny/
-source_files: []
-depends_on: []
-related_to: []

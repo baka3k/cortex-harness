@@ -1,8 +1,0 @@
-schema_version: 1
-module_path: installers
-title: Cross-Platform Context Menu Installers
-scope:
-    - installers/
-source_files: []
-depends_on: []
-related_to: []

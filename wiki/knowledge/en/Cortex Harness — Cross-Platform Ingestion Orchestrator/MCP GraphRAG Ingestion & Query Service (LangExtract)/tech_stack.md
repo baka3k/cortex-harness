@@ -1,1 +1,0 @@
-Python with `fastmcp` (MCP server), `qdrant-client` (vector DB), `sentence-transformers` (BAAI/bge-m3 embeddings), `neo4j` driver plus optional `falkordb` as an alternative graph backend, `gliner` for zero-shot NER, `langextract` (Gemini/OpenAI/Azure/Ollama) as the default LLM extractor, and `pypdf`/`python-docx`/`python-pptx`/`openpyxl` for multi-format ingestion.

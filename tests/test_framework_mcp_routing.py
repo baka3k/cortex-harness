@@ -161,6 +161,19 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
         self.assertIn("DECLARES_QUERY", spring_relationships)
         self.assertEqual(len(spring_relationships), len(set(spring_relationships)))
 
+    def test_language_aliases_keep_alias_symbols_and_edges_searchable(self):
+        for parser in (
+            "c++", "csharp", "go", "rust", "swift", "spring-boot", "my-batis",
+            "struts2", "flutter", "aspnet-core", "asp.net-framework",
+        ):
+            with self.subTest(parser=parser):
+                self.assertIn("Alias", searchable_labels(parser))
+                self.assertIn("ALIASES", default_relationships(parser, "explore_graph"))
+                self.assertIn("USES_TYPE", default_relationships(parser, "explore_graph"))
+
+        cplus = capability_for_parser("cpp")
+        self.assertIn("target_name", cplus.searchable_properties)
+
     def test_searchable_labels_and_servlet_freshness_predicate_cover_framework_nodes(self):
         self.assertIn("ApiEndpoint", searchable_labels("spring"))
         self.assertIn("JSPView", searchable_labels("servlet_jsp"))
