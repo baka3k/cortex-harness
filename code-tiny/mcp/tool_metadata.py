@@ -471,7 +471,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             "explanation (human-readable summary), "
             "confidence (0.0–1.0), "
             "query_analysis (extracted intent/entities/domain_signals), "
-            "mode"
+            "mode, and retrieval (provider/database/degraded-mode diagnostics)"
         ),
         "example": (
             "explore_graph(query='function xử lý thanh toán bị lỗi khi user chưa login', "
@@ -509,7 +509,10 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "graph_limit", "type": "int", "required": False,
              "description": "Maximum graph-expanded nodes to return (default: 50)"},
         ],
-        "output": "Dict with semantically similar code snippets and optional graph_expansion context",
+        "output": (
+            "Dict with semantic results and optional graph_expansion context containing "
+            "exact hop distance, seed_id/seed_ids provenance, expanded node metadata, and edges"
+        ),
         "example": "semantic_search(query='allocate memory safely', top_k=5, collection='MYPROJECT', expand_graph=true, graph_depth=2)",
     },
     # --- IPC / Android -----------------------------------------------------------

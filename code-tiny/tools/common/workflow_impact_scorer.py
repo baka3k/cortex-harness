@@ -2,12 +2,12 @@
 Workflow-aware impact scorer for hyper-graph.
 
 Given a function_id and the call-graph nodes already fetched by ImpactAnalyzer,
-this module queries Neo4j for workflow/navigator context and returns structured
+this module queries the configured graph provider for workflow/navigator context and returns structured
 impact data with severity ratings and a rule-based recommendation.
 
 Usage::
 
-    scorer = WorkflowImpactScorer(neo4j_driver, database="neo4j")
+    scorer = WorkflowImpactScorer(graph_driver, database="hyper_graph")
     result = await scorer.score(function_id, call_graph_nodes)
 """
 from __future__ import annotations
@@ -199,10 +199,10 @@ def _generate_recommendation(result: "WorkflowImpactResult") -> str:
 
 class WorkflowImpactScorer:
     """
-    Queries Neo4j for workflow/navigator impact of a changed function.
+    Queries the configured graph provider for workflow/navigator impact.
 
-    Uses the sync `neo4j` driver (wrapped in run_in_executor) to match the
-    existing MCP pattern in unified_mcp.py.
+    Uses the shared GraphDriver sync contract when available and retains a
+    Neo4j session fallback for legacy callers.
     """
 
     def __init__(
@@ -224,6 +224,11 @@ class WorkflowImpactScorer:
         )
 
     def _run_sync(self, cypher: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if hasattr(self._driver, "execute_query_sync"):
+            records, _, _ = self._driver.execute_query_sync(
+                cypher, params, self._database,
+            )
+            return [dict(record) for record in records]
         with self._driver.session(database=self._database) as session:
             result = session.run(cypher, params)
             return [dict(r) for r in result]

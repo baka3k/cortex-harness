@@ -368,9 +368,8 @@ export FALKORDB_GRAPH=${FALKORDB_GRAPH:-hyper_graph}
 
 Set these variables **before** the Python process starts. The backend reads the
 provider during module import. A bare `python mcp/unified_mcp.py ...` command
-without `GRAPH_PROVIDER` still follows the source-level legacy fallback to
-Neo4j, while the Hyper Pack service launcher explicitly supplies FalkorDB as
-the runtime default.
+without provider variables defaults to FalkorDB and graph `hyper_graph`, matching
+the service launcher.
 
 For tools with a `db` field, use the FalkorDB graph name:
 
@@ -380,18 +379,13 @@ For tools with a `db` field, use the FalkorDB graph name:
 }
 ```
 
-Several unified wrapper signatures still show the legacy literal
-`db="neo4j"`. That literal is not the default provider contract. In FalkorDB
-mode, pass `db: "hyper_graph"` explicitly or call `activate_project` with
-`database_name: "hyper_graph"`. Explicit `db` values are safest for clients
-that cache tool schemas or always send optional defaults.
+Pass `db: "hyper_graph"` explicitly or call `activate_project` with
+`database_name: "hyper_graph"` when a client caches old tool schemas. New direct
+workflow and bridge calls resolve the active graph through the same provider-neutral
+database contract as search and expansion tools.
 
-The `cplus`/generic and planner/Living Docs paths are provider-aware. The
-current `android` backend remains Neo4j-specific, so Android graph queries still
-require the Neo4j compatibility configuration below.
-
-Provider support is currently mixed because several specialized tools still
-open a raw Neo4j driver instead of using the shared graph-driver abstraction:
+Unified MCP graph tools use the shared graph-driver abstraction. Neo4j remains
+an explicit compatibility provider rather than a hidden fallback:
 
 | Tool family                                                                      | FalkorDB default runtime                                                                             | Neo4j compatibility mode |
 | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------ |
@@ -400,15 +394,12 @@ open a raw Neo4j driver instead of using the shared graph-driver abstraction:
 | `semantic_search` and `list_qdrant_collections`                                  | Qdrant-backed; graph expansion depends on selected backend                                           | Supported                |
 | `explore_graph`                                                                  | Provider-aware semantic, keyword, and graph-expanded retrieval; bounded timeouts may return partial expansion | Supported          |
 | `find_callers_of_endpoint`, `get_api_call_chain`                                 | Provider-aware through the shared graph driver; schema-gated                                          | Supported                |
-| `find_workflows_containing` and workflow layer of `analyze_workflow_impact`      | Not currently provider-aware                                                                         | Supported                |
-| `android` backend                                                                | Not currently provider-aware                                                                         | Supported                |
-
-This guide marks Neo4j-only tools in their individual sections. Do not point a
-Neo4j-only tool at `db: "hyper_graph"`; it will still try the Neo4j Bolt driver.
+| `find_workflows_containing` and workflow layer of `analyze_workflow_impact`      | Supported through the shared graph driver                                                             | Supported                |
+| `android` backend                                                                | Supported through the shared graph driver                                                             | Supported                |
 
 ### Neo4j: Compatibility Mode
 
-Use Neo4j only when an older flow or the Android backend requires it:
+Use Neo4j only when an external/legacy deployment requires it:
 
 ```bash
 export GRAPH_PROVIDER=neo4j
@@ -872,9 +863,13 @@ Input:
 | `collection` | No       | `str`  | Qdrant collection override.                                   |
 | `project_id` | No       | `str`  | Exact project scope for every retrieval and expansion stage.   |
 | `debug`      | No       | `bool` | Include per-signal scoring details.                           |
+| `parser_type`| No       | `str`  | Canonical parser or alias; selects labels, properties, and relationships. |
 
 Output: Dict with `matched_nodes`, `entry_points`, `related_paths`,
-`explanation`, `confidence`, `query_analysis`, and `mode`.
+`explanation`, `confidence`, `query_analysis`, `mode`, and `retrieval`. The
+`retrieval` block identifies the selected provider/graph and whether graph
+retrieval degraded, so an empty match set is distinguishable from unavailable
+graph expansion.
 
 Use when:
 
@@ -923,7 +918,9 @@ seeds, neighbors, and returned edges.
 
 Output: Dict with `results`, or backend-specific semantic result fields. Each
 result normally includes score, node metadata, file path, symbol name, and code
-or summary content.
+or summary content. With `expand_graph: true`, `graph_expansion.results` includes
+exact `hop_distance`, `seed_id`/`seed_ids` provenance, alias target metadata, and
+`graph_expansion.edges`.
 
 Use when:
 
@@ -2361,16 +2358,16 @@ Use provider-aware graph tools for a concrete impact set:
    }
    ```
 
-#### Neo4j Workflow-Aware Path
+#### Provider-Neutral Workflow-Aware Path
 
-Use this only in Neo4j compatibility mode when workflow nodes and edges exist:
+Use this when workflow nodes and edges exist in the active graph provider:
 
 1. `find_workflows_containing`:
 
    ```json
    {
      "function_id": "processPayment/2@src/payment/service.py",
-     "db": "neo4j",
+    "db": "hyper_graph",
      "include_indirect": true,
      "max_depth": 4
    }
@@ -2381,7 +2378,7 @@ Use this only in Neo4j compatibility mode when workflow nodes and edges exist:
    ```json
    {
      "function_id": "processPayment/2@src/payment/service.py",
-     "db": "neo4j",
+    "db": "hyper_graph",
      "direction": "downstream",
      "max_depth": 4
    }
@@ -2392,7 +2389,7 @@ workflow lists to decide review depth and regression-test scope.
 
 ### Recipe 4: Trace A Frontend Endpoint To Backend Data
 
-These fullstack bridge tools currently require Neo4j compatibility mode.
+These fullstack bridge tools use the active graph provider.
 
 Starting from an endpoint, call `find_callers_of_endpoint`:
 
@@ -2402,7 +2399,7 @@ Starting from an endpoint, call `find_callers_of_endpoint`:
   "http_method": "GET",
   "fe_project_id": "web-client",
   "be_project_id": "user-service",
-  "db": "neo4j"
+  "db": "hyper_graph"
 }
 ```
 
@@ -2414,7 +2411,7 @@ Starting from a screen, call `get_api_call_chain`:
   "fe_project_id": "web-client",
   "be_project_id": "user-service",
   "max_depth": "5",
-  "db": "neo4j"
+  "db": "hyper_graph"
 }
 ```
 
@@ -2543,7 +2540,7 @@ Then call `topological_sort` with the same nodes and edges:
    `db: "hyper_graph"` plus the correct `project_id`.
 4. Remove `project_id` temporarily only if the graph is trusted and you are
    diagnosing a scope mismatch.
-5. Check whether the tool is marked Neo4j-only in this guide.
+5. Inspect the response provider/database diagnostics and confirm the active graph.
 6. Call `list_mcp_functions` to verify that your client is using the live input
    schema rather than a cached schema.
 7. Treat an empty array as a valid no-match result only when
@@ -2572,7 +2569,7 @@ python testtool/mcp_tester.py --tool search_functions --project-id my_project
 | Symptom                                        | Likely cause                                                                        | What to check                                                                                      |
 | ---------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | FalkorDB connection refused                    | FalkorDB is not running or the runtime points to the wrong host/port.               | `GRAPH_PROVIDER=falkordb`, `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_GRAPH`.                     |
-| Tool unexpectedly connects to Neo4j            | The tool is Neo4j-only, or the process did not inherit FalkorDB provider variables. | Check the provider support table, `GRAPH_PROVIDER`, `MCP_GRAPH_PROVIDER`, and tool-specific notes. |
+| Tool unexpectedly connects to Neo4j            | The process explicitly inherited Neo4j provider variables or is running an old cached MCP process. | Check `GRAPH_PROVIDER`, `CODE_GRAPH_PROVIDER`, restart MCP, then inspect response provider/database diagnostics. |
 | Neo4j connection refused in compatibility mode | Neo4j is not running or credentials point to the wrong host/port.                   | `GRAPH_PROVIDER=neo4j`, `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASS`, `NEO4J_DB`.                       |
 | Semantic search returns no results             | Qdrant collection missing or wrong collection name.                                 | `list_qdrant_collections`, `QDRANT_URL`, analyzer ingest logs.                                     |
 | Tool routes to unexpected backend              | Missing or wrong `parser_type`.                                                     | `activate_project`, `list_parsers`, parser routing table above.                                    |
