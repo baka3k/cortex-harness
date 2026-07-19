@@ -25,8 +25,11 @@ class _GraphDriver:
         self.queries.append((query, dict(parameters or {}), database))
         if "RETURN n LIMIT" in query:
             return ([{"n": {"id": "seed", "project_id": "project-a"}}], [], None)
-        if "MATCH (seed)-" in query:
+        if "MATCH p = (seed)-" in query:
             return ([{
+                "seed_id": "seed",
+                "seed_ids": ["seed"],
+                "hops": 1,
                 "node_id": "neighbor",
                 "project_id": "project-a",
                 "name": "neighbor",
@@ -138,11 +141,14 @@ class ExploreProjectScopeAsyncTests(unittest.IsolatedAsyncioTestCase):
         service = ExploreService()
         run_retrieval = AsyncMock(return_value=[])
         with patch.object(service, "_run_retrieval", run_retrieval):
-            await service.explore(
+            result = await service.explore(
                 "orders", mode="semantic", project_id="project-a",
             )
 
         self.assertEqual(run_retrieval.await_args.kwargs["project_id"], "project-a")
+        self.assertEqual(result["retrieval"]["graph_provider"], "falkordb")
+        self.assertFalse(result["retrieval"]["graph_requested"])
+        self.assertFalse(result["retrieval"]["degraded"])
 
 
 if __name__ == "__main__":

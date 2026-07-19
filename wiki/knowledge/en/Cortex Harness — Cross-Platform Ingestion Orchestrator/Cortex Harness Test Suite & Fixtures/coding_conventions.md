@@ -1,5 +1,0 @@
-- Each test file resolves `ROOT = Path(__file__).resolve().parents[1]` and injects `ROOT / "code-tiny"` into `sys.path` before importing production modules, keeping fixtures and source importable regardless of cwd.
-- Test classes inherit from `unittest.TestCase` for synchronous tests and `unittest.IsolatedAsyncioTestCase` for async tests; async methods use `self.subTest(...)` to parameterize sub-cases.
-- External subsystems (graph drivers, subprocesses, native parsers) are stubbed with `unittest.mock.patch.object` on the exact attribute path rather than replacing global state.
-- Acceptance assertions reference a central `ACCEPTANCE_MATRIX` dict whose keys mirror `CAPABILITIES` and whose values point at the owning test file, so capability changes must update both registry and matrix.
-- Fixture projects are referenced as absolute `ROOT / "tests" / "fixtures" / <name>` paths and passed as `root=` strings to pipeline entry points like `run_spring_foundation`, `analyze_project`, or `run_aspnet_core_analysis`.

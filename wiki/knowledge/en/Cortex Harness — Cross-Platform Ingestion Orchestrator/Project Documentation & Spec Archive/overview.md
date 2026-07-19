@@ -1,1 +1,0 @@
-Curated Markdown archive of design specs, acceptance matrices, database integration guides, and dated implementation logs for the Cortex Harness project.

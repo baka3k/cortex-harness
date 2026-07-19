@@ -1,1 +1,0 @@
-Pure Python 3 stdlib (no pip deps) plus Bash; MCP transport is raw HTTP POST with `application/json` headers and optional `text/event-stream` SSE responses, using the `mcp-session-id` header for session affinity.

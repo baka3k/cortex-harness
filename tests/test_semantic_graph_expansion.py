@@ -52,6 +52,7 @@ class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
                 return "neo4j", [
                     {
                         "seed_id": "seed-function",
+                        "seed_ids": ["seed-function"],
                         "node_id": "neighbor-function",
                         "name": "helper",
                         "qualified_name": "pkg.helper",
@@ -86,6 +87,7 @@ class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expansion["seed_ids"], ["seed-function"])
         self.assertEqual(expansion["results"][0]["node_id"], "neighbor-function")
         self.assertEqual(expansion["results"][0]["graph_proximity"], 0.8)
+        self.assertEqual(expansion["results"][0]["seed_ids"], ["seed-function"])
         self.assertEqual(expansion["edges"][0]["type"], "CALLS")
         self.assertEqual(calls[0][1]["seed_ids"], ["seed-function"])
 

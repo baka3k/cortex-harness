@@ -1,6 +1,0 @@
-- Plan filenames use a timestamped slug prefix (`YYYYMMDD-HHMM-<feature>`) so each plan has a stable, deduplicated identity independent of its title.
-- Every plan starts with YAML front-matter declaring `status`, `created`, `mode`, `scope`, `blockedBy`, and `relatedPlans`; status values include `in_progress`, `complete`, and `complete-with-exclusions`.
-- Implementation steps are split into numbered `phase-NN-<short-title>.md` files that form a strict dependency chain referenced from the parent `plan.md`.
-- Cross-plan relationships are expressed declaratively via `blockedBy` and `relatedPlans` lists rather than prose, enabling machine-readable coordination.
-- Validation evidence is kept under a sibling `reports/` directory (and optionally `research/`) and linked from the plan's Evidence Coverage section instead of being embedded inline.
-- Plans explicitly call out which existing repository files they touch (e.g. `incremental_sync.py::ANALYZERS`, `unified_mcp.py`, `language_writer.py`) so overlapping analyzer plans can keep edits additive.

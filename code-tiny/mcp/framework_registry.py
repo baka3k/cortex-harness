@@ -11,15 +11,26 @@ from types import MappingProxyType
 from typing import Dict, FrozenSet, Iterable, Mapping, Optional, Tuple
 
 
-CORE_RELATIONSHIPS = ("CALLS", "USES_TYPE", "REFERENCES", "INHERITS")
-GENERIC_LABELS = frozenset({"File", "Namespace", "Class", "Type", "Function", "Field"})
-GENERIC_SEARCHABLE_PROPERTIES = (
-    "name", "qualified_name", "file_path", "path", "code", "comment",
+CORE_RELATIONSHIPS = (
+    "CALLS", "USES_TYPE", "REFERENCES", "INHERITS", "ALIASES", "ALIAS_OF",
 )
-GENERIC_RELATIONSHIPS = ("CALLS", "DECLARES", "CONTAINS", "DEPENDS_ON")
+GENERIC_LABELS = frozenset({
+    "Project", "Repository", "Module", "Package", "File", "Namespace",
+    "Class", "Interface", "Enum", "Type", "Function", "Method", "Field",
+    "Alias", "Template", "FunctionType", "Event", "Resource", "UIControl",
+})
+GENERIC_SEARCHABLE_PROPERTIES = (
+    "name", "qualified_name", "target_name", "signature", "type_signature",
+    "file_path", "path", "summary", "code", "comment",
+)
+GENERIC_RELATIONSHIPS = (
+    "CALLS", "DECLARES", "CONTAINS", "DEPENDS_ON", "IMPORTS", "EXPORTS",
+    "IMPLEMENTS", "EXTENDS", "ALIASES", "ALIAS_OF",
+)
 CPLUS_RELATIONSHIPS = (
     "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "DECLARES", "CONTAINS",
     "USES_RESOURCE", "BINDS_CONTROL", "HANDLES_CONTROL", "OWNS_DIALOG", "DEPENDS_ON",
+    "ALIASES", "ALIAS_OF",
 )
 ANDROID_RELATIONSHIPS = (
     "CALLS", "DECLARES", "CONTAINS", "USES_RESOURCE", "DECLARES_ROUTE",
@@ -68,7 +79,8 @@ PUBLIC_QUERY_ENGINES = MappingProxyType({
 CAPABILITY_CONTRACT_VERSION = 1
 _DIMENSION_LABEL_EVIDENCE = MappingProxyType({
     "symbols": frozenset({
-        "File", "Namespace", "Package", "Module", "Class", "Type", "Function", "Field",
+        "File", "Namespace", "Package", "Module", "Class", "Interface", "Enum",
+        "Type", "Function", "Method", "Field", "Alias", "Template", "FunctionType",
         "CobolProgram", "CobolSection", "CobolParagraph", "CobolDataItem", "CobolCopybook",
         "Widget", "Screen", "AndroidComponent", "Project", "Repository",
     }),
@@ -358,7 +370,6 @@ def _generic_profile(
         labels=GENERIC_LABELS,
         relationships=relationships,
         searchable_properties=GENERIC_SEARCHABLE_PROPERTIES,
-        default_query_profiles={"default": relationships},
         features=features,
     )
 
@@ -453,7 +464,7 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "cobol": FrameworkQueryConfig(
         name="cobol",
         aliases=frozenset({"cobol", "cobol85", "ibm-cobol", "gnucobol"}),
-        labels=frozenset({
+        labels=GENERIC_LABELS | frozenset({
             "CobolProgram", "CobolSection", "CobolParagraph", "CobolDataItem",
             "CobolCopybook", "CobolFile", "CobolSqlStatement", "CobolCicsCommand",
         }),
@@ -471,7 +482,7 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "spring": FrameworkQueryConfig(
         name="spring",
         aliases=frozenset({"spring", "spring-boot", "spring_boot"}),
-        labels=frozenset({
+        labels=GENERIC_LABELS | frozenset({
             "SpringModule", "SpringApplication", "SpringConfiguration", "SpringBean",
             "JpaEntity", "TransactionBoundary", "MessageDestination", "ScheduledTask",
             "AsyncBoundary", "ApplicationEvent", "SecurityFilterChain", "SecurityRule",
@@ -485,15 +496,15 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
             "QUERIES", "IMPLEMENTS_REPOSITORY", "CONSUMES_FROM", "PUBLISHES_TO",
             "PUBLISHES_EVENT", "LISTENS_TO", "EXECUTES_ASYNC", "RUNS",
         ),
-        searchable_properties=(
-            "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value",
-        ),
+        searchable_properties=tuple(dict.fromkeys((
+            *GENERIC_SEARCHABLE_PROPERTIES, "raw_value", "resolved_value",
+        ))),
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "servlet_jsp": FrameworkQueryConfig(
         name="servlet_jsp",
         aliases=frozenset({"servlet_jsp", "servlet-jsp", "servlet", "jsp"}),
-        labels=frozenset({
+        labels=GENERIC_LABELS | frozenset({
             "ServletJspModule", "WebDescriptor", "Servlet", "ServletMapping", "Filter",
             "FilterMapping", "Listener", "JSPView", "JspTag", "JspExpression", "ApiEndpoint",
             "StateSlot", "LifecycleEvent", "SecurityConstraint", "ErrorPage", "WelcomePage",
@@ -503,17 +514,17 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
             "SEMANTIC_OF", "HANDLES", "MAPS_TO", "PASSES_THROUGH", "FORWARDS_TO",
             "READS", "WRITES", "RESOLVES_TO", "USES", "DECLARES", "PROTECTS",
         ),
-        searchable_properties=(
-            "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value",
+        searchable_properties=tuple(dict.fromkeys((
+            *GENERIC_SEARCHABLE_PROPERTIES, "raw_value", "resolved_value",
             "url_pattern", "http_method",
-        ),
+        ))),
         generation_scoped=True,
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "mybatis": FrameworkQueryConfig(
         name="mybatis",
         aliases=frozenset({"mybatis", "my-batis"}),
-        labels=frozenset({
+        labels=GENERIC_LABELS | frozenset({
             "MyBatisModule", "MyBatisArtifact", "MyBatisMapper", "MyBatisMapperMethod",
             "MyBatisParameter", "MyBatisJavaProperty", "MyBatisXmlDocument",
             "MyBatisStatement", "MyBatisSqlFragment", "MyBatisResultMap",
@@ -529,15 +540,15 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
             "MAPS_PROPERTY", "MAPS_COLUMN", "NESTED_SELECT", "HAS_ASSOCIATION",
             "HAS_COLLECTION", "EXTENDS_RESULT_MAP",
         ),
-        searchable_properties=(
-            "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value", "sql",
-        ),
+        searchable_properties=tuple(dict.fromkeys((
+            *GENERIC_SEARCHABLE_PROPERTIES, "raw_value", "resolved_value", "sql",
+        ))),
         features=FRAMEWORK_FEATURES | frozenset({"persistence_queries"}),
     ),
     "struts": FrameworkQueryConfig(
         name="struts",
         aliases=frozenset({"struts", "struts2", "apache-struts", "apache_struts"}),
-        labels=frozenset({
+        labels=GENERIC_LABELS | frozenset({
             "StrutsFact", "Plugin", "Package", "Action", "HttpEndpoint", "InterceptorStack",
             "Interceptor", "Result", "ResultType", "View", "ExceptionMapping", "ValidationRule",
         }),
@@ -546,20 +557,20 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
             "RETURNS_RESULT", "INSTANCE_OF", "RESOLVES_TO", "CHAINS_TO", "REDIRECTS_TO",
             "HANDLES_EXCEPTION", "VALIDATES_WITH",
         ),
-        searchable_properties=(
-            "name", "qualified_name", "file_path", "path", "route", "class_name", "method",
+        searchable_properties=tuple(dict.fromkeys((
+            *GENERIC_SEARCHABLE_PROPERTIES, "route", "class_name", "method",
             "namespace", "result_type", "location", "validator_type",
-        ),
+        ))),
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "flutter": FrameworkQueryConfig(
         name="flutter",
         aliases=frozenset({"dart", "flutter", "flutter-dart", "flutter_dart"}),
-        labels=frozenset({"File", "Class", "Type", "Function", "Field"}),
+        labels=GENERIC_LABELS,
         relationships=("CONTAINS", "IMPORTS", "EXPORTS", "EXTENDS", "CALLS"),
-        searchable_properties=(
-            "name", "qualified_name", "file_path", "path", "package_name", "class_name", "code", "comment",
-        ),
+        searchable_properties=tuple(dict.fromkeys((
+            *GENERIC_SEARCHABLE_PROPERTIES, "package_name", "class_name",
+        ))),
         features=FRAMEWORK_FEATURES,
     ),
     "aspnet_framework": FrameworkQueryConfig(
@@ -567,7 +578,7 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
         aliases=frozenset({
             "aspnet_framework", "aspnet-framework", "asp.net-framework", "aspnetframework",
         }),
-        labels=frozenset({
+        labels=GENERIC_LABELS | frozenset({
             "HttpEndpoint", "Route", "Middleware", "Controller", "Action", "RazorPage",
             "PageHandler", "WebFormPage", "HttpHandler", "HttpModule", "Filter", "Result",
             "View", "Layout", "PartialView", "Service", "Repository", "Model", "ViewModel",
@@ -580,17 +591,17 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
             "DEPENDS_ON", "READS_CONFIG", "WRITES_SESSION", "POSTS_BACK_TO", "INITIALIZES",
             "RETURNS_RESULT",
         ),
-        searchable_properties=(
-            "name", "qualified_name", "file_path", "path", "route", "http_method",
-            "config_key", "resolution_status", "framework",
-        ),
+        searchable_properties=tuple(dict.fromkeys((
+            *GENERIC_SEARCHABLE_PROPERTIES, "route", "http_method", "config_key",
+            "resolution_status", "framework",
+        ))),
         generation_scoped=True,
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
     "aspnet_core": FrameworkQueryConfig(
         name="aspnet_core",
         aliases=frozenset({"aspnet_core", "aspnet-core", "asp.net-core", "aspnetcore"}),
-        labels=frozenset({
+        labels=GENERIC_LABELS | frozenset({
             "HttpEndpoint", "Route", "Middleware", "Controller", "Action", "RazorPage",
             "PageHandler", "WebFormPage", "HttpHandler", "HttpModule", "Filter", "Result",
             "View", "Layout", "PartialView", "Service", "Repository", "Model", "ViewModel",
@@ -603,10 +614,10 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
             "DEPENDS_ON", "READS_CONFIG", "WRITES_SESSION", "POSTS_BACK_TO", "INITIALIZES",
             "RETURNS_RESULT",
         ),
-        searchable_properties=(
-            "name", "qualified_name", "file_path", "path", "route", "http_method",
-            "config_key", "resolution_status", "framework", "position", "lifetime",
-        ),
+        searchable_properties=tuple(dict.fromkeys((
+            *GENERIC_SEARCHABLE_PROPERTIES, "route", "http_method", "config_key",
+            "resolution_status", "framework", "position", "lifetime",
+        ))),
         generation_scoped=True,
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),

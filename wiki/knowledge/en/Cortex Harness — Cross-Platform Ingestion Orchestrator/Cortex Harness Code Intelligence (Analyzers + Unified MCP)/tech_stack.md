@@ -1,1 +1,0 @@
-Python with FastMCP/FastAPI for the MCP server; FalkorDB (default) and Neo4j as graph backends via a shared driver factory; Qdrant for primary-language symbol vectors; PyTorch-based embeddings (e.g. `jinaai/jina-embeddings-v3`) loaded lazily so graph-only runs do not require vector services.
