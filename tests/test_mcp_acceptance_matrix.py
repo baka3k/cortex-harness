@@ -10,7 +10,11 @@ for path in (str(CODE_TINY), str(MCP_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from framework_registry import CAPABILITIES, SUPPORT_DIMENSIONS  # noqa: E402
+from framework_registry import (  # noqa: E402
+    CAPABILITIES,
+    SUPPORT_DIMENSIONS,
+    evaluate_capability_schema,
+)
 from tools.database_schema.pipeline import analyze_project as analyze_database  # noqa: E402
 from tools.sync.incremental_sync import ANALYZERS  # noqa: E402
 from tools.web_framework.pipeline import analyze_project as analyze_web  # noqa: E402
@@ -66,6 +70,22 @@ PRIMARY_TO_PROFILE = {
 
 
 class McpAcceptanceMatrixTest(unittest.TestCase):
+    def test_every_advertised_dimension_has_a_satisfiable_schema_contract(self):
+        for profile, capability in CAPABILITIES.items():
+            with self.subTest(profile=profile):
+                evaluation = evaluate_capability_schema(
+                    capability,
+                    available_labels=capability.labels,
+                    available_relationships=capability.relationships_for(),
+                )
+                for dimension, advertised in capability.support.items():
+                    expected = "none" if advertised == "none" else advertised
+                    self.assertEqual(
+                        evaluation["dimensions"][dimension]["effective"],
+                        expected,
+                        evaluation["dimensions"][dimension],
+                    )
+
     def test_every_advertised_profile_has_an_independent_matrix_row(self):
         self.assertEqual(set(ACCEPTANCE_MATRIX), set(CAPABILITIES))
         for profile, row in ACCEPTANCE_MATRIX.items():

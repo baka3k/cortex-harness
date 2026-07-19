@@ -970,7 +970,8 @@ async def _run_cypher(query: str, params: Dict[str, Any], db: str) -> List[Dict[
     return records
 
 
-async def _list_relationship_types(dbs: List[str]) -> List[str]:
+async def _list_relationship_types(dbs: List[str]) -> Optional[List[str]]:
+    """Return relationship types, or ``None`` when schema inspection fails."""
     query_call = (
         "CALL db.relationshipTypes() YIELD relationshipType "
         "RETURN relationshipType AS rel_type"
@@ -995,7 +996,7 @@ async def _list_relationship_types(dbs: List[str]) -> List[str]:
                 continue
             logger.warning("Unable to list relationship types from %s: %s", db, exc)
             break
-    return []
+    return None
 
 
 async def _list_node_labels(dbs: List[str]) -> Optional[List[str]]:
@@ -1078,7 +1079,7 @@ async def _resolve_rel_types_with_diagnostics(
         default=defaults or _get_default_flow_rel_types(parser_type),
     )
     available = await _list_relationship_types(db_candidates)
-    if not available:
+    if available is None:
         return requested, {
             "schema_status": "unavailable",
             "requested_relationships": requested,
@@ -2671,16 +2672,21 @@ async def tool_search_functions(
     include_raw_fields = payload.get("include_raw_fields", False)
     framework = str(payload.get("framework") or "").strip().lower() or None
     kinds = _normalize_string_list(payload.get("kinds"))
-    capability = capability_for_parser(framework or payload.get("parser_type"))
-    if framework and (not capability or "framework_query" not in capability.features):
+    parser_capability = capability_for_parser(payload.get("parser_type"))
+    framework_capability = capability_for_parser(framework) if framework else None
+    if framework and (
+        not framework_capability
+        or "framework_query" not in framework_capability.features
+    ):
         raise ValueError(f"framework '{framework}' is not a registered framework capability")
+    capability = framework_capability or parser_capability
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query is required.")
     db_candidates = _resolve_db_candidates(db)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
-    profile_labels = searchable_labels(capability.name) if capability and framework else ()
-    profile_properties = searchable_properties(capability.name) if capability and framework else ()
+    profile_labels = searchable_labels(capability.name) if capability else ()
+    profile_properties = searchable_properties(capability.name) if capability else ()
     label_predicate = (
         "(" + " OR ".join(f"n:{label}" for label in profile_labels) + ")"
         if profile_labels
@@ -2725,7 +2731,7 @@ async def tool_search_functions(
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
         f"WHERE {fulltext_node_predicate} "
         "AND ($project_id IS NULL OR node.project_id = $project_id) "
-        f"AND ($framework IS NULL OR node.framework = $framework OR {node_profile_predicate}) "
+        "AND ($framework IS NULL OR node.framework = $framework) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR node.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('node')} "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"

@@ -10,19 +10,62 @@ if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
 from framework_registry import (  # noqa: E402
+    CAPABILITY_CONTRACT_VERSION,
     CAPABILITIES,
     capability_catalog,
     capability_for_parser,
     default_relationships,
+    evaluate_capability_schema,
     framework_for_parser,
     parser_aliases,
     searchable_labels,
+    schema_fingerprint,
     servlet_active_generation_predicate,
     validate_capability_registry,
 )
 
 
 class FrameworkMcpRoutingTest(unittest.TestCase):
+    def test_runtime_schema_evaluation_is_dimensional_and_order_independent(self):
+        capability = capability_for_parser("python")
+        first = evaluate_capability_schema(
+            capability,
+            available_labels=["Function", "ApiEndpoint"],
+            available_relationships=["CALLS", "HANDLES"],
+        )
+        second = evaluate_capability_schema(
+            capability,
+            available_labels=["ApiEndpoint", "Function"],
+            available_relationships=["HANDLES", "CALLS"],
+        )
+
+        self.assertEqual(first["contract_version"], CAPABILITY_CONTRACT_VERSION)
+        self.assertEqual(first["schema_fingerprint"], second["schema_fingerprint"])
+        self.assertEqual(first["dimensions"]["symbols"]["effective"], "full")
+        self.assertEqual(first["dimensions"]["calls"]["effective"], "partial")
+        self.assertEqual(first["dimensions"]["endpoints"]["effective"], "partial")
+        self.assertEqual(first["dimensions"]["database"]["effective"], "none")
+
+    def test_runtime_schema_evaluation_downgrades_missing_or_unknown_evidence(self):
+        capability = capability_for_parser("python")
+        missing = evaluate_capability_schema(
+            capability,
+            available_labels=["Function"],
+            available_relationships=["CALLS"],
+        )
+        unknown = evaluate_capability_schema(
+            capability,
+            available_labels=["Function", "ApiEndpoint"],
+            available_relationships=None,
+        )
+
+        self.assertEqual(missing["dimensions"]["endpoints"]["observed"], "unavailable")
+        self.assertEqual(missing["dimensions"]["endpoints"]["effective"], "none")
+        self.assertTrue(missing["dimensions"]["endpoints"]["missing_labels_any"])
+        self.assertEqual(unknown["dimensions"]["calls"]["observed"], "unknown")
+        self.assertEqual(unknown["dimensions"]["calls"]["effective"], "unknown")
+        self.assertIsNone(schema_fingerprint(["Function"], None))
+
     def test_capability_registry_is_canonical_unique_and_backend_aware(self):
         aliases = validate_capability_registry()
         self.assertEqual(len(aliases), len(parser_aliases()))

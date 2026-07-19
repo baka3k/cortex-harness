@@ -4,7 +4,7 @@ status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
-blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening]
+blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening, 260719-2150-parser-mcp-runtime-alignment]
 
 ## Cross-Plan Dependency
 
@@ -23,6 +23,12 @@ The MCP query capability hardening plan at
 inspection to node labels, adds provider-neutral web/database overlay writers, and
 uses FalkorDB as the active acceptance target. Its live Neo4j parity remains gated
 by this migration.
+
+The parser-MCP runtime alignment plan at
+`plans/260719-2150-parser-mcp-runtime-alignment/plan.md` separates parser profiles
+from exact framework filters, adds live provider schema observability, and
+removes provider-specific wording from public MCP metadata. Neo4j/FalkorDB live
+parity remains gated by this migration.
 
 ## Objective
 
