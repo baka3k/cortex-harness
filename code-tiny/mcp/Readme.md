@@ -870,6 +870,7 @@ Input:
 | `top_k`      | No       | `str`  | Max matched nodes. Default: `10`.                             |
 | `db`         | No       | `str`  | Database override used by graph-assisted modes.               |
 | `collection` | No       | `str`  | Qdrant collection override.                                   |
+| `project_id` | No       | `str`  | Exact project scope for every retrieval and expansion stage.   |
 | `debug`      | No       | `bool` | Include per-signal scoring details.                           |
 
 Output: Dict with `matched_nodes`, `entry_points`, `related_paths`,
@@ -885,6 +886,9 @@ Use when:
 Provider note: `semantic` mode is primarily Qdrant-backed. `hybrid` and
 `graph_expanded` use the shared provider abstraction. If graph expansion times
 out, the response can still contain semantic candidates plus diagnostics.
+When `project_id` is supplied, Qdrant vector search, graph keyword matching,
+BM25 boosting, graph expansion, and final result packaging remain inside that
+project. BM25 cannot introduce an unverified project-external candidate.
 
 Example:
 
@@ -912,6 +916,10 @@ Input:
 | `top_k`       | No       | `str` | Number of results.                                                     |
 | `collection`  | No       | `str` | Qdrant collection or project collection prefix.                        |
 | `project_id`  | No       | `str` | Project scope for indexed data.                                        |
+
+`project_id` is applied as a server-side Qdrant payload filter for every
+backend. With graph expansion enabled, the same scope is applied to graph
+seeds, neighbors, and returned edges.
 
 Output: Dict with `results`, or backend-specific semantic result fields. Each
 result normally includes score, node metadata, file path, symbol name, and code

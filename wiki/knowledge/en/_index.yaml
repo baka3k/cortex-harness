@@ -1,0 +1,108 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: en-US
+branch: develop
+nodes_managed: true
+exported_at: "2026-07-19T15:02:38Z"
+modules:
+    "":
+        dir_name: Cortex Harness — Cross-Platform Ingestion Orchestrator
+        title: Cortex Harness — Cross-Platform Ingestion Orchestrator
+        scope:
+            - ReadMe.md
+            - Makefile
+            - pyproject.toml
+            - requirements.txt
+            - .gitignore
+            - dev.sh
+            - dev.bat
+            - dev.ps1
+            - install-windows.bat
+            - install-windows.ps1
+            - cortex-harness.sln
+            - INSTALLER_GUIDE.md
+            - dev-global.cmd
+        source_files: []
+        children:
+            - code_tiny
+            - doc_tiny
+            - docs
+            - harness_templates
+            - installers
+            - plans
+            - scripts
+            - tests
+        depends_on: []
+        related_to: []
+    code_tiny:
+        dir_name: Cortex Harness Code Intelligence (Analyzers + Unified MCP)
+        title: Cortex Harness Code Intelligence (Analyzers + Unified MCP)
+        scope:
+            - code-tiny/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    doc_tiny:
+        dir_name: MCP GraphRAG Ingestion & Query Service (LangExtract)
+        title: MCP GraphRAG Ingestion & Query Service (LangExtract)
+        scope:
+            - doc-tiny/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    docs:
+        dir_name: Project Documentation & Spec Archive
+        title: Project Documentation & Spec Archive
+        scope:
+            - docs/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    harness_templates:
+        dir_name: Agent Session Harness & Templates
+        title: Agent Session Harness & Templates
+        scope:
+            - harness/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    installers:
+        dir_name: Cross-Platform Context Menu Installers
+        title: Cross-Platform Context Menu Installers
+        scope:
+            - installers/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    plans:
+        dir_name: Planned Feature & Analyzer Plans
+        title: Planned Feature & Analyzer Plans
+        scope:
+            - plans/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    scripts:
+        dir_name: MCP Dev Lifecycle & Runtime Environment Scripts
+        title: MCP Dev Lifecycle & Runtime Environment Scripts
+        scope:
+            - scripts/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    tests:
+        dir_name: Cortex Harness Test Suite & Fixtures
+        title: Cortex Harness Test Suite & Fixtures
+        scope:
+            - tests/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

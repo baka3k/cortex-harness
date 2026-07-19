@@ -1,0 +1,6 @@
+- Lifecycle actions are declared once in an `ACTIONS` dict mapping string names to callable functions, and dispatched from `main()` by looking up `sys.argv[1]` — duplicated verbatim in the PowerShell `switch ($Action)` block.
+- Infrastructure and server definitions use parallel tuple/list-of-dict structures (`SERVERS`, `INFRA_SERVICES`) whose keys (`name`, `container`, `image`, `ports`, `host`, `port`, `ready_url`) drive both startup and `doctor` checks uniformly.
+- External commands are wrapped in helpers (`run()`, `Invoke-NativeQuiet`) that suppress stderr and return exit codes instead of raising, letting callers decide whether to treat non-zero as fatal.
+- Readiness probing follows a two-stage pattern: `wait_for_port(host, port)` polls TCP first, then `http_ready(url)` validates an HTTP endpoint when one is configured.
+- Per-process state is persisted as UTF-8 JSON under `.cache/mcp/` (`pids.json`, `<server>.pid`, `<server>.active.env`) and cleaned up on `stop` with `missing_ok=True` to tolerate partial runs.
+- Error paths raise `RuntimeError` (POSIX) or throw (PowerShell) with a `[error]`-prefixed message printed before returning non-zero, keeping the top-level `main`/`try` block uniform.
