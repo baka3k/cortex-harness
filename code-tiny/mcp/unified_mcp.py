@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import importlib.util
 import inspect
 import json
@@ -42,9 +43,11 @@ fast_backend = _load_module("fast_backend", ROOT_DIR / "fastmcp_server.py")
 
 from tool_metadata import build_catalog  # noqa: E402
 from framework_registry import (  # noqa: E402
+    CAPABILITY_CONTRACT_VERSION,
     capability_catalog,
     capability_for_parser,
     default_relationships,
+    evaluate_capability_schema,
     framework_for_parser,
     parser_aliases,
     query_engine_for_backend,
@@ -76,6 +79,7 @@ _UNIFIED_TOOL_NAMES: frozenset = frozenset(
         "list_databases",
         "list_qdrant_collections",
         "list_parsers",
+        "inspect_parser_capabilities",
         "list_mcp_functions",
         "compute_scc",
         "topological_sort",
@@ -591,8 +595,6 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
             relationships_applied = relationship_defaults
             if framework and "expand_graph" not in merged:
                 merged["expand_graph"] = True
-        if tool_name == "search_functions" and framework and not merged.get("framework"):
-            merged["framework"] = framework.name
     routing = _capability_summary(merged.get("parser_type"), backend_name)
     routing["default_relationships_applied"] = relationships_applied
     backend = BACKENDS[backend_name]
@@ -673,6 +675,7 @@ async def tool_list_parsers() -> Dict[str, Any]:
     return {
         "parsers": sorted(parser_aliases()),
         "capabilities": capabilities,
+        "capability_contract_version": CAPABILITY_CONTRACT_VERSION,
         "default_query_engine": query_engine_for_backend(DEFAULT_BACKEND),
         "active_parser_type": active_project.get("parser_type"),
         "active_capability": _capability_summary(
@@ -682,7 +685,85 @@ async def tool_list_parsers() -> Dict[str, Any]:
     }
 
 
-@mcp_server.tool(name="list_databases", description="List available Neo4j databases.", output_schema=None)
+@mcp_server.tool(
+    name="inspect_parser_capabilities",
+    description=(
+        "Compare a parser profile's advertised support with labels and relationships "
+        "observed in the active graph provider."
+    ),
+    output_schema=None,
+)
+async def tool_inspect_parser_capabilities(
+    parser_type: str = "",
+    db: str = "",
+) -> Dict[str, Any]:
+    selected_parser = (
+        _normalize_parser_type(parser_type)
+        or _normalize_parser_type(active_project.get("parser_type"))
+    )
+    if not selected_parser:
+        return _build_tool_error(
+            "inspect_parser_capabilities",
+            {"parser_type": parser_type, "db": db},
+            ValueError("parser_type is required when no project profile is active."),
+        )
+    capability = capability_for_parser(selected_parser)
+    if capability is None:
+        return _unsupported_parser_result(
+            "inspect_parser_capabilities",
+            {"parser_type": selected_parser, "db": db},
+            selected_parser,
+        )
+
+    db_candidates = cplus_backend._resolve_db_candidates(db or None)
+    labels, relationships = await asyncio.gather(
+        cplus_backend._list_node_labels(db_candidates),
+        cplus_backend._list_relationship_types(db_candidates),
+    )
+    evaluation = evaluate_capability_schema(
+        capability,
+        available_labels=labels,
+        available_relationships=relationships,
+    )
+    dimensions = evaluation["dimensions"]
+    effective_support = {
+        dimension: details["effective"]
+        for dimension, details in dimensions.items()
+    }
+    unavailable_dimensions = [
+        dimension for dimension, details in dimensions.items()
+        if details["advertised"] != "none" and details["observed"] == "unavailable"
+    ]
+    unknown_dimensions = [
+        dimension for dimension, details in dimensions.items()
+        if details["advertised"] != "none" and details["observed"] == "unknown"
+    ]
+    recommended_action = (
+        "inspect_provider_schema"
+        if unknown_dimensions else "run_incremental_sync"
+        if unavailable_dimensions else "none"
+    )
+    return {
+        "ok": True,
+        "requested_parser": selected_parser,
+        "canonical_parser": capability.name,
+        "query_engine": query_engine_for_backend(capability.backend),
+        "db": db_candidates[0] if db_candidates else (db or None),
+        "advertised_support": dict(capability.support),
+        "effective_support": effective_support,
+        "schema_status": evaluation["schema_status"],
+        "schema_fingerprint": evaluation["schema_fingerprint"],
+        "contract_version": evaluation["contract_version"],
+        "dimensions": dimensions,
+        "available_labels": sorted(labels or []),
+        "available_relationships": sorted(relationships or []),
+        "unavailable_dimensions": unavailable_dimensions,
+        "unknown_dimensions": unknown_dimensions,
+        "recommended_action": recommended_action,
+    }
+
+
+@mcp_server.tool(name="list_databases", description="List graph databases or graph names from the active provider.", output_schema=None)
 async def tool_list_databases(
     parser_type: str = "",
 ) -> Dict[str, Any]:
@@ -1701,7 +1782,7 @@ async def tool_explore_graph(
         query:      Natural language text (keyword, sentence, or multi-line paragraph).
         mode:       "semantic" | "hybrid" (default) | "graph_expanded"
         top_k:      Max matched nodes (default 10).
-        db:         Neo4j database name override.
+        db:         Graph database or graph name override.
         collection: Qdrant collection name override.
         debug:      Include per-signal score breakdown in each node.
 
@@ -1930,7 +2011,7 @@ async def tool_find_callers_of_endpoint(
         http_method:   HTTP method (GET/POST/…), case-insensitive. Empty = any.
         be_project_id: project_id of the backend project.
         fe_project_id: project_id of the frontend project (empty = all projects).
-        db:            Neo4j database name (defaults to NEO4J_DB env var or 'neo4j').
+        db:            Graph database or graph name (uses the active/default context).
 
     Returns:
         {
@@ -2046,7 +2127,7 @@ async def tool_get_api_call_chain(
         fe_project_id:  project_id of the frontend project.
         be_project_id:  project_id of the backend project.
         max_depth:      Max CALLS hops in FE chain (default 5).
-        db:             Neo4j database name.
+        db:             Graph database or graph name.
 
     Returns:
         {
@@ -2261,7 +2342,7 @@ async def tool_analyze_workflow_impact(
     """
     Args:
         function_id: symbol_id of the function/screen to analyze
-        db:          Neo4j database name (default: 'neo4j')
+        db:          Graph database or graph name (uses active/default context)
         direction:   'downstream' or 'upstream' (default: 'downstream')
         max_depth:   CALLS traversal depth, capped at 4 (default: 4)
 
@@ -2435,7 +2516,7 @@ async def tool_find_workflows_containing(
     """
     Args:
         function_id:      symbol_id of the function to look up
-        db:               Neo4j database name
+        db:               Graph database or graph name
         include_indirect: Also find workflows reachable via CALLS chain (default True)
         max_depth:        Max CALLS hops for indirect search (default 4)
 
@@ -2531,7 +2612,7 @@ LIMIT 30
 # ===========================================================================
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Unified FastMCP server for Android/C++ code graphs.",
+        description="Unified FastMCP server for multi-language code graphs.",
     )
     parser.add_argument(
         "--transport",

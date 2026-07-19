@@ -15,6 +15,42 @@ from cplus import cplus_mcp
 
 
 class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_parser_profile_applies_labels_without_inventing_framework_filter(self):
+        calls = []
+
+        async def fake_run(query, params, dbs):
+            calls.append((query, params))
+            return dbs[0], []
+
+        tool = getattr(cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions)
+        with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
+            await tool(query="users", db="graph", payload={"parser_type": "python"})
+
+        self.assertTrue(calls)
+        self.assertIn("node:ApiEndpoint", calls[0][0])
+        self.assertIsNone(calls[0][1]["framework"])
+
+    async def test_explicit_framework_filter_is_exact_in_fulltext_and_fallback(self):
+        calls = []
+
+        async def fake_run(query, params, dbs):
+            calls.append((query, params))
+            return dbs[0], []
+
+        tool = getattr(cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions)
+        with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
+            await tool(
+                query="users", db="graph", framework="fastapi",
+                payload={"parser_type": "python"},
+            )
+
+        self.assertEqual(len(calls), 2)
+        for query, params in calls:
+            self.assertIn("$framework IS NULL OR", query)
+            self.assertIn("framework = $framework", query)
+            self.assertEqual(params["framework"], "fastapi")
+        self.assertNotIn("node.framework = $framework OR (", calls[0][0])
+
     async def test_profile_search_merges_fulltext_and_property_fallback_results(self):
         calls = []
 

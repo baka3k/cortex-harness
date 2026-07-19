@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -314,6 +315,23 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["capability"]["canonical_parser"], "spring")
         self.assertEqual(result["capability"]["support_level"], "full")
 
+    async def test_dispatch_keeps_parser_profile_separate_from_framework_filter(self):
+        captured = {}
+
+        async def fake_search(payload):
+            captured.update(payload)
+            return {"results": [], "ids": []}
+
+        with patch.object(unified_mcp.cplus_backend, "tool_search_functions", fake_search):
+            result = await unified_mcp._dispatch_tool(
+                "search_functions",
+                {"parser_type": "python", "query": "users"},
+            )
+
+        self.assertEqual(captured["parser_type"], "python")
+        self.assertNotIn("framework", captured)
+        self.assertEqual(result["capability"]["canonical_parser"], "python")
+
     async def test_dispatch_rejects_unknown_nonempty_parser(self):
         result = await unified_mcp._dispatch_tool(
             "trace_flow",
@@ -354,10 +372,36 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(missing, [])
         self.assertEqual(unsupported["support_status"], "unsupported")
 
+    async def test_provider_relationship_filter_distinguishes_unknown_from_empty_schema(self):
+        resolver = unified_mcp.cplus_backend._resolve_rel_types_with_diagnostics
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_list_relationship_types",
+            AsyncMock(return_value=None),
+        ):
+            retained, unknown = await resolver(
+                ["CALLS"], "python", ["graph"], explicit=False,
+            )
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_list_relationship_types",
+            AsyncMock(return_value=[]),
+        ):
+            omitted, empty = await resolver(
+                ["CALLS"], "python", ["graph"], explicit=False,
+            )
+
+        self.assertEqual(retained, ["CALLS"])
+        self.assertEqual(unknown["schema_status"], "unavailable")
+        self.assertEqual(omitted, [])
+        self.assertEqual(empty["schema_status"], "available")
+        self.assertEqual(empty["support_status"], "unsupported")
+
     async def test_list_parsers_returns_canonical_capability_catalog(self):
         tool = getattr(unified_mcp.tool_list_parsers, "fn", unified_mcp.tool_list_parsers)
         result = await tool()
 
+        self.assertEqual(result["capability_contract_version"], 1)
         profiles = {item["canonical_parser"]: item for item in result["capabilities"]}
         self.assertEqual(profiles["android"]["query_engine"], "android_graph")
         self.assertEqual(profiles["spring"]["query_engine"], "graph_generic")
@@ -368,6 +412,78 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(profiles["perl"]["support_level"], "generic")
         self.assertIn("asp.net-framework", result["parsers"])
+
+    async def test_public_tool_catalog_is_provider_neutral_and_exposes_inspector(self):
+        tool = getattr(
+            unified_mcp.tool_list_mcp_functions,
+            "fn",
+            unified_mcp.tool_list_mcp_functions,
+        )
+        catalog = json.loads(await tool())
+        serialized = json.dumps(catalog)
+        names = {item["name"] for item in catalog["functions"]}
+
+        self.assertIn("inspect_parser_capabilities", names)
+        self.assertNotIn("Neo4j database", serialized)
+        self.assertNotIn("raw Neo4j", serialized)
+        self.assertNotIn("aliases, backends", serialized)
+
+    async def test_inspect_parser_capabilities_reports_live_effective_support(self):
+        tool = getattr(
+            unified_mcp.tool_inspect_parser_capabilities,
+            "fn",
+            unified_mcp.tool_inspect_parser_capabilities,
+        )
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_list_node_labels",
+            AsyncMock(return_value=["Function", "ApiEndpoint"]),
+        ), patch.object(
+            unified_mcp.cplus_backend,
+            "_list_relationship_types",
+            AsyncMock(return_value=["CALLS", "HANDLES"]),
+        ):
+            result = await tool(parser_type="python", db="graph")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["canonical_parser"], "python")
+        self.assertEqual(result["effective_support"]["symbols"], "full")
+        self.assertEqual(result["effective_support"]["endpoints"], "partial")
+        self.assertEqual(result["effective_support"]["database"], "none")
+        self.assertEqual(result["recommended_action"], "none")
+        self.assertTrue(result["schema_fingerprint"])
+
+    async def test_inspect_parser_capabilities_recommends_sync_for_missing_schema(self):
+        tool = getattr(
+            unified_mcp.tool_inspect_parser_capabilities,
+            "fn",
+            unified_mcp.tool_inspect_parser_capabilities,
+        )
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_list_node_labels",
+            AsyncMock(return_value=["Function"]),
+        ), patch.object(
+            unified_mcp.cplus_backend,
+            "_list_relationship_types",
+            AsyncMock(return_value=["CALLS"]),
+        ):
+            result = await tool(parser_type="python", db="graph")
+
+        self.assertEqual(result["effective_support"]["endpoints"], "none")
+        self.assertEqual(result["recommended_action"], "run_incremental_sync")
+        self.assertIn("endpoints", result["unavailable_dimensions"])
+
+    async def test_inspect_parser_capabilities_rejects_unknown_parser(self):
+        tool = getattr(
+            unified_mcp.tool_inspect_parser_capabilities,
+            "fn",
+            unified_mcp.tool_inspect_parser_capabilities,
+        )
+        result = await tool(parser_type="pyhton", db="graph")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "unsupported_parser")
 
     def test_parse_positive_int_accepts_numeric_and_string_values(self):
         self.assertEqual(unified_mcp._parse_positive_int(20, "top_k"), (20, None))
