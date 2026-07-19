@@ -50,3 +50,36 @@ Endpoint query tools additionally inspect the live graph schema. If required
 labels such as `ApiEndpoint` or relationships such as `HANDLES` are absent (or
 schema inspection is unavailable), the tool returns `capability_unavailable`
 instead of a misleading empty result.
+
+## Runtime verification
+
+`list_parsers` is the versioned advertised contract. Its
+`capability_contract_version` changes when the evidence contract changes.
+`inspect_parser_capabilities(parser_type, db)` compares that contract with the
+active provider and reports, per dimension:
+
+- `advertised`: the parser profile claim (`full`, `partial`, `generic`, `none`).
+- `observed`: whether matching labels or relationships exist in the live schema.
+- `effective`: the support level safe to use at query time.
+
+The inspector also returns an order-independent `schema_fingerprint`, matched
+and missing evidence, and one bounded recommendation. `unknown` means provider
+schema inspection failed; it is never promoted to available support. A missing
+advertised dimension recommends an incremental sync rather than claiming the
+parser is broken, because the active graph may simply predate the analyzer.
+
+## Bounded live evidence (2026-07-19)
+
+The restarted code-tiny MCP exposed 36 tools, including the inspector, against
+the active FalkorDB graph `cortext`:
+
+- Python: `symbols=full`, `calls=partial`, `endpoints=none`; the graph has
+  `Function`/`File` and `CALLS`, but no endpoint evidence. Recommendation:
+  `run_incremental_sync`.
+- SQL: `symbols=full`, `database=none`; current graph lacks the SQL schema facts.
+  Recommendation: `run_incremental_sync`.
+- An unregistered parser returned `unsupported_parser` with supported canonical
+  profiles and aliases; it did not fall back to the generic/C++ profile.
+
+These are read-only schema observations, not proof of source-index freshness.
+No ingestion or embedding sync was run during verification.

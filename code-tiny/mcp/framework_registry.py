@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 
@@ -63,6 +64,35 @@ PUBLIC_QUERY_ENGINES = MappingProxyType({
     "android": "android_graph",
     "cplus": "graph_generic",
     "fast": "fast_graph",
+})
+CAPABILITY_CONTRACT_VERSION = 1
+_DIMENSION_LABEL_EVIDENCE = MappingProxyType({
+    "symbols": frozenset({
+        "File", "Namespace", "Package", "Module", "Class", "Type", "Function", "Field",
+        "CobolProgram", "CobolSection", "CobolParagraph", "CobolDataItem", "CobolCopybook",
+        "Widget", "Screen", "AndroidComponent", "Project", "Repository",
+    }),
+    "calls": frozenset(),
+    "endpoints": frozenset({"ApiEndpoint", "HttpEndpoint", "Route"}),
+    "database": frozenset({
+        "Table", "View", "Procedure", "Database", "DataRepository", "Repository",
+        "MyBatisStatement", "SqlStatement", "CobolSqlStatement",
+    }),
+})
+_DIMENSION_RELATIONSHIP_EVIDENCE = MappingProxyType({
+    "symbols": frozenset(),
+    "calls": frozenset({
+        "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "ROUTE_CALLS", "PERFORMS",
+        "STARTS_COMPONENT", "SENDS_MESSAGE", "TARGETS_ENDPOINT",
+    }),
+    "endpoints": frozenset({
+        "HANDLES", "HANDLED_BY", "MAPPED_TO", "SEMANTIC_OF", "DECLARES_ROUTE",
+        "STARTS_WITH_ROUTE", "MATCHES", "TARGETS_ENDPOINT",
+    }),
+    "database": frozenset({
+        "READS_FROM", "WRITES_TO", "REFERENCES_TABLE", "QUERIES", "DECLARES_QUERY",
+        "DERIVES_QUERY", "BINDS_STATEMENT", "DECLARES_STATEMENT",
+    }),
 })
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -176,6 +206,139 @@ def query_engine_for_backend(backend: Optional[str]) -> str:
     """Return the public query-engine name for an internal dispatch backend."""
     internal_name = str(backend or "cplus").strip().lower() or "cplus"
     return PUBLIC_QUERY_ENGINES.get(internal_name, "graph_generic")
+
+
+def schema_fingerprint(
+    available_labels: Optional[Iterable[str]],
+    available_relationships: Optional[Iterable[str]],
+) -> Optional[str]:
+    """Return an order-independent fingerprint for an inspectable graph schema."""
+    if available_labels is None or available_relationships is None:
+        return None
+    labels = sorted({str(value).strip() for value in available_labels if str(value).strip()})
+    relationships = sorted({
+        str(value).strip().upper()
+        for value in available_relationships
+        if str(value).strip()
+    })
+    material = (
+        f"v{CAPABILITY_CONTRACT_VERSION}|labels=" + "\x1f".join(labels)
+        + "|relationships=" + "\x1f".join(relationships)
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+
+
+def capability_schema_contract(
+    capability: FrameworkQueryConfig,
+) -> Dict[str, Dict[str, Tuple[str, ...]]]:
+    """Build the provider-schema evidence contract for one parser profile."""
+    profile_labels = set(capability.labels)
+    profile_relationships = set(capability.relationships_for())
+    contracts: Dict[str, Dict[str, Tuple[str, ...]]] = {}
+    for dimension in SUPPORT_DIMENSIONS:
+        label_candidates = (
+            profile_labels
+            if dimension == "symbols"
+            else profile_labels & set(_DIMENSION_LABEL_EVIDENCE[dimension])
+        )
+        contracts[dimension] = {
+            "labels_any": tuple(sorted(label_candidates)),
+            "relationships_any": tuple(sorted(
+                profile_relationships & set(_DIMENSION_RELATIONSHIP_EVIDENCE[dimension])
+            )),
+        }
+    return contracts
+
+
+def evaluate_capability_schema(
+    capability: FrameworkQueryConfig,
+    *,
+    available_labels: Optional[Iterable[str]],
+    available_relationships: Optional[Iterable[str]],
+) -> Dict[str, object]:
+    """Compare advertised parser support with the active provider schema."""
+    label_set = (
+        {str(value).strip() for value in available_labels if str(value).strip()}
+        if available_labels is not None else None
+    )
+    relationship_set = (
+        {str(value).strip().upper() for value in available_relationships if str(value).strip()}
+        if available_relationships is not None else None
+    )
+    contracts = capability_schema_contract(capability)
+    dimensions: Dict[str, Dict[str, object]] = {}
+    for dimension in SUPPORT_DIMENSIONS:
+        advertised = capability.support[dimension]
+        contract = contracts[dimension]
+        required_labels = tuple(contract["labels_any"])
+        required_relationships = tuple(contract["relationships_any"])
+        if advertised == "none":
+            dimensions[dimension] = {
+                "advertised": advertised,
+                "observed": "not_applicable",
+                "effective": "none",
+                "labels_any": list(required_labels),
+                "relationships_any": list(required_relationships),
+                "matched_labels": [],
+                "matched_relationships": [],
+                "missing_labels_any": [],
+                "missing_relationships_any": [],
+            }
+            continue
+
+        matched_labels = sorted(label_set & set(required_labels)) if label_set is not None else []
+        matched_relationships = (
+            sorted(relationship_set & set(required_relationships))
+            if relationship_set is not None else []
+        )
+        checks: list[Optional[bool]] = []
+        if required_labels:
+            checks.append(None if label_set is None else bool(matched_labels))
+        if required_relationships:
+            checks.append(None if relationship_set is None else bool(matched_relationships))
+        if not checks:
+            checks.append(False)
+
+        if any(value is None for value in checks):
+            observed = "unknown"
+            effective = "unknown"
+        elif all(checks):
+            observed = "available"
+            effective = advertised
+        else:
+            observed = "unavailable"
+            effective = "none"
+        dimensions[dimension] = {
+            "advertised": advertised,
+            "observed": observed,
+            "effective": effective,
+            "labels_any": list(required_labels),
+            "relationships_any": list(required_relationships),
+            "matched_labels": matched_labels,
+            "matched_relationships": matched_relationships,
+            "missing_labels_any": (
+                list(required_labels)
+                if required_labels and label_set is not None and not matched_labels else []
+            ),
+            "missing_relationships_any": (
+                list(required_relationships)
+                if required_relationships and relationship_set is not None and not matched_relationships else []
+            ),
+        }
+
+    schema_status = (
+        "available"
+        if label_set is not None and relationship_set is not None
+        else "unavailable"
+        if label_set is None and relationship_set is None
+        else "partial"
+    )
+    return {
+        "contract_version": CAPABILITY_CONTRACT_VERSION,
+        "schema_status": schema_status,
+        "schema_fingerprint": schema_fingerprint(label_set, relationship_set),
+        "dimensions": dimensions,
+    }
 
 
 def _generic_profile(
@@ -573,9 +736,11 @@ def servlet_active_generation_predicate(alias: str) -> str:
 
 
 __all__ = [
-    "ANDROID_RELATIONSHIPS", "CAPABILITIES", "CORE_RELATIONSHIPS", "CPLUS_RELATIONSHIPS",
+    "ANDROID_RELATIONSHIPS", "CAPABILITIES", "CAPABILITY_CONTRACT_VERSION",
+    "CORE_RELATIONSHIPS", "CPLUS_RELATIONSHIPS",
     "FRAMEWORKS", "PUBLIC_QUERY_ENGINES", "SUPPORT_DIMENSIONS", "FrameworkQueryConfig",
-    "capability_catalog", "capability_for_parser", "query_engine_for_backend",
+    "capability_catalog", "capability_for_parser", "capability_schema_contract",
+    "evaluate_capability_schema", "query_engine_for_backend", "schema_fingerprint",
     "default_relationships", "framework_for_parser", "parser_aliases", "searchable_labels",
     "searchable_properties", "servlet_active_generation_predicate", "validate_capability_registry",
 ]
