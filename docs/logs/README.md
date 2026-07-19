@@ -2,6 +2,8 @@
 
 Implementation and maintenance records, newest first:
 
+- [Parser-MCP runtime alignment](2026-07-19-parser-mcp-runtime-alignment.md)
+- [Windows MCP force-restart reliability](2026-07-19-windows-mcp-force-restart.md)
 - [MCP query capability hardening](2026-07-19-mcp-query-capability-hardening.md)
 - [Incremental scan reliability upgrade](2026-07-18-incremental-scan-reliability.md)
 - [Code-Tiny README refresh](2026-07-17-code-tiny-readme-refresh.md)

@@ -1335,6 +1335,26 @@ def _print_summary(summaries: list, total_elapsed: float) -> None:
 # ---------------------------------------------------------------------------
 
 def _mcp_pids(pattern: str) -> list:
+    if sys.platform == "win32":
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if not powershell:
+            return []
+        escaped_pattern = pattern.replace("'", "''")
+        command = (
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { $_.Name -match '^python(w)?(\\.exe)?$' -and "
+            f"$_.CommandLine -like '*{escaped_pattern}*' }} | "
+            "ForEach-Object { $_.ProcessId }"
+        )
+        try:
+            r = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+            )
+            return [int(p) for p in r.stdout.split() if p.strip().isdigit()]
+        except Exception:
+            return []
     try:
         r = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
         return [int(p) for p in r.stdout.split() if p.strip().isdigit()]
@@ -1355,11 +1375,19 @@ def _mcp_stop_pattern(pattern: str) -> int:
     pids = _mcp_pids(pattern)
     for pid in pids:
         try:
-            subprocess.run(["kill", "-TERM", str(pid)], check=False)
+            command = (
+                ["taskkill", "/PID", str(pid), "/T", "/F"]
+                if sys.platform == "win32"
+                else ["kill", "-TERM", str(pid)]
+            )
+            subprocess.run(command, check=False, capture_output=True)
         except Exception:
             pass
-    if pids:
-        time.sleep(1)
+    deadline = time.monotonic() + 5.0
+    while pids and time.monotonic() < deadline:
+        if not _mcp_pids(pattern):
+            break
+        time.sleep(0.1)
     return len(pids)
 
 
@@ -2308,7 +2336,7 @@ def mcp_start(force_restart, project_dir):
         pattern = svc["pattern"]
         pids    = _mcp_pids(pattern)
 
-        click.echo(f"\n── {name} (port {svc['port']}) {'─' * 30}")
+        click.echo(f"\n-- {name} (port {svc['port']}) {'-' * 30}")
 
         if pids and not force_restart:
             uptime = _mcp_uptime(pids[0])

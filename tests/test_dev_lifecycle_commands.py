@@ -4,7 +4,7 @@ from unittest import mock
 
 from click.testing import CliRunner
 
-from cortex_harness.dev import REPO_ROOT, cli
+from cortex_harness.dev import REPO_ROOT, _mcp_pids, _mcp_stop_pattern, cli
 
 
 class DevLifecycleCommandTests(unittest.TestCase):
@@ -116,6 +116,34 @@ class DevLifecycleCommandTests(unittest.TestCase):
                 script = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
                 self.assertIn("MSYS_NO_PATHCONV=1 python", script)
                 self.assertIn("--path /mcp", script)
+
+    def test_windows_mcp_pid_discovery_uses_python_command_lines(self):
+        completed = subprocess.CompletedProcess([], 0, stdout="101\n202\n")
+        with mock.patch("cortex_harness.dev.sys.platform", "win32"), mock.patch(
+            "cortex_harness.dev.shutil.which", return_value="powershell.exe"
+        ), mock.patch("cortex_harness.dev.subprocess.run", return_value=completed) as run:
+            result = _mcp_pids("unified_mcp.py")
+
+        self.assertEqual(result, [101, 202])
+        command = run.call_args.args[0]
+        self.assertEqual(command[:3], ["powershell.exe", "-NoProfile", "-Command"])
+        self.assertIn("python", command[3])
+        self.assertIn("unified_mcp.py", command[3])
+
+    def test_windows_mcp_stop_kills_process_trees(self):
+        with mock.patch("cortex_harness.dev.sys.platform", "win32"), mock.patch(
+            "cortex_harness.dev._mcp_pids", side_effect=[[101, 202], []]
+        ), mock.patch("cortex_harness.dev.subprocess.run") as run:
+            stopped = _mcp_stop_pattern("unified_mcp.py")
+
+        self.assertEqual(stopped, 2)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [
+                ["taskkill", "/PID", "101", "/T", "/F"],
+                ["taskkill", "/PID", "202", "/T", "/F"],
+            ],
+        )
 
 
 if __name__ == "__main__":

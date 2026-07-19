@@ -41,7 +41,7 @@ most common follow-up call.
 
 | Question or task                                                      | Start with                                                                                              | Next step                               |
 | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| I only know the behavior or business concept                          | [`semantic_search`](#semantic_search) in FalkorDB mode; [`explore_graph`](#explore_graph) in Neo4j mode | `get_symbol` or `query_subgraph`        |
+| I only know the behavior or business concept                          | [`semantic_search`](#semantic_search) or [`explore_graph`](#explore_graph) | `get_symbol` or `query_subgraph`        |
 | I want code that is semantically similar to a description             | [`semantic_search`](#semantic_search)                                                                   | `get_symbol`                            |
 | I know part of a function, class, or type name                        | [`search_functions`](#search_functions)                                                                 | `get_symbol`                            |
 | I know a literal, SQL fragment, API call, or log message              | [`search_by_code`](#search_by_code)                                                                     | `get_symbol`                            |
@@ -398,8 +398,8 @@ open a raw Neo4j driver instead of using the shared graph-driver abstraction:
 | `cplus`/generic search, symbol, path, trace, IPC, and annotation tools           | Supported                                                                                            | Supported                |
 | Dependency planners and Living Docs tools dispatched through `fastmcp_server.py` | Supported                                                                                            | Supported                |
 | `semantic_search` and `list_qdrant_collections`                                  | Qdrant-backed; graph expansion depends on selected backend                                           | Supported                |
-| `explore_graph`                                                                  | Semantic/Qdrant behavior can work, but keyword and graph-expanded modes still use a raw Neo4j driver | Fully supported          |
-| `find_callers_of_endpoint`, `get_api_call_chain`                                 | Not currently provider-aware                                                                         | Supported                |
+| `explore_graph`                                                                  | Provider-aware semantic, keyword, and graph-expanded retrieval; bounded timeouts may return partial expansion | Supported          |
+| `find_callers_of_endpoint`, `get_api_call_chain`                                 | Provider-aware through the shared graph driver; schema-gated                                          | Supported                |
 | `find_workflows_containing` and workflow layer of `analyze_workflow_impact`      | Not currently provider-aware                                                                         | Supported                |
 | `android` backend                                                                | Not currently provider-aware                                                                         | Supported                |
 
@@ -692,7 +692,7 @@ Current unified routing:
 1. Call `list_mcp_functions` to confirm the live tool catalog.
 2. Call `list_parsers` and `list_databases` if you are unsure about routing.
 3. Call `activate_project` to set default parser/database context.
-4. Use `semantic_search` for vague natural-language discovery in FalkorDB mode. Use `explore_graph` hybrid/expanded modes only in Neo4j mode.
+4. Use `semantic_search` or `explore_graph` for vague natural-language discovery; inspect graph-expansion diagnostics when partial.
 5. Use `search_functions`, `search_by_code`, or `listup_symbols_matching_file_path` to get stable node IDs.
 6. Use `get_symbol`, `get_node_details`, `query_subgraph`, `find_paths`, or impact tools for exact analysis.
 
@@ -731,7 +731,8 @@ default/active parser context.
 
 Input: none.
 
-Output: Dict with `parsers`, `default_backend`, and `active_parser_type`.
+Output: Dict with aliases, canonical `capabilities`, `default_query_engine`,
+`active_parser_type`, and `active_capability`.
 
 Use when:
 
@@ -745,6 +746,25 @@ Example:
 {}
 ```
 
+#### `inspect_parser_capabilities`
+
+Purpose: Compares a parser profile's advertised support with node labels and
+relationship types observed in the active graph provider.
+
+Input:
+
+| Field         | Required | Type  | Meaning                                                    |
+| ------------- | -------- | ----- | ---------------------------------------------------------- |
+| `parser_type` | No       | `str` | Parser profile; uses the active profile when omitted.      |
+| `db`          | No       | `str` | FalkorDB graph name or Neo4j database name.                |
+
+Output: Advertised/effective support for `symbols`, `calls`, `endpoints`, and
+`database`; schema status/fingerprint; missing contract evidence; and a
+recommended action such as `run_incremental_sync`.
+
+Use this before specialized endpoint or database queries, and after changing
+parser/overlay configuration.
+
 #### `activate_project`
 
 Purpose: Sets default `parser_type` and graph name/database for subsequent calls
@@ -754,17 +774,17 @@ Input:
 
 | Field           | Required | Type  | Meaning                                                                             |
 | --------------- | -------- | ----- | ----------------------------------------------------------------------------------- |
-| `parser_type`   | No       | `str` | Parser/backend alias, for example `cplus`, `android`, `java`, `kotlin`, or `perl`.  |
+| `parser_type`   | No       | `str` | Parser profile or alias, for example `python`, `android`, `java`, or `perl`.        |
 | `database_name` | No       | `str` | FalkorDB graph name or Neo4j database name. Current runtime default: `hyper_graph`. |
 
-Output: Dict with `parser_type`, `database_name`, `activated` or backend
-status fields, plus `backend`.
+Output: Dict with `parser_type`, canonical capability, `database_name`, and
+public `query_engine`.
 
 Use when:
 
 - Running several related calls against the same project/database.
 - Avoiding repeated `parser_type` and `db` parameters.
-- Switching between Android and C/C++-family backends.
+- Switching between parser profiles and graph query engines.
 
 Example:
 
@@ -862,10 +882,9 @@ Use when:
 - You want both candidate symbols and graph-neighbor context in one call.
 - You need a first-pass map before exact symbol lookup.
 
-Provider note: `semantic` mode is primarily Qdrant-backed. The current
-`hybrid` keyword path and `graph_expanded` path still open a raw Neo4j driver,
-so use those modes only in Neo4j compatibility mode until `explore_graph` is
-migrated to the shared provider abstraction.
+Provider note: `semantic` mode is primarily Qdrant-backed. `hybrid` and
+`graph_expanded` use the shared provider abstraction. If graph expansion times
+out, the response can still contain semantic candidates plus diagnostics.
 
 Example:
 
@@ -1794,7 +1813,7 @@ Input:
 | `http_method`   | No       | `str` | `GET`, `POST`, `PUT`, `DELETE`, `ALL`, or empty for any. Default: `GET`. |
 | `be_project_id` | No       | `str` | Backend project scope.                                                   |
 | `fe_project_id` | No       | `str` | Frontend project scope.                                                  |
-| `db`            | No       | `str` | Neo4j database. Default: `neo4j`.                                        |
+| `db`            | No       | `str` | Graph database or graph name; uses active/default context.               |
 
 Output: Dict with `endpoint_path`, `callers`, and `total`. Each caller
 contains function name, qualified name, React role, file path, line number,
@@ -1806,8 +1825,8 @@ Use when:
 - You need to find affected frontend screens.
 - You want FE impact before removing or renaming an endpoint.
 
-Provider note: this tool currently opens a raw Neo4j driver and is not
-FalkorDB-aware.
+Provider note: this tool uses the shared graph driver and checks required
+`ApiEndpoint`, `ApiCall`, `CALLS_API`, and `MATCHES` schema before querying.
 
 Example:
 
@@ -1835,7 +1854,7 @@ Input:
 | `fe_project_id`  | No       | `str` | Frontend project scope.                                          |
 | `be_project_id`  | No       | `str` | Backend project scope.                                           |
 | `max_depth`      | No       | `str` | Max frontend `CALLS` hops. Default: `5`.                         |
-| `db`             | No       | `str` | hyper_graph database. Default: `neo4j`.                          |
+| `db`             | No       | `str` | Graph database or graph name; uses active/default context.       |
 
 Output: Dict with `chains` and `total`. Each chain can include frontend
 component/caller, API call, backend endpoint, controller, service, repository,
@@ -1848,8 +1867,8 @@ Use when:
 - You are debugging a fullstack behavior from UI to backend.
 - You need backend dependencies of a frontend component.
 
-Provider note: this tool currently opens a raw Neo4j driver and is not
-FalkorDB-aware.
+Provider note: this tool uses the shared graph driver and fails with
+`capability_unavailable` when required endpoint/handler schema is absent.
 
 Example:
 
@@ -1859,7 +1878,7 @@ Example:
   "fe_project_id": "frontend",
   "be_project_id": "backend",
   "max_depth": "5",
-  "db": "neo4j"
+  "db": "hyper_graph"
 }
 ```
 
