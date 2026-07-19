@@ -1,1 +1,0 @@
-Builds and installs CortexHarness context-menu integrations for Windows Explorer, macOS Services, and Ubuntu Nautilus via platform-specific installers driven by shared configuration.

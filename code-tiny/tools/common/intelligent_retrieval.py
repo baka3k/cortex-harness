@@ -449,7 +449,7 @@ def _graph_keyword_node_to_candidate(node: Dict[str, Any]) -> Dict[str, Any]:
 def _graph_node_to_candidate(gnode: GraphNode) -> Dict[str, Any]:
     """Convert a GraphNode from graph expansion into a flat candidate dict."""
     props = gnode.properties
-    return {
+    candidate = {
         "node_id":        gnode.node_id,
         "name":           gnode.name,
         "qualified_name": gnode.qualified_name,
@@ -469,6 +469,13 @@ def _graph_node_to_candidate(gnode: GraphNode) -> Dict[str, Any]:
         "language":       "",
         "_source":        "graph_expansion",
     }
+    for key in (
+        "seed_id", "seed_ids", "target_name", "signature", "framework",
+        "resolution_status", "start_line", "end_line",
+    ):
+        if props.get(key) not in (None, "", []):
+            candidate[key] = props[key]
+    return candidate
 
 
 # ─────────────────────────────────────────────────────────────

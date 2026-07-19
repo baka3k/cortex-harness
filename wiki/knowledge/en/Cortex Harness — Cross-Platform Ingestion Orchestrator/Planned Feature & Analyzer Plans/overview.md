@@ -1,1 +1,0 @@
-Repository of dated, phase-gated plan documents that scope and coordinate incremental additions of analyzers, MCP capabilities, graph schema changes, and scan orchestration upgrades.

@@ -12,7 +12,8 @@ for path in (CODE_TINY_DIR, MCP_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from services.explore_service import _make_graph_driver  # noqa: E402
+from services import explore_service as explore_service_module  # noqa: E402
+from services.explore_service import ExploreService, _make_graph_driver  # noqa: E402
 from tools.common.graph_expander import GraphExpander  # noqa: E402
 from tools.common.intelligent_retrieval import (  # noqa: E402
     IntelligentRetrievalEngine,
@@ -49,10 +50,13 @@ class SessionlessFalkorLikeDriver:
                 None,
             )
 
-        if "MATCH (seed)-" in query:
+        if "MATCH p = (seed)-" in query:
             return (
                 [
                     {
+                        "seed_id": "seed-function",
+                        "seed_ids": ["seed-function"],
+                        "hops": 2,
                         "node_id": "neighbor-function",
                         "name": "neighbor",
                         "qualified_name": "pkg.neighbor",
@@ -69,6 +73,13 @@ class SessionlessFalkorLikeDriver:
 
 
 class ExploreGraphFalkorCompatTest(unittest.IsolatedAsyncioTestCase):
+    def test_explore_defaults_match_unified_falkordb_runtime(self):
+        self.assertEqual(explore_service_module._DEFAULT_GRAPH_PROVIDER, "falkordb")
+        self.assertEqual(explore_service_module._DEFAULT_GRAPH_DB, "hyper_graph")
+        service = ExploreService()
+        self.assertEqual(service._graph_provider, "falkordb")
+        self.assertEqual(service._neo4j_db, "hyper_graph")
+
     async def test_make_graph_driver_selects_falkordb_for_redis_uri(self):
         fake_driver = object()
         with patch.dict(os.environ, {}, clear=True):
@@ -131,7 +142,9 @@ class ExploreGraphFalkorCompatTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(nodes[0].node_id, "neighbor-function")
-        self.assertEqual(nodes[0].graph_proximity, 0.8)
+        self.assertEqual(nodes[0].hop_distance, 2)
+        self.assertEqual(nodes[0].graph_proximity, 0.6)
+        self.assertEqual(nodes[0].properties["seed_ids"], ["seed-function"])
 
     def test_intelligent_retrieval_expands_from_falkor_keyword_seed(self):
         driver = SessionlessFalkorLikeDriver()

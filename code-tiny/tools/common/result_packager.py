@@ -155,6 +155,8 @@ def _build_related_path(scored: ScoredResult) -> Optional[Dict[str, Any]]:
         return None
 
     return {
+        "seed_id":       node.get("seed_id"),
+        "seed_ids":      node.get("seed_ids") or ([node.get("seed_id")] if node.get("seed_id") else []),
         "node_id":       scored.node_id,
         "name":          node.get("name") or scored.node_id,
         "qualified_name":node.get("qualified_name", ""),
