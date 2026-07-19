@@ -58,7 +58,9 @@ logger = logging.getLogger(__name__)
 
 # Default relationship types that represent functional dependencies in the
 # hyper-graph code graph schema.
-DEFAULT_REL_TYPES: List[str] = ["CALLS", "USES_TYPE", "REFERENCES", "INHERITS"]
+DEFAULT_REL_TYPES: List[str] = [
+    "CALLS", "USES_TYPE", "REFERENCES", "INHERITS", "ALIASES", "ALIAS_OF",
+]
 
 # Hop-count to proximity score decay table.
 # Entries beyond the table end use the extrapolation formula below.
@@ -131,11 +133,15 @@ def _expand_cypher(rel_types: List[str], depth: int) -> str:
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
 WHERE ($project_id IS NULL OR seed.project_id = $project_id)
-MATCH (seed)-[:{rel}*1..{depth}]-(neighbor)
-WHERE neighbor.id <> sid
-  AND ($project_id IS NULL OR neighbor.project_id = $project_id)
-RETURN DISTINCT
-    neighbor.id            AS node_id,
+    MATCH p = (seed)-[:{rel}*1..{depth}]-(neighbor)
+    WHERE neighbor.id <> sid
+      AND ($project_id IS NULL OR neighbor.project_id = $project_id)
+    WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
+    RETURN
+        seed_ids,
+        seed_ids[0]             AS seed_id,
+        hops,
+        neighbor.id            AS node_id,
     neighbor.name          AS name,
     coalesce(neighbor.qualified_name, neighbor.name) AS qualified_name,
     coalesce(labels(neighbor)[0], 'Node') AS kind,
@@ -143,8 +149,16 @@ RETURN DISTINCT
     neighbor.doc_confidence                AS doc_confidence,
     neighbor.intent                        AS intent,
     neighbor.exported                      AS exported,
-    neighbor.side_effect                   AS side_effect,
-    neighbor.project_id                    AS project_id
+        neighbor.side_effect                   AS side_effect,
+        neighbor.project_id                    AS project_id,
+        neighbor.target_name                   AS target_name,
+        neighbor.signature                     AS signature,
+        neighbor.language                      AS language,
+        neighbor.framework                     AS framework,
+        neighbor.resolution_status             AS resolution_status,
+        neighbor.start_line                    AS start_line,
+        neighbor.end_line                      AS end_line
+    ORDER BY hops ASC
 LIMIT $limit
 """
 
@@ -221,14 +235,12 @@ class GraphExpander:
         })
 
         seen: Set[str] = {n.node_id for n in nodes}
-        hop_map = self._compute_hop_distances(seed_ids, records)
-
         for row in records:
             nid = str(row.get("node_id") or "")
             if not nid or nid in seen:
                 continue
             seen.add(nid)
-            hops = hop_map.get(nid, depth)
+            hops = max(1, int(row.get("hops") or depth))
             nodes.append(GraphNode(
                 node_id=nid,
                 name=str(row.get("name") or ""),
@@ -243,6 +255,15 @@ class GraphExpander:
                     "exported":       bool(row.get("exported") or False),
                     "side_effect":    bool(row.get("side_effect") or False),
                     "project_id":     str(row.get("project_id") or ""),
+                    "seed_id":        str(row.get("seed_id") or ""),
+                    "seed_ids":       list(row.get("seed_ids") or []),
+                    "target_name":    str(row.get("target_name") or ""),
+                    "signature":      str(row.get("signature") or ""),
+                    "language":       str(row.get("language") or ""),
+                    "framework":      str(row.get("framework") or ""),
+                    "resolution_status": str(row.get("resolution_status") or ""),
+                    "start_line":     row.get("start_line"),
+                    "end_line":       row.get("end_line"),
                 },
             ))
 
@@ -339,18 +360,14 @@ RETURN
         Use Neo4j shortestPath to compute exact hop distances for returned
         neighbor node IDs.
 
-        For simplicity we approximate by assigning all returned nodes a
-        distance of 1 (direct neighbor) since the expand query already returns
-        nodes reachable within ``depth`` hops but doesn't return the actual
-        distance per node.  Callers that need exact distances can call
-        ``proximity_score`` per candidate.
-
-        A future enhancement can use APOC ``shortestPath`` or a Cypher-level
-        DISTINCT on hop lengths.
+        The expansion query returns the minimum path length for every node.
+        Keep a conservative fallback for legacy/fake drivers that omit it.
         """
-        # Minimal implementation: assign hop=1 for all expanded candidates.
-        # Override with exact values if Neo4j APOC is available.
-        return {str(r.get("node_id") or ""): 1 for r in records if r.get("node_id")}
+        return {
+            str(row.get("node_id") or ""): max(1, int(row.get("hops") or 1))
+            for row in records
+            if row.get("node_id")
+        }
 
     def _run_query(
         self,
@@ -424,14 +441,23 @@ class AsyncGraphExpander:
                 qualified_name=str(row.get("qualified_name") or ""),
                 kind=str(row.get("kind") or "Node"),
                 file_path=str(row.get("file_path") or ""),
-                hop_distance=1,
-                graph_proximity=_hop_proximity(1),
+                hop_distance=max(1, int(row.get("hops") or 1)),
+                graph_proximity=_hop_proximity(max(1, int(row.get("hops") or 1))),
                 properties={
                     "doc_confidence": float(row.get("doc_confidence") or 0.0),
                     "intent":         str(row.get("intent") or ""),
                     "exported":       bool(row.get("exported") or False),
                     "side_effect":    bool(row.get("side_effect") or False),
                     "project_id":     str(row.get("project_id") or ""),
+                    "seed_id":        str(row.get("seed_id") or ""),
+                    "seed_ids":       list(row.get("seed_ids") or []),
+                    "target_name":    str(row.get("target_name") or ""),
+                    "signature":      str(row.get("signature") or ""),
+                    "language":       str(row.get("language") or ""),
+                    "framework":      str(row.get("framework") or ""),
+                    "resolution_status": str(row.get("resolution_status") or ""),
+                    "start_line":     row.get("start_line"),
+                    "end_line":       row.get("end_line"),
                 },
             ))
         return nodes

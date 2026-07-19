@@ -140,10 +140,11 @@ async def expand_semantic_results(
       AND NOT neighbor.id IN $seed_ids
       AND ($project_id IS NULL OR neighbor.project_id = $project_id)
       AND {servlet_active_generation_predicate('neighbor')}
-    WITH sid, neighbor, min(length(p)) AS hops
+    WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
     ORDER BY hops ASC
     LIMIT $limit
-    RETURN sid AS seed_id,
+    RETURN seed_ids[0] AS seed_id,
+           seed_ids AS seed_ids,
            neighbor.id AS node_id,
            neighbor.name AS name,
            coalesce(neighbor.qualified_name, neighbor.name) AS qualified_name,
@@ -158,6 +159,9 @@ async def expand_semantic_results(
            neighbor.side_effect AS side_effect,
            neighbor.doc_confidence AS doc_confidence,
            neighbor.project_id AS project_id,
+           neighbor.target_name AS target_name,
+           neighbor.signature AS signature,
+           neighbor.language AS language,
            hops AS hop_distance
     """
     params = {
@@ -183,6 +187,7 @@ async def expand_semantic_results(
         graph_nodes.append(
             {
                 "seed_id": row.get("seed_id"),
+                "seed_ids": list(row.get("seed_ids") or ([row.get("seed_id")] if row.get("seed_id") else [])),
                 "node_id": node_id,
                 "name": row.get("name") or "",
                 "qualified_name": row.get("qualified_name") or "",
@@ -197,6 +202,9 @@ async def expand_semantic_results(
                 "side_effect": bool(row.get("side_effect") or False),
                 "doc_confidence": float(row.get("doc_confidence") or 0.0),
                 "project_id": row.get("project_id") or "",
+                "target_name": row.get("target_name") or "",
+                "signature": row.get("signature") or "",
+                "language": row.get("language") or "",
                 "hop_distance": hops,
                 "graph_proximity": _proximity(hops),
             }
@@ -214,7 +222,7 @@ async def expand_semantic_results(
       AND target.id IN $node_ids
       AND ($project_id IS NULL OR source.project_id = $project_id)
       AND ($project_id IS NULL OR target.project_id = $project_id)
-    RETURN source.id AS source,
+    RETURN DISTINCT source.id AS source,
            target.id AS target,
            type(r) AS type,
            coalesce(r.confidence, r.score) AS confidence,

@@ -21,10 +21,10 @@ Configuration is read from environment variables:
   QDRANT_URL          (default: http://localhost:6333)
   QDRANT_COLLECTION   (default: empty — auto-discovered)
   EMBED_MODEL         (default: empty — uses cplus_mcp DEFAULT_MODEL)
-  NEO4J_URI           (default: bolt://localhost:7687)
-  NEO4J_USER
-  NEO4J_PASS
-  NEO4J_DB            (default: neo4j)
+  CODE_GRAPH_PROVIDER / GRAPH_PROVIDER (default: falkordb)
+  FALKORDB_URI or FALKORDB_HOST / FALKORDB_PORT
+  FALKORDB_GRAPH       (default: hyper_graph)
+  NEO4J_URI / NEO4J_USER / NEO4J_PASS / NEO4J_DB (legacy/Neo4j mode)
 
 Usage
 ─────
@@ -61,12 +61,25 @@ _DEFAULT_MODEL       = os.environ.get("EMBED_MODEL", "")
 _DEFAULT_NEO4J_URI   = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 _DEFAULT_NEO4J_USER  = os.environ.get("NEO4J_USER", "")
 _DEFAULT_NEO4J_PASS  = os.environ.get("NEO4J_PASS", "")
-_DEFAULT_NEO4J_DB    = os.environ.get("NEO4J_DB", "neo4j")
+_DEFAULT_NEO4J_DB    = os.environ.get("NEO4J_DB", "hyper_graph")
 _DEFAULT_GRAPH_PROVIDER = (
     os.environ.get("CODE_GRAPH_PROVIDER")
     or os.environ.get("GRAPH_PROVIDER")
-    or ""
+    or os.environ.get("MCP_GRAPH_PROVIDER")
+    or "falkordb"
 ).strip().lower()
+if _DEFAULT_GRAPH_PROVIDER in {"falkor", "falkor-db"}:
+    _DEFAULT_GRAPH_PROVIDER = "falkordb"
+_DEFAULT_FALKORDB_GRAPH = (
+    os.environ.get("FALKORDB_GRAPH")
+    or os.environ.get("FALKORDB_DATABASE")
+    or "hyper_graph"
+)
+_DEFAULT_GRAPH_DB = (
+    _DEFAULT_FALKORDB_GRAPH
+    if _DEFAULT_GRAPH_PROVIDER == "falkordb"
+    else _DEFAULT_NEO4J_DB
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lazy imports (avoid hard failure at import time if libraries missing)
@@ -119,6 +132,8 @@ async def _make_graph_driver(
     user: str,
     password: str,
     database: str,
+    *,
+    provider: Optional[str] = None,
 ) -> Optional[Any]:
     """
     Build a graph driver using the shared GraphDriverFactory.
@@ -126,7 +141,11 @@ async def _make_graph_driver(
     Despite the legacy NEO4J_* environment variable names, the factory may
     return a Neo4jDriver or a FalkorDBDriver depending on provider/URI config.
     """
-    provider_text = _DEFAULT_GRAPH_PROVIDER
+    provider_text = (provider or _DEFAULT_GRAPH_PROVIDER or "falkordb").strip().lower()
+    if provider_text in {"falkor", "falkor-db"}:
+        provider_text = "falkordb"
+    if provider_text not in {"falkordb", "neo4j"}:
+        raise ValueError(f"Unsupported graph provider: {provider_text}")
     use_falkor = provider_text in {"falkor", "falkordb"} or _is_falkordb_uri(uri)
     if not use_falkor and not (user and password):
         logger.info(
@@ -149,8 +168,8 @@ async def _make_graph_driver(
                 "port": int(os.environ.get("FALKORDB_PORT", "6379")),
                 "user": os.environ.get("FALKORDB_USER") or os.environ.get("FALKORDB_USERNAME") or user,
                 "password": os.environ.get("FALKORDB_PASSWORD", password or ""),
-                "database": os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or database,
-                "graph": os.environ.get("FALKORDB_GRAPH"),
+                "database": database,
+                "graph": database,
                 "ssl": os.environ.get("FALKORDB_SSL", "").lower() in {"1", "true", "yes", "on"},
             }
             return await GraphDriverFactory.create_driver(GraphProvider.FALKORDB, config)
@@ -210,6 +229,7 @@ class ExploreService:
         neo4j_user:   Optional[str] = None,
         neo4j_pass:   Optional[str] = None,
         neo4j_db:     Optional[str] = None,
+        graph_provider: Optional[str] = None,
     ) -> None:
         self._qdrant_url  = qdrant_url  or _DEFAULT_QDRANT_URL
         self._collection  = collection  or _DEFAULT_COLLECTION
@@ -217,7 +237,10 @@ class ExploreService:
         self._neo4j_uri   = neo4j_uri   or _DEFAULT_NEO4J_URI
         self._neo4j_user  = neo4j_user  or _DEFAULT_NEO4J_USER
         self._neo4j_pass  = neo4j_pass  or _DEFAULT_NEO4J_PASS
-        self._neo4j_db    = neo4j_db    or _DEFAULT_NEO4J_DB
+        self._graph_provider = (graph_provider or _DEFAULT_GRAPH_PROVIDER or "falkordb").strip().lower()
+        if self._graph_provider in {"falkor", "falkor-db"}:
+            self._graph_provider = "falkordb"
+        self._neo4j_db    = neo4j_db or _DEFAULT_GRAPH_DB
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -274,7 +297,13 @@ class ExploreService:
         # 2. Build embedder + graph driver
         embedder = _make_embedder(self._model_name)
         graph_driver = (
-            await _make_graph_driver(self._neo4j_uri, self._neo4j_user, self._neo4j_pass, active_db)
+            await _make_graph_driver(
+                self._neo4j_uri,
+                self._neo4j_user,
+                self._neo4j_pass,
+                active_db,
+                provider=self._graph_provider,
+            )
             if mode != MODE_SEMANTIC
             else None
         )
@@ -298,7 +327,18 @@ class ExploreService:
         # 4. Package results
         packed = self._pack(scored_results, understanding, mode)
 
-        return packed.to_dict()
+        response = packed.to_dict()
+        graph_requested = mode != MODE_SEMANTIC
+        response["retrieval"] = {
+            "graph_provider": self._graph_provider,
+            "graph_database": active_db,
+            "graph_requested": graph_requested,
+            "graph_connected": graph_driver is not None,
+            "graph_expansion_requested": bool(_MODE_EXPAND_GRAPH.get(mode, False)),
+            "semantic_enabled": embedder is not None,
+            "degraded": bool(graph_requested and graph_driver is None),
+        }
+        return response
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
