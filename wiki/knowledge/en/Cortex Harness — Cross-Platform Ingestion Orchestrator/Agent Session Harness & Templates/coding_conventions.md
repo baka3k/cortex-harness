@@ -1,0 +1,6 @@
+- CLI arguments mirror config keys and fall back to `os.getenv(...)` defaults, so every tunable parameter can be supplied via flags, env vars, or `config.yaml` in that precedence order.
+- External subprocess calls go through `run_command(cmd, cwd, env)` and return `(returncode, combined_stdout_stderr)`; callers always check the exit code and record the last 2000 chars of output in `log.verify_attempts`.
+- I/O helpers `load_json` / `save_json` / `append_progress` create parent directories with `parents=True, exist_ok=True` before writing, ensuring the `.harness/state/...` tree is created on first use.
+- Error paths set `task['status'] = 'blocked'`, persist the updated feature list, finalize the `SessionLog` with `ended_at`, append a summary line to `progress.md`, and return non-zero — never raise uncaught exceptions out of `main()`.
+- MCP discovery follows a fixed handshake: `initialize` → optional `notifications/initialized` → `tools/list`, then pick a tool by configured name or by falling back to a priority list (`GRAPH_AUTO_TOOL_PRIORITY` / `MIND_AUTO_TOOL_PRIORITY`).
+- JSON payloads are serialized with `ensure_ascii=True, indent=2` and terminated with a trailing newline, applied consistently across all `save_json` and `print(json.dumps(...))` calls.

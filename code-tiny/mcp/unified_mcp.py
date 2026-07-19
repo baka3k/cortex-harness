@@ -1774,6 +1774,7 @@ async def tool_explore_graph(
     collection: str  = "",
     debug:      bool = False,
     parser_type: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
     """
     Intent-aware graph search combining semantic + keyword + graph expansion.
@@ -1785,6 +1786,7 @@ async def tool_explore_graph(
         db:         Graph database or graph name override.
         collection: Qdrant collection name override.
         debug:      Include per-signal score breakdown in each node.
+        project_id: Restrict every retrieval and expansion stage to one project.
 
     Returns:
         {
@@ -1852,16 +1854,18 @@ async def tool_explore_graph(
             result["capability_diagnostics"] = capability_diagnostics
             return result
     service = get_explore_service()
+    active_db = db or active_project.get("database_name") or None
     result = await service.explore(
         query      = q,
         top_k      = k,
         mode       = mode or "hybrid",
-        db         = db or None,
+        db         = active_db,
         collection = collection or None,
         debug      = debug,
         graph_rel_types= relationship_types,
         searchable_labels= sorted(capability.labels) if capability else None,
         searchable_properties= list(capability.searchable_properties) if capability else None,
+        project_id = project_id or None,
     )
     result.pop("backend", None)
     result["query_engine"] = query_engine_for_backend(backend_name)

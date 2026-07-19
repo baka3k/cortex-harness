@@ -1,0 +1,1 @@
+Standalone Python service that ingests documents into Qdrant + Neo4j/FalkorDB via LangExtract/GLiNER and exposes a FastMCP server for vector+graph retrieval.

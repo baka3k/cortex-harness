@@ -1,0 +1,1 @@
+Python 3.10+ with Click for the unified CLI; Docker-backed Qdrant + FalkorDB/Neo4j as the shared vector/graph store; a single C# Roslyn VB worker built via the top-level Visual Studio solution; cross-platform shell/PowerShell lifecycle scripts driven by one Makefile target set.
