@@ -161,7 +161,7 @@ Tool inputs:
 
 mcp_server = FastMCP(
     name=MCP_NAME,
-    version="2.1.0",
+    version="2.2.0",
     instructions=INSTRUCTIONS,
 )
 
@@ -3102,6 +3102,8 @@ async def tool_find_screen_workflows(
     if not relationship_types:
         return _unsupported_relationship_result(parser_type, capability_diagnostics)
     payload["relationship_types"] = relationship_types
+    if not payload.get("db") and not payload.get("database"):
+        payload["db"] = _resolve_db_candidates(None)[0]
 
     driver = await _get_graph_driver()
 

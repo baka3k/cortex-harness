@@ -734,7 +734,7 @@ def servlet_active_generation_predicate(alias: str) -> str:
     provider = (
         os.environ.get("CODE_GRAPH_PROVIDER")
         or os.environ.get("GRAPH_PROVIDER")
-        or "neo4j"
+        or "falkordb"
     ).strip().lower()
     if provider in {"falkor", "falkordb", "falkor-db"}:
         # FalkorDB cleanup removes inactive generations during promotion.

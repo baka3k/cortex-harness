@@ -195,6 +195,12 @@ class FrameworkMcpRoutingTest(unittest.TestCase):
 
         self.assertEqual(predicate, "true")
 
+    def test_freshness_predicate_defaults_to_falkordb(self):
+        with patch.dict("os.environ", {}, clear=True):
+            predicate = servlet_active_generation_predicate("node")
+
+        self.assertEqual(predicate, "true")
+
 
 if __name__ == "__main__":
     unittest.main()
