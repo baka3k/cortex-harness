@@ -1,0 +1,1 @@
+Bash/Python harness that bootstraps a task-driven agent session, selects graph/mind MCP context, runs bounded rounds with verification gates, and persists state and logs.

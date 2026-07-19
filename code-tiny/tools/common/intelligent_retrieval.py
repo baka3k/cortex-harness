@@ -57,6 +57,11 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 
 from tools.common.graph_expander import GraphExpander, GraphNode
+from tools.common.project_scope import (
+    matches_project_scope,
+    normalize_project_id,
+    qdrant_project_filter,
+)
 from tools.common.query_intent_classifier import classify_query, get_weight_profile
 from tools.common.retrieval_scorer import RetrievalScorer, ScoredResult
 from tools.common.signal_normalizer import (
@@ -170,6 +175,7 @@ def _qdrant_search(
     vector: List[float],
     top_k: int,
     timeout: float = 10.0,
+    project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Run a Qdrant vector search via the REST API.
@@ -191,6 +197,9 @@ def _qdrant_search(
     }
     if named_vector is not None:
         body["using"] = named_vector
+    project_filter = qdrant_project_filter(project_id)
+    if project_filter is not None:
+        body["filter"] = project_filter
     try:
         resp = httpx.post(url, json=body, timeout=timeout)
         resp.raise_for_status()
@@ -280,6 +289,7 @@ def _qdrant_search_by_ids(
     collection: str,
     ids: List[str],
     timeout: float = 10.0,
+    project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Retrieve specific Qdrant points by ID (for graph-expanded nodes)."""
     if not ids:
@@ -289,7 +299,13 @@ def _qdrant_search_by_ids(
     try:
         resp = httpx.post(url, json=body, timeout=timeout)
         resp.raise_for_status()
-        return resp.json().get("result", [])
+        results = resp.json().get("result", [])
+        if normalize_project_id(project_id) is None:
+            return results
+        return [
+            point for point in results
+            if matches_project_scope(point.get("payload") or {}, project_id)
+        ]
     except Exception as exc:  # noqa: BLE001
         logger.warning("[intelligent_retrieval] Qdrant id-fetch failed: %s", exc)
         return []
@@ -307,6 +323,7 @@ def _graph_keyword_search(
     limit: int,
     labels: Optional[List[str]] = None,
     properties: Optional[List[str]] = None,
+    project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Text search in the configured graph database.
@@ -333,16 +350,22 @@ def _graph_keyword_search(
         for property_name in safe_properties
     )
     cypher = (
-        "MATCH (n) WHERE " + label_clause
+        "MATCH (n) WHERE ($project_id IS NULL OR n.project_id = $project_id) AND "
+        + label_clause
         + "any(q IN $qs WHERE " + property_clause + ") "
         + "RETURN n LIMIT $limit"
     )
+    parameters = {
+        "qs": tokens,
+        "limit": limit,
+        "project_id": normalize_project_id(project_id),
+    }
     try:
         if hasattr(graph_driver, "execute_query_sync"):
-            records, _, _ = graph_driver.execute_query_sync(cypher, {"qs": tokens, "limit": limit}, database)
+            records, _, _ = graph_driver.execute_query_sync(cypher, parameters, database)
             return [_node_record_to_dict(record.get("n")) for record in records if record.get("n")]
         with graph_driver.session(database=database) as session:
-            result = session.run(cypher, {"qs": tokens, "limit": limit})
+            result = session.run(cypher, parameters)
             return [_node_record_to_dict(record["n"]) for record in result if record.get("n")]
     except Exception as exc:  # noqa: BLE001
         logger.warning("[intelligent_retrieval] graph keyword search failed: %s", exc)
@@ -442,7 +465,7 @@ def _graph_node_to_candidate(gnode: GraphNode) -> Dict[str, Any]:
         "exported":       bool(props.get("exported") or False),
         "side_effect":    bool(props.get("side_effect") or False),
         "return_type":    "",
-        "project_id":     "",
+        "project_id":     str(props.get("project_id") or ""),
         "language":       "",
         "_source":        "graph_expansion",
     }
@@ -518,6 +541,7 @@ class IntelligentRetrievalEngine:
         graph_rel_types: Optional[List[str]] = None,
         searchable_labels: Optional[List[str]] = None,
         searchable_properties: Optional[List[str]] = None,
+        project_id: Optional[str] = None,
     ) -> List[ScoredResult]:
         """
         Execute context-aware retrieval for *query*.
@@ -537,6 +561,7 @@ class IntelligentRetrievalEngine:
         q = (query or "").strip()
         if not q:
             return []
+        active_project_id = normalize_project_id(project_id)
 
         t0 = time.perf_counter()
 
@@ -549,12 +574,15 @@ class IntelligentRetrievalEngine:
 
         # 2. Initial retrieval
         col = collection or self._collection
-        seeds_qdrant = self._retrieve_qdrant(q, col, self._seed_k)
+        seeds_qdrant = self._retrieve_qdrant(
+            q, col, self._seed_k, project_id=active_project_id
+        )
         seeds_kw     = self._retrieve_keyword(
             q,
             self._seed_k,
             labels=searchable_labels,
             properties=searchable_properties,
+            project_id=active_project_id,
         )
 
         # Merge into candidate dict  node_id → candidate
@@ -579,7 +607,7 @@ class IntelligentRetrievalEngine:
             for nid, bm25_score in bm25_scores.items():
                 if nid in candidates:
                     candidates[nid]["bm25"] = bm25_score
-                else:
+                elif active_project_id is None:
                     # BM25 hit not in Qdrant/graph DB seeds - add as candidate
                     candidates[nid] = {"node_id": nid, "bm25": bm25_score}
 
@@ -591,6 +619,7 @@ class IntelligentRetrievalEngine:
                 rel_types = graph_rel_types,
                 limit     = self._expand_limit,
                 include_seeds = False,
+                project_id = active_project_id,
             )
             for gnode in graph_nodes:
                 nid = gnode.node_id
@@ -602,7 +631,10 @@ class IntelligentRetrievalEngine:
                     candidates[nid]["graph"] = max(existing, gnode.graph_proximity)
 
         # 4. Signal collection & normalization
-        candidate_list = list(candidates.values())
+        candidate_list = [
+            candidate for candidate in candidates.values()
+            if matches_project_scope(candidate, active_project_id)
+        ]
         self._inject_freshness(candidate_list)
         candidate_list = self._normalize_batch_signals(candidate_list)
 
@@ -633,6 +665,7 @@ class IntelligentRetrievalEngine:
         query: str,
         collection: str,
         top_k: int,
+        project_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Embed query and run Qdrant vector search."""
         if not self._embedder:
@@ -642,7 +675,17 @@ class IntelligentRetrievalEngine:
             collections = _resolve_qdrant_collections(self._qdrant_url, collection)
             merged: Dict[str, Dict[str, Any]] = {}
             for col in collections:
-                for hit in _qdrant_search(self._qdrant_url, col, vector, top_k):
+                if normalize_project_id(project_id) is None:
+                    hits = _qdrant_search(self._qdrant_url, col, vector, top_k)
+                else:
+                    hits = _qdrant_search(
+                        self._qdrant_url,
+                        col,
+                        vector,
+                        top_k,
+                        project_id=project_id,
+                    )
+                for hit in hits:
                     payload = hit.get("payload") or {}
                     node_id = str(payload.get("symbol_id") or hit.get("id") or "")
                     if not node_id:
@@ -664,6 +707,7 @@ class IntelligentRetrievalEngine:
         *,
         labels: Optional[List[str]] = None,
         properties: Optional[List[str]] = None,
+        project_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Run graph DB keyword search."""
         if not self._graph:
@@ -675,6 +719,7 @@ class IntelligentRetrievalEngine:
             top_k,
             labels=labels,
             properties=properties,
+            project_id=project_id,
         )
         return [_graph_keyword_node_to_candidate(n) for n in nodes]
 

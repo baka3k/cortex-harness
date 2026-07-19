@@ -1,0 +1,6 @@
+- Configuration is read exclusively from environment variables (with `.env` auto-loaded via `dotenv.load_dotenv`) and exposed through module-level constants like `NEO4J_URI`, `QDRANT_HOST`, `DEFAULT_ENTITY_TYPES`.
+- Long-lived external clients (Qdrant client, SentenceTransformer embedder, Neo4j driver) are constructed lazily inside `get_*()` functions using module-level `_xxx: Optional[...] = None` globals so they are instantiated once per process.
+- Each MCP tool is registered by decorating a function with `@mcp.tool()` inside a single `register_tools(mcp)` helper, keeping all tool definitions co-located rather than scattered across files.
+- All MCP tool parameters are explicitly coerced to their expected types at the top of the handler body (`int(...)`, `float(...)`, `bool(...)`, `str(...)`) to tolerate n8n passing stringified values.
+- Graph queries are written as raw Cypher strings passed to `session.run(query, **params)` with positional `$param` placeholders instead of ORM-style queries.
+- The graph backend is selected through a small factory (`create_graph_store_from_args` / `create_graph_store_from_env`) that returns any object implementing `session()`/`setup_indexes()`, letting callers stay provider-agnostic.

@@ -30,6 +30,9 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "services.explore_service.get_explore_service",
             return_value=FakeExploreService(),
+        ), patch.dict(
+            unified_mcp.active_project,
+            {"database_name": "cortext"},
         ):
             with patch.object(
                 unified_mcp.cplus_backend,
@@ -38,9 +41,12 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             ):
                 result = await tool(
                     query="orders", mode="semantic", parser_type="spring",
+                    project_id="project-a",
                 )
 
         self.assertIsNone(captured["graph_rel_types"])
+        self.assertEqual(captured["project_id"], "project-a")
+        self.assertEqual(captured["db"], "cortext")
         self.assertIn("ApiEndpoint", captured["searchable_labels"])
         self.assertEqual(result["capability"]["canonical_parser"], "spring")
 

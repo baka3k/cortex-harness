@@ -12,6 +12,37 @@ from semantic_graph_expansion import expand_semantic_results  # noqa: E402
 
 
 class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_project_scope_filters_seeds_neighbors_and_edges(self):
+        calls = []
+
+        async def fake_run_cypher_first(query, params, dbs):
+            calls.append((query, params, dbs))
+            if "MATCH p =" in query:
+                return "cortext", [{
+                    "seed_id": "seed",
+                    "node_id": "neighbor",
+                    "project_id": "project-a",
+                    "hop_distance": 1,
+                }]
+            return "cortext", []
+
+        await expand_semantic_results(
+            {"results": [{"payload": {"symbol_id": "seed"}}]},
+            run_cypher_first=fake_run_cypher_first,
+            db_candidates=["cortext"],
+            expand_graph=True,
+            project_id="project-a",
+        )
+
+        node_query, node_params, _ = calls[0]
+        edge_query, edge_params, _ = calls[1]
+        self.assertIn("seed.project_id = $project_id", node_query)
+        self.assertIn("neighbor.project_id = $project_id", node_query)
+        self.assertIn("source.project_id = $project_id", edge_query)
+        self.assertIn("target.project_id = $project_id", edge_query)
+        self.assertEqual(node_params["project_id"], "project-a")
+        self.assertEqual(edge_params["project_id"], "project-a")
+
     async def test_expand_semantic_results_uses_vector_hits_as_graph_seeds(self):
         calls = []
 

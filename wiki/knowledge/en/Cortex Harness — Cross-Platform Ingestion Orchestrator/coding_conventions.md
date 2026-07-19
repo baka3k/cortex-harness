@@ -1,0 +1,5 @@
+- Every subcommand is implemented in `cortex_harness/dev.py` and exposed through the Click CLI; no per-child CLI entrypoints are used at the repo root.
+- Child module paths are resolved relative to `REPO_ROOT` via constants (`CODE_TINY`, `DOC_TINY`, `HARNESS_SCRIPTS`) rather than hard-coded strings scattered across commands.
+- Graph/vector configuration is normalized once in `_code_env_for_process` / `_doc_env_for_process` and passed to children via explicit `--graph-provider`, `--qdrant-url`, `--collection` flags — children never read root config themselves.
+- Per-project mutable state is persisted under `.cortext-harness/{config,sync-state}/` as JSON files keyed by environment name and folder hash, never in-memory-only.
+- Cross-platform behavior is gated by `sys.platform` checks inside `dev.py`; shell wrappers (`dev.sh`, `dev.bat`, `dev.ps1`) remain thin delegators.

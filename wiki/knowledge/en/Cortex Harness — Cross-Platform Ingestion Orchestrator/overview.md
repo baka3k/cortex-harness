@@ -1,0 +1,1 @@
+Top-level orchestrator that wires the code-tiny and doc-tiny MCP analyzers, harness session runner, installers, tests, docs and plans behind a single `dev` CLI and cross-platform dev scripts.

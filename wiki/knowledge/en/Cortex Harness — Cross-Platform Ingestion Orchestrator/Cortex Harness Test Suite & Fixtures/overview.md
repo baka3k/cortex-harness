@@ -1,0 +1,1 @@
+Python unittest suite exercising every analyzer, MCP capability profile, incremental-sync lifecycle, and graph provider against shared fixture projects.

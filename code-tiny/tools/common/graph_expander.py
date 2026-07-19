@@ -48,6 +48,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set
 
+from tools.common.project_scope import normalize_project_id
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────
@@ -128,8 +130,10 @@ def _expand_cypher(rel_types: List[str], depth: int) -> str:
     return f"""
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
+WHERE ($project_id IS NULL OR seed.project_id = $project_id)
 MATCH (seed)-[:{rel}*1..{depth}]-(neighbor)
 WHERE neighbor.id <> sid
+  AND ($project_id IS NULL OR neighbor.project_id = $project_id)
 RETURN DISTINCT
     neighbor.id            AS node_id,
     neighbor.name          AS name,
@@ -139,7 +143,8 @@ RETURN DISTINCT
     neighbor.doc_confidence                AS doc_confidence,
     neighbor.intent                        AS intent,
     neighbor.exported                      AS exported,
-    neighbor.side_effect                   AS side_effect
+    neighbor.side_effect                   AS side_effect,
+    neighbor.project_id                    AS project_id
 LIMIT $limit
 """
 
@@ -149,7 +154,9 @@ def _shortest_hop_cypher(rel_types: List[str], depth: int) -> str:
     return f"""
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
+WHERE ($project_id IS NULL OR seed.project_id = $project_id)
 MATCH p = shortestPath((seed)-[:{rel}*1..{depth}]-(target {{id: $target_id}}))
+WHERE ($project_id IS NULL OR target.project_id = $project_id)
 RETURN length(p) AS hops
 ORDER BY hops
 LIMIT 1
@@ -189,6 +196,7 @@ class GraphExpander:
         rel_types: Optional[List[str]] = None,
         limit: int = 50,
         include_seeds: bool = True,
+        project_id: Optional[str] = None,
     ) -> List[GraphNode]:
         """
         Expand *seed_ids* up to *depth* hops and return all discovered nodes.
@@ -199,14 +207,18 @@ class GraphExpander:
         nodes: List[GraphNode] = []
 
         if include_seeds:
-            seed_nodes = self._fetch_seeds(seed_ids)
+            seed_nodes = self._fetch_seeds(seed_ids, project_id=project_id)
             nodes.extend(seed_nodes)
 
         if not seed_ids:
             return nodes
 
         cypher = _expand_cypher(rels, depth)
-        records = self._run_query(cypher, {"seed_ids": seed_ids, "limit": limit})
+        records = self._run_query(cypher, {
+            "seed_ids": seed_ids,
+            "limit": limit,
+            "project_id": normalize_project_id(project_id),
+        })
 
         seen: Set[str] = {n.node_id for n in nodes}
         hop_map = self._compute_hop_distances(seed_ids, records)
@@ -230,6 +242,7 @@ class GraphExpander:
                     "intent":         str(row.get("intent") or ""),
                     "exported":       bool(row.get("exported") or False),
                     "side_effect":    bool(row.get("side_effect") or False),
+                    "project_id":     str(row.get("project_id") or ""),
                 },
             ))
 
@@ -241,6 +254,7 @@ class GraphExpander:
         candidate_id: str,
         depth: int = 4,
         rel_types: Optional[List[str]] = None,
+        project_id: Optional[str] = None,
     ) -> float:
         """
         Return a graph_proximity score in [0, 1] for *candidate_id* relative
@@ -253,7 +267,11 @@ class GraphExpander:
 
         rels = rel_types or DEFAULT_REL_TYPES
         cypher = _shortest_hop_cypher(rels, depth)
-        records = self._run_query(cypher, {"seed_ids": seed_ids, "target_id": candidate_id})
+        records = self._run_query(cypher, {
+            "seed_ids": seed_ids,
+            "target_id": candidate_id,
+            "project_id": normalize_project_id(project_id),
+        })
 
         if not records:
             return 0.0
@@ -262,12 +280,17 @@ class GraphExpander:
 
     # ── internal helpers ──────────────────────────────────────
 
-    def _fetch_seeds(self, seed_ids: List[str]) -> List[GraphNode]:
+    def _fetch_seeds(
+        self,
+        seed_ids: List[str],
+        project_id: Optional[str] = None,
+    ) -> List[GraphNode]:
         if not seed_ids:
             return []
         cypher = """
 UNWIND $seed_ids AS sid
 MATCH (n {id: sid})
+WHERE ($project_id IS NULL OR n.project_id = $project_id)
 RETURN
     n.id                                   AS node_id,
     n.name                                 AS name,
@@ -277,9 +300,13 @@ RETURN
     n.doc_confidence                       AS doc_confidence,
     n.intent                               AS intent,
     n.exported                             AS exported,
-    n.side_effect                          AS side_effect
+    n.side_effect                          AS side_effect,
+    n.project_id                           AS project_id
 """
-        records = self._run_query(cypher, {"seed_ids": seed_ids})
+        records = self._run_query(cypher, {
+            "seed_ids": seed_ids,
+            "project_id": normalize_project_id(project_id),
+        })
         nodes: List[GraphNode] = []
         for row in records:
             nid = str(row.get("node_id") or "")
@@ -298,6 +325,7 @@ RETURN
                     "intent":         str(row.get("intent") or ""),
                     "exported":       bool(row.get("exported") or False),
                     "side_effect":    bool(row.get("side_effect") or False),
+                    "project_id":     str(row.get("project_id") or ""),
                 },
             ))
         return nodes
@@ -365,19 +393,24 @@ class AsyncGraphExpander:
         rel_types: Optional[List[str]] = None,
         limit: int = 50,
         include_seeds: bool = True,
+        project_id: Optional[str] = None,
     ) -> List[GraphNode]:
         rels = rel_types or DEFAULT_REL_TYPES
         nodes: List[GraphNode] = []
 
         if include_seeds:
-            seed_nodes = await self._fetch_seeds(seed_ids)
+            seed_nodes = await self._fetch_seeds(seed_ids, project_id=project_id)
             nodes.extend(seed_nodes)
 
         if not seed_ids:
             return nodes
 
         cypher = _expand_cypher(rels, depth)
-        records = await self._run_query(cypher, {"seed_ids": seed_ids, "limit": limit})
+        records = await self._run_query(cypher, {
+            "seed_ids": seed_ids,
+            "limit": limit,
+            "project_id": normalize_project_id(project_id),
+        })
 
         seen: Set[str] = {n.node_id for n in nodes}
         for row in records:
@@ -398,6 +431,7 @@ class AsyncGraphExpander:
                     "intent":         str(row.get("intent") or ""),
                     "exported":       bool(row.get("exported") or False),
                     "side_effect":    bool(row.get("side_effect") or False),
+                    "project_id":     str(row.get("project_id") or ""),
                 },
             ))
         return nodes
@@ -408,23 +442,33 @@ class AsyncGraphExpander:
         candidate_id: str,
         depth: int = 4,
         rel_types: Optional[List[str]] = None,
+        project_id: Optional[str] = None,
     ) -> float:
         if candidate_id in seed_ids:
             return 1.0
         rels = rel_types or DEFAULT_REL_TYPES
         cypher = _shortest_hop_cypher(rels, depth)
-        records = await self._run_query(cypher, {"seed_ids": seed_ids, "target_id": candidate_id})
+        records = await self._run_query(cypher, {
+            "seed_ids": seed_ids,
+            "target_id": candidate_id,
+            "project_id": normalize_project_id(project_id),
+        })
         if not records:
             return 0.0
         hops = int(records[0].get("hops") or depth)
         return _hop_proximity(hops)
 
-    async def _fetch_seeds(self, seed_ids: List[str]) -> List[GraphNode]:
+    async def _fetch_seeds(
+        self,
+        seed_ids: List[str],
+        project_id: Optional[str] = None,
+    ) -> List[GraphNode]:
         if not seed_ids:
             return []
         cypher = """
 UNWIND $seed_ids AS sid
 MATCH (n {id: sid})
+WHERE ($project_id IS NULL OR n.project_id = $project_id)
 RETURN
     n.id                                   AS node_id,
     n.name                                 AS name,
@@ -434,9 +478,13 @@ RETURN
     n.doc_confidence                       AS doc_confidence,
     n.intent                               AS intent,
     n.exported                             AS exported,
-    n.side_effect                          AS side_effect
+    n.side_effect                          AS side_effect,
+    n.project_id                           AS project_id
 """
-        records = await self._run_query(cypher, {"seed_ids": seed_ids})
+        records = await self._run_query(cypher, {
+            "seed_ids": seed_ids,
+            "project_id": normalize_project_id(project_id),
+        })
         nodes: List[GraphNode] = []
         for row in records:
             nid = str(row.get("node_id") or "")
@@ -455,6 +503,7 @@ RETURN
                     "intent":         str(row.get("intent") or ""),
                     "exported":       bool(row.get("exported") or False),
                     "side_effect":    bool(row.get("side_effect") or False),
+                    "project_id":     str(row.get("project_id") or ""),
                 },
             ))
         return nodes

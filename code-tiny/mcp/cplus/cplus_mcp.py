@@ -28,6 +28,7 @@ if _MCP_DIR not in sys.path:
 
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
+from tools.common.project_scope import qdrant_project_filter
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
 from framework_registry import (
@@ -677,6 +678,7 @@ def _qdrant_search(
     top_k: int,
     qdrant_url: str,
     vector_name: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Vector search via Qdrant Query API (``/points/query``).
 
@@ -702,6 +704,9 @@ def _qdrant_search(
     }
     if vector_name:
         payload["using"] = vector_name
+    project_filter = qdrant_project_filter(project_id)
+    if project_filter is not None:
+        payload["filter"] = project_filter
     response = httpx.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     body = response.json()
@@ -792,12 +797,15 @@ def _merge_qdrant_results(
     vector: List[float],
     top_k: int,
     qdrant_url: str,
+    project_id: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     combined: Dict[str, Dict[str, Any]] = {}
     errors: List[Dict[str, str]] = []
     for col, vector_name in collections:
         try:
-            payload = _qdrant_search(col, vector, top_k, qdrant_url, vector_name)
+            payload = _qdrant_search(
+                col, vector, top_k, qdrant_url, vector_name, project_id
+            )
         except Exception as exc:
             errors.append({"collection": col, "error": str(exc)})
             continue
@@ -1567,7 +1575,7 @@ async def tool_semantic_search(
     selected_mode = _normalize_content_mode(content_mode)
     results: Dict[str, Any] = {"mode": mode, "query": query, "results": [], "content_mode": selected_mode}
     if mode == "comment":
-        items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url)
+        items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url, project_id)
         results["results"] = items
         merged_errors = comment_errors + errors
         if merged_errors:
@@ -1595,7 +1603,7 @@ async def tool_semantic_search(
             results["capability_diagnostics"] = capability_diagnostics
         return results
     if mode == "code":
-        items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url)
+        items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url, project_id)
         results["results"] = items
         merged_errors = code_errors + errors
         if merged_errors:
@@ -1626,7 +1634,7 @@ async def tool_semantic_search(
     combined_map.update(comment_collections)
     combined_map.update(code_collections)
     combined_collections = list(combined_map)
-    items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url)
+    items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url, project_id)
     results["results"] = items
     merged_errors = base_errors + comment_errors + code_errors + errors
     if merged_errors:

@@ -1,0 +1,1 @@
+`make help|build|install|uninstall|infra-up|infra-down|doctor|start|stop` are the canonical cross-platform entry points; on Unix they invoke `python scripts/mcp-lifecycle.py <cmd>`, on Windows `powershell.exe -File scripts/mcp-lifecycle.ps1 <cmd>`. The installed `dev` console script (`pip install .`) delegates to `cortex_harness/dev.py` directly.
