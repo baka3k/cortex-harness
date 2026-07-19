@@ -86,8 +86,26 @@ def _make_embedder(model_name: str) -> Optional[Callable[[str], List[float]]]:
             return _model.encode([text])[0].tolist()  # type: ignore[return-value]
         return _embed
     except Exception as exc:
-        logger.warning("[explore_service] Could not load embedder %r: %s", model_name, exc)
-        return None
+        logger.warning(
+            "[explore_service] sentence-transformers could not load %r: %s; "
+            "falling back to the semantic backend embedder.",
+            model_name,
+            exc,
+        )
+        try:
+            from cplus.cplus_mcp import _embed_query as backend_embed_query
+        except Exception as fallback_exc:
+            logger.warning(
+                "[explore_service] Could not load fallback embedder %r: %s",
+                model_name,
+                fallback_exc,
+            )
+            return None
+
+        def _embed_with_backend(text: str) -> List[float]:
+            return backend_embed_query(text, model_name)
+
+        return _embed_with_backend
 
 
 def _is_falkordb_uri(uri: str) -> bool:
