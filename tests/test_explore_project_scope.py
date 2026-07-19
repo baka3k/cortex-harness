@@ -11,6 +11,7 @@ for path in (CODE_TINY, MCP_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from services import explore_service as explore_service_module  # noqa: E402
 from services.explore_service import ExploreService  # noqa: E402
 from tools.common.graph_expander import AsyncGraphExpander, GraphExpander  # noqa: E402
 from tools.common import intelligent_retrieval as ir  # noqa: E402
@@ -45,6 +46,19 @@ def _candidate(node_id, project_id, score=0.9):
 
 
 class ExploreProjectScopeTests(unittest.TestCase):
+    def test_embedder_falls_back_to_semantic_backend_for_remote_code_models(self):
+        with patch.dict(sys.modules, {"sentence_transformers": None}), patch(
+            "cplus.cplus_mcp._embed_query",
+            return_value=[0.1, 0.2],
+        ) as backend_embed:
+            embedder = explore_service_module._make_embedder("jinaai/jina-embeddings-v3")
+
+            self.assertIsNotNone(embedder)
+            self.assertEqual(embedder("orders"), [0.1, 0.2])
+            backend_embed.assert_called_once_with(
+                "orders", "jinaai/jina-embeddings-v3",
+            )
+
     def test_keyword_search_filters_in_graph_query(self):
         driver = _GraphDriver()
 
