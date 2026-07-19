@@ -239,23 +239,9 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
 
         queries = []
 
-        class FakeSession:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def run(self, query, _params):
-                queries.append(query)
-                return []
-
-        class FakeDriver:
-            def session(self, **_kwargs):
-                return FakeSession()
-
-            def close(self):
-                return None
+        async def workflow_query(query, _params, _database):
+            queries.append(query)
+            return []
 
         workflow_tool = getattr(
             unified_mcp.tool_find_workflows_containing,
@@ -267,7 +253,7 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_resolve_direct_capability_context",
             AsyncMock(return_value=context),
         ):
-            with patch.object(unified_mcp, "_get_bridge_driver", return_value=FakeDriver()):
+            with patch.object(unified_mcp, "_run_bridge_query", side_effect=workflow_query):
                 result = await workflow_tool(function_id="entry", parser_type="spring")
 
         self.assertTrue(any("[:CALLS|SEMANTIC_OF*" in query for query in queries))

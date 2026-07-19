@@ -149,7 +149,7 @@ Input contract:
 
 mcp_server = FastMCP(
     name=MCP_NAME,
-    version="1.1.0",
+    version="1.2.0",
     instructions=INSTRUCTIONS,
 )
 
@@ -1932,37 +1932,35 @@ async def tool_reconstruct_flow(
 # ── Frontend → Backend API Contract Bridge tools ──────────────────────────────
 
 
-def _get_bridge_driver() -> Any:
-    """Legacy session driver retained for workflow tools not yet adapter-based."""
+def _resolve_graph_database(db: Optional[str] = None) -> str:
+    """Resolve one provider-neutral graph/database name for direct MCP tools."""
 
-    provider = (
-        os.environ.get("CODE_GRAPH_PROVIDER")
-        or os.environ.get("GRAPH_PROVIDER")
-        or "neo4j"
-    ).strip().lower()
-    if provider in {"falkor", "falkordb", "falkor-db"}:
-        raise RuntimeError(
-            "Neo4j-only workflow tool is unavailable while FalkorDB is configured."
-        )
-
-    import neo4j as _neo4j
-
-    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-    user = os.environ.get("NEO4J_USER", "")
-    password = os.environ.get("NEO4J_PASS", "")
-    return _neo4j.GraphDatabase.driver(uri, auth=(user, password)) if user and password else _neo4j.GraphDatabase.driver(uri)
+    requested = str(db or "").strip()
+    if requested:
+        return requested
+    active = str(active_project.get("database_name") or "").strip()
+    if active:
+        return active
+    return str(
+        os.environ.get("FALKORDB_GRAPH")
+        or os.environ.get("FALKORDB_DATABASE")
+        or os.environ.get("NEO4J_DB")
+        or cplus_backend.DEFAULT_GRAPH_DB
+        or "hyper_graph"
+    ).strip()
 
 
 async def _run_bridge_query(cypher: str, params: Dict[str, Any], database: str) -> List[Dict[str, Any]]:
     provider_name = (
         os.environ.get("CODE_GRAPH_PROVIDER")
         or os.environ.get("GRAPH_PROVIDER")
-        or ("falkordb" if os.environ.get("NEO4J_URI", "").startswith(("redis://", "rediss://")) else "neo4j")
+        or os.environ.get("MCP_GRAPH_PROVIDER")
+        or "falkordb"
     ).strip().lower()
     provider = GraphProvider.FALKORDB if provider_name in {"falkor", "falkordb"} else GraphProvider.NEO4J
     if provider == GraphProvider.FALKORDB:
         config = {
-            "uri": os.environ.get("FALKORDB_URI") or os.environ.get("NEO4J_URI"),
+            "uri": os.environ.get("FALKORDB_URI"),
             "host": os.environ.get("FALKORDB_HOST", "localhost"),
             "port": int(os.environ.get("FALKORDB_PORT", "6379")),
             "user": os.environ.get("FALKORDB_USER", ""),
@@ -2032,7 +2030,7 @@ async def tool_find_callers_of_endpoint(
         return {"endpoint_path": "", "callers": [], "total": 0,
                 "error": "endpoint_path is required"}
 
-    database = db or os.environ.get("NEO4J_DB", "neo4j")
+    database = _resolve_graph_database(db)
     _, _, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(
             "find_callers_of_endpoint", parser_type, database,
@@ -2147,7 +2145,7 @@ async def tool_get_api_call_chain(
           "total": int
         }
     """
-    database = db or os.environ.get("NEO4J_DB", "neo4j")
+    database = _resolve_graph_database(db)
     _depth = int(max_depth) if str(max_depth).isdigit() else 5
 
     if not component_name and not endpoint_path:
@@ -2320,8 +2318,8 @@ LIMIT 30
 
 
 # ── Workflow-Aware Impact Assessment tools ────────────────────────────────────
-# Uses the same direct Neo4j driver pattern as tool_find_callers_of_endpoint
-# and tool_get_api_call_chain — no FastAPI Request dependency.
+# Uses the same provider-neutral graph-driver path as the bridge tools and has
+# no FastAPI Request dependency.
 
 _EXTERNAL_MARKERS = ("third_party", "external", "vendor", "/usr", "node_modules")
 
@@ -2371,7 +2369,7 @@ async def tool_analyze_workflow_impact(
     """
     import sys as _sys  # noqa: PLC0415
 
-    database = db or os.environ.get("NEO4J_DB", "neo4j")
+    database = _resolve_graph_database(db)
     capped = min(int(max_depth), 4)
 
     # 1. Call-graph expansion via existing dispatch system
@@ -2418,7 +2416,7 @@ async def tool_analyze_workflow_impact(
     if subgraph.get("error"):
         base_result["subgraph_error"] = subgraph["error"]
 
-    # 3. Workflow impact layer — direct Neo4j, same pattern as bridge tools
+    # 3. Workflow impact layer — shared provider-neutral graph driver
     if os.environ.get("WORKFLOW_IMPACT_DISABLED", "").strip() == "1":
         return base_result
 
@@ -2455,7 +2453,7 @@ async def tool_analyze_workflow_impact(
 
         from tools.common.workflow_impact_scorer import WorkflowImpactScorer  # noqa: PLC0415
 
-        drv = _get_bridge_driver()
+        drv = await cplus_backend._get_graph_driver()
         scorer = WorkflowImpactScorer(
             drv,
             database=database,
@@ -2463,7 +2461,6 @@ async def tool_analyze_workflow_impact(
             workflow_relationship="HAS_STEP",
         )
         wf_impact = await scorer.score(function_id, nodes, max_depth=capped)
-        drv.close()
 
         overall = min(1.0, round(0.4 * base_risk + 0.6 * wf_impact.workflow_risk_score, 3))
         wf_impact.overall_risk_score = overall
@@ -2532,7 +2529,7 @@ async def tool_find_workflows_containing(
           "total": int
         }
     """
-    database = db or os.environ.get("NEO4J_DB", "neo4j")
+    database = _resolve_graph_database(db)
     capped = min(int(max_depth), 4)
     selected_parser, relationships, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(
@@ -2582,17 +2579,17 @@ LIMIT 30
 """
 
     try:
-        drv = _get_bridge_driver()
-        with drv.session(database=database) as session:
-            direct_rows = [dict(r) for r in session.run(direct_cypher, {"id": function_id})]
-            indirect_rows: List[Dict[str, Any]] = []
-            if include_indirect:
-                direct_ids = [r["workflow_id"] for r in direct_rows]
-                indirect_rows = [
-                    dict(r)
-                    for r in session.run(indirect_cypher, {"id": function_id, "direct_ids": direct_ids})
-                ]
-        drv.close()
+        direct_rows = await _run_bridge_query(
+            direct_cypher, {"id": function_id}, database,
+        )
+        indirect_rows: List[Dict[str, Any]] = []
+        if include_indirect:
+            direct_ids = [row["workflow_id"] for row in direct_rows]
+            indirect_rows = await _run_bridge_query(
+                indirect_cypher,
+                {"id": function_id, "direct_ids": direct_ids},
+                database,
+            )
         result = {
             "function_id": function_id,
             "direct_workflows": direct_rows,

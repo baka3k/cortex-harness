@@ -2,13 +2,14 @@
 workflow_service.py — MCP service wrapper for find_screen_workflows.
 
 Provides the tool-level entrypoint that unified_mcp registers. Reuses the
-shared Neo4j driver from whichever backend the caller is using (cplus/android)
+shared graph driver from whichever backend the caller is using (cplus/android)
 by delegating driver acquisition to a small callable passed at init time.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,14 @@ async def run_find_screen_workflows(
     node_b_raw = payload.get("node_b") or payload.get("target")
     node_b = node_b_raw.strip() if isinstance(node_b_raw, str) and node_b_raw.strip() else None
     direction = (payload.get("direction") or "bidirectional").strip().lower()
-    database = (payload.get("db") or payload.get("database") or "neo4j").strip() or "neo4j"
+    database = (
+        payload.get("db")
+        or payload.get("database")
+        or os.environ.get("FALKORDB_GRAPH")
+        or os.environ.get("FALKORDB_DATABASE")
+        or os.environ.get("NEO4J_DB")
+        or "hyper_graph"
+    ).strip() or "hyper_graph"
 
     def _int(key: str, default: int) -> int:
         val = payload.get(key)
