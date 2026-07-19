@@ -215,6 +215,7 @@ class ExploreService:
         graph_rel_types: Optional[list[str]] = None,
         searchable_labels: Optional[list[str]] = None,
         searchable_properties: Optional[list[str]] = None,
+        project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run intent-aware multi-strategy search.
@@ -273,6 +274,7 @@ class ExploreService:
             graph_rel_types= graph_rel_types,
             searchable_labels= searchable_labels,
             searchable_properties= searchable_properties,
+            project_id     = project_id,
         )
 
         # 4. Package results
@@ -306,6 +308,7 @@ class ExploreService:
         graph_rel_types: Optional[list[str]],
         searchable_labels: Optional[list[str]],
         searchable_properties: Optional[list[str]],
+        project_id: Optional[str],
     ) -> list:
         """
         Build an ``IntelligentRetrievalEngine`` and run the search.
@@ -341,6 +344,7 @@ class ExploreService:
                 graph_rel_types= graph_rel_types,
                 searchable_labels= searchable_labels,
                 searchable_properties= searchable_properties,
+                project_id     = project_id,
             )
 
         try:

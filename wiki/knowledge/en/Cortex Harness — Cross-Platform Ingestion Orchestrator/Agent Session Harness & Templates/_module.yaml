@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: harness_templates
+title: Agent Session Harness & Templates
+scope:
+    - harness/
+source_files: []
+depends_on: []
+related_to: []

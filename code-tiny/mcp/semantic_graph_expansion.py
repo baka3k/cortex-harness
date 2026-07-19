@@ -112,6 +112,7 @@ async def expand_semantic_results(
     limit = _normalize_positive_int(graph_limit, DEFAULT_GRAPH_LIMIT, 500)
     direction = _normalize_graph_direction(graph_direction)
     rel_types = normalize_graph_rel_types(graph_rel_types)
+    project_id = (project_id or "").strip() or None
     seed_ids = extract_seed_ids(items)
 
     expansion: Dict[str, Any] = {
@@ -130,15 +131,14 @@ async def expand_semantic_results(
 
     rel_pattern = _build_rel_pattern(rel_types, depth, direction)
     edge_pattern = _build_edge_pattern(rel_types, direction)
-    project_filter = "AND ($project_id IS NULL OR neighbor.project_id = $project_id)"
-
     node_query = f"""
     UNWIND $seed_ids AS sid
     MATCH (seed {{id: sid}})
+    WHERE ($project_id IS NULL OR seed.project_id = $project_id)
     MATCH p = (seed){rel_pattern}(neighbor)
     WHERE neighbor.id IS NOT NULL
       AND NOT neighbor.id IN $seed_ids
-      {project_filter}
+      AND ($project_id IS NULL OR neighbor.project_id = $project_id)
       AND {servlet_active_generation_predicate('neighbor')}
     WITH sid, neighbor, min(length(p)) AS hops
     ORDER BY hops ASC
@@ -157,6 +157,7 @@ async def expand_semantic_results(
            neighbor.exported AS exported,
            neighbor.side_effect AS side_effect,
            neighbor.doc_confidence AS doc_confidence,
+           neighbor.project_id AS project_id,
            hops AS hop_distance
     """
     params = {
@@ -195,6 +196,7 @@ async def expand_semantic_results(
                 "exported": bool(row.get("exported") or False),
                 "side_effect": bool(row.get("side_effect") or False),
                 "doc_confidence": float(row.get("doc_confidence") or 0.0),
+                "project_id": row.get("project_id") or "",
                 "hop_distance": hops,
                 "graph_proximity": _proximity(hops),
             }
@@ -210,6 +212,8 @@ async def expand_semantic_results(
     MATCH (source){edge_pattern}(target)
     WHERE source.id IN $node_ids
       AND target.id IN $node_ids
+      AND ($project_id IS NULL OR source.project_id = $project_id)
+      AND ($project_id IS NULL OR target.project_id = $project_id)
     RETURN source.id AS source,
            target.id AS target,
            type(r) AS type,
@@ -221,7 +225,11 @@ async def expand_semantic_results(
         edge_dbs = [str(expansion["db"])] if expansion.get("db") else db_candidates
         _, edge_rows = await run_cypher_first(
             edge_query,
-            {"node_ids": node_ids, "edge_limit": max(limit * 2, 25)},
+            {
+                "node_ids": node_ids,
+                "edge_limit": max(limit * 2, 25),
+                "project_id": project_id,
+            },
             edge_dbs,
         )
         expansion["edges"] = [
