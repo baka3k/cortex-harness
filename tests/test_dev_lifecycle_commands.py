@@ -67,6 +67,50 @@ class DevLifecycleCommandTests(unittest.TestCase):
             cwd=str(REPO_ROOT),
         )
 
+    def test_custom_start_forwards_named_project_options(self):
+        with mock.patch("cortex_harness.dev._run_lifecycle") as run:
+            result = self.runner.invoke(
+                cli,
+                [
+                    "start",
+                    "--server",
+                    "code",
+                    "--name",
+                    "shop-code",
+                    "--project",
+                    "SHOP",
+                    "--port",
+                    "8790",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        run.assert_called_once_with(
+            "start",
+            ["--server", "code", "--name", "shop-code", "--project", "SHOP", "--port", "8790"],
+        )
+
+    def test_windows_custom_start_translates_options_for_powershell(self):
+        completed = subprocess.CompletedProcess([], 0)
+        with mock.patch("cortex_harness.dev.sys.platform", "win32"), mock.patch(
+            "cortex_harness.dev.shutil.which", return_value="powershell.exe"
+        ), mock.patch("cortex_harness.dev.subprocess.run", return_value=completed) as run:
+            result = self.runner.invoke(
+                cli,
+                ["start", "--server", "doc", "--name", "shop-doc", "--project", "SHOP", "--port", "8791"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        command = run.call_args.args[0]
+        self.assertEqual(command[-8:], ["-Server", "doc", "-Name", "shop-doc", "-Project", "SHOP", "-Port", "8791"])
+
+    def test_named_stop_forwards_only_the_instance_name(self):
+        with mock.patch("cortex_harness.dev._run_lifecycle") as run:
+            result = self.runner.invoke(cli, ["stop", "--name", "shop-code"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        run.assert_called_once_with("stop", ["--name", "shop-code"])
+
     def test_every_make_lifecycle_target_is_exposed_by_dev(self):
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         phony = next(line for line in makefile.splitlines() if line.startswith(".PHONY:"))
@@ -116,6 +160,13 @@ class DevLifecycleCommandTests(unittest.TestCase):
                 script = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
                 self.assertIn("MSYS_NO_PATHCONV=1 python", script)
                 self.assertIn("--path /mcp", script)
+                self.assertIn('"$@"', script)
+
+    def test_mcp_server_names_can_be_overridden_per_instance(self):
+        code_server = (REPO_ROOT / "code-tiny" / "mcp" / "unified_mcp.py").read_text(encoding="utf-8")
+        doc_server = (REPO_ROOT / "doc-tiny" / "mcp_graph_rag.py").read_text(encoding="utf-8")
+        self.assertIn('os.getenv("MCP_SERVER_NAME", "Project Call Graph Unified")', code_server)
+        self.assertIn('os.getenv("MCP_SERVER_NAME", "graph_rag")', doc_server)
 
     def test_windows_mcp_pid_discovery_uses_python_command_lines(self):
         completed = subprocess.CompletedProcess([], 0, stdout="101\n202\n")
