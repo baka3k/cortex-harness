@@ -2,7 +2,24 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet("build", "install", "uninstall", "infra-up", "infra-down", "doctor", "start", "stop", "help")]
-    [string]$Action = "help"
+    [string]$Action = "help",
+    [ValidateSet("all", "code", "doc")]
+    [string]$Server = "all",
+    [string]$Name = "",
+    [string]$Project = "",
+    [string]$Database = "",
+    [string]$CodeDatabase = "",
+    [string]$DocDatabase = "",
+    [int]$Port = 0,
+    [int]$CodePort = 0,
+    [int]$DocPort = 0,
+    [string]$BindHost = "",
+    [string]$McpPath = "",
+    [ValidateSet("", "falkordb", "neo4j")]
+    [string]$Provider = "",
+    [string]$Collection = "",
+    [string]$CodeCollection = "",
+    [string]$DocCollection = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,6 +80,11 @@ Usage (equivalent forms):
   make doctor      | dev doctor      Check Python deps, Docker, databases, and MCP ports.
   make start       | dev start       Open each MCP server in a separate terminal window.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
+
+Parameterized MCP instances:
+  dev start --server code --name shop --project SHOP --port 8790
+  dev start --name shop --project SHOP --code-port 8790 --doc-port 8791
+  dev stop --name shop
 
 Default MCP servers:
   code-tiny  http://127.0.0.1:8788/mcp
@@ -687,13 +709,26 @@ function Write-PidRecords {
     param([object[]]$Records)
 
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+    if (@($Records).Count -eq 0) {
+        if (Test-Path -LiteralPath $PidFile) {
+            Remove-Item -LiteralPath $PidFile -Force
+        }
+        return
+    }
     $Records | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $PidFile -Encoding UTF8
 }
 
 function Stop-SavedProcesses {
+    param([string]$InstanceName = "")
+
     $records = Read-PidRecords
+    $remaining = @()
 
     foreach ($record in $records) {
+        if ($InstanceName -and $record.Instance -ne $InstanceName) {
+            $remaining += $record
+            continue
+        }
         $pidToStop = [int]$record.Pid
         $proc = Get-Process -Id $pidToStop -ErrorAction SilentlyContinue
         if (-not $proc) {
@@ -718,6 +753,8 @@ function Stop-SavedProcesses {
             Write-Host "[stop] Skipping stale PID record $pidToStop ($($record.Name))"
         }
     }
+
+    return $remaining
 }
 
 function Stop-MarkerProcesses {
@@ -773,14 +810,17 @@ function Stop-MarkerProcesses {
 }
 
 function Invoke-Stop {
-    Stop-SavedProcesses
-    Stop-MarkerProcesses
+    param([string]$InstanceName = "")
 
-    if (Test-Path -LiteralPath $PidFile) {
-        Remove-Item -LiteralPath $PidFile -Force
+    $remaining = @(Stop-SavedProcesses -InstanceName $InstanceName)
+    if (-not $InstanceName) {
+        Stop-MarkerProcesses
+        $remaining = @()
     }
+    Write-PidRecords -Records $remaining
 
-    Write-Host "[stop] MCP stop complete."
+    $scope = if ($InstanceName) { " instance '$InstanceName'" } else { "" }
+    Write-Host "[stop] MCP$scope stop complete."
 }
 
 function Get-DefaultGraphEnvBash {
@@ -813,24 +853,148 @@ if (-not `$env:FALKORDB_PASSWORD) { `$env:FALKORDB_PASSWORD = '' }
 "@
 }
 
+function Get-StartConfiguration {
+    $custom = (
+        $Server -ne "all" -or $Name -or $Project -or $Database -or $CodeDatabase -or $DocDatabase -or
+        $Port -gt 0 -or $CodePort -gt 0 -or $DocPort -gt 0 -or $BindHost -or $McpPath -or $Provider -or
+        $Collection -or $CodeCollection -or $DocCollection
+    )
+    if (-not $custom) {
+        return [pscustomobject]@{
+            Custom = $false
+            Instance = "default"
+            HostName = "127.0.0.1"
+            Path = "/mcp"
+            Servers = @($Servers)
+        }
+    }
+
+    $instance = @($Name, $Project, $Database, $Server) | Where-Object { $_ } | Select-Object -First 1
+    if ($instance -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$') {
+        throw "Instance name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,63}. Use -Name to provide one."
+    }
+    if ($Port -gt 0 -and $Server -eq "all") {
+        throw "-Port requires -Server code or -Server doc; use -CodePort/-DocPort for both."
+    }
+    if ($Server -eq "code" -and $DocPort -gt 0) {
+        throw "-DocPort cannot be used with -Server code."
+    }
+    if ($Server -eq "doc" -and $CodePort -gt 0) {
+        throw "-CodePort cannot be used with -Server doc."
+    }
+
+    $hostName = if ($BindHost) { $BindHost } else { "127.0.0.1" }
+    $route = if ($McpPath) { $McpPath } else { "/mcp" }
+    if (-not $route.StartsWith("/")) {
+        $route = "/$route"
+    }
+    $selected = @()
+    foreach ($source in $Servers) {
+        if ($Server -ne "all" -and -not $source.Name.StartsWith($Server)) {
+            continue
+        }
+        $serverPort = $source.Port
+        if ($Port -gt 0) { $serverPort = $Port }
+        if ($source.Name -eq "code-tiny" -and $CodePort -gt 0) {
+            if ($Port -gt 0) { throw "Use either -Port or -CodePort, not both." }
+            $serverPort = $CodePort
+        }
+        if ($source.Name -eq "doc-tiny" -and $DocPort -gt 0) {
+            if ($Port -gt 0) { throw "Use either -Port or -DocPort, not both." }
+            $serverPort = $DocPort
+        }
+        if ($serverPort -lt 1 -or $serverPort -gt 65535) {
+            throw "Port must be between 1 and 65535: $serverPort"
+        }
+        $arguments = if ($source.Name -eq "code-tiny") {
+            @("--transport", "streamable-http", "--host", $hostName, "--port", [string]$serverPort, "--path", $route)
+        } else {
+            @("--host", $hostName, "--port", [string]$serverPort, "--transport", "streamable-http", "--path", $route)
+        }
+        $selected += [pscustomobject]@{
+            Name = $source.Name
+            WorkDir = $source.WorkDir
+            Script = $source.Script
+            PythonScript = $source.PythonScript
+            Arguments = $arguments
+            Port = $serverPort
+        }
+    }
+    if ((@($selected | ForEach-Object { $_.Port } | Select-Object -Unique)).Count -ne $selected.Count) {
+        throw "Each selected MCP server must use a different port."
+    }
+    return [pscustomobject]@{
+        Custom = $true
+        Instance = $instance
+        HostName = $hostName
+        Path = $route
+        Servers = $selected
+    }
+}
+
+function Get-RuntimeOverrides {
+    param(
+        [object]$Config,
+        [object]$ServerConfig
+    )
+
+    $isCode = $ServerConfig.Name -eq "code-tiny"
+    $databaseName = if ($isCode -and $CodeDatabase) { $CodeDatabase } elseif (-not $isCode -and $DocDatabase) { $DocDatabase } elseif ($Database) { $Database } else { $Project }
+    $collectionName = if ($isCode -and $CodeCollection) { $CodeCollection } elseif (-not $isCode -and $DocCollection) { $DocCollection } elseif ($Collection) { $Collection } else { $Project }
+    $suffix = if ($isCode) { "code" } else { "doc" }
+    $mcpName = if ($Config.Servers.Count -gt 1) { "$($Config.Instance)-$suffix" } else { $Config.Instance }
+    $overrides = [ordered]@{ MCP_SERVER_NAME = $mcpName }
+    if ($Project) {
+        $overrides.PROJECT_ID = $Project
+        $overrides.PROJECT_NAME = $Project
+    }
+    if ($databaseName) {
+        $overrides.FALKORDB_GRAPH = $databaseName
+        $overrides.NEO4J_DB = $databaseName
+    }
+    if ($collectionName) {
+        $collectionKey = if ($isCode) { "QDRANT_COLLECTION" } else { "QDRANT_COLLECTION_DOC" }
+        $overrides[$collectionKey] = $collectionName
+    }
+    if ($Provider) {
+        $overrides.GRAPH_PROVIDER = $Provider
+        $providerKey = if ($isCode) { "CODE_GRAPH_PROVIDER" } else { "DOC_GRAPH_PROVIDER" }
+        $overrides[$providerKey] = $Provider
+    }
+    return $overrides
+}
+
 function Invoke-Start {
+    $config = Get-StartConfiguration
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
-    Invoke-Stop
+    if ($config.Custom) {
+        Invoke-Stop -InstanceName $config.Instance
+        $records = @(Read-PidRecords)
+        foreach ($server in $config.Servers) {
+            if (Test-TcpPort -HostName $config.HostName -Port $server.Port -TimeoutMs 300) {
+                throw "Port already in use: $($config.HostName):$($server.Port)"
+            }
+        }
+    } else {
+        Invoke-Stop
+        $records = @()
+    }
 
     $runner = Get-ShellRunner
-    $records = @()
 
-    foreach ($server in $Servers) {
+    foreach ($server in $config.Servers) {
         if (-not (Test-Path -LiteralPath $server.Script)) {
             throw "MCP script not found: $($server.Script)"
         }
 
-        $title = "MCP $($server.Name) :$($server.Port)"
+        $label = if ($config.Custom) { "$($config.Instance)/$($server.Name)" } else { $server.Name }
+        $title = "MCP $label :$($server.Port)"
         $titleArg = Quote-PowerShell $title
         $scriptArg = Quote-PowerShell $server.Script
         $runtimeConfigScript = Join-Path $Root "scripts\mcp_runtime_config.py"
-        $runtimeJsonPath = Join-Path $StateDir "$($server.Name).active.json"
-        $runtimeBashPath = Join-Path $StateDir "$($server.Name).active.env"
+        $stateName = if ($config.Custom) { "$($config.Instance)-$($server.Name)" } else { $server.Name }
+        $runtimeJsonPath = Join-Path $StateDir "$stateName.active.json"
+        $runtimeBashPath = Join-Path $StateDir "$stateName.active.env"
         $rootPython = Get-RootVenvPython
         $runtimeJson = & $rootPython $runtimeConfigScript --root $Root --server $server.Name --format json
         if ($LASTEXITCODE -ne 0) {
@@ -839,6 +1003,17 @@ function Invoke-Start {
         $runtimeBash = & $rootPython $runtimeConfigScript --root $Root --server $server.Name --format bash
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to render active MCP environment for $($server.Name)."
+        }
+        if ($config.Custom) {
+            $runtimeData = [ordered]@{}
+            $parsedRuntime = ($runtimeJson -join [Environment]::NewLine) | ConvertFrom-Json
+            $parsedRuntime.PSObject.Properties | ForEach-Object { $runtimeData[$_.Name] = [string]$_.Value }
+            $overrides = Get-RuntimeOverrides -Config $config -ServerConfig $server
+            foreach ($entry in $overrides.GetEnumerator()) {
+                $runtimeData[$entry.Key] = [string]$entry.Value
+                $runtimeBash += "export $($entry.Key)=$(Quote-Bash ([string]$entry.Value))"
+            }
+            $runtimeJson = @($runtimeData | ConvertTo-Json -Compress)
         }
         [System.IO.File]::WriteAllText($runtimeJsonPath, ($runtimeJson -join [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
         [System.IO.File]::WriteAllText($runtimeBashPath, (($runtimeBash -join [Environment]::NewLine) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
@@ -849,7 +1024,8 @@ function Invoke-Start {
             $scriptName = Quote-Bash (Split-Path -Leaf $server.Script)
             $runtimeEnvFile = Quote-Bash (Convert-ToShellPath -Path $runtimeBashPath -Kind $runner.Kind)
             $graphEnv = Get-DefaultGraphEnvBash -ServerName $server.Name
-            $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; $graphEnv; export CORTEX_HARNESS_ENV_FILE=$runtimeEnvFile; cd $workDir && bash ./$scriptName"
+            $scriptOptions = if ($config.Custom) { " " + (($server.Arguments | ForEach-Object { Quote-Bash $_ }) -join " ") } else { "" }
+            $bashCommand = "if [ -f $rootVenv/bin/activate ]; then source $rootVenv/bin/activate; elif [ -f $rootVenv/Scripts/activate ]; then source $rootVenv/Scripts/activate; fi; $graphEnv; export CORTEX_HARNESS_ENV_FILE=$runtimeEnvFile; cd $workDir && bash ./$scriptName$scriptOptions"
             $runnerArg = Quote-PowerShell $runner.Command
             $bashCommandArg = Quote-PowerShell $bashCommand
             $invokeLine = "& $runnerArg -lc $bashCommandArg"
@@ -903,7 +1079,7 @@ Write-Host '[start]' $titleArg 'exited.'
             -WindowStyle Normal `
             -PassThru
 
-        $records += [pscustomobject]@{
+        $record = [ordered]@{
             Name = $server.Name
             Pid = $proc.Id
             Script = $server.Script
@@ -911,8 +1087,19 @@ Write-Host '[start]' $titleArg 'exited.'
             RuntimeConfig = $runtimeJsonPath
             StartedAt = $proc.StartTime.ToUniversalTime().ToString("o")
         }
+        if ($config.Custom) {
+            $record.Instance = $config.Instance
+            $record.Host = $config.HostName
+            $record.Path = $config.Path
+            $record.Endpoint = "http://$($config.HostName):$($server.Port)$($config.Path)"
+        }
+        $records += [pscustomobject]$record
 
-        Write-Host "[start] Started $($server.Name) in terminal PID $($proc.Id)"
+        if ($config.Custom) {
+            Write-Host "[start] Started $label in terminal PID $($proc.Id) on $($server.Port)"
+        } else {
+            Write-Host "[start] Started $label in terminal PID $($proc.Id)"
+        }
     }
 
     Write-PidRecords $records
@@ -928,7 +1115,7 @@ try {
         "infra-down" { Invoke-InfraDown }
         "doctor" { Invoke-Doctor }
         "start" { Invoke-Start }
-        "stop" { Invoke-Stop }
+        "stop" { Invoke-Stop -InstanceName $Name }
         default { Write-Usage }
     }
 } catch {

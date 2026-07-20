@@ -29,7 +29,7 @@ doctor:
 	$(LIFECYCLE) doctor
 
 start:
-	$(LIFECYCLE) start
+	$(LIFECYCLE) start $(START_ARGS)
 
 stop:
-	$(LIFECYCLE) stop
+	$(LIFECYCLE) stop $(STOP_ARGS)

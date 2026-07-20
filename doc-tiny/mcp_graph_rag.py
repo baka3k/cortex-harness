@@ -13,7 +13,7 @@ from embedding_utils import resolve_embedding_device, resolve_embedding_model
 from graph_store import create_graph_store_from_env
 
 
-MCP_NAME = "graph_rag"
+MCP_NAME = os.getenv("MCP_SERVER_NAME", "graph_rag")
 
 # Load .env if present (for NEO4J_*/QDRANT_*/TEXT_EMBEDDING_MODEL).
 try:

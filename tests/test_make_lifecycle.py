@@ -118,6 +118,99 @@ class MakeLifecycleTests(unittest.TestCase):
                     content,
                 )
 
+    def test_custom_start_creates_one_named_project_instance(self):
+        options = LIFECYCLE.start_options(
+            ["--server", "code", "--name", "shop-code", "--project", "SHOP", "--port", "8790"]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory)
+            pid_file = state_dir / "pids.json"
+
+            def fake_terminal_command(wrapper):
+                state_name = wrapper.stem.removeprefix("start-")
+                (state_dir / f"{state_name}.pid").write_text("12345", encoding="utf-8")
+                return ["true"]
+
+            with mock.patch.object(LIFECYCLE, "STATE_DIR", state_dir), mock.patch.object(
+                LIFECYCLE, "PID_FILE", pid_file
+            ), mock.patch.object(LIFECYCLE, "invoke_stop") as stop, mock.patch.object(
+                LIFECYCLE, "tcp_port_open", return_value=False
+            ), mock.patch.object(
+                LIFECYCLE, "runtime_environment", return_value={}
+            ), mock.patch.object(
+                LIFECYCLE, "terminal_command", side_effect=fake_terminal_command
+            ), mock.patch.object(LIFECYCLE, "run"):
+                LIFECYCLE.invoke_start(options)
+
+            stop.assert_called_once_with("shop-code")
+            records = json.loads(pid_file.read_text(encoding="utf-8"))
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["name"], "code-tiny")
+            self.assertEqual(records[0]["instance"], "shop-code")
+            self.assertEqual(records[0]["port"], 8790)
+            self.assertEqual(records[0]["endpoint"], "http://127.0.0.1:8790/mcp")
+
+            launcher = state_dir / "start-shop-code-code-tiny.command"
+            active_env = state_dir / "shop-code-code-tiny.active.env"
+            self.assertIn("--port 8790", launcher.read_text(encoding="utf-8"))
+            env_content = active_env.read_text(encoding="utf-8")
+            self.assertIn("export MCP_SERVER_NAME=shop-code", env_content)
+            self.assertIn("export PROJECT_ID=SHOP", env_content)
+            self.assertIn("export FALKORDB_GRAPH=SHOP", env_content)
+            self.assertIn("export QDRANT_COLLECTION=SHOP", env_content)
+
+    def test_custom_start_supports_independent_code_and_doc_settings(self):
+        options = LIFECYCLE.start_options(
+            [
+                "--name",
+                "mixed",
+                "--code-database",
+                "CODE_DB",
+                "--doc-database",
+                "DOC_DB",
+                "--code-collection",
+                "code_vectors",
+                "--doc-collection",
+                "doc_vectors",
+                "--code-port",
+                "8810",
+                "--doc-port",
+                "8811",
+            ]
+        )
+        servers = LIFECYCLE.selected_servers(options)
+        self.assertEqual([server["port"] for server in servers], [8810, 8811])
+        code_env = LIFECYCLE.runtime_overrides(options, "code-tiny", "mixed", True)
+        doc_env = LIFECYCLE.runtime_overrides(options, "doc-tiny", "mixed", True)
+        self.assertEqual(code_env["MCP_SERVER_NAME"], "mixed-code")
+        self.assertEqual(code_env["FALKORDB_GRAPH"], "CODE_DB")
+        self.assertEqual(code_env["QDRANT_COLLECTION"], "code_vectors")
+        self.assertEqual(doc_env["MCP_SERVER_NAME"], "mixed-doc")
+        self.assertEqual(doc_env["FALKORDB_GRAPH"], "DOC_DB")
+        self.assertEqual(doc_env["QDRANT_COLLECTION_DOC"], "doc_vectors")
+
+    def test_named_stop_preserves_other_instance_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory)
+            pid_file = state_dir / "pids.json"
+            records = [
+                {"name": "code-tiny", "instance": "shop", "pid": 101, "script": "/repo/code-tiny/mcp.sh"},
+                {"name": "code-tiny", "instance": "crm", "pid": 202, "script": "/repo/code-tiny/mcp.sh"},
+            ]
+            pid_file.write_text(json.dumps(records), encoding="utf-8")
+            processes = {
+                101: (1, "bash /repo/code-tiny/mcp.sh"),
+                202: (1, "bash /repo/code-tiny/mcp.sh"),
+            }
+            with mock.patch.object(LIFECYCLE, "PID_FILE", pid_file), mock.patch.object(
+                LIFECYCLE, "process_table", return_value=processes
+            ), mock.patch.object(LIFECYCLE, "stop_process_tree") as stop_tree:
+                LIFECYCLE.invoke_stop("shop")
+
+            stop_tree.assert_called_once_with(101, processes)
+            remaining = json.loads(pid_file.read_text(encoding="utf-8"))
+            self.assertEqual([record["instance"] for record in remaining], ["crm"])
+
     def test_macos_terminal_command_uses_osascript(self):
         wrapper = Path("/tmp/cortex launcher.command")
         with mock.patch.object(LIFECYCLE.sys, "platform", "darwin"), mock.patch.object(
