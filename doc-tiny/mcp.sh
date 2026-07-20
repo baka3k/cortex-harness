@@ -17,4 +17,4 @@ if [ -n "${CORTEX_HARNESS_ENV_FILE:-}" ] && [ -f "$CORTEX_HARNESS_ENV_FILE" ]; t
     source "$CORTEX_HARNESS_ENV_FILE"
 fi
 
-MSYS_NO_PATHCONV=1 python mcp_graph_rag.py --host 127.0.0.1 --port 8789 --transport streamable-http --path /mcp
+MSYS_NO_PATHCONV=1 python mcp_graph_rag.py --host 127.0.0.1 --port 8789 --transport streamable-http --path /mcp "$@"

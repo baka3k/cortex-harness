@@ -78,6 +78,33 @@ dev stop
 
 For example, `dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory. The same one-to-one mapping applies to `build`, `install`, `uninstall`, `infra-up`, `infra-down`, `doctor`, `stop`, and `help`.
 
+`dev start` and `make start` keep that behavior when called without parameters. Parameterized starts create named instances that can run alongside one another:
+
+```bash
+# One code MCP for project SHOP / graph SHOP on :8790
+dev start --server code --name shop-code --project SHOP --port 8790
+
+# Both MCPs for project CRM, with independent ports
+dev start --name crm --project CRM --code-port 8800 --doc-port 8801
+
+# Separate graph databases or vector collections per service
+dev start --name mixed --code-database CODE_DB --doc-database DOC_DB \
+  --code-collection code_vectors --doc-collection doc_vectors \
+  --code-port 8810 --doc-port 8811
+
+# Stop one named instance; `dev stop` without options still stops every MCP
+dev stop --name crm
+```
+
+The equivalent Make syntax passes lifecycle arguments through `START_ARGS` and `STOP_ARGS`:
+
+```bash
+make start START_ARGS="--server doc --name shop-doc --project SHOP --port 8791"
+make stop STOP_ARGS="--name shop-doc"
+```
+
+Useful start options include `--server all|code|doc`, `--name`, `--project`, `--database`/`--db`, service-specific database and collection overrides, `--port`, `--code-port`, `--doc-port`, `--host`, `--path`, and `--provider falkordb|neo4j`. When `--project` is given, it also acts as the default graph database and vector collection unless a more specific option overrides it.
+
 Lifecycle compatibility is gated in GitHub Actions on both Intel and Apple Silicon macOS runners. The gate executes the installed `~/.local/bin/dev` wrapper from outside the repository and validates Make/dev parity, Terminal launcher construction, and start/stop state handling.
 
 Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.

@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Project-scoped MCP instances](2026-07-20-project-scoped-mcp-instances.md)
 - [Project-scoped semantic retrieval](2026-07-19-project-scoped-semantic-retrieval.md)
 - [Parser-MCP runtime alignment](2026-07-19-parser-mcp-runtime-alignment.md)
 - [Windows MCP force-restart reliability](2026-07-19-windows-mcp-force-restart.md)

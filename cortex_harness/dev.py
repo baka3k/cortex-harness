@@ -1500,8 +1500,9 @@ def cli():
     """
 
 
-def _run_lifecycle(action: str) -> None:
+def _run_lifecycle(action: str, arguments: Optional[list[str]] = None) -> None:
     """Run a repository lifecycle action independently of the caller's cwd."""
+    arguments = arguments or []
     if sys.platform == "win32":
         lifecycle = REPO_ROOT / "scripts" / "mcp-lifecycle.ps1"
         powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
@@ -1516,9 +1517,27 @@ def _run_lifecycle(action: str) -> None:
             str(lifecycle),
             action,
         ]
+        windows_options = {
+            "--server": "-Server",
+            "--name": "-Name",
+            "--project": "-Project",
+            "--database": "-Database",
+            "--code-database": "-CodeDatabase",
+            "--doc-database": "-DocDatabase",
+            "--port": "-Port",
+            "--code-port": "-CodePort",
+            "--doc-port": "-DocPort",
+            "--host": "-BindHost",
+            "--path": "-McpPath",
+            "--provider": "-Provider",
+            "--collection": "-Collection",
+            "--code-collection": "-CodeCollection",
+            "--doc-collection": "-DocCollection",
+        }
+        command.extend(windows_options.get(value, value) for value in arguments)
     else:
         lifecycle = REPO_ROOT / "scripts" / "mcp-lifecycle.py"
-        command = [sys.executable, str(lifecycle), action]
+        command = [sys.executable, str(lifecycle), action, *arguments]
 
     if not lifecycle.is_file():
         raise click.ClickException(f"Lifecycle script not found: {lifecycle}")
@@ -1568,15 +1587,66 @@ def infra_down():
 
 
 @cli.command()
-def start():
-    """Open the code-tiny and doc-tiny MCP servers in terminal windows."""
-    _run_lifecycle("start")
+@click.option("--server", type=click.Choice(["all", "code", "doc"]), default="all", show_default=True)
+@click.option("--name", help="Named instance used for concurrent start/stop operations.")
+@click.option("--project", help="Project ID; also defaults database and vector collection names.")
+@click.option("--database", "--db", help="Graph database used by every selected MCP server.")
+@click.option("--code-database", help="Graph database override for code-tiny.")
+@click.option("--doc-database", help="Graph database override for doc-tiny.")
+@click.option("--port", type=click.IntRange(1, 65535), help="Port for a single selected server.")
+@click.option("--code-port", type=click.IntRange(1, 65535), help="code-tiny port.")
+@click.option("--doc-port", type=click.IntRange(1, 65535), help="doc-tiny port.")
+@click.option("--host", help="Bind host for selected MCP servers.")
+@click.option("--path", "mcp_path", help="Streamable HTTP route.")
+@click.option("--provider", type=click.Choice(["falkordb", "neo4j"]), help="Graph provider override.")
+@click.option("--collection", help="Vector collection used by every selected server.")
+@click.option("--code-collection", help="Vector collection override for code-tiny.")
+@click.option("--doc-collection", help="Vector collection override for doc-tiny.")
+def start(
+    server: str,
+    name: Optional[str],
+    project: Optional[str],
+    database: Optional[str],
+    code_database: Optional[str],
+    doc_database: Optional[str],
+    port: Optional[int],
+    code_port: Optional[int],
+    doc_port: Optional[int],
+    host: Optional[str],
+    mcp_path: Optional[str],
+    provider: Optional[str],
+    collection: Optional[str],
+    code_collection: Optional[str],
+    doc_collection: Optional[str],
+):
+    """Open default MCPs, or launch a named project-specific instance."""
+    values = (
+        ("--name", name),
+        ("--project", project),
+        ("--database", database),
+        ("--code-database", code_database),
+        ("--doc-database", doc_database),
+        ("--port", port),
+        ("--code-port", code_port),
+        ("--doc-port", doc_port),
+        ("--host", host),
+        ("--path", mcp_path),
+        ("--provider", provider),
+        ("--collection", collection),
+        ("--code-collection", code_collection),
+        ("--doc-collection", doc_collection),
+    )
+    arguments = [item for option, value in values if value is not None for item in (option, str(value))]
+    if server != "all":
+        arguments[:0] = ["--server", server]
+    _run_lifecycle("start", arguments) if arguments else _run_lifecycle("start")
 
 
 @cli.command()
-def stop():
-    """Stop MCP processes started by dev start or make start."""
-    _run_lifecycle("stop")
+@click.option("--name", help="Stop only this named MCP instance.")
+def stop(name: Optional[str]):
+    """Stop all MCPs, or stop one named instance."""
+    _run_lifecycle("stop", ["--name", name]) if name else _run_lifecycle("stop")
 
 
 @cli.command()
