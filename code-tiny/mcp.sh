@@ -31,4 +31,4 @@ fi
 
 # Git Bash otherwise rewrites the route argument to C:/Program Files/Git/mcp
 # before invoking the Windows Python executable.
-MSYS_NO_PATHCONV=1 python mcp/unified_mcp.py --transport streamable-http --host 127.0.0.1 --port 8788 --path /mcp
+MSYS_NO_PATHCONV=1 python mcp/unified_mcp.py --transport streamable-http --host 127.0.0.1 --port 8788 --path /mcp "$@"

@@ -117,7 +117,7 @@ _MCP_FUNCTIONS_JSON: str = json.dumps(
 )
 
 
-MCP_NAME = "Project Call Graph Unified"
+MCP_NAME = os.getenv("MCP_SERVER_NAME", "Project Call Graph Unified")
 
 INSTRUCTIONS = """Unified MCP for multi-language code graphs (single server/port).
 

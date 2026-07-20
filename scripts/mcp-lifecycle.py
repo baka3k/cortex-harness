@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -75,6 +77,13 @@ USAGE = """Usage (equivalent forms):
   make start       | dev start       Open each MCP server in a separate terminal window.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
 
+Parameterized MCP instances:
+  dev start --server code --name shop --project SHOP --port 8790
+  dev start --name shop --project SHOP --code-port 8790 --doc-port 8791
+  dev stop --name shop
+  make start START_ARGS="--server code --name shop --project SHOP --port 8790"
+  make stop STOP_ARGS="--name shop"
+
 Default MCP servers:
   code-tiny  http://127.0.0.1:8788/mcp
   doc-tiny   http://127.0.0.1:8789/mcp
@@ -83,6 +92,8 @@ Default local infrastructure:
   qdrant    http://127.0.0.1:6333
   falkordb  redis://127.0.0.1:6379
 """
+
+INSTANCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 def run(arguments: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -352,33 +363,52 @@ def stop_process_tree(pid: int, processes: dict[int, tuple[int, str]]) -> None:
         return
 
 
-def invoke_stop() -> None:
+def read_pid_records() -> list[dict[str, object]]:
+    if not PID_FILE.is_file():
+        return []
+    try:
+        payload = json.loads(PID_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    return [record for record in payload if isinstance(record, dict)] if isinstance(payload, list) else []
+
+
+def write_pid_records(records: list[dict[str, object]]) -> None:
+    if records:
+        PID_FILE.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    else:
+        PID_FILE.unlink(missing_ok=True)
+
+
+def invoke_stop(instance: str | None = None) -> None:
     processes = process_table()
     stopped: set[int] = set()
-    if PID_FILE.is_file():
-        try:
-            records = json.loads(PID_FILE.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            records = []
-        for record in records:
-            pid = int(record.get("pid", 0))
-            command = processes.get(pid, (0, ""))[1]
-            script = str(record.get("script", ""))
-            if pid > 1 and script and script in command:
-                print(f"[stop] Stopping saved process {pid} ({record.get('name', 'unknown')})")
-                stop_process_tree(pid, processes)
-                stopped.add(pid)
-            elif pid in processes:
-                print(f"[stop] Skipping stale PID record {pid} ({record.get('name', 'unknown')})")
-
-    markers = ("code-tiny/mcp.sh", "doc-tiny/mcp.sh", "mcp/unified_mcp.py", "mcp_graph_rag.py")
-    for pid, (_, command) in processes.items():
-        if pid != os.getpid() and pid not in stopped and str(ROOT) in command and any(marker in command for marker in markers):
-            print(f"[stop] Stopping MCP process {pid}")
+    remaining: list[dict[str, object]] = []
+    for record in read_pid_records():
+        if instance is not None and record.get("instance") != instance:
+            remaining.append(record)
+            continue
+        pid = int(record.get("pid", 0))
+        command = processes.get(pid, (0, ""))[1]
+        script = str(record.get("script", ""))
+        if pid > 1 and script and script in command:
+            print(f"[stop] Stopping saved process {pid} ({record.get('name', 'unknown')})")
             stop_process_tree(pid, processes)
+            stopped.add(pid)
+        elif pid in processes:
+            print(f"[stop] Skipping stale PID record {pid} ({record.get('name', 'unknown')})")
 
-    PID_FILE.unlink(missing_ok=True)
-    print("[stop] MCP stop complete.")
+    if instance is None:
+        markers = ("code-tiny/mcp.sh", "doc-tiny/mcp.sh", "mcp/unified_mcp.py", "mcp_graph_rag.py")
+        for pid, (_, command) in processes.items():
+            if pid != os.getpid() and pid not in stopped and str(ROOT) in command and any(marker in command for marker in markers):
+                print(f"[stop] Stopping MCP process {pid}")
+                stop_process_tree(pid, processes)
+        remaining = []
+
+    write_pid_records(remaining)
+    scope = f" instance '{instance}'" if instance else ""
+    print(f"[stop] MCP{scope} stop complete.")
 
 
 def terminal_command(wrapper: Path) -> list[str]:
@@ -416,18 +446,86 @@ def default_graph_env_exports(server_name: str) -> str:
     )
 
 
-def invoke_start() -> None:
+def validate_instance_name(value: str) -> str:
+    if not INSTANCE_NAME.fullmatch(value):
+        raise RuntimeError("Instance name must match [A-Za-z0-9][A-Za-z0-9_.-]{0,63}.")
+    return value
+
+
+def selected_servers(options: argparse.Namespace) -> list[dict[str, object]]:
+    selected = [dict(server) for server in SERVERS if options.server == "all" or server["name"].startswith(options.server)]
+    if options.port is not None and options.server == "all":
+        raise RuntimeError("--port requires --server code or --server doc; use --code-port/--doc-port for both.")
+    if options.port is not None:
+        selected[0]["port"] = options.port
+    for server in selected:
+        if server["name"] == "code-tiny" and options.code_port is not None:
+            if options.port is not None:
+                raise RuntimeError("Use either --port or --code-port, not both.")
+            server["port"] = options.code_port
+        if server["name"] == "doc-tiny" and options.doc_port is not None:
+            if options.port is not None:
+                raise RuntimeError("Use either --port or --doc-port, not both.")
+            server["port"] = options.doc_port
+    ports = [int(server["port"]) for server in selected]
+    if len(ports) != len(set(ports)):
+        raise RuntimeError("Each selected MCP server must use a different port.")
+    return selected
+
+
+def runtime_overrides(
+    options: argparse.Namespace,
+    server_name: str,
+    instance: str,
+    multiple_servers: bool,
+) -> dict[str, str]:
+    is_code = server_name == "code-tiny"
+    database = options.code_database if is_code else options.doc_database
+    database = database or options.database or options.project
+    collection = options.code_collection if is_code else options.doc_collection
+    collection = collection or options.collection or options.project
+    mcp_name = f"{instance}-{'code' if is_code else 'doc'}" if multiple_servers else instance
+    overrides = {"MCP_SERVER_NAME": mcp_name}
+    if options.project:
+        overrides.update({"PROJECT_ID": options.project, "PROJECT_NAME": options.project})
+    if database:
+        overrides.update({"FALKORDB_GRAPH": database, "NEO4J_DB": database})
+    if collection:
+        overrides["QDRANT_COLLECTION" if is_code else "QDRANT_COLLECTION_DOC"] = collection
+    if options.provider:
+        overrides["GRAPH_PROVIDER"] = options.provider
+        overrides["CODE_GRAPH_PROVIDER" if is_code else "DOC_GRAPH_PROVIDER"] = options.provider
+    return overrides
+
+
+def invoke_start(options: argparse.Namespace | None = None) -> None:
+    custom = options is not None
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    invoke_stop()
-    records = []
-    for server in SERVERS:
+    if custom:
+        instance = validate_instance_name(options.name or options.project or options.database or options.server)
+        servers = selected_servers(options)
+        invoke_stop(instance)
+        records = read_pid_records()
+        for server in servers:
+            if tcp_port_open(options.host, int(server["port"])):
+                raise RuntimeError(f"Port already in use: {options.host}:{server['port']}")
+    else:
+        instance = "default"
+        servers = [dict(server) for server in SERVERS]
+        invoke_stop()
+        records = []
+
+    for server in servers:
         script = Path(server["script"])
         if not script.is_file():
             raise RuntimeError(f"MCP script not found: {script}")
-        wrapper = STATE_DIR / f"start-{server['name']}.command"
-        pid_path = STATE_DIR / f"{server['name']}.pid"
-        runtime_env_path = STATE_DIR / f"{server['name']}.active.env"
+        state_name = f"{instance}-{server['name']}" if custom else str(server["name"])
+        wrapper = STATE_DIR / f"start-{state_name}.command"
+        pid_path = STATE_DIR / f"{state_name}.pid"
+        runtime_env_path = STATE_DIR / f"{state_name}.active.env"
         runtime_env = runtime_environment(ROOT, str(server["name"]))
+        if custom:
+            runtime_env.update(runtime_overrides(options, str(server["name"]), instance, len(servers) > 1))
         runtime_env_path.write_text(
             format_bash_exports(runtime_env) + ("\n" if runtime_env else ""),
             encoding="utf-8",
@@ -443,7 +541,24 @@ def invoke_start() -> None:
             f"{default_graph_env_exports(str(server['name']))}"
             f"export CORTEX_HARNESS_ENV_FILE={shlex.quote(str(runtime_env_path))}\n"
             f"cd {shlex.quote(str(server['work_dir']))}\n"
-            f"exec bash {shlex.quote(str(script))}\n",
+            f"exec bash {shlex.quote(str(script))}"
+            + (
+                " "
+                + " ".join(
+                    shlex.quote(value)
+                    for value in (
+                        "--host",
+                        options.host,
+                        "--port",
+                        str(server["port"]),
+                        "--path",
+                        options.path,
+                    )
+                )
+                if custom
+                else ""
+            )
+            + "\n",
             encoding="utf-8",
         )
         wrapper.chmod(0o755)
@@ -455,10 +570,24 @@ def invoke_start() -> None:
         if not pid_path.is_file():
             raise RuntimeError(f"Terminal opened, but {server['name']} did not report its process ID.")
         pid = int(pid_path.read_text(encoding="utf-8"))
-        records.append({"name": server["name"], "pid": pid, "script": str(script), "port": server["port"]})
-        print(f"[start] Started {server['name']} in terminal PID {pid}")
+        record = {"name": server["name"], "pid": pid, "script": str(script), "port": server["port"]}
+        if custom:
+            record.update(
+                {
+                    "instance": instance,
+                    "host": options.host,
+                    "path": options.path,
+                    "endpoint": f"http://{options.host}:{server['port']}{options.path}",
+                }
+            )
+        records.append(record)
+        label = f"{instance}/{server['name']}" if custom else str(server["name"])
+        if custom:
+            print(f"[start] Started {label} in terminal PID {pid} on {server['port']}")
+        else:
+            print(f"[start] Started {label} in terminal PID {pid}")
 
-    PID_FILE.write_text(json.dumps(records, indent=2), encoding="utf-8")
+    write_pid_records(records)
     print("[start] MCP terminals opened. Logs are visible in their own windows.")
 
 
@@ -475,14 +604,66 @@ ACTIONS = {
 }
 
 
+def port_number(value: str) -> int:
+    port = int(value)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
+def start_options(arguments: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="mcp-lifecycle.py start")
+    parser.add_argument("--server", choices=("all", "code", "doc"), default="all")
+    parser.add_argument("--name")
+    parser.add_argument("--project")
+    parser.add_argument("--database", "--db")
+    parser.add_argument("--code-database")
+    parser.add_argument("--doc-database")
+    parser.add_argument("--port", type=port_number)
+    parser.add_argument("--code-port", type=port_number)
+    parser.add_argument("--doc-port", type=port_number)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--path", default="/mcp")
+    parser.add_argument("--provider", choices=("falkordb", "neo4j"))
+    parser.add_argument("--collection")
+    parser.add_argument("--code-collection")
+    parser.add_argument("--doc-collection")
+    options = parser.parse_args(arguments)
+    if not options.path.startswith("/"):
+        options.path = "/" + options.path
+    if options.server == "code" and options.doc_port is not None:
+        parser.error("--doc-port cannot be used with --server code")
+    if options.server == "doc" and options.code_port is not None:
+        parser.error("--code-port cannot be used with --server doc")
+    return options
+
+
+def stop_options(arguments: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="mcp-lifecycle.py stop")
+    parser.add_argument("--name")
+    options = parser.parse_args(arguments)
+    if options.name:
+        validate_instance_name(options.name)
+    return options
+
+
 def main(arguments: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if arguments is None else arguments
     action = arguments[0] if arguments else "help"
-    if action not in ACTIONS or len(arguments) > 1:
+    if action not in ACTIONS:
         print(USAGE, end="")
         return 2
     try:
-        ACTIONS[action]()
+        if action == "start":
+            invoke_start(start_options(arguments[1:]) if len(arguments) > 1 else None)
+        elif action == "stop":
+            options = stop_options(arguments[1:]) if len(arguments) > 1 else None
+            invoke_stop(options.name if options else None)
+        elif len(arguments) > 1:
+            print(USAGE, end="")
+            return 2
+        else:
+            ACTIONS[action]()
         return 0
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"[error] {error}")
