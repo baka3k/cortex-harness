@@ -15,6 +15,10 @@ from tools.common.analyzer_cache import safe_cache_root
 from tools.common.incremental_cleanup import cleanup_qdrant_for_files
 from tools.common.message_detectors import get_detector, has_specific_detector, supported_parsers
 from tools.common.message_detectors.base import BaseMessageDetector, unquote
+from tools.common.project_scope import (
+    PROJECT_ID_NORMALIZED_FIELD,
+    project_id_lookup_key,
+)
 
 
 SUPPORTED_PARSERS: Set[str] = supported_parsers()
@@ -380,7 +384,14 @@ def _qdrant_delete_by_project(
     retry_sleep: float,
 ) -> None:
     endpoint = qdrant_url.rstrip("/") + f"/collections/{collection}/points/delete?wait=true"
-    payload = {"filter": {"must": [{"key": "project_id", "match": {"value": project_id}}]}}
+    payload = {
+        "filter": {
+            "must": [{
+                "key": PROJECT_ID_NORMALIZED_FIELD,
+                "match": {"value": project_id_lookup_key(project_id)},
+            }]
+        }
+    }
     for attempt in range(retries + 1):
         try:
             response = requests.post(endpoint, json=payload, timeout=timeout)
@@ -447,6 +458,30 @@ def _ensure_qdrant_collection(
             time.sleep(retry_sleep)
 
 
+def _ensure_qdrant_project_scope_index(
+    *,
+    qdrant_url: str,
+    collection: str,
+    timeout: float,
+    retries: int,
+    retry_sleep: float,
+) -> None:
+    endpoint = qdrant_url.rstrip("/") + f"/collections/{collection}/index?wait=true"
+    payload = {
+        "field_name": PROJECT_ID_NORMALIZED_FIELD,
+        "field_schema": "keyword",
+    }
+    for attempt in range(retries + 1):
+        try:
+            response = requests.put(endpoint, json=payload, timeout=timeout)
+            response.raise_for_status()
+            return
+        except requests.RequestException:
+            if attempt >= retries:
+                raise
+            time.sleep(retry_sleep)
+
+
 def _hash_vector(text: str, size: int) -> List[float]:
     buckets = [0.0] * size
     for token in re.findall(r"[A-Za-z0-9_:.]+", text.lower()):
@@ -472,6 +507,7 @@ def _message_point_payload(record: MessageRecord, project_name: str) -> Dict[str
         "confidence": record.confidence,
         "language": record.language,
         "project_id": record.project_id,
+        PROJECT_ID_NORMALIZED_FIELD: project_id_lookup_key(record.project_id),
         "project_name": project_name,
     }
 
@@ -496,6 +532,13 @@ def upsert_messages_to_qdrant(
         qdrant_url=qdrant_url,
         collection=collection,
         vector_size=vector_size,
+        timeout=timeout,
+        retries=retries,
+        retry_sleep=retry_sleep,
+    )
+    _ensure_qdrant_project_scope_index(
+        qdrant_url=qdrant_url,
+        collection=collection,
         timeout=timeout,
         retries=retries,
         retry_sleep=retry_sleep,
@@ -583,6 +626,7 @@ async def upsert_messages_to_neo4j(
         m.line = row.line,
         m.confidence = row.confidence,
         m.project_id = row.project_id,
+        m.project_id_normalized = row.project_id_normalized,
         m.project_name = row.project_name,
         m.language = row.language,
         m.repo = row.repo,
@@ -598,6 +642,7 @@ async def upsert_messages_to_neo4j(
     MERGE (s:MessageEndpoint {id: row.sender_endpoint_id})
     SET s.name = row.sender,
         s.project_id = row.project_id,
+        s.project_id_normalized = row.project_id_normalized,
         s.project_name = row.project_name,
         s.updated_at = datetime()
     MERGE (s)-[:SENDS_MESSAGE]->(m)
@@ -606,6 +651,7 @@ async def upsert_messages_to_neo4j(
       MERGE (r:MessageEndpoint {id: row.receiver_endpoint_id})
       SET r.name = row.receiver,
           r.project_id = row.project_id,
+          r.project_id_normalized = row.project_id_normalized,
           r.project_name = row.project_name,
           r.updated_at = datetime()
       MERGE (m)-[:TARGETS_ENDPOINT]->(r)

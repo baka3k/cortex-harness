@@ -4,7 +4,7 @@ status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
-blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening, 260719-2150-parser-mcp-runtime-alignment]
+blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening, 260719-2150-parser-mcp-runtime-alignment, 260723-0908-case-insensitive-project-id]
 
 ## Cross-Plan Dependency
 
@@ -29,6 +29,12 @@ The parser-MCP runtime alignment plan at
 from exact framework filters, adds live provider schema observability, and
 removes provider-specific wording from public MCP metadata. Neo4j/FalkorDB live
 parity remains gated by this migration.
+
+The case-insensitive project-scope plan at
+`plans/260723-0908-case-insensitive-project-id/plan.md` depends on this migration
+for provider-neutral persistence, exact normalized-field predicates, index setup,
+and Neo4j/FalkorDB parity. Changes to graph drivers, query helpers, schema setup,
+and unified MCP bridge queries must preserve both plans' contracts.
 
 ## Objective
 

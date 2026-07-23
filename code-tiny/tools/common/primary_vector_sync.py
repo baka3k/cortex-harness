@@ -11,6 +11,11 @@ from dataclasses import dataclass
 import re
 import time
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
+
+from tools.common.project_scope import (
+    PROJECT_ID_NORMALIZED_FIELD,
+    project_id_lookup_key,
+)
 from urllib.parse import urlparse
 import uuid
 
@@ -124,6 +129,7 @@ def documents_from_payloads(
             "node_type": node_type,
             "symbol_id": symbol_id,
             "project_id": project_id,
+            PROJECT_ID_NORMALIZED_FIELD: project_id_lookup_key(project_id),
             "project_name": str(source.get("project_name") or project_id),
             "language": str(source.get("language") or parser),
             "repo": str(source.get("repo") or ""),
@@ -252,6 +258,29 @@ def _ensure_collection(
     )
 
 
+def _ensure_project_scope_index(
+    requests_module: Any,
+    *,
+    url: str,
+    collection: str,
+    timeout: float,
+    retries: int,
+    retry_sleep: float,
+) -> None:
+    _request_with_retry(
+        requests_module,
+        "PUT",
+        f"{url.rstrip('/')}/collections/{collection}/index?wait=true",
+        json={
+            "field_name": PROJECT_ID_NORMALIZED_FIELD,
+            "field_schema": "keyword",
+        },
+        timeout=timeout,
+        retries=retries,
+        retry_sleep=retry_sleep,
+    )
+
+
 def _delete_stale(
     requests_module: Any,
     *,
@@ -271,7 +300,10 @@ def _delete_stale(
     if not full_replace and not paths:
         return
     must: list[dict[str, Any]] = [
-        {"key": "project_id", "match": {"value": project_id}},
+        {
+            "key": PROJECT_ID_NORMALIZED_FIELD,
+            "match": {"value": project_id_lookup_key(project_id)},
+        },
         {"key": "parser", "match": {"value": parser}},
         {"key": "root_scope", "match": {"value": root_scope}},
     ]
@@ -368,6 +400,14 @@ def sync_vector_documents(
             url=url,
             collection=collection,
             vector_size=vector_size,
+            timeout=timeout,
+            retries=retries,
+            retry_sleep=retry_sleep,
+        )
+        _ensure_project_scope_index(
+            requests_module,
+            url=url,
+            collection=collection,
             timeout=timeout,
             retries=retries,
             retry_sleep=retry_sleep,

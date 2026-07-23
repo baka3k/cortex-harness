@@ -102,6 +102,7 @@ class PrimaryVectorSyncTests(unittest.TestCase):
                 "node_type",
                 "symbol_id",
                 "project_id",
+                "project_id_normalized",
                 "project_name",
                 "language",
                 "repo",
@@ -201,7 +202,13 @@ class PrimaryVectorSyncTests(unittest.TestCase):
         self.assertEqual([len(call[2]["json"]["points"]) for call in point_upserts], [2, 1])
         self.assertEqual(requests.calls[-1][0], "POST")
         point_filter = requests.calls[-1][2]["json"]["filter"]
-        self.assertIn({"key": "project_id", "match": {"value": "project-a"}}, point_filter["must"])
+        self.assertIn(
+            {
+                "key": "project_id_normalized",
+                "match": {"value": "project-a"},
+            },
+            point_filter["must"],
+        )
         self.assertIn({"key": "parser", "match": {"value": "rust"}}, point_filter["must"])
         self.assertIn({"key": "root_scope", "match": {"value": "org/repo"}}, point_filter["must"])
         self.assertIn(
