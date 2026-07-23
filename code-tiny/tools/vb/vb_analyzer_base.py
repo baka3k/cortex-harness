@@ -23,6 +23,7 @@ from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, 
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
+from tools.common.project_scope import enrich_project_scope
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
@@ -1029,7 +1030,7 @@ async def build_call_graph(
             points = []
             for (_, point), vector in zip(batch, vectors):
                 points.append({"id": point["id"], "vector": vector, "payload": point["payload"]})
-            qdrant_writer.upsert(points)
+            qdrant_writer.upsert(enrich_project_scope(points))
             del texts, vectors, points, batch
             batch_no = (idx // qdrant_batch_size) + 1
             if batch_no % 20 == 0:

@@ -24,7 +24,7 @@ if _ROOT_DIR not in sys.path:
 
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
-from tools.common.project_scope import qdrant_project_filter
+from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
 from framework_registry import servlet_active_generation_predicate
@@ -1212,6 +1212,7 @@ async def _run_cypher(query: str, params: Dict[str, Any], db: str) -> List[Dict[
 
 
 async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
+    params = prepare_project_scope_parameters(query, params)
     last_error: Optional[Exception] = None
     candidates = [db for db in dbs if db]
     available = await _list_databases()
@@ -1718,8 +1719,8 @@ async def tool_find_path_between_module(
         "MATCH (s:Function), (t:Function) "
         "WHERE any(token IN $sources WHERE s.file_path CONTAINS token) "
         "AND any(token IN $targets WHERE t.file_path CONTAINS token) "
-        "AND ($project_id IS NULL OR s.project_id = $project_id) "
-        "AND ($project_id IS NULL OR t.project_id = $project_id) "
+        "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
         f"MATCH p=shortestPath((s)-[:CALLS*..{depth}]->(t)) "
         "RETURN p LIMIT 10"
     )
@@ -2321,7 +2322,7 @@ async def tool_listup_symbols_matching_file_path(
     cypher = (
         f"MATCH (n) WHERE ({type_conditions}) "
         "AND any(token IN $modules WHERE n.file_path CONTAINS token OR n.path CONTAINS token) "
-        "AND ($project_id IS NULL OR n.project_id = $project_id) "
+        "AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) "
         "RETURN n"
     )
     used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id}, db_candidates)
@@ -2351,9 +2352,9 @@ async def tool_listup_class_matching_path(
         "WHERE (c:Class OR c:Type) "
         "AND any(token IN $classes WHERE "
         "toLower(c.name) CONTAINS toLower(token) OR toLower(c.qualified_name) CONTAINS toLower(token)) "
-        "AND ($project_id IS NULL OR c.project_id = $project_id) "
+        "AND ($project_id IS NULL OR c.project_id_normalized = $project_id_normalized) "
         "OPTIONAL MATCH (c)-[:DECLARES]->(f:Function) "
-        "WHERE ($project_id IS NULL OR f.project_id = $project_id) "
+        "WHERE ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized) "
         "RETURN c, f"
     )
     used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id}, db_candidates)
@@ -2394,7 +2395,7 @@ async def tool_list_up_entrypoint(
         "WHERE any(token IN $modules WHERE f.file_path CONTAINS token) "
         "AND none(token IN $modules WHERE caller.file_path CONTAINS token) "
         "AND (f.kind IS NULL OR f.kind <> 'lambda') "
-        "AND ($project_id IS NULL OR f.project_id = $project_id) "
+        "AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized) "
         "RETURN DISTINCT f LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
@@ -2442,7 +2443,7 @@ async def tool_search_functions(
         "OR toLower(coalesce(n.caption, '')) CONTAINS q "
         "OR toLower(coalesce(n.text, '')) CONTAINS q "
         "OR toLower(coalesce(n.summary, '')) CONTAINS q) "
-        "AND ($project_id IS NULL OR n.project_id = $project_id) "
+        "AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) "
         "AND ($framework IS NULL OR n.framework = $framework) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR n.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('n')} "
@@ -2453,7 +2454,7 @@ async def tool_search_functions(
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
         "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package OR node:Resource OR node:UIControl "
         "OR node.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
-        "AND ($project_id IS NULL OR node.project_id = $project_id) "
+        "AND ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized) "
         "AND ($framework IS NULL OR node.framework = $framework) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR node.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('node')} "
@@ -2514,11 +2515,11 @@ async def tool_search_by_code(
     qs = [t.strip() for t in query.split("|") if t.strip()]
     if not qs:
         raise ValueError("query is required.")
-    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id = $project_id) RETURN n LIMIT $limit"
+    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) RETURN n LIMIT $limit"
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
-        "WHERE ($project_id IS NULL OR node.project_id = $project_id) "
+        "WHERE ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized) "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
@@ -2575,7 +2576,7 @@ async def tool_annotate_node(
     node_id = str(node_id)
     cypher = (
         "MATCH (n) WHERE n.id = $id "
-        "AND ($project_id IS NULL OR n.project_id = $project_id) "
+        "AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) "
         "SET n.note = $note, n.tags = $tags, n.severity = $severity "
         "RETURN n"
     )
@@ -2622,7 +2623,7 @@ async def tool_list_workflows(
         filters.append("w.domain = $domain")
         params["domain"] = domain
     if project_id is not None:
-        filters.append("w.project_id = $project_id")
+        filters.append("w.project_id_normalized = $project_id_normalized")
         params["project_id"] = project_id
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
     query = f"""
@@ -2720,7 +2721,7 @@ async def tool_search_workflows(
     WHERE (toLower(w.name) CONTAINS toLower($q)
        OR toLower(w.description) CONTAINS toLower($q)
        OR toLower(w.domain) CONTAINS toLower($q))
-      AND ($project_id IS NULL OR w.project_id = $project_id)
+      AND ($project_id IS NULL OR w.project_id_normalized = $project_id_normalized)
     RETURN w.workflow_id   AS workflow_id,
            w.name          AS name,
            w.domain        AS domain,

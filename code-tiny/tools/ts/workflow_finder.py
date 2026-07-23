@@ -28,6 +28,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from tools.common.project_scope import prepare_project_scope_parameters
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,7 +57,7 @@ async def _resolve_node(
 
     warnings: List[str] = []
     query = """
-    MATCH (f:Function {project_id: $pid})
+    MATCH (f:Function {project_id_normalized: $pid_normalized})
     WHERE (f.symbol_id = $value OR toLower(f.name) = toLower($value))
       AND f.react_role = 'screen'
     RETURN f.symbol_id AS symbol_id,
@@ -98,6 +100,8 @@ async def _run_records(
     on every ``GraphDriver``-backed call (e.g. ``find_screen_workflows``).
     """
     import inspect
+
+    params = prepare_project_scope_parameters(query, params)
 
     # Preferred: the project abstraction
     run = getattr(driver, "run_read", None)
@@ -150,15 +154,15 @@ def _path_query_no_apoc(max_hops: int) -> str:
     return f"""
     MATCH (a:Function)
     WHERE a.symbol_id IN $a_ids
-      AND a.project_id = $pid
+      AND a.project_id_normalized = $pid_normalized
       AND a.react_role = 'screen'
     MATCH (b:Function)
     WHERE b.symbol_id IN $b_ids
-      AND b.project_id = $pid
+      AND b.project_id_normalized = $pid_normalized
       AND b.react_role = 'screen'
     MATCH p = (a)-[:NAVIGATE*1..{max_hops}]->(b)
     WHERE ALL(n IN nodes(p) WHERE n.react_role = 'screen'
-                               AND n.project_id = $pid)
+                               AND n.project_id_normalized = $pid_normalized)
       AND NONE(
             x IN nodes(p)
             WHERE size([y IN nodes(p) WHERE y.symbol_id = x.symbol_id]) > 1
@@ -394,11 +398,11 @@ async def _collect_open_ended(
     query = f"""
     MATCH (a:Function), (b:Function)
     WHERE {anchor_clause}
-      AND a.project_id = $pid AND b.project_id = $pid
+      AND a.project_id_normalized = $pid_normalized AND b.project_id_normalized = $pid_normalized
       AND a.react_role = 'screen' AND b.react_role = 'screen'
     MATCH p = {pattern}
     WHERE ALL(n IN nodes(p) WHERE n.react_role = 'screen'
-                               AND n.project_id = $pid)
+                               AND n.project_id_normalized = $pid_normalized)
       AND NONE(
             x IN nodes(p)
             WHERE size([y IN nodes(p) WHERE y.symbol_id = x.symbol_id]) > 1
@@ -426,7 +430,11 @@ async def _collect_open_ended(
         driver,
         database,
         query,
-        {"ids": anchor_ids, "pid": project_id, "limit": max_paths * 3},
+        {
+            "ids": anchor_ids,
+            "pid": project_id,
+            "limit": max_paths * 3,
+        },
     )
     for row in rows:
         nodes = row["nodes"]

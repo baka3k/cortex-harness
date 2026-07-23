@@ -12,6 +12,10 @@ from neo4j import GraphDatabase, Driver, Session
 import logging
 
 from tools.graph.core.base import GraphDriver, GraphProvider
+from tools.common.project_scope import (
+    matches_project_scope,
+    prepare_project_scope_parameters,
+)
 
 
 _FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
@@ -196,7 +200,7 @@ class Neo4jDriver(GraphDriver):
         Execute a Cypher query synchronously
         """
         db = database or self._database
-        params = parameters or {}
+        params = prepare_project_scope_parameters(query, parameters)
         
         with self._driver.session(database=db) as session:
             result = session.run(query, params)
@@ -426,7 +430,7 @@ class Neo4jDriver(GraphDriver):
             )
         if records:
             node = records[0].get("n")
-            if node and (project_id is None or node.get("project_id") == project_id):
+            if node and matches_project_scope(node, project_id):
                 if node.get("framework") == "servlet_jsp":
                     active_records, _, _ = await self.execute_query(
                         "MATCH (s:ServletJspAnalysisState {project_id: $project_id, module_id: $module_id}) "
@@ -470,7 +474,7 @@ class Neo4jDriver(GraphDriver):
             nodes.extend(record.get("n") for record in fallback_records if record.get("n"))
         # Filter by project_id in Python (since queries are pre-built UNION queries)
         if project_id is not None:
-            nodes = [n for n in nodes if n.get("project_id") == project_id]
+            nodes = [n for n in nodes if matches_project_scope(n, project_id)]
         servlet_nodes = [n for n in nodes if n.get("framework") == "servlet_jsp"]
         if servlet_nodes:
             active_records, _, _ = await self.execute_query(
@@ -495,7 +499,7 @@ class Neo4jDriver(GraphDriver):
         fulltext_cypher = """
         CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
         WHERE node:Function
-          AND ($project_id IS NULL OR node.project_id = $project_id)
+          AND ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit
@@ -516,7 +520,7 @@ class Neo4jDriver(GraphDriver):
         MATCH (n:Function)
         WHERE toLower(n.name) CONTAINS toLower($query)
            OR toLower(coalesce(n.qualified_name, '')) CONTAINS toLower($query)
-          AND ($project_id IS NULL OR n.project_id = $project_id)
+          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
@@ -537,7 +541,7 @@ class Neo4jDriver(GraphDriver):
         """Search for nodes by code content"""
         fulltext_cypher = """
         CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
-        WHERE ($project_id IS NULL OR node.project_id = $project_id)
+        WHERE ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit
@@ -559,7 +563,7 @@ class Neo4jDriver(GraphDriver):
         WHERE toLower(coalesce(n.code, '')) CONTAINS toLower($query)
            OR toLower(coalesce(n.comment, '')) CONTAINS toLower($query)
            OR toLower(coalesce(n.summary, '')) CONTAINS toLower($query)
-          AND ($project_id IS NULL OR n.project_id = $project_id)
+          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
@@ -583,9 +587,9 @@ class Neo4jDriver(GraphDriver):
         rel_pattern = f"[:{'|'.join(relationship_types)}*..{max_depth}]"
         cypher = f"""
         MATCH (a:Function) WHERE a.id = $start
-          AND ($project_id IS NULL OR a.project_id = $project_id)
+          AND ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized)
         MATCH (b:Function) WHERE b.id = $end
-          AND ($project_id IS NULL OR b.project_id = $project_id)
+          AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized)
         AND a.id <> b.id
         MATCH p=shortestPath((a)-{rel_pattern}->(b))
         RETURN p
@@ -618,7 +622,7 @@ class Neo4jDriver(GraphDriver):
         
         cypher = f"""
         MATCH (f:Function) WHERE f.id = $id
-          AND ($project_id IS NULL OR f.project_id = $project_id)
+          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
         MATCH p=(f){pattern}(n)
         RETURN p
         """
@@ -686,12 +690,12 @@ class Neo4jDriver(GraphDriver):
             toLower(coalesce(s.file_path, '')) CONTAINS token OR
             toLower(coalesce(sf.path, '')) CONTAINS token OR
             toLower(coalesce(sf.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR s.project_id = $project_id)
+          AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized)
         AND any(token IN targets WHERE
             toLower(coalesce(t.file_path, '')) CONTAINS token OR
             toLower(coalesce(tf.path, '')) CONTAINS token OR
             toLower(coalesce(tf.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR t.project_id = $project_id)
+          AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized)
         AND s.id <> t.id
         MATCH p=shortestPath((s){rel_pattern}(t))
         RETURN p
@@ -713,8 +717,8 @@ class Neo4jDriver(GraphDriver):
         """List POSSIBLE_CALLS relationships"""
         cypher = """
         MATCH (a:Function)-[r:POSSIBLE_CALLS]->(b:Function)
-        WHERE ($project_id IS NULL OR a.project_id = $project_id)
-        AND ($project_id IS NULL OR b.project_id = $project_id)
+        WHERE ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized)
+        AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized)
         RETURN a, b, r
         LIMIT $limit
         """
@@ -764,7 +768,7 @@ class Neo4jDriver(GraphDriver):
             toLower(coalesce(f.file_path, '')) CONTAINS token OR
             toLower(coalesce(file.path, '')) CONTAINS token OR
             toLower(coalesce(file.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR f.project_id = $project_id)
+          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
@@ -787,9 +791,9 @@ class Neo4jDriver(GraphDriver):
         WHERE any(token IN tokens WHERE
             toLower(coalesce(c.name, '')) CONTAINS token OR
             toLower(coalesce(c.qualified_name, '')) CONTAINS token)
-          AND ($project_id IS NULL OR c.project_id = $project_id)
+          AND ($project_id IS NULL OR c.project_id_normalized = $project_id_normalized)
         MATCH (c)-[:CONTAINS]->(f:Function)
-        WHERE ($project_id IS NULL OR f.project_id = $project_id)
+        WHERE ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
@@ -811,7 +815,7 @@ class Neo4jDriver(GraphDriver):
         WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower($token)
            OR toLower(coalesce(file.path, '')) CONTAINS toLower($token)
            OR toLower(coalesce(file.file_path, '')) CONTAINS toLower($token)
-          AND ($project_id IS NULL OR f.project_id = $project_id)
+          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
@@ -837,17 +841,17 @@ class Neo4jDriver(GraphDriver):
             toLower(coalesce(internalFn.file_path, '')) CONTAINS token OR
             toLower(coalesce(internalFile.path, '')) CONTAINS token OR
             toLower(coalesce(internalFile.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR internalFn.project_id = $project_id)
+          AND ($project_id IS NULL OR internalFn.project_id_normalized = $project_id_normalized)
         WITH collect(internalFn.id) AS internalIds, modules
         MATCH (externalFile:File)-[:CONTAINS]->(externalFn:Function)
         WHERE NOT any(token IN modules WHERE
             toLower(coalesce(externalFn.file_path, '')) CONTAINS token OR
             toLower(coalesce(externalFile.path, '')) CONTAINS token OR
             toLower(coalesce(externalFile.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR externalFn.project_id = $project_id)
+          AND ($project_id IS NULL OR externalFn.project_id_normalized = $project_id_normalized)
         MATCH (externalFn)-[:{rel_pattern}]->(entryFn:Function)
         WHERE entryFn.id IN internalIds
-          AND ($project_id IS NULL OR entryFn.project_id = $project_id)
+          AND ($project_id IS NULL OR entryFn.project_id_normalized = $project_id_normalized)
         RETURN DISTINCT entryFn
         """
         records, _, _ = await self.execute_query(

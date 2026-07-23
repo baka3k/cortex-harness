@@ -36,13 +36,16 @@ class QdrantProjectScopeTests(unittest.TestCase):
             ) as post:
                 backend._qdrant_search(
                     "symbols", [0.1, 0.2], 5, "http://qdrant",
-                    project_id="project-a",
+                    project_id="PrOjEcT-A",
                 )
 
                 request = post.call_args.kwargs["json"]
                 self.assertEqual(
                     request["filter"],
-                    {"must": [{"key": "project_id", "match": {"value": "project-a"}}]},
+                    {"must": [{
+                        "key": "project_id_normalized",
+                        "match": {"value": "project-a"},
+                    }]},
                 )
 
     def test_semantic_backends_leave_unscoped_requests_unfiltered(self):
@@ -62,12 +65,15 @@ class QdrantProjectScopeTests(unittest.TestCase):
         ):
             intelligent_retrieval._qdrant_search(
                 "http://qdrant", "symbols", [0.1, 0.2], 5,
-                project_id="project-a",
+                project_id="PrOjEcT-A",
             )
 
         self.assertEqual(
             post.call_args.kwargs["json"]["filter"],
-            {"must": [{"key": "project_id", "match": {"value": "project-a"}}]},
+            {"must": [{
+                "key": "project_id_normalized",
+                "match": {"value": "project-a"},
+            }]},
         )
 
 
@@ -94,20 +100,20 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                             "query": "orders",
                             "mode": mode,
                             "collection": "symbols",
-                            "project_id": "project-a",
+                            "project_id": "PrOjEcT-A",
                         })
                     else:
                         await tool(
                             query="orders",
                             mode=mode,
                             collection="symbols",
-                            project_id="project-a",
+                            project_id="PrOjEcT-A",
                         )
 
                 self.assertEqual(
                     post.call_args.kwargs["json"]["filter"],
                     {"must": [{
-                        "key": "project_id",
+                        "key": "project_id_normalized",
                         "match": {"value": "project-a"},
                     }]},
                 )

@@ -2045,7 +2045,7 @@ async def tool_find_callers_of_endpoint(
     params: Dict[str, Any] = {"path": endpoint_path}
     ep_props = ["path: $path"]
     if be_project_id:
-        ep_props.append("project_id: $be_project")
+        ep_props.append("project_id_normalized: $be_project_normalized")
         params["be_project"] = be_project_id
 
     endpoint_match_lines: List[str] = []
@@ -2073,7 +2073,7 @@ async def tool_find_callers_of_endpoint(
     api_call_match = "MATCH (ac:ApiCall)-[m:MATCHES]->(ep)"
     if fe_project_id:
         params["fe_project"] = fe_project_id
-        api_call_match = "MATCH (ac:ApiCall {project_id: $fe_project})-[m:MATCHES]->(ep)"
+        api_call_match = "MATCH (ac:ApiCall {project_id_normalized: $fe_project_normalized})-[m:MATCHES]->(ep)"
 
     cypher = "\n".join(
         endpoint_match_lines
@@ -2218,14 +2218,14 @@ LIMIT 30
         fe_props = ["name: $component_name"]
         params = {"component_name": component_name}
         if fe_project_id:
-            fe_props.append("project_id: $fe_project")
+            fe_props.append("project_id_normalized: $fe_project_normalized")
             params["fe_project"] = fe_project_id
 
         endpoint_match = "MATCH (caller)-[:CALLS_API]->(ac:ApiCall)-[m:MATCHES]->(ep:ApiEndpoint)"
         if be_project_id:
             endpoint_match = (
                 "MATCH (caller)-[:CALLS_API]->(ac:ApiCall)-[m:MATCHES]->"
-                "(ep:ApiEndpoint {project_id: $be_project})"
+                "(ep:ApiEndpoint {project_id_normalized: $be_project_normalized})"
             )
             params["be_project"] = be_project_id
 
@@ -2253,12 +2253,12 @@ LIMIT 30
         ep_props = ["path: $endpoint_path"]
         params = {"endpoint_path": endpoint_path}
         if be_project_id:
-            ep_props.append("project_id: $be_project")
+            ep_props.append("project_id_normalized: $be_project_normalized")
             params["be_project"] = be_project_id
 
         api_call_match = "MATCH (ac:ApiCall)-[m:MATCHES]->(ep)"
         if fe_project_id:
-            api_call_match = "MATCH (ac:ApiCall {project_id: $fe_project})-[m:MATCHES]->(ep)"
+            api_call_match = "MATCH (ac:ApiCall {project_id_normalized: $fe_project_normalized})-[m:MATCHES]->(ep)"
             params["fe_project"] = fe_project_id
 
         cypher = "\n".join(

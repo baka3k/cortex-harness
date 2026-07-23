@@ -31,17 +31,19 @@ class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
             run_cypher_first=fake_run_cypher_first,
             db_candidates=["cortext"],
             expand_graph=True,
-            project_id="project-a",
+            project_id="PrOjEcT-A",
         )
 
         node_query, node_params, _ = calls[0]
         edge_query, edge_params, _ = calls[1]
-        self.assertIn("seed.project_id = $project_id", node_query)
-        self.assertIn("neighbor.project_id = $project_id", node_query)
-        self.assertIn("source.project_id = $project_id", edge_query)
-        self.assertIn("target.project_id = $project_id", edge_query)
-        self.assertEqual(node_params["project_id"], "project-a")
-        self.assertEqual(edge_params["project_id"], "project-a")
+        self.assertIn("seed.project_id_normalized = $project_id_normalized", node_query)
+        self.assertIn("neighbor.project_id_normalized = $project_id_normalized", node_query)
+        self.assertIn("source.project_id_normalized = $project_id_normalized", edge_query)
+        self.assertIn("target.project_id_normalized = $project_id_normalized", edge_query)
+        self.assertEqual(node_params["project_id"], "PrOjEcT-A")
+        self.assertEqual(edge_params["project_id"], "PrOjEcT-A")
+        self.assertEqual(node_params["project_id_normalized"], "project-a")
+        self.assertEqual(edge_params["project_id_normalized"], "project-a")
 
     async def test_expand_semantic_results_uses_vector_hits_as_graph_seeds(self):
         calls = []

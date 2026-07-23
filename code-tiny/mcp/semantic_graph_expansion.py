@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
 from framework_registry import servlet_active_generation_predicate
+from tools.common.project_scope import prepare_project_scope_parameters
 
 
 RunCypherFirst = Callable[[str, Dict[str, Any], List[str]], Awaitable[Tuple[str, List[Dict[str, Any]]]]]
@@ -134,11 +135,11 @@ async def expand_semantic_results(
     node_query = f"""
     UNWIND $seed_ids AS sid
     MATCH (seed {{id: sid}})
-    WHERE ($project_id IS NULL OR seed.project_id = $project_id)
+    WHERE ($project_id IS NULL OR seed.project_id_normalized = $project_id_normalized)
     MATCH p = (seed){rel_pattern}(neighbor)
     WHERE neighbor.id IS NOT NULL
       AND NOT neighbor.id IN $seed_ids
-      AND ($project_id IS NULL OR neighbor.project_id = $project_id)
+      AND ($project_id IS NULL OR neighbor.project_id_normalized = $project_id_normalized)
       AND {servlet_active_generation_predicate('neighbor')}
     WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
     ORDER BY hops ASC
@@ -164,11 +165,10 @@ async def expand_semantic_results(
            neighbor.language AS language,
            hops AS hop_distance
     """
-    params = {
-        "seed_ids": seed_ids,
-        "limit": limit,
-        "project_id": project_id,
-    }
+    params = prepare_project_scope_parameters(
+        node_query,
+        {"seed_ids": seed_ids, "limit": limit, "project_id": project_id},
+    )
 
     try:
         used_db, rows = await run_cypher_first(node_query, params, db_candidates)
@@ -220,8 +220,8 @@ async def expand_semantic_results(
     MATCH (source){edge_pattern}(target)
     WHERE source.id IN $node_ids
       AND target.id IN $node_ids
-      AND ($project_id IS NULL OR source.project_id = $project_id)
-      AND ($project_id IS NULL OR target.project_id = $project_id)
+      AND ($project_id IS NULL OR source.project_id_normalized = $project_id_normalized)
+      AND ($project_id IS NULL OR target.project_id_normalized = $project_id_normalized)
     RETURN DISTINCT source.id AS source,
            target.id AS target,
            type(r) AS type,
@@ -233,11 +233,11 @@ async def expand_semantic_results(
         edge_dbs = [str(expansion["db"])] if expansion.get("db") else db_candidates
         _, edge_rows = await run_cypher_first(
             edge_query,
-            {
+            prepare_project_scope_parameters(edge_query, {
                 "node_ids": node_ids,
                 "edge_limit": max(limit * 2, 25),
                 "project_id": project_id,
-            },
+            }),
             edge_dbs,
         )
         expansion["edges"] = [

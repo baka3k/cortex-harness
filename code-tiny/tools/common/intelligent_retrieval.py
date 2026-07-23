@@ -60,6 +60,8 @@ from tools.common.graph_expander import GraphExpander, GraphNode
 from tools.common.project_scope import (
     matches_project_scope,
     normalize_project_id,
+    prepare_project_scope_parameters,
+    project_id_lookup_key,
     qdrant_project_filter,
 )
 from tools.common.query_intent_classifier import classify_query, get_weight_profile
@@ -350,16 +352,19 @@ def _graph_keyword_search(
         for property_name in safe_properties
     )
     cypher = (
-        "MATCH (n) WHERE ($project_id IS NULL OR n.project_id = $project_id) AND "
+        "MATCH (n) WHERE ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) AND "
         + label_clause
         + "any(q IN $qs WHERE " + property_clause + ") "
         + "RETURN n LIMIT $limit"
     )
-    parameters = {
-        "qs": tokens,
-        "limit": limit,
-        "project_id": normalize_project_id(project_id),
-    }
+    parameters = prepare_project_scope_parameters(
+        cypher,
+        {
+            "qs": tokens,
+            "limit": limit,
+            "project_id": normalize_project_id(project_id),
+        },
+    )
     try:
         if hasattr(graph_driver, "execute_query_sync"):
             records, _, _ = graph_driver.execute_query_sync(cypher, parameters, database)
@@ -568,7 +573,7 @@ class IntelligentRetrievalEngine:
         q = (query or "").strip()
         if not q:
             return []
-        active_project_id = normalize_project_id(project_id)
+        active_project_id = project_id_lookup_key(project_id)
 
         t0 = time.perf_counter()
 
