@@ -54,8 +54,11 @@ from tools.common.analyzer_cache import (
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files
 from tools.common.semantic_inference import SemanticInferenceEngine
-from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, prepare_graph_args
+from tools.graph.cli import (
+    add_graph_provider_args,
+    create_graph_driver_from_args,
+    prepare_graph_args,
+)
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
 try:
@@ -1682,16 +1685,14 @@ async def build_backend_graph(
 
     # Incremental cleanup
     if incremental and (changed_set | deleted_set) and code_writer:
-        cleanup_targets = sorted(
-            (changed_set | deleted_set) - {
-                os.path.relpath(f, root).replace("\\", "/") for f in all_scanned_files
-            }
-        )
+        cleanup_targets = sorted(changed_set | deleted_set)
         if cleanup_targets:
             await cleanup_neo4j_for_files(
-                code_writer.driver,
-                cleanup_targets,
+                driver=code_writer.driver,
                 database=code_writer.database,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
             )
 
     # ── Dual-pipeline parse ───────────────────────────────────────────────────
@@ -2126,24 +2127,26 @@ async def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
 
+    if args.dry_run:
+        files = _scan_backend_files(args.root)
+        print(f"Dry run: {len(files)} TypeScript/JavaScript files found under {args.root}")
+        print(f"  Project type: {project_type}")
+        return 0
+
     code_writer = None
     driver = None
     if prepare_graph_args(args):
         try:
-            driver = await GraphDriverFactory.create_driver(
-                provider=GraphProvider.NEO4J,
-                uri=args.neo4j_uri,
-                user=args.neo4j_user,
-                password=args.neo4j_password,
-            )
-            code_writer = LanguageCodeWriter(
-                driver=driver,
-                database=args.neo4j_db,
-                batch_size=args.neo4j_batch_size,
-                verbose=args.verbose,
-            )
-            if args.verbose:
-                print(f"[backend-analyzer] Connected to graph store at {args.neo4j_uri}")
+            driver = await create_graph_driver_from_args(args)
+            if driver is not None:
+                code_writer = LanguageCodeWriter(
+                    driver=driver,
+                    database=args.neo4j_db,
+                    batch_size=args.neo4j_batch_size,
+                    verbose=args.verbose,
+                )
+                if args.verbose:
+                    print(f"[backend-analyzer] Connected to graph store at {args.neo4j_uri}")
         except Exception as exc:
             print(f"[backend-analyzer] graph connection failed: {exc}", file=sys.stderr)
 
@@ -2162,12 +2165,6 @@ async def main(argv: Optional[List[str]] = None) -> int:
             changed_files = list(load_manifest_paths(args.changed_files_manifest, args.root))
         if args.deleted_files_manifest:
             deleted_files = list(load_manifest_paths(args.deleted_files_manifest, args.root))
-
-    if args.dry_run:
-        files = _scan_backend_files(args.root)
-        print(f"Dry run: {len(files)} TypeScript/JavaScript files found under {args.root}")
-        print(f"  Project type: {project_type}")
-        return 0
 
     try:
         await build_backend_graph(
