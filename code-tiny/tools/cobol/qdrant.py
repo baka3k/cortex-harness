@@ -7,6 +7,11 @@ import uuid
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from tools.common.project_scope import (
+    PROJECT_ID_NORMALIZED_FIELD,
+    project_id_lookup_key,
+)
+
 from .models import AnalysisResult
 
 
@@ -67,6 +72,7 @@ def semantic_documents(result: AnalysisResult, *, max_chars: int = 800) -> list[
                 "start_line": node.evidence.start_line,
                 "end_line": node.evidence.end_line,
                 "project_id": result.project_id,
+                PROJECT_ID_NORMALIZED_FIELD: project_id_lookup_key(result.project_id),
                 "language": "cobol",
                 "code": detail[:max_chars] if max_chars > 0 else detail,
             },
@@ -106,7 +112,10 @@ def _delete_stale(
     cleanup_paths: Iterable[str],
     full_replace: bool,
 ) -> None:
-    must: list[dict[str, Any]] = [{"key": "project_id", "match": {"value": project_id}}]
+    must: list[dict[str, Any]] = [{
+        "key": PROJECT_ID_NORMALIZED_FIELD,
+        "match": {"value": project_id_lookup_key(project_id)},
+    }]
     paths = sorted(set(cleanup_paths))
     if not full_replace:
         if not paths:

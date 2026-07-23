@@ -66,12 +66,13 @@ class ExploreProjectScopeTests(unittest.TestCase):
         driver = _GraphDriver()
 
         ir._graph_keyword_search(
-            driver, "seed", "cortext", 5, project_id="project-a",
+            driver, "seed", "cortext", 5, project_id="PrOjEcT-A",
         )
 
         query, params, database = driver.queries[0]
-        self.assertIn("n.project_id = $project_id", query)
-        self.assertEqual(params["project_id"], "project-a")
+        self.assertIn("n.project_id_normalized = $project_id_normalized", query)
+        self.assertEqual(params["project_id"], "PrOjEcT-A")
+        self.assertEqual(params["project_id_normalized"], "project-a")
         self.assertEqual(database, "cortext")
 
     def test_graph_expansion_filters_seed_and_neighbor_projects(self):
@@ -80,14 +81,15 @@ class ExploreProjectScopeTests(unittest.TestCase):
 
         nodes = expander.expand(
             ["seed"], rel_types=["CALLS"], include_seeds=False,
-            project_id="project-a",
+            project_id="PrOjEcT-A",
         )
 
         self.assertEqual([node.node_id for node in nodes], ["neighbor"])
         query, params, database = driver.queries[0]
-        self.assertIn("seed.project_id = $project_id", query)
-        self.assertIn("neighbor.project_id = $project_id", query)
-        self.assertEqual(params["project_id"], "project-a")
+        self.assertIn("seed.project_id_normalized = $project_id_normalized", query)
+        self.assertIn("neighbor.project_id_normalized = $project_id_normalized", query)
+        self.assertEqual(params["project_id"], "PrOjEcT-A")
+        self.assertEqual(params["project_id_normalized"], "project-a")
         self.assertEqual(database, "cortext")
 
     def test_scoped_search_drops_foreign_candidates_and_bm25_only_hits(self):
@@ -127,14 +129,15 @@ class ExploreProjectScopeAsyncTests(unittest.IsolatedAsyncioTestCase):
         driver = _AsyncDriver()
         expander = AsyncGraphExpander(driver, database="cortext")
         nodes = await expander.expand(
-            ["seed"], include_seeds=False, project_id="project-a",
+            ["seed"], include_seeds=False, project_id="PrOjEcT-A",
         )
 
         self.assertEqual([node.node_id for node in nodes], ["neighbor"])
         query, params, database = driver.queries[0]
-        self.assertIn("seed.project_id = $project_id", query)
-        self.assertIn("neighbor.project_id = $project_id", query)
-        self.assertEqual(params["project_id"], "project-a")
+        self.assertIn("seed.project_id_normalized = $project_id_normalized", query)
+        self.assertIn("neighbor.project_id_normalized = $project_id_normalized", query)
+        self.assertEqual(params["project_id"], "PrOjEcT-A")
+        self.assertEqual(params["project_id_normalized"], "project-a")
         self.assertEqual(database, "cortext")
 
     async def test_service_propagates_project_scope_to_retrieval(self):
@@ -142,10 +145,10 @@ class ExploreProjectScopeAsyncTests(unittest.IsolatedAsyncioTestCase):
         run_retrieval = AsyncMock(return_value=[])
         with patch.object(service, "_run_retrieval", run_retrieval):
             result = await service.explore(
-                "orders", mode="semantic", project_id="project-a",
+                "orders", mode="semantic", project_id="PrOjEcT-A",
             )
 
-        self.assertEqual(run_retrieval.await_args.kwargs["project_id"], "project-a")
+        self.assertEqual(run_retrieval.await_args.kwargs["project_id"], "PrOjEcT-A")
         self.assertEqual(result["retrieval"]["graph_provider"], "falkordb")
         self.assertFalse(result["retrieval"]["graph_requested"])
         self.assertFalse(result["retrieval"]["degraded"])

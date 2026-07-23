@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from tools.graph.core.base import GraphProvider
 from tools.graph.driver.neo4j_driver import Neo4jDriver
+from tools.common.project_scope import prepare_project_scope_parameters
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ def _prepare_falkordb_query(
     query: str,
     parameters: Optional[Dict[str, Any]],
 ) -> Tuple[str, Dict[str, Any]]:
-    params = dict(parameters or {})
+    params = prepare_project_scope_parameters(query, parameters)
     if "datetime()" not in query:
         return query, params
 
@@ -280,7 +281,7 @@ class FalkorDBDriver(Neo4jDriver):
         cypher = """
         MATCH (n)
         WHERE n.id = $id
-          AND ($project_id IS NULL OR n.project_id = $project_id)
+          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
         RETURN n
         LIMIT 1
         """
@@ -312,7 +313,7 @@ class FalkorDBDriver(Neo4jDriver):
         cypher = """
         MATCH (n)
         WHERE n.id IN $ids
-          AND ($project_id IS NULL OR n.project_id = $project_id)
+          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
         RETURN n
         """
         records, _, _ = await self.execute_query(
@@ -352,7 +353,7 @@ class FalkorDBDriver(Neo4jDriver):
             toLower(n.name) CONTAINS toLower($query)
             OR toLower(coalesce(n.qualified_name, '')) CONTAINS toLower($query)
         )
-          AND ($project_id IS NULL OR n.project_id = $project_id)
+          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
@@ -382,7 +383,7 @@ class FalkorDBDriver(Neo4jDriver):
             OR toLower(coalesce(n.comment, '')) CONTAINS toLower($query)
             OR toLower(coalesce(n.summary, '')) CONTAINS toLower($query)
         )
-          AND ($project_id IS NULL OR n.project_id = $project_id)
+          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
@@ -403,7 +404,7 @@ class FalkorDBDriver(Neo4jDriver):
     ) -> List[Dict[str, Any]]:
         cypher = f"""
         CALL db.idx.fulltext.queryNodes({_cypher_string(label)}, $query) YIELD node, score
-        WHERE ($project_id IS NULL OR node.project_id = $project_id)
+        WHERE ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit
