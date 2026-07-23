@@ -1169,9 +1169,9 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 
 
 async def _list_databases() -> List[str]:
-    if DEFAULT_GRAPH_PROVIDER == "falkordb":
-        return [_normalize_db_name(DEFAULT_GRAPH_DB)]
     driver = await _get_graph_driver()
+    if DEFAULT_GRAPH_PROVIDER == "falkordb":
+        return await driver.list_databases()
     records, summary, keys = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
     names: List[str] = []
     for record in records:
