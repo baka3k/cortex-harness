@@ -36,6 +36,7 @@ from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, 
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
+from tools.common.project_scope import enrich_project_scope
 from tools.android import android_common
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, prepare_graph_args
@@ -1099,7 +1100,7 @@ class QdrantWriter:
     def upsert(self, points: List[Dict]) -> None:
         if not points:
             return
-        payload = {"points": points}
+        payload = {"points": enrich_project_scope(points)}
         for attempt in range(self.retries + 1):
             try:
                 response = requests.put(
@@ -4278,14 +4279,14 @@ async def build_call_graph(
                     batch_index += 1
                     if verbose:
                         print(f"[qdrant] Upsert batch {batch_index}/{total_batches}")
-                    qdrant_writer.upsert(batch)
+                    qdrant_writer.upsert(enrich_project_scope(batch))
                     write_qdrant_state({"total_points": total_points, "upserted": line_index})
                     batch = []
             if batch:
                 batch_index += 1
                 if verbose:
                     print(f"[qdrant] Upsert batch {batch_index}/{total_batches}")
-                qdrant_writer.upsert(batch)
+                qdrant_writer.upsert(enrich_project_scope(batch))
                 write_qdrant_state({"total_points": total_points, "upserted": line_index})
         if verbose:
             print("[qdrant] Upsert complete")

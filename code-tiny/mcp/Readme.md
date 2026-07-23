@@ -861,7 +861,7 @@ Input:
 | `top_k`      | No       | `str`  | Max matched nodes. Default: `10`.                             |
 | `db`         | No       | `str`  | Database override used by graph-assisted modes.               |
 | `collection` | No       | `str`  | Qdrant collection override.                                   |
-| `project_id` | No       | `str`  | Exact project scope for every retrieval and expansion stage.   |
+| `project_id` | No       | `str`  | Case-insensitive project scope for every retrieval and expansion stage. |
 | `debug`      | No       | `bool` | Include per-signal scoring details.                           |
 | `parser_type`| No       | `str`  | Canonical parser or alias; selects labels, properties, and relationships. |
 
@@ -883,7 +883,8 @@ Provider note: `semantic` mode is primarily Qdrant-backed. `hybrid` and
 out, the response can still contain semantic candidates plus diagnostics.
 When `project_id` is supplied, Qdrant vector search, graph keyword matching,
 BM25 boosting, graph expansion, and final result packaging remain inside that
-project. BM25 cannot introduce an unverified project-external candidate.
+project. Project-scope matching ignores letter case while preserving the raw
+stored identifier. BM25 cannot introduce an unverified project-external candidate.
 
 Example:
 
@@ -910,11 +911,14 @@ Input:
 | `db`          | No       | `str` | Graph name/database context. Use `hyper_graph` in the current runtime. |
 | `top_k`       | No       | `str` | Number of results.                                                     |
 | `collection`  | No       | `str` | Qdrant collection or project collection prefix.                        |
-| `project_id`  | No       | `str` | Project scope for indexed data.                                        |
+| `project_id`  | No       | `str` | Case-insensitive project scope for indexed data.                       |
 
 `project_id` is applied as a server-side Qdrant payload filter for every
 backend. With graph expansion enabled, the same scope is applied to graph
-seeds, neighbors, and returned edges.
+seeds, neighbors, and returned edges. Existing deployments must run
+`python code-tiny/scripts/backfill_project_scope_keys.py` first to inspect the
+migration, then repeat it with `--apply` to populate and index the normalized
+scope field.
 
 Output: Dict with `results`, or backend-specific semantic result fields. Each
 result normally includes score, node metadata, file path, symbol name, and code
@@ -1816,8 +1820,8 @@ Input:
 | --------------- | -------- | ----- | ------------------------------------------------------------------------ |
 | `endpoint_path` | Yes      | `str` | Backend endpoint path, for example `/api/users/:id`.                     |
 | `http_method`   | No       | `str` | `GET`, `POST`, `PUT`, `DELETE`, `ALL`, or empty for any. Default: `GET`. |
-| `be_project_id` | No       | `str` | Backend project scope.                                                   |
-| `fe_project_id` | No       | `str` | Frontend project scope.                                                  |
+| `be_project_id` | No       | `str` | Case-insensitive backend project scope.                                  |
+| `fe_project_id` | No       | `str` | Case-insensitive frontend project scope.                                 |
 | `db`            | No       | `str` | Graph database or graph name; uses active/default context.               |
 
 Output: Dict with `endpoint_path`, `callers`, and `total`. Each caller
@@ -1856,8 +1860,8 @@ Input:
 | ---------------- | -------- | ----- | ---------------------------------------------------------------- |
 | `component_name` | No       | `str` | Frontend component/screen name.                                  |
 | `endpoint_path`  | No       | `str` | Backend endpoint path. Required when `component_name` is absent. |
-| `fe_project_id`  | No       | `str` | Frontend project scope.                                          |
-| `be_project_id`  | No       | `str` | Backend project scope.                                           |
+| `fe_project_id`  | No       | `str` | Case-insensitive frontend project scope.                         |
+| `be_project_id`  | No       | `str` | Case-insensitive backend project scope.                          |
 | `max_depth`      | No       | `str` | Max frontend `CALLS` hops. Default: `5`.                         |
 | `db`             | No       | `str` | Graph database or graph name; uses active/default context.       |
 

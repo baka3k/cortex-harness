@@ -48,7 +48,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set
 
-from tools.common.project_scope import normalize_project_id
+from tools.common.project_scope import (
+    normalize_project_id,
+    prepare_project_scope_parameters,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,10 +135,10 @@ def _expand_cypher(rel_types: List[str], depth: int) -> str:
     return f"""
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
-WHERE ($project_id IS NULL OR seed.project_id = $project_id)
+WHERE ($project_id IS NULL OR seed.project_id_normalized = $project_id_normalized)
     MATCH p = (seed)-[:{rel}*1..{depth}]-(neighbor)
     WHERE neighbor.id <> sid
-      AND ($project_id IS NULL OR neighbor.project_id = $project_id)
+      AND ($project_id IS NULL OR neighbor.project_id_normalized = $project_id_normalized)
     WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
     RETURN
         seed_ids,
@@ -168,9 +171,9 @@ def _shortest_hop_cypher(rel_types: List[str], depth: int) -> str:
     return f"""
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
-WHERE ($project_id IS NULL OR seed.project_id = $project_id)
+WHERE ($project_id IS NULL OR seed.project_id_normalized = $project_id_normalized)
 MATCH p = shortestPath((seed)-[:{rel}*1..{depth}]-(target {{id: $target_id}}))
-WHERE ($project_id IS NULL OR target.project_id = $project_id)
+WHERE ($project_id IS NULL OR target.project_id_normalized = $project_id_normalized)
 RETURN length(p) AS hops
 ORDER BY hops
 LIMIT 1
@@ -311,7 +314,7 @@ class GraphExpander:
         cypher = """
 UNWIND $seed_ids AS sid
 MATCH (n {id: sid})
-WHERE ($project_id IS NULL OR n.project_id = $project_id)
+WHERE ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
 RETURN
     n.id                                   AS node_id,
     n.name                                 AS name,
@@ -375,6 +378,7 @@ RETURN
         params: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         """Execute a Cypher query and return rows as plain dicts."""
+        params = prepare_project_scope_parameters(cypher, params)
         try:
             if hasattr(self._driver, "execute_query_sync"):
                 records, _, _ = self._driver.execute_query_sync(cypher, params, self._database)
@@ -494,7 +498,7 @@ class AsyncGraphExpander:
         cypher = """
 UNWIND $seed_ids AS sid
 MATCH (n {id: sid})
-WHERE ($project_id IS NULL OR n.project_id = $project_id)
+WHERE ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
 RETURN
     n.id                                   AS node_id,
     n.name                                 AS name,
@@ -539,6 +543,7 @@ RETURN
         cypher: str,
         params: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
+        params = prepare_project_scope_parameters(cypher, params)
         try:
             if hasattr(self._driver, "execute_query"):
                 records, _, _ = await self._driver.execute_query(cypher, params, self._database)
