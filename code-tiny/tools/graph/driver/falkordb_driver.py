@@ -253,7 +253,17 @@ class FalkorDBDriver(Neo4jDriver):
     async def list_databases(self) -> List[str]:
         try:
             names = self._client.list_graphs()
-            return [name for name in names if isinstance(name, str)] or [self._database]
+            normalized_names = []
+            for name in names:
+                if isinstance(name, bytes):
+                    try:
+                        name = name.decode("utf-8")
+                    except UnicodeDecodeError:
+                        logger.warning("Ignoring non-UTF-8 FalkorDB graph name")
+                        continue
+                if isinstance(name, str):
+                    normalized_names.append(name)
+            return normalized_names or [self._database]
         except Exception as exc:
             logger.warning("Failed to list FalkorDB graphs: %s", exc)
             return [self._database]
