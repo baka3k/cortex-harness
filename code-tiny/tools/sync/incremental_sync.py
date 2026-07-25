@@ -54,6 +54,7 @@ from tools.common.sync_scope import (
 )
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, normalize_graph_provider, prepare_graph_args
+from tools.project_topology.registry import descriptor_spec_for_path
 from tools.vb.vb_path_classifier import VBPathClassifier
 from tools.ts.ts_project_detector import detect_project_type as _detect_ts_project_type
 
@@ -113,6 +114,18 @@ ANALYZERS: Dict[str, AnalyzerConfig] = {
     "sql": AnalyzerConfig("sql", os.path.join(_ROOT_DIR, "tools", "sql", "sql_analyzer.py"), True),
     "plsql": AnalyzerConfig("plsql", os.path.join(_ROOT_DIR, "tools", "plsql", "plsql_analyzer.py"), True),
 }
+
+PROJECT_TOPOLOGY_ANALYZER = AnalyzerConfig(
+    "project_topology",
+    os.path.join(
+        _ROOT_DIR,
+        "tools",
+        "project_topology",
+        "topology_analyzer.py",
+    ),
+    True,
+    writes_vectors=False,
+)
 
 FRAMEWORK_ANALYZERS: Dict[str, FrameworkAnalyzerConfig] = {
     "spring": FrameworkAnalyzerConfig(
@@ -868,9 +881,9 @@ async def _query_impacted_files(
 def _selected_parsers(parsers_arg: str) -> Tuple[Set[str], bool]:
     text = (parsers_arg or "auto").strip().lower()
     if text == "auto":
-        return set(ANALYZERS) | set(FRAMEWORK_ANALYZERS), True
+        return set(ANALYZERS) | set(FRAMEWORK_ANALYZERS) | {"project_topology"}, True
     values = {item.strip() for item in text.split(",") if item.strip()}
-    supported = set(ANALYZERS) | set(FRAMEWORK_ANALYZERS)
+    supported = set(ANALYZERS) | set(FRAMEWORK_ANALYZERS) | {"project_topology"}
     unsupported = sorted(values - supported)
     if unsupported:
         raise ValueError(f"Unsupported parser(s): {', '.join(unsupported)}")
@@ -1159,12 +1172,16 @@ def _walk_all_source_files(root: str) -> Set[str]:
         for fname in filenames:
             lower = fname.lower()
             ext = os.path.splitext(lower)[1]
-            if ext not in _SOURCE_EXTENSIONS and not lower.endswith(".gradle.kts"):
-                continue
             full = os.path.join(dirpath, fname)
             try:
                 rel = os.path.relpath(full, root_abs).replace("\\", "/")
             except ValueError:
+                continue
+            if (
+                ext not in _SOURCE_EXTENSIONS
+                and not lower.endswith(".gradle.kts")
+                and descriptor_spec_for_path(rel) is None
+            ):
                 continue
             found.add(rel)
     return found
@@ -1219,6 +1236,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "parsers": [],
         "primary_parsers": [],
         "framework_overlays": [],
+        "topology_overlays": [],
         "state_before": {},
         "state_after": {},
         "dirty_marked": False,
@@ -1461,7 +1479,11 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             if any(part in _SKIP_DIRS or part.startswith(".") for part in parts[:-1]):
                 return False
             lower = normalized.lower()
-            return Path(lower).suffix in _SOURCE_EXTENSIONS or lower.endswith(".gradle.kts")
+            return (
+                Path(lower).suffix in _SOURCE_EXTENSIONS
+                or lower.endswith(".gradle.kts")
+                or descriptor_spec_for_path(normalized) is not None
+            )
 
         for scope in scopes:
             current_sha = (
@@ -1715,6 +1737,16 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             changed_paths | deleted_paths | impacted_paths,
             root=root,
         )
+        topology_changed = {
+            path
+            for path in changed_paths | impacted_paths
+            if descriptor_spec_for_path(path) is not None
+        }
+        topology_deleted = {
+            path
+            for path in deleted_paths
+            if descriptor_spec_for_path(path) is not None
+        }
         if not parser_auto_mode:
             for framework in parser_filter & set(FRAMEWORK_ANALYZERS):
                 framework_grouped[framework].update(
@@ -1980,9 +2012,88 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 framework_info["finished_at"] = _now_iso()
                 framework_info["duration_seconds"] = round(time.time() - framework_started, 6)
 
+        topology_summaries: List[Dict[str, object]] = []
+        if "project_topology" in parser_filter and (
+            topology_changed or topology_deleted
+        ):
+            topology_changed_manifest = os.path.join(
+                manifest_root, f"project_topology_changed_{artifact_token}.json"
+            )
+            topology_deleted_manifest = os.path.join(
+                manifest_root, f"project_topology_deleted_{artifact_token}.json"
+            )
+            write_manifest_paths(topology_changed_manifest, topology_changed)
+            write_manifest_paths(topology_deleted_manifest, topology_deleted)
+            topology_info: Dict[str, object] = {
+                "parser": "project_topology",
+                "role": "topology_overlay",
+                "changed": len(topology_changed),
+                "deleted": len(topology_deleted),
+                "incremental_supported": True,
+                "writes_vectors": False,
+                "vector_status": "disabled",
+                "status": "pending",
+                "error": "",
+                "started_at": _now_iso(),
+                "finished_at": None,
+                "duration_seconds": None,
+                "changed_manifest": topology_changed_manifest,
+                "deleted_manifest": topology_deleted_manifest,
+            }
+            topology_summaries.append(topology_info)
+            topology_started = time.time()
+            cmd = _build_analyzer_cmd(
+                python_bin=args.python_bin,
+                analyzer=PROJECT_TOPOLOGY_ANALYZER,
+                root=root,
+                project_id=project_id,
+                project_name=project_name,
+                before_sha=before_sha,
+                after_sha=after_sha,
+                changed_manifest=(
+                    topology_changed_manifest if not full_scan else None
+                ),
+                deleted_manifest=(
+                    topology_deleted_manifest if not full_scan else None
+                ),
+                qdrant_collection=None,
+                message_scan_enabled=False,
+                message_output_dir=None,
+                message_qdrant_collection=None,
+                incremental=not full_scan,
+                verbose=args.verbose,
+                ignore_cache=bool(args.ignore_cache),
+            )
+            topology_info["command"] = cmd
+            print(
+                "[overlay] project_topology changed=%d deleted=%d mode=%s"
+                % (
+                    len(topology_changed),
+                    len(topology_deleted),
+                    "full" if full_scan else "incremental",
+                )
+            )
+            try:
+                _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=env)
+            except Exception as exc:
+                topology_info["status"] = "failed"
+                topology_info["error"] = str(exc)
+                raise
+            else:
+                topology_info["status"] = "success"
+                executed_parsers.append("project_topology")
+            finally:
+                topology_info["finished_at"] = _now_iso()
+                topology_info["duration_seconds"] = round(
+                    time.time() - topology_started, 6
+                )
+
         summary["primary_parsers"] = parser_summaries
         summary["framework_overlays"] = framework_summaries
-        summary["parsers"] = parser_summaries + framework_summaries
+        summary["topology_overlays"] = topology_summaries
+        summary["parsers"] = (
+            parser_summaries + framework_summaries + topology_summaries
+        )
         verification_paths = (
             set(current_inventory.entries)
             if full_scan or effective_detection == "hash" or args.reconcile

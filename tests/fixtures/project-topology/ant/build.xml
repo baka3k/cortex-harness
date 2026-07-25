@@ -1,0 +1,4 @@
+<project name="legacy" default="package">
+  <target name="compile" />
+  <target name="package" depends="compile" />
+</project>

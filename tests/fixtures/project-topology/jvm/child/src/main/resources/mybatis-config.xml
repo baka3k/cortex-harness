@@ -1,0 +1,5 @@
+<configuration>
+  <mappers>
+    <mapper resource="mappers/UserMapper.xml" />
+  </mappers>
+</configuration>

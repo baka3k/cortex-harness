@@ -18,14 +18,27 @@ GENERIC_LABELS = frozenset({
     "Project", "Repository", "Module", "Package", "File", "Namespace",
     "Class", "Interface", "Enum", "Type", "Function", "Method", "Field",
     "Alias", "Template", "FunctionType", "Event", "Resource", "UIControl",
+    "ProjectModule", "BuildDescriptor", "Dependency", "FrameworkInstance",
+    "GrpcService", "GrpcEndpoint",
 })
 GENERIC_SEARCHABLE_PROPERTIES = (
     "name", "qualified_name", "target_name", "signature", "type_signature",
     "file_path", "path", "summary", "code", "comment",
+    "module_id", "module_path", "visibility", "is_public_api",
+    "descriptor_type", "role", "parse_depth", "protocol", "framework",
 )
 GENERIC_RELATIONSHIPS = (
     "CALLS", "DECLARES", "CONTAINS", "DEPENDS_ON", "IMPORTS", "EXPORTS",
     "IMPLEMENTS", "EXTENDS", "ALIASES", "ALIAS_OF",
+    "HAS_DESCRIPTOR", "EXPOSES_API", "EXPOSES_ENDPOINT", "USES_FRAMEWORK",
+)
+CONTEXT_RELATIONSHIPS = frozenset(
+    {
+        "HAS_DESCRIPTOR",
+        "EXPOSES_API",
+        "EXPOSES_ENDPOINT",
+        "USES_FRAMEWORK",
+    }
 )
 CPLUS_RELATIONSHIPS = (
     "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "DECLARES", "CONTAINS",
@@ -63,6 +76,9 @@ DATABASE_SEARCHABLE_PROPERTIES = tuple(dict.fromkeys((
 GENERIC_FEATURES = frozenset({
     "graph_search", "graph_paths", "graph_flow", "semantic_search",
     "graph_exploration", "dependency_planning",
+    "module_queries", "public_api_queries", "endpoint_inventory_queries",
+    "architecture_summary_queries", "special_file_queries",
+    "framework_context_queries",
 })
 FRAMEWORK_FEATURES = GENERIC_FEATURES | frozenset({
     "framework_query", "profile_labels", "profile_relationships",
@@ -85,7 +101,7 @@ _DIMENSION_LABEL_EVIDENCE = MappingProxyType({
         "Widget", "Screen", "AndroidComponent", "Project", "Repository",
     }),
     "calls": frozenset(),
-    "endpoints": frozenset({"ApiEndpoint", "HttpEndpoint", "Route"}),
+    "endpoints": frozenset({"ApiEndpoint", "HttpEndpoint", "GrpcEndpoint", "Route"}),
     "database": frozenset({
         "Table", "View", "Procedure", "Database", "DataRepository", "Repository",
         "MyBatisStatement", "SqlStatement", "CobolSqlStatement",
@@ -133,7 +149,18 @@ class FrameworkQueryConfig:
             for profile, relationships in self.default_query_profiles.items()
             if str(profile).strip()
         }
-        default_relationships = tuple(dict.fromkeys((*CORE_RELATIONSHIPS, *self.relationships)))
+        default_relationships = tuple(
+            dict.fromkeys(
+                (
+                    *CORE_RELATIONSHIPS,
+                    *(
+                        relationship
+                        for relationship in self.relationships
+                        if relationship not in CONTEXT_RELATIONSHIPS
+                    ),
+                )
+            )
+        )
         profiles.setdefault("default", default_relationships)
         profiles.setdefault("find_callers_of_endpoint", ("CALLS_API", "MATCHES"))
         profiles.setdefault(
@@ -153,6 +180,23 @@ class FrameworkQueryConfig:
             "analyze_workflow_impact",
             tuple(dict.fromkeys((*default_relationships, "HAS_STEP", "NAVIGATE"))),
         )
+        profiles.setdefault(
+            "get_project_modules", ("HAS_DESCRIPTOR", "DEPENDS_ON")
+        )
+        profiles.setdefault("get_public_apis", ("EXPOSES_API",))
+        profiles.setdefault("get_endpoints", ("EXPOSES_ENDPOINT",))
+        profiles.setdefault(
+            "get_module_architecture_summary",
+            (
+                "HAS_DESCRIPTOR",
+                "DEPENDS_ON",
+                "EXPOSES_API",
+                "EXPOSES_ENDPOINT",
+                "USES_FRAMEWORK",
+            ),
+        )
+        profiles.setdefault("get_project_special_files", ("HAS_DESCRIPTOR",))
+        profiles.setdefault("get_framework_context", ("USES_FRAMEWORK",))
         legacy_level = self.support_level.strip().lower()
         default_symbol_level = "generic" if legacy_level == "generic" else "full"
         default_call_level = (

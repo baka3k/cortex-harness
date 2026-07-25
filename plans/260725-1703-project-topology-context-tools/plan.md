@@ -1,12 +1,13 @@
 ---
 title: "Project Topology, Parser Coverage, and Context MCP Tools"
-status: pending
+status: completed
 created: 2026-07-25
 mode: hi-plan --full
 scope: all registered code-tiny primary analyzers and framework overlays, special-file coverage, project topology graph, public API and endpoint semantics, unified MCP context tools
 blockedBy: [neo4j-to-falkordb-migration]
 relatedPlans: [260713-1638-framework-parser-integration, 260718-2159-incremental-scan-reliability, 260719-0100-mcp-query-capability-hardening, 260719-2150-parser-mcp-runtime-alignment]
 reviewed: 2026-07-25
+completed: 2026-07-25
 ---
 
 # Project Topology, Parser Coverage, and Context MCP Tools
