@@ -1,0 +1,14 @@
+{
+  "dependencies": {
+    "tests/fixtures/flutter-app/lib/main.dart": [
+      "tests/fixtures/flutter-app/lib/widgets/home_page.dart"
+    ],
+    "tests/fixtures/flutter-app/lib/widgets/home_page.dart": [
+      "tests/fixtures/flutter-app/lib/widgets/parts.dart"
+    ],
+    "tests/fixtures/flutter-app/lib/widgets/parts.dart": [
+      "tests/fixtures/flutter-app/lib/widgets/parts_values.dart"
+    ]
+  },
+  "version": 1
+}
