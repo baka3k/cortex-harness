@@ -1,0 +1,5 @@
+project(native_core)
+add_library(core STATIC core.cpp)
+add_executable(app main.cpp)
+target_link_libraries(app PRIVATE core)
+add_subdirectory(extra)

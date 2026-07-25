@@ -1,0 +1,8 @@
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/main_nav">
+    <fragment
+        android:id="@+id/details"
+        android:name="example.app.DetailsFragment">
+        <deepLink android:uri="https://example.test/details/{id}" />
+    </fragment>
+</navigation>

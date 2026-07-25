@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">Topology App</string>
+    <string name="api_key">must-not-leak</string>
+    <color name="brand">#123456</color>
+    <style name="AppTheme" parent="Theme.Material3.DayNight" />
+</resources>

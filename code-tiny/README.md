@@ -7,6 +7,8 @@
 - persist semantic vectors for primary-language symbols to Qdrant;
 - enrich primary-language graphs with framework-specific facts; and
 - expose search, traversal, impact, dependency-planning, and workflow tools through one MCP endpoint.
+- derive canonical project modules, descriptors, dependencies, framework
+  instances, public APIs, and gRPC endpoints without executing project builds.
 
 Run the examples below from the `code-tiny/` directory unless stated otherwise.
 
@@ -54,6 +56,26 @@ Framework overlays run after their prerequisite primary parser. They write graph
 | `flutter` | `tools.flutter.flutter_analyzer --mode flutter` | Dart |
 | `aspnet_core` | `tools.aspnet_core.aspnet_core_analyzer` | C# |
 | `aspnet_framework` | `tools.aspnet_framework.aspnet_framework_analyzer` | C# |
+
+### Project topology overlay
+
+`project_topology` is a graph-only, non-exclusive overlay. Auto sync invokes it
+after primary and framework analyzers whenever an allowlisted descriptor
+changes. It statically reads Gradle settings/build files, Maven POMs, Ant,
+CMake, Make, Android manifests/resources, protobuf IDLs, and identity-level
+package/framework descriptors. It never runs build scripts or follows
+descriptor symlinks, bounds file/XML inputs, and redacts secret-bearing
+configuration.
+
+On an affected incremental run, the overlay recomputes the bounded descriptor
+topology and replaces only nodes and relationships marked
+`topology_owned=true`. Canonical source and specialized framework facts remain
+owned by their existing analyzers. A no-change sync does not start the topology
+analyzer.
+
+The executable coverage contract is
+[`docs/PROJECT_TOPOLOGY_ACCEPTANCE_MATRIX.json`](../docs/PROJECT_TOPOLOGY_ACCEPTANCE_MATRIX.json).
+Identity-level entries intentionally do not claim dependency or semantic depth.
 
 ## Persistence model
 

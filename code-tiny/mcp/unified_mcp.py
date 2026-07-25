@@ -91,6 +91,12 @@ _UNIFIED_TOOL_NAMES: frozenset = frozenset(
         "get_api_call_chain",
         "analyze_workflow_impact",
         "find_workflows_containing",
+        "get_project_modules",
+        "get_public_apis",
+        "get_endpoints",
+        "get_module_architecture_summary",
+        "get_project_special_files",
+        "get_framework_context",
     }
 )
 _unified_catalog = build_catalog(_UNIFIED_TOOL_NAMES)
@@ -1984,6 +1990,267 @@ async def _run_bridge_query(cypher: str, params: Dict[str, Any], database: str) 
         close_result = driver.close()
         if hasattr(close_result, "__await__"):
             await close_result
+
+
+async def _run_project_context_tool(
+    *,
+    tool_name: str,
+    project_id: str,
+    parser_type: str,
+    db: str,
+    required_labels: Tuple[str, ...],
+    required_relationships: Tuple[str, ...],
+    method_name: str,
+    method_args: Dict[str, Any],
+) -> Dict[str, Any]:
+    database = _resolve_graph_database(db)
+    _, _, routing, capability_diagnostics, capability_error = (
+        await _resolve_direct_capability_context(
+            tool_name,
+            parser_type,
+            database,
+            required_labels=required_labels,
+            required_relationships=required_relationships,
+            error_payload={"project_id": project_id},
+        )
+    )
+    if capability_error:
+        return capability_error
+    from services.project_context_service import ProjectContextService
+
+    async def runner(cypher: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return await _run_bridge_query(cypher, params, database)
+
+    service = ProjectContextService(runner)
+    method = getattr(service, method_name)
+    try:
+        result = await method(project_id=project_id, **method_args)
+    except Exception as exc:
+        result = _build_tool_error(
+            tool_name,
+            {
+                "project_id": project_id,
+                "parser_type": parser_type,
+                "db": db,
+                **method_args,
+            },
+            exc,
+            backend_name=_resolve_backend_name(parser_type),
+        )
+    result["capability"] = routing
+    if capability_diagnostics:
+        result["capability_diagnostics"] = capability_diagnostics
+    return result
+
+
+@mcp_server.tool(
+    name="get_project_modules",
+    description="Return canonical project modules, descriptors, and dependencies.",
+    output_schema=None,
+)
+async def tool_get_project_modules(
+    project_id: str = "",
+    module_id: str = "",
+    module_path: str = "",
+    include_dependencies: bool = True,
+    offset: int = 0,
+    limit: int = 50,
+    db: str = "",
+    parser_type: str = "",
+) -> Dict[str, Any]:
+    return await _run_project_context_tool(
+        tool_name="get_project_modules",
+        project_id=project_id,
+        parser_type=parser_type,
+        db=db,
+        required_labels=("ProjectModule", "BuildDescriptor"),
+        required_relationships=("HAS_DESCRIPTOR",),
+        method_name="get_project_modules",
+        method_args={
+            "module_id": module_id,
+            "module_path": module_path,
+            "include_dependencies": include_dependencies,
+            "offset": offset,
+            "limit": limit,
+        },
+    )
+
+
+@mcp_server.tool(
+    name="get_public_apis",
+    description="Return strict source-level public/exported APIs by module.",
+    output_schema=None,
+)
+async def tool_get_public_apis(
+    project_id: str = "",
+    module_id: str = "",
+    symbol_kinds: Optional[List[str]] = None,
+    language: str = "",
+    include_inferred: bool = False,
+    offset: int = 0,
+    limit: int = 50,
+    db: str = "",
+    parser_type: str = "",
+) -> Dict[str, Any]:
+    return await _run_project_context_tool(
+        tool_name="get_public_apis",
+        project_id=project_id,
+        parser_type=parser_type,
+        db=db,
+        required_labels=("ProjectModule",),
+        required_relationships=("EXPOSES_API",),
+        method_name="get_public_apis",
+        method_args={
+            "module_id": module_id,
+            "symbol_kinds": symbol_kinds or [],
+            "language": language,
+            "include_inferred": include_inferred,
+            "offset": offset,
+            "limit": limit,
+        },
+    )
+
+
+@mcp_server.tool(
+    name="get_endpoints",
+    description="Return normalized HTTP, route, page, service, and gRPC endpoints.",
+    output_schema=None,
+)
+async def tool_get_endpoints(
+    project_id: str = "",
+    module_id: str = "",
+    protocol: str = "",
+    framework: str = "",
+    http_method: str = "",
+    query: str = "",
+    offset: int = 0,
+    limit: int = 50,
+    db: str = "",
+    parser_type: str = "",
+) -> Dict[str, Any]:
+    return await _run_project_context_tool(
+        tool_name="get_endpoints",
+        project_id=project_id,
+        parser_type=parser_type,
+        db=db,
+        required_labels=("ProjectModule",),
+        required_relationships=("EXPOSES_ENDPOINT",),
+        method_name="get_endpoints",
+        method_args={
+            "module_id": module_id,
+            "protocol": protocol,
+            "framework": framework,
+            "http_method": http_method,
+            "query": query,
+            "offset": offset,
+            "limit": limit,
+        },
+    )
+
+
+@mcp_server.tool(
+    name="get_module_architecture_summary",
+    description="Return bounded indexed-graph architecture context.",
+    output_schema=None,
+)
+async def tool_get_module_architecture_summary(
+    project_id: str = "",
+    module_id: str = "",
+    all_modules: bool = False,
+    detail_level: str = "standard",
+    item_limit: int = 10,
+    db: str = "",
+    parser_type: str = "",
+) -> Dict[str, Any]:
+    return await _run_project_context_tool(
+        tool_name="get_module_architecture_summary",
+        project_id=project_id,
+        parser_type=parser_type,
+        db=db,
+        required_labels=("ProjectModule",),
+        required_relationships=(),
+        method_name="get_module_architecture_summary",
+        method_args={
+            "module_id": module_id,
+            "all_modules": all_modules,
+            "detail_level": detail_level,
+            "item_limit": item_limit,
+        },
+    )
+
+
+@mcp_server.tool(
+    name="get_project_special_files",
+    description="Return decisive project files with redaction-safe summaries.",
+    output_schema=None,
+)
+async def tool_get_project_special_files(
+    project_id: str = "",
+    module_id: str = "",
+    role: str = "",
+    parser: str = "",
+    framework: str = "",
+    parse_depth: str = "",
+    status: str = "",
+    include_generated: bool = True,
+    offset: int = 0,
+    limit: int = 50,
+    db: str = "",
+    parser_type: str = "",
+) -> Dict[str, Any]:
+    return await _run_project_context_tool(
+        tool_name="get_project_special_files",
+        project_id=project_id,
+        parser_type=parser_type,
+        db=db,
+        required_labels=("ProjectModule", "BuildDescriptor"),
+        required_relationships=("HAS_DESCRIPTOR",),
+        method_name="get_project_special_files",
+        method_args={
+            "module_id": module_id,
+            "role": role,
+            "parser": parser,
+            "framework": framework,
+            "parse_depth": parse_depth,
+            "status": status,
+            "include_generated": include_generated,
+            "offset": offset,
+            "limit": limit,
+        },
+    )
+
+
+@mcp_server.tool(
+    name="get_framework_context",
+    description="Return framework instances and dimension-specific context.",
+    output_schema=None,
+)
+async def tool_get_framework_context(
+    project_id: str = "",
+    module_id: str = "",
+    framework: str = "",
+    dimensions: Optional[List[str]] = None,
+    offset: int = 0,
+    limit: int = 50,
+    db: str = "",
+    parser_type: str = "",
+) -> Dict[str, Any]:
+    return await _run_project_context_tool(
+        tool_name="get_framework_context",
+        project_id=project_id,
+        parser_type=parser_type,
+        db=db,
+        required_labels=("ProjectModule", "FrameworkInstance"),
+        required_relationships=("USES_FRAMEWORK",),
+        method_name="get_framework_context",
+        method_args={
+            "module_id": module_id,
+            "framework": framework,
+            "dimensions": dimensions or [],
+            "offset": offset,
+            "limit": limit,
+        },
+    )
 
 
 def _format_props(props: List[str]) -> str:

@@ -17,7 +17,25 @@ because it adds or updates graph annotations.
 
 The normal entry point is `unified_mcp.py`. It exposes one MCP server named
 `graph_mcp` and routes each call to the appropriate backend. The current unified
-server exposes **42 tools**.
+server exposes **40 tools**.
+
+## Project context tools
+
+Six bounded aggregate tools expose indexed architecture context:
+
+| Tool | Purpose |
+| --- | --- |
+| `get_project_modules` | Canonical modules, descriptors, and internal/external dependencies |
+| `get_public_apis` | Strict source-level public/exported declarations; inferred C/C++ headers are opt-in |
+| `get_endpoints` | Normalized HTTP, route, service, page, and gRPC endpoint inventory |
+| `get_module_architecture_summary` | Counts and bounded samples from the indexed graph; no filesystem rescan |
+| `get_project_special_files` | Descriptor roles, parse depth, diagnostics, freshness, and redaction-safe summaries |
+| `get_framework_context` | Framework instances and independently reported context dimensions |
+
+All six require `project_id`, use deterministic ordering and limits, and return
+capability diagnostics when the active provider schema lacks required topology
+labels or relationships. `get_module_architecture_summary` additionally
+requires `module_id` or explicit `all_modules=true`.
 
 ## How To Use This Guide
 

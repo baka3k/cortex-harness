@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Project topology and context tools](2026-07-25-project-topology-context-tools.md)
 - [Case-insensitive project scope](2026-07-23-case-insensitive-project-scope.md)
 - [Project-scoped MCP instances](2026-07-20-project-scoped-mcp-instances.md)
 - [Project-scoped semantic retrieval](2026-07-19-project-scoped-semantic-retrieval.md)
