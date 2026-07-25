@@ -89,3 +89,4 @@ code-tiny/tools/common/aspnet/roslyn_worker/obj/
 code-tiny/tools/common/aspnet
 code-tiny/tools/common/aspnet/roslyn_worker/bin/
 code-tiny/tools/common/aspnet/roslyn_worker/obj/
+.cortext-harness/config/dev.json
