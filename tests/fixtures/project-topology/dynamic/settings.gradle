@@ -1,0 +1,2 @@
+rootProject.name = "dynamic"
+include(System.getenv("DYNAMIC_MODULE"))

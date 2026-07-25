@@ -112,6 +112,41 @@ CONSTRAINTS: list[tuple[str, str]] = [
             "FOR (p:RouteParam) REQUIRE p.id IS UNIQUE"
         ),
     ),
+    (
+        "unique_project_module_id",
+        (
+            "CREATE CONSTRAINT unique_project_module_id IF NOT EXISTS "
+            "FOR (m:ProjectModule) REQUIRE m.id IS UNIQUE"
+        ),
+    ),
+    (
+        "unique_build_descriptor_id",
+        (
+            "CREATE CONSTRAINT unique_build_descriptor_id IF NOT EXISTS "
+            "FOR (d:BuildDescriptor) REQUIRE d.id IS UNIQUE"
+        ),
+    ),
+    (
+        "unique_dependency_id",
+        (
+            "CREATE CONSTRAINT unique_dependency_id IF NOT EXISTS "
+            "FOR (d:Dependency) REQUIRE d.id IS UNIQUE"
+        ),
+    ),
+    (
+        "unique_framework_instance_id",
+        (
+            "CREATE CONSTRAINT unique_framework_instance_id IF NOT EXISTS "
+            "FOR (f:FrameworkInstance) REQUIRE f.id IS UNIQUE"
+        ),
+    ),
+    (
+        "unique_grpc_endpoint_id",
+        (
+            "CREATE CONSTRAINT unique_grpc_endpoint_id IF NOT EXISTS "
+            "FOR (e:GrpcEndpoint) REQUIRE e.id IS UNIQUE"
+        ),
+    ),
 ]
 
 INDEXES: list[tuple[str, str]] = [
