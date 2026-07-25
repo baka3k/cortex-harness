@@ -22,5 +22,6 @@ Keep topology as a graph-only overlay, preserve specialized Android and framewor
 
 - Plan: [Project Topology, Parser Coverage, and Context MCP Tools](../../plans/260725-1703-project-topology-context-tools/plan.md)
 - Implementation report: [Project topology/context-tools implementation report](../../plans/260725-1703-project-topology-context-tools/reports/implementation-report.md)
+- Implementation commit: `7b887bf4cc4235ea7e89796189cc97e930c7b84b`
 - Executable coverage: `docs/PROJECT_TOPOLOGY_ACCEPTANCE_MATRIX.json`
 - Acceptance assertions: `tests/test_project_topology_acceptance_matrix.py:28`, `tests/test_project_topology_acceptance_matrix.py:58`
