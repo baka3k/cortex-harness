@@ -150,6 +150,22 @@ class FunctionDef:
     note: str = ""
 
 
+def _cplus_api_visibility(code: str, file_path: str) -> Tuple[str, bool, str]:
+    """Classify explicit exports and keep header-only evidence opt-in."""
+
+    header = code.split("{", 1)[0]
+    explicit_patterns = (
+        r"__declspec\s*\(\s*dllexport\s*\)",
+        r"__attribute__\s*\(\([^)]*visibility\s*\(\s*[\"']default[\"']\s*\)",
+        r'\bextern\s+"C"\b',
+    )
+    if any(re.search(pattern, header) for pattern in explicit_patterns):
+        return "exported", True, "explicit export/linkage attribute"
+    if os.path.splitext(file_path)[1].lower() in {".h", ".hh", ".hpp", ".hxx"}:
+        return "inferred", False, "public-header location heuristic"
+    return "unknown", False, "no explicit export evidence"
+
+
 @dataclass
 class FileDef:
     file_path: str
@@ -3797,6 +3813,9 @@ SET c.node_type = 'code',
                     "build_system": build_system,
                 })
             for func in payload["functions"]:
+                visibility, is_public_api, export_evidence = _cplus_api_visibility(
+                    func.get("code") or "", func.get("file_path") or ""
+                )
                 # Lean metadata for post-loop DECLARES-inference
                 func_metas.append({
                     "id": func["symbol_id"],
@@ -3820,6 +3839,14 @@ SET c.node_type = 'code',
                     "comment": func["comment"],
                     "summary": func["summary"],
                     "note": func["note"],
+                    "exported": is_public_api,
+                    "visibility": visibility,
+                    "is_public_api": is_public_api,
+                    "visibility_source": "source-export",
+                    "export_evidence": export_evidence,
+                    "signature": " ".join(
+                        (func.get("code") or "").split("{", 1)[0].split()
+                    )[:500],
                     "project_id": project_id,
                     "project_name": project_name,
                     "language": language,

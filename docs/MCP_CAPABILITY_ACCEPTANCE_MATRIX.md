@@ -46,6 +46,13 @@ relationship rows. Other rows link to their existing parser/framework regression
 suites; a route alias alone is never accepted as evidence for the newly added
 semantic capabilities.
 
+Project-topology and aggregate-context coverage is separately executable in
+`tests/test_project_topology_acceptance_matrix.py`, backed by
+`docs/PROJECT_TOPOLOGY_ACCEPTANCE_MATRIX.json`. It requires rows for all 22
+primary analyzers, all 12 framework overlays, and all six project-context MCP
+tools. Parse depth is explicit; an identity adapter is not advertised as a
+semantic parser.
+
 Endpoint query tools additionally inspect the live graph schema. If required
 labels such as `ApiEndpoint` or relationships such as `HANDLES` are absent (or
 schema inspection is unavailable), the tool returns `capability_unavailable`

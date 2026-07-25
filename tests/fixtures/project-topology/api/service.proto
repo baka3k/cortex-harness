@@ -1,0 +1,9 @@
+syntax = "proto3";
+package example.users;
+
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User) {
+    option (google.api.http) = { get: "/v1/users/{id}" };
+  }
+  rpc StreamUsers (stream Query) returns (stream User);
+}

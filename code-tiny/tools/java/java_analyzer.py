@@ -46,7 +46,7 @@ try:
 except Exception:
     ts_get_parser = None
 
-_PARSE_CACHE_VERSION = "java-v2026-03-09-1"
+_PARSE_CACHE_VERSION = "java-v2026-07-25-public-api-1"
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -100,6 +100,11 @@ class FunctionDef:
     comment: str = ""
     summary: str = ""
     note: str = ""
+    visibility: str = "unknown"
+    is_public_api: bool = False
+    visibility_source: str = "source-modifier"
+    export_evidence: str = ""
+    signature: str = ""
 
 
 @dataclass
@@ -153,6 +158,33 @@ class ClassDef:
     comment: str = ""
     summary: str = ""
     note: str = ""
+    visibility: str = "unknown"
+    is_public_api: bool = False
+    visibility_source: str = "source-modifier"
+    export_evidence: str = ""
+    signature: str = ""
+
+
+def _java_api_visibility(
+    snippet: str, *, implicit_public: bool = False
+) -> Tuple[str, bool, str]:
+    """Classify source-level Java visibility without compiled ABI inference."""
+
+    header = snippet.split("{", 1)[0]
+    tokens = set(re.findall(r"\b(public|protected|private)\b", header))
+    if "private" in tokens:
+        return "private", False, "explicit private"
+    if "protected" in tokens:
+        return "protected", False, "explicit protected"
+    if "public" in tokens:
+        return "public", True, "explicit public"
+    if implicit_public:
+        return "public", True, "implicit interface/annotation public"
+    return "package", False, "package-private by Java language rule"
+
+
+def _source_signature(snippet: str) -> str:
+    return " ".join(snippet.split("{", 1)[0].split())[:500]
 
 
 @dataclass
@@ -746,6 +778,7 @@ def parse_java_file(
     function_types: List[FunctionTypeDef] = []
     relation_edges: List[RelationEdge] = []
     class_super_map: Dict[str, List[str]] = {}
+    class_kind_map: Dict[str, str] = {}
 
     package_def = None
     if package_name:
@@ -784,6 +817,7 @@ def parse_java_file(
         note = _build_note(snippet, comment, summary)
         class_id = _class_id(package_name, class_path)
         qualified = _class_qualified_name(package_name, class_path)
+        visibility, is_public_api, export_evidence = _java_api_visibility(snippet)
         classes.append(
             ClassDef(
                 symbol_id=class_id,
@@ -798,10 +832,15 @@ def parse_java_file(
                 comment=comment,
                 summary=summary,
                 note=note,
+                visibility=visibility,
+                is_public_api=is_public_api,
+                export_evidence=export_evidence,
+                signature=_source_signature(snippet),
             )
         )
         super_types = _extract_super_types(class_node, source_bytes)
         class_super_map[class_path] = super_types
+        class_kind_map[class_path] = kind
         if super_types:
             if kind in {"class", "anonymous"}:
                 first, rest = super_types[0], super_types[1:]
@@ -859,6 +898,11 @@ def parse_java_file(
         comment = _extract_leading_comment(method_node, source_bytes)
         summary = comment
         note = _build_note(snippet, comment, summary)
+        owner_kind = class_kind_map.get(class_name or "", "")
+        visibility, is_public_api, export_evidence = _java_api_visibility(
+            snippet,
+            implicit_public=owner_kind in {"interface", "annotation"},
+        )
         functions.append(
             FunctionDef(
                 symbol_id=symbol_id,
@@ -875,6 +919,10 @@ def parse_java_file(
                 comment=comment,
                 summary=summary,
                 note=note,
+                visibility=visibility,
+                is_public_api=is_public_api,
+                export_evidence=export_evidence,
+                signature=_source_signature(snippet),
             )
         )
 
@@ -1002,6 +1050,10 @@ def parse_java_file(
                     comment="",
                     summary="",
                     note=_build_note(snippet, "", ""),
+                    visibility="private",
+                    is_public_api=False,
+                    export_evidence="lambda is not a declared public API",
+                    signature=_source_signature(snippet),
                 )
             )
             relation_edges.append(
@@ -2043,6 +2095,11 @@ async def build_call_graph(
                         "comment": class_def["comment"],
                         "summary": class_def["summary"],
                         "note": class_def["note"],
+                        "visibility": class_def.get("visibility", "unknown"),
+                        "is_public_api": bool(class_def.get("is_public_api", False)),
+                        "visibility_source": class_def.get("visibility_source", "source-modifier"),
+                        "export_evidence": class_def.get("export_evidence", ""),
+                        "signature": class_def.get("signature", ""),
                         "project_id": project_id,
                         "project_name": project_name,
                         "language": language,
@@ -2088,7 +2145,12 @@ async def build_call_graph(
                         "comment": func["comment"],
                         "summary": func["summary"],
                         "note": func["note"],
-                        "exported": False,
+                        "exported": bool(func.get("is_public_api", False)),
+                        "visibility": func.get("visibility", "unknown"),
+                        "is_public_api": bool(func.get("is_public_api", False)),
+                        "visibility_source": func.get("visibility_source", "source-modifier"),
+                        "export_evidence": func.get("export_evidence", ""),
+                        "signature": func.get("signature", ""),
                         "project_id": project_id,
                         "project_name": project_name,
                         "language": language,
@@ -2157,6 +2219,11 @@ async def build_call_graph(
                     "comment": class_def["comment"],
                     "summary": class_def["summary"],
                     "note": class_def["note"],
+                    "visibility": class_def.get("visibility", "unknown"),
+                    "is_public_api": bool(class_def.get("is_public_api", False)),
+                    "visibility_source": class_def.get("visibility_source", "source-modifier"),
+                    "export_evidence": class_def.get("export_evidence", ""),
+                    "signature": class_def.get("signature", ""),
                     "project_id": project_id,
                     "project_name": project_name,
                     "language": language,

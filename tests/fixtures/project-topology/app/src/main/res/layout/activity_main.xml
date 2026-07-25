@@ -1,0 +1,7 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:orientation="vertical">
+    <TextView
+        android:id="@+id/title"
+        android:text="@string/app_name" />
+</LinearLayout>

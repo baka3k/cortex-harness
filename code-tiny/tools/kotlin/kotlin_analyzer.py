@@ -46,7 +46,7 @@ try:
 except Exception:
     ts_get_parser = None
 
-_PARSE_CACHE_VERSION = "kotlin-v2026-03-09-1"
+_PARSE_CACHE_VERSION = "kotlin-v2026-07-25-public-api-1"
 
 
 @dataclass
@@ -65,6 +65,11 @@ class FunctionDef:
     comment: str = ""
     summary: str = ""
     note: str = ""
+    visibility: str = "unknown"
+    is_public_api: bool = False
+    visibility_source: str = "source-modifier"
+    export_evidence: str = ""
+    signature: str = ""
 
 
 @dataclass
@@ -118,6 +123,29 @@ class ClassDef:
     comment: str = ""
     summary: str = ""
     note: str = ""
+    visibility: str = "unknown"
+    is_public_api: bool = False
+    visibility_source: str = "source-modifier"
+    export_evidence: str = ""
+    signature: str = ""
+
+
+def _kotlin_api_visibility(snippet: str) -> Tuple[str, bool, str]:
+    """Apply Kotlin's default-public source visibility rules."""
+
+    header = snippet.split("{", 1)[0]
+    for visibility in ("private", "internal", "protected", "public"):
+        if re.search(rf"\b{visibility}\b", header):
+            return (
+                visibility,
+                visibility == "public",
+                f"explicit {visibility}",
+            )
+    return "public", True, "default public by Kotlin language rule"
+
+
+def _source_signature(snippet: str) -> str:
+    return " ".join(snippet.split("{", 1)[0].split())[:500]
 
 
 @dataclass
@@ -648,6 +676,7 @@ def parse_kotlin_file(
         note = _build_note(snippet, comment, summary)
         class_id = _class_id(package_name, class_path)
         qualified = _class_qualified_name(package_name, class_path)
+        visibility, is_public_api, export_evidence = _kotlin_api_visibility(snippet)
         classes.append(
             ClassDef(
                 symbol_id=class_id,
@@ -662,6 +691,10 @@ def parse_kotlin_file(
                 comment=comment,
                 summary=summary,
                 note=note,
+                visibility=visibility,
+                is_public_api=is_public_api,
+                export_evidence=export_evidence,
+                signature=_source_signature(snippet),
             )
         )
         super_types = _extract_super_types(class_node, source_bytes)
@@ -710,6 +743,7 @@ def parse_kotlin_file(
         comment = _extract_leading_comment(func_node, source_bytes)
         summary = comment
         note = _build_note(snippet, comment, summary)
+        visibility, is_public_api, export_evidence = _kotlin_api_visibility(snippet)
         functions.append(
             FunctionDef(
                 symbol_id=symbol_id,
@@ -726,6 +760,10 @@ def parse_kotlin_file(
                 comment=comment,
                 summary=summary,
                 note=note,
+                visibility=visibility,
+                is_public_api=is_public_api,
+                export_evidence=export_evidence,
+                signature=_source_signature(snippet),
             )
         )
 
@@ -803,6 +841,10 @@ def parse_kotlin_file(
                     comment="",
                     summary="",
                     note=_build_note(snippet, "", ""),
+                    visibility="private",
+                    is_public_api=False,
+                    export_evidence="lambda is not a declared public API",
+                    signature=_source_signature(snippet),
                 )
             )
             relation_edges.append(
@@ -1775,6 +1817,11 @@ async def build_call_graph(
                     "comment": class_def["comment"],
                     "summary": class_def["summary"],
                     "note": class_def["note"],
+                    "visibility": class_def.get("visibility", "unknown"),
+                    "is_public_api": bool(class_def.get("is_public_api", False)),
+                    "visibility_source": class_def.get("visibility_source", "source-modifier"),
+                    "export_evidence": class_def.get("export_evidence", ""),
+                    "signature": class_def.get("signature", ""),
                     "project_id": project_id,
                     "project_name": project_name,
                     "language": language,
@@ -1815,6 +1862,12 @@ async def build_call_graph(
                     "comment": func["comment"],
                     "summary": func["summary"],
                     "note": func["note"],
+                    "exported": bool(func.get("is_public_api", False)),
+                    "visibility": func.get("visibility", "unknown"),
+                    "is_public_api": bool(func.get("is_public_api", False)),
+                    "visibility_source": func.get("visibility_source", "source-modifier"),
+                    "export_evidence": func.get("export_evidence", ""),
+                    "signature": func.get("signature", ""),
                     "project_id": project_id,
                     "project_name": project_name,
                     "language": language,
@@ -1837,6 +1890,11 @@ async def build_call_graph(
                 "comment": class_def["comment"],
                 "summary": class_def["summary"],
                 "note": class_def["note"],
+                "visibility": class_def.get("visibility", "unknown"),
+                "is_public_api": bool(class_def.get("is_public_api", False)),
+                "visibility_source": class_def.get("visibility_source", "source-modifier"),
+                "export_evidence": class_def.get("export_evidence", ""),
+                "signature": class_def.get("signature", ""),
                 "project_id": project_id,
                 "project_name": project_name,
                 "language": language,

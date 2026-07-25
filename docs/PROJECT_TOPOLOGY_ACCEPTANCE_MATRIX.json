@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "primary_analyzers": [
+    {"name": "android", "parse_depth": "semantic", "evidence": "tests/test_android_topology_semantics.py"},
+    {"name": "cobol", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "cplus", "parse_depth": "dependency", "evidence": "tests/test_project_descriptor_parsers.py"},
+    {"name": "csharp", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "dart", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "delphi", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "go", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "java", "parse_depth": "dependency", "evidence": "tests/test_project_descriptor_parsers.py"},
+    {"name": "js", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "kotlin", "parse_depth": "dependency", "evidence": "tests/test_project_descriptor_parsers.py"},
+    {"name": "perl", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "php", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "plsql", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "python", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "rust", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "sql", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "swift", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "ts", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "vb6", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "vba", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "vbnet", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "vbscript", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"}
+  ],
+  "framework_overlays": [
+    {"name": "aspnet_core", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "aspnet_framework", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "database_plsql", "parse_depth": "semantic", "evidence": "tests/test_mcp_acceptance_matrix.py"},
+    {"name": "database_sql", "parse_depth": "semantic", "evidence": "tests/test_mcp_acceptance_matrix.py"},
+    {"name": "express_js", "parse_depth": "identity", "evidence": "tests/test_mcp_acceptance_matrix.py"},
+    {"name": "fastapi_django", "parse_depth": "identity", "evidence": "tests/test_mcp_acceptance_matrix.py"},
+    {"name": "flutter", "parse_depth": "identity", "evidence": "tests/test_project_topology_contract.py"},
+    {"name": "laravel", "parse_depth": "identity", "evidence": "tests/test_mcp_acceptance_matrix.py"},
+    {"name": "mybatis", "parse_depth": "semantic", "evidence": "tests/test_framework_fixture_analysis.py"},
+    {"name": "servlet_jsp", "parse_depth": "semantic", "evidence": "tests/test_framework_fixture_analysis.py"},
+    {"name": "spring", "parse_depth": "semantic", "evidence": "tests/test_framework_fixture_analysis.py"},
+    {"name": "struts", "parse_depth": "semantic", "evidence": "tests/test_framework_fixture_analysis.py"}
+  ],
+  "context_tools": [
+    "get_endpoints",
+    "get_framework_context",
+    "get_module_architecture_summary",
+    "get_project_modules",
+    "get_project_special_files",
+    "get_public_apis"
+  ]
+}
