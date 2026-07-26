@@ -45,6 +45,20 @@ async def test_writer_is_additive_idempotent_and_cleanup_is_topology_owned():
     assert "EXPOSES_ENDPOINT" in combined
     assert "fact:AndroidManifest" in combined
     assert "topology_owned = true" in combined
+    assert (
+        "substring(symbol.file_path, 0, size(row.module_path) + 1)"
+        in combined
+    )
+    assert (
+        "substring(endpoint.file_path, 0, size(row.module_path) + 1)"
+        in combined
+    )
+    assert (
+        "substring(fact.file_path, 0, size(row.module_path) + 1)"
+        in combined
+    )
+    assert "substring(node.module_path, 0, size(path) + 1)" in combined
+    assert "STARTS WITH" not in combined
     cleanup_query = driver.calls[-1][0]
     assert "node.topology_owned = true" in cleanup_query
     assert "AndroidComponent" not in cleanup_query
