@@ -15,7 +15,7 @@ python-multipart
 requests
 gliner
 torch
-transformers<5.0 # FOR WINDOW
+transformers>=4.41,<4.56 # FOR WINDOW
 # transformers # FOR UBUNTU, MACOS...etc
 
 # Existing dependencies

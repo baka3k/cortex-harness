@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import collections
 import gc
+import importlib.util
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ import sys
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import requests
 import torch
@@ -2272,9 +2273,18 @@ class CodeEmbedder:
             trust_remote_code=trust_remote_code,
             **extra_tokenizer_kwargs,
         )
+        model_kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
+        if (
+            "jina-embeddings-v3" in model_source.lower()
+            and (
+                not str(device).lower().startswith("cuda")
+                or importlib.util.find_spec("flash_attn") is None
+            )
+        ):
+            model_kwargs["use_flash_attn"] = False
         self.model = AutoModel.from_pretrained(
             model_source,
-            trust_remote_code=trust_remote_code,
+            **model_kwargs,
         )
         self.device = torch.device(device)
         self.model.to(self.device)
