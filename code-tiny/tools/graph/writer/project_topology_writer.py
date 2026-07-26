@@ -120,14 +120,15 @@ WHERE (symbol:Class OR symbol:Function OR symbol:Type OR symbol:Interface)
   AND (
     row.module_path = '.'
     OR symbol.file_path = row.module_path
-    OR symbol.file_path STARTS WITH row.module_path + '/'
+    OR substring(symbol.file_path, 0, size(row.module_path) + 1) = row.module_path + '/'
   )
 OPTIONAL MATCH (more_specific:ProjectModule)
 WHERE more_specific.project_id_normalized = row.project_id_normalized
   AND more_specific.id <> module.id
   AND more_specific.module_path <> '.'
   AND size(more_specific.module_path) > size(row.module_path)
-  AND symbol.file_path STARTS WITH more_specific.module_path + '/'
+  AND substring(symbol.file_path, 0, size(more_specific.module_path) + 1)
+      = more_specific.module_path + '/'
 WITH row, module, symbol, count(more_specific) AS more_specific_count
 WHERE more_specific_count = 0
 SET symbol.module_id = row.module_id
@@ -155,14 +156,15 @@ WHERE (
   AND (
     row.module_path = '.'
     OR endpoint.file_path = row.module_path
-    OR endpoint.file_path STARTS WITH row.module_path + '/'
+    OR substring(endpoint.file_path, 0, size(row.module_path) + 1) = row.module_path + '/'
   )
 OPTIONAL MATCH (more_specific:ProjectModule)
 WHERE more_specific.project_id_normalized = row.project_id_normalized
   AND more_specific.id <> module.id
   AND more_specific.module_path <> '.'
   AND size(more_specific.module_path) > size(row.module_path)
-  AND endpoint.file_path STARTS WITH more_specific.module_path + '/'
+  AND substring(endpoint.file_path, 0, size(more_specific.module_path) + 1)
+      = more_specific.module_path + '/'
 WITH row, module, endpoint, count(more_specific) AS more_specific_count
 WHERE more_specific_count = 0
 SET endpoint.module_id = row.module_id
@@ -190,14 +192,15 @@ WHERE (
   AND (
     row.module_path = '.'
     OR fact.file_path = row.module_path
-    OR fact.file_path STARTS WITH row.module_path + '/'
+    OR substring(fact.file_path, 0, size(row.module_path) + 1) = row.module_path + '/'
   )
 OPTIONAL MATCH (more_specific:ProjectModule)
 WHERE more_specific.project_id_normalized = row.project_id_normalized
   AND more_specific.id <> module.id
   AND more_specific.module_path <> '.'
   AND size(more_specific.module_path) > size(row.module_path)
-  AND fact.file_path STARTS WITH more_specific.module_path + '/'
+  AND substring(fact.file_path, 0, size(more_specific.module_path) + 1)
+      = more_specific.module_path + '/'
 WITH row, module, fact, count(more_specific) AS more_specific_count
 WHERE more_specific_count = 0
 SET fact.module_id = row.module_id
@@ -218,7 +221,7 @@ WHERE node.project_id_normalized = $project_id_normalized
     OR node.path IN $paths
     OR any(path IN $paths WHERE
       node.module_path = path OR
-      node.module_path STARTS WITH path + '/'
+      substring(node.module_path, 0, size(path) + 1) = path + '/'
     )
   )
 WITH collect(node) AS nodes

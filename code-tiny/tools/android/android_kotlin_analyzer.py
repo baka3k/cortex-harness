@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import gc
+import importlib.util
 import json
 import hashlib
 import fnmatch
@@ -1235,6 +1236,14 @@ class CodeEmbedder:
                 **extra_tokenizer_kwargs,
             }
             model_kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
+            if (
+                "jina-embeddings-v3" in model_source.lower()
+                and (
+                    not str(device).lower().startswith("cuda")
+                    or importlib.util.find_spec("flash_attn") is None
+                )
+            ):
+                model_kwargs["use_flash_attn"] = False
             if cache_dir:
                 tokenizer_kwargs["cache_dir"] = cache_dir
                 model_kwargs["cache_dir"] = cache_dir
