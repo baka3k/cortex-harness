@@ -27,7 +27,7 @@ uvicorn[standard]
 python-multipart
 requests
 torch
-transformers<5.0
+transformers>=4.41,<4.56
 # Existing dependencies
 tree-sitter
 tree-sitter-rust
