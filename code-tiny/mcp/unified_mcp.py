@@ -1947,10 +1947,15 @@ def _resolve_graph_database(db: Optional[str] = None) -> str:
     active = str(active_project.get("database_name") or "").strip()
     if active:
         return active
+    # cplus_backend.DEFAULT_GRAPH_DB is already provider-aware
+    # (DEFAULT_FALKORDB_GRAPH when provider=falkordb, else DEFAULT_NEO4J_DB).
+    # Do NOT inline os.environ.get("NEO4J_DB") before it: a stale NEO4J_DB in
+    # the shell env would leak into the FalkorDB path and make the reader
+    # target a different graph than the topology writer (which defaults to
+    # "hyper_graph" via dev.py --falkordb-graph).
     return str(
         os.environ.get("FALKORDB_GRAPH")
         or os.environ.get("FALKORDB_DATABASE")
-        or os.environ.get("NEO4J_DB")
         or cplus_backend.DEFAULT_GRAPH_DB
         or "hyper_graph"
     ).strip()
