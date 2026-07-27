@@ -7,6 +7,7 @@ record is a dictionary keyed by returned column name.
 """
 
 import logging
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,6 +19,30 @@ from tools.common.project_scope import prepare_project_scope_parameters
 
 
 logger = logging.getLogger(__name__)
+
+
+# Neo4j 5.x subquery-with-importing-variable: CALL (var) { ... }.
+# FalkorDB only supports the older CALL { WITH var ... } form (variables
+# imported via opening WITH clause). Rewrite the parenthesized form to the
+# portable form so a single query works against both backends.
+#
+# Caveat: this regex matches the opening ``CALL (var) {`` and rewriter inserts
+# ``WITH var`` right after the brace. Nested CALL subqueries inside the body
+# are left alone — if a query has nested ``CALL (other) {`` braces inside the
+# outer subquery, callers should write the query in the portable form.
+_CALL_IMPORTING_SUBQUERY_RE = re.compile(
+    r"CALL\s+\(([A-Za-z_][A-Za-z0-9_]*)\)\s*\{",
+)
+
+
+def _normalize_query(query: str) -> str:
+    """Rewrite Cypher constructs FalkorDB doesn't understand.
+
+    Currently rewrites Neo4j 5 ``CALL (var) { ... }`` (importing-variable
+    subquery) to ``CALL { WITH var ... }`` which both FalkorDB and Neo4j
+    accept.
+    """
+    return _CALL_IMPORTING_SUBQUERY_RE.sub(r"CALL { WITH \1", query)
 
 
 def _cypher_string(value: str) -> str:
@@ -32,6 +57,7 @@ def _prepare_falkordb_query(
     query: str,
     parameters: Optional[Dict[str, Any]],
 ) -> Tuple[str, Dict[str, Any]]:
+    query = _normalize_query(query)
     params = prepare_project_scope_parameters(query, parameters)
     if "datetime()" not in query:
         return query, params
