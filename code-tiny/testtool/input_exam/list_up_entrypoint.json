@@ -2,7 +2,7 @@
     "modules": [
         "src/main"
     ],
-    "db": "neo4j",
+    "db": "hyper_graph",
     "top_k": 200,
     "content_mode": "summary",
     "include_raw_fields": false

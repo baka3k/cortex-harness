@@ -1,6 +1,6 @@
 {
     "function_id": "YOUR_FUNCTION_ID",
-    "db": "neo4j",
+    "db": "hyper_graph",
     "direction": "all",
     "max_depth": 2,
     "content_mode": "summary",

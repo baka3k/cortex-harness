@@ -1,5 +1,5 @@
 {
     "modules": ["src/auth", "src/payment"],
-    "db": "neo4j",
+    "db": "hyper_graph",
     "on_cycle": "auto_condense_scc"
 }

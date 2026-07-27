@@ -1,7 +1,7 @@
 {
     "start_function_id": "START_FUNCTION_ID",
     "end_function_id": "END_FUNCTION_ID",
-    "db": "neo4j",
+    "db": "hyper_graph",
     "max_depth": 8,
     "content_mode": "summary",
     "include_raw_fields": false

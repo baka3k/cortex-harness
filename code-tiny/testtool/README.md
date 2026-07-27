@@ -72,7 +72,7 @@ Example input file for `search_by_code` (`/tmp/search_authentication.json`):
 ```json
 {
   "query": "DataNormal|Authen|Login|SignIn|Account",
-  "db": "neo4j",
+  "db": "hyper_graph",
   "top_k": 500,
   "content_mode": "summary",
   "include_raw_fields": false
