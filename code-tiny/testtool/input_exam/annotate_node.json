@@ -1,6 +1,6 @@
 {
     "node_id": "YOUR_NODE_ID",
-    "db": "neo4j",
+    "db": "hyper_graph",
     "note": "Important function",
     "tags": "review,todo",
     "severity": "medium"

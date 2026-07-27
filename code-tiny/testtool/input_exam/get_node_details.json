@@ -3,7 +3,7 @@
         "NODE_ID_1",
         "NODE_ID_2"
     ],
-    "db": "neo4j",
+    "db": "hyper_graph",
     "content_mode": "summary",
     "include_raw_fields": false
 }

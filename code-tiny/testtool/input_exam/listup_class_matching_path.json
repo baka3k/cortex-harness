@@ -2,7 +2,7 @@
     "class_names": [
         "MyClass"
     ],
-    "db": "neo4j",
+    "db": "hyper_graph",
     "content_mode": "summary",
     "include_raw_fields": false
 }
