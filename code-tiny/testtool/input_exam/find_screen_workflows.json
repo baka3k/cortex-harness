@@ -1,0 +1,7 @@
+{
+    "project_id": "YOUR_PROJECT_ID",
+    "node_a": "HomeScreen",
+    "node_b": "DetailScreen",
+    "max_hops": 8,
+    "max_paths": 100
+}

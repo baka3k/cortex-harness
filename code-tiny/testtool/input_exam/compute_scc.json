@@ -1,0 +1,5 @@
+{
+    "nodes": ["auth", "payment"],
+    "edges": [{"from": "auth", "to": "payment"}],
+    "edge_semantics": "depends_on"
+}

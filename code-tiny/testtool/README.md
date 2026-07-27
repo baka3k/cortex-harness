@@ -36,7 +36,19 @@ python testtool/mcp_tester.py --endpoint http://127.0.0.1:8788/mcp
 
 Menu workflow
 
-- Select tool (enter number or name).
+- Select tool (enter number or name). The menu is **grouped by category**
+  (Session & Discovery, Search, Graph Traversal, Planning & Dependency,
+  Project Context, Fullstack & Workflow, Annotation); categories come from
+  `tool_defaults.TOOL_CATEGORIES`.
+- Header shows `scope:` and `filter:` so you always know what is active.
+- Main prompt controls:
+  - `<number>` — select the Nth visible tool (numbers re-index per render).
+  - `<tool name>` — select by name (matches a tool in the current view).
+  - `/text` — filter; matches name **and** the first description line (case-insensitive).
+  - `c` — open the category browser and scope the view to one bucket.
+  - `*` — reset scope to "all categories".
+  - `Enter` (empty) — clear the filter (scope is preserved; press `*` to widen).
+  - `q` / `quit` / `exit` — leave the tester.
 - You are prompted for a JSON input file path. Options:
   - Type a file path to load a JSON object to use as the request payload.
   - Press Enter to use the default or previously cached payload for that tool.
@@ -51,7 +63,9 @@ Menu workflow
 
 Default payloads and `search_by_code` example
 
-- The `tool_defaults.py` file contains default payloads. It includes an example `search_by_code` payload (the same query you provided). You can also create a JSON file and load it when prompted.
+- The `tool_defaults.py` file contains default payloads covering every registered MCP tool (40 as of the last coverage sync). It includes an example `search_by_code` payload (the same query you provided). You can also create a JSON file and load it when prompted.
+- Tools without a default are still listed — they fall into the `Other` bucket and prompt you for the payload at run time. Add the tool to `TOOL_CATEGORIES` and `TOOL_DEFAULTS` in `tool_defaults.py` to keep coverage in sync with the MCP server.
+- Run `python testtool/_check_coverage.py` to verify the three artifacts (`TOOL_DEFAULTS`, `TOOL_CATEGORIES`, `input_exam/*.json`) stay in 1:1 lockstep — exits non-zero on any mismatch.
 
 Example input file for `search_by_code` (`/tmp/search_authentication.json`):
 

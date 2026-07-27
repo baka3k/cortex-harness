@@ -1,0 +1,5 @@
+{
+    "modules": ["src/auth", "src/payment"],
+    "db": "neo4j",
+    "on_cycle": "auto_condense_scc"
+}
