@@ -1,0 +1,48 @@
+kiểm tra tại sao api này luôn trả về rỗng 
+ Tool: get_public_apis
+  Return strict source-level public/exported APIs by module.
+────────────────────────────────────────────────────────────────────────
+
+  JSON input file path  (Enter = load default from file, b = back)
+  › file:
+  Loaded from: input_exam\get_public_apis.json
+
+  Payload:
+    {
+      "project_id": "cortext",
+      "limit": 50
+    }
+
+  Enter run   e edit in $EDITOR   i edit inline   f load another file   r reset to default   b back
+
+  ›
+
+  Calling get_public_apis …
+────────────────────────────────────────────────────────────────────────
+  Result  (0.08s)
+  {
+    "ok": true,
+    "project_id": "cortext",
+    "public_apis": [],
+    "total": 0,
+    "offset": 0,
+    "limit": 50,
+    "has_more": false,
+    "include_inferred": false,
+    "capability": {
+      "requested_parser": null,
+      "canonical_parser": null,
+      "query_engine": "graph_generic",
+      "support_level": "generic",
+      "support": {
+        "symbols": "generic",
+        "calls": "generic",
+        "endpoints": "none",
+        "database": "none"
+      },
+      "features": [],
+      "labels": [],
+      "searchable_properties": [],
+      "warning": "No parser selected; generic query behavior is being used."
+    }
+  }
