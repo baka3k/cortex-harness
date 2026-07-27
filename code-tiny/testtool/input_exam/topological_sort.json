@@ -1,0 +1,10 @@
+{
+    "nodes": ["auth", "payment", "user"],
+    "edges": [
+        {"from": "user", "to": "auth"},
+        {"from": "auth", "to": "payment"}
+    ],
+    "edge_semantics": "depends_on",
+    "output_mode": "both",
+    "on_cycle": "auto_condense_scc"
+}
