@@ -1,0 +1,4 @@
+{
+    "entry_context_json": "{\"type\":\"backend\",\"entry_point\":\"main\",\"entry_node_id\":\"n1\",\"screen\":null,\"trigger\":null}",
+    "paths_json": "[{\"path_id\":\"path_1\",\"nodes\":[{\"node_id\":\"n1\",\"name\":\"main\",\"mapped_type\":\"function\",\"location\":{\"file\":\"main.c\",\"line\":10}}],\"edges\":[]}]"
+}
