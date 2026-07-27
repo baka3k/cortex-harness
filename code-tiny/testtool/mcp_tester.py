@@ -236,7 +236,12 @@ def _render_tool_list(
     filter_text: str = "",
     scope_category: str = "",
 ) -> List[Dict[str, Any]]:
-    """Print categorized tool list and return the visible subset."""
+    """Print categorized tool list and return the visible subset in display order.
+
+    Numbers in the menu are assigned category-by-category, so the returned list
+    is flattened in the same order — a user typing ``33`` gets the tool shown
+    at row 33, regardless of how the MCP server ordered its tool list.
+    """
     visible = _filter_tools(tools, filter_text, scope_category)
     total = len(tools)
     shown = len(visible)
@@ -254,15 +259,17 @@ def _render_tool_list(
     print(_hr())
 
     buckets = _bucket_by_category(visible)
-    idx = 0
+    display_ordered: List[Dict[str, Any]] = []
     for category, items in buckets:
+        if not items:
+            continue
         print(BOLD(f"  ▸ {category} ") + DIM(f"({len(items)})"))
         for tool in items:
-            idx += 1
+            display_ordered.append(tool)
             name = tool.get("name", "?")
             desc = tool.get("description", "")
             first_line = desc.split("\n", 1)[0][:72] if desc else ""
-            num = CYAN(f"{idx:>3}.")
+            num = CYAN(f"{len(display_ordered):>3}.")
             print(f"  {num} {BOLD(name)}")
             if first_line:
                 print(f"       {DIM(first_line)}")
@@ -274,12 +281,12 @@ def _render_tool_list(
     print(_hr())
     print(
         DIM(
-            f"  {shown}/{total} tools  |  /filter  c category  * all  "
-            f"<number> select  q quit"
+            f"  {shown}/{total} tools  |  <number> select  /text filter  "
+            f"c category  * all  q quit"
         )
     )
     print(_hr())
-    return visible
+    return display_ordered
 
 
 # ── Payload loader ────────────────────────────────────────────────────────────
