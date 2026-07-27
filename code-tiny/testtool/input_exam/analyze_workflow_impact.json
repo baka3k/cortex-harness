@@ -1,0 +1,5 @@
+{
+    "function_id": "YOUR_NODE_ID",
+    "direction": "downstream",
+    "max_depth": 4
+}

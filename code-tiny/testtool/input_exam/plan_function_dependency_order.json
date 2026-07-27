@@ -1,0 +1,6 @@
+{
+    "modules": ["src/auth", "src/payment"],
+    "db": "neo4j",
+    "include_cross_module": true,
+    "on_cycle": "auto_condense_scc"
+}

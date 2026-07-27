@@ -1,0 +1,4 @@
+{
+    "endpoint_path": "/api/users/:id",
+    "http_method": "GET"
+}
