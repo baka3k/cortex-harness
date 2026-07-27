@@ -92,3 +92,4 @@ code-tiny/tools/common/aspnet/roslyn_worker/obj/
 .cortext-harness/config/dev.json
 .cortex/flutter/
 .cortex/flutter/**
+.cortext-harness/config/dev.json
