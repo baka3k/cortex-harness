@@ -321,14 +321,17 @@ def _load_payload_from_file(path: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _ask_input_source(tool_name: str, cached: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _ask_input_source(tool_name: str) -> Optional[Dict[str, Any]]:
     """
-    Ask user for a JSON input file, or use cached/default payload.
+    Ask user for a JSON input file, or load the on-disk default payload.
+
+    The default is read fresh from ``input_exam/{tool_name}.json`` (or
+    ``TOOL_DEFAULTS``) on every call — nothing is cached in RAM, so edits to
+    the file between runs are picked up immediately.
     Returns the loaded payload, or None to go back.
     """
-    default_label = "cached" if cached else "default"
     print()
-    print(f"  {DIM('JSON input file path')}  {DIM(f'(Enter = use {default_label} payload, b = back)')}")
+    print(f"  {DIM('JSON input file path')}  {DIM('(Enter = load default from file, b = back)')}")
     try:
         raw = input(f"  {CYAN('›')} file: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -339,17 +342,16 @@ def _ask_input_source(tool_name: str, cached: Dict[str, Any]) -> Optional[Dict[s
         return None
 
     if raw == "":
-        # Use cached/default
-        if cached:
-            payload = cached
-            source = default_label
-        else:
-            payload = get_default(tool_name)
-            # Show user the actual file path when loaded from file
-            _d = os.path.join(
-                os.path.dirname(__file__), "input", f"{tool_name}.json"
-            )
-            source = os.path.relpath(_d) if os.path.isfile(_d) else "default"
+        # Always reload from disk / TOOL_DEFAULTS — no in-memory cache.
+        payload = get_default(tool_name)
+        _d = os.path.join(
+            os.path.dirname(__file__), "input_exam", f"{tool_name}.json"
+        )
+        source = (
+            os.path.relpath(_d)
+            if os.path.isfile(_d)
+            else "TOOL_DEFAULTS"
+        )
     else:
         payload = _load_payload_from_file(raw)
         if payload is None:
@@ -362,11 +364,13 @@ def _ask_input_source(tool_name: str, cached: Dict[str, Any]) -> Optional[Dict[s
 
 # ── Payload editor ────────────────────────────────────────────────────────────
 
-def _edit_payload(tool_name: str, current: Dict[str, Any], tool_schema: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
+def _edit_payload(tool_name: str, tool_schema: Optional[Dict] = None) -> Optional[Dict[str, Any]]:
     """
-    Step 1: ask for JSON file (or use current/default).
+    Step 1: ask for JSON file (or load default from disk).
     Step 2: show payload and offer edit/run/back.
     Returns final dict or None to cancel.
+
+    No payload is retained between calls — each invocation reloads from file.
     """
     print()
     print(BOLD(f"  Tool: {GREEN(tool_name)}"))
@@ -376,7 +380,7 @@ def _edit_payload(tool_name: str, current: Dict[str, Any], tool_schema: Optional
     print(_hr())
 
     # Step 1: load input
-    payload = _ask_input_source(tool_name, current)
+    payload = _ask_input_source(tool_name)
     if payload is None:
         return None
 
@@ -406,7 +410,7 @@ def _edit_payload(tool_name: str, current: Dict[str, Any], tool_schema: Optional
             return payload
 
         if choice == "f":
-            loaded = _ask_input_source(tool_name, payload)
+            loaded = _ask_input_source(tool_name)
             if loaded is not None:
                 payload = loaded
 
@@ -480,8 +484,8 @@ def _run_tool(client: MCPClient, tool_name: str, payload: Dict[str, Any]) -> Non
 # ── Main interactive loop ─────────────────────────────────────────────────────
 
 def interactive(client: MCPClient, tools: List[Dict[str, Any]], start_tool: Optional[str] = None) -> None:
-    # Per-session payload cache (retains edits across reruns)
-    payload_cache: Dict[str, Dict[str, Any]] = {}
+    # No in-RAM payload cache — every tool run reloads from input_exam/{tool}.json
+    # (or TOOL_DEFAULTS) so file edits are picked up immediately.
     filter_text = ""
     scope_category = ""
 
@@ -489,10 +493,8 @@ def interactive(client: MCPClient, tools: List[Dict[str, Any]], start_tool: Opti
         # Jump directly to the specified tool — bypass menu (CLI flag path).
         match = next((t for t in tools if t["name"] == start_tool), None)
         if match:
-            cached = payload_cache.get(start_tool, get_default(start_tool))
-            payload = _edit_payload(start_tool, cached, tool_schema=match)
+            payload = _edit_payload(start_tool, tool_schema=match)
             if payload is not None:
-                payload_cache[start_tool] = payload
                 _run_tool(client, start_tool, payload)
         else:
             print(RED(f"  Tool '{start_tool}' not found."))
@@ -547,10 +549,8 @@ def interactive(client: MCPClient, tools: List[Dict[str, Any]], start_tool: Opti
             tool = filtered[idx - 1]
 
         tool_name = tool["name"]
-        cached = payload_cache.get(tool_name, get_default(tool_name))
-        payload = _edit_payload(tool_name, cached, tool_schema=tool)
+        payload = _edit_payload(tool_name, tool_schema=tool)
         if payload is not None:
-            payload_cache[tool_name] = payload
             _run_tool(client, tool_name, payload)
 
     print(DIM("\n  Bye.\n"))

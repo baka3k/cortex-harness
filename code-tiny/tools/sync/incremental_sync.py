@@ -12,13 +12,14 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+from tools.common.project_scope import project_id_lookup_key
 
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.git_diff import (
@@ -872,6 +873,69 @@ async def _query_impacted_files(
                 if file_path:
                     impacted.add(file_path)
         return impacted
+    finally:
+        close_result = driver.close()
+        if hasattr(close_result, "__await__"):
+            await close_result
+
+
+async def _project_topology_bootstrap_needed(
+    *,
+    args: argparse.Namespace,
+    project_id: str,
+) -> bool:
+    """Return True when the topology overlay is missing for this project.
+
+    The incremental path only runs the topology analyzer when a build
+    descriptor changed. A project ingested before the overlay existed (or one
+    whose commits never touch descriptors) therefore never receives
+    ``ProjectModule`` / ``BuildDescriptor`` facts, so the project-context tools
+    return empty even though the rest of the graph is populated. Probing for
+    any existing ``ProjectModule`` lets us bootstrap the overlay once on an
+    otherwise no-op incremental run.
+    """
+    provider = normalize_graph_provider(getattr(args, "graph_provider", None))
+    database = getattr(args, "neo4j_db", None) or getattr(args, "falkordb_graph", None)
+    if provider == GraphProvider.NEO4J:
+        config: Dict[str, Any] = {
+            "uri": getattr(args, "neo4j_uri", None),
+            "user": getattr(args, "neo4j_user", None),
+            "password": getattr(args, "neo4j_password", None),
+            "database": database,
+        }
+    else:
+        graph_name = getattr(args, "falkordb_graph", None) or database
+        config = {
+            "uri": getattr(args, "falkordb_uri", None),
+            "host": getattr(args, "falkordb_host", None),
+            "port": getattr(args, "falkordb_port", None),
+            "user": getattr(args, "falkordb_user", None),
+            "password": getattr(args, "falkordb_password", None),
+            "graph": graph_name,
+            "database": graph_name,
+            "ssl": bool(getattr(args, "falkordb_ssl", False)),
+        }
+    try:
+        driver = await GraphDriverFactory.create_driver(provider, config)
+    except Exception:
+        return False
+    try:
+        normalized = project_id_lookup_key(project_id)
+        if normalized is None:
+            return True
+        rows, _, _ = await driver.execute_query(
+            "MATCH (m:ProjectModule) "
+            "WHERE m.project_id_normalized = $project_id_normalized "
+            "RETURN count(m) AS total",
+            {"project_id_normalized": normalized},
+            database=database,
+        )
+        total = 0
+        if rows:
+            value = rows[0].get("total")
+            if value is not None:
+                total = int(value)
+        return total == 0
     finally:
         close_result = driver.close()
         if hasattr(close_result, "__await__"):
@@ -1747,6 +1811,23 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             for path in deleted_paths
             if descriptor_spec_for_path(path) is not None
         }
+        topology_bootstrap_needed = False
+        if (
+            not full_scan
+            and "project_topology" in parser_filter
+            and not topology_changed
+            and not topology_deleted
+            and graph_ready
+        ):
+            try:
+                topology_bootstrap_needed = await _project_topology_bootstrap_needed(
+                    args=args, project_id=project_id,
+                )
+            except Exception as exc:
+                if args.verbose:
+                    print(f"[topology] bootstrap probe failed: {exc}")
+            if topology_bootstrap_needed and args.verbose:
+                print("[topology] no ProjectModule facts found; scheduling bootstrap overlay")
         if not parser_auto_mode:
             for framework in parser_filter & set(FRAMEWORK_ANALYZERS):
                 framework_grouped[framework].update(
@@ -2014,7 +2095,10 @@ async def _run_incremental(args: argparse.Namespace) -> int:
 
         topology_summaries: List[Dict[str, object]] = []
         if "project_topology" in parser_filter and (
-            full_scan or topology_changed or topology_deleted
+            full_scan
+            or topology_changed
+            or topology_deleted
+            or topology_bootstrap_needed
         ):
             topology_changed_manifest = os.path.join(
                 manifest_root, f"project_topology_changed_{artifact_token}.json"
@@ -2029,6 +2113,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "role": "topology_overlay",
                 "changed": len(topology_changed),
                 "deleted": len(topology_deleted),
+                "bootstrap": bool(topology_bootstrap_needed),
                 "incremental_supported": True,
                 "writes_vectors": False,
                 "vector_status": "disabled",
@@ -2065,12 +2150,17 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 ignore_cache=bool(args.ignore_cache),
             )
             topology_info["command"] = cmd
+            topology_mode = (
+                "full" if full_scan
+                else "bootstrap" if topology_bootstrap_needed
+                else "incremental"
+            )
             print(
                 "[overlay] project_topology changed=%d deleted=%d mode=%s"
                 % (
                     len(topology_changed),
                     len(topology_deleted),
-                    "full" if full_scan else "incremental",
+                    topology_mode,
                 )
             )
             try:

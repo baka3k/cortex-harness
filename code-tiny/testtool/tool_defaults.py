@@ -319,14 +319,17 @@ def category_of(tool_name: str) -> str:
     return _CATEGORY_OF.get(tool_name, OTHER_CATEGORY)
 
 
-_TEST_DIR = os.path.join(os.path.dirname(__file__), "input")
+# Directory holding per-tool JSON defaults. Files here are read fresh on every
+# call to ``get_default`` — no in-memory cache — so edits between runs are
+# picked up immediately.
+_TEST_DIR = os.path.join(os.path.dirname(__file__), "input_exam")
 
 
 def get_default(tool_name: str) -> Dict[str, Any]:
     """Return default payload for a tool.
 
     Priority:
-      1. temp/test/{tool_name}.json  — file-based defaults (edit freely)
+      1. input_exam/{tool_name}.json — file-based defaults (edit freely)
       2. TOOL_DEFAULTS dict          — in-code fallback
       3. {}
     """
