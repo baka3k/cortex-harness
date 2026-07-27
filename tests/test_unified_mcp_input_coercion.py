@@ -216,6 +216,39 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error["error"]["type"], "capability_unavailable")
         self.assertIn("relationship schema", error["error"]["message"])
 
+    async def test_direct_context_fails_closed_when_no_parser_for_project_context_tool(self):
+        with patch.dict(unified_mcp.active_project, {"parser_type": None, "database_name": None}):
+            *_, routing, _diagnostics, error = (
+                await unified_mcp._resolve_direct_capability_context(
+                    "get_public_apis",
+                    None,
+                    "",
+                    required_relationships=("EXPOSES_API",),
+                    required_labels=("ProjectModule",),
+                    error_payload={"project_id": "cortext"},
+                )
+            )
+
+        self.assertIsNotNone(error)
+        self.assertFalse(error["ok"])
+        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        self.assertIsNone(routing["canonical_parser"])
+        self.assertIn("No parser selected", error["error"]["message"])
+        self.assertIn("activate_project", error["error"]["message"])
+
+    async def test_public_apis_returns_capability_error_when_no_parser_active(self):
+        tool = getattr(unified_mcp.tool_get_public_apis, "fn", unified_mcp.tool_get_public_apis)
+        bridge = AsyncMock(return_value=[])
+        with patch.dict(unified_mcp.active_project, {"parser_type": None, "database_name": None}):
+            with patch.object(unified_mcp, "_run_bridge_query", bridge):
+                result = await tool(project_id="cortext", limit=50)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "capability_unavailable")
+        self.assertIn("No parser selected", result["error"]["message"])
+        self.assertIsNone(result["capability"]["canonical_parser"])
+        bridge.assert_not_called()
+
     async def test_endpoint_chain_and_workflow_queries_use_profile_relationships(self):
         context = (
             "spring", ["CALLS", "SEMANTIC_OF"],
