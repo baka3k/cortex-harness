@@ -2014,7 +2014,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
 
         topology_summaries: List[Dict[str, object]] = []
         if "project_topology" in parser_filter and (
-            topology_changed or topology_deleted
+            full_scan or topology_changed or topology_deleted
         ):
             topology_changed_manifest = os.path.join(
                 manifest_root, f"project_topology_changed_{artifact_token}.json"
