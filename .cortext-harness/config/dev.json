@@ -25,7 +25,7 @@
       "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
-      "device": "cpu"
+      "device": "cuda"
     },
     "source": {
       "projects": [
@@ -59,7 +59,7 @@
       "EMBEDDING_MODEL": "BAAI/bge-m3",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
-      "device": "cpu"
+      "device": "cuda"
     },
     "source": {
       "projects": [
