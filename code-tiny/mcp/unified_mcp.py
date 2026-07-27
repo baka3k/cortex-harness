@@ -324,6 +324,26 @@ async def _resolve_direct_capability_context(
             selected_parser,
         )
         return selected_parser, [], routing, None, error
+    if not selected_parser and (required_relationships or required_labels):
+        required = list(dict.fromkeys(required_relationships or ()))
+        labels_required = list(dict.fromkeys(required_labels or ()))
+        error = _build_tool_error(
+            tool_name,
+            {"parser_type": selected_parser, "db": db, **(error_payload or {})},
+            ValueError(
+                f"No parser selected. '{tool_name}' requires a parser profile "
+                f"(labels={labels_required}, relationships={required}). "
+                f"Call activate_project with a supported parser_type, or pass parser_type."
+            ),
+            backend_name=backend_name,
+        )
+        error["error"]["type"] = "capability_unavailable"
+        error["capability"] = routing
+        error["error"]["next_step"] = (
+            "Call list_parsers to see supported parsers, then activate_project "
+            "with a parser_type that supports this tool."
+        )
+        return selected_parser, [], routing, None, error
     relationships: List[str] = []
     diagnostics: Optional[Dict[str, Any]] = None
     if capability and backend_name != "android":
