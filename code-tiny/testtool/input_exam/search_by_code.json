@@ -1,6 +1,6 @@
 {
     "query": "DataNormal|Ticket",
-    "db": "neo4j",
+    "db": "hyper_graph",
     "top_k": 500,
     "content_mode": "summary",
     "include_raw_fields": false
