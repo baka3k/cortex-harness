@@ -833,7 +833,7 @@ function Get-DefaultGraphEnvBash {
         'export FALKORDB_HOST="${FALKORDB_HOST:-localhost}"',
         'export FALKORDB_PORT="${FALKORDB_PORT:-6379}"',
         'export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"',
-        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-neo4j}"',
+        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-hyper_graph}"',
         'export FALKORDB_PASSWORD="${FALKORDB_PASSWORD:-}"'
     ) -join "; "
 }
@@ -848,7 +848,7 @@ if (-not [Environment]::GetEnvironmentVariable('$scopedProvider', 'Process')) { 
 if (-not `$env:FALKORDB_HOST) { `$env:FALKORDB_HOST = 'localhost' }
 if (-not `$env:FALKORDB_PORT) { `$env:FALKORDB_PORT = '6379' }
 if (-not `$env:FALKORDB_URI) { `$env:FALKORDB_URI = "redis://`$(`$env:FALKORDB_HOST):`$(`$env:FALKORDB_PORT)" }
-if (-not `$env:FALKORDB_GRAPH) { `$env:FALKORDB_GRAPH = 'neo4j' }
+if (-not `$env:FALKORDB_GRAPH) { `$env:FALKORDB_GRAPH = 'hyper_graph' }
 if (-not `$env:FALKORDB_PASSWORD) { `$env:FALKORDB_PASSWORD = '' }
 "@
 }

@@ -441,7 +441,7 @@ def default_graph_env_exports(server_name: str) -> str:
         'export FALKORDB_HOST="${FALKORDB_HOST:-localhost}"\n'
         'export FALKORDB_PORT="${FALKORDB_PORT:-6379}"\n'
         'export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"\n'
-        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-neo4j}"\n'
+        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-hyper_graph}"\n'
         'export FALKORDB_PASSWORD="${FALKORDB_PASSWORD:-}"\n'
     )
 
