@@ -207,7 +207,7 @@ call.
 
 | Before | After |
 | --- | --- |
-| `activate_project` tool | Replaced by `activate_project_removed` deprecation stub. Callers must pass `project_id` and `parser_type` explicitly. |
+| `activate_project` tool | Removed entirely. Callers must pass `project_id` and `parser_type` explicitly on every project-scoped call. |
 | `active_project` module-level dict | Removed. No stateful default. |
 | Module-level `DEFAULT_GRAPH_DB` env reads | Replaced by registry resolution. |
 | `QDRANT_COLLECTION_DOC` not set by `dev.py mcp start` | Now set from `targets.doc_qdrant_collection`. |

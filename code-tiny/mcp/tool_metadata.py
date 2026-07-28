@@ -28,24 +28,6 @@ from typing import Any, Dict, List, Optional, Set
 
 _FULL_CATALOG: List[Dict[str, Any]] = [
     {
-        "name": "activate_project_removed",
-        "description": (
-            "DEPRECATED — returns a deprecation notice. The previous "
-            "``activate_project`` tool has been removed per the unified "
-            "ingest/query contract plan. Pass ``project_id`` to scope "
-            "to one project; omit it for cross-project queries."
-        ),
-        "use_cases": ["Start of conversation", "Switch between projects", "Set context for multiple queries"],
-        "inputs": [
-            {"name": "parser_type", "type": "str", "required": False,
-             "description": "Parser type including COBOL, Go, Dart/Flutter, Spring, Struts, Servlet/JSP, MyBatis, C++/JVM aliases, or Android"},
-            {"name": "database_name", "type": "str", "required": False,
-             "description": "Graph database or graph name (for example 'my_project')"},
-        ],
-        "output": "Dict with parser_type, database_name, activated status",
-        "example": "activate_project_removed(parser_type='cplus', database_name='sample_module')",
-    },
-    {
         "name": "search_functions",
         "description": "Search for functions/classes/types by name or qualified name. Returns BOTH node details AND IDs.",
         "use_cases": ["Find function by name", "Search for class", "Get symbol ID for further queries",
@@ -828,16 +810,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])",
     },
     {
-        "name": "activate_project_removed",
-        "inputs": [
-            {"name": "parser_type", "type": "str", "required": False,
-             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
-            {"name": "database_name", "type": "str", "required": False,
-             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
-        ],
-        "example": "activate_project_removed(parser_type='android')",
-    },
-    {
         "name": "get_project_modules",
         "description": "Return canonical project modules, descriptors, and bounded dependency context.",
         "use_cases": ["Understand repository module topology", "List internal and external dependencies"],
@@ -974,15 +946,6 @@ ANDROID_OVERRIDES: Dict[str, Dict[str, Any]] = {
             "Find inter-module event flows",
         ],
         "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])",
-    },
-    "activate_project_removed": {
-        "inputs": [
-            {"name": "parser_type", "type": "str", "required": False,
-             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
-            {"name": "database_name", "type": "str", "required": False,
-             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
-        ],
-        "example": "activate_project_removed(parser_type='android')",
     },
 }
 # ---------------------------------------------------------------------------

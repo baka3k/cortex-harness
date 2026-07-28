@@ -63,7 +63,6 @@ from tools.graph import GraphDriverFactory, GraphProvider  # noqa: E402
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
-        "activate_project_removed",
         "search_functions",
         "search_by_code",
         "get_symbol",
@@ -651,34 +650,6 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
         result.setdefault("query_engine", query_engine_for_backend(backend_name))
         result.setdefault("capability", routing)
     return result
-
-
-@mcp_server.tool(
-    name="activate_project_removed",
-    description=(
-        "DEPRECATED — returns a deprecation notice. The previous "
-        "``activate_project`` tool has been removed per the unified "
-        "ingest/query contract plan. Callers must pass ``project_id`` to "
-        "scope to one project; omit it for cross-project queries. See "
-        "docs/PROJECT_REGISTRY.md."
-    ),
-    output_schema=None,
-)
-async def tool_activate_project_removed(
-    parser_type: str = "",
-    database_name: str = "",
-) -> Dict[str, Any]:
-    return {
-        "deprecated": True,
-        "message": (
-            "activate_project has been removed. Pass project_id='...' on "
-            "every project-scoped call to scope to one project, or omit "
-            "it to query across all projects. See "
-            "docs/PROJECT_REGISTRY.md."
-        ),
-        "parser_type": parser_type or None,
-        "database_name": database_name or None,
-    }
 
 
 @mcp_server.tool(
