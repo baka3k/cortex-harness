@@ -1060,33 +1060,6 @@ async def tool_list_databases() -> Dict[str, Any]:
     return {"databases": names, "default": default_db}
 
 
-@mcp_server.tool(
-    name="activate_project_removed",
-    description=(
-        "DEPRECATED — returns a deprecation notice. The previous "
-        "``activate_project`` tool has been removed per the unified "
-        "ingest/query contract plan. Callers must pass ``project_id`` to "
-        "scope to one project; omit it for cross-project queries. See "
-        "docs/PROJECT_REGISTRY.md."
-    ),
-)
-async def tool_activate_project_removed(
-    parser_type: Optional[str] = None,
-    database_name: Optional[str] = None,
-) -> Dict[str, Any]:
-    return {
-        "deprecated": True,
-        "message": (
-            "activate_project has been removed. Pass project_id='...' on "
-            "every project-scoped call to scope to one project, or omit "
-            "it to query across all projects. See "
-            "docs/PROJECT_REGISTRY.md."
-        ),
-        "parser_type": parser_type,
-        "database_name": database_name,
-    }
-
-
 async def _enrich_with_infra_community(
     items: List[Dict[str, Any]],
     db_candidates: List[str],
@@ -2027,7 +2000,7 @@ async def tool_trace_flow_between_module(
 
 
 _JAVA_TOOL_NAMES: frozenset = frozenset({
-    "activate_project_removed", "search_functions", "search_by_code",
+    "search_functions", "search_by_code",
     "get_symbol", "get_node_details", "query_subgraph",
     "find_paths", "find_path_between_module",
     "listup_symbols_matching_file_path", "listup_class_matching_path",
