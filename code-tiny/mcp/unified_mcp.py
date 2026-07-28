@@ -114,8 +114,8 @@ _PARAMETER_GUIDELINES: Dict[str, Any] = {
     "always_call_first": "list_mcp_functions",
     "rules": [
         "Use exact parameter names from tool metadata; avoid inventing aliases.",
-        "Send required fields explicitly, even if you set activate_project defaults.",
-        "Use either parser_type OR activate_project(parser_type=...) to select a query profile.",
+        "Send required fields explicitly on every call.",
+        "Pass parser_type on every call to select a query profile (see list_parsers for aliases).",
         "When list-like params are accepted, prefer arrays over comma-separated strings.",
         "On error.invalid_parameters, follow required_params + example and retry once.",
     ],
@@ -139,8 +139,8 @@ Discovery first:
 - Call `list_parsers` to inspect canonical profiles, aliases, query engines, dimensional support, and feature gates.
 
 Routing:
-- Use `activate_project(parser_type=..., database_name=...)` to set defaults.
-- Most tools also accept `parser_type` directly.
+- Pass `parser_type` on every call to select a query profile (stateless — no session defaults).
+- Project-context tools (get_project_modules, get_public_apis, get_endpoints, get_module_architecture_summary, get_project_special_files, get_framework_context) require `parser_type`.
 - Parser mapping:
   - android/android-kotlin/kotlin-android -> android_graph query engine
   - Other registered profiles -> graph_generic query engine with parser-aware labels and traversal defaults
@@ -339,15 +339,15 @@ async def _resolve_direct_capability_context(
             ValueError(
                 f"No parser selected. '{tool_name}' requires a parser profile "
                 f"(labels={labels_required}, relationships={required}). "
-                f"Call activate_project with a supported parser_type, or pass parser_type."
+                f"Pass parser_type on this call — see list_parsers for supported values."
             ),
             backend_name=backend_name,
         )
         error["error"]["type"] = "capability_unavailable"
         error["capability"] = routing
         error["error"]["next_step"] = (
-            "Call list_parsers to see supported parsers, then activate_project "
-            "with a parser_type that supports this tool."
+            "Call list_parsers to see supported parsers, then retry with "
+            "parser_type set to one that supports this tool."
         )
         return selected_parser, [], routing, None, error
     relationships: List[str] = []

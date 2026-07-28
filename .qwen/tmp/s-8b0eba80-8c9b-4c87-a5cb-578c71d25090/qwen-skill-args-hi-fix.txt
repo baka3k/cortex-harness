@@ -1,0 +1,59 @@
+kiểm tra xem việc add thêm parser có phải bắt buộc ko , đây là query danh sách module khi test với tool testtool
+{
+      "project_id": "digital_key",
+      "limit": 50
+    }
+
+  Enter run   e edit in $EDITOR   i edit inline   f load another file   r reset to default   b back
+
+  ›
+
+  Calling get_project_modules …
+────────────────────────────────────────────────────────────────────────
+  Result  PASS  (0.01s)
+────────────────────────────────────────────────────────────────────────
+  {
+    "ok": false,
+    "query_engine": "graph_generic",
+    "error": {
+      "type": "capability_unavailable",
+      "tool": "get_project_modules",
+      "query_engine": "graph_generic",
+      "message": "No parser selected. 'get_project_modules' requires a parser profile (labels=['ProjectModule', 'BuildDescriptor'], relationships=['HAS_DESCRIPTOR']). Call activate_project with a supported parser_type, or pass parser_type.",
+      "missing_required_params": [],
+      "required_params": [
+        "project_id"
+      ],
+      "accepted_params": [
+        "project_id",
+        "module_id",
+        "module_path",
+        "include_dependencies",
+        "offset",
+        "limit",
+        "project_id",
+        "parser_type"
+      ],
+      "received_params": [
+        "project_id"
+      ],
+      "example": "get_project_modules(project_id='shop', limit=50)",
+      "next_step": "Call list_parsers to see supported parsers, then activate_project with a parser_type that supports this tool."
+    },
+    "capability": {
+      "requested_parser": null,
+      "canonical_parser": null,
+      "query_engine": "graph_generic",
+      "support_level": "generic",
+      "support": {
+        "symbols": "generic",
+        "calls": "generic",
+        "endpoints": "none",
+        "database": "none"
+      },
+      "features": [],
+      "labels": [],
+      "searchable_properties": [],
+      "warning": "No parser selected; generic query behavior is being used."
+    }
+  }
