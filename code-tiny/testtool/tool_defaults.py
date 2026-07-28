@@ -21,14 +21,14 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "search_functions": {
         "query": "MyClass|myFunction",
         "project_id": "hyper_graph",
-        "top_k": 50,
+        "limit": 50,
         "content_mode": "summary",
         "include_raw_fields": False,
     },
     "search_by_code": {
         "query": "DataNormal|Ticket",
         "project_id": "hyper_graph",
-        "top_k": 500,
+        "limit": 500,
         "content_mode": "summary",
         "include_raw_fields": False,
     },
@@ -83,9 +83,7 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "list_up_entrypoint": {
         "modules": ["src/main"],
         "project_id": "hyper_graph",
-        "top_k": 200,
-        "content_mode": "summary",
-        "include_raw_fields": False,
+        "limit": 200,
     },
     "trace_flow": {
         "start_id": "START_NODE_ID",
@@ -128,9 +126,7 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "list_possible_calls": {
         "project_id": "hyper_graph",
-        "top_k": 200,
-        "content_mode": "summary",
-        "include_raw_fields": False,
+        "limit": 200,
     },
     # --- New tools (added 2026-07-27) ----------------------------------------
     "inspect_parser_capabilities": {
@@ -175,11 +171,17 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "node_b": "DetailScreen",
         "max_hops": 8,
         "max_paths": 100,
+        "include_entry_function": False,
+        "include_api_calls": False,
     },
     "explore_graph": {
         "query": "user login authentication flow",
         "mode": "hybrid",
         "top_k": 10,
+        "project_id": "hyper_graph",
+        "collection": "",
+        "debug": False,
+        "parser_type": "",
     },
     "reconstruct_flow": {
         "entry_context_json": (
