@@ -1,0 +1,106 @@
+--full dự án digital_key là dự án android, nhưng khi call get module thì trả về thông tin như sau- đó
+    là thông tin sai
+    Tool: get_project_modules
+      Return canonical project modules, descriptors, and dependencies.
+    ────────────────────────────────────────────────────────────────────────
+
+      JSON input file path  (Enter = load default from file, b = back)
+      › file:
+      Loaded from: input_exam/get_project_modules.json
+
+      Payload:
+        {
+          "project_id": "digital_key",
+          "limit": 50
+        }
+        {
+    "ok": true,
+    "project_id": "digital_key",
+    "modules": [],
+    "total": 0,
+    "offset": 0,
+    "limit": 50,
+    "has_more": false,
+    "capability": {
+      "requested_parser": "android",
+      "canonical_parser": "android",
+      "query_engine": "android_graph",
+      "support_level": "full",
+      "support": {
+        "symbols": "full",
+        "calls": "full",
+        "endpoints": "none",
+        "database": "none"
+      },
+      "features": [
+        "android_queries",
+        "architecture_summary_queries",
+        "dependency_planning",
+        "endpoint_inventory_queries",
+        "framework_context_queries",
+        "graph_exploration",
+        "graph_flow",
+        "graph_paths",
+        "graph_search",
+        "module_queries",
+        "public_api_queries",
+        "semantic_search",
+        "special_file_queries"
+      ],
+      "labels": [
+        "Alias",
+        "BuildDescriptor",
+        "Class",
+        "Dependency",
+        "Enum",
+        "Event",
+        "Field",
+        "File",
+        "FrameworkInstance",
+        "Function",
+        "FunctionType",
+        "GrpcEndpoint",
+        "GrpcService",
+        "Interface",
+        "Method",
+        "Module",
+        "Namespace",
+        "Package",
+        "Project",
+        "ProjectModule",
+        "Repository",
+        "Resource",
+        "Template",
+        "Type",
+        "UIControl"
+      ],
+      "searchable_properties": [
+        "name",
+        "qualified_name",
+        "target_name",
+        "signature",
+        "type_signature",
+        "file_path",
+        "path",
+        "summary",
+        "code",
+        "comment",
+        "module_id",
+        "module_path",
+        "visibility",
+        "is_public_api",
+        "descriptor_type",
+        "role",
+        "parse_depth",
+        "protocol",
+        "framework"
+      ]
+    }
+  }
+    /Users/hieplq1.rpm/AndroidStudioProjects/digital_key_main - đáng ra , nó phải trả về các module
+     android như EmulatorVehicleOem, DigitalKey...etc - logic get moduel có vấn đề - kể cả các dự
+    án python, backend ...etc nó cũng ko trả về module thật
+    ví dụ android nó có thể trả về list module là list namespace trong build.gradle namespace =
+    "hi.baka3k.emulator.oem"
+    tương tự back end , front end cũng vậy, expect trả về module nhé, ko phải các data vô nghĩa như
+     trên

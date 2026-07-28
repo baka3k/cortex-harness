@@ -53,6 +53,7 @@ from framework_registry import (  # noqa: E402
     query_engine_for_backend,
     servlet_active_generation_predicate,
 )
+from tools.common.project_scope import project_id_lookup_key  # noqa: E402
 from tools.graph import GraphDriverFactory, GraphProvider  # noqa: E402
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
@@ -1991,7 +1992,10 @@ async def _run_bridge_query(cypher: str, params: Dict[str, Any], database: str) 
     provider = GraphProvider.FALKORDB if provider_name in {"falkor", "falkordb"} else GraphProvider.NEO4J
     if provider == GraphProvider.FALKORDB:
         config = {
-            "uri": os.environ.get("FALKORDB_URI"),
+            # Intentionally omit "uri": FalkorDB.from_url() creates a redis
+            # client whose connection buffer corrupts during nested response
+            # parsing in a long-running uvicorn server. The host/port
+            # constructor path (FalkorDB.__init__) does not have this issue.
             "host": os.environ.get("FALKORDB_HOST", "localhost"),
             "port": int(os.environ.get("FALKORDB_PORT", "6379")),
             "user": os.environ.get("FALKORDB_USER", ""),
@@ -2028,7 +2032,13 @@ async def _run_project_context_tool(
     method_name: str,
     method_args: Dict[str, Any],
 ) -> Dict[str, Any]:
-    database = _resolve_graph_database(db)
+    # Each project's topology lives in its own graph named after the project
+    # (by convention --project doubles as the graph/collection name). When no
+    # explicit db is given, scope the query to the caller's project_id so the
+    # reader targets the same graph the topology writer filled. Without this,
+    # a server started for project A silently reads A's graph for every call
+    # and returns empty results for every other project.
+    database = _resolve_graph_database(db or project_id_lookup_key(project_id))
     _, _, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(
             tool_name,
