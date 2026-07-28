@@ -12,11 +12,6 @@ from typing import Any, Dict, List
 
 # Map: tool_name -> default arguments dict
 TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    # ``activate_project`` was removed per the unified ingest/query contract
-    # plan. The replacement stub accepts the same args but always returns a
-    # deprecation notice. We keep an entry here so the test runner's UI does
-    # not show a missing-tool error.
-    "activate_project_removed": {},
     "list_databases": {},
     "list_parsers": {},
     "list_mcp_functions": {},
@@ -248,7 +243,6 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
 # the renderer falls back to "Other" for tools missing from the map.
 TOOL_CATEGORIES: Dict[str, List[str]] = {
     "Session & Discovery": [
-        "activate_project_removed",
         "list_databases",
         "list_parsers",
         "inspect_parser_capabilities",
