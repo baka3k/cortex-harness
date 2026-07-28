@@ -58,17 +58,33 @@ def prepare_project_scope_parameters(
 
     Raw project identifiers remain untouched for legacy predicates and write
     identities. Each recognized project-scope parameter receives a sibling
-    ``*_normalized`` parameter for normalized predicates.
+    ``*_normalized`` parameter for normalized predicates. Callers omit
+    ``project_id`` (or pass an empty/blank value) to query across every
+    project — the normalized key is simply not added in that case so
+    Cypher queries that filter on ``$project_id_normalized`` automatically
+    skip the predicate.
+
+    The ``query`` argument is preserved for backwards compatibility with the
+    original signature and may be used by future callers to inspect the Cypher
+    text. It is intentionally unused today.
     """
     prepared = enrich_project_scope(dict(parameters or {}))
     for key in _PROJECT_SCOPE_PARAMETER_KEYS:
         if key in prepared:
             prepared[f"{key}_normalized"] = project_id_lookup_key(prepared[key])
+    # ``query`` is intentionally unused; it is part of the public signature so
+    # future versions can inspect the Cypher text without breaking callers.
+    del query
     return prepared
 
 
 def qdrant_project_filter(project_id: Any) -> Optional[Dict[str, Any]]:
-    """Build the canonical Qdrant payload filter for a project scope."""
+    """Build the canonical Qdrant payload filter for a project scope.
+
+    When ``project_id`` is empty (``None``/blank), the filter is suppressed
+    (``None`` returned) so the query crosses project boundaries. This is the
+    implicit default for the unified contract.
+    """
     normalized = project_id_lookup_key(project_id)
     if normalized is None:
         return None
@@ -79,8 +95,16 @@ def qdrant_project_filter(project_id: Any) -> Optional[Dict[str, Any]]:
     }
 
 
-def matches_project_scope(candidate: Mapping[str, Any], project_id: Any) -> bool:
-    """Return whether a retrieval candidate belongs to the requested project."""
+def matches_project_scope(
+    candidate: Mapping[str, Any],
+    project_id: Any,
+) -> bool:
+    """Return whether a retrieval candidate belongs to the requested project.
+
+    When ``project_id`` is ``None`` (or blank), every candidate matches —
+    the filter is intentionally a no-op so the caller can paginate across
+    projects.
+    """
     normalized = project_id_lookup_key(project_id)
     if normalized is None:
         return True
