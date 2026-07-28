@@ -162,6 +162,13 @@ class FalkorDBDriver(Neo4jDriver):
         if url and "://" in url:
             parsed = urlparse(url)
             if parsed.scheme in {"falkor", "falkors", "redis", "rediss", "unix"}:
+                # redis.from_url() defaults to RESP3 (protocol=3); the
+                # falkordb package's own default is protocol=2 but is ignored
+                # on the from_url path because from_url creates its own
+                # connection pool. RESP3's parser corrupts its buffer state
+                # on nested graph-query responses in a long-running server,
+                # so pin RESP2 explicitly.
+                client_kwargs.setdefault("protocol", 2)
                 self._client = FalkorDB.from_url(url, **client_kwargs)
             else:
                 raise ValueError(

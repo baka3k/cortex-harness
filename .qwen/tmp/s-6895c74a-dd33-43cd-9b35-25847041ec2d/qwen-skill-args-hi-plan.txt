@@ -1,0 +1,7 @@
+--full  mind_mcp dùng collection của qdrant
+    graph_mcp dùng graph của FALKORDB(hoặc db của neo4j) tuy nhiên các node của graph có dùng thêm project_id 
+    thông thường 1 graph hoặc db chứa nhiều node và có thể các node này có project_id khác nhau
+    hoặc project_id có thể có mặt trên nhiều graph hoặc db
+
+    hãy thiết kế thống nhất lại luồng ingest, query, để đảm bảo ko có sự vênh nhau nào, và query có thể dễ dàng trả về dầy đủ thông tin
+    cách query, cách ingest nó phải thật sự đơn giản
