@@ -3,5 +3,7 @@
     "node_a": "HomeScreen",
     "node_b": "DetailScreen",
     "max_hops": 8,
-    "max_paths": 100
+    "max_paths": 100,
+    "include_entry_function": false,
+    "include_api_calls": false
 }
