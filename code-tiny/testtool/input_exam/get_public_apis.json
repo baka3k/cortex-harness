@@ -1,4 +1,5 @@
 {
     "project_id": "cortext",
+    "parser_type": "YOUR_PARSER_TYPE",
     "limit": 50
 }

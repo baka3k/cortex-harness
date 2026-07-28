@@ -1,4 +1,5 @@
 {
     "project_id": "digital_key",
+    "parser_type": "android",
     "limit": 50
 }

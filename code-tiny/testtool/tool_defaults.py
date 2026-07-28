@@ -196,27 +196,33 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "get_project_modules": {
         "project_id": "YOUR_PROJECT_ID",
+        "parser_type": "YOUR_PARSER_TYPE",
         "limit": 50,
     },
     "get_public_apis": {
         "project_id": "YOUR_PROJECT_ID",
+        "parser_type": "YOUR_PARSER_TYPE",
         "limit": 50,
     },
     "get_endpoints": {
         "project_id": "YOUR_PROJECT_ID",
+        "parser_type": "YOUR_PARSER_TYPE",
         "protocol": "http",
         "limit": 50,
     },
     "get_module_architecture_summary": {
         "project_id": "YOUR_PROJECT_ID",
+        "parser_type": "YOUR_PARSER_TYPE",
         "limit": 50,
     },
     "get_project_special_files": {
         "project_id": "YOUR_PROJECT_ID",
+        "parser_type": "YOUR_PARSER_TYPE",
         "limit": 50,
     },
     "get_framework_context": {
         "project_id": "YOUR_PROJECT_ID",
+        "parser_type": "YOUR_PARSER_TYPE",
         "framework": "spring",
         "limit": 50,
     },

@@ -1,5 +1,6 @@
 {
     "project_id": "YOUR_PROJECT_ID",
+    "parser_type": "YOUR_PARSER_TYPE",
     "protocol": "http",
     "limit": 50
 }
