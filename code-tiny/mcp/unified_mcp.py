@@ -162,6 +162,7 @@ mcp_server = FastMCP(
     name=MCP_NAME,
     version="1.2.0",
     instructions=INSTRUCTIONS,
+    middleware=[],  # populated below once _proxy_middleware is defined
 )
 
 @mcp_server.custom_route("/health", methods=["GET"])
@@ -592,6 +593,130 @@ def _parse_positive_int(raw: Any, param_name: str) -> Tuple[Optional[int], Optio
     if value <= 0:
         return None, f"{param_name} must be greater than 0."
     return value, None
+
+
+# ── Pass-through proxy registration ──────────────────────────────────────────
+# These sets drive both the dynamic registration below and the middleware
+# routing.  Tools in ``_PLANNER_TOOL_NAMES`` are dispatched to ``fast_backend``
+# via ``_dispatch_planner_tool``; everything else is dispatched to whichever
+# backend ``_resolve_backend_name`` picks (cplus / android).
+_PLANNER_TOOL_NAMES: frozenset = frozenset(
+    {
+        "compute_scc",
+        "topological_sort",
+        "plan_dependency_order",
+        "plan_file_dependency_order",
+        "plan_function_dependency_order",
+    }
+)
+
+# Tools whose wrapper only marshals args and calls ``_dispatch_tool`` /
+# ``_dispatch_planner_tool`` — i.e. they have no business logic of their own.
+# These are dynamically registered from the backend callable so their schema
+# always matches the backend (no more drift).
+_PROXIED_TOOL_NAMES: frozenset = frozenset(
+    {
+        # Planner set → fast_backend
+        "compute_scc",
+        "topological_sort",
+        "plan_dependency_order",
+        "plan_file_dependency_order",
+        "plan_function_dependency_order",
+        # cplus_backend → _dispatch_tool
+        "list_databases",
+        "list_qdrant_collections",
+        "annotate_node",
+        "semantic_search",
+        "trace_flow_between_module",
+        "trace_flow",
+        "find_screen_workflows",
+        "list_up_entrypoint",
+        "listup_class_matching_path",
+        "listup_symbols_matching_file_path",
+        "find_path_between_module",
+        "find_paths",
+        "query_subgraph",
+        "get_node_details",
+        "list_possible_calls",
+        "get_symbol",
+        "search_by_code",
+        "search_functions",
+        "get_ipc_message",
+    }
+)
+
+
+def _resolve_proxy_backend_module(tool_name: str) -> Any:
+    """Return the backend module whose ``tool_<name>`` will back this proxy."""
+    if tool_name in _PLANNER_TOOL_NAMES:
+        return fast_backend
+    # All non-planner proxied tools currently route through the parser-based
+    # dispatch (``_dispatch_tool``), which itself looks at the
+    # ``BACKENDS`` dict.  Default to ``cplus_backend`` for the introspected
+    # callable signature only — the actual runtime routing still happens
+    # inside ``_dispatch_tool`` via ``_resolve_backend_name``.
+    return BACKENDS["cplus"].module
+
+
+class _ProxyMiddleware(Middleware):
+    """Routes ``tools/call`` for proxied tools to the existing dispatch helpers.
+
+    FastMCP's normal validation pipeline has already coerced ``arguments``
+    against the registered tool's JSON schema before this middleware runs, so
+    any field accepted by the backend's signature is also accepted here.
+    """
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext,
+        call_next: CallNext,
+    ) -> Any:
+        message = context.message
+        name = getattr(message, "name", None) or context.fastmcp_context
+        # ``message.arguments`` is a Mapping on CallToolRequestParams
+        arguments = dict(getattr(message, "arguments", {}) or {})
+        if name in _PROXIED_TOOL_NAMES:
+            if name in _PLANNER_TOOL_NAMES:
+                return await _dispatch_planner_tool(name, arguments)
+            return await _dispatch_tool(name, arguments)
+        return await call_next(context)
+
+
+_proxy_middleware = _ProxyMiddleware()
+
+
+def _register_proxy_tools() -> None:
+    """Dynamically register proxied tools from their backend callables.
+
+    Each proxied tool's schema is derived from the backend function signature
+    by FastMCP's ``Tool.from_function`` machinery — so adding or removing a
+    parameter in the backend is automatically reflected here on next reload.
+    """
+    for name in _PROXIED_TOOL_NAMES:
+        backend_module = _resolve_proxy_backend_module(name)
+        raw = getattr(backend_module, f"tool_{name}", None)
+        fn = _unwrap_tool_callable(raw)
+        if fn is None:
+            # Surface a clear error at import time rather than at first call.
+            raise RuntimeError(
+                f"Cannot proxy tool {name!r}: backend module "
+                f"{backend_module.__name__!r} has no callable tool_{name}."
+            )
+        catalog_entry = _CATALOG_BY_NAME.get(name, {})
+        description = catalog_entry.get("description") or f"Proxied to {backend_module.__name__}"
+        mcp_server.add_tool(
+            fn,
+            name=name,
+            description=description,
+            output_schema=None,
+        )
+
+
+# Attach the proxy middleware and register proxied tools now that
+# ``_dispatch_tool`` / ``_dispatch_planner_tool`` / ``_CATALOG_BY_NAME`` are
+# all defined.
+mcp_server.middleware.append(_proxy_middleware)
+_register_proxy_tools()
 
 
 async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
