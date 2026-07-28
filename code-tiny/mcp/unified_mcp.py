@@ -1086,16 +1086,19 @@ def _resolve_graph_database(project_id: Optional[str] = None) -> str:
     Precedence (highest first):
     1. ``project_id`` — resolves through the ProjectRegistry so the reader
        targets the same shard the topology writer filled. An unregistered
-       project_id falls through to the env-default graph (graceful
-       degradation rather than raising).
+       ``project_id`` falls back to the naming convention
+       ``code_graph == project_id`` (every project's topology lives in its
+       own graph named after the project). This lets callers query any
+       FalkorDB graph by ``project_id`` without first registering it in the
+       local harness config.
     2. Neither — falls through to env defaults (``FALKORDB_GRAPH`` /
        ``NEO4J_DB`` / ``DEFAULT_GRAPH_DB`` / ``"hyper_graph"``). This is the
        implicit full-search path: omit ``project_id`` to query across every
        project.
 
     Returns a non-empty graph name string. Never raises for a missing
-    ``project_id``; missing or unregistered ``project_id`` both resolve to
-    the env-derived graph name.
+    ``project_id``; a present but unregistered ``project_id`` resolves to
+    itself (the per-project graph convention) rather than the env graph.
     """
 
     if project_id:
@@ -1105,7 +1108,12 @@ def _resolve_graph_database(project_id: Optional[str] = None) -> str:
                 targets = resolve_project_targets(project_id)
                 return targets.code_graph
             except ProjectNotRegisteredError:
-                pass  # Fall through to env defaults — graceful degradation.
+                # Naming convention: code_graph == project_id. Each
+                # project's topology is written into its own graph named
+                # after the project, so an unregistered project_id still
+                # names the right graph rather than silently leaking into
+                # the server's env-default graph.
+                return project_id
 
     # Full-search path: resolve from env defaults.
     return (
