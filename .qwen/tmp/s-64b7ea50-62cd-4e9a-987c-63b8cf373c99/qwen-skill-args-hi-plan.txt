@@ -1,0 +1,15 @@
+--full "{
+  "project_id": "digital_key",
+  "parser_type": "android",
+  "db": "digital_key",
+  "include_dependencies": true,
+  "limit": 200
+} 
+{
+  "parser_type": "android",
+  "db": "digital_key",
+  "include_dependencies": true,
+  "limit": 200
+}
+
+2 inpurt này cho ra 2 kết quả khác nhau , "db": "digital_key" - hiện tại db chính là project_id rồi, hãy thực hiện bỏ db

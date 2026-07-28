@@ -29,6 +29,10 @@ if _MCP_DIR not in sys.path:
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
+from tools.common.project_registry import (
+    ProjectNotRegisteredError,
+    resolve_project_targets,
+)
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
 
@@ -185,10 +189,16 @@ async def _select_database_name(requested: Optional[str]) -> Optional[str]:
     return normalized
 
 
-def _resolve_db_candidates(db: Optional[str]) -> List[str]:
+def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
     candidates: List[str] = []
-    if db and str(db).strip():
-        candidates.append(_normalize_db_name(str(db).strip()))
+    if project_id and str(project_id).strip():
+        try:
+            targets = resolve_project_targets(project_id)
+            graph_name = _normalize_db_name(targets.code_graph)
+            if graph_name and graph_name not in candidates:
+                candidates.append(graph_name)
+        except ProjectNotRegisteredError:
+            pass  # Fall through to default.
     default_db = _normalize_db_name(DEFAULT_NEO4J_DB)
     if default_db and default_db not in candidates:
         candidates.append(default_db)
@@ -1149,7 +1159,6 @@ async def tool_semantic_search(
     graph_direction: str = "both",
     graph_rel_types: Optional[Any] = None,
     graph_limit: int = 50,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> Any:
     query = (query or "").strip()
@@ -1213,7 +1222,7 @@ async def tool_semantic_search(
         await expand_semantic_results(
             results,
             run_cypher_first=_run_cypher_first,
-            db_candidates=_resolve_db_candidates(db),
+            db_candidates=_resolve_db_candidates(project_id),
             expand_graph=expand_graph,
             graph_depth=graph_depth,
             graph_direction=graph_direction,
@@ -1239,7 +1248,7 @@ async def tool_semantic_search(
         await expand_semantic_results(
             results,
             run_cypher_first=_run_cypher_first,
-            db_candidates=_resolve_db_candidates(db),
+            db_candidates=_resolve_db_candidates(project_id),
             expand_graph=expand_graph,
             graph_depth=graph_depth,
             graph_direction=graph_direction,
@@ -1268,7 +1277,7 @@ async def tool_semantic_search(
     await expand_semantic_results(
         results,
         run_cypher_first=_run_cypher_first,
-        db_candidates=_resolve_db_candidates(db),
+        db_candidates=_resolve_db_candidates(project_id),
         expand_graph=expand_graph,
         graph_depth=graph_depth,
         graph_direction=graph_direction,
@@ -1294,12 +1303,11 @@ async def tool_list_qdrant_collections(
 )
 async def tool_get_symbol(
     node_id: Any,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     node_id = str(node_id)
     
@@ -1322,13 +1330,12 @@ async def tool_get_symbol(
     description="List POSSIBLE_CALLS edges (virtual dispatch). Supports content_mode/include_raw_fields.",
 )
 async def tool_list_possible_calls(
-    db: Optional[str] = None,
     limit: int = 200,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     
     driver = await _get_graph_driver()
@@ -1361,12 +1368,11 @@ async def tool_list_possible_calls(
 )
 async def tool_get_node_details(
     node_ids: List[Any],
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     ids = [str(item) for item in node_ids]
     query = "MATCH (n) WHERE n.id IN $ids AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) RETURN n"
@@ -1383,17 +1389,16 @@ async def tool_get_node_details(
     description="Return call graph context around a function ID. Supports content_mode/include_raw_fields.",
 )
 async def tool_query_subgraph(
-    db: Optional[str],
     function_id: Any,
     direction: str = "all",
     max_depth: int = 2,
     include_possible: bool = False,
     include_fp: bool = False,
-    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     function_id = str(function_id)
     depth = _normalize_depth(max_depth, default=2, max_limit=10)
@@ -1461,17 +1466,16 @@ async def tool_query_subgraph(
     description="Find call paths between two functions. Supports content_mode/include_raw_fields.",
 )
 async def tool_find_paths(
-    db: Optional[str],
     start_function_id: Any,
     end_function_id: Any,
     max_depth: int = 8,
     include_possible: bool = False,
     include_fp: bool = False,
-    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     start_id = str(start_function_id)
     end_id = str(end_function_id)
@@ -1510,7 +1514,6 @@ async def tool_find_paths(
 async def tool_find_path_between_module(
     source_modules: List[str],
     target_modules: List[str],
-    db: Optional[str] = None,
     max_depth: int = 8,
     include_possible: bool = False,
     include_fp: bool = False,
@@ -1522,7 +1525,7 @@ async def tool_find_path_between_module(
     target_modules = _normalize_string_list(target_modules)
     if not source_modules or not target_modules:
         raise ValueError("source_modules and target_modules must be non-empty lists.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
     rel_types = ["CALLS"]
@@ -1566,7 +1569,6 @@ async def tool_find_path_between_module(
 )
 async def tool_listup_symbols_matching_file_path(
     modules: List[str],
-    db: Optional[str] = None,
     node_types: Optional[List[str]] = None,
     max_depth: Optional[int] = None,
     project_id: Optional[str] = None,
@@ -1576,7 +1578,7 @@ async def tool_listup_symbols_matching_file_path(
     modules = _normalize_string_list(modules)
     if not modules:
         raise ValueError("modules must be a non-empty list.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     
     # Build node type filter
@@ -1606,7 +1608,6 @@ async def tool_listup_symbols_matching_file_path(
 )
 async def tool_listup_class_matching_path(
     class_names: List[str],
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
@@ -1614,7 +1615,7 @@ async def tool_listup_class_matching_path(
     class_names = _normalize_string_list(class_names)
     if not class_names:
         raise ValueError("class_names must be a non-empty list.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     cypher = (
         "MATCH (c) "
@@ -1648,7 +1649,6 @@ async def tool_listup_class_matching_path(
 )
 async def tool_list_up_entrypoint(
     modules: List[str],
-    db: Optional[str] = None,
     limit: int = 200,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
@@ -1657,7 +1657,7 @@ async def tool_list_up_entrypoint(
     modules = _normalize_string_list(modules)
     if not modules:
         raise ValueError("modules must be a non-empty list.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     cypher = (
         "MATCH (caller:Function)-[:CALLS]->(f:Function) "
@@ -1684,12 +1684,11 @@ async def tool_list_up_entrypoint(
 async def tool_search_functions(
     query: str,
     limit: int = 50,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
     fallback_cypher = (
@@ -1739,12 +1738,11 @@ async def tool_search_functions(
 async def tool_search_by_code(
     query: str,
     limit: int = 50,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.strip() for t in query.split("|") if t.strip()]
     if not qs:
@@ -1785,7 +1783,6 @@ async def tool_search_by_code(
 )
 async def tool_annotate_node(
     node_id: Any,
-    db: Optional[str] = None,
     note: Optional[str] = None,
     tags: Optional[str] = None,
     severity: Optional[str] = None,
@@ -1793,7 +1790,7 @@ async def tool_annotate_node(
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     node_id = str(node_id)
     cypher = (
@@ -1827,7 +1824,6 @@ async def tool_get_ipc_message(
     receiver: Optional[str] = None,
     senders: Optional[Any] = None,
     receivers: Optional[Any] = None,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> List[Any]:
     sender_queries = _normalize_string_list(sender)
@@ -1847,7 +1843,7 @@ async def tool_get_ipc_message(
 
     graph_messages: List[Dict[str, Any]] = []
     graph_error: Optional[str] = None
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     try:
         graph_messages = await _query_ipc_messages_from_graph(
             sender_queries=sender_queries,
@@ -1901,7 +1897,6 @@ async def tool_get_ipc_message(
 async def tool_trace_flow(
     start_id: Any = None,
     end_id: Any = None,
-    db: Optional[str] = None,
     max_depth: int = 6,
     direction: str = "out",
     rel_types: Optional[List[str]] = None,
@@ -1915,7 +1910,7 @@ async def tool_trace_flow(
 ) -> Dict[str, Any]:
     if start_id is None:
         raise ValueError("start_id is required.")
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     rel_value = rel_types if rel_types is not None else relationship_types
     resolved_rel_types = await _resolve_trace_rel_types(rel_value, candidates)
@@ -1973,7 +1968,6 @@ async def tool_trace_flow_between_module(
     target_modules: Optional[List[str]] = None,
     source_module: Optional[Any] = None,
     target_module: Optional[Any] = None,
-    db: Optional[str] = None,
     max_depth: int = 8,
     direction: str = "out",
     rel_types: Optional[List[str]] = None,
@@ -1988,7 +1982,7 @@ async def tool_trace_flow_between_module(
     target_modules = _normalize_string_list(target_modules if target_modules is not None else target_module)
     if not source_modules or not target_modules:
         raise ValueError("source_modules and target_modules must be non-empty lists.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     rel_value = rel_types if rel_types is not None else relationship_types
     resolved_rel_types = await _resolve_trace_rel_types(rel_value, db_candidates)
