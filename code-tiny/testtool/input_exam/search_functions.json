@@ -1,6 +1,6 @@
 {
     "query": "MyClass|myFunction",
-    "db": "hyper_graph",
+    "project_id": "hyper_graph",
     "top_k": 50,
     "content_mode": "summary",
     "include_raw_fields": false

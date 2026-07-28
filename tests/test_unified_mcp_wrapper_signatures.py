@@ -75,13 +75,19 @@ def test_catalog_inputs_are_accepted_by_handwritten_wrappers():
 
 def test_unified_routed_tool_signatures_do_not_default_to_neo4j():
     for name, node in _function_nodes().items():
+        # Internal helpers (prefixed with `_`) may still take a resolved `db`
+        # positional arg per plan exemption — they receive the resolved graph
+        # name, not a tool input.
+        if name.startswith("_"):
+            continue
+        if not name.startswith("tool_"):
+            continue
         positional = node.args.args
         defaults = [None] * (len(positional) - len(node.args.defaults)) + list(
             node.args.defaults
         )
         for argument, default in zip(positional, defaults):
-            if argument.arg != "db":
-                continue
+            assert argument.arg != "db", f"db param should not exist in tool wrapper signatures: {name}"
             assert not (
                 isinstance(default, ast.Constant) and default.value == "neo4j"
             ), name

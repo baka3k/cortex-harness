@@ -24,7 +24,7 @@ class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
 
         tool = getattr(cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions)
         with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
-            await tool(query="users", db="graph", payload={"parser_type": "python"})
+            await tool(query="users", project_id="graph", payload={"parser_type": "python"})
 
         self.assertTrue(calls)
         self.assertIn("node:ApiEndpoint", calls[0][0])
@@ -40,7 +40,7 @@ class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
         tool = getattr(cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions)
         with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
             await tool(
-                query="users", db="graph", framework="fastapi",
+                query="users", project_id="graph", framework="fastapi",
                 payload={"parser_type": "python"},
             )
 
@@ -62,7 +62,7 @@ class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
 
         tool = getattr(cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions)
         with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
-            result = await tool(query="orders", db="neo4j", framework="aspnet_core")
+            result = await tool(query="orders", project_id="neo4j", framework="aspnet_core")
 
         self.assertEqual(len(calls), 2)
         self.assertIn("node:HttpEndpoint", calls[0])
@@ -79,7 +79,7 @@ class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
         tool = getattr(cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions)
         with patch.dict(os.environ, {"CODE_GRAPH_PROVIDER": "neo4j"}):
             with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
-                result = await tool(query="catalog", db="neo4j", framework="mybatis", kinds=["MyBatisStatement"])
+                result = await tool(query="catalog", project_id="neo4j", framework="mybatis", kinds=["MyBatisStatement"])
 
         query, params, _ = calls[0]
         self.assertIn("node.framework IN ['spring', 'servlet_jsp', 'mybatis']", query)
@@ -112,7 +112,7 @@ class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
             result = await tool(
                 query="checkout action",
-                db="neo4j",
+                project_id="neo4j",
                 framework="struts",
                 include_raw_fields=True,
             )

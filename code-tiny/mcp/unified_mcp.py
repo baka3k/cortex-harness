@@ -325,7 +325,7 @@ async def _resolve_direct_capability_context(
     if selected_parser and capability is None:
         error = _unsupported_parser_result(
             tool_name,
-            {"parser_type": selected_parser, "db": db, **(error_payload or {})},
+            {"parser_type": selected_parser, **(error_payload or {})},
             selected_parser,
         )
         return selected_parser, [], routing, None, error
@@ -334,7 +334,7 @@ async def _resolve_direct_capability_context(
         labels_required = list(dict.fromkeys(required_labels or ()))
         error = _build_tool_error(
             tool_name,
-            {"parser_type": selected_parser, "db": db, **(error_payload or {})},
+            {"parser_type": selected_parser, **(error_payload or {})},
             ValueError(
                 f"No parser selected. '{tool_name}' requires a parser profile "
                 f"(labels={labels_required}, relationships={required}). "
@@ -409,7 +409,6 @@ async def _resolve_direct_capability_context(
                 tool_name,
                 {
                     "parser_type": selected_parser,
-                    "db": db,
                     **(error_payload or {}),
                 },
                 ValueError(
@@ -716,8 +715,9 @@ async def tool_list_parsers() -> Dict[str, Any]:
 )
 async def tool_inspect_parser_capabilities(
     parser_type: str = "",
-    db: str = "",
+    project_id: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     selected_parser = (
         _normalize_parser_type(parser_type)
         or _normalize_parser_type(parser_type)
@@ -725,18 +725,18 @@ async def tool_inspect_parser_capabilities(
     if not selected_parser:
         return _build_tool_error(
             "inspect_parser_capabilities",
-            {"parser_type": parser_type, "db": db},
+            {"parser_type": parser_type, "db": _db},
             ValueError("parser_type is required when no project profile is active."),
         )
     capability = capability_for_parser(selected_parser)
     if capability is None:
         return _unsupported_parser_result(
             "inspect_parser_capabilities",
-            {"parser_type": selected_parser, "db": db},
+            {"parser_type": selected_parser, "db": _db},
             selected_parser,
         )
 
-    db_candidates = cplus_backend._resolve_db_candidates(db or None)
+    db_candidates = cplus_backend._resolve_db_candidates(project_id)
     labels, relationships = await asyncio.gather(
         cplus_backend._list_node_labels(db_candidates),
         cplus_backend._list_relationship_types(db_candidates),
@@ -769,7 +769,7 @@ async def tool_inspect_parser_capabilities(
         "requested_parser": selected_parser,
         "canonical_parser": capability.name,
         "query_engine": query_engine_for_backend(capability.backend),
-        "db": db_candidates[0] if db_candidates else (db or None),
+        "db": _db,
         "advertised_support": dict(capability.support),
         "effective_support": effective_support,
         "schema_status": evaluation["schema_status"],
@@ -799,13 +799,14 @@ async def tool_list_databases(
 )
 async def tool_list_qdrant_collections(
     parser_type: str = "",
-    db: str = "",
+    project_id: str = "",
     qdrant_url: str = "http://localhost:6333",
     include_vectors: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     values = {
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "qdrant_url": qdrant_url,
         "include_vectors": include_vectors if include_vectors else None,
     }
@@ -897,14 +898,15 @@ async def tool_topological_sort(
 async def tool_plan_dependency_order(
     modules: str = "",
     parser_type: str = "",
-    db: str = "",
+    project_id: str = "",
     edge_semantics: str = "depends_on",
     on_cycle: str = "auto_condense_scc",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     payload: Dict[str, Any] = {
         "modules": _normalize_string_list(modules) if modules else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db if db else None,
+        "db": _db,
         "edge_semantics": edge_semantics if edge_semantics else None,
         "on_cycle": on_cycle if on_cycle else None,
     }
@@ -920,16 +922,17 @@ async def tool_plan_dependency_order(
 async def tool_plan_file_dependency_order(
     modules: str = "",
     parser_type: str = "",
-    db: str = "",
+    project_id: str = "",
     edge_semantics: str = "depends_on",
     on_cycle: str = "auto_condense_scc",
     include_cross_module: bool = False,
     max_files_per_module: int = 2000,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     payload: Dict[str, Any] = {
         "modules": _normalize_string_list(modules) if modules else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db if db else None,
+        "db": _db,
         "edge_semantics": edge_semantics if edge_semantics else None,
         "on_cycle": on_cycle if on_cycle else None,
         "include_cross_module": include_cross_module if include_cross_module else None,
@@ -947,17 +950,18 @@ async def tool_plan_file_dependency_order(
 async def tool_plan_function_dependency_order(
     modules: str = "",
     parser_type: str = "",
-    db: str = "",
+    project_id: str = "",
     edge_semantics: str = "depends_on",
     on_cycle: str = "auto_condense_scc",
     include_cross_module: bool = False,
     include_lambdas: bool = False,
     max_functions_per_module: int = 5000,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     payload: Dict[str, Any] = {
         "modules": _normalize_string_list(modules) if modules else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db if db else None,
+        "db": _db,
         "edge_semantics": edge_semantics if edge_semantics else None,
         "on_cycle": on_cycle if on_cycle else None,
         "include_cross_module": include_cross_module if include_cross_module else None,
@@ -968,118 +972,6 @@ async def tool_plan_function_dependency_order(
     return await _dispatch_planner_tool("plan_function_dependency_order", payload)
 
 
-def _register_payload_tool(tool_name: str, description: str) -> None:
-    @mcp_server.tool(name=tool_name, description=description, output_schema=None)
-    async def _tool(
-        parser_type: str = "",
-        db: str = "",
-        query: str = "",
-        mode: str = "",
-        top_k: int = 0,
-        model_path: str = "",
-        qdrant_url: str = "",
-        collection: str = "",
-        collection_comment: str = "",
-        collection_code: str = "",
-        content_mode: str = "",
-        include_raw_fields: bool = False,
-        show_snippet: bool = False,
-        show_comment: bool = False,
-        expand_graph: bool = False,
-        graph_depth: int = 0,
-        graph_direction: str = "",
-        graph_rel_types: str = "",
-        graph_limit: int = 0,
-        node_id: str = "",
-        node_ids: str = "",
-        function_id: str = "",
-        start_function_id: str = "",
-        end_function_id: str = "",
-        start_id: str = "",
-        end_id: str = "",
-        source_modules: str = "",
-        target_modules: str = "",
-        source_module: str = "",
-        target_module: str = "",
-        class_names: str = "",
-        class_name: str = "",
-        file_paths: str = "",
-        file_path: str = "",
-        modules: str = "",
-        module: str = "",
-        max_depth: int = 0,
-        direction: str = "",
-        rel_types: str = "",
-        relationship_types: str = "",
-        limit: int = 0,
-        include_possible: bool = False,
-        include_fp: bool = False,
-        project_id: str = "",
-        note: str = "",
-        tags: str = "",
-        severity: str = "",
-        sender: str = "",
-        receiver: str = "",
-        senders: str = "",
-        receivers: str = "",
-    ) -> Any:
-        values = {
-            "parser_type": parser_type if parser_type else None,
-            "db": db if db else None,
-            "query": query if query else None,
-            "mode": mode if mode else None,
-            "top_k": top_k if top_k > 0 else None,
-            "model_path": model_path if model_path else None,
-            "qdrant_url": qdrant_url if qdrant_url else None,
-            "collection": collection if collection else None,
-            "collection_comment": collection_comment if collection_comment else None,
-            "collection_code": collection_code if collection_code else None,
-            "content_mode": content_mode if content_mode else None,
-            "include_raw_fields": include_raw_fields if include_raw_fields else None,
-            "show_snippet": show_snippet if show_snippet else None,
-            "show_comment": show_comment if show_comment else None,
-            "expand_graph": expand_graph if expand_graph else None,
-            "graph_depth": graph_depth if graph_depth > 0 else None,
-            "graph_direction": graph_direction if graph_direction else None,
-            "graph_rel_types": graph_rel_types if graph_rel_types else None,
-            "graph_limit": graph_limit if graph_limit > 0 else None,
-            "node_id": node_id if node_id else None,
-            "node_ids": node_ids if node_ids else None,
-            "function_id": function_id if function_id else None,
-            "start_function_id": start_function_id if start_function_id else None,
-            "end_function_id": end_function_id if end_function_id else None,
-            "start_id": start_id if start_id else None,
-            "end_id": end_id if end_id else None,
-            "source_modules": source_modules if source_modules else None,
-            "target_modules": target_modules if target_modules else None,
-            "source_module": source_module if source_module else None,
-            "target_module": target_module if target_module else None,
-            "class_names": class_names if class_names else None,
-            "class_name": class_name if class_name else None,
-            "file_paths": file_paths if file_paths else None,
-            "file_path": file_path if file_path else None,
-            "modules": modules if modules else None,
-            "module": module if module else None,
-            "max_depth": max_depth if max_depth > 0 else None,
-            "direction": direction if direction else None,
-            "rel_types": rel_types if rel_types else None,
-            "relationship_types": relationship_types if relationship_types else None,
-            "limit": limit if limit > 0 else None,
-            "include_possible": include_possible if include_possible else None,
-            "include_fp": include_fp if include_fp else None,
-            "project_id": project_id if project_id else None,
-            "note": note if note else None,
-            "tags": tags if tags else None,
-            "severity": severity if severity else None,
-            "sender": sender if sender else None,
-            "receiver": receiver if receiver else None,
-            "senders": senders if senders else None,
-            "receivers": receivers if receivers else None,
-        }
-        merged = {k: v for k, v in values.items() if v is not None}
-        return await _dispatch_tool(tool_name, merged)
-
-
 # Define annotate_node separately with specific parameters
 @mcp_server.tool(name="annotate_node", description="Add or update annotations for a node.", output_schema=None)
 async def tool_annotate_node(
@@ -1087,17 +979,17 @@ async def tool_annotate_node(
     note: str = "",
     tags: str = "",
     parser_type: str = "",
-    db: str = "",
     project_id: str = "",
     severity: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Add or update annotations for a node."""
     values = {
         "node_id": node_id if node_id else None,
         "note": note if note else None,
         "tags": tags if tags else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "project_id": project_id if project_id else None,
         "severity": severity if severity else None,
     }
@@ -1111,7 +1003,6 @@ async def tool_annotate_node(
 async def tool_semantic_search(
     query: str = "",
     parser_type: str = "",
-    db: str = "",
     top_k: int | float | str = "",
     collection: str = "",
     project_id: str = "",
@@ -1123,6 +1014,7 @@ async def tool_semantic_search(
     mode: str = "",
     qdrant_url: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Semantic search over Qdrant embeddings with optional graph expansion."""
     parsed_top_k, top_k_error = _parse_positive_int(top_k, "top_k")
     parsed_graph_depth, graph_depth_error = _parse_positive_int(graph_depth, "graph_depth")
@@ -1130,7 +1022,7 @@ async def tool_semantic_search(
     values = {
         "query": query if query else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "top_k": parsed_top_k,
         "collection": collection if collection else None,
         "project_id": project_id if project_id else None,
@@ -1165,7 +1057,6 @@ async def tool_trace_flow_between_module(
     source_modules: Optional[List[str]] = None,
     target_modules: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
@@ -1173,6 +1064,7 @@ async def tool_trace_flow_between_module(
     max_depth: int | float | str = "",
     direction: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Trace flow paths between modules."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
@@ -1180,7 +1072,7 @@ async def tool_trace_flow_between_module(
         "source_modules": source_modules or _normalize_string_list(source_module),
         "target_modules": target_modules or _normalize_string_list(target_module),
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
         "rel_types": rel_types,
@@ -1214,13 +1106,13 @@ async def tool_trace_flow(
     end_id: str = "",
     direction: str = "",
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
     rel_types: Optional[List[str]] = None,
     max_depth: int | float | str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Trace flow paths using configurable relationships."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
@@ -1229,7 +1121,7 @@ async def tool_trace_flow(
         "end_id": end_id if end_id else None,
         "direction": direction if direction else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
         "rel_types": rel_types,
@@ -1273,9 +1165,9 @@ async def tool_find_screen_workflows(
     max_paths: int = 100,
     include_entry_function: bool = False,
     include_api_calls: bool = False,
-    db: str = "",
     parser_type: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     merged = {
         "project_id": project_id or None,
         "node_a": node_a or None,
@@ -1285,7 +1177,7 @@ async def tool_find_screen_workflows(
         "max_paths": max_paths,
         "include_entry_function": include_entry_function,
         "include_api_calls": include_api_calls,
-        "db": db or None,
+        "db": _db,
         "parser_type": parser_type or None,
     }
     merged = {k: v for k, v in merged.items() if v is not None}
@@ -1297,15 +1189,15 @@ async def tool_find_screen_workflows(
 async def tool_list_up_entrypoint(
     modules: str | List[str] = "",
     parser_type: str = "",
-    db: str = "",
     project_id: str = "",
     limit: int | float | str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """List entrypoint functions called from outside modules."""
     values = {
         "modules": modules if modules else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "project_id": project_id if project_id else None,
         "limit": limit if limit != "" else None,
     }
@@ -1324,14 +1216,14 @@ async def tool_listup_class_matching_path(
     class_name: str = "",
     class_names: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """List functions for classes/types by name."""
     values = {
         "class_names": class_names or _normalize_string_list(class_name),
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
@@ -1359,11 +1251,11 @@ async def tool_listup_symbols_matching_file_path(
     modules: Optional[List[str]] = None,
     node_types: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "",
     project_id: str = "",
     content_mode: str = "",
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """List symbols by file path token.
 
     Translates the single-string ``file_path`` surface into the backend's
@@ -1391,7 +1283,7 @@ async def tool_listup_symbols_matching_file_path(
         }
     values: Dict[str, Any] = {
         "modules": tokens,
-        "db": db,
+        "db": _db,
         "project_id": project_id if project_id else None,
         "content_mode": content_mode if content_mode else None,
         "include_raw_fields": include_raw_fields if include_raw_fields else None,
@@ -1420,7 +1312,6 @@ async def tool_find_path_between_module(
     source_modules: Optional[List[str]] = None,
     target_modules: Optional[List[str]] = None,
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
@@ -1429,6 +1320,7 @@ async def tool_find_path_between_module(
     include_possible: bool = False,
     include_fp: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Find call paths between modules."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
@@ -1436,7 +1328,7 @@ async def tool_find_path_between_module(
         "source_modules": source_modules or _normalize_string_list(source_module),
         "target_modules": target_modules or _normalize_string_list(target_module),
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
         "max_depth": max_depth if max_depth != "" else None,
@@ -1461,7 +1353,6 @@ async def tool_find_paths(
     start_function_id: str = "",
     end_function_id: str = "",
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
@@ -1472,6 +1363,7 @@ async def tool_find_paths(
     max_depth: int | float | str = "",
     relationship_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Find call paths between two functions."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
@@ -1479,7 +1371,7 @@ async def tool_find_paths(
         "start_function_id": start_function_id if start_function_id else None,
         "end_function_id": end_function_id if end_function_id else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
@@ -1517,7 +1409,6 @@ async def tool_find_paths(
 async def tool_query_subgraph(
     function_id: str = "",
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
@@ -1529,13 +1420,14 @@ async def tool_query_subgraph(
     relationship_types: Optional[List[str]] = None,
     direction: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Return call graph context around a function ID."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "function_id": function_id if function_id else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
@@ -1571,17 +1463,17 @@ async def tool_query_subgraph(
 async def tool_get_node_details(
     node_ids: str | List[str] = "",
     parser_type: str = "",
-    db: str = "",
     node_type: str = "",
     project_id: str = "",
     content_mode: str = "",
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Fetch metadata for multiple node IDs."""
     values = {
         "node_ids": node_ids if node_ids else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "node_type": node_type if node_type else None,
         "project_id": project_id if project_id else None,
         "content_mode": content_mode if content_mode else None,
@@ -1601,20 +1493,20 @@ async def tool_get_node_details(
 async def tool_list_possible_calls(
     function_id: str = "",
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     project_id: str = "",
     content_mode: str = "",
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """List POSSIBLE_CALLS edges."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "function_id": function_id if function_id else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "project_id": project_id if project_id else None,
         "content_mode": content_mode if content_mode else None,
@@ -1636,17 +1528,17 @@ async def tool_list_possible_calls(
 async def tool_get_symbol(
     node_id: str = "",
     parser_type: str = "",
-    db: str = "",
     node_type: str = "",
     project_id: str = "",
     content_mode: str = "",
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Retrieve metadata for a specific node by id."""
     values = {
         "node_id": node_id if node_id else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "node_type": node_type if node_type else None,
         "project_id": project_id if project_id else None,
         "content_mode": content_mode if content_mode else None,
@@ -1667,7 +1559,6 @@ async def tool_get_symbol(
 async def tool_search_by_code(
     query: str = "",
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
@@ -1676,13 +1567,14 @@ async def tool_search_by_code(
     content_mode: str = "",
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Search nodes by matching text in code snippets."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "query": query if query else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
@@ -1706,7 +1598,6 @@ async def tool_search_by_code(
 async def tool_search_functions(
     query: str = "",
     parser_type: str = "",
-    db: str = "",
     limit: int | float | str = "",
     top_k: int | float | str = "",
     node_type: str = "",
@@ -1717,13 +1608,14 @@ async def tool_search_functions(
     content_mode: str = "",
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Search nodes by name/qualified_name."""
     requested_limit = limit or top_k
     parsed_limit, limit_error = _parse_positive_int(requested_limit, "limit")
     values = {
         "query": query if query else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "limit": parsed_limit,
         "node_type": node_type if node_type else None,
         "expand_search": expand_search,
@@ -1750,15 +1642,15 @@ async def tool_get_ipc_message(
     sender: str = "",
     receiver: str = "",
     parser_type: str = "",
-    db: str = "",
     project_id: str = "",
 ) -> Dict[str, Any]:
+    _db = _resolve_graph_database(project_id=project_id or None)
     """Query IPC messages by sender/receiver."""
     values = {
         "sender": sender if sender else None,
         "receiver": receiver if receiver else None,
         "parser_type": parser_type if parser_type else None,
-        "db": db,
+        "db": _db,
         "project_id": project_id if project_id else None,
     }
     merged = {k: v for k, v in values.items() if v is not None}
@@ -1791,7 +1683,6 @@ async def tool_explore_graph(
     query:      str  = "",
     mode:       str  = "hybrid",
     top_k:      int | float | str  = "",
-    db:         str  = "",
     collection: str  = "",
     debug:      bool = False,
     parser_type: str = "",
@@ -1857,7 +1748,7 @@ async def tool_explore_graph(
             await cplus_backend._resolve_rel_types_with_diagnostics(
                 list(default_relationships(capability.name, "explore_graph")),
                 selected_parser,
-                cplus_backend._resolve_db_candidates(db or None),
+                cplus_backend._resolve_db_candidates(project_id),
                 explicit=False,
             )
         )
@@ -1875,7 +1766,7 @@ async def tool_explore_graph(
             result["capability_diagnostics"] = capability_diagnostics
             return result
     service = get_explore_service()
-    active_db = _resolve_graph_database(db=db) if db else None
+    active_db = _resolve_graph_database(project_id=project_id or None) if project_id else None
     result = await service.explore(
         query      = q,
         top_k      = k,
@@ -1953,19 +1844,15 @@ async def tool_reconstruct_flow(
 # ── Frontend → Backend API Contract Bridge tools ──────────────────────────────
 
 
-def _resolve_graph_database(
-    db: Optional[str] = None,
-    project_id: Optional[str] = None,
-) -> str:
+def _resolve_graph_database(project_id: Optional[str] = None) -> str:
     """Resolve one provider-neutral graph/database name for direct MCP tools.
 
     Precedence (highest first):
-    1. ``db`` — explicit override, always wins (escape hatch).
-    2. ``project_id`` — resolves through the ProjectRegistry so the reader
+    1. ``project_id`` — resolves through the ProjectRegistry so the reader
        targets the same shard the topology writer filled. An unregistered
        project_id falls through to the env-default graph (graceful
        degradation rather than raising).
-    3. Neither — falls through to env defaults (``FALKORDB_GRAPH`` /
+    2. Neither — falls through to env defaults (``FALKORDB_GRAPH`` /
        ``NEO4J_DB`` / ``DEFAULT_GRAPH_DB`` / ``"hyper_graph"``). This is the
        implicit full-search path: omit ``project_id`` to query across every
        project.
@@ -1974,10 +1861,6 @@ def _resolve_graph_database(
     ``project_id``; missing or unregistered ``project_id`` both resolve to
     the env-derived graph name.
     """
-
-    requested = str(db or "").strip()
-    if requested:
-        return requested
 
     if project_id:
         normalized = project_id_lookup_key(project_id)
@@ -2041,20 +1924,18 @@ async def _run_project_context_tool(
     tool_name: str,
     project_id: str,
     parser_type: str,
-    db: str,
     required_labels: Tuple[str, ...],
     required_relationships: Tuple[str, ...],
     method_name: str,
     method_args: Dict[str, Any],
 ) -> Dict[str, Any]:
     # Each project's topology lives in its own graph named after the project
-    # (by convention --project doubles as the graph/collection name). When no
-    # explicit db is given, scope the query to the caller's project_id so the
-    # reader targets the same graph the topology writer filled. Without this,
-    # a server started for project A silently reads A's graph for every call
-    # and returns empty results for every other project.
+    # (by convention --project doubles as the graph/collection name). The
+    # reader scopes the query to the caller's project_id so it targets the
+    # same graph the topology writer filled. Without this, a server started
+    # for project A silently reads A's graph for every call and returns empty
+    # results for every other project.
     database = _resolve_graph_database(
-        db=db,
         project_id=project_id or None,
     )
     _, _, routing, capability_diagnostics, capability_error = (
@@ -2084,7 +1965,7 @@ async def _run_project_context_tool(
             {
                 "project_id": project_id,
                 "parser_type": parser_type,
-                "db": db,
+                "db": _db,
                 **method_args,
             },
             exc,
@@ -2108,14 +1989,12 @@ async def tool_get_project_modules(
     include_dependencies: bool = True,
     offset: int = 0,
     limit: int = 50,
-    db: str = "",
     parser_type: str = "",
 ) -> Dict[str, Any]:
     return await _run_project_context_tool(
         tool_name="get_project_modules",
         project_id=project_id,
         parser_type=parser_type,
-        db=db,
         required_labels=("ProjectModule", "BuildDescriptor"),
         required_relationships=("HAS_DESCRIPTOR",),
         method_name="get_project_modules",
@@ -2142,14 +2021,12 @@ async def tool_get_public_apis(
     include_inferred: bool = False,
     offset: int = 0,
     limit: int = 50,
-    db: str = "",
     parser_type: str = "",
 ) -> Dict[str, Any]:
     return await _run_project_context_tool(
         tool_name="get_public_apis",
         project_id=project_id,
         parser_type=parser_type,
-        db=db,
         required_labels=("ProjectModule",),
         required_relationships=("EXPOSES_API",),
         method_name="get_public_apis",
@@ -2178,14 +2055,12 @@ async def tool_get_endpoints(
     query: str = "",
     offset: int = 0,
     limit: int = 50,
-    db: str = "",
     parser_type: str = "",
 ) -> Dict[str, Any]:
     return await _run_project_context_tool(
         tool_name="get_endpoints",
         project_id=project_id,
         parser_type=parser_type,
-        db=db,
         required_labels=("ProjectModule",),
         required_relationships=("EXPOSES_ENDPOINT",),
         method_name="get_endpoints",
@@ -2212,14 +2087,12 @@ async def tool_get_module_architecture_summary(
     all_modules: bool = False,
     detail_level: str = "standard",
     item_limit: int = 10,
-    db: str = "",
     parser_type: str = "",
 ) -> Dict[str, Any]:
     return await _run_project_context_tool(
         tool_name="get_module_architecture_summary",
         project_id=project_id,
         parser_type=parser_type,
-        db=db,
         required_labels=("ProjectModule",),
         required_relationships=(),
         method_name="get_module_architecture_summary",
@@ -2248,14 +2121,12 @@ async def tool_get_project_special_files(
     include_generated: bool = True,
     offset: int = 0,
     limit: int = 50,
-    db: str = "",
     parser_type: str = "",
 ) -> Dict[str, Any]:
     return await _run_project_context_tool(
         tool_name="get_project_special_files",
         project_id=project_id,
         parser_type=parser_type,
-        db=db,
         required_labels=("ProjectModule", "BuildDescriptor"),
         required_relationships=("HAS_DESCRIPTOR",),
         method_name="get_project_special_files",
@@ -2285,14 +2156,12 @@ async def tool_get_framework_context(
     dimensions: Optional[List[str]] = None,
     offset: int = 0,
     limit: int = 50,
-    db: str = "",
     parser_type: str = "",
 ) -> Dict[str, Any]:
     return await _run_project_context_tool(
         tool_name="get_framework_context",
         project_id=project_id,
         parser_type=parser_type,
-        db=db,
         required_labels=("ProjectModule", "FrameworkInstance"),
         required_relationships=("USES_FRAMEWORK",),
         method_name="get_framework_context",
@@ -2325,7 +2194,6 @@ async def tool_find_callers_of_endpoint(
     be_project_id: str = "",
     fe_project_id: str = "",
     project_id:    str = "",
-    db:            str = "",
     parser_type:   str = "",
 ) -> Dict[str, Any]:
     """
@@ -2364,7 +2232,6 @@ async def tool_find_callers_of_endpoint(
         project_id or be_project_id or fe_project_id
     )
     database = _resolve_graph_database(
-        db=db,
         project_id=effective_project_id or None,
     )
     _, _, routing, capability_diagnostics, capability_error = (
@@ -2456,7 +2323,6 @@ async def tool_get_api_call_chain(
     be_project_id:  str = "",
     project_id:     str = "",
     max_depth:      str = "5",
-    db:             str = "",
     parser_type:    str = "",
 ) -> Dict[str, Any]:
     """
@@ -2490,7 +2356,6 @@ async def tool_get_api_call_chain(
         project_id or be_project_id or fe_project_id
     )
     database = _resolve_graph_database(
-        db=db,
         project_id=effective_project_id or None,
     )
     _depth = int(max_depth) if str(max_depth).isdigit() else 5
@@ -2683,7 +2548,6 @@ _EXTERNAL_MARKERS = ("third_party", "external", "vendor", "/usr", "node_modules"
 )
 async def tool_analyze_workflow_impact(
     function_id: str,
-    db: str = "",
     project_id: str = "",
     direction: str = "downstream",
     max_depth: int = 4,
@@ -2720,7 +2584,6 @@ async def tool_analyze_workflow_impact(
     import sys as _sys  # noqa: PLC0415
 
     database = _resolve_graph_database(
-        db=db,
         project_id=project_id or None,
     )
     capped = min(int(max_depth), 4)
@@ -2862,7 +2725,6 @@ async def tool_analyze_workflow_impact(
 )
 async def tool_find_workflows_containing(
     function_id: str,
-    db: str = "",
     project_id: str = "",
     include_indirect: bool = True,
     max_depth: int = 4,
@@ -2887,7 +2749,6 @@ async def tool_find_workflows_containing(
         }
     """
     database = _resolve_graph_database(
-        db=db,
         project_id=project_id or None,
     )
     capped = min(int(max_depth), 4)

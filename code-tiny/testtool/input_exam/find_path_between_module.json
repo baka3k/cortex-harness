@@ -5,7 +5,7 @@
     "target_modules": [
         "sample_database01"
     ],
-    "db": "hyper_graph",
+    "project_id": "hyper_graph",
     "max_depth": 8,
     "direction": "both",
     "content_mode": "summary",

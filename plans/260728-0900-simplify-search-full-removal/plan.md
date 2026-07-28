@@ -8,8 +8,14 @@ blockedBy: [260728-0000-unified-ingest-query-contract]
 relatedPlans:
   - 260728-0000-unified-ingest-query-contract
   - 260723-0908-case-insensitive-project-id
+  - 260728-1400-remove-db-param-unify-project-id
 reviewed: 2026-07-28
 ---
+
+> **FOLLOW-UP NOTE (2026-07-28):** Plan `260728-1400-remove-db-param-unify-project-id`
+> extends the same single-key contract established here. This plan removed
+> `search_full`; the follow-up removes `db`. Together they leave `project_id`
+> as the sole scoping key on every MCP tool.
 
 # Remove search_full — Simplify to project_id-only Scoping
 

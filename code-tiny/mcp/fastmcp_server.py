@@ -25,6 +25,10 @@ if _ROOT_DIR not in sys.path:
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.core.base import GraphDriver
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
+from tools.common.project_registry import (  # noqa: E402
+    ProjectNotRegisteredError,
+    resolve_project_targets,
+)
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
 from framework_registry import servlet_active_generation_predicate
@@ -236,10 +240,16 @@ async def _select_database_name(requested: Optional[str]) -> Optional[str]:
     return normalized
 
 
-def _resolve_db_candidates(db: Optional[str]) -> List[str]:
+def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
     candidates: List[str] = []
-    if db and str(db).strip():
-        candidates.append(_normalize_db_name(str(db).strip()))
+    if project_id and str(project_id).strip():
+        try:
+            targets = resolve_project_targets(project_id)
+            graph_name = _normalize_db_name(targets.code_graph)
+            if graph_name and graph_name not in candidates:
+                candidates.append(graph_name)
+        except ProjectNotRegisteredError:
+            pass  # Fall through to default.
     default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
     if default_db and default_db not in candidates:
         candidates.append(default_db)
@@ -1368,7 +1378,6 @@ async def tool_semantic_search(
     graph_direction: str = "both",
     graph_rel_types: Optional[Any] = None,
     graph_limit: int = 50,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> Any:
     query = (query or "").strip()
@@ -1432,7 +1441,7 @@ async def tool_semantic_search(
         await expand_semantic_results(
             results,
             run_cypher_first=_run_cypher_first,
-            db_candidates=_resolve_db_candidates(db),
+            db_candidates=_resolve_db_candidates(project_id),
             expand_graph=expand_graph,
             graph_depth=graph_depth,
             graph_direction=graph_direction,
@@ -1458,7 +1467,7 @@ async def tool_semantic_search(
         await expand_semantic_results(
             results,
             run_cypher_first=_run_cypher_first,
-            db_candidates=_resolve_db_candidates(db),
+            db_candidates=_resolve_db_candidates(project_id),
             expand_graph=expand_graph,
             graph_depth=graph_depth,
             graph_direction=graph_direction,
@@ -1487,7 +1496,7 @@ async def tool_semantic_search(
     await expand_semantic_results(
         results,
         run_cypher_first=_run_cypher_first,
-        db_candidates=_resolve_db_candidates(db),
+        db_candidates=_resolve_db_candidates(project_id),
         expand_graph=expand_graph,
         graph_depth=graph_depth,
         graph_direction=graph_direction,
@@ -1513,13 +1522,12 @@ async def tool_list_qdrant_collections(
 )
 async def tool_get_symbol(
     node_id: Any,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     node_id = str(node_id)
     
@@ -1547,13 +1555,12 @@ async def tool_get_symbol(
 )
 async def tool_get_node_details(
     node_ids: List[Any],
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     ids = [str(item) for item in node_ids]
     
@@ -1582,17 +1589,16 @@ async def tool_get_node_details(
     description="Return call graph context around a function ID. Supports content_mode/include_raw_fields.",
 )
 async def tool_query_subgraph(
-    db: Optional[str],
     function_id: Any,
     direction: str = "all",
     max_depth: int = 2,
-    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
     expand_search: bool = False,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     function_id = str(function_id)
     depth = _normalize_depth(max_depth, default=2, max_limit=10)
@@ -1640,17 +1646,16 @@ async def tool_query_subgraph(
     description="Find call paths between two functions. Supports content_mode/include_raw_fields.",
 )
 async def tool_find_paths(
-    db: Optional[str],
     start_function_id: Any,
     end_function_id: Any,
     max_depth: int = 8,
-    project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
     expand_search: bool = False,
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    candidates = _resolve_db_candidates(db)
+    candidates = _resolve_db_candidates(project_id)
     _require(candidates[0] if candidates else None, "db")
     start_id = str(start_function_id)
     end_id = str(end_function_id)
@@ -1691,7 +1696,6 @@ async def tool_find_paths(
 async def tool_find_path_between_module(
     source_modules: List[str],
     target_modules: List[str],
-    db: Optional[str] = None,
     max_depth: int = 8,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
@@ -1701,7 +1705,7 @@ async def tool_find_path_between_module(
     target_modules = _normalize_string_list(target_modules)
     if not source_modules or not target_modules:
         raise ValueError("source_modules and target_modules must be non-empty lists.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     depth = _normalize_depth(max_depth, default=8, max_limit=20)
     query = (
@@ -1873,14 +1877,14 @@ async def tool_topological_sort(
 async def tool_plan_dependency_order(
     modules: List[str],
     parser_type: Optional[str] = None,
-    db: Optional[str] = None,
+    project_id: Optional[str] = None,
     edge_semantics: str = "depends_on",
     on_cycle: str = "auto_condense_scc",
 ) -> Dict[str, Any]:
     module_tokens = _normalize_string_list(modules)
     if not module_tokens:
         raise ValueError("modules must be a non-empty list.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
 
     query = (
@@ -1972,7 +1976,7 @@ async def tool_plan_dependency_order(
 async def tool_plan_file_dependency_order(
     modules: List[str],
     parser_type: Optional[str] = None,
-    db: Optional[str] = None,
+    project_id: Optional[str] = None,
     edge_semantics: str = "depends_on",
     on_cycle: str = "auto_condense_scc",
     include_cross_module: bool = False,
@@ -1983,7 +1987,7 @@ async def tool_plan_file_dependency_order(
         raise ValueError("modules must be a non-empty list.")
     if max_files_per_module < 1:
         raise ValueError("max_files_per_module must be >= 1.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
 
     query = (
@@ -2119,7 +2123,7 @@ async def tool_plan_file_dependency_order(
 async def tool_plan_function_dependency_order(
     modules: List[str],
     parser_type: Optional[str] = None,
-    db: Optional[str] = None,
+    project_id: Optional[str] = None,
     edge_semantics: str = "depends_on",
     on_cycle: str = "auto_condense_scc",
     include_cross_module: bool = False,
@@ -2131,7 +2135,7 @@ async def tool_plan_function_dependency_order(
         raise ValueError("modules must be a non-empty list.")
     if max_functions_per_module < 1:
         raise ValueError("max_functions_per_module must be >= 1.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
 
     lambda_filter = "" if include_lambdas else "AND (caller.kind IS NULL OR caller.kind <> 'lambda') AND (callee.kind IS NULL OR callee.kind <> 'lambda') "
@@ -2288,7 +2292,6 @@ async def tool_plan_function_dependency_order(
 )
 async def tool_listup_symbols_matching_file_path(
     modules: List[str],
-    db: Optional[str] = None,
     node_types: Optional[List[str]] = None,
     max_depth: Optional[int] = None,
     project_id: Optional[str] = None,
@@ -2298,7 +2301,7 @@ async def tool_listup_symbols_matching_file_path(
     modules = _normalize_string_list(modules)
     if not modules:
         raise ValueError("modules must be a non-empty list.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     
     # Build node type filter
@@ -2326,7 +2329,6 @@ async def tool_listup_symbols_matching_file_path(
 )
 async def tool_listup_class_matching_path(
     class_names: List[str],
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
@@ -2334,7 +2336,7 @@ async def tool_listup_class_matching_path(
     class_names = _normalize_string_list(class_names)
     if not class_names:
         raise ValueError("class_names must be a non-empty list.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     cypher = (
         "MATCH (c) "
@@ -2368,7 +2370,6 @@ async def tool_listup_class_matching_path(
 )
 async def tool_list_up_entrypoint(
     modules: List[str],
-    db: Optional[str] = None,
     limit: int = 200,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
@@ -2377,7 +2378,7 @@ async def tool_list_up_entrypoint(
     modules = _normalize_string_list(modules)
     if not modules:
         raise ValueError("modules must be a non-empty list.")
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     cypher = (
         "MATCH (caller:Function)-[:CALLS]->(f:Function) "
@@ -2404,7 +2405,6 @@ async def tool_list_up_entrypoint(
 async def tool_search_functions(
     query: str,
     limit: int = 50,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
@@ -2413,7 +2413,7 @@ async def tool_search_functions(
     framework: Optional[str] = None,
     kinds: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
     framework = str(framework or "").strip().lower() or None
@@ -2492,14 +2492,13 @@ async def tool_search_functions(
 async def tool_search_by_code(
     query: str,
     limit: int = 50,
-    db: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     node_type: Optional[str] = None,
     expand_search: bool = False,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.strip() for t in query.split("|") if t.strip()]
     if not qs:
@@ -2552,7 +2551,6 @@ async def tool_search_by_code(
 )
 async def tool_annotate_node(
     node_id: Any,
-    db: Optional[str] = None,
     note: Optional[str] = None,
     tags: Optional[str] = None,
     severity: Optional[str] = None,
@@ -2560,7 +2558,7 @@ async def tool_annotate_node(
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db)
+    db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     node_id = str(node_id)
     cypher = (
@@ -2594,10 +2592,9 @@ async def tool_list_workflows(
     language: str = "",
     domain: str = "",
     limit: int = 50,
-    db: str = "",
     project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    db_candidates = _resolve_db_candidates(db if db else None)
+    db_candidates = _resolve_db_candidates(project_id)
     if not db_candidates:
         db_candidates = [DEFAULT_GRAPH_DB]
     filters = []
@@ -2643,11 +2640,11 @@ async def tool_list_workflows(
 )
 async def tool_get_workflow_steps(
     workflow_id: str,
-    db: str = "",
+    project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not workflow_id:
         raise ValueError("workflow_id is required")
-    db_candidates = _resolve_db_candidates(db if db else None)
+    db_candidates = _resolve_db_candidates(project_id)
     if not db_candidates:
         db_candidates = [DEFAULT_GRAPH_DB]
     wf_query = """
@@ -2697,12 +2694,11 @@ async def tool_get_workflow_steps(
 async def tool_search_workflows(
     query: str,
     limit: int = 20,
-    db: str = "",
     project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not query:
         raise ValueError("query is required")
-    db_candidates = _resolve_db_candidates(db if db else None)
+    db_candidates = _resolve_db_candidates(project_id)
     if not db_candidates:
         db_candidates = [DEFAULT_GRAPH_DB]
     cypher = """
