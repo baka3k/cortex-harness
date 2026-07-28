@@ -430,13 +430,19 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("python", result["error"]["supported_parsers"])
         self.assertEqual(result["query_engine"], "graph_generic")
 
-    async def test_activate_project_rejects_unknown_parser(self):
-        tool = getattr(unified_mcp.tool_activate_project, "fn", unified_mcp.tool_activate_project)
+    async def test_activate_project_removed_returns_deprecation_notice(self):
+        # The previous ``activate_project`` tool has been replaced with a
+        # deprecation stub. Verify the stub returns the expected message
+        # so existing callers fail loudly instead of silently.
+        tool = getattr(
+            unified_mcp.tool_activate_project_removed,
+            "fn",
+            unified_mcp.tool_activate_project_removed,
+        )
         result = await tool(parser_type="laravle", database_name="graph")
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["type"], "unsupported_parser")
-        self.assertEqual(result["error"]["parser_type"], "laravle")
+        self.assertTrue(result["deprecated"])
+        self.assertIn("activate_project has been removed", result["message"])
 
     async def test_provider_relationship_filter_reports_partial_and_unsupported(self):
         resolver = unified_mcp.cplus_backend._resolve_rel_types_with_diagnostics

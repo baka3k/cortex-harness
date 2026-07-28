@@ -11,6 +11,11 @@ from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
 from graph_store import create_graph_store_from_env
+from project_contract import (
+    ProjectNotRegisteredError,
+    qdrant_project_filter as _pc_qdrant_project_filter,
+    resolve_project_targets,
+)
 
 
 MCP_NAME = os.getenv("MCP_SERVER_NAME", "graph_rag")
@@ -102,19 +107,47 @@ def qdrant_search_entity_payload(
     top_k: int,
     source_id: Optional[str],
     collection: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     qdrant = get_qdrant()
-    collection_name = collection or QDRANT_COLLECTION
-    qdrant_filter = None
+    # Resolve the collection through the registry when ``project_id`` is
+    # given and the caller did not pass an explicit ``collection`` arg.
+    if collection:
+        collection_name = collection
+    elif project_id:
+        try:
+            targets = resolve_project_targets(project_id)
+        except ProjectNotRegisteredError:
+            collection_name = QDRANT_COLLECTION
+        else:
+            collection_name = targets.doc_qdrant_collection
+    else:
+        collection_name = QDRANT_COLLECTION
+
+    # Build the Qdrant filter. The project filter combines with the
+    # ``source_id`` filter via AND. A missing ``project_id`` produces no
+    # project predicate, so the search spans every project.
+    must_conditions: List[qmodels.FieldCondition] = []
     if source_id:
-        qdrant_filter = qmodels.Filter(
-            must=[
-                qmodels.FieldCondition(
-                    key="source_id",
-                    match=qmodels.MatchValue(value=source_id),
-                )
-            ]
+        must_conditions.append(
+            qmodels.FieldCondition(
+                key="source_id",
+                match=qmodels.MatchValue(value=source_id),
+            )
         )
+    project_filter = _pc_qdrant_project_filter(project_id)
+    if project_filter and "must" in project_filter:
+        for cond in project_filter["must"]:
+            key = cond.get("key")
+            match_value = cond.get("match", {}).get("value")
+            if key and match_value is not None:
+                must_conditions.append(
+                    qmodels.FieldCondition(
+                        key=key,
+                        match=qmodels.MatchValue(value=match_value),
+                    )
+                )
+    qdrant_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
 
     if hasattr(qdrant, "search"):
         hits = qdrant.search(
@@ -365,11 +398,19 @@ def register_tools(mcp: FastMCP) -> None:
         top_k=5,
         source_id=None,
         collection=None,
+        project_id=None,
         max_passage_chars=None,
         include_entity_ids=True,
         include_entity_mentions=False,
     ):
-        """Vector-only search in Qdrant. Returns passages without graph expansion."""
+        """Vector-only search in Qdrant. Returns passages without graph expansion.
+
+        Per Phase 05 of the unified ingest/query contract plan, ``project_id``
+        scopes the query to one project's shard; omit it to search across all
+        projects. The Qdrant collection is resolved through the registry when
+        ``project_id`` is given; the explicit ``collection`` arg still wins as
+        an escape hatch.
+        """
         # Type coercion to handle n8n passing strings
         query = str(query) if query else ""
         top_k = int(top_k) if top_k is not None else 5
@@ -383,7 +424,11 @@ def register_tools(mcp: FastMCP) -> None:
         q_vec = embedder.encode([query])[0].tolist()
 
         payloads = qdrant_search_entity_payload(
-            q_vec, top_k=top_k, source_id=source_id, collection=collection
+            q_vec,
+            top_k=top_k,
+            source_id=source_id,
+            collection=collection,
+            project_id=project_id,
         )
 
         passages = []

@@ -4,7 +4,7 @@ status: in_progress
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
-blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening, 260719-2150-parser-mcp-runtime-alignment, 260723-0908-case-insensitive-project-id, 260725-1703-project-topology-context-tools]
+blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening, 260719-2150-parser-mcp-runtime-alignment, 260723-0908-case-insensitive-project-id, 260725-1703-project-topology-context-tools, 260728-0000-unified-ingest-query-contract]
 
 ## Cross-Plan Dependency
 

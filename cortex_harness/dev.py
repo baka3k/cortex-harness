@@ -446,6 +446,24 @@ def _doc_env_for_process(cfg: dict) -> dict:
     result.setdefault("QDRANT_URL", _env_to_qdrant_url(env))
     if env.get("EMBEDDING_MODEL"):
         result.setdefault("DOC_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
+    # Per Phase 06 of the unified ingest/query contract plan, the doc
+    # server's Qdrant collection is resolved through the ProjectRegistry
+    # so it matches the doc graph name (``{project_id}_doc``) by default.
+    # An explicit value in ``doc.env.QDRANT_COLLECTION`` still wins.
+    if "QDRANT_COLLECTION_DOC" not in result and "QDRANT_COLLECTION" not in result:
+        project_id = (cfg.get("project") or {}).get("code")
+        if project_id:
+            try:
+                # Local import — dev.py is part of the cortex_harness
+                # package; project_registry lives in code-tiny.
+                from tools.common.project_registry import resolve_project_targets
+
+                targets = resolve_project_targets(project_id)
+            except Exception:
+                targets = None
+            if targets is not None:
+                result.setdefault("QDRANT_COLLECTION_DOC", targets.doc_qdrant_collection)
+                result.setdefault("FALKORDB_GRAPH", targets.doc_graph)
     return result
 
 

@@ -54,11 +54,16 @@ from framework_registry import (  # noqa: E402
     servlet_active_generation_predicate,
 )
 from tools.common.project_scope import project_id_lookup_key  # noqa: E402
+from tools.common.project_registry import (  # noqa: E402
+    ProjectNotRegisteredError,
+    ProjectRegistryError,
+    resolve_project_targets,
+)
 from tools.graph import GraphDriverFactory, GraphProvider  # noqa: E402
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
-        "activate_project",
+        "activate_project_removed",
         "search_functions",
         "search_by_code",
         "get_symbol",
@@ -184,10 +189,9 @@ if DEFAULT_BACKEND not in BACKENDS:
 PARSER_ALIASES_ANDROID = set(parser_aliases("android"))
 PARSER_ALIASES_CPLUS = set(parser_aliases("cplus"))
 
-active_project: Dict[str, Optional[str]] = {
-    "parser_type": None,
-    "database_name": None,
-}
+# ``active_project`` was removed per the unified ingest/query contract plan.
+# Callers must pass ``parser_type`` and ``project_id`` explicitly on every
+# tool call. See docs/PROJECT_REGISTRY.md for the new contract.
 
 
 def _coerce_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -259,7 +263,7 @@ def _normalize_parser_type(value: Optional[str]) -> Optional[str]:
 
 
 def _resolve_backend_name(parser_type: Optional[str]) -> str:
-    parser = _normalize_parser_type(parser_type) or _normalize_parser_type(active_project.get("parser_type"))
+    parser = _normalize_parser_type(parser_type)
     capability = capability_for_parser(parser)
     if capability:
         return capability.backend
@@ -313,7 +317,7 @@ async def _resolve_direct_capability_context(
 ]:
     selected_parser = (
         _normalize_parser_type(parser_type)
-        or _normalize_parser_type(active_project.get("parser_type"))
+        or _normalize_parser_type(parser_type)
     )
     backend_name = _resolve_backend_name(selected_parser)
     routing = _capability_summary(selected_parser, backend_name)
@@ -429,13 +433,11 @@ def _relationship_pattern(relationships: List[str], fallback: str = "CALLS") -> 
 
 def _apply_unified_defaults(payload: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(payload)
-    if merged.get("parser_type") is None and active_project.get("parser_type"):
-        merged["parser_type"] = active_project["parser_type"]
-    if not merged.get("db"):
-        if active_project.get("database_name"):
-            merged["db"] = active_project["database_name"]
-        else:
-            merged.pop("db", None)
+    # Both branches below used to fall back to ``active_project``. Per the
+    # unified ingest/query contract plan, that state has been removed —
+    # callers must pass ``parser_type`` and ``db`` (or ``project_id``)
+    # explicitly. We leave the merged dict untouched so missing values
+    # surface as the env-default full-search path downstream.
     return merged
 
 
@@ -653,38 +655,31 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
 
 
 @mcp_server.tool(
-    name="activate_project",
-    description="Set default parser_type and optional database_name for subsequent tool calls.",
+    name="activate_project_removed",
+    description=(
+        "DEPRECATED — returns a deprecation notice. The previous "
+        "``activate_project`` tool has been removed per the unified "
+        "ingest/query contract plan. Callers must pass ``project_id`` to "
+        "scope to one project; omit it for cross-project queries. See "
+        "docs/PROJECT_REGISTRY.md."
+    ),
     output_schema=None,
 )
-async def tool_activate_project(
+async def tool_activate_project_removed(
     parser_type: str = "",
     database_name: str = "",
-) -> Dict[str, Optional[str]]:
-    values = {"parser_type": parser_type if parser_type else None, "database_name": database_name if database_name else None}
-    merged = {k: v for k, v in values.items() if v is not None}
-    selected_parser = _normalize_parser_type(merged.get("parser_type"))
-    if selected_parser and capability_for_parser(selected_parser) is None:
-        return _unsupported_parser_result("activate_project", merged, selected_parser)
-    backend_name = _resolve_backend_name(selected_parser)
-    fn = _unwrap_tool_callable(getattr(BACKENDS[backend_name].module, "tool_activate_project", None))
-    if fn is None:
-        raise ValueError(f"Backend '{backend_name}' does not expose activate_project.")
-    response = await fn(payload=merged)
-    parser = _normalize_parser_type((response or {}).get("parser_type") or merged.get("parser_type"))
-    if parser:
-        active_project["parser_type"] = parser
-    db_name = (response or {}).get("database_name")
-    if db_name:
-        active_project["database_name"] = str(db_name)
-    if not isinstance(response, dict):
-        response = {"parser_type": parser, "database_name": db_name}
-    response.pop("backend", None)
-    response["query_engine"] = query_engine_for_backend(backend_name)
-    response["capability"] = _capability_summary(parser, backend_name)
-    response["canonical_parser"] = response["capability"].get("canonical_parser")
-    response["support_level"] = response["capability"].get("support_level")
-    return response
+) -> Dict[str, Any]:
+    return {
+        "deprecated": True,
+        "message": (
+            "activate_project has been removed. Pass project_id='...' on "
+            "every project-scoped call to scope to one project, or omit "
+            "it to query across all projects. See "
+            "docs/PROJECT_REGISTRY.md."
+        ),
+        "parser_type": parser_type or None,
+        "database_name": database_name or None,
+    }
 
 
 @mcp_server.tool(
@@ -704,11 +699,10 @@ async def tool_list_parsers() -> Dict[str, Any]:
         "capabilities": capabilities,
         "capability_contract_version": CAPABILITY_CONTRACT_VERSION,
         "default_query_engine": query_engine_for_backend(DEFAULT_BACKEND),
-        "active_parser_type": active_project.get("parser_type"),
-        "active_capability": _capability_summary(
-            active_project.get("parser_type"),
-            _resolve_backend_name(active_project.get("parser_type")),
-        ),
+        # ``active_parser_type`` is always None now — the stateful default has
+        # been removed. Callers must pass parser_type explicitly per call.
+        "active_parser_type": None,
+        "active_capability": _capability_summary(None, None),
     }
 
 
@@ -726,7 +720,7 @@ async def tool_inspect_parser_capabilities(
 ) -> Dict[str, Any]:
     selected_parser = (
         _normalize_parser_type(parser_type)
-        or _normalize_parser_type(active_project.get("parser_type"))
+        or _normalize_parser_type(parser_type)
     )
     if not selected_parser:
         return _build_tool_error(
@@ -1846,7 +1840,7 @@ async def tool_explore_graph(
     k = parsed_top_k or 10
     selected_parser = (
         _normalize_parser_type(parser_type)
-        or _normalize_parser_type(active_project.get("parser_type"))
+        or _normalize_parser_type(parser_type)
     )
     if selected_parser and capability_for_parser(selected_parser) is None:
         return _unsupported_parser_result(
@@ -1881,7 +1875,7 @@ async def tool_explore_graph(
             result["capability_diagnostics"] = capability_diagnostics
             return result
     service = get_explore_service()
-    active_db = db or active_project.get("database_name") or None
+    active_db = _resolve_graph_database(db=db) if db else None
     result = await service.explore(
         query      = q,
         top_k      = k,
@@ -1959,27 +1953,48 @@ async def tool_reconstruct_flow(
 # ── Frontend → Backend API Contract Bridge tools ──────────────────────────────
 
 
-def _resolve_graph_database(db: Optional[str] = None) -> str:
-    """Resolve one provider-neutral graph/database name for direct MCP tools."""
+def _resolve_graph_database(
+    db: Optional[str] = None,
+    project_id: Optional[str] = None,
+) -> str:
+    """Resolve one provider-neutral graph/database name for direct MCP tools.
+
+    Precedence (highest first):
+    1. ``db`` — explicit override, always wins (escape hatch).
+    2. ``project_id`` — resolves through the ProjectRegistry so the reader
+       targets the same shard the topology writer filled. An unregistered
+       project_id falls through to the env-default graph (graceful
+       degradation rather than raising).
+    3. Neither — falls through to env defaults (``FALKORDB_GRAPH`` /
+       ``NEO4J_DB`` / ``DEFAULT_GRAPH_DB`` / ``"hyper_graph"``). This is the
+       implicit full-search path: omit ``project_id`` to query across every
+       project.
+
+    Returns a non-empty graph name string. Never raises for a missing
+    ``project_id``; missing or unregistered ``project_id`` both resolve to
+    the env-derived graph name.
+    """
 
     requested = str(db or "").strip()
     if requested:
         return requested
-    active = str(active_project.get("database_name") or "").strip()
-    if active:
-        return active
-    # cplus_backend.DEFAULT_GRAPH_DB is already provider-aware
-    # (DEFAULT_FALKORDB_GRAPH when provider=falkordb, else DEFAULT_NEO4J_DB).
-    # Do NOT inline os.environ.get("NEO4J_DB") before it: a stale NEO4J_DB in
-    # the shell env would leak into the FalkorDB path and make the reader
-    # target a different graph than the topology writer (which defaults to
-    # "hyper_graph" via dev.py --falkordb-graph).
-    return str(
+
+    if project_id:
+        normalized = project_id_lookup_key(project_id)
+        if normalized:
+            try:
+                targets = resolve_project_targets(project_id)
+                return targets.code_graph
+            except ProjectNotRegisteredError:
+                pass  # Fall through to env defaults — graceful degradation.
+
+    # Full-search path: resolve from env defaults.
+    return (
         os.environ.get("FALKORDB_GRAPH")
-        or os.environ.get("FALKORDB_DATABASE")
-        or cplus_backend.DEFAULT_GRAPH_DB
+        or os.environ.get("NEO4J_DB")
+        or str(cplus_backend.DEFAULT_GRAPH_DB)
         or "hyper_graph"
-    ).strip()
+    )
 
 
 async def _run_bridge_query(cypher: str, params: Dict[str, Any], database: str) -> List[Dict[str, Any]]:
@@ -2038,7 +2053,10 @@ async def _run_project_context_tool(
     # reader targets the same graph the topology writer filled. Without this,
     # a server started for project A silently reads A's graph for every call
     # and returns empty results for every other project.
-    database = _resolve_graph_database(db or project_id_lookup_key(project_id))
+    database = _resolve_graph_database(
+        db=db,
+        project_id=project_id or None,
+    )
     _, _, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(
             tool_name,
@@ -2306,6 +2324,7 @@ async def tool_find_callers_of_endpoint(
     http_method:   str = "GET",
     be_project_id: str = "",
     fe_project_id: str = "",
+    project_id:    str = "",
     db:            str = "",
     parser_type:   str = "",
 ) -> Dict[str, Any]:
@@ -2315,7 +2334,12 @@ async def tool_find_callers_of_endpoint(
         http_method:   HTTP method (GET/POST/…), case-insensitive. Empty = any.
         be_project_id: project_id of the backend project.
         fe_project_id: project_id of the frontend project (empty = all projects).
-        db:            Graph database or graph name (uses the active/default context).
+        project_id:    project_id of the shard to query. Resolved via the
+                        ProjectRegistry. Optional when ``be_project_id`` or
+                        ``fe_project_id`` is set — those narrow the query to
+                        one project. Omit every project_id to query across
+                        all projects.
+        db:            Graph database or graph name (explicit override).
 
     Returns:
         {
@@ -2332,7 +2356,17 @@ async def tool_find_callers_of_endpoint(
         return {"endpoint_path": "", "callers": [], "total": 0,
                 "error": "endpoint_path is required"}
 
-    database = _resolve_graph_database(db)
+    # Resolve the graph shard. Precedence: db (explicit) → project_id
+    # (registry) → be_project_id/fe_project_id (registry). When multiple
+    # project_id args are present, project_id wins, then be_project_id, then
+    # fe_project_id. Omit every project_id to query across all projects.
+    effective_project_id = (
+        project_id or be_project_id or fe_project_id
+    )
+    database = _resolve_graph_database(
+        db=db,
+        project_id=effective_project_id or None,
+    )
     _, _, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(
             "find_callers_of_endpoint", parser_type, database,
@@ -2420,6 +2454,7 @@ async def tool_get_api_call_chain(
     endpoint_path:  str = "",
     fe_project_id:  str = "",
     be_project_id:  str = "",
+    project_id:     str = "",
     max_depth:      str = "5",
     db:             str = "",
     parser_type:    str = "",
@@ -2430,8 +2465,12 @@ async def tool_get_api_call_chain(
         endpoint_path:  Backend endpoint path, e.g. '/api/users/:id' (used if component not given)
         fe_project_id:  project_id of the frontend project.
         be_project_id:  project_id of the backend project.
+        project_id:     project_id of the shard to query. Resolved via the
+                        ProjectRegistry. Optional when ``fe_project_id`` or
+                        ``be_project_id`` is set. Omit every project_id to
+                        query across all projects.
         max_depth:      Max CALLS hops in FE chain (default 5).
-        db:             Graph database or graph name.
+        db:             Graph database or graph name (explicit override).
 
     Returns:
         {
@@ -2447,7 +2486,13 @@ async def tool_get_api_call_chain(
           "total": int
         }
     """
-    database = _resolve_graph_database(db)
+    effective_project_id = (
+        project_id or be_project_id or fe_project_id
+    )
+    database = _resolve_graph_database(
+        db=db,
+        project_id=effective_project_id or None,
+    )
     _depth = int(max_depth) if str(max_depth).isdigit() else 5
 
     if not component_name and not endpoint_path:
@@ -2639,6 +2684,7 @@ _EXTERNAL_MARKERS = ("third_party", "external", "vendor", "/usr", "node_modules"
 async def tool_analyze_workflow_impact(
     function_id: str,
     db: str = "",
+    project_id: str = "",
     direction: str = "downstream",
     max_depth: int = 4,
     parser_type: str = "",
@@ -2646,7 +2692,9 @@ async def tool_analyze_workflow_impact(
     """
     Args:
         function_id: symbol_id of the function/screen to analyze
-        db:          Graph database or graph name (uses active/default context)
+        db:          Graph database or graph name (explicit override)
+        project_id:  project_id of the shard to query. Resolved via the
+                     ProjectRegistry. Omit it to query across all projects.
         direction:   'downstream' or 'upstream' (default: 'downstream')
         max_depth:   CALLS traversal depth, capped at 4 (default: 4)
 
@@ -2671,7 +2719,10 @@ async def tool_analyze_workflow_impact(
     """
     import sys as _sys  # noqa: PLC0415
 
-    database = _resolve_graph_database(db)
+    database = _resolve_graph_database(
+        db=db,
+        project_id=project_id or None,
+    )
     capped = min(int(max_depth), 4)
 
     # 1. Call-graph expansion via existing dispatch system
@@ -2708,8 +2759,8 @@ async def tool_analyze_workflow_impact(
             for n in nodes
         ],
         "capability": subgraph.get("capability") or _capability_summary(
-            parser_type or active_project.get("parser_type"),
-            _resolve_backend_name(parser_type or active_project.get("parser_type")),
+            parser_type or None,
+            _resolve_backend_name(parser_type or None),
         ),
     }
     if subgraph.get("capability_diagnostics"):
@@ -2812,6 +2863,7 @@ async def tool_analyze_workflow_impact(
 async def tool_find_workflows_containing(
     function_id: str,
     db: str = "",
+    project_id: str = "",
     include_indirect: bool = True,
     max_depth: int = 4,
     parser_type: str = "",
@@ -2819,7 +2871,10 @@ async def tool_find_workflows_containing(
     """
     Args:
         function_id:      symbol_id of the function to look up
-        db:               Graph database or graph name
+        db:               Graph database or graph name (explicit override)
+        project_id:       project_id of the shard to query. Resolved via the
+                          ProjectRegistry. Omit it to query across all
+                          projects.
         include_indirect: Also find workflows reachable via CALLS chain (default True)
         max_depth:        Max CALLS hops for indirect search (default 4)
 
@@ -2831,7 +2886,10 @@ async def tool_find_workflows_containing(
           "total": int
         }
     """
-    database = _resolve_graph_database(db)
+    database = _resolve_graph_database(
+        db=db,
+        project_id=project_id or None,
+    )
     capped = min(int(max_depth), 4)
     selected_parser, relationships, routing, capability_diagnostics, capability_error = (
         await _resolve_direct_capability_context(

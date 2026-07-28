@@ -395,8 +395,14 @@ class LanguageCodeWriter:
         """Write function call relationships in batches"""
         if not calls:
             return 0
-        
+
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            # ``enrich_project_scope`` (via the upstream pipeline) adds
+            # ``project_id_normalized`` to each row. Per Phase 03 of the
+            # unified ingest/query contract plan, CALLS edges now also carry
+            # ``project_id`` and ``project_id_normalized`` so the standard
+            # ``n.project_id_normalized = $project_id_normalized`` predicate
+            # returns CALLS edges alongside the nodes they connect.
             query = """
             UNWIND $rows AS row
             MATCH (caller:Function {id: row.caller_id})
@@ -404,8 +410,10 @@ class LanguageCodeWriter:
             MERGE (caller)-[r:CALLS]->(callee)
             ON CREATE SET r.count = 1
             ON MATCH SET r.count = COALESCE(r.count, 0) + 1
-            SET r.call_type = row.call_type,
-                r.updated_at = datetime()
+            SET r.call_type            = row.call_type,
+                r.project_id           = row.project_id,
+                r.project_id_normalized = row.project_id_normalized,
+                r.updated_at           = datetime()
             """
 
             await self.driver.execute_query(
@@ -415,7 +423,7 @@ class LanguageCodeWriter:
             )
 
             return len(batch)
-        
+
         return await self.write_batches(
             "calls",
             calls,
@@ -438,16 +446,17 @@ class LanguageCodeWriter:
             query = """
             UNWIND $rows AS row
             MERGE (ft:FunctionType {id: row.id})
-            SET ft.type_signature = row.type_signature,
-                ft.file_path      = row.file_path,
-                ft.start_line     = row.start_line,
-                ft.end_line       = row.end_line,
-                ft.code           = row.code,
-                ft.project_id     = row.project_id,
-                ft.project_name   = row.project_name,
-                ft.language       = row.language,
-                ft.repo           = row.repo,
-                ft.build_system   = row.build_system
+            SET ft.type_signature        = row.type_signature,
+                ft.file_path             = row.file_path,
+                ft.start_line            = row.start_line,
+                ft.end_line              = row.end_line,
+                ft.code                  = row.code,
+                ft.project_id            = row.project_id,
+                ft.project_id_normalized = row.project_id_normalized,
+                ft.project_name          = row.project_name,
+                ft.language              = row.language,
+                ft.repo                  = row.repo,
+                ft.build_system          = row.build_system
             RETURN count(ft) AS count
             """
             records, _, _ = await self.driver.execute_query(
@@ -473,19 +482,20 @@ class LanguageCodeWriter:
             query = """
             UNWIND $rows AS row
             MERGE (f:Field {id: row.id})
-            SET f.name           = row.name,
-                f.qualified_name = row.qualified_name,
-                f.scope_name     = row.scope_name,
-                f.type_signature = row.type_signature,
-                f.file_path      = row.file_path,
-                f.start_line     = row.start_line,
-                f.end_line       = row.end_line,
-                f.code           = row.code,
-                f.project_id     = row.project_id,
-                f.project_name   = row.project_name,
-                f.language       = row.language,
-                f.repo           = row.repo,
-                f.build_system   = row.build_system
+            SET f.name                  = row.name,
+                f.qualified_name        = row.qualified_name,
+                f.scope_name            = row.scope_name,
+                f.type_signature        = row.type_signature,
+                f.file_path             = row.file_path,
+                f.start_line            = row.start_line,
+                f.end_line              = row.end_line,
+                f.code                  = row.code,
+                f.project_id            = row.project_id,
+                f.project_id_normalized = row.project_id_normalized,
+                f.project_name          = row.project_name,
+                f.language              = row.language,
+                f.repo                  = row.repo,
+                f.build_system          = row.build_system
             RETURN count(f) AS count
             """
             records, _, _ = await self.driver.execute_query(
@@ -511,19 +521,20 @@ class LanguageCodeWriter:
             query = """
             UNWIND $rows AS row
             MERGE (a:Alias {id: row.id})
-            SET a.name           = row.name,
-                a.qualified_name = row.qualified_name,
-                a.kind           = row.kind,
-                a.target_name    = row.target_name,
-                a.file_path      = row.file_path,
-                a.start_line     = row.start_line,
-                a.end_line       = row.end_line,
-                a.code           = row.code,
-                a.project_id     = row.project_id,
-                a.project_name   = row.project_name,
-                a.language       = row.language,
-                a.repo           = row.repo,
-                a.build_system   = row.build_system
+            SET a.name                  = row.name,
+                a.qualified_name        = row.qualified_name,
+                a.kind                  = row.kind,
+                a.target_name           = row.target_name,
+                a.file_path             = row.file_path,
+                a.start_line            = row.start_line,
+                a.end_line              = row.end_line,
+                a.code                  = row.code,
+                a.project_id            = row.project_id,
+                a.project_id_normalized = row.project_id_normalized,
+                a.project_name          = row.project_name,
+                a.language              = row.language,
+                a.repo                  = row.repo,
+                a.build_system          = row.build_system
             RETURN count(a) AS count
             """
             records, _, _ = await self.driver.execute_query(
@@ -549,16 +560,17 @@ class LanguageCodeWriter:
             query = """
             UNWIND $rows AS row
             MERGE (t:Template {id: row.id})
-            SET t.name         = row.name,
-                t.file_path    = row.file_path,
-                t.start_line   = row.start_line,
-                t.end_line     = row.end_line,
-                t.code         = row.code,
-                t.project_id   = row.project_id,
-                t.project_name = row.project_name,
-                t.language     = row.language,
-                t.repo         = row.repo,
-                t.build_system = row.build_system
+            SET t.name                  = row.name,
+                t.file_path             = row.file_path,
+                t.start_line            = row.start_line,
+                t.end_line              = row.end_line,
+                t.code                  = row.code,
+                t.project_id            = row.project_id,
+                t.project_id_normalized = row.project_id_normalized,
+                t.project_name          = row.project_name,
+                t.language              = row.language,
+                t.repo                  = row.repo,
+                t.build_system          = row.build_system
             RETURN count(t) AS count
             """
             records, _, _ = await self.driver.execute_query(

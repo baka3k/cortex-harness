@@ -166,10 +166,10 @@ mcp_server = FastMCP(
     instructions=INSTRUCTIONS,
 )
 
-active_project: Dict[str, Optional[str]] = {
-    "parser_type": None,
-    "database_name": None,
-}
+# Module-level state was removed as part of the unified ingest/query contract
+# plan (Phase 02d). Every project-scoped tool now resolves its graph through
+# ``unified_mcp.ProjectTargets`` and accepts ``project_id`` per call. Omit
+# ``project_id`` to span every project. There is no stateful default.
 
 _graph_driver: Optional[GraphDriver] = None
 _embedder_cache: Dict[Tuple[str, str], Tuple[Any, Any, torch.device]] = {}
@@ -236,25 +236,10 @@ async def _select_database_name(requested: Optional[str]) -> Optional[str]:
     return normalized
 
 
-def _set_active_project(
-    parser_type: Optional[str],
-    database_name: Optional[str],
-) -> None:
-    if parser_type:
-        active_project["parser_type"] = parser_type
-    if database_name:
-        active_project["database_name"] = database_name
-
-
 def _resolve_db_candidates(db: Optional[str]) -> List[str]:
     candidates: List[str] = []
     if db and str(db).strip():
         candidates.append(_normalize_db_name(str(db).strip()))
-    cached = active_project.get("database_name")
-    if cached:
-        normalized = _normalize_db_name(cached)
-        if normalized not in candidates:
-            candidates.append(normalized)
     default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
     if default_db and default_db not in candidates:
         candidates.append(default_db)
@@ -1272,26 +1257,30 @@ async def tool_list_databases() -> Dict[str, Any]:
 
 
 @mcp_server.tool(
-    name="activate_project",
-    description="Set default parser_type and optional database_name for subsequent tool calls.",
+    name="activate_project_removed",
+    description=(
+        "DEPRECATED — returns a deprecation notice. The previous "
+        "``activate_project`` tool has been removed per the unified "
+        "ingest/query contract plan. Callers must pass ``project_id`` to "
+        "scope to one project; omit it for cross-project queries. See "
+        "docs/PROJECT_REGISTRY.md for the new contract."
+    ),
 )
-async def tool_activate_project(
+async def tool_activate_project_removed(
     parser_type: Optional[str] = None,
     database_name: Optional[str] = None,
-) -> Dict[str, Optional[str]]:
-    parser_type = (parser_type or "").strip() or None
-    db_name = None
-    if database_name is not None:
-        db_text = str(database_name).strip()
-        db_name = await _select_database_name(db_text)
-    if not any([parser_type, db_name]):
-        db_name = await _select_database_name(DEFAULT_GRAPH_DB)
-    response = {
+) -> Dict[str, Any]:
+    return {
+        "deprecated": True,
+        "message": (
+            "activate_project has been removed. Pass project_id='...' on "
+            "every project-scoped call to scope to one project, or omit "
+            "it to query across all projects. See "
+            "docs/PROJECT_REGISTRY.md."
+        ),
         "parser_type": parser_type,
-        "database_name": db_name,
+        "database_name": database_name,
     }
-    _set_active_project(parser_type, db_name)
-    return response
 
 
 async def _enrich_with_infra_community(
