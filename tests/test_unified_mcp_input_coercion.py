@@ -249,6 +249,67 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["capability"]["canonical_parser"])
         bridge.assert_not_called()
 
+    async def test_project_context_tool_scopes_database_to_project_id(self):
+        # Each project's topology lives in its own graph (named after the
+        # project). When a caller passes project_id without an explicit db,
+        # the project-context tools must read from that project's graph, not
+        # the server's startup/active graph. Regression for the "empty
+        # modules for every project" bug.
+        context = (
+            "android", ["HAS_DESCRIPTOR"],
+            {"canonical_parser": "android", "query_engine": "android_graph"},
+            None, None,
+        )
+        tool = getattr(
+            unified_mcp.tool_get_project_modules,
+            "fn",
+            unified_mcp.tool_get_project_modules,
+        )
+        bridge = AsyncMock(return_value=[])
+        with patch.object(
+            unified_mcp,
+            "_resolve_direct_capability_context",
+            AsyncMock(return_value=context),
+        ):
+            with patch.dict(
+                unified_mcp.active_project,
+                {"parser_type": "android", "database_name": "cortext"},
+            ):
+                with patch.dict(os.environ, {"FALKORDB_GRAPH": "cortext"}):
+                    with patch.object(unified_mcp, "_run_bridge_query", bridge):
+                        result = await tool(project_id="digital_key", limit=50)
+
+        self.assertTrue(result["ok"])
+        # The bridge query must target the digital_key graph, not the
+        # server's active/startup cortext graph.
+        self.assertEqual(bridge.await_args.args[2], "digital_key")
+
+    async def test_project_context_tool_explicit_db_overrides_project_id(self):
+        context = (
+            "android", ["HAS_DESCRIPTOR"],
+            {"canonical_parser": "android", "query_engine": "android_graph"},
+            None, None,
+        )
+        tool = getattr(
+            unified_mcp.tool_get_project_modules,
+            "fn",
+            unified_mcp.tool_get_project_modules,
+        )
+        bridge = AsyncMock(return_value=[])
+        with patch.object(
+            unified_mcp,
+            "_resolve_direct_capability_context",
+            AsyncMock(return_value=context),
+        ):
+            with patch.dict(
+                unified_mcp.active_project,
+                {"parser_type": "android", "database_name": "cortext"},
+            ):
+                with patch.object(unified_mcp, "_run_bridge_query", bridge):
+                    await tool(project_id="digital_key", db="shared_graph", limit=50)
+
+        self.assertEqual(bridge.await_args.args[2], "shared_graph")
+
     async def test_endpoint_chain_and_workflow_queries_use_profile_relationships(self):
         context = (
             "spring", ["CALLS", "SEMANTIC_OF"],
