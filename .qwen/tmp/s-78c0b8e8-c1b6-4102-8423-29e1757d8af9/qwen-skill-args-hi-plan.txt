@@ -1,0 +1,1 @@
+remove hàm activate_project_removed ko dùng đến, cùng các hàm liên quan của nó
