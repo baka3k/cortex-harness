@@ -67,7 +67,7 @@ def add_graph_provider_args(parser: ArgumentParser) -> None:
     if not _has_option(parser, "--falkordb-graph"):
         parser.add_argument(
             "--falkordb-graph",
-            default=os.getenv("FALKORDB_GRAPH") or os.getenv("FALKORDB_DATABASE", "neo4j"),
+            default=os.getenv("FALKORDB_GRAPH") or os.getenv("FALKORDB_DATABASE"),
             help=(
                 "FalkorDB graph name. When --project-id is set, the "
                 "ProjectRegistry resolves this default unless an explicit "
@@ -149,7 +149,14 @@ def prepare_graph_args(args: Namespace) -> bool:
     setattr(args, "neo4j_uri", uri)
     setattr(args, "neo4j_user", getattr(args, "falkordb_user", None) or "")
     setattr(args, "neo4j_password", getattr(args, "falkordb_password", None) or "")
-    setattr(args, "neo4j_db", getattr(args, "falkordb_graph", None) or "neo4j")
+    resolved_graph = (
+        getattr(args, "falkordb_graph", None)
+        or getattr(args, "project_id", None)
+        or "neo4j"
+    )
+    setattr(args, "neo4j_db", resolved_graph)
+    if not getattr(args, "falkordb_graph", None):
+        args.falkordb_graph = resolved_graph
     return True
 
 
@@ -171,7 +178,12 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
             database=getattr(args, "neo4j_db", None),
         )
 
-    graph_name = getattr(args, "falkordb_graph", None) or "neo4j"
+    graph_name = (
+        getattr(args, "falkordb_graph", None)
+        or getattr(args, "neo4j_db", None)
+        or getattr(args, "project_id", None)
+        or "neo4j"
+    )
     setattr(args, "neo4j_db", graph_name)
     return await GraphDriverFactory.create_driver(
         GraphProvider.FALKORDB,

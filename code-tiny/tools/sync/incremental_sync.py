@@ -818,6 +818,7 @@ def _detect_default_before(root: str, after_sha: str) -> str:
 
 async def _query_impacted_files(
     *,
+    graph_provider: Optional[str],
     neo4j_uri: str,
     neo4j_user: str,
     neo4j_password: str,
@@ -827,8 +828,9 @@ async def _query_impacted_files(
 ) -> Set[str]:
     if not changed_paths:
         return set()
+    provider = normalize_graph_provider(graph_provider)
     driver = await GraphDriverFactory.create_driver(
-        GraphProvider.NEO4J,
+        provider,
         {
             "uri": neo4j_uri,
             "user": neo4j_user,
@@ -1141,13 +1143,14 @@ async def _ensure_project_repository_graph(
             "ssl": bool(getattr(args, "falkordb_ssl", False)),
         },
     )
+    resolved_graph = getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None)
     try:
         await driver.create_indexes(
             [
                 {"label": "Project", "property": "project_id"},
                 {"label": "Repository", "property": "name"},
             ],
-            database=getattr(args, "neo4j_db", None),
+            database=resolved_graph,
         )
         await driver.execute_query(
             _PROJECT_REPOSITORY_SETUP_QUERY,
@@ -1157,7 +1160,7 @@ async def _ensure_project_repository_graph(
                 "project_slug": _normalize_slug(project_name),
                 "repo_name": repo_name,
             },
-            database=getattr(args, "neo4j_db", None),
+            database=resolved_graph,
         )
     finally:
         close_result = driver.close()
@@ -1778,6 +1781,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         if not full_scan and graph_ready and changed_paths:
             summary["services"]["impact_expansion_used"] = True
             impacted_paths = await _query_impacted_files(
+                graph_provider=getattr(args, "graph_provider", None),
                 neo4j_uri=args.neo4j_uri,
                 neo4j_user=args.neo4j_user,
                 neo4j_password=args.neo4j_password,

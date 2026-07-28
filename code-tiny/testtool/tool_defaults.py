@@ -106,8 +106,6 @@ TOOL_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "query": "function that handles user authentication",
         "mode": "combined",
         "top_k": 10,
-        "content_mode": "summary",
-        "include_raw_fields": False,
         "expand_graph": False,
         "graph_depth": 2,
         "graph_direction": "both",
