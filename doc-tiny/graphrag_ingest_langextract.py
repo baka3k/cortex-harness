@@ -126,8 +126,25 @@ def _normalize_entity_name(name: str, mode: str = "aggressive") -> str:
     return cleaned
 
 
-def _entity_id(name: str, ent_type: str, name_norm: str | None = None) -> str:
-    key = f"{ent_type}::{name_norm or _normalize_entity_name(name)}"
+def _entity_id(
+    name: str,
+    ent_type: str,
+    name_norm: str | None = None,
+    project_id_normalized: str | None = None,
+) -> str:
+    """Generate a deterministic entity ID.
+
+    Per Phase 04 of the unified ingest/query contract plan, the merge key
+    is namespaced by ``project_id_normalized`` so entities from two projects
+    that share one doc graph (e.g. ``{project_id}_doc``) stay distinct.
+    ``project_id_normalized=None`` is preserved for backwards compatibility
+    with single-project tests; it produces a globally-namespaced ID.
+    """
+    name_part = name_norm or _normalize_entity_name(name)
+    if project_id_normalized:
+        key = f"{project_id_normalized}::{ent_type}::{name_part}"
+    else:
+        key = f"{ent_type}::{name_part}"
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
@@ -140,6 +157,7 @@ def build_graph_components(
     gliner_threshold: float = 0.3,
     merge_entities: bool = True,
     normalize_mode: str = "aggressive",
+    project_id_normalized: str | None = None,
 ) -> Tuple[Dict[str, Dict[str, str]], List[Dict[str, str]]]:
     if provider == "spacy":
         doc = nlp(text)
@@ -161,6 +179,7 @@ def build_graph_components(
         relations,
         merge_entities=merge_entities,
         normalize_mode=normalize_mode,
+        project_id_normalized=project_id_normalized,
     )
 
 
@@ -169,6 +188,7 @@ def build_graph_components_from_entities(
     relations: List[Dict[str, str]],
     merge_entities: bool = True,
     normalize_mode: str = "aggressive",
+    project_id_normalized: str | None = None,
 ) -> Tuple[Dict[str, Dict[str, str]], List[Dict[str, str]]]:
     nodes: Dict[str, Dict[str, str]] = {}
     name_index: Dict[str, str] = {}
@@ -188,10 +208,18 @@ def build_graph_components_from_entities(
         if ent.get("confidence") is not None:
             mention["confidence"] = ent.get("confidence")
         if merge_entities:
-            key = f"{ent_type}::{name_norm}"
-            if key not in nodes:
-                nodes[key] = {
-                    "id": _entity_id(name, ent_type, name_norm=name_norm),
+            # Per-project merge key: ``{project_id_normalized}::{type}::{name}``.
+            # When ``project_id_normalized`` is None we fall back to the legacy
+            # ``{type}::{name}`` form so single-project tests keep passing.
+            key_proj = f"{project_id_normalized}::{ent_type}::{name_norm}" if project_id_normalized else f"{ent_type}::{name_norm}"
+            if key_proj not in nodes:
+                nodes[key_proj] = {
+                    "id": _entity_id(
+                        name,
+                        ent_type,
+                        name_norm=name_norm,
+                        project_id_normalized=project_id_normalized,
+                    ),
                     "name": name,
                     "type": ent_type,
                     "name_norm": name_norm,
@@ -199,16 +227,16 @@ def build_graph_components_from_entities(
                     "confidence": mention.get("confidence") if mention else None,
                 }
             else:
-                if len(name) > len(nodes[key]["name"]):
-                    nodes[key]["name"] = name
+                if len(name) > len(nodes[key_proj]["name"]):
+                    nodes[key_proj]["name"] = name
                 if mention:
-                    nodes[key]["mentions"].append(mention)
+                    nodes[key_proj]["mentions"].append(mention)
                     conf = mention.get("confidence")
                     if conf is not None:
-                        existing = nodes[key].get("confidence")
+                        existing = nodes[key_proj].get("confidence")
                         if existing is None or conf > existing:
-                            nodes[key]["confidence"] = conf
-            name_index.setdefault(name_norm, key)
+                            nodes[key_proj]["confidence"] = conf
+            name_index.setdefault(name_norm, key_proj)
         else:
             key = str(uuid.uuid4())
             nodes[key] = {
@@ -233,9 +261,21 @@ def build_graph_components_from_entities(
             continue
         source_key = name_index.get(source_norm)
         if source_key is None:
-            source_key = f"UNKNOWN::{source_norm}" if merge_entities else str(uuid.uuid4())
+            if merge_entities:
+                source_key = (
+                    f"{project_id_normalized}::UNKNOWN::{source_norm}"
+                    if project_id_normalized
+                    else f"UNKNOWN::{source_norm}"
+                )
+            else:
+                source_key = str(uuid.uuid4())
             nodes[source_key] = {
-                "id": _entity_id(source, "UNKNOWN", name_norm=source_norm)
+                "id": _entity_id(
+                    source,
+                    "UNKNOWN",
+                    name_norm=source_norm,
+                    project_id_normalized=project_id_normalized,
+                )
                 if merge_entities
                 else str(uuid.uuid4()),
                 "name": source,
@@ -247,9 +287,21 @@ def build_graph_components_from_entities(
             name_index.setdefault(source_norm, source_key)
         target_key = name_index.get(target_norm)
         if target_key is None:
-            target_key = f"UNKNOWN::{target_norm}" if merge_entities else str(uuid.uuid4())
+            if merge_entities:
+                target_key = (
+                    f"{project_id_normalized}::UNKNOWN::{target_norm}"
+                    if project_id_normalized
+                    else f"UNKNOWN::{target_norm}"
+                )
+            else:
+                target_key = str(uuid.uuid4())
             nodes[target_key] = {
-                "id": _entity_id(target, "UNKNOWN", name_norm=target_norm)
+                "id": _entity_id(
+                    target,
+                    "UNKNOWN",
+                    name_norm=target_norm,
+                    project_id_normalized=project_id_normalized,
+                )
                 if merge_entities
                 else str(uuid.uuid4()),
                 "name": target,
@@ -291,6 +343,8 @@ def ingest_to_graph(
     paragraph_text: str | None = None,
     is_short: bool = False,
     paragraph_props: Dict[str, Any] | None = None,
+    project_id: str | None = None,
+    project_id_normalized: str | None = None,
 ) -> None:
     with driver.session() as session:
         if paragraph_text:
@@ -298,10 +352,14 @@ def ingest_to_graph(
             session.run(
                 """
                 MERGE (d:Document {id: $doc_id})
-                SET d.name = $doc_name
+                SET d.name               = $doc_name,
+                    d.project_id         = $project_id,
+                    d.project_id_normalized = $project_id_normalized
                 MERGE (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
-                SET p.text = $text,
-                    p.short = $is_short
+                SET p.text               = $text,
+                    p.short              = $is_short,
+                    p.project_id         = $project_id,
+                    p.project_id_normalized = $project_id_normalized
                 SET p += $props
                 MERGE (d)-[:HAS_PARAGRAPH]->(p)
                 """,
@@ -310,6 +368,8 @@ def ingest_to_graph(
                 source_id=source_id,
                 paragraph_id=paragraph_id,
                 text=paragraph_text,
+                project_id=project_id,
+                project_id_normalized=project_id_normalized,
                 is_short=is_short,
                 props=props,
             )
@@ -319,12 +379,16 @@ def ingest_to_graph(
                 MERGE (e:Entity {id: $id})
                 SET e.name = coalesce(e.name, $name),
                     e.type = $type,
-                    e.name_norm = $name_norm
+                    e.name_norm = $name_norm,
+                    e.project_id = $project_id,
+                    e.project_id_normalized = $project_id_normalized
                 """,
                 id=node["id"],
                 name=node["name"],
                 type=node["type"],
                 name_norm=node["name_norm"],
+                project_id=project_id,
+                project_id_normalized=project_id_normalized,
             )
             if paragraph_text:
                 primary = _select_primary_mention(node.get("mentions", []))
@@ -338,7 +402,9 @@ def ingest_to_graph(
                         r.confidence = $confidence,
                         r.start_char = $start_char,
                         r.end_char = $end_char,
-                        r.surface = $surface
+                        r.surface = $surface,
+                        r.project_id = $project_id,
+                        r.project_id_normalized = $project_id_normalized
                     """,
                     source_id=source_id,
                     paragraph_id=paragraph_id,
@@ -347,6 +413,8 @@ def ingest_to_graph(
                     start_char=primary.get("start_char"),
                     end_char=primary.get("end_char"),
                     surface=primary.get("surface"),
+                    project_id=project_id,
+                    project_id_normalized=project_id_normalized,
                 )
         for rel in relations:
             session.run(
@@ -354,16 +422,25 @@ def ingest_to_graph(
                 MATCH (s:Entity {id: $source_id})
                 MATCH (t:Entity {id: $target_id})
                 MERGE (s)-[r:RELATED {type: $type, source_id: $source_doc, paragraph_id: $paragraph_id}]->(t)
+                SET r.project_id           = $project_id,
+                    r.project_id_normalized = $project_id_normalized
                 """,
                 source_id=rel["source_id"],
                 target_id=rel["target_id"],
                 type=rel["type"],
                 source_doc=source_id,
                 paragraph_id=paragraph_id,
+                project_id=project_id,
+                project_id_normalized=project_id_normalized,
             )
 
 
-def ingest_to_graph_batch(driver, items: List[Dict[str, Any]]) -> None:
+def ingest_to_graph_batch(
+    driver,
+    items: List[Dict[str, Any]],
+    project_id: str | None = None,
+    project_id_normalized: str | None = None,
+) -> None:
     paragraphs = []
     entities = []
     relations = []
@@ -413,25 +490,35 @@ def ingest_to_graph_batch(driver, items: List[Dict[str, Any]]) -> None:
                 """
                 UNWIND $paragraphs AS row
                 MERGE (d:Document {id: row.doc_id})
-                SET d.name = row.doc_name
+                SET d.name                 = row.doc_name,
+                    d.project_id           = $project_id,
+                    d.project_id_normalized = $project_id_normalized
                 MERGE (p:Paragraph {source_id: row.source_id, paragraph_id: row.paragraph_id})
-                SET p.text = row.text,
-                    p.short = row.is_short
+                SET p.text                 = row.text,
+                    p.short                = row.is_short,
+                    p.project_id           = $project_id,
+                    p.project_id_normalized = $project_id_normalized
                 SET p += row.props
                 MERGE (d)-[:HAS_PARAGRAPH]->(p)
                 """,
                 paragraphs=paragraphs,
+                project_id=project_id,
+                project_id_normalized=project_id_normalized,
             )
         if entities:
             session.run(
                 """
                 UNWIND $entities AS row
                 MERGE (e:Entity {id: row.id})
-                SET e.name = coalesce(e.name, row.name),
-                    e.type = row.type,
-                    e.name_norm = row.name_norm
+                SET e.name                 = coalesce(e.name, row.name),
+                    e.type                 = row.type,
+                    e.name_norm            = row.name_norm,
+                    e.project_id           = $project_id,
+                    e.project_id_normalized = $project_id_normalized
                 """,
                 entities=entities,
+                project_id=project_id,
+                project_id_normalized=project_id_normalized,
             )
             session.run(
                 """
@@ -439,14 +526,18 @@ def ingest_to_graph_batch(driver, items: List[Dict[str, Any]]) -> None:
                 MATCH (p:Paragraph {source_id: row.source_id, paragraph_id: row.paragraph_id})
                 MATCH (e:Entity {id: row.id})
                 MERGE (p)-[r:HAS_ENTITY]->(e)
-                SET r.source_id = row.source_id,
-                    r.paragraph_id = row.paragraph_id,
-                    r.confidence = row.confidence,
-                    r.start_char = row.start_char,
-                    r.end_char = row.end_char,
-                    r.surface = row.surface
+                SET r.source_id            = row.source_id,
+                    r.paragraph_id         = row.paragraph_id,
+                    r.confidence           = row.confidence,
+                    r.start_char           = row.start_char,
+                    r.end_char             = row.end_char,
+                    r.surface              = row.surface,
+                    r.project_id           = $project_id,
+                    r.project_id_normalized = $project_id_normalized
                 """,
                 entities=entities,
+                project_id=project_id,
+                project_id_normalized=project_id_normalized,
             )
         if relations:
             session.run(
@@ -455,8 +546,12 @@ def ingest_to_graph_batch(driver, items: List[Dict[str, Any]]) -> None:
                 MATCH (s:Entity {id: row.source_id})
                 MATCH (t:Entity {id: row.target_id})
                 MERGE (s)-[r:RELATED {type: row.type, source_id: row.source_doc, paragraph_id: row.paragraph_id}]->(t)
+                SET r.project_id           = $project_id,
+                    r.project_id_normalized = $project_id_normalized
                 """,
                 relations=relations,
+                project_id=project_id,
+                project_id_normalized=project_id_normalized,
             )
 
 
@@ -576,6 +671,7 @@ def process_text(
     embedder: SentenceTransformer,
     nlp=None,
     gliner_model=None,
+    project_id_normalized: str | None = None,
 ) -> None:
     if not raw_text:
         print(f"Skip empty input: {source_id}")
@@ -605,7 +701,12 @@ def process_text(
         if not graph_batch:
             return
         print(f"Ingesting {len(graph_batch)} paragraphs to graph store (batch)...")
-        ingest_to_graph_batch(driver, graph_batch)
+        ingest_to_graph_batch(
+            driver,
+            graph_batch,
+            project_id=(args.project_id or args.source_id or None),
+            project_id_normalized=project_id_normalized,
+        )
         graph_batch.clear()
         print("Graph batch ingestion complete.")
 
@@ -659,6 +760,7 @@ def process_text(
                     [],
                     merge_entities=merge_entities,
                     normalize_mode=normalize_mode,
+                    project_id_normalized=project_id_normalized,
                 )
                 print(f"Paragraph {idx + 1}/{len(paragraphs)}: extracted {len(nodes)} entities.")
                 graph_batch.append(
@@ -688,6 +790,7 @@ def process_text(
                 gliner_threshold=args.gliner_threshold,
                 merge_entities=merge_entities,
                 normalize_mode=normalize_mode,
+                project_id_normalized=project_id_normalized,
             )
             print(f"Extracted {len(nodes)} entities, {len(relations)} relations.")
             graph_batch.append(
@@ -748,7 +851,12 @@ def process_xlsx_structured(
     def flush_graph_batch() -> None:
         if not graph_batch:
             return
-        ingest_to_graph_batch(driver, graph_batch)
+        ingest_to_graph_batch(
+            driver,
+            graph_batch,
+            project_id=(args.project_id or args.source_id or None),
+            project_id_normalized=project_id_normalized,
+        )
         graph_batch.clear()
 
     row_counter = 0
@@ -923,6 +1031,18 @@ def main() -> None:
     )
     parser.add_argument("--source-id", default=None, help="Custom source identifier")
     parser.add_argument(
+        "--project-id",
+        default=os.getenv("PROJECT_ID"),
+        help=(
+            "Project identifier. Stamped on Document/Paragraph/Entity nodes "
+            "and on Qdrant payloads. When set, the ProjectRegistry resolves "
+            "the doc graph and Qdrant collection unless an explicit "
+            "--collection or --graph value is provided. When absent, "
+            "fallback to source_id is used and a deprecation warning is "
+            "logged."
+        ),
+    )
+    parser.add_argument(
         "--collection",
         default=os.getenv("QDRANT_COLLECTION_DOC", "graphrag_entities"),
     )
@@ -1016,7 +1136,23 @@ def main() -> None:
     parser.set_defaults(no_batch=True)
     args = parser.parse_args()
 
-    _load_env()
+    # Resolve ``project_id_normalized`` for the new contract. When the
+    # caller passed --project-id we use it directly. When --project-id is
+    # absent we fall back to --source-id (the legacy single-axis scope)
+    # and log a deprecation warning so callers know to migrate.
+    raw_project_id = (args.project_id or args.source_id or "").strip()
+    if not args.project_id and args.source_id:
+        print(
+            "[graphrag_ingest_langextract] WARNING: --project-id not set; "
+            "falling back to --source-id. The unified ingest/query contract "
+            "requires --project-id. Pass --project-id explicitly to remove "
+            "this warning and enable per-project entity isolation.",
+            flush=True,
+        )
+    # Case-insensitive comparison key — mirrors tools.common.project_scope
+    # in code-tiny. We inline the helper here because doc-tiny does not
+    # have a Python package layout that can import from code-tiny.
+    project_id_normalized = raw_project_id.casefold() if raw_project_id else None
 
     if args.gliner_model_path:
         gliner_model_choice = args.gliner_model_path
@@ -1104,7 +1240,15 @@ def main() -> None:
             raise FileNotFoundError(pdf_path)
         raw_text = read_pdf_text(pdf_path)
         source_id = args.source_id or pdf_path.stem
-        process_text(raw_text, source_id, args, driver, qdrant, embedder)
+        process_text(
+            raw_text,
+            source_id,
+            args,
+            driver,
+            qdrant,
+            embedder,
+            project_id_normalized=project_id_normalized,
+        )
         return
 
     if args.text_file:
@@ -1113,7 +1257,15 @@ def main() -> None:
             raise FileNotFoundError(text_path)
         raw_text = read_text_file(text_path)
         source_id = args.source_id or text_path.stem
-        process_text(raw_text, source_id, args, driver, qdrant, embedder)
+        process_text(
+            raw_text,
+            source_id,
+            args,
+            driver,
+            qdrant,
+            embedder,
+            project_id_normalized=project_id_normalized,
+        )
         return
     
     if args.md:
@@ -1122,7 +1274,15 @@ def main() -> None:
             raise FileNotFoundError(md_path)
         raw_text = read_text_file(md_path)
         source_id = args.source_id or md_path.stem
-        process_text(raw_text, source_id, args, driver, qdrant, embedder)
+        process_text(
+            raw_text,
+            source_id,
+            args,
+            driver,
+            qdrant,
+            embedder,
+            project_id_normalized=project_id_normalized,
+        )
         return
 
     if args.docx:
@@ -1131,7 +1291,15 @@ def main() -> None:
             raise FileNotFoundError(docx_path)
         raw_text = read_docx_text(docx_path)
         source_id = args.source_id or docx_path.stem
-        process_text(raw_text, source_id, args, driver, qdrant, embedder)
+        process_text(
+            raw_text,
+            source_id,
+            args,
+            driver,
+            qdrant,
+            embedder,
+            project_id_normalized=project_id_normalized,
+        )
         return
 
     if args.pptx:
@@ -1140,7 +1308,15 @@ def main() -> None:
             raise FileNotFoundError(pptx_path)
         raw_text = read_pptx_text(pptx_path)
         source_id = args.source_id or pptx_path.stem
-        process_text(raw_text, source_id, args, driver, qdrant, embedder)
+        process_text(
+            raw_text,
+            source_id,
+            args,
+            driver,
+            qdrant,
+            embedder,
+            project_id_normalized=project_id_normalized,
+        )
         return
 
     if args.xlsx:
@@ -1152,7 +1328,15 @@ def main() -> None:
             process_xlsx_structured(xlsx_path, source_id, args, driver, qdrant, embedder)
         else:
             raw_text = read_xlsx_text(xlsx_path)
-            process_text(raw_text, source_id, args, driver, qdrant, embedder)
+            process_text(
+            raw_text,
+            source_id,
+            args,
+            driver,
+            qdrant,
+            embedder,
+            project_id_normalized=project_id_normalized,
+        )
         return
 
     raw_text = args.raw_text.strip()

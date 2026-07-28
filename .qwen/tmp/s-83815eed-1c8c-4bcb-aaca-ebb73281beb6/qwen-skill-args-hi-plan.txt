@@ -1,0 +1,1 @@
+--full các hàm truyền vào cả 2 biến 1. project_id=project_id or None 2. search_full=search_full -quá phức tạp - nên sửa lại - search_full=true  thừa  nếu truyền project_id thì search theo project_id, ko truyền thì search full
