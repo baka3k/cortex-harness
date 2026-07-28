@@ -28,8 +28,13 @@ from typing import Any, Dict, List, Optional, Set
 
 _FULL_CATALOG: List[Dict[str, Any]] = [
     {
-        "name": "activate_project",
-        "description": "Set default parser_type and database for all subsequent tool calls in this session.",
+        "name": "activate_project_removed",
+        "description": (
+            "DEPRECATED — returns a deprecation notice. The previous "
+            "``activate_project`` tool has been removed per the unified "
+            "ingest/query contract plan. Pass ``project_id`` to scope "
+            "to one project; omit it for cross-project queries."
+        ),
         "use_cases": ["Start of conversation", "Switch between projects", "Set context for multiple queries"],
         "inputs": [
             {"name": "parser_type", "type": "str", "required": False,
@@ -38,7 +43,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
              "description": "Graph database or graph name (for example 'my_project')"},
         ],
         "output": "Dict with parser_type, database_name, activated status",
-        "example": "activate_project(parser_type='cplus', database_name='sample_module')",
+        "example": "activate_project_removed(parser_type='cplus', database_name='sample_module')",
     },
     {
         "name": "search_functions",
@@ -50,7 +55,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
              "description": "Search terms separated by | (e.g., 'MyClass|MyFunc'). Case-insensitive substring match."},
             {"name": "limit", "type": "int", "required": False, "description": "Max results (default: 50)"},
             {"name": "db", "type": "str", "required": False,
-             "description": "Database name (uses activate_project default if not set)"},
+             "description": "Database name (explicit override; project_id is the recommended way to pick a shard)"},
             {"name": "content_mode", "type": "str", "required": False,
              "description": "Output format: 'auto', 'summary', 'comment', 'code', 'name'"},
             {"name": "include_raw_fields", "type": "bool", "required": False,
@@ -831,14 +836,14 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])",
     },
     {
-        "name": "activate_project",
+        "name": "activate_project_removed",
         "inputs": [
             {"name": "parser_type", "type": "str", "required": False,
-             "description": "Parser type: android / android-kotlin / kotlin-android"},
+             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
             {"name": "database_name", "type": "str", "required": False,
-             "description": "Graph database or graph name for the Android project"},
+             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
         ],
-        "example": "activate_project(parser_type='android', database_name='my_android_db')",
+        "example": "activate_project_removed(parser_type='android')",
     },
     {
         "name": "get_project_modules",
@@ -978,14 +983,14 @@ ANDROID_OVERRIDES: Dict[str, Dict[str, Any]] = {
         ],
         "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])",
     },
-    "activate_project": {
+    "activate_project_removed": {
         "inputs": [
             {"name": "parser_type", "type": "str", "required": False,
-             "description": "Parser type: android / android-kotlin / kotlin-android"},
+             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
             {"name": "database_name", "type": "str", "required": False,
-             "description": "Graph database or graph name for the Android project"},
+             "description": "DEPRECATED — kept for backwards compatibility; ignored."},
         ],
-        "example": "activate_project(parser_type='android', database_name='my_android_db')",
+        "example": "activate_project_removed(parser_type='android')",
     },
 }
 # ---------------------------------------------------------------------------
