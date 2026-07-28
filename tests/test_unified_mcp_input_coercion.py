@@ -269,17 +269,18 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_resolve_direct_capability_context",
             AsyncMock(return_value=context),
         ):
-            with patch.dict(
-                unified_mcp.active_project,
-                {"parser_type": "android", "database_name": "cortext"},
-            ):
-                with patch.dict(os.environ, {"FALKORDB_GRAPH": "cortext"}):
-                    with patch.object(unified_mcp, "_run_bridge_query", bridge):
-                        result = await tool(project_id="digital_key", limit=50)
+            with patch.dict(os.environ, {"FALKORDB_GRAPH": "cortext"}):
+                with patch.object(unified_mcp, "_run_bridge_query", bridge):
+                    result = await tool(
+                        project_id="digital_key", parser_type="android", limit=50
+                    )
 
         self.assertTrue(result["ok"])
         # The bridge query must target the digital_key graph, not the
-        # server's active/startup cortext graph.
+        # server's startup/active cortext graph. digital_key is not
+        # registered in the harness config, so the resolver must fall back
+        # to the code_graph == project_id naming convention rather than
+        # leaking the server's env-default graph.
         self.assertEqual(bridge.await_args.args[2], "digital_key")
 
     async def test_endpoint_chain_and_workflow_queries_use_profile_relationships(self):
