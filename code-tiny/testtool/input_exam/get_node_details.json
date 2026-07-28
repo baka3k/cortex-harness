@@ -3,7 +3,7 @@
         "NODE_ID_1",
         "NODE_ID_2"
     ],
-    "db": "hyper_graph",
+    "project_id": "hyper_graph",
     "content_mode": "summary",
     "include_raw_fields": false
 }

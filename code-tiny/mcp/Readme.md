@@ -389,16 +389,16 @@ provider during module import. A bare `python mcp/unified_mcp.py ...` command
 without provider variables defaults to FalkorDB and graph `hyper_graph`, matching
 the service launcher.
 
-For tools with a `db` field, use the FalkorDB graph name:
+Use the `project_id` field to scope to a project's graph shard. Omit
+`project_id` to query across all projects in the env-default graph:
 
 ```json
 {
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
-Pass `db: "hyper_graph"` explicitly or call `activate_project` with
-`database_name: "hyper_graph"` when a client caches old tool schemas. New direct
+The `db` parameter has been removed; pass `project_id` only. Direct
 workflow and bridge calls resolve the active graph through the same provider-neutral
 database contract as search and expansion tools.
 
@@ -427,7 +427,7 @@ export NEO4J_PASS=your_password
 export NEO4J_DB=neo4j
 ```
 
-Then use `database_name: "neo4j"` or `db: "neo4j"` in calls.
+Then use `project_id: "neo4j"` in calls.
 
 ## Start The Unified MCP Server
 
@@ -533,7 +533,7 @@ Important normalization rules:
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Empty strings               | Treated as "not provided".                                                                                                                                                                  |
 | `activate_project` defaults | Stores `parser_type` and `database_name` for later calls in the same server session.                                                                                                        |
-| `db` selection              | Current runtime uses FalkorDB graph `hyper_graph`. Some wrappers still expose legacy `neo4j` defaults, so pass `db: "hyper_graph"` explicitly in FalkorDB mode.                             |
+| `project_id` selection      | Current runtime uses FalkorDB graph `hyper_graph`. Pass `project_id: "hyper_graph"` explicitly to scope to that shard, or omit `project_id` to fall through to env defaults.                  |
 | Numeric strings             | Several public wrappers accept numbers as strings, for example `limit: "50"` or `top_k: "10"`.                                                                                              |
 | List aliases                | The router normalizes aliases such as `module` -> `modules`, `source_module` -> `source_modules`, `target_module` -> `target_modules`, and `class_name` -> `class_names` for backend calls. |
 | `project_id`                | Use it when multiple projects are indexed into the same graph/Qdrant services.                                                                                                              |
@@ -2559,7 +2559,7 @@ Then call `topological_sort` with the same nodes and edges:
 2. Call `list_qdrant_collections` and copy the exact collection name instead of
    guessing it.
 3. Run `search_functions` with a broad known name and explicit
-   `db: "hyper_graph"` plus the correct `project_id`.
+   `project_id: "hyper_graph"`.
 4. Remove `project_id` temporarily only if the graph is trusted and you are
    diagnosing a scope mismatch.
 5. Inspect the response provider/database diagnostics and confirm the active graph.

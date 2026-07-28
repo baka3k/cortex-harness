@@ -67,7 +67,7 @@ class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
 
         tool = getattr(unified_mcp.tool_get_api_call_chain, "fn", unified_mcp.tool_get_api_call_chain)
         with patch.object(unified_mcp, "_run_bridge_query", side_effect=fake_query):
-            result = await tool(endpoint_path="/catalog/{id}", db="hyper_graph")
+            result = await tool(endpoint_path="/catalog/{id}", project_id="hyper_graph")
 
         query = captured["cypher"]
         self.assertIn("(ep)-[:HANDLES]->(forwardCtrl:Controller)", query)

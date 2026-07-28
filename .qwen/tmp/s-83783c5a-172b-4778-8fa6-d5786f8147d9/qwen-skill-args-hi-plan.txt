@@ -1,0 +1,1 @@
+--full sửa lại test tool & dữ liệu của test tool & giao thức của test tool để khớp với mcp mới nhất - target là có thể test all input output của mcp, ngoài ra chuẩn bị thêm 1 item run all để tự động chạy toàn bộ các test tool, nếu có exception hay lỗi thì in ra cho người dùng để trace mcp nhanh nhất

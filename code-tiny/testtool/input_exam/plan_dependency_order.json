@@ -1,5 +1,5 @@
 {
     "modules": ["src/auth", "src/payment"],
-    "db": "hyper_graph",
+    "project_id": "hyper_graph",
     "on_cycle": "auto_condense_scc"
 }

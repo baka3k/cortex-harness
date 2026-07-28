@@ -10,9 +10,19 @@ relatedPlans:
   - 260725-1703-project-topology-context-tools
   - 260719-0100-mcp-query-capability-hardening
   - make-mcp-lifecycle
-amendedBy: [260728-0900-simplify-search-full-removal]
+amendedBy:
+  - 260728-0900-simplify-search-full-removal
+  - 260728-1400-remove-db-param-unify-project-id
 reviewed: 2026-07-28
 ---
+
+> **AMENDMENT NOTE (2026-07-28):** Plan `260728-1400-remove-db-param-unify-project-id`
+> supersedes the `db` parameter in this plan's Phase 02 query path. After the
+> amendment, every project-scoped MCP tool takes only `project_id` — `db` is
+> hard-removed from all tool signatures (the `db == project_id` convention makes
+> it redundant, and when both are passed they produce divergent results through
+> different downstream paths). Internal payload keys and variable names holding
+> the resolved graph name are unaffected.
 
 > **AMENDMENT NOTE (2026-07-28):** Plan `260728-0900-simplify-search-full-removal`
 > supersedes the `search_full` flag and `ProjectScopeRequiredError` introduced in

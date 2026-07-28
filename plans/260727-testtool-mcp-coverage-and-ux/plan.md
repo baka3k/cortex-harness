@@ -1,15 +1,25 @@
 ---
 title: "Testtool: Cover New MCP Tools + Categorized Selection UX"
-status: pending
+status: implemented
 created: 2026-07-27
 mode: hi-plan --fast
 scope: code-tiny/testtool default payloads, input_exam data, interactive menu UX
 blockedBy: []
+supersededBy:
+  - 260728-1500-testtool-runall-error-tracing
 relatedPlans:
   - 260719-2150-parser-mcp-runtime-alignment
   - 260715-2200-mcp-capability-routing
-reviewed: 2026-07-27
+reviewed: 2026-07-28
 ---
+
+> **SUPERSEDED (2026-07-28):** Phases 01–04 of this plan (19 new defaults,
+> categorized UX, stale cleanup, coverage check) are implemented in the
+> working tree. Plan `260728-1500-testtool-runall-error-tracing` supersedes
+> it: it fixes the one stale artifact this plan's Phase 04 missed
+> (`activate_project.json` filename), adds run-all batch mode, error/exception
+> tracing, and hybrid live-discover sync. This plan is marked `implemented`;
+> all new testtool work continues under the superseding plan.
 
 # Testtool: Cover New MCP Tools + Categorized Selection UX
 

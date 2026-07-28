@@ -1,6 +1,6 @@
 {
     "modules": ["src/auth", "src/payment"],
-    "db": "hyper_graph",
+    "project_id": "hyper_graph",
     "include_cross_module": true,
     "on_cycle": "auto_condense_scc"
 }
