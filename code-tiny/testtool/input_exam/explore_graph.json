@@ -1,5 +1,9 @@
 {
     "query": "user login authentication flow",
     "mode": "hybrid",
-    "top_k": 10
+    "top_k": 10,
+    "project_id": "hyper_graph",
+    "collection": "",
+    "debug": false,
+    "parser_type": ""
 }

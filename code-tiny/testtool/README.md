@@ -73,7 +73,7 @@ Example input file for `search_by_code` (`/tmp/search_authentication.json`):
 {
   "query": "DataNormal|Authen|Login|SignIn|Account",
   "project_id": "hyper_graph",
-  "top_k": 500,
+  "limit": 500,
   "content_mode": "summary",
   "include_raw_fields": false
 }

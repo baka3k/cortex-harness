@@ -22,6 +22,8 @@ import tempfile
 import subprocess
 import textwrap
 import time
+import traceback
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 # Allow running from repo root
@@ -33,9 +35,83 @@ from testtool.mcp_client import MCPClient, MCPError  # noqa: E402
 from testtool.tool_defaults import (                  # noqa: E402
     OTHER_CATEGORY,
     TOOL_CATEGORIES,
+    TOOL_DEFAULTS,
     category_of,
     get_default,
 )
+from dataclasses import dataclass, field, asdict  # noqa: E402
+
+# ── Hybrid discover reconciliation ────────────────────────────────────────────
+# Tool names declared in TOOL_DEFAULTS — cheap membership lookup for the
+# "no default" hint shown next to server-only tools in the Other bucket.
+_DEFAULT_NAMES: frozenset = frozenset(TOOL_DEFAULTS.keys())
+
+
+@dataclass
+class SyncReport:
+    """Outcome of reconciling live ``tools/list`` against ``TOOL_DEFAULTS``.
+
+    Drives the startup banner, run-all filtering, and the
+    ``⚠ no default`` / ``✗ offline`` decorations in the tool menu.
+    """
+
+    known: List[Dict[str, Any]] = field(default_factory=list)
+    server_only: List[Dict[str, Any]] = field(default_factory=list)
+    stale: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def live_total(self) -> int:
+        return len(self.known) + len(self.server_only)
+
+    def runnable(self, filtered: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Subset of ``filtered`` that is safe to call (live + not stale)."""
+        stale_names = {t["name"] for t in self.stale}
+        return [t for t in filtered if t.get("name") not in stale_names]
+
+
+def _reconcile_tools(
+    live_tools: List[Dict[str, Any]],
+    default_names: frozenset,
+) -> SyncReport:
+    """Split live tools into known / server-only / stale sets.
+
+    A tool is **known** when the server registers it AND it appears in
+    ``TOOL_DEFAULTS``; **server-only** when the server registers it but
+    has no default; **stale** when a default exists but the server no
+    longer registers the tool (would always fail a ``tools/call``).
+    """
+    live_names = {t.get("name", "") for t in live_tools if t.get("name")}
+    known: List[Dict[str, Any]] = []
+    server_only: List[Dict[str, Any]] = []
+    for t in live_tools:
+        name = t.get("name", "")
+        if name in default_names:
+            known.append(t)
+        else:
+            server_only.append(t)
+    stale = [
+        {"name": n, "description": "(default only — not registered by server)"}
+        for n in sorted(default_names - live_names)
+    ]
+    return SyncReport(known=known, server_only=server_only, stale=stale)
+
+
+def _print_sync_report(report: SyncReport) -> None:
+    """Emit the one-line sync summary plus any drift warnings."""
+    print(
+        GREEN(f"  {report.live_total} tools available.")
+        + DIM(
+            f"  ({len(report.known)} known · "
+            f"{len(report.server_only)} server-only · "
+            f"{len(report.stale)} stale)"
+        )
+    )
+    if report.server_only:
+        names = ", ".join(t.get("name", "?") for t in report.server_only)
+        print(YELLOW(f"  ⚠ No default payload for: {names}"))
+    if report.stale:
+        names = ", ".join(t.get("name", "?") for t in report.stale)
+        print(YELLOW(f"  ⚠ Stale defaults (no matching server tool): {names}"))
 
 # ── readline (best-effort) ───────────────────────────────────────────────────
 try:
@@ -235,12 +311,17 @@ def _render_tool_list(
     tools: List[Dict[str, Any]],
     filter_text: str = "",
     scope_category: str = "",
+    sync_report: Optional[SyncReport] = None,
 ) -> List[Dict[str, Any]]:
     """Print categorized tool list and return the visible subset in display order.
 
     Numbers in the menu are assigned category-by-category, so the returned list
     is flattened in the same order — a user typing ``33`` gets the tool shown
     at row 33, regardless of how the MCP server ordered its tool list.
+
+    The ``sync_report`` (when supplied) drives the drift hints: server-only
+    tools get ``⚠ no default`` next to their name, and stale tools render
+    with ``✗ offline``.
     """
     visible = _filter_tools(tools, filter_text, scope_category)
     total = len(tools)
@@ -270,7 +351,14 @@ def _render_tool_list(
             desc = tool.get("description", "")
             first_line = desc.split("\n", 1)[0][:72] if desc else ""
             num = CYAN(f"{len(display_ordered):>3}.")
-            print(f"  {num} {BOLD(name)}")
+            # Drift decorations: only attach when a sync_report is provided.
+            hint = ""
+            if sync_report is not None:
+                if name not in _DEFAULT_NAMES:
+                    hint = f" {YELLOW('⚠ no default')}"
+                elif not any(t.get("name") == name for t in sync_report.known):
+                    hint = f" {DIM('✗ offline')}"
+            print(f"  {num} {BOLD(name)}{hint}")
             if first_line:
                 print(f"       {DIM(first_line)}")
         print()
@@ -282,7 +370,7 @@ def _render_tool_list(
     print(
         DIM(
             f"  {shown}/{total} tools  |  <number> select  /text filter  "
-            f"c category  * all  q quit"
+            f"c category  * all  a run-all  q quit"
         )
     )
     print(_hr())
@@ -450,40 +538,377 @@ def _edit_payload(tool_name: str, tool_schema: Optional[Dict] = None) -> Optiona
 
 # ── Call & display result ─────────────────────────────────────────────────────
 
-def _run_tool(client: MCPClient, tool_name: str, payload: Dict[str, Any]) -> None:
-    print()
-    print(DIM(f"  Calling {tool_name} …"))
+def _result_is_empty(result: Any) -> bool:
+    """Heuristic: empty list / dict / dict-of-empty-lists counts as ``EMPTY``.
+
+    A false ``EMPTY`` classification is harmless (the tool still ran). The
+    goal is to distinguish "no data" from "no problem".
+    """
+    if result is None:
+        return True
+    if isinstance(result, list):
+        return len(result) == 0
+    if isinstance(result, dict):
+        if not result:
+            return True
+        return all(
+            isinstance(v, (list, dict)) and len(v) == 0
+            for v in result.values()
+        )
+    if isinstance(result, str):
+        return not result.strip()
+    return False
+
+
+@dataclass
+class _ToolRunResult:
+    """Outcome of a single tool call.
+
+    Used by both the interactive single-run path (printed inline) and the
+    run-all batch path (aggregated into a summary table and log file).
+    """
+
+    tool: str
+    status: str  # "pass" | "empty" | "fail"
+    elapsed: float
+    payload: Dict[str, Any]
+    result: Any = None
+    error: Optional[str] = None
+    traceback: Optional[str] = None
+    response_snippet: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """JSON-safe form (dataclasses.asdict plus non-iterable-safe fields)."""
+        d = asdict(self)
+        # ``result`` may contain non-serializable types; coerce to string.
+        try:
+            json.dumps(d["result"])
+        except (TypeError, ValueError):
+            d["result"] = repr(d["result"])
+        return d
+
+
+# Cap on raw response text captured on failure — keep failure detail useful
+# without flooding the operator's terminal.
+_RESPONSE_SNIPPET_LIMIT = 500
+
+
+def _execute_call(
+    client: MCPClient,
+    tool_name: str,
+    payload: Dict[str, Any],
+) -> _ToolRunResult:
+    """Call ``tools/call`` and wrap the outcome in a ``_ToolRunResult``.
+
+    Time and traceback are captured uniformly; status is decided by the
+    caller (``_run_tool`` for inline display, ``_run_all`` for batch runs).
+    """
     t0 = time.time()
     try:
         result = client.call_tool(tool_name, payload)
         elapsed = time.time() - t0
+        return _ToolRunResult(
+            tool=tool_name,
+            status="empty" if _result_is_empty(result) else "pass",
+            elapsed=elapsed,
+            payload=payload,
+            result=result,
+        )
+    except MCPError as exc:
+        return _ToolRunResult(
+            tool=tool_name,
+            status="fail",
+            elapsed=time.time() - t0,
+            payload=payload,
+            error=f"MCPError: {exc}",
+            traceback=traceback.format_exc(),
+            response_snippet=str(exc)[:_RESPONSE_SNIPPET_LIMIT],
+        )
+    except Exception as exc:
+        return _ToolRunResult(
+            tool=tool_name,
+            status="fail",
+            elapsed=time.time() - t0,
+            payload=payload,
+            error=f"{type(exc).__name__}: {exc}",
+            traceback=traceback.format_exc(),
+        )
+
+
+def _print_status(status: str) -> str:
+    """Colorized status label used by both single-run and summary blocks."""
+    if status == "pass":
+        return GREEN("PASS")
+    if status == "empty":
+        return YELLOW("EMPTY")
+    if status == "fail":
+        return RED("FAIL")
+    return DIM(status.upper())
+
+
+def _print_failure_block(run: _ToolRunResult) -> None:
+    """Inline failure detail block for single-tool runs.
+
+    Mirrors the log-entry shape so operators see the same context either way.
+    """
+    elapsed_str = f"{run.elapsed:.2f}s"
+    print(_hr())
+    print(BOLD(f"  {RED('FAIL')}  {run.tool}  ") + DIM(f"({elapsed_str})"))
+    print(_hr())
+    print(DIM("  payload: ") + json.dumps(run.payload, ensure_ascii=False))
+    if run.error:
+        print(DIM("  error:   ") + run.error)
+    if run.response_snippet and run.response_snippet != run.error:
+        print(DIM("  server:  ") + run.response_snippet)
+    if run.traceback:
+        print(DIM("  trace:"))
+        print(textwrap.indent(run.traceback.rstrip(), "    "))
+    print(_hr())
+
+
+def _run_all(
+    client: MCPClient,
+    scope: List[Dict[str, Any]],
+    sync_report: Optional[SyncReport],
+) -> None:
+    """Run every tool in ``scope`` with its default payload, continue on error.
+
+    Inline progress + summary table + structured log file (``outputs/``).
+
+    The ``activate_project_removed`` tool is **skipped** (always returns a
+    deprecation stub). Stale tools (defaults with no matching server tool)
+    are excluded up-front — calling them would only surface a transport
+    error and waste a slot.
+    """
+    if not scope:
+        print(YELLOW("  No tools in scope — adjust the filter or `*` first."))
+        return
+
+    now = datetime.now()
+    started_at = now.strftime("%Y-%m-%dT%H:%M:%S")
+    stamp = now.strftime("%Y%m%d-%H%M%S")
+
+    # Filter out tools that are unsafe to call (stale + the deprecation stub).
+    skip_names = {"activate_project_removed"}
+    if sync_report is not None:
+        skip_names |= {t.get("name", "") for t in sync_report.stale}
+    runnable = [t for t in scope if t.get("name") not in skip_names]
+    skipped = [t for t in scope if t.get("name") in skip_names
+               and t.get("name") == "activate_project_removed"]
+    stale = [t for t in scope if t.get("name") in skip_names
+             and t.get("name") != "activate_project_removed"]
+
+    total = len(runnable) + len(skipped) + len(stale)
+    print()
+    print(_hr())
+    print(
+        BOLD(f"  Run-all  {DIM(f'{len(runnable)} tools')}")
+        + (f" {DIM('(1 skipped)')}" if skipped else "")
+    )
+    print(_hr())
+
+    results: List[_ToolRunResult] = []
+    aborted = False
+    try:
+        for idx, tool in enumerate(runnable, 1):
+            name = tool.get("name", "?")
+            payload = get_default(name)
+            run = _execute_call(client, name, payload)
+            results.append(run)
+            label = _print_status(run.status)
+            elapsed_str = f"{run.elapsed:.2f}s"
+            print(
+                f"  [{CYAN(f'{idx}/{len(runnable)}')}] "
+                f"{BOLD(name)} … {label} {DIM(elapsed_str)}"
+            )
+            _emit_inline_progress(run)
+    except KeyboardInterrupt:
+        print(YELLOW("\n  Aborted by user — partial summary follows."))
+        aborted = True
+
+    finished_at = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+    # Tally by status.
+    by_status: Dict[str, List[_ToolRunResult]] = {"pass": [], "empty": [], "fail": []}
+    for r in results:
+        by_status.setdefault(r.status, []).append(r)
+
+    # Pre-populate the skip groups so they appear in the summary.
+    skip_results: List[_ToolRunResult] = []
+    for t in skipped:
+        skip_results.append(_ToolRunResult(
+            tool=t.get("name", "?"), status="skip", elapsed=0.0, payload={},
+        ))
+
+    print()
+    print(_hr())
+    summary_line = _print_summary(by_status, skip_results, results)
+    print(_hr())
+
+    failures = [r for r in results if r.status == "fail"]
+    if failures:
+        print()
+        print(BOLD(f"  Failures ({len(failures)}):"))
         print(_hr())
-        print(BOLD(f"  Result  {DIM(f'({elapsed:.2f}s)')}"))
+        for r in failures:
+            _print_failure_block(r)
         print(_hr())
-        pretty = _pprint(result)
-        print(textwrap.indent(pretty, "  "))
-        print(_hr())
-        # Post-run actions
+
+    # Persist the run to outputs/testtool-runall-{timestamp}.json.
+    log_path = _save_run_log(
+        stamp=stamp,
+        started_at=started_at,
+        finished_at=finished_at,
+        aborted=aborted,
+        scope_size=total,
+        results=results,
+        skip_results=skip_results,
+        summary_line=summary_line,
+    )
+    if log_path is not None:
+        print(GREEN(f"  Log saved → {log_path}"))
+
+
+def _emit_inline_progress(run: _ToolRunResult) -> None:
+    """One additional line of context on FAIL — keeps the progress scannable."""
+    if run.status == "fail" and run.error:
+        print(DIM(f"          {run.error}"))
+
+
+def _print_summary(
+    by_status: Dict[str, List[_ToolRunResult]],
+    skip_results: List[_ToolRunResult],
+    results: List[_ToolRunResult],
+) -> str:
+    """Render the summary block; return the single-line tally for the log."""
+    counts = {
+        "pass": len(by_status.get("pass", [])),
+        "empty": len(by_status.get("empty", [])),
+        "fail": len(by_status.get("fail", [])),
+        "skip": len(skip_results),
+    }
+    total_elapsed = sum(r.elapsed for r in results)
+
+    def _names(rs: List[_ToolRunResult]) -> str:
+        names = [r.tool for r in rs]
+        if len(names) <= 6:
+            return ", ".join(names) if names else "—"
+        return ", ".join(names[:6]) + f", … (+{len(names) - 6} more)"
+
+    line = (
+        f"  PASS {counts['pass']:>3}   "
+        f"EMPTY {counts['empty']:>3}   "
+        f"FAIL {counts['fail']:>3}   "
+        f"SKIP {counts['skip']:>3}   "
+        f"{DIM(f'total {total_elapsed:.1f}s')}"
+    )
+    print(line)
+    if counts["pass"]:
+        print(DIM(f"  pass  : ") + _names(by_status["pass"]))
+    if counts["empty"]:
+        print(DIM(f"  empty : ") + _names(by_status["empty"]))
+    if counts["fail"]:
+        print(DIM(f"  fail  : ") + _names(by_status["fail"]))
+    if counts["skip"]:
+        print(DIM(f"  skip  : ") + _names(skip_results))
+    return line.strip()
+
+
+def _save_run_log(
+    stamp: str,
+    started_at: str,
+    finished_at: str,
+    aborted: bool,
+    scope_size: int,
+    results: List[_ToolRunResult],
+    skip_results: List[_ToolRunResult],
+    summary_line: str,
+) -> Optional[str]:
+    """Persist the run to ``outputs/testtool-runall-{stamp}.json``.
+
+    Returns the absolute log path on success, ``None`` if writing fails.
+    """
+    try:
+        out_dir = os.path.join(os.getcwd(), "outputs")
+        os.makedirs(out_dir, exist_ok=True)
+        log_path = os.path.join(out_dir, f"testtool-runall-{stamp}.json")
+        payload = {
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "aborted": aborted,
+            "scope_size": scope_size,
+            "summary": summary_line,
+            "results": [r.to_dict() for r in results + skip_results],
+        }
+        with open(log_path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2, default=str)
+        return os.path.abspath(log_path)
+    except OSError as exc:
+        print(YELLOW(f"  Log save failed: {exc}"))
+        return None
+
+
+def _run_tool(client: MCPClient, tool_name: str, payload: Dict[str, Any]) -> None:
+    """Single-tool entry: execute, then display result or failure block."""
+    print()
+    print(DIM(f"  Calling {tool_name} …"))
+    run = _execute_call(client, tool_name, payload)
+
+    if run.status == "fail":
+        _print_failure_block(run)
+        # Post-failure actions: retry or continue (no save — nothing to save).
         while True:
-            print(f"  {CYAN('s')} save result   {CYAN('Enter')} continue")
+            print(f"  {CYAN('r')} retry   {CYAN('Enter')} continue")
             try:
                 act = input(f"  {CYAN('›')} ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 print()
                 break
-            if act == "s":
-                _save_result(result)
-            else:
+            if act == "r":
+                run = _execute_call(client, tool_name, payload)
+                if run.status == "fail":
+                    _print_failure_block(run)
+                    continue
                 break
-    except MCPError as exc:
-        print(RED(f"  MCP Error: {exc}"))
-    except Exception as exc:
-        print(RED(f"  Unexpected error: {exc}"))
+            break
+        if run.status != "fail":
+            print(_hr())
+            print(BOLD(f"  Result  {DIM(f'({run.elapsed:.2f}s)')}"))
+            print(_hr())
+            print(textwrap.indent(_pprint(run.result), "  "))
+            print(_hr())
+        return
+
+    # PASS / EMPTY — normal single-run display path.
+    status_label = _print_status(run.status)
+    print(_hr())
+    print(BOLD(f"  Result  {status_label}  ") + DIM(f"({run.elapsed:.2f}s)"))
+    print(_hr())
+    pretty = _pprint(run.result)
+    print(textwrap.indent(pretty, "  "))
+    print(_hr())
+    # Post-run actions
+    while True:
+        print(f"  {CYAN('s')} save result   {CYAN('Enter')} continue")
+        try:
+            act = input(f"  {CYAN('›')} ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if act == "s":
+            _save_result(run.result)
+        else:
+            break
 
 
 # ── Main interactive loop ─────────────────────────────────────────────────────
 
-def interactive(client: MCPClient, tools: List[Dict[str, Any]], start_tool: Optional[str] = None) -> None:
+def interactive(
+    client: MCPClient,
+    tools: List[Dict[str, Any]],
+    start_tool: Optional[str] = None,
+    sync_report: Optional[SyncReport] = None,
+) -> None:
     # No in-RAM payload cache — every tool run reloads from input_exam/{tool}.json
     # (or TOOL_DEFAULTS) so file edits are picked up immediately.
     filter_text = ""
@@ -500,7 +925,7 @@ def interactive(client: MCPClient, tools: List[Dict[str, Any]], start_tool: Opti
             print(RED(f"  Tool '{start_tool}' not found."))
 
     while True:
-        filtered = _render_tool_list(tools, filter_text, scope_category)
+        filtered = _render_tool_list(tools, filter_text, scope_category, sync_report)
 
         try:
             raw = input(f"\n  {CYAN('Select')} ").strip()
@@ -523,6 +948,16 @@ def interactive(client: MCPClient, tools: List[Dict[str, Any]], start_tool: Opti
 
         if raw == "*":
             scope_category = ""
+            continue
+
+        # 'a' runs every visible tool with its default payload.
+        # Guarded the same way 'c' is: only run-all if no visible tool is
+        # literally named 'a' (none today; documented to keep the shortcut
+        # predictable).
+        if (raw == "a" or raw.lower() == "run-all") and not any(
+            t["name"] == "a" for t in filtered
+        ):
+            _run_all(client, filtered, sync_report)
             continue
 
         # 'c' opens the category browser, unless a real tool is literally named
@@ -613,9 +1048,11 @@ def main() -> None:
         from testtool.tool_defaults import TOOL_DEFAULTS
         tools = [{"name": k, "description": ""} for k in sorted(TOOL_DEFAULTS)]
 
-    print(GREEN(f"  {len(tools)} tools available.\n"))
+    sync_report = _reconcile_tools(tools, _DEFAULT_NAMES)
+    _print_sync_report(sync_report)
+    print()
 
-    interactive(client, tools, start_tool=args.tool)
+    interactive(client, tools, start_tool=args.tool, sync_report=sync_report)
 
 
 if __name__ == "__main__":

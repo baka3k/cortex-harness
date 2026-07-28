@@ -1,7 +1,7 @@
 {
     "query": "MyClass|myFunction",
     "project_id": "hyper_graph",
-    "top_k": 50,
+    "limit": 50,
     "content_mode": "summary",
     "include_raw_fields": false
 }
