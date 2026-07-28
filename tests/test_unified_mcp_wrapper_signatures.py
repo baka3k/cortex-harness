@@ -37,22 +37,51 @@ def _catalog() -> list[dict]:
     return module._FULL_CATALOG
 
 
-def test_query_wrappers_accept_result_formatting_options():
-    wrappers = [
-        "tool_listup_symbols_matching_file_path",
-        "tool_search_functions",
-        "tool_search_by_code",
-        "tool_get_symbol",
-        "tool_get_node_details",
-        "tool_find_paths",
-        "tool_query_subgraph",
-        "tool_list_possible_calls",
+def test_proxied_tools_accept_result_formatting_options():
+    """Regression guard for the unified/backend schema-drift bug class.
+
+    Before the pass-through proxy refactor, wrappers in ``unified_mcp.py``
+    re-declared a subset of the backend signature and silently dropped fields
+    like ``content_mode`` and ``include_raw_fields``. Pydantic then rejected
+    any payload containing those fields with ``Unexpected keyword argument``.
+
+    Now these tools are dynamically registered from the backend callable, so
+    their JSON schema must include every named parameter that the backend
+    exposes. Asserting against the live ``mcp_server`` tool registry catches
+    any future re-introduction of the drift.
+    """
+    import asyncio
+    import sys
+
+    sys.path.insert(0, str(ROOT / "code-tiny" / "mcp"))
+    import unified_mcp  # noqa: E402
+
+    formatting_opts = {"content_mode", "include_raw_fields"}
+    proxied_query_tools = [
+        "listup_symbols_matching_file_path",
+        "search_functions",
+        "search_by_code",
+        "get_symbol",
+        "get_node_details",
+        "find_paths",
+        "query_subgraph",
+        "list_possible_calls",
+        "semantic_search",
     ]
 
-    for wrapper in wrappers:
-        args = _function_args(wrapper)
-        assert "content_mode" in args, wrapper
-        assert "include_raw_fields" in args, wrapper
+    async def _props() -> dict[str, set[str]]:
+        live = await unified_mcp.mcp_server.list_tools()
+        return {
+            tool.name: set(tool.parameters.get("properties", {}).keys())
+            for tool in live
+        }
+
+    properties_by_name = asyncio.run(_props())
+    for tool_name in proxied_query_tools:
+        props = properties_by_name.get(tool_name)
+        assert props is not None, f"{tool_name} not registered"
+        missing = formatting_opts - props
+        assert not missing, f"{tool_name} missing fields {missing}"
 
 
 def test_catalog_inputs_are_accepted_by_handwritten_wrappers():

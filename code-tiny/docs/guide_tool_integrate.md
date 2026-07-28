@@ -36,7 +36,7 @@ Every new tool must be reviewed against the following file set. These are the sh
 | `tools/sync/owner_manifest.py`    | Yes                                        | No                | Register exclusive source ownership and extension/classifier routing. Never add overlays here.                                                                |
 | `../cortex_harness/dev.py`        | Yes                                        | Yes               | Expose the tool through root CLI discovery using `LANG_ANALYZERS` or `FRAMEWORK_ANALYZERS`; add primary extensions to `LANG_EXTENSIONS`.                      |
 | `mcp/framework_registry.py`       | When parser-specific graph behavior exists | Yes               | Register aliases, searchable labels/properties, and parser-specific traversal relationships.                                                                  |
-| `mcp/unified_mcp.py`              | Yes                                        | Yes               | Route aliases to the shared backend, expose canonical names through `list_parsers`, and update public routing instructions.                                   |
+| `mcp/unified_mcp.py`              | Pass-through tools only                    | Yes               | Add the canonical tool name to `_UNIFIED_TOOL_NAMES` frozenset; the middleware auto-registers the proxy from the backend callable on next reload. Tools with custom business logic (Cypher, services) keep their hand-rolled wrapper here. |
 | `docs/guide_tool_integrate.md`    | Yes                                        | Yes               | Update this guide whenever a new shared integration point, required flag, registry, or verification step is introduced.                                       |
 
 The minimum review path is therefore:
@@ -114,7 +114,8 @@ Update `mcp/framework_registry.py` when the tool introduces framework-specific l
 
 Update `mcp/unified_mcp.py`:
 
-- Add generic primary aliases to the correct backend alias set.
+- For pass-through tools (the common case): add the canonical name to `_UNIFIED_TOOL_NAMES` (line ~66). On next reload, `_register_proxy_tools()` dynamically registers the tool from the backend callable via `mcp_server.add_tool(Tool.from_function(...))`. The JSON schema is derived from the backend signature — no manual wrapper needed.
+- For tools with custom business logic (Cypher queries, services, capability checks): keep the hand-rolled `@mcp_server.tool(...) async def tool_X(...)` wrapper here. The middleware routes these via `call_next(context)` (they live outside `_PROXIED_TOOL_NAMES`).
 - Update the MCP routing instructions.
 - Ensure `tool_list_parsers` includes explicit aliases that cannot be discovered from a `tools/` directory name.
 
