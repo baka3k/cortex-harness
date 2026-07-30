@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import Tool
+from fastmcp.tools.tool import ToolResult
 
 load_dotenv()  # Load environment variables from .env file if present
 
@@ -667,6 +668,32 @@ class _ProxyMiddleware(Middleware):
     any field accepted by the backend's signature is also accepted here.
     """
 
+    @staticmethod
+    def _wrap_dispatch_result(result: Any) -> Any:
+        """Wrap a dispatch dict as a ``ToolResult`` so FastMCP's outer
+        ``_mcp_call_tool`` can call ``.to_mcp_result()`` on it.
+
+        Without this wrapper, returning a plain dict from ``on_call_tool``
+        triggers ``AttributeError: 'dict' object has no attribute
+        'to_mcp_result'`` at the protocol boundary.
+        """
+        if isinstance(result, ToolResult):
+            return result
+        if result is None:
+            return ToolResult(content="")
+        # Errors come back as ``{"ok": False, "error": {...}}``; surface them
+        # as tool errors so the LLM sees a structured message.
+        if isinstance(result, dict) and result.get("ok") is False:
+            error = result.get("error") or {}
+            message = error.get("message") if isinstance(error, dict) else str(error)
+            return ToolResult(
+                content=message or "Tool execution failed.",
+                structured_content=result,
+            )
+        if isinstance(result, dict):
+            return ToolResult(content="", structured_content=result)
+        return ToolResult(content=str(result))
+
     async def on_call_tool(
         self,
         context: MiddlewareContext,
@@ -678,8 +705,10 @@ class _ProxyMiddleware(Middleware):
         arguments = dict(getattr(message, "arguments", {}) or {})
         if name in _PROXIED_TOOL_NAMES:
             if name in _PLANNER_TOOL_NAMES:
-                return await _dispatch_planner_tool(name, arguments)
-            return await _dispatch_tool(name, arguments)
+                result = await _dispatch_planner_tool(name, arguments)
+            else:
+                result = await _dispatch_tool(name, arguments)
+            return self._wrap_dispatch_result(result)
         return await call_next(context)
 
 
