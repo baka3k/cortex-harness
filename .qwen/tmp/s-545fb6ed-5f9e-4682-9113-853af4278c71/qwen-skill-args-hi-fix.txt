@@ -1,0 +1,86 @@
+Traceback (most recent call last):
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/_parsers/socket.py", line 64, in _read_from_socket
+    data = sock.recv(socket_read_size)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/python/python_analyzer.py", line 2223, in <module>
+    raise SystemExit(asyncio.run(main()))
+                     ^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/.pyenv/versions/3.12.12/lib/python3.12/asyncio/runners.py", line 195, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/.pyenv/versions/3.12.12/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/.pyenv/versions/3.12.12/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/python/python_analyzer.py", line 2141, in main
+    await build_call_graph(
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/python/python_analyzer.py", line 1726, in build_call_graph
+    await code_writer.write_all(
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/language_writer.py", line 1693, in write_all
+    counts["relations"] = await self.write_relations_typed(relations, state, state_writer)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/language_writer.py", line 1278, in write_relations_typed
+    written = await self.write_batches(state_key, group, write_batch, state, state_writer)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/language_writer.py", line 99, in write_batches
+    count = await write_fn(batch)
+            ^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/language_writer.py", line 1273, in write_batch
+    records, _, _ = await self.driver.execute_query(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/driver/falkordb_driver.py", line 225, in execute_query
+    return self.execute_query_sync(query, parameters, database)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/driver/falkordb_driver.py", line 235, in execute_query_sync
+    result = graph.query(query, params=params)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/falkordb/graph.py", line 125, in query
+    return self._query(q, params=params, timeout=timeout, read_only=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/falkordb/graph.py", line 97, in _query
+    response = self.execute_command(*command)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/client.py", line 798, in execute_command
+    return self._execute_command(*args, **options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/client.py", line 820, in _execute_command
+    result = conn.retry.call_with_retry(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/retry.py", line 132, in call_with_retry
+    raise error
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/retry.py", line 120, in call_with_retry
+    return do()
+           ^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/client.py", line 821, in <lambda>
+    lambda: self._send_command_parse_response(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/client.py", line 764, in _send_command_parse_response
+    return self.parse_response(conn, command_name, **options)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/client.py", line 864, in parse_response
+    response = connection.read_response()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/connection.py", line 1378, in read_response
+    response = self._parser.read_response(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/_parsers/resp2.py", line 18, in read_response
+    result = self._read_response(
+             ^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/_parsers/resp2.py", line 32, in _read_response
+    raw = self._buffer.readline(timeout=timeout)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/_parsers/socket.py", line 117, in readline
+    self._read_from_socket(timeout=timeout)
+  File "/Users/hieplq1.rpm/AI/cortex-harness/.venv/lib/python3.12/site-packages/redis/_parsers/socket.py", line 77, in _read_from_socket
+    raise TimeoutError("Timeout reading from socket")
+redis.exceptions.TimeoutError: Timeout reading from socket
+[state] marked dirty: Command '['/Users/hieplq1.rpm/AI/cortex-harness/.venv/bin/python', '/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/python/python_analyzer.py', '--root', '/Users/hieplq1.rpm/Hyper-Dev/hyper-pack', '--project-id', 'hyperpack', '--project-name', 'hyperpack', '--commit-sha-before', 'full_scan', '--commit-sha-after', '57f21b551e3d6814f9f3c6c5a8e6a5d0935e81ec', '--qdrant-collection', 'hyperpack_ff08090b83__python_functions', '--enable-message-scan', '--message-output-dir', '/Users/hieplq1.rpm/Hyper-Dev/hyper-pack/.cache/message_scan_artifacts/hyper-pack_ff08090b835e', '--message-qdrant-collection', 'hyperpack_mess', '--verbose']' returned non-zero exit status 1.
+[state] lock released: /Users/hieplq1.rpm/Hyper-Dev/hyper-pack/.cache/incremental_sync_locks/efdfa101b0085f2544e588d1.lock
+[state] summary json: /Users/hieplq1.rpm/Hyper-Dev/hyper-pack/.cache/incremental_sync_summaries/dev_efdfa101b0085f25_40388_22d1b3e757e14879994b4b06c510ea3c.json
