@@ -141,6 +141,7 @@ class FalkorDBDriver(Neo4jDriver):
     ):
         try:
             from falkordb import FalkorDB
+            import redis
         except ImportError as exc:
             raise ImportError(
                 "FalkorDB provider requires the 'falkordb' package. "
@@ -157,6 +158,17 @@ class FalkorDBDriver(Neo4jDriver):
             client_kwargs["username"] = user
         if password:
             client_kwargs["password"] = password
+
+        # redis-py's Connection defaults to socket_timeout=5s with 0 retries.
+        # Graph queries (batch MERGE, full-text, etc.) routinely exceed 5s on
+        # large codebases, so raise the socket timeout and add retry-on-timeout
+        # unless the caller explicitly provided their own values.
+        client_kwargs.setdefault("socket_timeout", 120)
+        client_kwargs.setdefault("socket_connect_timeout", 10)
+        client_kwargs.setdefault(
+            "retry_on_error",
+            [ConnectionError, redis.exceptions.TimeoutError, TimeoutError],
+        )
 
         url = uri or client_kwargs.pop("url", None)
         if url and "://" in url:
