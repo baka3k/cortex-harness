@@ -234,7 +234,12 @@ class FalkorDBDriver(Neo4jDriver):
         parameters: Optional[Dict[str, Any]] = None,
         database: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], List[str], Any]:
-        return self.execute_query_sync(query, parameters, database)
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self.execute_query_sync, query, parameters, database
+        )
 
     def execute_query_sync(
         self,
@@ -254,6 +259,69 @@ class FalkorDBDriver(Neo4jDriver):
             for row in result.result_set
         ]
         return records, keys, result
+
+    def execute_queries_pipelined(
+        self,
+        queries: List[Tuple[str, Optional[Dict[str, Any]]]],
+        database: Optional[str] = None,
+    ) -> List[Tuple[List[Dict[str, Any]], List[str], Any]]:
+        """Queue multiple GRAPH.QUERY commands in one Redis pipeline.
+
+        FalkorDB serializes writes per-graph (single writer, FIFO), so this
+        does NOT parallelize writes — it eliminates per-query TCP round-trip
+        latency.  Each query is prepared (datetime rewriting, project scope)
+        exactly like :meth:`execute_query_sync`.
+
+        Args:
+            queries: list of ``(cypher, params)`` tuples.
+            database: optional graph override.
+
+        Returns:
+            One ``(records, keys, result)`` tuple per input query, in order.
+        """
+        if not queries:
+            return []
+
+        graph = self._graph_for(database)
+        pipe = graph.client.pipeline(transaction=False)
+
+        for query, params in queries:
+            prepared_q, prepared_p = _prepare_falkordb_query(query, params)
+            param_header = graph._build_params_header(prepared_p)
+            full_query = param_header + prepared_q
+            pipe.execute_command("GRAPH.QUERY", graph.name, full_query, "--compact")
+
+        raw_responses = pipe.execute()
+
+        results: List[Tuple[List[Dict[str, Any]], List[str], Any]] = []
+        from falkordb import QueryResult
+
+        for raw in raw_responses:
+            qr = QueryResult(graph, raw)
+            keys = [_result_key(item) for item in qr.header]
+            records = [
+                {
+                    key: _normalize_falkordb_value(row[index])
+                    for index, key in enumerate(keys)
+                }
+                for row in qr.result_set
+            ]
+            results.append((records, keys, qr))
+
+        return results
+
+    async def execute_queries_pipelined_async(
+        self,
+        queries: List[Tuple[str, Optional[Dict[str, Any]]]],
+        database: Optional[str] = None,
+    ) -> List[Tuple[List[Dict[str, Any]], List[str], Any]]:
+        """Async wrapper for :meth:`execute_queries_pipelined`."""
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, self.execute_queries_pipelined, queries, database
+        )
 
     def _graph_for(self, database: Optional[str]) -> Any:
         graph_name = database or self._database

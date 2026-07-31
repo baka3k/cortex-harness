@@ -4396,6 +4396,8 @@ SET c.node_type = 'code',
         index_queries = [
             "CREATE INDEX function_id_lookup IF NOT EXISTS FOR (f:Function) ON (f.id)",
             "CREATE INDEX file_id_lookup IF NOT EXISTS FOR (f:File) ON (f.id)",
+            "CREATE INDEX namespace_id_lookup IF NOT EXISTS FOR (n:Namespace) ON (n.id)",
+            "CREATE INDEX class_id_lookup IF NOT EXISTS FOR (c:Class) ON (c.id)",
             "CREATE INDEX resource_id_lookup IF NOT EXISTS FOR (r:Resource) ON (r.id)",
             "CREATE INDEX ui_control_id_lookup IF NOT EXISTS FOR (c:UIControl) ON (c.id)",
             "CREATE INDEX unknown_function_id_lookup IF NOT EXISTS FOR (u:UnknownFunction) ON (u.id)",
@@ -4688,7 +4690,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--neo4j-calls-batch-size",
         type=int,
-        default=50,
+        default=500,
         help="Batch size dedicated to CALLS edges (lower helps avoid Neo4j transaction OOM)",
     )
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))

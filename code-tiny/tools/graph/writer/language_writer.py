@@ -331,60 +331,83 @@ class LanguageCodeWriter:
         state: Optional[Dict[str, int]] = None,
         state_writer: Optional[Callable] = None,
     ) -> int:
-        """Write generic relationships in batches"""
+        """Write generic relationships in batches.
+
+        Relations are grouped by (source_label, target_label) so each group
+        emits a labeled MATCH that hits indexes instead of a full-graph scan.
+        Rows without labels fall back to unlabeled MATCH.
+        """
         if not relations:
             return 0
-        
-        async def write_batch(batch: List[Dict[str, Any]]) -> int:
-            query = """
-            UNWIND $rows AS row
-            MATCH (source {id: row.source_id})
-            MATCH (target {id: row.target_id})
-            CALL apoc.merge.relationship(
-                source,
-                row.rel_type,
-                {},
-                row.properties,
-                target,
-                {}
-            ) YIELD rel
-            RETURN count(rel) as count
-            """
-            
-            # Fallback for systems without APOC
-            fallback_query = """
-            UNWIND $rows AS row
-            MATCH (source {id: row.source_id})
-            MATCH (target {id: row.target_id})
-            CREATE (source)-[r:RELATION]->(target)
-            SET r = row.properties,
-                r.rel_type = row.rel_type
-            RETURN count(r) as count
-            """
-            
-            try:
-                records, _, _ = await self.driver.execute_query(
-                    query,
-                    {"rows": batch},
-                    self.database
+
+        from collections import defaultdict
+        groups: dict = defaultdict(list)
+        for rel in relations:
+            src_label = rel.get("source_label")
+            tgt_label = rel.get("target_label")
+            groups[(src_label, tgt_label)].append(rel)
+
+        total_written = 0
+        for (src_label, tgt_label), group in groups.items():
+            state_key = f"relations:{src_label or '_'}:{tgt_label or '_'}"
+
+            if src_label and tgt_label:
+                _match = (
+                    f"MATCH (source:{src_label} {{id: row.source_id}})\n"
+                    f"MATCH (target:{tgt_label} {{id: row.target_id}})\n"
                 )
-            except Exception:
-                # Fallback if APOC not available
-                records, _, _ = await self.driver.execute_query(
-                    fallback_query,
-                    {"rows": batch},
-                    self.database
+            else:
+                _match = (
+                    "MATCH (source {id: row.source_id})\n"
+                    "MATCH (target {id: row.target_id})\n"
                 )
-            
-            return records[0]["count"] if records else 0
-        
-        return await self.write_batches(
-            "relations",
-            relations,
-            write_batch,
-            state,
-            state_writer
-        )
+
+            async def write_batch(
+                batch: List[Dict[str, Any]],
+                _match: str = _match,
+            ) -> int:
+                query = (
+                    "UNWIND $rows AS row\n"
+                    f"{_match}"
+                    "CALL apoc.merge.relationship(\n"
+                    "    source,\n"
+                    "    row.rel_type,\n"
+                    "    {},\n"
+                    "    row.properties,\n"
+                    "    target,\n"
+                    "    {}\n"
+                    ") YIELD rel\n"
+                    "RETURN count(rel) as count\n"
+                )
+
+                fallback_query = (
+                    "UNWIND $rows AS row\n"
+                    f"{_match}"
+                    "CREATE (source)-[r:RELATION]->(target)\n"
+                    "SET r = row.properties,\n"
+                    "    r.rel_type = row.rel_type\n"
+                    "RETURN count(r) as count\n"
+                )
+
+                try:
+                    records, _, _ = await self.driver.execute_query(
+                        query,
+                        {"rows": batch},
+                        self.database
+                    )
+                except Exception:
+                    records, _, _ = await self.driver.execute_query(
+                        fallback_query,
+                        {"rows": batch},
+                        self.database
+                    )
+
+                return records[0]["count"] if records else 0
+
+            written = await self.write_batches(state_key, group, write_batch, state, state_writer)
+            total_written += written
+
+        return total_written
     
     async def write_calls(
         self,
@@ -1250,22 +1273,39 @@ class LanguageCodeWriter:
             return 0
 
         from collections import defaultdict
+        # Group by (source_label, target_label, rel_type) so each group can
+        # emit a labeled MATCH that uses FalkorDB/Neo4j indexes instead of a
+        # full-graph scan.  Rows without labels fall back to unlabeled MATCH.
         groups: dict = defaultdict(list)
         for rel in relations:
-            key = rel.get("rel_type", "RELATION")
-            groups[key].append(rel)
+            src_label = rel.get("source_label")
+            tgt_label = rel.get("target_label")
+            rel_type = rel.get("rel_type", "RELATION")
+            groups[(src_label, tgt_label, rel_type)].append(rel)
 
         total_written = 0
-        for rel_type, group in groups.items():
-            state_key = f"relations:{rel_type}"
+        for (src_label, tgt_label, rel_type), group in groups.items():
+            state_key = f"relations:{rel_type}:{src_label or '_'}:{tgt_label or '_'}"
             start_index = state.get(state_key, 0) if state else 0
             if start_index >= len(group):
                 continue
 
-            async def write_batch(batch: List[Dict[str, Any]], _rel_type: str = rel_type) -> int:
+            if src_label and tgt_label:
+                _match = (
+                    f"MATCH (a:{src_label} {{id: row.source_id}}), "
+                    f"(b:{tgt_label} {{id: row.target_id}}) "
+                )
+            else:
+                _match = "MATCH (a {id: row.source_id}), (b {id: row.target_id}) "
+
+            async def write_batch(
+                batch: List[Dict[str, Any]],
+                _rel_type: str = rel_type,
+                _match: str = _match,
+            ) -> int:
                 query = (
                     "UNWIND $rows AS row "
-                    "MATCH (a {id: row.source_id}), (b {id: row.target_id}) "
+                    f"{_match}"
                     f"MERGE (a)-[r:{_rel_type}]->(b) "
                     "SET r += row.properties "
                     "RETURN count(r) as count"
