@@ -83,7 +83,11 @@ class ShellParserTest(unittest.TestCase):
         self.assertIn("CALLS", rel_types)
         config_rel = next(r for r in relations if r.rel_type == "READS_CONFIG")
         self.assertEqual(config_rel.source_label, "Function")
-        self.assertEqual(config_rel.target_label, "ConfigEntry")
+        # ini_path_expr is templated ("${CONFIG_DIR}/batch.ini"), so it
+        # resolves to a directory-scoped ConfigDirectory node, not a single
+        # ConfigEntry (Phase 4's templated-path handling).
+        self.assertEqual(config_rel.target_label, "ConfigDirectory")
+        self.assertEqual(config_rel.properties["note"], "templated path, resolved to directory scope")
 
     def test_analyze_root_discovers_and_counts(self):
         rows = analyze_root(str(self.root))
