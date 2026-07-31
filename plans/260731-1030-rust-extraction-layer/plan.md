@@ -7,7 +7,8 @@ source: profiling-driven Rust rewrite evaluation
 target: code-tiny/tools/ (all language analyzers, pilot: cplus)
 scope: Port tree-sitter AST walk + extraction + semantic enrichment to a Rust native extension; keep embedding/graph-write in Python
 blockedBy: []
-relatedPlans: [260731-1400-graph-write-optimization]
+relatedPlans: [260731-1400-graph-write-optimization, 260731-1700-multi-language-rust-extraction]
+supersededPhase6By: 260731-1700-multi-language-rust-extraction
 ---
 
 # Rust Extraction Layer for Analyzer Pipeline
@@ -128,14 +129,19 @@ dev sync code
 - Prebuilt wheels (macOS arm64/x86_64, Linux manylinux)
 - Pure-Python fallback path with warning
 
-### Phase 6 — Expand to other analyzers
+### Phase 6 — Expand to other analyzers  → SUPERSEDED
 
-**Goal:** Parameterize Rust core by grammar; add java, ts, python, etc.
+> ⚠️ **This phase has been superseded by a dedicated full-scope plan.** The original
+> assumption below ("parameterize by grammar = done") was invalidated by a codebase
+> survey: there is no shared extraction core and no shared payload schema across the 17
+> analyzers. See **[260731-1700-multi-language-rust-extraction](../260731-1700-multi-language-rust-extraction/plan.md)**
+> for the tiered 4-tier roadmap (Phase 0 profiling gate → Phase 1 trait refactor →
+> Tier 1/2/3/4 ports). That plan's Phase 1 refactors this pilot's C++ walker into the
+> `LanguageProfile` dispatch-table architecture.
 
-**Deliverables:**
-- Grammar trait + per-language implementations
-- `cortex_extract.extract_batch(paths, root, language) -> list[dict]`
-- Each analyzer's `parse_*_file()` gets a Rust fast-path
+**Original (stub) goal — kept for history:** Parameterize Rust core by grammar; add
+java, ts, python, etc. In practice `grammar.rs` only loads 5 grammars; the walker
+remains C++-specific, so this never went beyond a placeholder.
 
 ## Detailed Design: cplus analyzer (pilot)
 
