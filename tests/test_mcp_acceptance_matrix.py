@@ -44,6 +44,7 @@ ACCEPTANCE_MATRIX = {
     "go": _row("generic", "generic", "none", "none", "tests/test_primary_analyzer_vector_contract.py"),
     "perl": _row("generic", "generic", "none", "none", "tests/test_perl_parser.py"),
     "shell": _row("generic", "generic", "none", "none", "tests/test_shell_analyzer.py"),
+    "jp1": _row("generic", "generic", "none", "none", "tests/test_jp1_analyzer.py"),
     "rust": _row("generic", "generic", "none", "none", "tests/test_primary_analyzer_vector_contract.py"),
     "swift": _row("generic", "generic", "none", "none", "tests/test_primary_analyzer_vector_contract.py"),
     "delphi": _row("generic", "generic", "none", "none", "tests/test_common_analyzer_registry.py"),
@@ -66,6 +67,7 @@ PRIMARY_TO_PROFILE = {
     "vb6": "visual_basic", "vba": "visual_basic", "vbscript": "visual_basic",
     "python": "python", "go": "go", "perl": "perl", "rust": "rust",
     "shell": "shell",
+    "jp1": "jp1",
     "swift": "swift", "js": "javascript", "ts": "typescript", "php": "php",
     "csharp": "csharp", "sql": "sql", "plsql": "plsql",
 }

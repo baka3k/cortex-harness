@@ -281,6 +281,7 @@ PRIMARY_SPECIAL_FILE_COVERAGE: Mapping[str, CoverageEntry] = MappingProxyType(
         "python": CoverageEntry("python", ("pyproject.toml", "requirements*.txt", "*.lock"), (DescriptorRole.IDENTITY, DescriptorRole.DEPENDENCY), ParseDepth.IDENTITY, "parser-special-files/python"),
         "rust": CoverageEntry("rust", ("Cargo.toml", "Cargo.lock"), (DescriptorRole.IDENTITY, DescriptorRole.DEPENDENCY), ParseDepth.IDENTITY, "parser-special-files/rust"),
         "shell": CoverageEntry("shell", ("*.sh",), (DescriptorRole.INTERFACE,), ParseDepth.IDENTITY, "parser-special-files/shell"),
+        "jp1": CoverageEntry("jp1", ("*.txt",), (DescriptorRole.TOPOLOGY,), ParseDepth.SEMANTIC, "parser-special-files/jp1"),
         "sql": CoverageEntry("sql", ("*.sql", "dbt_project.yml", "liquibase*.xml"), (DescriptorRole.INTERFACE, DescriptorRole.DEPLOYMENT), ParseDepth.IDENTITY, "parser-special-files/sql"),
         "swift": CoverageEntry("swift", ("Package.swift", "project.pbxproj", "Info.plist"), (DescriptorRole.TOPOLOGY, DescriptorRole.RESOURCE), ParseDepth.IDENTITY, "parser-special-files/swift"),
         "ts": CoverageEntry("ts", ("package.json", "tsconfig.json", "*lock*"), (DescriptorRole.IDENTITY, DescriptorRole.TOPOLOGY), ParseDepth.IDENTITY, "parser-special-files/typescript"),

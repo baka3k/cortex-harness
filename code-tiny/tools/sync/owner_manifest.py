@@ -34,6 +34,7 @@ SUPPORTED_PARSERS: Set[str] = {
     "go",
     "perl",
     "shell",
+    "jp1",
     "rust",
     "js",
     "ts",

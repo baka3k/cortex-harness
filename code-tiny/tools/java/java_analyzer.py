@@ -763,6 +763,48 @@ def parse_java_file(
     Optional[PackageDef],
     Dict[str, Any],
 ]:
+    try:
+        from tools.common._rust_accel import extract as _rust_extract
+        payload = _rust_extract("java", path, root)
+        if payload is not None:
+            from tools.common._rust_accel import (
+                materialize_dataclass as _mat,
+                materialize_list as _mat_list,
+            )
+            return (
+                _mat_list(payload.get("functions"), FunctionDef),
+                _mat_list(payload.get("calls"), CallEdge),
+                _mat_list(payload.get("classes"), ClassDef),
+                _mat_list(payload.get("type_edges"), TypeEdge),
+                _mat_list(payload.get("function_types"), FunctionTypeDef),
+                _mat_list(payload.get("relations"), RelationEdge),
+                _mat(payload.get("file_def"), FileDef),
+                _mat(payload.get("package_def"), PackageDef),
+                payload.get("parse_meta") or {},
+            )
+    except Exception:
+        try:
+            from tools.common._rust_accel import warn_fallback
+            warn_fallback("java")
+        except Exception:
+            pass
+    return _python_parse_java_file(path, root)
+
+
+def _python_parse_java_file(
+    path: str,
+    root: str,
+) -> Tuple[
+    List[FunctionDef],
+    List[CallEdge],
+    List[ClassDef],
+    List[TypeEdge],
+    List[FunctionTypeDef],
+    List[RelationEdge],
+    FileDef,
+    Optional[PackageDef],
+    Dict[str, Any],
+]:
     parser = _get_java_parser()
     with open(path, "rb") as handle:
         source_bytes = handle.read()
