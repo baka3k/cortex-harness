@@ -23,8 +23,14 @@ relatedPlans:
     260731-1900-rust-extraction-tier2-ts,
     260731-2000-rust-extraction-tier2-java-js-csharp-php-sql,
     260731-2100-rust-extraction-tier3-delphi-plsql,
+    260731-2200-jp1-shell-proc-batch-coverage,
   ]
 supersedesPhase: "260731-1030-rust-extraction-layer / Phase 6 (stub)"
+note: >
+  260731-2200-jp1-shell-proc-batch-coverage adds Pro*C (.pc) file discovery +
+  EXEC SQL preprocessing to cplus_analyzer.py (file-discovery/pre-parse layer
+  only). When cplus extraction is ported to Rust, carry this preprocessing
+  step forward or keep it as a Python pre-pass feeding the Rust extractor.
 ---
 
 # Multi-Language Rust Extraction Layer (Full 4-Tier)
