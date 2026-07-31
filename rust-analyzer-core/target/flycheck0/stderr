@@ -1,16 +1,821 @@
-   0.197739250s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: stale: changed "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/payload.rs"
-   0.197812167s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint:           (vs) "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/cortex-extract-a941a212325a9104/dep-lib-cortex_extract"
-   0.197818917s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1785490515, nanos: 302878129 } < FileTime { seconds: 1785490872, nanos: 344968553 }
-   0.198390042s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: fingerprint dirty for cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core)/Check { test: false }/TargetInner { ..: lib_target("cortex_extract", ["cdylib"], "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/lib.rs", Edition2021) }
-   0.198718792s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/cortex-extract-a941a212325a9104/dep-lib-cortex_extract", reference_mtime: FileTime { seconds: 1785490515, nanos: 302878129 }, stale: "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/payload.rs", stale_mtime: FileTime { seconds: 1785490872, nanos: 344968553 } }))
-   0.241421792s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: stale: changed "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/payload.rs"
-   0.241433042s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint:           (vs) "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/cortex-extract-e97c3320d9c0e845/dep-test-lib-cortex_extract"
-   0.241435292s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 1785490515, nanos: 302994004 } < FileTime { seconds: 1785490872, nanos: 344968553 }
-   0.241708750s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: fingerprint dirty for cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core)/Check { test: true }/TargetInner { ..: lib_target("cortex_extract", ["cdylib"], "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/lib.rs", Edition2021) }
-   0.241720417s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/cortex-extract-e97c3320d9c0e845/dep-test-lib-cortex_extract", reference_mtime: FileTime { seconds: 1785490515, nanos: 302994004 }, stale: "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/payload.rs", stale_mtime: FileTime { seconds: 1785490872, nanos: 344968553 } }))
-warning: tree-sitter-swift@0.7.3-vendored: ../../src/scanner.c:541:17: warning: unused parameter 'valid_symbols' [-Wunused-parameter]
-warning: tree-sitter-swift@0.7.3-vendored:   541 |     const bool *valid_symbols,
-warning: tree-sitter-swift@0.7.3-vendored:       |                 ^
-warning: tree-sitter-swift@0.7.3-vendored: 1 warning generated.
-    Checking cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.34s
+   0.116560792s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `autocfg` is newer than we are 1785505569.138555031s > 1785501802.307182758s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memoffset-0.9.1"
+   0.116982333s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `scopeguard` is newer than we are 1785505569.341818461s > 1785505569.166542987s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14"
+   0.117834333s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `smallvec` is newer than we are 1785505569.354590976s > 1785505569.239247847s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12"
+   0.120257250s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `target_lexicon` is newer than we are 1785505569.390500466s > 1785501802.415476373s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2"
+   0.121479208s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `target_lexicon` is newer than we are 1785505569.390500466s > 1785505569.272447033s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2"
+   0.122665083s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `unicode_ident` is newer than we are 1785505569.396472867s > 1785505569.247935551s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/proc-macro2-1.0.107"
+   0.123946750s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `unicode_ident` is newer than we are 1785505569.396472867s > 1785505569.385531153s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/syn-2.0.119"
+   0.126274000s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `crossbeam_utils` is newer than we are 1785505569.150860002s > 1785505569.149894581s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.20"
+   0.126310000s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `crossbeam_utils` is newer than we are 1785505569.150860002s > 1785505569.149053619s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-deque-0.8.7"
+   0.127220958s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `memchr` is newer than we are 1785505569.168661955s > 1785505569.130219370s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aho-corasick-1.1.4"
+   0.127557042s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `regex_syntax` is newer than we are 1785505569.341055208s > 1785505569.330869497s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.16"
+   0.129965583s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `zmij` is newer than we are 1785505569.398038332s > 1785505569.351354462s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151"
+   0.131239500s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `object` is newer than we are 1785505569.230358183s > 1785505569.135938353s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ar_archive_writer-0.5.2"
+   0.131755583s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `find_msvc_tools` is newer than we are 1785505569.154079516s > 1785505569.147541654s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cc-1.4.0"
+   0.132465750s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `tree_sitter_language` is newer than we are 1785505569.394953319s > 1785505569.393270728s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-c-0.23.4"
+   0.132759208s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: dependency on `tree_sitter_language` is newer than we are 1785505569.394953319s > 1785505569.394446358s "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-cpp-0.23.4"
+   0.133889792s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint: fingerprint error for cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core)/Check { test: false }/TargetInner { ..: lib_target("cortex_extract", ["cdylib"], "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/lib.rs", Edition2021) }
+   0.134210417s  INFO prepare_target{force=false package_id=cortex-extract v0.1.0 (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core) target="cortex_extract"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/cortex-extract-a941a212325a9104/lib-cortex_extract`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   7: cargo::ops::cargo_compile::compile_ws
+   8: cargo::ops::cargo_compile::compile_with_exec
+   9: cargo::ops::cargo_compile::compile
+  10: cargo::commands::check::exec
+  11: <cargo::cli::Exec>::exec
+  12: cargo::main
+  13: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  14: std::rt::lang_start::<()>::{closure#0}
+  15: std::rt::lang_start_internal
+  16: _main
+   0.161921125s  INFO prepare_target{force=false package_id=pyo3 v0.21.2 target="pyo3"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3 v0.21.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("pyo3", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-0.21.2/src/lib.rs", Edition2021) }
+   0.161951875s  INFO prepare_target{force=false package_id=pyo3 v0.21.2 target="pyo3"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(50) })
+   0.165296208s  INFO prepare_target{force=false package_id=memoffset v0.9.1 target="memoffset"}: cargo::core::compiler::fingerprint: fingerprint dirty for memoffset v0.9.1/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("memoffset", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memoffset-0.9.1/src/lib.rs", Edition2015) }
+   0.165310208s  INFO prepare_target{force=false package_id=memoffset v0.9.1 target="memoffset"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(29) })
+   0.166954625s  INFO prepare_target{force=false package_id=memoffset v0.9.1 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for memoffset v0.9.1/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memoffset-0.9.1/build.rs", Edition2015) }
+   0.166963500s  INFO prepare_target{force=false package_id=memoffset v0.9.1 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(28) })
+   0.167900042s  INFO prepare_target{force=false package_id=memoffset v0.9.1 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for memoffset v0.9.1/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memoffset-0.9.1/build.rs", Edition2015) }
+   0.167908042s  INFO prepare_target{force=false package_id=memoffset v0.9.1 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(2), dep_mtime: FileTime { seconds: 1785505569, nanos: 138555031 }, max_mtime: FileTime { seconds: 1785501802, nanos: 307182758 } })
+   0.168449167s  INFO prepare_target{force=false package_id=parking_lot v0.12.5 target="parking_lot"}: cargo::core::compiler::fingerprint: fingerprint dirty for parking_lot v0.12.5/Check { test: false }/TargetInner { ..: lib_target("parking_lot", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot-0.12.5/src/lib.rs", Edition2021) }
+   0.168456125s  INFO prepare_target{force=false package_id=parking_lot v0.12.5 target="parking_lot"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(24) })
+   0.169416708s  INFO prepare_target{force=false package_id=lock_api v0.4.14 target="lock_api"}: cargo::core::compiler::fingerprint: fingerprint dirty for lock_api v0.4.14/Check { test: false }/TargetInner { ..: lib_target("lock_api", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lock_api-0.4.14/src/lib.rs", Edition2021) }
+   0.169423958s  INFO prepare_target{force=false package_id=lock_api v0.4.14 target="lock_api"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(69), dep_mtime: FileTime { seconds: 1785505569, nanos: 341818461 }, max_mtime: FileTime { seconds: 1785505569, nanos: 166542987 } })
+   0.170920042s  INFO prepare_target{force=false package_id=parking_lot_core v0.9.12 target="parking_lot_core"}: cargo::core::compiler::fingerprint: fingerprint dirty for parking_lot_core v0.9.12/Check { test: false }/TargetInner { ..: lib_target("parking_lot_core", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/parking_lot_core-0.9.12/src/lib.rs", Edition2021) }
+   0.170925833s  INFO prepare_target{force=false package_id=parking_lot_core v0.9.12 target="parking_lot_core"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(77), dep_mtime: FileTime { seconds: 1785505569, nanos: 354590976 }, max_mtime: FileTime { seconds: 1785505569, nanos: 239247847 } })
+   0.174867625s  INFO prepare_target{force=false package_id=pyo3 v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3 v0.21.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-0.21.2/build.rs", Edition2021) }
+   0.174880333s  INFO prepare_target{force=false package_id=pyo3 v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(49) })
+   0.175468333s  INFO prepare_target{force=false package_id=pyo3 v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3 v0.21.2/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-0.21.2/build.rs", Edition2021) }
+   0.175476208s  INFO prepare_target{force=false package_id=pyo3 v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(51) })
+   0.176036792s  INFO prepare_target{force=false package_id=pyo3-build-config v0.21.2 target="pyo3_build_config"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-build-config v0.21.2/Build/TargetInner { name_inferred: true, ..: lib_target("pyo3_build_config", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/lib.rs", Edition2021) }
+   0.176043583s  INFO prepare_target{force=false package_id=pyo3-build-config v0.21.2 target="pyo3_build_config"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(82), dep_mtime: FileTime { seconds: 1785505569, nanos: 390500466 }, max_mtime: FileTime { seconds: 1785505569, nanos: 272447033 } })
+   0.176920667s  INFO prepare_target{force=false package_id=pyo3-build-config v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-build-config v0.21.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/build.rs", Edition2021) }
+   0.176926542s  INFO prepare_target{force=false package_id=pyo3-build-config v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(53) })
+   0.177281583s  INFO prepare_target{force=false package_id=pyo3-build-config v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-build-config v0.21.2/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/build.rs", Edition2021) }
+   0.177288250s  INFO prepare_target{force=false package_id=pyo3-build-config v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(82), dep_mtime: FileTime { seconds: 1785505569, nanos: 390500466 }, max_mtime: FileTime { seconds: 1785501802, nanos: 415476373 } })
+   0.178331167s  INFO prepare_target{force=false package_id=pyo3-ffi v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-ffi v0.21.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-ffi-0.21.2/build.rs", Edition2021) }
+   0.178335333s  INFO prepare_target{force=false package_id=pyo3-ffi v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(55) })
+   0.178631583s  INFO prepare_target{force=false package_id=pyo3-ffi v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-ffi v0.21.2/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-ffi-0.21.2/build.rs", Edition2021) }
+   0.178635958s  INFO prepare_target{force=false package_id=pyo3-ffi v0.21.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(51) })
+   0.179049958s  INFO prepare_target{force=false package_id=pyo3-ffi v0.21.2 target="pyo3_ffi"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-ffi v0.21.2/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("pyo3_ffi", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-ffi-0.21.2/src/lib.rs", Edition2021) }
+   0.179055208s  INFO prepare_target{force=false package_id=pyo3-ffi v0.21.2 target="pyo3_ffi"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(56) })
+   0.179403750s  INFO prepare_target{force=false package_id=pyo3-macros v0.21.2 target="pyo3_macros"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-macros v0.21.2/Build/TargetInner { name_inferred: true, for_host: true, proc_macro: true, ..: lib_target("pyo3_macros", ["proc-macro"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-macros-0.21.2/src/lib.rs", Edition2021) }
+   0.179408292s  INFO prepare_target{force=false package_id=pyo3-macros v0.21.2 target="pyo3_macros"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(59) })
+   0.179821500s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.107 target="proc_macro2"}: cargo::core::compiler::fingerprint: fingerprint dirty for proc-macro2 v1.0.107/Build/TargetInner { ..: lib_target("proc_macro2", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/proc-macro2-1.0.107/src/lib.rs", Edition2021) }
+   0.179826708s  INFO prepare_target{force=false package_id=proc-macro2 v1.0.107 target="proc_macro2"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(124), dep_mtime: FileTime { seconds: 1785505569, nanos: 396472867 }, max_mtime: FileTime { seconds: 1785505569, nanos: 247935551 } })
+   0.181064958s  INFO prepare_target{force=false package_id=pyo3-macros-backend v0.21.2 target="pyo3_macros_backend"}: cargo::core::compiler::fingerprint: fingerprint dirty for pyo3-macros-backend v0.21.2/Build/TargetInner { name_inferred: true, ..: lib_target("pyo3_macros_backend", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-macros-backend-0.21.2/src/lib.rs", Edition2021) }
+   0.181070167s  INFO prepare_target{force=false package_id=pyo3-macros-backend v0.21.2 target="pyo3_macros_backend"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(59) })
+   0.181652333s  INFO prepare_target{force=false package_id=quote v1.0.47 target="quote"}: cargo::core::compiler::fingerprint: fingerprint dirty for quote v1.0.47/Build/TargetInner { ..: lib_target("quote", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quote-1.0.47/src/lib.rs", Edition2021) }
+   0.181656708s  INFO prepare_target{force=false package_id=quote v1.0.47 target="quote"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(42) })
+   0.183071333s  INFO prepare_target{force=false package_id=syn v2.0.119 target="syn"}: cargo::core::compiler::fingerprint: fingerprint dirty for syn v2.0.119/Build/TargetInner { ..: lib_target("syn", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/syn-2.0.119/src/lib.rs", Edition2021) }
+   0.183075375s  INFO prepare_target{force=false package_id=syn v2.0.119 target="syn"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(124), dep_mtime: FileTime { seconds: 1785505569, nanos: 396472867 }, max_mtime: FileTime { seconds: 1785505569, nanos: 385531153 } })
+   0.183669792s  INFO prepare_target{force=false package_id=rayon v1.12.0 target="rayon"}: cargo::core::compiler::fingerprint: fingerprint dirty for rayon v1.12.0/Check { test: false }/TargetInner { ..: lib_target("rayon", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-1.12.0/src/lib.rs", Edition2021) }
+   0.183674333s  INFO prepare_target{force=false package_id=rayon v1.12.0 target="rayon"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(63) })
+   0.184878958s  INFO prepare_target{force=false package_id=rayon-core v1.13.0 target="rayon_core"}: cargo::core::compiler::fingerprint: fingerprint dirty for rayon-core v1.13.0/Check { test: false }/TargetInner { ..: lib_target("rayon_core", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rayon-core-1.13.0/src/lib.rs", Edition2021) }
+   0.184885792s  INFO prepare_target{force=false package_id=rayon-core v1.13.0 target="rayon_core"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(7) })
+   0.185382458s  INFO prepare_target{force=false package_id=crossbeam-deque v0.8.7 target="crossbeam_deque"}: cargo::core::compiler::fingerprint: fingerprint dirty for crossbeam-deque v0.8.7/Check { test: false }/TargetInner { ..: lib_target("crossbeam_deque", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-deque-0.8.7/src/lib.rs", Edition2021) }
+   0.185386833s  INFO prepare_target{force=false package_id=crossbeam-deque v0.8.7 target="crossbeam_deque"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(13), dep_mtime: FileTime { seconds: 1785505569, nanos: 150860002 }, max_mtime: FileTime { seconds: 1785505569, nanos: 149053619 } })
+   0.186412042s  INFO prepare_target{force=false package_id=crossbeam-epoch v0.9.20 target="crossbeam_epoch"}: cargo::core::compiler::fingerprint: fingerprint dirty for crossbeam-epoch v0.9.20/Check { test: false }/TargetInner { ..: lib_target("crossbeam_epoch", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/crossbeam-epoch-0.9.20/src/lib.rs", Edition2021) }
+   0.186417125s  INFO prepare_target{force=false package_id=crossbeam-epoch v0.9.20 target="crossbeam_epoch"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(13), dep_mtime: FileTime { seconds: 1785505569, nanos: 150860002 }, max_mtime: FileTime { seconds: 1785505569, nanos: 149894581 } })
+   0.188393458s  INFO prepare_target{force=false package_id=regex v1.13.1 target="regex"}: cargo::core::compiler::fingerprint: fingerprint dirty for regex v1.13.1/Check { test: false }/TargetInner { ..: lib_target("regex", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-1.13.1/src/lib.rs", Edition2021) }
+   0.188399542s  INFO prepare_target{force=false package_id=regex v1.13.1 target="regex"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(67) })
+   0.188905250s  INFO prepare_target{force=false package_id=aho-corasick v1.1.4 target="aho_corasick"}: cargo::core::compiler::fingerprint: fingerprint dirty for aho-corasick v1.1.4/Check { test: false }/TargetInner { ..: lib_target("aho_corasick", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aho-corasick-1.1.4/src/lib.rs", Edition2021) }
+   0.188910542s  INFO prepare_target{force=false package_id=aho-corasick v1.1.4 target="aho_corasick"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(26), dep_mtime: FileTime { seconds: 1785505569, nanos: 168661955 }, max_mtime: FileTime { seconds: 1785505569, nanos: 130219370 } })
+   0.189477792s  INFO prepare_target{force=false package_id=regex-automata v0.4.16 target="regex_automata"}: cargo::core::compiler::fingerprint: fingerprint dirty for regex-automata v0.4.16/Check { test: false }/TargetInner { benched: false, ..: lib_target("regex_automata", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.16/src/lib.rs", Edition2021) }
+   0.189484292s  INFO prepare_target{force=false package_id=regex-automata v0.4.16 target="regex_automata"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(68), dep_mtime: FileTime { seconds: 1785505569, nanos: 341055208 }, max_mtime: FileTime { seconds: 1785505569, nanos: 330869497 } })
+   0.190496375s  INFO prepare_target{force=false package_id=serde_json v1.0.151 target="serde_json"}: cargo::core::compiler::fingerprint: fingerprint dirty for serde_json v1.0.151/Check { test: false }/TargetInner { ..: lib_target("serde_json", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/lib.rs", Edition2021) }
+   0.190502708s  INFO prepare_target{force=false package_id=serde_json v1.0.151 target="serde_json"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(126), dep_mtime: FileTime { seconds: 1785505569, nanos: 398038332 }, max_mtime: FileTime { seconds: 1785505569, nanos: 351354462 } })
+   0.193345417s  INFO prepare_target{force=false package_id=stacker v0.1.24 target="stacker"}: cargo::core::compiler::fingerprint: fingerprint dirty for stacker v0.1.24/Check { test: false }/TargetInner { tested: false, doctest: false, ..: lib_target("stacker", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/lib.rs", Edition2021) }
+   0.193353167s  INFO prepare_target{force=false package_id=stacker v0.1.24 target="stacker"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(45) })
+   0.193803542s  INFO prepare_target{force=false package_id=psm v0.1.31 target="psm"}: cargo::core::compiler::fingerprint: fingerprint dirty for psm v0.1.31/Check { test: false }/TargetInner { ..: lib_target("psm", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.31/src/lib.rs", Edition2021) }
+   0.193809417s  INFO prepare_target{force=false package_id=psm v0.1.31 target="psm"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(47) })
+   0.194616917s  INFO prepare_target{force=false package_id=psm v0.1.31 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for psm v0.1.31/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.31/build.rs", Edition2021) }
+   0.194622125s  INFO prepare_target{force=false package_id=psm v0.1.31 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(46) })
+   0.194945792s  INFO prepare_target{force=false package_id=psm v0.1.31 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for psm v0.1.31/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.31/build.rs", Edition2021) }
+   0.194950625s  INFO prepare_target{force=false package_id=psm v0.1.31 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(1) })
+   0.195513000s  INFO prepare_target{force=false package_id=ar_archive_writer v0.5.2 target="ar_archive_writer"}: cargo::core::compiler::fingerprint: fingerprint dirty for ar_archive_writer v0.5.2/Build/TargetInner { ..: lib_target("ar_archive_writer", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ar_archive_writer-0.5.2/src/lib.rs", Edition2024) }
+   0.195518417s  INFO prepare_target{force=false package_id=ar_archive_writer v0.5.2 target="ar_archive_writer"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(30), dep_mtime: FileTime { seconds: 1785505569, nanos: 230358183 }, max_mtime: FileTime { seconds: 1785505569, nanos: 135938353 } })
+   0.197176333s  INFO prepare_target{force=false package_id=cc v1.4.0 target="cc"}: cargo::core::compiler::fingerprint: fingerprint dirty for cc v1.4.0/Build/TargetInner { ..: lib_target("cc", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cc-1.4.0/src/lib.rs", Edition2018) }
+   0.197181708s  INFO prepare_target{force=false package_id=cc v1.4.0 target="cc"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(17), dep_mtime: FileTime { seconds: 1785505569, nanos: 154079516 }, max_mtime: FileTime { seconds: 1785505569, nanos: 147541654 } })
+   0.198061375s  INFO prepare_target{force=false package_id=stacker v0.1.24 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for stacker v0.1.24/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/build.rs", Edition2021) }
+   0.198065708s  INFO prepare_target{force=false package_id=stacker v0.1.24 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(79) })
+   0.198564000s  INFO prepare_target{force=false package_id=stacker v0.1.24 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for stacker v0.1.24/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/build.rs", Edition2021) }
+   0.198569958s  INFO prepare_target{force=false package_id=stacker v0.1.24 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(3) })
+   0.199233875s  INFO prepare_target{force=false package_id=tree-sitter v0.23.2 target="tree_sitter"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter v0.23.2/Check { test: false }/TargetInner { ..: lib_target("tree_sitter", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-0.23.2/binding_rust/lib.rs", Edition2021) }
+   0.199239708s  INFO prepare_target{force=false package_id=tree-sitter v0.23.2 target="tree_sitter"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(66) })
+   0.200191875s  INFO prepare_target{force=false package_id=tree-sitter v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter v0.23.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-0.23.2/binding_rust/build.rs", Edition2021) }
+   0.200198042s  INFO prepare_target{force=false package_id=tree-sitter v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(86) })
+   0.200514375s  INFO prepare_target{force=false package_id=tree-sitter v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter v0.23.2/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-0.23.2/binding_rust/build.rs", Edition2021) }
+   0.200518458s  INFO prepare_target{force=false package_id=tree-sitter v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(3) })
+   0.201525250s  INFO prepare_target{force=false package_id=tree-sitter-c v0.23.4 target="tree_sitter_c"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter-c v0.23.4/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_c", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-c-0.23.4/bindings/rust/lib.rs", Edition2021) }
+   0.201530917s  INFO prepare_target{force=false package_id=tree-sitter-c v0.23.4 target="tree_sitter_c"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(106), dep_mtime: FileTime { seconds: 1785505569, nanos: 394953319 }, max_mtime: FileTime { seconds: 1785505569, nanos: 393270728 } })
+   0.202614375s  INFO prepare_target{force=false package_id=tree-sitter-c v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter-c v0.23.4/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-c-0.23.4/bindings/rust/build.rs", Edition2021) }
+   0.202618958s  INFO prepare_target{force=false package_id=tree-sitter-c v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(89) })
+   0.202885875s  INFO prepare_target{force=false package_id=tree-sitter-c v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter-c v0.23.4/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-c-0.23.4/bindings/rust/build.rs", Edition2021) }
+   0.202889708s  INFO prepare_target{force=false package_id=tree-sitter-c v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(3) })
+   0.203667792s  INFO prepare_target{force=false package_id=tree-sitter-c-sharp v0.23.1 target="tree_sitter_c_sharp"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-c-sharp v0.23.1/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_c_sharp", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-c-sharp-0.23.1/bindings/rust/lib.rs", Edition2021) }
+   0.203684958s  INFO prepare_target{force=false package_id=tree-sitter-c-sharp v0.23.1 target="tree_sitter_c_sharp"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-c-sharp-2f7e493f36a246a9/lib-tree_sitter_c_sharp`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.204633250s  INFO prepare_target{force=false package_id=tree-sitter-c-sharp v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-c-sharp v0.23.1/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-c-sharp-0.23.1/bindings/rust/build.rs", Edition2021) }
+   0.204639083s  INFO prepare_target{force=false package_id=tree-sitter-c-sharp v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-c-sharp-cf3fd9ebe07df39b/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.204995375s  INFO prepare_target{force=false package_id=tree-sitter-c-sharp v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-c-sharp v0.23.1/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-c-sharp-0.23.1/bindings/rust/build.rs", Edition2021) }
+   0.204999625s  INFO prepare_target{force=false package_id=tree-sitter-c-sharp v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-c-sharp-426ff6258317b72b/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.205454292s  INFO prepare_target{force=false package_id=tree-sitter-cpp v0.23.4 target="tree_sitter_cpp"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter-cpp v0.23.4/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_cpp", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-cpp-0.23.4/bindings/rust/lib.rs", Edition2021) }
+   0.205460000s  INFO prepare_target{force=false package_id=tree-sitter-cpp v0.23.4 target="tree_sitter_cpp"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDependency { unit: UnitIndex(106), dep_mtime: FileTime { seconds: 1785505569, nanos: 394953319 }, max_mtime: FileTime { seconds: 1785505569, nanos: 394446358 } })
+   0.206042500s  INFO prepare_target{force=false package_id=tree-sitter-cpp v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter-cpp v0.23.4/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-cpp-0.23.4/bindings/rust/build.rs", Edition2021) }
+   0.206046750s  INFO prepare_target{force=false package_id=tree-sitter-cpp v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(95) })
+   0.206326875s  INFO prepare_target{force=false package_id=tree-sitter-cpp v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint dirty for tree-sitter-cpp v0.23.4/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-cpp-0.23.4/bindings/rust/build.rs", Edition2021) }
+   0.206330792s  INFO prepare_target{force=false package_id=tree-sitter-cpp v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(3) })
+   0.206631208s  INFO prepare_target{force=false package_id=tree-sitter-go v0.23.4 target="tree_sitter_go"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-go v0.23.4/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_go", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-go-0.23.4/bindings/rust/lib.rs", Edition2021) }
+   0.206635208s  INFO prepare_target{force=false package_id=tree-sitter-go v0.23.4 target="tree_sitter_go"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-go-37b2ad4cdcf4e048/lib-tree_sitter_go`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.207454333s  INFO prepare_target{force=false package_id=tree-sitter-go v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-go v0.23.4/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-go-0.23.4/bindings/rust/build.rs", Edition2021) }
+   0.207458875s  INFO prepare_target{force=false package_id=tree-sitter-go v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-go-406d25137089db73/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.207892792s  INFO prepare_target{force=false package_id=tree-sitter-go v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-go v0.23.4/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-go-0.23.4/bindings/rust/build.rs", Edition2021) }
+   0.207897042s  INFO prepare_target{force=false package_id=tree-sitter-go v0.23.4 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-go-9319a7d80a22f3fc/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.208184500s  INFO prepare_target{force=false package_id=tree-sitter-java v0.23.5 target="tree_sitter_java"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-java v0.23.5/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_java", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-java-0.23.5/bindings/rust/lib.rs", Edition2021) }
+   0.208188583s  INFO prepare_target{force=false package_id=tree-sitter-java v0.23.5 target="tree_sitter_java"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-java-f68033017bd796ff/lib-tree_sitter_java`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.209550542s  INFO prepare_target{force=false package_id=tree-sitter-java v0.23.5 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-java v0.23.5/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-java-0.23.5/bindings/rust/build.rs", Edition2021) }
+   0.209555625s  INFO prepare_target{force=false package_id=tree-sitter-java v0.23.5 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-java-c08f3320f3b15a3b/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.210199958s  INFO prepare_target{force=false package_id=tree-sitter-java v0.23.5 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-java v0.23.5/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-java-0.23.5/bindings/rust/build.rs", Edition2021) }
+   0.210206583s  INFO prepare_target{force=false package_id=tree-sitter-java v0.23.5 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-java-8aed29f900b64983/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.210581917s  INFO prepare_target{force=false package_id=tree-sitter-javascript v0.23.1 target="tree_sitter_javascript"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-javascript v0.23.1/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_javascript", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-javascript-0.23.1/bindings/rust/lib.rs", Edition2021) }
+   0.210587458s  INFO prepare_target{force=false package_id=tree-sitter-javascript v0.23.1 target="tree_sitter_javascript"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-javascript-06b3a40a5f1359d9/lib-tree_sitter_javascript`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.211299625s  INFO prepare_target{force=false package_id=tree-sitter-javascript v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-javascript v0.23.1/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-javascript-0.23.1/bindings/rust/build.rs", Edition2021) }
+   0.211304000s  INFO prepare_target{force=false package_id=tree-sitter-javascript v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-javascript-728e6e877fd0a0dd/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.211716292s  INFO prepare_target{force=false package_id=tree-sitter-javascript v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-javascript v0.23.1/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-javascript-0.23.1/bindings/rust/build.rs", Edition2021) }
+   0.211720375s  INFO prepare_target{force=false package_id=tree-sitter-javascript v0.23.1 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-javascript-67b99f7083cc8ddc/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.212577958s  INFO prepare_target{force=false package_id=tree-sitter-php v0.23.11 target="tree_sitter_php"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-php v0.23.11/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_php", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-php-0.23.11/bindings/rust/lib.rs", Edition2021) }
+   0.212595333s  INFO prepare_target{force=false package_id=tree-sitter-php v0.23.11 target="tree_sitter_php"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-php-40f2e6c704b83904/lib-tree_sitter_php`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.213384208s  INFO prepare_target{force=false package_id=tree-sitter-php v0.23.11 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-php v0.23.11/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-php-0.23.11/bindings/rust/build.rs", Edition2021) }
+   0.213399250s  INFO prepare_target{force=false package_id=tree-sitter-php v0.23.11 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-php-fb333f74c26d5607/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.213720042s  INFO prepare_target{force=false package_id=tree-sitter-php v0.23.11 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-php v0.23.11/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-php-0.23.11/bindings/rust/build.rs", Edition2021) }
+   0.213724458s  INFO prepare_target{force=false package_id=tree-sitter-php v0.23.11 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-php-92ed91de2c788ef1/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.214000417s  INFO prepare_target{force=false package_id=tree-sitter-python v0.23.6 target="tree_sitter_python"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-python v0.23.6/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_python", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-python-0.23.6/bindings/rust/lib.rs", Edition2021) }
+   0.214005750s  INFO prepare_target{force=false package_id=tree-sitter-python v0.23.6 target="tree_sitter_python"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-python-f55670a27bbb71a4/lib-tree_sitter_python`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.214483667s  INFO prepare_target{force=false package_id=tree-sitter-python v0.23.6 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-python v0.23.6/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-python-0.23.6/bindings/rust/build.rs", Edition2021) }
+   0.214488500s  INFO prepare_target{force=false package_id=tree-sitter-python v0.23.6 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-python-91512539d62a534b/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.214883167s  INFO prepare_target{force=false package_id=tree-sitter-python v0.23.6 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-python v0.23.6/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-python-0.23.6/bindings/rust/build.rs", Edition2021) }
+   0.214887042s  INFO prepare_target{force=false package_id=tree-sitter-python v0.23.6 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-python-916203de85dca090/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.215145208s  INFO prepare_target{force=false package_id=tree-sitter-rust v0.23.3 target="tree_sitter_rust"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-rust v0.23.3/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_rust", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-rust-0.23.3/bindings/rust/lib.rs", Edition2021) }
+   0.215149667s  INFO prepare_target{force=false package_id=tree-sitter-rust v0.23.3 target="tree_sitter_rust"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-rust-b7e1e6136167dc2f/lib-tree_sitter_rust`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.215948667s  INFO prepare_target{force=false package_id=tree-sitter-rust v0.23.3 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-rust v0.23.3/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-rust-0.23.3/bindings/rust/build.rs", Edition2021) }
+   0.215953375s  INFO prepare_target{force=false package_id=tree-sitter-rust v0.23.3 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-rust-82b783af2fd08c4a/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.216287333s  INFO prepare_target{force=false package_id=tree-sitter-rust v0.23.3 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-rust v0.23.3/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-rust-0.23.3/bindings/rust/build.rs", Edition2021) }
+   0.216302667s  INFO prepare_target{force=false package_id=tree-sitter-rust v0.23.3 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-rust-b5b98002bdd7da7e/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.216629792s  INFO prepare_target{force=false package_id=tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust) target="tree_sitter_swift"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("tree_sitter_swift", ["lib"], "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust/lib.rs", Edition2018) }
+   0.216635375s  INFO prepare_target{force=false package_id=tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust) target="tree_sitter_swift"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-swift-6d48753b679fa075/lib-tree_sitter_swift`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.217229083s  INFO prepare_target{force=false package_id=tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust) target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust)/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust/build.rs", Edition2018) }
+   0.217233958s  INFO prepare_target{force=false package_id=tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust) target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-swift-e78fd4c50aecbf1b/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.217533750s  INFO prepare_target{force=false package_id=tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust) target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust)/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust/build.rs", Edition2018) }
+   0.217538000s  INFO prepare_target{force=false package_id=tree-sitter-swift v0.7.3-vendored (/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/vendor/tree-sitter-swift/bindings/rust) target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-swift-a511ba75379133d2/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.218038750s  INFO prepare_target{force=false package_id=tree-sitter-typescript v0.23.2 target="tree_sitter_typescript"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-typescript v0.23.2/Check { test: false }/TargetInner { ..: lib_target("tree_sitter_typescript", ["lib"], "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-typescript-0.23.2/bindings/rust/lib.rs", Edition2021) }
+   0.218043833s  INFO prepare_target{force=false package_id=tree-sitter-typescript v0.23.2 target="tree_sitter_typescript"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-typescript-6ec14a6d345efc81/lib-tree_sitter_typescript`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::compile
+   6: cargo::core::compiler::compile
+   7: <cargo::core::compiler::build_runner::BuildRunner>::compile
+   8: cargo::ops::cargo_compile::compile_ws
+   9: cargo::ops::cargo_compile::compile_with_exec
+  10: cargo::ops::cargo_compile::compile
+  11: cargo::commands::check::exec
+  12: <cargo::cli::Exec>::exec
+  13: cargo::main
+  14: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  15: std::rt::lang_start::<()>::{closure#0}
+  16: std::rt::lang_start_internal
+  17: _main
+   0.218689250s  INFO prepare_target{force=false package_id=tree-sitter-typescript v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-typescript v0.23.2/RunCustomBuild/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-typescript-0.23.2/bindings/rust/build.rs", Edition2021) }
+   0.218693625s  INFO prepare_target{force=false package_id=tree-sitter-typescript v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-typescript-99ee8edf0899c805/run-build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
+   0: <std::backtrace::Backtrace>::create
+   1: cargo_util::paths::read_bytes
+   2: cargo_util::paths::read
+   3: cargo::core::compiler::fingerprint::_compare_old_fingerprint
+   4: cargo::core::compiler::fingerprint::prepare_target
+   5: cargo::core::compiler::custom_build::build_work
+   6: cargo::core::compiler::compile
+   7: cargo::core::compiler::compile
+   8: cargo::core::compiler::compile
+   9: <cargo::core::compiler::build_runner::BuildRunner>::compile
+  10: cargo::ops::cargo_compile::compile_ws
+  11: cargo::ops::cargo_compile::compile_with_exec
+  12: cargo::ops::cargo_compile::compile
+  13: cargo::commands::check::exec
+  14: <cargo::cli::Exec>::exec
+  15: cargo::main
+  16: std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>
+  17: std::rt::lang_start::<()>::{closure#0}
+  18: std::rt::lang_start_internal
+  19: _main
+   0.219030208s  INFO prepare_target{force=false package_id=tree-sitter-typescript v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint: fingerprint error for tree-sitter-typescript v0.23.2/Build/TargetInner { ..: custom_build_target("build-script-build", "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tree-sitter-typescript-0.23.2/bindings/rust/build.rs", Edition2021) }
+   0.219045292s  INFO prepare_target{force=false package_id=tree-sitter-typescript v0.23.2 target="build-script-build"}: cargo::core::compiler::fingerprint:     err: failed to read `/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/target/debug/.fingerprint/tree-sitter-typescript-c8f5e1b86631ab6b/build-script-build-script-build`
+
+Caused by:
+    No such file or directory (os error 2)
+
+Stack backtrace:
