@@ -1,0 +1,111 @@
+{
+  "language": "csharp",
+  "target": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp",
+  "file_count": 5,
+  "total_extract_ms": 9.266,
+  "timestamp": "20260731_134055",
+  "top_slowest": [
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Models/Person.cs",
+      "extract_ms": 3.322,
+      "ts_parse_ms": 3.627,
+      "file_size_bytes": 754,
+      "line_count": 34,
+      "funcs": 4,
+      "calls": 2,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Program.cs",
+      "extract_ms": 2.603,
+      "ts_parse_ms": 2.335,
+      "file_size_bytes": 1039,
+      "line_count": 48,
+      "funcs": 5,
+      "calls": 8,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/DiagnosticsSample.cs",
+      "extract_ms": 1.716,
+      "ts_parse_ms": 10.466,
+      "file_size_bytes": 396,
+      "line_count": 20,
+      "funcs": 2,
+      "calls": 3,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Services/ConsoleGreeter.cs",
+      "extract_ms": 0.857,
+      "ts_parse_ms": 0.429,
+      "file_size_bytes": 198,
+      "line_count": 11,
+      "funcs": 1,
+      "calls": 0,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Services/IGreeter.cs",
+      "extract_ms": 0.769,
+      "ts_parse_ms": 0.879,
+      "file_size_bytes": 121,
+      "line_count": 8,
+      "funcs": 1,
+      "calls": 0,
+      "classes": 1
+    }
+  ],
+  "all_files": [
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Models/Person.cs",
+      "extract_ms": 3.322,
+      "ts_parse_ms": 3.627,
+      "file_size_bytes": 754,
+      "line_count": 34,
+      "funcs": 4,
+      "calls": 2,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Program.cs",
+      "extract_ms": 2.603,
+      "ts_parse_ms": 2.335,
+      "file_size_bytes": 1039,
+      "line_count": 48,
+      "funcs": 5,
+      "calls": 8,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/DiagnosticsSample.cs",
+      "extract_ms": 1.716,
+      "ts_parse_ms": 10.466,
+      "file_size_bytes": 396,
+      "line_count": 20,
+      "funcs": 2,
+      "calls": 3,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Services/ConsoleGreeter.cs",
+      "extract_ms": 0.857,
+      "ts_parse_ms": 0.429,
+      "file_size_bytes": 198,
+      "line_count": 11,
+      "funcs": 1,
+      "calls": 0,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp/test_repo/Services/IGreeter.cs",
+      "extract_ms": 0.769,
+      "ts_parse_ms": 0.879,
+      "file_size_bytes": 121,
+      "line_count": 8,
+      "funcs": 1,
+      "calls": 0,
+      "classes": 1
+    }
+  ]
+}

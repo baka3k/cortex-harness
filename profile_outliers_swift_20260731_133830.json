@@ -1,0 +1,31 @@
+{
+  "language": "swift",
+  "target": "/Users/hieplq1.rpm/Hyper-Dev",
+  "file_count": 1,
+  "total_extract_ms": 6.864,
+  "timestamp": "20260731_133830",
+  "top_slowest": [
+    {
+      "file": "/Users/hieplq1.rpm/Hyper-Dev/tree-sitter-kotlin/Package.swift",
+      "extract_ms": 6.864,
+      "ts_parse_ms": 2.293,
+      "file_size_bytes": 1438,
+      "line_count": 48,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    }
+  ],
+  "all_files": [
+    {
+      "file": "/Users/hieplq1.rpm/Hyper-Dev/tree-sitter-kotlin/Package.swift",
+      "extract_ms": 6.864,
+      "ts_parse_ms": 2.293,
+      "file_size_bytes": 1438,
+      "line_count": 48,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    }
+  ]
+}

@@ -1,0 +1,2511 @@
+{
+  "language": "python",
+  "target": "/Users/hieplq1.rpm/AI/cortex-harness",
+  "file_count": 200,
+  "total_extract_ms": 3484.046,
+  "timestamp": "20260731_133428",
+  "top_slowest": [
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/cplus_analyzer.py",
+      "extract_ms": 187.119,
+      "ts_parse_ms": 40.507,
+      "file_size_bytes": 209284,
+      "line_count": 5024,
+      "funcs": 91,
+      "calls": 1739,
+      "classes": 12
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/android/android_kotlin_analyzer.py",
+      "extract_ms": 165.451,
+      "ts_parse_ms": 33.689,
+      "file_size_bytes": 195465,
+      "line_count": 4673,
+      "funcs": 113,
+      "calls": 1367,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/tool_metadata.py",
+      "extract_ms": 153.791,
+      "ts_parse_ms": 10.831,
+      "file_size_bytes": 59715,
+      "line_count": 981,
+      "funcs": 1,
+      "calls": 3,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/cplus/cplus_mcp.py",
+      "extract_ms": 116.182,
+      "ts_parse_ms": 24.491,
+      "file_size_bytes": 120380,
+      "line_count": 3137,
+      "funcs": 89,
+      "calls": 1052,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/android/android_mcp.py",
+      "extract_ms": 108.047,
+      "ts_parse_ms": 62.009,
+      "file_size_bytes": 117708,
+      "line_count": 3049,
+      "funcs": 87,
+      "calls": 974,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/fastmcp_server.py",
+      "extract_ms": 106.664,
+      "ts_parse_ms": 23.537,
+      "file_size_bytes": 119557,
+      "line_count": 3025,
+      "funcs": 86,
+      "calls": 1061,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/java/java_analyzer.py",
+      "extract_ms": 101.894,
+      "ts_parse_ms": 21.216,
+      "file_size_bytes": 106470,
+      "line_count": 2678,
+      "funcs": 72,
+      "calls": 837,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/delphi/delphi_analyzer.py",
+      "extract_ms": 100.968,
+      "ts_parse_ms": 20.751,
+      "file_size_bytes": 103390,
+      "line_count": 2769,
+      "funcs": 58,
+      "calls": 912,
+      "classes": 9
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/kotlin/kotlin_analyzer.py",
+      "extract_ms": 89.946,
+      "ts_parse_ms": 21.495,
+      "file_size_bytes": 98517,
+      "line_count": 2479,
+      "funcs": 66,
+      "calls": 777,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/js/js_analyzer.py",
+      "extract_ms": 85.919,
+      "ts_parse_ms": 19.235,
+      "file_size_bytes": 80883,
+      "line_count": 2116,
+      "funcs": 59,
+      "calls": 676,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/android/android_java_analyzer.py",
+      "extract_ms": 85.509,
+      "ts_parse_ms": 7.701,
+      "file_size_bytes": 42038,
+      "line_count": 1054,
+      "funcs": 21,
+      "calls": 305,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/java/java_mcp.py",
+      "extract_ms": 81.954,
+      "ts_parse_ms": 18.257,
+      "file_size_bytes": 86369,
+      "line_count": 2211,
+      "funcs": 80,
+      "calls": 754,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/csharp/csharp_analyzer.py",
+      "extract_ms": 76.926,
+      "ts_parse_ms": 15.032,
+      "file_size_bytes": 74975,
+      "line_count": 1930,
+      "funcs": 50,
+      "calls": 621,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/framework_registry.py",
+      "extract_ms": 76.133,
+      "ts_parse_ms": 10.17,
+      "file_size_bytes": 34860,
+      "line_count": 802,
+      "funcs": 17,
+      "calls": 179,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/go/go_analyzer.py",
+      "extract_ms": 63.422,
+      "ts_parse_ms": 10.568,
+      "file_size_bytes": 48609,
+      "line_count": 1397,
+      "funcs": 51,
+      "calls": 481,
+      "classes": 9
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/unified_mcp.py",
+      "extract_ms": 62.1,
+      "ts_parse_ms": 14.277,
+      "file_size_bytes": 84817,
+      "line_count": 2177,
+      "funcs": 49,
+      "calls": 438,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/semantic_inference.py",
+      "extract_ms": 45.799,
+      "ts_parse_ms": 5.181,
+      "file_size_bytes": 32458,
+      "line_count": 736,
+      "funcs": 16,
+      "calls": 89,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/frontend_relationship_extractor.py",
+      "extract_ms": 42.14,
+      "ts_parse_ms": 5.05,
+      "file_size_bytes": 40221,
+      "line_count": 956,
+      "funcs": 20,
+      "calls": 122,
+      "classes": 6
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/testtool/mcp_tester.py",
+      "extract_ms": 39.954,
+      "ts_parse_ms": 9.205,
+      "file_size_bytes": 36938,
+      "line_count": 1060,
+      "funcs": 31,
+      "calls": 515,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/query_understanding.py",
+      "extract_ms": 38.294,
+      "ts_parse_ms": 3.786,
+      "file_size_bytes": 20900,
+      "line_count": 514,
+      "funcs": 8,
+      "calls": 68,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/language_writer.py",
+      "extract_ms": 35.962,
+      "ts_parse_ms": 8.277,
+      "file_size_bytes": 68183,
+      "line_count": 1751,
+      "funcs": 40,
+      "calls": 154,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/detector.py",
+      "extract_ms": 35.773,
+      "ts_parse_ms": 1.219,
+      "file_size_bytes": 2380,
+      "line_count": 69,
+      "funcs": 4,
+      "calls": 43,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_scan.py",
+      "extract_ms": 33.662,
+      "ts_parse_ms": 6.303,
+      "file_size_bytes": 31515,
+      "line_count": 948,
+      "funcs": 21,
+      "calls": 246,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/android/android_common.py",
+      "extract_ms": 32.899,
+      "ts_parse_ms": 4.866,
+      "file_size_bytes": 22554,
+      "line_count": 705,
+      "funcs": 31,
+      "calls": 158,
+      "classes": 9
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/flutter_analyzer.py",
+      "extract_ms": 30.493,
+      "ts_parse_ms": 3.48,
+      "file_size_bytes": 13851,
+      "line_count": 307,
+      "funcs": 7,
+      "calls": 180,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/setup_constraints.py",
+      "extract_ms": 30.403,
+      "ts_parse_ms": 3.492,
+      "file_size_bytes": 20715,
+      "line_count": 637,
+      "funcs": 3,
+      "calls": 46,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/testtool/tool_defaults.py",
+      "extract_ms": 28.174,
+      "ts_parse_ms": 3.231,
+      "file_size_bytes": 10555,
+      "line_count": 350,
+      "funcs": 2,
+      "calls": 7,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/rc_parser.py",
+      "extract_ms": 27.744,
+      "ts_parse_ms": 12.381,
+      "file_size_bytes": 23115,
+      "line_count": 651,
+      "funcs": 23,
+      "calls": 251,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/driver/neo4j_driver.py",
+      "extract_ms": 27.273,
+      "ts_parse_ms": 5.385,
+      "file_size_bytes": 31502,
+      "line_count": 863,
+      "funcs": 32,
+      "calls": 145,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/intelligent_retrieval.py",
+      "extract_ms": 26.251,
+      "ts_parse_ms": 5.286,
+      "file_size_bytes": 31870,
+      "line_count": 786,
+      "funcs": 19,
+      "calls": 252,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/parser.py",
+      "extract_ms": 25.142,
+      "ts_parse_ms": 4.711,
+      "file_size_bytes": 18854,
+      "line_count": 441,
+      "funcs": 12,
+      "calls": 272,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/api_match_engine.py",
+      "extract_ms": 24.887,
+      "ts_parse_ms": 3.619,
+      "file_size_bytes": 24013,
+      "line_count": 541,
+      "funcs": 13,
+      "calls": 94,
+      "classes": 6
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/dart_parser.py",
+      "extract_ms": 23.952,
+      "ts_parse_ms": 4.451,
+      "file_size_bytes": 21176,
+      "line_count": 600,
+      "funcs": 25,
+      "calls": 168,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/project_context_service.py",
+      "extract_ms": 22.824,
+      "ts_parse_ms": 5.162,
+      "file_size_bytes": 31204,
+      "line_count": 773,
+      "funcs": 13,
+      "calls": 259,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/ingest_workflows.py",
+      "extract_ms": 21.889,
+      "ts_parse_ms": 4.234,
+      "file_size_bytes": 19424,
+      "line_count": 508,
+      "funcs": 13,
+      "calls": 182,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/bootstrap_compile_commands.py",
+      "extract_ms": 20.661,
+      "ts_parse_ms": 3.712,
+      "file_size_bytes": 16461,
+      "line_count": 476,
+      "funcs": 15,
+      "calls": 187,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/clang_parser.py",
+      "extract_ms": 20.496,
+      "ts_parse_ms": 5.075,
+      "file_size_bytes": 27209,
+      "line_count": 709,
+      "funcs": 8,
+      "calls": 111,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/workflow_classifier.py",
+      "extract_ms": 20.484,
+      "ts_parse_ms": 3.325,
+      "file_size_bytes": 16513,
+      "line_count": 382,
+      "funcs": 9,
+      "calls": 81,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/servlet_jsp_writer.py",
+      "extract_ms": 20.179,
+      "ts_parse_ms": 3.521,
+      "file_size_bytes": 13726,
+      "line_count": 301,
+      "funcs": 16,
+      "calls": 100,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/test_project_registry.py",
+      "extract_ms": 19.861,
+      "ts_parse_ms": 2.942,
+      "file_size_bytes": 15667,
+      "line_count": 390,
+      "funcs": 27,
+      "calls": 136,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/mybatis/detector.py",
+      "extract_ms": 19.457,
+      "ts_parse_ms": 3.672,
+      "file_size_bytes": 14597,
+      "line_count": 349,
+      "funcs": 14,
+      "calls": 165,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/models.py",
+      "extract_ms": 18.895,
+      "ts_parse_ms": 2.117,
+      "file_size_bytes": 7759,
+      "line_count": 223,
+      "funcs": 7,
+      "calls": 38,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/graph_expander.py",
+      "extract_ms": 18.728,
+      "ts_parse_ms": 3.79,
+      "file_size_bytes": 22017,
+      "line_count": 557,
+      "funcs": 16,
+      "calls": 185,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-summarize.py",
+      "extract_ms": 18.408,
+      "ts_parse_ms": 4.359,
+      "file_size_bytes": 17317,
+      "line_count": 472,
+      "funcs": 11,
+      "calls": 166,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/driver/falkordb_driver.py",
+      "extract_ms": 17.803,
+      "ts_parse_ms": 3.535,
+      "file_size_bytes": 19828,
+      "line_count": 541,
+      "funcs": 27,
+      "calls": 144,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-link.py",
+      "extract_ms": 17.12,
+      "ts_parse_ms": 4.319,
+      "file_size_bytes": 19425,
+      "line_count": 468,
+      "funcs": 10,
+      "calls": 195,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/workflow_impact_scorer.py",
+      "extract_ms": 16.756,
+      "ts_parse_ms": 4.522,
+      "file_size_bytes": 17154,
+      "line_count": 418,
+      "funcs": 7,
+      "calls": 93,
+      "classes": 4
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/primary_vector_sync.py",
+      "extract_ms": 16.12,
+      "ts_parse_ms": 3.73,
+      "file_size_bytes": 15066,
+      "line_count": 446,
+      "funcs": 13,
+      "calls": 147,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-vectorize.py",
+      "extract_ms": 16.059,
+      "ts_parse_ms": 4.739,
+      "file_size_bytes": 17500,
+      "line_count": 462,
+      "funcs": 13,
+      "calls": 174,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/git_diff.py",
+      "extract_ms": 16.023,
+      "ts_parse_ms": 3.653,
+      "file_size_bytes": 12067,
+      "line_count": 320,
+      "funcs": 17,
+      "calls": 164,
+      "classes": 2
+    }
+  ],
+  "all_files": [
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/cplus_analyzer.py",
+      "extract_ms": 187.119,
+      "ts_parse_ms": 40.507,
+      "file_size_bytes": 209284,
+      "line_count": 5024,
+      "funcs": 91,
+      "calls": 1739,
+      "classes": 12
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/android/android_kotlin_analyzer.py",
+      "extract_ms": 165.451,
+      "ts_parse_ms": 33.689,
+      "file_size_bytes": 195465,
+      "line_count": 4673,
+      "funcs": 113,
+      "calls": 1367,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/tool_metadata.py",
+      "extract_ms": 153.791,
+      "ts_parse_ms": 10.831,
+      "file_size_bytes": 59715,
+      "line_count": 981,
+      "funcs": 1,
+      "calls": 3,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/cplus/cplus_mcp.py",
+      "extract_ms": 116.182,
+      "ts_parse_ms": 24.491,
+      "file_size_bytes": 120380,
+      "line_count": 3137,
+      "funcs": 89,
+      "calls": 1052,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/android/android_mcp.py",
+      "extract_ms": 108.047,
+      "ts_parse_ms": 62.009,
+      "file_size_bytes": 117708,
+      "line_count": 3049,
+      "funcs": 87,
+      "calls": 974,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/fastmcp_server.py",
+      "extract_ms": 106.664,
+      "ts_parse_ms": 23.537,
+      "file_size_bytes": 119557,
+      "line_count": 3025,
+      "funcs": 86,
+      "calls": 1061,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/java/java_analyzer.py",
+      "extract_ms": 101.894,
+      "ts_parse_ms": 21.216,
+      "file_size_bytes": 106470,
+      "line_count": 2678,
+      "funcs": 72,
+      "calls": 837,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/delphi/delphi_analyzer.py",
+      "extract_ms": 100.968,
+      "ts_parse_ms": 20.751,
+      "file_size_bytes": 103390,
+      "line_count": 2769,
+      "funcs": 58,
+      "calls": 912,
+      "classes": 9
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/kotlin/kotlin_analyzer.py",
+      "extract_ms": 89.946,
+      "ts_parse_ms": 21.495,
+      "file_size_bytes": 98517,
+      "line_count": 2479,
+      "funcs": 66,
+      "calls": 777,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/js/js_analyzer.py",
+      "extract_ms": 85.919,
+      "ts_parse_ms": 19.235,
+      "file_size_bytes": 80883,
+      "line_count": 2116,
+      "funcs": 59,
+      "calls": 676,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/android/android_java_analyzer.py",
+      "extract_ms": 85.509,
+      "ts_parse_ms": 7.701,
+      "file_size_bytes": 42038,
+      "line_count": 1054,
+      "funcs": 21,
+      "calls": 305,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/java/java_mcp.py",
+      "extract_ms": 81.954,
+      "ts_parse_ms": 18.257,
+      "file_size_bytes": 86369,
+      "line_count": 2211,
+      "funcs": 80,
+      "calls": 754,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/csharp/csharp_analyzer.py",
+      "extract_ms": 76.926,
+      "ts_parse_ms": 15.032,
+      "file_size_bytes": 74975,
+      "line_count": 1930,
+      "funcs": 50,
+      "calls": 621,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/framework_registry.py",
+      "extract_ms": 76.133,
+      "ts_parse_ms": 10.17,
+      "file_size_bytes": 34860,
+      "line_count": 802,
+      "funcs": 17,
+      "calls": 179,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/go/go_analyzer.py",
+      "extract_ms": 63.422,
+      "ts_parse_ms": 10.568,
+      "file_size_bytes": 48609,
+      "line_count": 1397,
+      "funcs": 51,
+      "calls": 481,
+      "classes": 9
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/unified_mcp.py",
+      "extract_ms": 62.1,
+      "ts_parse_ms": 14.277,
+      "file_size_bytes": 84817,
+      "line_count": 2177,
+      "funcs": 49,
+      "calls": 438,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/semantic_inference.py",
+      "extract_ms": 45.799,
+      "ts_parse_ms": 5.181,
+      "file_size_bytes": 32458,
+      "line_count": 736,
+      "funcs": 16,
+      "calls": 89,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/frontend_relationship_extractor.py",
+      "extract_ms": 42.14,
+      "ts_parse_ms": 5.05,
+      "file_size_bytes": 40221,
+      "line_count": 956,
+      "funcs": 20,
+      "calls": 122,
+      "classes": 6
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/testtool/mcp_tester.py",
+      "extract_ms": 39.954,
+      "ts_parse_ms": 9.205,
+      "file_size_bytes": 36938,
+      "line_count": 1060,
+      "funcs": 31,
+      "calls": 515,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/query_understanding.py",
+      "extract_ms": 38.294,
+      "ts_parse_ms": 3.786,
+      "file_size_bytes": 20900,
+      "line_count": 514,
+      "funcs": 8,
+      "calls": 68,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/language_writer.py",
+      "extract_ms": 35.962,
+      "ts_parse_ms": 8.277,
+      "file_size_bytes": 68183,
+      "line_count": 1751,
+      "funcs": 40,
+      "calls": 154,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/detector.py",
+      "extract_ms": 35.773,
+      "ts_parse_ms": 1.219,
+      "file_size_bytes": 2380,
+      "line_count": 69,
+      "funcs": 4,
+      "calls": 43,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_scan.py",
+      "extract_ms": 33.662,
+      "ts_parse_ms": 6.303,
+      "file_size_bytes": 31515,
+      "line_count": 948,
+      "funcs": 21,
+      "calls": 246,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/android/android_common.py",
+      "extract_ms": 32.899,
+      "ts_parse_ms": 4.866,
+      "file_size_bytes": 22554,
+      "line_count": 705,
+      "funcs": 31,
+      "calls": 158,
+      "classes": 9
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/flutter_analyzer.py",
+      "extract_ms": 30.493,
+      "ts_parse_ms": 3.48,
+      "file_size_bytes": 13851,
+      "line_count": 307,
+      "funcs": 7,
+      "calls": 180,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/setup_constraints.py",
+      "extract_ms": 30.403,
+      "ts_parse_ms": 3.492,
+      "file_size_bytes": 20715,
+      "line_count": 637,
+      "funcs": 3,
+      "calls": 46,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/testtool/tool_defaults.py",
+      "extract_ms": 28.174,
+      "ts_parse_ms": 3.231,
+      "file_size_bytes": 10555,
+      "line_count": 350,
+      "funcs": 2,
+      "calls": 7,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/rc_parser.py",
+      "extract_ms": 27.744,
+      "ts_parse_ms": 12.381,
+      "file_size_bytes": 23115,
+      "line_count": 651,
+      "funcs": 23,
+      "calls": 251,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/driver/neo4j_driver.py",
+      "extract_ms": 27.273,
+      "ts_parse_ms": 5.385,
+      "file_size_bytes": 31502,
+      "line_count": 863,
+      "funcs": 32,
+      "calls": 145,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/intelligent_retrieval.py",
+      "extract_ms": 26.251,
+      "ts_parse_ms": 5.286,
+      "file_size_bytes": 31870,
+      "line_count": 786,
+      "funcs": 19,
+      "calls": 252,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/parser.py",
+      "extract_ms": 25.142,
+      "ts_parse_ms": 4.711,
+      "file_size_bytes": 18854,
+      "line_count": 441,
+      "funcs": 12,
+      "calls": 272,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/api_match_engine.py",
+      "extract_ms": 24.887,
+      "ts_parse_ms": 3.619,
+      "file_size_bytes": 24013,
+      "line_count": 541,
+      "funcs": 13,
+      "calls": 94,
+      "classes": 6
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/dart_parser.py",
+      "extract_ms": 23.952,
+      "ts_parse_ms": 4.451,
+      "file_size_bytes": 21176,
+      "line_count": 600,
+      "funcs": 25,
+      "calls": 168,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/project_context_service.py",
+      "extract_ms": 22.824,
+      "ts_parse_ms": 5.162,
+      "file_size_bytes": 31204,
+      "line_count": 773,
+      "funcs": 13,
+      "calls": 259,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/ingest_workflows.py",
+      "extract_ms": 21.889,
+      "ts_parse_ms": 4.234,
+      "file_size_bytes": 19424,
+      "line_count": 508,
+      "funcs": 13,
+      "calls": 182,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/bootstrap_compile_commands.py",
+      "extract_ms": 20.661,
+      "ts_parse_ms": 3.712,
+      "file_size_bytes": 16461,
+      "line_count": 476,
+      "funcs": 15,
+      "calls": 187,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/clang_parser.py",
+      "extract_ms": 20.496,
+      "ts_parse_ms": 5.075,
+      "file_size_bytes": 27209,
+      "line_count": 709,
+      "funcs": 8,
+      "calls": 111,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/workflow_classifier.py",
+      "extract_ms": 20.484,
+      "ts_parse_ms": 3.325,
+      "file_size_bytes": 16513,
+      "line_count": 382,
+      "funcs": 9,
+      "calls": 81,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/servlet_jsp_writer.py",
+      "extract_ms": 20.179,
+      "ts_parse_ms": 3.521,
+      "file_size_bytes": 13726,
+      "line_count": 301,
+      "funcs": 16,
+      "calls": 100,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/test_project_registry.py",
+      "extract_ms": 19.861,
+      "ts_parse_ms": 2.942,
+      "file_size_bytes": 15667,
+      "line_count": 390,
+      "funcs": 27,
+      "calls": 136,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/mybatis/detector.py",
+      "extract_ms": 19.457,
+      "ts_parse_ms": 3.672,
+      "file_size_bytes": 14597,
+      "line_count": 349,
+      "funcs": 14,
+      "calls": 165,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/models.py",
+      "extract_ms": 18.895,
+      "ts_parse_ms": 2.117,
+      "file_size_bytes": 7759,
+      "line_count": 223,
+      "funcs": 7,
+      "calls": 38,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/graph_expander.py",
+      "extract_ms": 18.728,
+      "ts_parse_ms": 3.79,
+      "file_size_bytes": 22017,
+      "line_count": 557,
+      "funcs": 16,
+      "calls": 185,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-summarize.py",
+      "extract_ms": 18.408,
+      "ts_parse_ms": 4.359,
+      "file_size_bytes": 17317,
+      "line_count": 472,
+      "funcs": 11,
+      "calls": 166,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/driver/falkordb_driver.py",
+      "extract_ms": 17.803,
+      "ts_parse_ms": 3.535,
+      "file_size_bytes": 19828,
+      "line_count": 541,
+      "funcs": 27,
+      "calls": 144,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-link.py",
+      "extract_ms": 17.12,
+      "ts_parse_ms": 4.319,
+      "file_size_bytes": 19425,
+      "line_count": 468,
+      "funcs": 10,
+      "calls": 195,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/workflow_impact_scorer.py",
+      "extract_ms": 16.756,
+      "ts_parse_ms": 4.522,
+      "file_size_bytes": 17154,
+      "line_count": 418,
+      "funcs": 7,
+      "calls": 93,
+      "classes": 4
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/primary_vector_sync.py",
+      "extract_ms": 16.12,
+      "ts_parse_ms": 3.73,
+      "file_size_bytes": 15066,
+      "line_count": 446,
+      "funcs": 13,
+      "calls": 147,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-vectorize.py",
+      "extract_ms": 16.059,
+      "ts_parse_ms": 4.739,
+      "file_size_bytes": 17500,
+      "line_count": 462,
+      "funcs": 13,
+      "calls": 174,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/git_diff.py",
+      "extract_ms": 16.023,
+      "ts_parse_ms": 3.653,
+      "file_size_bytes": 12067,
+      "line_count": 320,
+      "funcs": 17,
+      "calls": 164,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_core/resolver.py",
+      "extract_ms": 15.784,
+      "ts_parse_ms": 3.297,
+      "file_size_bytes": 13618,
+      "line_count": 251,
+      "funcs": 5,
+      "calls": 137,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_framework/artifact_parsers.py",
+      "extract_ms": 15.339,
+      "ts_parse_ms": 2.889,
+      "file_size_bytes": 11953,
+      "line_count": 226,
+      "funcs": 3,
+      "calls": 147,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/gen_semantic_example.py",
+      "extract_ms": 14.921,
+      "ts_parse_ms": 1.42,
+      "file_size_bytes": 4967,
+      "line_count": 145,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/explore_service.py",
+      "extract_ms": 14.567,
+      "ts_parse_ms": 2.627,
+      "file_size_bytes": 18814,
+      "line_count": 460,
+      "funcs": 10,
+      "calls": 52,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/result_packager.py",
+      "extract_ms": 14.359,
+      "ts_parse_ms": 2.674,
+      "file_size_bytes": 15497,
+      "line_count": 409,
+      "funcs": 8,
+      "calls": 94,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-summarize-infra.py",
+      "extract_ms": 14.292,
+      "ts_parse_ms": 3.51,
+      "file_size_bytes": 15012,
+      "line_count": 373,
+      "funcs": 10,
+      "calls": 138,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/models.py",
+      "extract_ms": 14.236,
+      "ts_parse_ms": 1.539,
+      "file_size_bytes": 4931,
+      "line_count": 194,
+      "funcs": 4,
+      "calls": 21,
+      "classes": 12
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/flow_reconstructor.py",
+      "extract_ms": 13.931,
+      "ts_parse_ms": 3.52,
+      "file_size_bytes": 14709,
+      "line_count": 413,
+      "funcs": 12,
+      "calls": 107,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/backfill_project_scope_keys.py",
+      "extract_ms": 13.488,
+      "ts_parse_ms": 3.147,
+      "file_size_bytes": 12776,
+      "line_count": 385,
+      "funcs": 10,
+      "calls": 128,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/cobol_analyzer.py",
+      "extract_ms": 13.363,
+      "ts_parse_ms": 2.734,
+      "file_size_bytes": 11093,
+      "line_count": 248,
+      "funcs": 5,
+      "calls": 145,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/confidence_scorer.py",
+      "extract_ms": 13.303,
+      "ts_parse_ms": 1.493,
+      "file_size_bytes": 5763,
+      "line_count": 161,
+      "funcs": 5,
+      "calls": 23,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/android/android_mixed_analyzer.py",
+      "extract_ms": 12.987,
+      "ts_parse_ms": 5.636,
+      "file_size_bytes": 11698,
+      "line_count": 311,
+      "funcs": 9,
+      "calls": 104,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/call_graph_builder.py",
+      "extract_ms": 12.645,
+      "ts_parse_ms": 1.751,
+      "file_size_bytes": 9619,
+      "line_count": 303,
+      "funcs": 6,
+      "calls": 59,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/query_intent_classifier.py",
+      "extract_ms": 12.542,
+      "ts_parse_ms": 1.627,
+      "file_size_bytes": 9869,
+      "line_count": 287,
+      "funcs": 4,
+      "calls": 12,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-vectorize-infra.py",
+      "extract_ms": 12.432,
+      "ts_parse_ms": 4.174,
+      "file_size_bytes": 12939,
+      "line_count": 320,
+      "funcs": 10,
+      "calls": 124,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/project_registry.py",
+      "extract_ms": 12.272,
+      "ts_parse_ms": 2.621,
+      "file_size_bytes": 15045,
+      "line_count": 408,
+      "funcs": 10,
+      "calls": 82,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_framework/resolver.py",
+      "extract_ms": 12.151,
+      "ts_parse_ms": 2.652,
+      "file_size_bytes": 11012,
+      "line_count": 206,
+      "funcs": 4,
+      "calls": 114,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-pipeline.py",
+      "extract_ms": 12.145,
+      "ts_parse_ms": 3.41,
+      "file_size_bytes": 15533,
+      "line_count": 317,
+      "funcs": 10,
+      "calls": 129,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/java/services/graph_service.py",
+      "extract_ms": 12.135,
+      "ts_parse_ms": 4.216,
+      "file_size_bytes": 11372,
+      "line_count": 298,
+      "funcs": 17,
+      "calls": 116,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/cplus/services/graph_service.py",
+      "extract_ms": 12.062,
+      "ts_parse_ms": 5.004,
+      "file_size_bytes": 11372,
+      "line_count": 298,
+      "funcs": 17,
+      "calls": 116,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/graph_service.py",
+      "extract_ms": 11.98,
+      "ts_parse_ms": 2.867,
+      "file_size_bytes": 11372,
+      "line_count": 298,
+      "funcs": 17,
+      "calls": 116,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/android/services/graph_service.py",
+      "extract_ms": 11.907,
+      "ts_parse_ms": 5.905,
+      "file_size_bytes": 11372,
+      "line_count": 298,
+      "funcs": 17,
+      "calls": 116,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/semantics.py",
+      "extract_ms": 11.803,
+      "ts_parse_ms": 2.946,
+      "file_size_bytes": 14049,
+      "line_count": 288,
+      "funcs": 2,
+      "calls": 110,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/cli_runtime.py",
+      "extract_ms": 11.544,
+      "ts_parse_ms": 2.286,
+      "file_size_bytes": 9610,
+      "line_count": 192,
+      "funcs": 7,
+      "calls": 106,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/test_harness_config.py",
+      "extract_ms": 11.142,
+      "ts_parse_ms": 1.567,
+      "file_size_bytes": 5959,
+      "line_count": 179,
+      "funcs": 8,
+      "calls": 47,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/symbol_service.py",
+      "extract_ms": 10.865,
+      "ts_parse_ms": 2.42,
+      "file_size_bytes": 8926,
+      "line_count": 266,
+      "funcs": 9,
+      "calls": 88,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/normalizer.py",
+      "extract_ms": 10.834,
+      "ts_parse_ms": 2.169,
+      "file_size_bytes": 6760,
+      "line_count": 177,
+      "funcs": 4,
+      "calls": 62,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/android/services/symbol_service.py",
+      "extract_ms": 10.505,
+      "ts_parse_ms": 2.114,
+      "file_size_bytes": 8926,
+      "line_count": 266,
+      "funcs": 9,
+      "calls": 88,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_framework/pipeline.py",
+      "extract_ms": 10.497,
+      "ts_parse_ms": 2.072,
+      "file_size_bytes": 8840,
+      "line_count": 179,
+      "funcs": 3,
+      "calls": 106,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/java/services/symbol_service.py",
+      "extract_ms": 10.493,
+      "ts_parse_ms": 2.055,
+      "file_size_bytes": 8926,
+      "line_count": 266,
+      "funcs": 9,
+      "calls": 88,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/cplus/services/symbol_service.py",
+      "extract_ms": 10.483,
+      "ts_parse_ms": 2.554,
+      "file_size_bytes": 8926,
+      "line_count": 266,
+      "funcs": 9,
+      "calls": 88,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/resolver.py",
+      "extract_ms": 10.413,
+      "ts_parse_ms": 2.014,
+      "file_size_bytes": 8099,
+      "line_count": 202,
+      "funcs": 6,
+      "calls": 105,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/database_schema/pipeline.py",
+      "extract_ms": 10.258,
+      "ts_parse_ms": 1.934,
+      "file_size_bytes": 6664,
+      "line_count": 149,
+      "funcs": 5,
+      "calls": 83,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/incremental_sync_state.py",
+      "extract_ms": 10.244,
+      "ts_parse_ms": 1.845,
+      "file_size_bytes": 6951,
+      "line_count": 195,
+      "funcs": 11,
+      "calls": 78,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/spring_writer.py",
+      "extract_ms": 10.128,
+      "ts_parse_ms": 2.024,
+      "file_size_bytes": 7079,
+      "line_count": 226,
+      "funcs": 10,
+      "calls": 56,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/livingdoc/living-doc-louvain.py",
+      "extract_ms": 10.012,
+      "ts_parse_ms": 2.834,
+      "file_size_bytes": 12363,
+      "line_count": 358,
+      "funcs": 9,
+      "calls": 104,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/project_topology_writer.py",
+      "extract_ms": 10.012,
+      "ts_parse_ms": 2.655,
+      "file_size_bytes": 18014,
+      "line_count": 500,
+      "funcs": 8,
+      "calls": 77,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/retrieval_scorer.py",
+      "extract_ms": 9.955,
+      "ts_parse_ms": 1.655,
+      "file_size_bytes": 10162,
+      "line_count": 284,
+      "funcs": 9,
+      "calls": 33,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/project_metadata.py",
+      "extract_ms": 9.951,
+      "ts_parse_ms": 2.019,
+      "file_size_bytes": 6860,
+      "line_count": 162,
+      "funcs": 5,
+      "calls": 98,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_core/pipeline.py",
+      "extract_ms": 9.876,
+      "ts_parse_ms": 2.039,
+      "file_size_bytes": 8362,
+      "line_count": 173,
+      "funcs": 3,
+      "calls": 103,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_core/artifact_parsers.py",
+      "extract_ms": 9.737,
+      "ts_parse_ms": 1.775,
+      "file_size_bytes": 6762,
+      "line_count": 140,
+      "funcs": 2,
+      "calls": 72,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/mybatis/annotation_mapper.py",
+      "extract_ms": 9.645,
+      "ts_parse_ms": 2.076,
+      "file_size_bytes": 9169,
+      "line_count": 232,
+      "funcs": 11,
+      "calls": 68,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/aspnet_writer.py",
+      "extract_ms": 9.524,
+      "ts_parse_ms": 2.026,
+      "file_size_bytes": 9257,
+      "line_count": 219,
+      "funcs": 14,
+      "calls": 79,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/source_inventory.py",
+      "extract_ms": 9.483,
+      "ts_parse_ms": 1.922,
+      "file_size_bytes": 7122,
+      "line_count": 203,
+      "funcs": 11,
+      "calls": 89,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/core/base.py",
+      "extract_ms": 9.117,
+      "ts_parse_ms": 1.54,
+      "file_size_bytes": 13204,
+      "line_count": 489,
+      "funcs": 27,
+      "calls": 0,
+      "classes": 4
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/protocol.py",
+      "extract_ms": 9.027,
+      "ts_parse_ms": 1.937,
+      "file_size_bytes": 7683,
+      "line_count": 189,
+      "funcs": 6,
+      "calls": 102,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/mybatis_writer.py",
+      "extract_ms": 8.958,
+      "ts_parse_ms": 2.593,
+      "file_size_bytes": 6470,
+      "line_count": 202,
+      "funcs": 10,
+      "calls": 57,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/semantic_graph_expansion.py",
+      "extract_ms": 8.897,
+      "ts_parse_ms": 2.297,
+      "file_size_bytes": 9202,
+      "line_count": 257,
+      "funcs": 8,
+      "calls": 88,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tests/test_unified_ingest_query_contract.py",
+      "extract_ms": 8.622,
+      "ts_parse_ms": 1.805,
+      "file_size_bytes": 8347,
+      "line_count": 225,
+      "funcs": 14,
+      "calls": 60,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/roslyn_adapter.py",
+      "extract_ms": 8.256,
+      "ts_parse_ms": 1.844,
+      "file_size_bytes": 6755,
+      "line_count": 171,
+      "funcs": 5,
+      "calls": 81,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/models.py",
+      "extract_ms": 8.123,
+      "ts_parse_ms": 1.286,
+      "file_size_bytes": 2713,
+      "line_count": 103,
+      "funcs": 2,
+      "calls": 16,
+      "classes": 7
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/url_normalizer.py",
+      "extract_ms": 7.719,
+      "ts_parse_ms": 1.826,
+      "file_size_bytes": 7991,
+      "line_count": 247,
+      "funcs": 6,
+      "calls": 55,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/parser_runtime.py",
+      "extract_ms": 7.712,
+      "ts_parse_ms": 1.865,
+      "file_size_bytes": 5865,
+      "line_count": 172,
+      "funcs": 10,
+      "calls": 62,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/qdrant.py",
+      "extract_ms": 7.68,
+      "ts_parse_ms": 1.769,
+      "file_size_bytes": 6392,
+      "line_count": 191,
+      "funcs": 6,
+      "calls": 58,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/setup_graph_project.py",
+      "extract_ms": 7.677,
+      "ts_parse_ms": 1.973,
+      "file_size_bytes": 11191,
+      "line_count": 307,
+      "funcs": 7,
+      "calls": 56,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/impact_service.py",
+      "extract_ms": 7.403,
+      "ts_parse_ms": 2.122,
+      "file_size_bytes": 8127,
+      "line_count": 196,
+      "funcs": 7,
+      "calls": 60,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/cli.py",
+      "extract_ms": 7.317,
+      "ts_parse_ms": 1.707,
+      "file_size_bytes": 7732,
+      "line_count": 201,
+      "funcs": 7,
+      "calls": 79,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/pipeline.py",
+      "extract_ms": 7.09,
+      "ts_parse_ms": 1.751,
+      "file_size_bytes": 6234,
+      "line_count": 164,
+      "funcs": 4,
+      "calls": 58,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/cloc_stats.py",
+      "extract_ms": 6.977,
+      "ts_parse_ms": 1.375,
+      "file_size_bytes": 4059,
+      "line_count": 140,
+      "funcs": 6,
+      "calls": 43,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/run_migration.py",
+      "extract_ms": 6.854,
+      "ts_parse_ms": 2.474,
+      "file_size_bytes": 3303,
+      "line_count": 101,
+      "funcs": 2,
+      "calls": 18,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/react_role_classifier.py",
+      "extract_ms": 6.744,
+      "ts_parse_ms": 1.817,
+      "file_size_bytes": 9628,
+      "line_count": 251,
+      "funcs": 9,
+      "calls": 52,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tests/test_language_writer_project_scope.py",
+      "extract_ms": 6.689,
+      "ts_parse_ms": 1.409,
+      "file_size_bytes": 6765,
+      "line_count": 182,
+      "funcs": 11,
+      "calls": 39,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/database_schema/database_schema_analyzer.py",
+      "extract_ms": 6.474,
+      "ts_parse_ms": 1.401,
+      "file_size_bytes": 4227,
+      "line_count": 97,
+      "funcs": 4,
+      "calls": 57,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/cache.py",
+      "extract_ms": 6.434,
+      "ts_parse_ms": 1.553,
+      "file_size_bytes": 4837,
+      "line_count": 118,
+      "funcs": 5,
+      "calls": 57,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/safe_formats.py",
+      "extract_ms": 6.24,
+      "ts_parse_ms": 1.483,
+      "file_size_bytes": 4330,
+      "line_count": 108,
+      "funcs": 7,
+      "calls": 58,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/incremental_cleanup.py",
+      "extract_ms": 6.233,
+      "ts_parse_ms": 1.604,
+      "file_size_bytes": 7094,
+      "line_count": 224,
+      "funcs": 6,
+      "calls": 51,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/examples/example_usage.py",
+      "extract_ms": 6.228,
+      "ts_parse_ms": 1.582,
+      "file_size_bytes": 10050,
+      "line_count": 309,
+      "funcs": 4,
+      "calls": 41,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/testtool/mcp_client.py",
+      "extract_ms": 5.993,
+      "ts_parse_ms": 1.574,
+      "file_size_bytes": 5298,
+      "line_count": 153,
+      "funcs": 10,
+      "calls": 45,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/core/factory.py",
+      "extract_ms": 5.868,
+      "ts_parse_ms": 1.407,
+      "file_size_bytes": 6105,
+      "line_count": 159,
+      "funcs": 3,
+      "calls": 55,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/migrate_repo_file_edges.py",
+      "extract_ms": 5.837,
+      "ts_parse_ms": 1.451,
+      "file_size_bytes": 8531,
+      "line_count": 239,
+      "funcs": 3,
+      "calls": 51,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/__init__.py",
+      "extract_ms": 5.562,
+      "ts_parse_ms": 0.685,
+      "file_size_bytes": 1761,
+      "line_count": 55,
+      "funcs": 3,
+      "calls": 7,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/database_schema_writer.py",
+      "extract_ms": 5.52,
+      "ts_parse_ms": 1.374,
+      "file_size_bytes": 4284,
+      "line_count": 114,
+      "funcs": 9,
+      "calls": 42,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/sync_scope.py",
+      "extract_ms": 5.477,
+      "ts_parse_ms": 1.211,
+      "file_size_bytes": 3832,
+      "line_count": 128,
+      "funcs": 10,
+      "calls": 47,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/signal_normalizer.py",
+      "extract_ms": 5.395,
+      "ts_parse_ms": 1.609,
+      "file_size_bytes": 8470,
+      "line_count": 210,
+      "funcs": 7,
+      "calls": 30,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/test_project_scope.py",
+      "extract_ms": 5.202,
+      "ts_parse_ms": 1.199,
+      "file_size_bytes": 3526,
+      "line_count": 104,
+      "funcs": 9,
+      "calls": 26,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/database_schema/models.py",
+      "extract_ms": 5.176,
+      "ts_parse_ms": 1.061,
+      "file_size_bytes": 2675,
+      "line_count": 93,
+      "funcs": 5,
+      "calls": 16,
+      "classes": 3
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/web_framework_writer.py",
+      "extract_ms": 5.076,
+      "ts_parse_ms": 1.276,
+      "file_size_bytes": 4555,
+      "line_count": 118,
+      "funcs": 9,
+      "calls": 35,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/base.py",
+      "extract_ms": 5.03,
+      "ts_parse_ms": 0.921,
+      "file_size_bytes": 2672,
+      "line_count": 85,
+      "funcs": 6,
+      "calls": 28,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/link_project_repos.py",
+      "extract_ms": 5.013,
+      "ts_parse_ms": 1.414,
+      "file_size_bytes": 6010,
+      "line_count": 189,
+      "funcs": 3,
+      "calls": 38,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/scripts/cleanup_repo_graph.py",
+      "extract_ms": 4.987,
+      "ts_parse_ms": 1.469,
+      "file_size_bytes": 5008,
+      "line_count": 156,
+      "funcs": 4,
+      "calls": 44,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_core/aspnet_core_analyzer.py",
+      "extract_ms": 4.842,
+      "ts_parse_ms": 0.956,
+      "file_size_bytes": 2255,
+      "line_count": 65,
+      "funcs": 2,
+      "calls": 23,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/android/services/impact_service.py",
+      "extract_ms": 4.821,
+      "ts_parse_ms": 1.587,
+      "file_size_bytes": 3602,
+      "line_count": 94,
+      "funcs": 6,
+      "calls": 41,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/cfg.py",
+      "extract_ms": 4.792,
+      "ts_parse_ms": 1.286,
+      "file_size_bytes": 4578,
+      "line_count": 82,
+      "funcs": 1,
+      "calls": 50,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/identity.py",
+      "extract_ms": 4.657,
+      "ts_parse_ms": 1.244,
+      "file_size_bytes": 3106,
+      "line_count": 88,
+      "funcs": 8,
+      "calls": 51,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/harness_config.py",
+      "extract_ms": 4.641,
+      "ts_parse_ms": 1.545,
+      "file_size_bytes": 5269,
+      "line_count": 129,
+      "funcs": 3,
+      "calls": 37,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/analyzer_cache.py",
+      "extract_ms": 4.508,
+      "ts_parse_ms": 1.307,
+      "file_size_bytes": 2913,
+      "line_count": 104,
+      "funcs": 10,
+      "calls": 39,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/java/services/impact_service.py",
+      "extract_ms": 4.462,
+      "ts_parse_ms": 1.491,
+      "file_size_bytes": 3602,
+      "line_count": 94,
+      "funcs": 6,
+      "calls": 41,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/cplus/services/impact_service.py",
+      "extract_ms": 4.412,
+      "ts_parse_ms": 1.457,
+      "file_size_bytes": 3602,
+      "line_count": 94,
+      "funcs": 6,
+      "calls": 41,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/class_ops.py",
+      "extract_ms": 4.369,
+      "ts_parse_ms": 1.195,
+      "file_size_bytes": 9294,
+      "line_count": 333,
+      "funcs": 8,
+      "calls": 11,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_framework/aspnet_framework_analyzer.py",
+      "extract_ms": 4.311,
+      "ts_parse_ms": 1.028,
+      "file_size_bytes": 2295,
+      "line_count": 65,
+      "funcs": 2,
+      "calls": 23,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/type_ops.py",
+      "extract_ms": 4.095,
+      "ts_parse_ms": 1.058,
+      "file_size_bytes": 8120,
+      "line_count": 294,
+      "funcs": 7,
+      "calls": 11,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/function_ops.py",
+      "extract_ms": 3.929,
+      "ts_parse_ms": 1.088,
+      "file_size_bytes": 7389,
+      "line_count": 254,
+      "funcs": 6,
+      "calls": 11,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/infra_ops.py",
+      "extract_ms": 3.906,
+      "ts_parse_ms": 1.036,
+      "file_size_bytes": 8670,
+      "line_count": 291,
+      "funcs": 6,
+      "calls": 8,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/flow_ops.py",
+      "extract_ms": 3.809,
+      "ts_parse_ms": 1.093,
+      "file_size_bytes": 6620,
+      "line_count": 185,
+      "funcs": 5,
+      "calls": 14,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/core/record_parsers.py",
+      "extract_ms": 3.701,
+      "ts_parse_ms": 0.924,
+      "file_size_bytes": 3142,
+      "line_count": 104,
+      "funcs": 6,
+      "calls": 27,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/document_ops.py",
+      "extract_ms": 3.694,
+      "ts_parse_ms": 1.05,
+      "file_size_bytes": 7309,
+      "line_count": 259,
+      "funcs": 6,
+      "calls": 9,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/bm25_ranker.py",
+      "extract_ms": 3.676,
+      "ts_parse_ms": 0.795,
+      "file_size_bytes": 3107,
+      "line_count": 100,
+      "funcs": 5,
+      "calls": 12,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/project_scope.py",
+      "extract_ms": 3.636,
+      "ts_parse_ms": 1.055,
+      "file_size_bytes": 4129,
+      "line_count": 114,
+      "funcs": 6,
+      "calls": 23,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/llm_summary.py",
+      "extract_ms": 3.612,
+      "ts_parse_ms": 1.364,
+      "file_size_bytes": 3978,
+      "line_count": 115,
+      "funcs": 3,
+      "calls": 26,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/namespace_ops.py",
+      "extract_ms": 3.576,
+      "ts_parse_ms": 0.901,
+      "file_size_bytes": 7309,
+      "line_count": 257,
+      "funcs": 6,
+      "calls": 10,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/js.py",
+      "extract_ms": 3.447,
+      "ts_parse_ms": 0.709,
+      "file_size_bytes": 1675,
+      "line_count": 50,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/cross_edge_ops.py",
+      "extract_ms": 3.413,
+      "ts_parse_ms": 1.009,
+      "file_size_bytes": 6700,
+      "line_count": 228,
+      "funcs": 5,
+      "calls": 8,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/core/require_neo4j.py",
+      "extract_ms": 3.404,
+      "ts_parse_ms": 0.952,
+      "file_size_bytes": 5041,
+      "line_count": 143,
+      "funcs": 5,
+      "calls": 19,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/ts.py",
+      "extract_ms": 3.392,
+      "ts_parse_ms": 0.566,
+      "file_size_bytes": 1755,
+      "line_count": 52,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/kotlin.py",
+      "extract_ms": 3.329,
+      "ts_parse_ms": 0.684,
+      "file_size_bytes": 1793,
+      "line_count": 52,
+      "funcs": 2,
+      "calls": 18,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/workflow_service.py",
+      "extract_ms": 3.314,
+      "ts_parse_ms": 0.982,
+      "file_size_bytes": 2834,
+      "line_count": 90,
+      "funcs": 1,
+      "calls": 34,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/java.py",
+      "extract_ms": 3.314,
+      "ts_parse_ms": 0.761,
+      "file_size_bytes": 1817,
+      "line_count": 52,
+      "funcs": 2,
+      "calls": 20,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/testtool/_check_coverage.py",
+      "extract_ms": 3.304,
+      "ts_parse_ms": 0.885,
+      "file_size_bytes": 2788,
+      "line_count": 88,
+      "funcs": 2,
+      "calls": 26,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/cplus.py",
+      "extract_ms": 3.12,
+      "ts_parse_ms": 0.699,
+      "file_size_bytes": 1703,
+      "line_count": 50,
+      "funcs": 2,
+      "calls": 19,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/package_ops.py",
+      "extract_ms": 3.084,
+      "ts_parse_ms": 0.918,
+      "file_size_bytes": 5667,
+      "line_count": 209,
+      "funcs": 5,
+      "calls": 6,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/android.py",
+      "extract_ms": 3.07,
+      "ts_parse_ms": 0.687,
+      "file_size_bytes": 1639,
+      "line_count": 49,
+      "funcs": 1,
+      "calls": 19,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/vb6.py",
+      "extract_ms": 3.042,
+      "ts_parse_ms": 0.724,
+      "file_size_bytes": 1646,
+      "line_count": 46,
+      "funcs": 2,
+      "calls": 17,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/vbnet.py",
+      "extract_ms": 3.035,
+      "ts_parse_ms": 0.511,
+      "file_size_bytes": 1492,
+      "line_count": 44,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/php.py",
+      "extract_ms": 2.959,
+      "ts_parse_ms": 0.692,
+      "file_size_bytes": 1385,
+      "line_count": 44,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/delphi.py",
+      "extract_ms": 2.943,
+      "ts_parse_ms": 0.744,
+      "file_size_bytes": 1567,
+      "line_count": 45,
+      "funcs": 2,
+      "calls": 17,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/mybatis/dynamic_sql.py",
+      "extract_ms": 2.892,
+      "ts_parse_ms": 1.129,
+      "file_size_bytes": 1636,
+      "line_count": 54,
+      "funcs": 2,
+      "calls": 17,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/python.py",
+      "extract_ms": 2.887,
+      "ts_parse_ms": 0.657,
+      "file_size_bytes": 1331,
+      "line_count": 42,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/csharp.py",
+      "extract_ms": 2.875,
+      "ts_parse_ms": 0.626,
+      "file_size_bytes": 1426,
+      "line_count": 44,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/sql.py",
+      "extract_ms": 2.858,
+      "ts_parse_ms": 0.628,
+      "file_size_bytes": 1373,
+      "line_count": 45,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/mybatis/cache.py",
+      "extract_ms": 2.844,
+      "ts_parse_ms": 0.918,
+      "file_size_bytes": 1833,
+      "line_count": 48,
+      "funcs": 7,
+      "calls": 21,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/plsql.py",
+      "extract_ms": 2.782,
+      "ts_parse_ms": 0.729,
+      "file_size_bytes": 1413,
+      "line_count": 45,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/vbscript.py",
+      "extract_ms": 2.763,
+      "ts_parse_ms": 0.556,
+      "file_size_bytes": 1303,
+      "line_count": 38,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tests/mcp/cplus/test_cplus_mcp.py",
+      "extract_ms": 2.567,
+      "ts_parse_ms": 0.801,
+      "file_size_bytes": 1164,
+      "line_count": 37,
+      "funcs": 1,
+      "calls": 8,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/_rust_fallback.py",
+      "extract_ms": 2.523,
+      "ts_parse_ms": 0.941,
+      "file_size_bytes": 1778,
+      "line_count": 52,
+      "funcs": 4,
+      "calls": 6,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/message_detectors/vba.py",
+      "extract_ms": 2.489,
+      "ts_parse_ms": 0.633,
+      "file_size_bytes": 1204,
+      "line_count": 36,
+      "funcs": 2,
+      "calls": 13,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/builders.py",
+      "extract_ms": 2.337,
+      "ts_parse_ms": 0.68,
+      "file_size_bytes": 2383,
+      "line_count": 83,
+      "funcs": 2,
+      "calls": 4,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_core/detector.py",
+      "extract_ms": 2.28,
+      "ts_parse_ms": 0.677,
+      "file_size_bytes": 1301,
+      "line_count": 35,
+      "funcs": 4,
+      "calls": 14,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cplus/windows_resource_parser.py",
+      "extract_ms": 2.276,
+      "ts_parse_ms": 1.567,
+      "file_size_bytes": 1186,
+      "line_count": 49,
+      "funcs": 3,
+      "calls": 4,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_framework/detector.py",
+      "extract_ms": 2.248,
+      "ts_parse_ms": 0.672,
+      "file_size_bytes": 1315,
+      "line_count": 35,
+      "funcs": 4,
+      "calls": 12,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/list_db.py",
+      "extract_ms": 2.185,
+      "ts_parse_ms": 1.179,
+      "file_size_bytes": 324,
+      "line_count": 10,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/__init__.py",
+      "extract_ms": 2.07,
+      "ts_parse_ms": 1.373,
+      "file_size_bytes": 1281,
+      "line_count": 40,
+      "funcs": 1,
+      "calls": 1,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/operations/__init__.py",
+      "extract_ms": 1.993,
+      "ts_parse_ms": 0.531,
+      "file_size_bytes": 961,
+      "line_count": 27,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/docs/MIGRATION_GUIDE.py",
+      "extract_ms": 1.789,
+      "ts_parse_ms": 0.673,
+      "file_size_bytes": 12807,
+      "line_count": 419,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/pipeline.py",
+      "extract_ms": 1.548,
+      "ts_parse_ms": 0.696,
+      "file_size_bytes": 1109,
+      "line_count": 41,
+      "funcs": 2,
+      "calls": 3,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/core/provider_runtime.py",
+      "extract_ms": 1.411,
+      "ts_parse_ms": 0.541,
+      "file_size_bytes": 1187,
+      "line_count": 41,
+      "funcs": 1,
+      "calls": 3,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/common/aspnet/__init__.py",
+      "extract_ms": 1.347,
+      "ts_parse_ms": 0.803,
+      "file_size_bytes": 507,
+      "line_count": 26,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/flutter/__init__.py",
+      "extract_ms": 1.113,
+      "ts_parse_ms": 2.363,
+      "file_size_bytes": 357,
+      "line_count": 14,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tests/test_driver/test_falkordb_driver.py",
+      "extract_ms": 1.098,
+      "ts_parse_ms": 0.452,
+      "file_size_bytes": 574,
+      "line_count": 21,
+      "funcs": 2,
+      "calls": 4,
+      "classes": 2
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/cobol/__init__.py",
+      "extract_ms": 0.932,
+      "ts_parse_ms": 0.703,
+      "file_size_bytes": 244,
+      "line_count": 7,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_core/__init__.py",
+      "extract_ms": 0.789,
+      "ts_parse_ms": 0.844,
+      "file_size_bytes": 189,
+      "line_count": 8,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/aspnet_framework/__init__.py",
+      "extract_ms": 0.74,
+      "ts_parse_ms": 0.753,
+      "file_size_bytes": 209,
+      "line_count": 8,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/database_schema/__init__.py",
+      "extract_ms": 0.673,
+      "ts_parse_ms": 1.674,
+      "file_size_bytes": 172,
+      "line_count": 6,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/mybatis/__init__.py",
+      "extract_ms": 0.577,
+      "ts_parse_ms": 2.565,
+      "file_size_bytes": 136,
+      "line_count": 6,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/writer/__init__.py",
+      "extract_ms": 0.484,
+      "ts_parse_ms": 0.383,
+      "file_size_bytes": 96,
+      "line_count": 4,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/mcp/services/__init__.py",
+      "extract_ms": 0.441,
+      "ts_parse_ms": 0.567,
+      "file_size_bytes": 96,
+      "line_count": 4,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/core/__init__.py",
+      "extract_ms": 0.293,
+      "ts_parse_ms": 0.272,
+      "file_size_bytes": 0,
+      "line_count": 1,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/examples/__init__.py",
+      "extract_ms": 0.261,
+      "ts_parse_ms": 0.584,
+      "file_size_bytes": 0,
+      "line_count": 1,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/testtool/__init__.py",
+      "extract_ms": 0.218,
+      "ts_parse_ms": 0.499,
+      "file_size_bytes": 26,
+      "line_count": 2,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/docs/__init__.py",
+      "extract_ms": 0.208,
+      "ts_parse_ms": 0.184,
+      "file_size_bytes": 0,
+      "line_count": 1,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools/graph/driver/__init__.py",
+      "extract_ms": 0.191,
+      "ts_parse_ms": 0.15,
+      "file_size_bytes": 0,
+      "line_count": 1,
+      "funcs": 0,
+      "calls": 0,
+      "classes": 0
+    }
+  ]
+}

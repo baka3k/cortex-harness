@@ -1,0 +1,74 @@
+{
+  "language": "swift",
+  "target": "/Users/hieplq1.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tauri-2.11.5/mobile/ios-api",
+  "file_count": 10,
+  "timestamp": "20260731_133906",
+  "phases": [
+    {
+      "name": "1. SCAN (file discovery)",
+      "wall_seconds": 0.001812,
+      "peak_mem_mb": 0.0,
+      "item_count": 10,
+      "per_item_ms_p50": null,
+      "per_item_ms_p90": null,
+      "per_item_ms_p99": null,
+      "per_item_ms_max": null,
+      "notes": ""
+    },
+    {
+      "name": "2a. TREE-SITTER PARSE ONLY (C parse, no extraction) [singleton parser]",
+      "wall_seconds": 0.025295,
+      "peak_mem_mb": 0.02,
+      "item_count": 10,
+      "per_item_ms_p50": 2.4299,
+      "per_item_ms_p90": 4.0506,
+      "per_item_ms_p99": 6.0384,
+      "per_item_ms_max": 6.2592,
+      "notes": "total=23KB source"
+    },
+    {
+      "name": "2b. FULL PARSE + EXTRACT (tree-sitter + AST walk + dataclass)",
+      "wall_seconds": 0.22777,
+      "peak_mem_mb": 0.49,
+      "item_count": 10,
+      "per_item_ms_p50": 20.9616,
+      "per_item_ms_p90": 38.4438,
+      "per_item_ms_p99": 51.3502,
+      "per_item_ms_max": 52.7842,
+      "notes": "funcs=60 calls=186 classes=85"
+    },
+    {
+      "name": "3. PAYLOAD\u2192DICT (asdict serialization)",
+      "wall_seconds": 3.7e-05,
+      "peak_mem_mb": 0.0,
+      "item_count": 10,
+      "per_item_ms_p50": 0.0002,
+      "per_item_ms_p90": 0.0009,
+      "per_item_ms_p99": 0.0017,
+      "per_item_ms_max": 0.0017,
+      "notes": "(already dict \u2014 no asdict overhead)"
+    },
+    {
+      "name": "6. SEMANTIC ENRICHMENT (regex heuristics, no ML)",
+      "wall_seconds": 0.272321,
+      "peak_mem_mb": 0.46,
+      "item_count": 60,
+      "per_item_ms_p50": null,
+      "per_item_ms_p90": null,
+      "per_item_ms_p99": null,
+      "per_item_ms_max": null,
+      "notes": "enriched 60 funcs"
+    },
+    {
+      "name": "7. EMBEDDING INFERENCE (model=jinaai/jina-embeddings-v3, batch=8)",
+      "wall_seconds": 0,
+      "peak_mem_mb": 0,
+      "item_count": 0,
+      "per_item_ms_p50": null,
+      "per_item_ms_p90": null,
+      "per_item_ms_p99": null,
+      "per_item_ms_max": null,
+      "notes": "SKIPPED: No module named 'transformers.configuration_utils'"
+    }
+  ]
+}

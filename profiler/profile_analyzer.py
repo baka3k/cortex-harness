@@ -86,7 +86,7 @@ class LangConfig:
 LANGUAGES: Dict[str, LangConfig] = {
     "python":   LangConfig("tools.python.python_analyzer",         "_scan_python_files",   "_get_python_parser",   "parse_python_file",   "_parse_file", (".py", ".pyi")),
     "java":     LangConfig("tools.java.java_analyzer",              "_scan_java_files",     "_get_java_parser",     "parse_java_file",     "_parse_file", (".java",)),
-    "ts":       LangConfig("tools.ts.ts_analyzer",                  "_scan_ts_files",       "_get_parser",          "parse_ts_file",       "_parse_file", (".ts", ".tsx")),
+    "ts":       LangConfig("tools.ts.ts_analyzer",                  "_scan_ts_files",       "_get_ts_parser",       "parse_ts_file",       "_parse_file", (".ts", ".tsx")),
     "js":       LangConfig("tools.js.js_analyzer",                  "_scan_js_files",       "_get_js_parser",       "parse_js_file",       "_parse_file", (".js", ".jsx", ".mjs", ".cjs")),
     "go":       LangConfig("tools.go.go_analyzer",                  "_scan_go_files",       "_get_parser",          "parse_go_file",       "_parse_file", (".go",), scan_takes_selected=True, returns_dict=True),
     "csharp":   LangConfig("tools.csharp.csharp_analyzer",          "_scan_csharp_files",   "_get_csharp_parser",   "parse_csharp_file",   "_parse_file", (".cs",)),
@@ -288,7 +288,11 @@ class Profiler:
         self.scan_fn = getattr(self.mod, self.config.scan_fn)
         self.get_parser_fn = getattr(self.mod, self.config.get_parser_fn)
         self.parse_full_fn = getattr(self.mod, self.config.parse_full_fn)
-        self.parse_bytes_fn = getattr(self.mod, self.config.parse_bytes_fn)
+        # parse_bytes_fn is only used by _parse_bytes_for_file (legacy phase), so resolve lazily.
+        try:
+            self.parse_bytes_fn = getattr(self.mod, self.config.parse_bytes_fn)
+        except AttributeError:
+            self.parse_bytes_fn = None
         self._c_parser = None  # lazy: for cplus .c files
         # Per-file detail tracking for outlier analysis
         # {filepath: {ts_parse_ms, extract_ms, file_size_bytes, line_count, funcs, calls, classes}}
@@ -332,6 +336,8 @@ class Profiler:
 
     def _parse_bytes_for_file(self, filepath: str):
         """Call _parse_file with correct signature per language."""
+        if self.parse_bytes_fn is None:
+            return None
         if self.config.needs_cpp_detection:
             is_cpp = self._is_cpp_file(filepath)
             return self.parse_bytes_fn(filepath, is_cpp)
@@ -364,6 +370,13 @@ class Profiler:
             label += " [singleton parser]"
         else:
             label += " [fresh parser per file]"
+        # Some analyzers (e.g. ts) require language_name arg to get_parser; skip parse-only for those.
+        try:
+            self.get_parser_fn()
+        except TypeError:
+            r = PhaseResult(label + " [skipped: parser requires args]", 0.0, 0.0, len(self.scanned_files))
+            self.results.append(r)
+            return r
 
         per_file: List[float] = []
         total_bytes = 0

@@ -1,0 +1,351 @@
+{
+  "language": "rust",
+  "target": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src",
+  "file_count": 17,
+  "total_extract_ms": 1443.5,
+  "timestamp": "20260731_133517",
+  "top_slowest": [
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/resolver.rs",
+      "extract_ms": 212.012,
+      "ts_parse_ms": 4.163,
+      "file_size_bytes": 21003,
+      "line_count": 557,
+      "funcs": 19,
+      "calls": 309,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/semantic.rs",
+      "extract_ms": 169.89,
+      "ts_parse_ms": 4.828,
+      "file_size_bytes": 21765,
+      "line_count": 619,
+      "funcs": 17,
+      "calls": 154,
+      "classes": 4
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/mod.rs",
+      "extract_ms": 157.982,
+      "ts_parse_ms": 3.102,
+      "file_size_bytes": 15224,
+      "line_count": 479,
+      "funcs": 20,
+      "calls": 140,
+      "classes": 30
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/payload.rs",
+      "extract_ms": 132.406,
+      "ts_parse_ms": 2.857,
+      "file_size_bytes": 8991,
+      "line_count": 256,
+      "funcs": 2,
+      "calls": 195,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/walker.rs",
+      "extract_ms": 119.192,
+      "ts_parse_ms": 2.985,
+      "file_size_bytes": 13966,
+      "line_count": 375,
+      "funcs": 5,
+      "calls": 132,
+      "classes": 18
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/text.rs",
+      "extract_ms": 105.903,
+      "ts_parse_ms": 3.474,
+      "file_size_bytes": 8428,
+      "line_count": 256,
+      "funcs": 14,
+      "calls": 108,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/lib.rs",
+      "extract_ms": 78.48,
+      "ts_parse_ms": 2.009,
+      "file_size_bytes": 7359,
+      "line_count": 211,
+      "funcs": 12,
+      "calls": 127,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/grammar.rs",
+      "extract_ms": 76.397,
+      "ts_parse_ms": 2.246,
+      "file_size_bytes": 8459,
+      "line_count": 247,
+      "funcs": 29,
+      "calls": 77,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/function.rs",
+      "extract_ms": 75.8,
+      "ts_parse_ms": 1.61,
+      "file_size_bytes": 7816,
+      "line_count": 241,
+      "funcs": 5,
+      "calls": 117,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/field.rs",
+      "extract_ms": 69.003,
+      "ts_parse_ms": 1.62,
+      "file_size_bytes": 6609,
+      "line_count": 183,
+      "funcs": 5,
+      "calls": 112,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/alias.rs",
+      "extract_ms": 57.552,
+      "ts_parse_ms": 1.652,
+      "file_size_bytes": 5122,
+      "line_count": 146,
+      "funcs": 2,
+      "calls": 93,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/type_def.rs",
+      "extract_ms": 50.672,
+      "ts_parse_ms": 1.045,
+      "file_size_bytes": 4315,
+      "line_count": 126,
+      "funcs": 1,
+      "calls": 91,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/calls.rs",
+      "extract_ms": 36.648,
+      "ts_parse_ms": 1.897,
+      "file_size_bytes": 3559,
+      "line_count": 99,
+      "funcs": 4,
+      "calls": 46,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/relations.rs",
+      "extract_ms": 32.297,
+      "ts_parse_ms": 1.209,
+      "file_size_bytes": 3488,
+      "line_count": 102,
+      "funcs": 3,
+      "calls": 42,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/template.rs",
+      "extract_ms": 28.317,
+      "ts_parse_ms": 0.816,
+      "file_size_bytes": 3038,
+      "line_count": 89,
+      "funcs": 1,
+      "calls": 43,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/parser.rs",
+      "extract_ms": 20.785,
+      "ts_parse_ms": 0.948,
+      "file_size_bytes": 2190,
+      "line_count": 69,
+      "funcs": 7,
+      "calls": 24,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/namespace.rs",
+      "extract_ms": 20.164,
+      "ts_parse_ms": 0.888,
+      "file_size_bytes": 1798,
+      "line_count": 58,
+      "funcs": 1,
+      "calls": 34,
+      "classes": 0
+    }
+  ],
+  "all_files": [
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/resolver.rs",
+      "extract_ms": 212.012,
+      "ts_parse_ms": 4.163,
+      "file_size_bytes": 21003,
+      "line_count": 557,
+      "funcs": 19,
+      "calls": 309,
+      "classes": 11
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/semantic.rs",
+      "extract_ms": 169.89,
+      "ts_parse_ms": 4.828,
+      "file_size_bytes": 21765,
+      "line_count": 619,
+      "funcs": 17,
+      "calls": 154,
+      "classes": 4
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/mod.rs",
+      "extract_ms": 157.982,
+      "ts_parse_ms": 3.102,
+      "file_size_bytes": 15224,
+      "line_count": 479,
+      "funcs": 20,
+      "calls": 140,
+      "classes": 30
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/payload.rs",
+      "extract_ms": 132.406,
+      "ts_parse_ms": 2.857,
+      "file_size_bytes": 8991,
+      "line_count": 256,
+      "funcs": 2,
+      "calls": 195,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/walker.rs",
+      "extract_ms": 119.192,
+      "ts_parse_ms": 2.985,
+      "file_size_bytes": 13966,
+      "line_count": 375,
+      "funcs": 5,
+      "calls": 132,
+      "classes": 18
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/text.rs",
+      "extract_ms": 105.903,
+      "ts_parse_ms": 3.474,
+      "file_size_bytes": 8428,
+      "line_count": 256,
+      "funcs": 14,
+      "calls": 108,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/lib.rs",
+      "extract_ms": 78.48,
+      "ts_parse_ms": 2.009,
+      "file_size_bytes": 7359,
+      "line_count": 211,
+      "funcs": 12,
+      "calls": 127,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/grammar.rs",
+      "extract_ms": 76.397,
+      "ts_parse_ms": 2.246,
+      "file_size_bytes": 8459,
+      "line_count": 247,
+      "funcs": 29,
+      "calls": 77,
+      "classes": 8
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/function.rs",
+      "extract_ms": 75.8,
+      "ts_parse_ms": 1.61,
+      "file_size_bytes": 7816,
+      "line_count": 241,
+      "funcs": 5,
+      "calls": 117,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/field.rs",
+      "extract_ms": 69.003,
+      "ts_parse_ms": 1.62,
+      "file_size_bytes": 6609,
+      "line_count": 183,
+      "funcs": 5,
+      "calls": 112,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/alias.rs",
+      "extract_ms": 57.552,
+      "ts_parse_ms": 1.652,
+      "file_size_bytes": 5122,
+      "line_count": 146,
+      "funcs": 2,
+      "calls": 93,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/type_def.rs",
+      "extract_ms": 50.672,
+      "ts_parse_ms": 1.045,
+      "file_size_bytes": 4315,
+      "line_count": 126,
+      "funcs": 1,
+      "calls": 91,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/calls.rs",
+      "extract_ms": 36.648,
+      "ts_parse_ms": 1.897,
+      "file_size_bytes": 3559,
+      "line_count": 99,
+      "funcs": 4,
+      "calls": 46,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/relations.rs",
+      "extract_ms": 32.297,
+      "ts_parse_ms": 1.209,
+      "file_size_bytes": 3488,
+      "line_count": 102,
+      "funcs": 3,
+      "calls": 42,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/template.rs",
+      "extract_ms": 28.317,
+      "ts_parse_ms": 0.816,
+      "file_size_bytes": 3038,
+      "line_count": 89,
+      "funcs": 1,
+      "calls": 43,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/parser.rs",
+      "extract_ms": 20.785,
+      "ts_parse_ms": 0.948,
+      "file_size_bytes": 2190,
+      "line_count": 69,
+      "funcs": 7,
+      "calls": 24,
+      "classes": 0
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/rust-analyzer-core/src/symbols/namespace.rs",
+      "extract_ms": 20.164,
+      "ts_parse_ms": 0.888,
+      "file_size_bytes": 1798,
+      "line_count": 58,
+      "funcs": 1,
+      "calls": 34,
+      "classes": 0
+    }
+  ]
+}

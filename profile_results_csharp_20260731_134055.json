@@ -1,0 +1,74 @@
+{
+  "language": "csharp",
+  "target": "/Users/hieplq1.rpm/tool/serena/test/resources/repos/csharp",
+  "file_count": 5,
+  "timestamp": "20260731_134055",
+  "phases": [
+    {
+      "name": "1. SCAN (file discovery)",
+      "wall_seconds": 0.001322,
+      "peak_mem_mb": 0.0,
+      "item_count": 5,
+      "per_item_ms_p50": null,
+      "per_item_ms_p90": null,
+      "per_item_ms_p99": null,
+      "per_item_ms_max": null,
+      "notes": ""
+    },
+    {
+      "name": "2a. TREE-SITTER PARSE ONLY (C parse, no extraction) [singleton parser]",
+      "wall_seconds": 0.017801,
+      "peak_mem_mb": 0.01,
+      "item_count": 5,
+      "per_item_ms_p50": 2.3353,
+      "per_item_ms_p90": 7.7307,
+      "per_item_ms_p99": 10.1928,
+      "per_item_ms_max": 10.4664,
+      "notes": "total=2KB source"
+    },
+    {
+      "name": "2b. FULL PARSE + EXTRACT (tree-sitter + AST walk + dataclass)",
+      "wall_seconds": 0.010145,
+      "peak_mem_mb": 0.05,
+      "item_count": 5,
+      "per_item_ms_p50": 1.7158,
+      "per_item_ms_p90": 3.0345,
+      "per_item_ms_p99": 3.2935,
+      "per_item_ms_max": 3.3223,
+      "notes": "funcs=13 calls=13 classes=6"
+    },
+    {
+      "name": "3. PAYLOAD\u2192DICT (asdict serialization)",
+      "wall_seconds": 0.000761,
+      "peak_mem_mb": 0.03,
+      "item_count": 5,
+      "per_item_ms_p50": 0.1563,
+      "per_item_ms_p90": 0.2187,
+      "per_item_ms_p99": 0.2505,
+      "per_item_ms_max": 0.254,
+      "notes": ""
+    },
+    {
+      "name": "6. SEMANTIC ENRICHMENT (regex heuristics, no ML)",
+      "wall_seconds": 0.024155,
+      "peak_mem_mb": 0.09,
+      "item_count": 13,
+      "per_item_ms_p50": null,
+      "per_item_ms_p90": null,
+      "per_item_ms_p99": null,
+      "per_item_ms_max": null,
+      "notes": "enriched 13 funcs"
+    },
+    {
+      "name": "7. EMBEDDING INFERENCE (model=jinaai/jina-embeddings-v3, batch=8)",
+      "wall_seconds": 0,
+      "peak_mem_mb": 0,
+      "item_count": 0,
+      "per_item_ms_p50": null,
+      "per_item_ms_p90": null,
+      "per_item_ms_p99": null,
+      "per_item_ms_max": null,
+      "notes": "SKIPPED: No module named 'transformers.configuration_utils'"
+    }
+  ]
+}

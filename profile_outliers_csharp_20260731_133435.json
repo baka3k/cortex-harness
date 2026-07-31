@@ -1,0 +1,51 @@
+{
+  "language": "csharp",
+  "target": "/Users/hieplq1.rpm/AI/cortex-harness/tests/fixtures/aspnet-core-application",
+  "file_count": 2,
+  "total_extract_ms": 6.251,
+  "timestamp": "20260731_133435",
+  "top_slowest": [
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/tests/fixtures/aspnet-core-application/Program.cs",
+      "extract_ms": 4.436,
+      "ts_parse_ms": 2.828,
+      "file_size_bytes": 479,
+      "line_count": 17,
+      "funcs": 1,
+      "calls": 0,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/tests/fixtures/aspnet-core-application/Controllers/HomeController.cs",
+      "extract_ms": 1.815,
+      "ts_parse_ms": 13.989,
+      "file_size_bytes": 252,
+      "line_count": 12,
+      "funcs": 1,
+      "calls": 1,
+      "classes": 1
+    }
+  ],
+  "all_files": [
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/tests/fixtures/aspnet-core-application/Program.cs",
+      "extract_ms": 4.436,
+      "ts_parse_ms": 2.828,
+      "file_size_bytes": 479,
+      "line_count": 17,
+      "funcs": 1,
+      "calls": 0,
+      "classes": 1
+    },
+    {
+      "file": "/Users/hieplq1.rpm/AI/cortex-harness/tests/fixtures/aspnet-core-application/Controllers/HomeController.cs",
+      "extract_ms": 1.815,
+      "ts_parse_ms": 13.989,
+      "file_size_bytes": 252,
+      "line_count": 12,
+      "funcs": 1,
+      "calls": 1,
+      "classes": 1
+    }
+  ]
+}

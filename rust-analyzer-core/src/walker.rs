@@ -37,17 +37,41 @@ pub struct WalkContext {
 }
 
 /// Stack frame — all state passed into a child visit.
-struct Frame<'a> {
-    node: Node<'a>,
-    namespace_stack: Vec<String>,
-    type_stack: Vec<String>,
-    using_namespaces: Vec<String>,
-    using_imports: HashMap<String, String>,
+pub struct Frame<'a> {
+    pub node: Node<'a>,
+    pub namespace_stack: Vec<String>,
+    pub type_stack: Vec<String>,
+    pub using_namespaces: Vec<String>,
+    pub using_imports: HashMap<String, String>,
 }
 
 /// Run the walker over a parsed tree, returning a populated ParseOutput.
+///
+/// **Note:** this is the original C++-specific entry point retained for the
+/// pilot's parity tests. Phase 1+ work should prefer `profile::walk_with_profile`
+/// with a `LanguageProfile` so the walker can be reused across languages.
 pub fn walk_tree(root: Node, source: &'static [u8], rel_path: &'static str) -> ParseOutput {
-    let mut ctx = WalkContext {
+    let mut ctx = new_walk_context(source, rel_path);
+    let mut work: VecDeque<Frame<'_>> = VecDeque::new();
+    work.push_back(Frame {
+        node: root,
+        namespace_stack: Vec::new(),
+        type_stack: Vec::new(),
+        using_namespaces: Vec::new(),
+        using_imports: HashMap::new(),
+    });
+
+    while let Some(frame) = work.pop_front() {
+        process_frame(&mut ctx, frame, &mut work);
+    }
+
+    finalize_output(ctx, "cpp")
+}
+
+/// Build a fresh `WalkContext` for a (source, rel_path) pair. Used by both
+/// `walk_tree` and `profile::walk_with_profile`.
+pub fn new_walk_context(source: &'static [u8], rel_path: &'static str) -> WalkContext {
+    WalkContext {
         source,
         rel_path,
         functions: Vec::new(),
@@ -63,22 +87,7 @@ pub fn walk_tree(root: Node, source: &'static [u8], rel_path: &'static str) -> P
         namespace_registry: HashMap::new(),
         using_namespaces: Vec::new(),
         using_imports: HashMap::new(),
-    };
-
-    let mut work: VecDeque<Frame<'_>> = VecDeque::new();
-    work.push_back(Frame {
-        node: root,
-        namespace_stack: Vec::new(),
-        type_stack: Vec::new(),
-        using_namespaces: Vec::new(),
-        using_imports: HashMap::new(),
-    });
-
-    while let Some(frame) = work.pop_front() {
-        process_frame(&mut ctx, frame, &mut work);
     }
-
-    finalize_output(ctx)
 }
 
 fn process_frame<'a>(ctx: &mut WalkContext, frame: Frame<'a>, work: &mut VecDeque<Frame<'a>>) {
@@ -283,7 +292,7 @@ fn process_frame<'a>(ctx: &mut WalkContext, frame: Frame<'a>, work: &mut VecDequ
     push_children(work, node, &namespace_stack, &type_stack, &using_namespaces, &using_imports);
 }
 
-fn push_children<'a>(
+pub fn push_children<'a>(
     work: &mut VecDeque<Frame<'a>>,
     node: Node<'a>,
     namespace_stack: &[String],
@@ -305,7 +314,7 @@ fn push_children<'a>(
     }
 }
 
-fn declaration_type_text(node: Node, source: &[u8]) -> String {
+pub(crate) fn declaration_type_text(node: Node, source: &[u8]) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -329,7 +338,7 @@ fn declaration_type_text(node: Node, source: &[u8]) -> String {
     parts.join(" ")
 }
 
-fn finalize_output(ctx: WalkContext) -> ParseOutput {
+pub(crate) fn finalize_output(ctx: WalkContext, parser_language: &str) -> ParseOutput {
     let file_code = String::from_utf8_lossy(ctx.source).into_owned();
     let file_lines = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
 
@@ -360,8 +369,8 @@ fn finalize_output(ctx: WalkContext) -> ParseOutput {
         includes: file_includes,
         macros: file_macros,
         parse_meta: ParseMeta {
-            parser_language: "cpp".to_string(),
-            parser_language_initial: "cpp".to_string(),
+            parser_language: parser_language.to_string(),
+            parser_language_initial: parser_language.to_string(),
             header_retry_attempted: false,
             header_retry_selected: false,
             has_error: false,
