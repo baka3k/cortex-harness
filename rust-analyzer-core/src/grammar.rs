@@ -132,6 +132,26 @@ impl Grammar for JsGrammar {
     }
 }
 
+// ── Go ─────────────────────────────────────────────────────────────────
+
+pub struct GoGrammar;
+
+impl Grammar for GoGrammar {
+    fn id(&self) -> &'static str {
+        "go"
+    }
+    fn language(&self) -> Language {
+        tree_sitter_go::LANGUAGE.into()
+    }
+    fn matches_path(&self, path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e == "go")
+            .unwrap_or(false)
+    }
+}
+
 /// All grammars the extension knows about, in declaration order.
 pub fn registry() -> Vec<Box<dyn Grammar>> {
     vec![
@@ -140,6 +160,7 @@ pub fn registry() -> Vec<Box<dyn Grammar>> {
         Box::new(JavaGrammar),
         Box::new(PythonGrammar),
         Box::new(JsGrammar),
+        Box::new(GoGrammar),
     ]
 }
 
@@ -151,6 +172,7 @@ pub fn by_id(id: &str) -> Option<Box<dyn Grammar>> {
         "java" => "java",
         "python" | "py" => "python",
         "javascript" | "js" | "ts" => "javascript",
+        "go" => "go",
         _ => return None,
     };
     for g in registry() {
@@ -197,6 +219,7 @@ mod tests {
         assert_eq!(by_id("py").unwrap().id(), "python");
         assert_eq!(by_id("js").unwrap().id(), "javascript");
         assert_eq!(by_id("ts").unwrap().id(), "javascript");
+        assert_eq!(by_id("go").unwrap().id(), "go");
     }
 
     #[test]
@@ -204,7 +227,6 @@ mod tests {
         assert!(by_id("rust").is_none());
         assert!(by_id("").is_none());
     }
-
     #[test]
     fn by_path_dispatches_by_extension() {
         assert_eq!(by_path("src/main.cpp").unwrap().id(), "cpp");
@@ -215,6 +237,7 @@ mod tests {
         assert_eq!(by_path("app.py").unwrap().id(), "python");
         assert_eq!(by_path("index.js").unwrap().id(), "javascript");
         assert_eq!(by_path("main.c").unwrap().id(), "c");
+        assert_eq!(by_path("main.go").unwrap().id(), "go");
     }
 
     #[test]
@@ -243,5 +266,12 @@ mod tests {
         let src = b"function main() { return 0; }";
         let kind = parse_root_kind("javascript", src);
         assert_eq!(kind.as_deref(), Some("program"));
+    }
+
+    #[test]
+    fn parse_root_kind_runs_go_grammar() {
+        let src = b"package main\n\nfunc main() {}\n";
+        let kind = parse_root_kind("go", src);
+        assert_eq!(kind.as_deref(), Some("source_file"));
     }
 }

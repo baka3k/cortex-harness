@@ -9,6 +9,7 @@
 //!   used by Phase 6.
 
 mod calls;
+mod go;
 mod grammar;
 mod parser;
 mod payload;
@@ -46,6 +47,16 @@ fn parse_path_to_output(path: &str, root: &str, force_is_cpp: Option<bool>) -> O
     Some(out)
 }
 
+/// Parse a single Go file and return the `GoParseOutput`.
+fn parse_go_path_to_output(path: &str, root: &str) -> Option<go::GoParseOutput> {
+    let source = std::fs::read(path).ok()?;
+    let rel_path = Path::new(path)
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    go::parse_go_source(&source, &rel_path)
+}
+
 /// Parse a single C/C++ file and return the Python `dict` payload.
 #[pyfunction]
 fn extract_cplus(path: &str, root: &str) -> PyResult<PyObject> {
@@ -63,6 +74,62 @@ fn extract_cplus_force_cpp(path: &str, root: &str, force_cpp: bool) -> PyResult<
         let out = parse_path_to_output(path, root, Some(force_cpp))
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("parse failed"))?;
         payload::build_payload(py, &out)
+    })
+}
+
+/// Parse a single Go file and return the Python `dict` payload (Phase 2).
+#[pyfunction]
+fn extract_go(path: &str, root: &str) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let out = parse_go_path_to_output(path, root)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("go parse failed"))?;
+        payload::build_go_payload(py, &out)
+    })
+}
+
+/// Parse many Go files in parallel using rayon (Phase 2).
+///
+/// `threads` of 0 → use the rayon default (logical CPUs).
+#[pyfunction]
+fn extract_go_batch(paths: Vec<String>, root: String, threads: usize) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let pool = if threads == 0 {
+            rayon::ThreadPoolBuilder::new().build().map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+            })?
+        } else {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                })?
+        };
+
+        let results: Vec<Option<go::GoParseOutput>> = pool.install(|| {
+            use rayon::prelude::*;
+            paths
+                .par_iter()
+                .map(|p| parse_go_path_to_output(p, &root))
+                .collect()
+        });
+
+        let list = PyList::empty(py);
+        for (idx, res) in results.into_iter().enumerate() {
+            match res {
+                Some(out) => {
+                    let dict = payload::build_go_payload(py, &out)?;
+                    list.append(dict)?;
+                }
+                None => {
+                    let err_dict = PyDict::new(py);
+                    err_dict.set_item("error", "parse_failed")?;
+                    err_dict.set_item("path", &paths[idx])?;
+                    list.append(err_dict)?;
+                }
+            }
+        }
+        Ok(list.into())
     })
 }
 
@@ -122,6 +189,37 @@ fn extract_batch(
     threads: usize,
 ) -> PyResult<PyObject> {
     Python::with_gil(|py| {
+        // Route Go to the Go pipeline (different payload schema).
+        if language == "go" {
+            let pool = if threads == 0 {
+                rayon::ThreadPoolBuilder::new().build().map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                })?
+            } else {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                    })?
+            };
+
+            let results: Vec<Option<go::GoParseOutput>> = pool.install(|| {
+                use rayon::prelude::*;
+                paths
+                    .par_iter()
+                    .map(|p| parse_go_path_to_output(p, &root))
+                    .collect()
+            });
+
+            let list = PyList::empty(py);
+            for out in results.into_iter().flatten() {
+                let dict = payload::build_go_payload(py, &out)?;
+                list.append(dict)?;
+            }
+            return Ok(list.into());
+        }
+
         let force_is_cpp = match language.as_str() {
             "c" => Some(false),
             "cpp" | "cplus" => Some(true),
@@ -200,6 +298,8 @@ fn cortex_extract(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_cplus, m)?)?;
     m.add_function(wrap_pyfunction!(extract_cplus_force_cpp, m)?)?;
     m.add_function(wrap_pyfunction!(extract_cplus_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_go, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_go_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_batch, m)?)?;
     m.add_function(wrap_pyfunction!(is_cpp_file, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_batch, m)?)?;
