@@ -6,8 +6,10 @@ mode: hi-plan --fast
 source: /Users/hieplq1.rpm/Downloads/Analyzer_Design_Spec_Perl_Tree_Sitter.md
 scope: Perl 5 primary parsing, normalized structural facts, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
-relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260716-1615-primary-vector-ingestion-completion, 260718-2159-incremental-scan-reliability]
+relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260716-1615-primary-vector-ingestion-completion, 260718-2159-incremental-scan-reliability, 260731-1500-legacy-migration-parser-coverage]
 ---
+
+> **CROSS-PLAN NOTE (2026-07-31):** `260731-1500-legacy-migration-parser-coverage` adds new `shell`/`jp1` parser keys and a `.pc` extension for `cplus` across the same 7 registration files this plan touches (`incremental_sync.py`, `owner_manifest.py`, `dev.py`, `framework_registry.py`, `project_topology/registry.py`, `test_mcp_acceptance_matrix.py`, `test_common_analyzer_registry.py`). Whichever plan lands first should keep new dict entries minimal/independently mergeable so the other doesn't need a rebase beyond a line-level merge.
 
 # Perl Tree-sitter Analyzer Parser Plan
 
