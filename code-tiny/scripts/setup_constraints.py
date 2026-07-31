@@ -186,6 +186,20 @@ INDEXES: list[tuple[str, str]] = [
         ),
     ),
     (
+        "namespace_id_lookup",
+        (
+            "CREATE INDEX namespace_id_lookup IF NOT EXISTS "
+            "FOR (n:Namespace) ON (n.id)"
+        ),
+    ),
+    (
+        "class_id_lookup",
+        (
+            "CREATE INDEX class_id_lookup IF NOT EXISTS "
+            "FOR (c:Class) ON (c.id)"
+        ),
+    ),
+    (
         "package_id_lookup",
         (
             "CREATE INDEX package_id_lookup IF NOT EXISTS "
