@@ -1,0 +1,1 @@
+--full viết toàn bộ plan để hoàn thành các tool còn lại - mỗi ngôn ngữ một plan rieng, tôi sẽ tự chạy từng cái một

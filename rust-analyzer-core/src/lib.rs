@@ -21,7 +21,9 @@ mod php;
 mod profile;
 mod relations;
 mod resolver;
+mod rust_lang;
 mod semantic;
+mod sql_lang;
 mod symbols;
 mod text;
 mod ts;
@@ -114,6 +116,16 @@ fn parse_delphi_path_to_output(path: &str, root: &str) -> Option<delphi::DelphiP
     delphi::parse_delphi_source(&source, &rel_path)
 }
 
+/// Parse a single SQL file and return the `SqlParseOutput` (6-tuple).
+fn parse_sql_path_to_output(path: &str, root: &str) -> Option<sql_lang::SqlParseOutput> {
+    let source = std::fs::read(path).ok()?;
+    let rel_path = Path::new(path)
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    sql_lang::parse_sql_source(&source, &rel_path)
+}
+
 /// Parse a single TypeScript/TSX file and return the `TsParseOutput` (12-tuple).
 fn parse_ts_path_to_output(path: &str, root: &str) -> Option<ts::TsParseOutput> {
     let source = std::fs::read(path).ok()?;
@@ -123,6 +135,16 @@ fn parse_ts_path_to_output(path: &str, root: &str) -> Option<ts::TsParseOutput> 
         .unwrap_or_else(|_| path.to_string());
     let is_tsx = path.ends_with(".tsx");
     ts::parse_ts_source(&source, &rel_path, is_tsx)
+}
+
+/// Parse a single Rust file and return the `RustParseOutput`.
+fn parse_rust_path_to_output(path: &str, root: &str) -> Option<rust_lang::RustParseOutput> {
+    let source = std::fs::read(path).ok()?;
+    let rel_path = Path::new(path)
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    rust_lang::parse_rust_source(&source, &rel_path)
 }
 
 /// Parse a single C/C++ file and return the Python `dict` payload.
@@ -205,6 +227,16 @@ fn extract_delphi(path: &str, root: &str) -> PyResult<PyObject> {
     })
 }
 
+/// Parse a single SQL file and return the Python `dict` payload (Phase 2 Tier 3).
+#[pyfunction]
+fn extract_sql(path: &str, root: &str) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let out = parse_sql_path_to_output(path, root)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("sql parse failed"))?;
+        payload::build_sql_payload(py, &out)
+    })
+}
+
 /// Parse a single TypeScript/TSX file and return the Python `dict` payload (Tier 2).
 #[pyfunction]
 fn extract_ts(path: &str, root: &str) -> PyResult<PyObject> {
@@ -212,6 +244,62 @@ fn extract_ts(path: &str, root: &str) -> PyResult<PyObject> {
         let out = parse_ts_path_to_output(path, root)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ts parse failed"))?;
         payload::build_ts_payload(py, &out)
+    })
+}
+
+/// Parse a single Rust file and return the Python `dict` payload (Tier 1).
+#[pyfunction]
+fn extract_rust(path: &str, root: &str) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let out = parse_rust_path_to_output(path, root)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("rust parse failed"))?;
+        payload::build_rust_payload(py, &out)
+    })
+}
+
+/// Parse many Rust files in parallel using rayon (Tier 1).
+///
+/// `threads` of 0 → use the rayon default (logical CPUs).
+#[pyfunction]
+fn extract_rust_batch(paths: Vec<String>, root: String, threads: usize) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let pool = if threads == 0 {
+            rayon::ThreadPoolBuilder::new().build().map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+            })?
+        } else {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                })?
+        };
+
+        let results: Vec<Option<rust_lang::RustParseOutput>> = pool.install(|| {
+            use rayon::prelude::*;
+            paths
+                .par_iter()
+                .map(|p| parse_rust_path_to_output(p, &root))
+                .collect()
+        });
+
+        let list = PyList::empty(py);
+        for (idx, res) in results.into_iter().enumerate() {
+            match res {
+                Some(out) => {
+                    let dict = payload::build_rust_payload(py, &out)?;
+                    list.append(dict)?;
+                }
+                None => {
+                    let err_dict = PyDict::new(py);
+                    err_dict.set_item("error", "parse_failed")?;
+                    err_dict.set_item("path", &paths[idx])?;
+                    list.append(err_dict)?;
+                }
+            }
+        }
+        Ok(list.into())
     })
 }
 
@@ -587,6 +675,7 @@ fn cortex_extract(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_csharp, m)?)?;
     m.add_function(wrap_pyfunction!(extract_php, m)?)?;
     m.add_function(wrap_pyfunction!(extract_delphi, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_sql, m)?)?;
     m.add_function(wrap_pyfunction!(extract_ts, m)?)?;
     m.add_function(wrap_pyfunction!(extract_ts_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_batch, m)?)?;

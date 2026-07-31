@@ -25,7 +25,7 @@
       "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
-      "device": "cuda"
+      "device": "mps"
     },
     "source": {
       "projects": [
@@ -50,12 +50,11 @@
       "FALKORDB_GRAPH": "cortext_doc",
       "FALKORDB_SSL": "false",
       "NEO4J_URI": "redis://localhost:6379",
-      "NEO4J_DB": "cortext",
+      "NEO4J_DB": "cortext_doc",
       "NEO4J_USER": "",
       "NEO4J_PASS": "",
       "QDRANT_HOST": "localhost",
       "QDRANT_PORT": "6333",
-      "QDRANT_COLLECTION": "cortext_doc",
       "EMBEDDING_MODEL": "BAAI/bge-m3",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
