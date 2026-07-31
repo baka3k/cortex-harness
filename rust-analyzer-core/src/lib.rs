@@ -24,6 +24,7 @@ mod resolver;
 mod rust_lang;
 mod semantic;
 mod sql_lang;
+mod swift_lang;
 mod symbols;
 mod text;
 mod ts;
@@ -147,6 +148,16 @@ fn parse_rust_path_to_output(path: &str, root: &str) -> Option<rust_lang::RustPa
     rust_lang::parse_rust_source(&source, &rel_path)
 }
 
+/// Parse a single Swift file and return the `SwiftParseOutput`.
+fn parse_swift_path_to_output(path: &str, root: &str) -> Option<swift_lang::SwiftParseOutput> {
+    let source = std::fs::read(path).ok()?;
+    let rel_path = Path::new(path)
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    swift_lang::parse_swift_source(&source, &rel_path)
+}
+
 /// Parse a single C/C++ file and return the Python `dict` payload.
 #[pyfunction]
 fn extract_cplus(path: &str, root: &str) -> PyResult<PyObject> {
@@ -254,6 +265,62 @@ fn extract_rust(path: &str, root: &str) -> PyResult<PyObject> {
         let out = parse_rust_path_to_output(path, root)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("rust parse failed"))?;
         payload::build_rust_payload(py, &out)
+    })
+}
+
+/// Parse a single Swift file and return the Python `dict` payload (Tier 1).
+#[pyfunction]
+fn extract_swift(path: &str, root: &str) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let out = parse_swift_path_to_output(path, root)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("swift parse failed"))?;
+        payload::build_swift_payload(py, &out)
+    })
+}
+
+/// Parse many Swift files in parallel using rayon (Tier 1).
+///
+/// `threads` of 0 → use the rayon default (logical CPUs).
+#[pyfunction]
+fn extract_swift_batch(paths: Vec<String>, root: String, threads: usize) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let pool = if threads == 0 {
+            rayon::ThreadPoolBuilder::new().build().map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+            })?
+        } else {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                })?
+        };
+
+        let results: Vec<Option<swift_lang::SwiftParseOutput>> = pool.install(|| {
+            use rayon::prelude::*;
+            paths
+                .par_iter()
+                .map(|p| parse_swift_path_to_output(p, &root))
+                .collect()
+        });
+
+        let list = PyList::empty(py);
+        for (idx, res) in results.into_iter().enumerate() {
+            match res {
+                Some(out) => {
+                    let dict = payload::build_swift_payload(py, &out)?;
+                    list.append(dict)?;
+                }
+                None => {
+                    let err_dict = PyDict::new(py);
+                    err_dict.set_item("error", "parse_failed")?;
+                    err_dict.set_item("path", &paths[idx])?;
+                    list.append(err_dict)?;
+                }
+            }
+        }
+        Ok(list.into())
     })
 }
 
@@ -711,6 +778,8 @@ fn cortex_extract(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_ts_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_rust, m)?)?;
     m.add_function(wrap_pyfunction!(extract_rust_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_swift, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_swift_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_batch, m)?)?;
     m.add_function(wrap_pyfunction!(is_cpp_file, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_batch, m)?)?;

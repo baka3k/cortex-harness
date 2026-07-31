@@ -880,6 +880,17 @@ def _resolve_calls(functions: List[FunctionDef], calls: List[CallEdge], relation
 def parse_swift_file(path: str, root: Optional[str] = None) -> Dict[str, Any]:
     if root is None:
         root = os.path.dirname(os.path.abspath(path)) or os.getcwd()
+    from tools.common._rust_accel import extract as _rust_extract
+
+    payload = _rust_extract("swift", path, root)
+    if payload is not None:
+        return payload
+    return _python_parse_swift_file(path, root)
+
+
+def _python_parse_swift_file(path: str, root: Optional[str] = None) -> Dict[str, Any]:
+    if root is None:
+        root = os.path.dirname(os.path.abspath(path)) or os.getcwd()
     rel_path = os.path.relpath(path, root).replace("\\", "/")
     tree, source_bytes = _parse_file(path)
     has_error, error_nodes = _tree_error_stats(tree)

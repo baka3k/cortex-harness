@@ -1,0 +1,12 @@
+[package]
+name = "swift_probe"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "swift_probe"
+path = "/tmp/swift_probe.rs"
+
+[dependencies]
+tree-sitter = "0.23"
+tree-sitter-swift = "0.7"
