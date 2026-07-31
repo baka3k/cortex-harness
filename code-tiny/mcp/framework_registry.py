@@ -45,6 +45,9 @@ CPLUS_RELATIONSHIPS = (
     "USES_RESOURCE", "BINDS_CONTROL", "HANDLES_CONTROL", "OWNS_DIALOG", "DEPENDS_ON",
     "ALIASES", "ALIAS_OF", "EXEC_SQL",
 )
+SHELL_RELATIONSHIPS = tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "READS_CONFIG")))
+JP1_RELATIONSHIPS = tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "PRECEDES", "EXECUTES")))
+BATCHCONFIG_RELATIONSHIPS = tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "DEFINES_CONFIG")))
 ANDROID_RELATIONSHIPS = (
     "CALLS", "DECLARES", "CONTAINS", "USES_RESOURCE", "DECLARES_ROUTE",
     "STARTS_WITH_ROUTE", "ROUTE_CALLS", "DECLARES_COMPONENT", "STARTS_COMPONENT",
@@ -505,9 +508,9 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "jvm": _generic_profile("jvm", {"jvm", "java", "kotlin"}, relationships=ANDROID_RELATIONSHIPS),
     "go": _generic_profile("go", {"go"}),
     "perl": _generic_profile("perl", {"perl"}),
-    "shell": _generic_profile("shell", {"shell", "sh", "bash", "posix-shell"}),
-    "jp1": _generic_profile("jp1", {"jp1", "ajs", "jobnet"}),
-    "batchconfig": _generic_profile("batchconfig", {"ini", "batchconfig", "config"}),
+    "shell": _generic_profile("shell", {"shell", "sh", "bash", "posix-shell"}, relationships=SHELL_RELATIONSHIPS),
+    "jp1": _generic_profile("jp1", {"jp1", "ajs", "jobnet"}, relationships=JP1_RELATIONSHIPS),
+    "batchconfig": _generic_profile("batchconfig", {"ini", "batchconfig", "config"}, relationships=BATCHCONFIG_RELATIONSHIPS),
     "rust": _generic_profile("rust", {"rust"}),
     "swift": _generic_profile("swift", {"swift"}),
     "delphi": _generic_profile("delphi", {"delphi", "pascal"}),
