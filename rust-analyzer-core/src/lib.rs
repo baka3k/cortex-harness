@@ -10,6 +10,7 @@
 
 mod calls;
 mod csharp;
+mod delphi;
 mod go;
 mod grammar;
 mod java;
@@ -23,6 +24,8 @@ mod resolver;
 mod semantic;
 mod symbols;
 mod text;
+mod ts;
+mod ts_regex;
 mod walker;
 
 use std::path::Path;
@@ -101,6 +104,27 @@ fn parse_php_path_to_output(path: &str, root: &str) -> Option<php::PhpParseOutpu
     php::parse_php_source(&source, &rel_path)
 }
 
+/// Parse a single Delphi file and return the `DelphiParseOutput` (9-tuple).
+fn parse_delphi_path_to_output(path: &str, root: &str) -> Option<delphi::DelphiParseOutput> {
+    let source = std::fs::read(path).ok()?;
+    let rel_path = Path::new(path)
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    delphi::parse_delphi_source(&source, &rel_path)
+}
+
+/// Parse a single TypeScript/TSX file and return the `TsParseOutput` (12-tuple).
+fn parse_ts_path_to_output(path: &str, root: &str) -> Option<ts::TsParseOutput> {
+    let source = std::fs::read(path).ok()?;
+    let rel_path = Path::new(path)
+        .strip_prefix(root)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    let is_tsx = path.ends_with(".tsx");
+    ts::parse_ts_source(&source, &rel_path, is_tsx)
+}
+
 /// Parse a single C/C++ file and return the Python `dict` payload.
 #[pyfunction]
 fn extract_cplus(path: &str, root: &str) -> PyResult<PyObject> {
@@ -168,6 +192,72 @@ fn extract_php(path: &str, root: &str) -> PyResult<PyObject> {
         let out = parse_php_path_to_output(path, root)
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("php parse failed"))?;
         payload::build_php_payload(py, &out)
+    })
+}
+
+/// Parse a single Delphi file and return the Python `dict` payload (Phase 2 Tier 3).
+#[pyfunction]
+fn extract_delphi(path: &str, root: &str) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let out = parse_delphi_path_to_output(path, root)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("delphi parse failed"))?;
+        payload::build_delphi_payload(py, &out)
+    })
+}
+
+/// Parse a single TypeScript/TSX file and return the Python `dict` payload (Tier 2).
+#[pyfunction]
+fn extract_ts(path: &str, root: &str) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let out = parse_ts_path_to_output(path, root)
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("ts parse failed"))?;
+        payload::build_ts_payload(py, &out)
+    })
+}
+
+/// Parse many TypeScript/TSX files in parallel using rayon (Tier 2).
+///
+/// `threads` of 0 → use the rayon default (logical CPUs).
+#[pyfunction]
+fn extract_ts_batch(paths: Vec<String>, root: String, threads: usize) -> PyResult<PyObject> {
+    Python::with_gil(|py| {
+        let pool = if threads == 0 {
+            rayon::ThreadPoolBuilder::new().build().map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+            })?
+        } else {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                })?
+        };
+
+        let results: Vec<Option<ts::TsParseOutput>> = pool.install(|| {
+            use rayon::prelude::*;
+            paths
+                .par_iter()
+                .map(|p| parse_ts_path_to_output(p, &root))
+                .collect()
+        });
+
+        let list = PyList::empty(py);
+        for (idx, res) in results.into_iter().enumerate() {
+            match res {
+                Some(out) => {
+                    let dict = payload::build_ts_payload(py, &out)?;
+                    list.append(dict)?;
+                }
+                None => {
+                    let err_dict = PyDict::new(py);
+                    err_dict.set_item("error", "parse_failed")?;
+                    err_dict.set_item("path", &paths[idx])?;
+                    list.append(err_dict)?;
+                }
+            }
+        }
+        Ok(list.into())
     })
 }
 
@@ -381,6 +471,37 @@ fn extract_batch(
             return Ok(list.into());
         }
 
+        // Route TS/TSX to the TypeScript pipeline (Tier 2 — 12-tuple payload).
+        if language == "ts" || language == "typescript" || language == "tsx" {
+            let pool = if threads == 0 {
+                rayon::ThreadPoolBuilder::new().build().map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                })?
+            } else {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                    })?
+            };
+
+            let results: Vec<Option<ts::TsParseOutput>> = pool.install(|| {
+                use rayon::prelude::*;
+                paths
+                    .par_iter()
+                    .map(|p| parse_ts_path_to_output(p, &root))
+                    .collect()
+            });
+
+            let list = PyList::empty(py);
+            for out in results.into_iter().flatten() {
+                let dict = payload::build_ts_payload(py, &out)?;
+                list.append(dict)?;
+            }
+            return Ok(list.into());
+        }
+
         let force_is_cpp = match language.as_str() {
             "c" => Some(false),
             "cpp" | "cplus" => Some(true),
@@ -465,6 +586,9 @@ fn cortex_extract(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_java_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_csharp, m)?)?;
     m.add_function(wrap_pyfunction!(extract_php, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_delphi, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_ts, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_ts_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_batch, m)?)?;
     m.add_function(wrap_pyfunction!(is_cpp_file, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_batch, m)?)?;
