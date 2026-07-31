@@ -1,0 +1,1 @@
+--full, tạo plan  wire cortex_extract vào production analyzers - kể cả swift. nó sắp làm xong rồi
