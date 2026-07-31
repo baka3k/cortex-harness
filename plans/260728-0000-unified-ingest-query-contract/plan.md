@@ -10,11 +10,17 @@ relatedPlans:
   - 260725-1703-project-topology-context-tools
   - 260719-0100-mcp-query-capability-hardening
   - make-mcp-lifecycle
+  - 260731-1500-legacy-migration-parser-coverage
 amendedBy:
   - 260728-0900-simplify-search-full-removal
   - 260728-1400-remove-db-param-unify-project-id
 reviewed: 2026-07-28
 ---
+
+> **CROSS-PLAN NOTE (2026-07-31):** `260731-1500-legacy-migration-parser-coverage` adds new
+> `shell`/`jp1` entries to `code-tiny/mcp/framework_registry.py` CAPABILITIES. Both plans are
+> currently blocked/pending; coordinate before either touches `framework_registry.py` so the
+> CAPABILITIES dict additions merge cleanly.
 
 > **AMENDMENT NOTE (2026-07-28):** Plan `260728-1400-remove-db-param-unify-project-id`
 > supersedes the `db` parameter in this plan's Phase 02 query path. After the
