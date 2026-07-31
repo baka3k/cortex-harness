@@ -500,7 +500,7 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
 
     if ext in {".cbl", ".cob", ".cpy", ".copy"}:
         return "cobol"
-    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2"}:
+    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2", ".pc"}:
         return "cplus"
     if ext in {".pas", ".dpr", ".inc"}:
         return "delphi"
@@ -1204,7 +1204,7 @@ def _write_summary(path: str, payload: Dict[str, object]) -> None:
 
 _SOURCE_EXTENSIONS: Set[str] = {
     ".cbl", ".cob", ".cpy", ".copy",
-    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2", ".pc",
     ".pas", ".dpr", ".inc",
     ".py",
     ".go",

@@ -41,9 +41,11 @@ from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.common.project_scope import enrich_project_scope
+from tools.common.text_encoding import decode_source_bytes
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
+from tools.cplus.proc_preprocessor import EmbeddedSqlStatement, preprocess_proc_directives
 from tools.cplus.rc_parser import (
     extract_message_map_handlers,
     extract_resource_tokens,
@@ -280,8 +282,24 @@ class CallEdge:
     callee_id: Optional[str]
 
 
+def _decode_node_bytes(raw: bytes) -> str:
+    """Decode an extracted byte slice, falling back to CP932 for legacy Japanese text.
+
+    Tries strict UTF-8 first (the common case, and previously the only path),
+    then CP932/Shift-JIS, then a lossy UTF-8 decode so callers never raise.
+    """
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return raw.decode("cp932")
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", errors="ignore")
+
+
 def _node_text(node, source_bytes: bytes) -> str:
-    return source_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="ignore")
+    return _decode_node_bytes(source_bytes[node.start_byte : node.end_byte])
 
 
 def _extract_leading_comment(node, source_bytes: bytes) -> str:
@@ -335,7 +353,7 @@ def _node_snippet(node, source_bytes: bytes) -> Tuple[str, int, int]:
         start_node = prev
         prev = prev.prev_sibling
     start_byte = start_node.start_byte
-    snippet = source_bytes[start_byte : node.end_byte].decode("utf-8", errors="ignore")
+    snippet = _decode_node_bytes(source_bytes[start_byte : node.end_byte])
     # tree-sitter stores the line/col at each node in O(1) — no need to slice
     # and count newlines in the whole source buffer.
     start_line = start_node.start_point[0] + 1
@@ -598,10 +616,13 @@ def _get_c_parser() -> Parser:
     return _C_PARSER
 
 
-def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes]:
+def _parse_file(path: str, is_cpp: bool, override_bytes: Optional[bytes] = None) -> Tuple[Any, bytes]:
     parser = _get_cpp_parser() if is_cpp else _get_c_parser()
-    with open(path, "rb") as handle:
-        source_bytes = handle.read()
+    if override_bytes is not None:
+        source_bytes = override_bytes
+    else:
+        with open(path, "rb") as handle:
+            source_bytes = handle.read()
     tree = parser.parse(source_bytes)
     return tree, source_bytes
 
@@ -1973,7 +1994,17 @@ def parse_c_family_file(
     Dict[str, Any],
 ]:
     initial_is_cpp = is_cpp
-    tree, source_bytes = _parse_file(path, initial_is_cpp)
+    ext = os.path.splitext(path)[1].lower()
+    with open(path, "rb") as handle:
+        original_bytes = handle.read()
+
+    embedded_sql_statements: List[EmbeddedSqlStatement] = []
+    override_bytes: Optional[bytes] = None
+    if ext == ".pc":
+        initial_is_cpp = False
+        override_bytes, embedded_sql_statements = preprocess_proc_directives(original_bytes)
+
+    tree, source_bytes = _parse_file(path, initial_is_cpp, override_bytes=override_bytes)
     selected_is_cpp = initial_is_cpp
     retry_attempted = False
     retry_selected = False
@@ -1983,7 +2014,6 @@ def parse_c_family_file(
     selected_has_error = initial_has_error
     selected_error_nodes = initial_error_nodes
 
-    ext = os.path.splitext(path)[1].lower()
     if ext == ".h" and (initial_has_error or initial_error_nodes > 0):
         retry_attempted = True
         retry_is_cpp = not initial_is_cpp
@@ -2001,7 +2031,7 @@ def parse_c_family_file(
             retry_selected = True
 
     rel_path = os.path.relpath(path, root)
-    file_code = source_bytes.decode("utf-8", errors="ignore")
+    file_code, file_encoding, file_lossy = decode_source_bytes(original_bytes)
     file_lines = file_code.count("\n") + 1
     file_comment = _extract_file_comment(tree, source_bytes)
     file_summary = file_comment
@@ -2027,6 +2057,9 @@ def parse_c_family_file(
         "error_nodes_initial": initial_error_nodes,
         "header_retry_error_nodes": retry_error_nodes,
         "header_retry_has_error": retry_has_error,
+        "source_encoding": file_encoding,
+        "source_encoding_lossy": file_lossy,
+        "embedded_sql_statement_count": len(embedded_sql_statements),
     }
 
     functions: List[FunctionDef] = []
@@ -2063,6 +2096,9 @@ def parse_c_family_file(
         type_registry,
         namespace_registry,
     )
+
+    if embedded_sql_statements:
+        _attach_embedded_sql_relations(functions, embedded_sql_statements, relations, rel_path)
 
     return (
         functions,
@@ -2422,6 +2458,54 @@ def _stable_point_id(symbol_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, symbol_id))
 
 
+def _attach_embedded_sql_relations(
+    functions: List[FunctionDef],
+    statements: List[EmbeddedSqlStatement],
+    relations: List[RelationEdge],
+    rel_path: str,
+) -> None:
+    """Emit ``EXEC_SQL`` edges from the enclosing function to each Pro*C directive.
+
+    When the statement is a SELECT/INSERT/UPDATE/DELETE and a table name was
+    regex-extracted, the edge targets a ``Table`` node (best-effort name
+    match, not a resolved schema reference); otherwise it targets a
+    synthetic ``SqlStatement`` node scoped to this file/line range.
+    """
+
+    for stmt in statements:
+        owner: Optional[FunctionDef] = None
+        for func in functions:
+            if func.start_line <= stmt.start_line and func.end_line >= stmt.end_line:
+                if owner is None or (func.end_line - func.start_line) < (owner.end_line - owner.start_line):
+                    owner = func
+        source_id = owner.symbol_id if owner is not None else f"file::{rel_path}"
+        source_label = "Function" if owner is not None else "File"
+
+        if stmt.table_name:
+            target_id = f"table::{stmt.table_name.upper()}"
+            target_label = "Table"
+        else:
+            target_id = f"sql_stmt::{_stable_point_id(f'{rel_path}:{stmt.start_line}:{stmt.end_line}:{stmt.kind}')}"
+            target_label = "SqlStatement"
+
+        relations.append(
+            RelationEdge(
+                source_id=source_id,
+                source_label=source_label,
+                target_id=target_id,
+                target_label=target_label,
+                rel_type="EXEC_SQL",
+                properties={
+                    "kind": stmt.kind,
+                    "host_vars": ",".join(stmt.host_vars),
+                    "start_line": str(stmt.start_line),
+                    "end_line": str(stmt.end_line),
+                    "raw_text": stmt.raw_text[:400],
+                },
+            )
+        )
+
+
 def _event_id(event: Dict[str, Any]) -> str:
     event_id = str(event.get("id") or "").strip()
     if event_id:
@@ -2494,7 +2578,7 @@ def _scan_c_family_files(root: str) -> List[str]:
         for name in filenames:
             if name.lower().endswith(
                 (".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx")
-                + (".rc", ".rc2")
+                + (".rc", ".rc2", ".pc")
             ):
                 files.append(os.path.join(dirpath, name))
     return sorted(files)
@@ -2504,7 +2588,8 @@ def _is_cpp_file(path: str, root: str, compile_db_index: Optional[Dict[str, Any]
     ext = os.path.splitext(path)[1].lower()
     if ext in {".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"}:
         return True
-    if ext == ".c":
+    if ext in {".c", ".pc"}:
+        # Pro*C (.pc) is C with embedded EXEC SQL directives, not a C++ file.
         return False
     if ext != ".h":
         return False

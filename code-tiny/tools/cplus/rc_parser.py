@@ -13,6 +13,8 @@ import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from tools.common.text_encoding import decode_source_bytes
+
 
 _BLOCK_RESOURCE_TYPES = {
     "ACCELERATORS",
@@ -57,29 +59,7 @@ def decode_rc_bytes(data: bytes) -> Tuple[str, str, bool]:
     may use UTF-8 or a Windows ANSI code page, especially CP932 for Japanese.
     """
 
-    if data.startswith(b"\xff\xfe"):
-        return data[2:].decode("utf-16-le"), "utf-16-le", False
-    if data.startswith(b"\xfe\xff"):
-        return data[2:].decode("utf-16-be"), "utf-16-be", False
-    if data.startswith(b"\xef\xbb\xbf"):
-        return data.decode("utf-8-sig"), "utf-8-sig", False
-
-    sample = data[:512]
-    if sample:
-        odd_nuls = sample[1::2].count(0)
-        even_nuls = sample[0::2].count(0)
-        threshold = max(2, len(sample) // 8)
-        if odd_nuls >= threshold:
-            return data.decode("utf-16-le"), "utf-16-le", False
-        if even_nuls >= threshold:
-            return data.decode("utf-16-be"), "utf-16-be", False
-
-    for encoding in ("utf-8", "cp932"):
-        try:
-            return data.decode(encoding), encoding, False
-        except UnicodeDecodeError:
-            continue
-    return data.decode("cp1252", errors="replace"), "cp1252", True
+    return decode_source_bytes(data)
 
 
 def read_rc_text(path: str) -> Tuple[str, str, bool]:

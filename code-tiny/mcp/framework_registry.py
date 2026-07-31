@@ -43,7 +43,7 @@ CONTEXT_RELATIONSHIPS = frozenset(
 CPLUS_RELATIONSHIPS = (
     "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "DECLARES", "CONTAINS",
     "USES_RESOURCE", "BINDS_CONTROL", "HANDLES_CONTROL", "OWNS_DIALOG", "DEPENDS_ON",
-    "ALIASES", "ALIAS_OF",
+    "ALIASES", "ALIAS_OF", "EXEC_SQL",
 )
 ANDROID_RELATIONSHIPS = (
     "CALLS", "DECLARES", "CONTAINS", "USES_RESOURCE", "DECLARES_ROUTE",
@@ -427,9 +427,13 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
         support_level="full",
         features=GENERIC_FEATURES | frozenset({"android_queries"}),
     ),
-    "cplus": _generic_profile(
-        "cplus", {"cplus", "cpp", "c++", "c", "clang"},
-        relationships=CPLUS_RELATIONSHIPS, support_level="full",
+    "cplus": FrameworkQueryConfig(
+        name="cplus",
+        aliases=frozenset({"cplus", "cpp", "c++", "c", "clang", "pro*c", "proc"}),
+        labels=GENERIC_LABELS | frozenset({"Table", "SqlStatement"}),
+        relationships=CPLUS_RELATIONSHIPS,
+        searchable_properties=GENERIC_SEARCHABLE_PROPERTIES,
+        support_level="full",
     ),
     "python": FrameworkQueryConfig(
         name="python",

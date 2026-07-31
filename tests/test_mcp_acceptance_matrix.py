@@ -32,7 +32,7 @@ def _row(symbols, calls, endpoints, database, evidence):
 # what MCP advertises.
 ACCEPTANCE_MATRIX = {
     "android": _row("full", "full", "none", "none", "tests/test_common_analyzer_registry.py"),
-    "cplus": _row("full", "full", "none", "none", "tests/test_cplus_windows_resource_parser.py"),
+    "cplus": _row("full", "full", "none", "full", "tests/test_cplus_proc_support.py"),
     "python": _row("full", "partial", "partial", "none", "tests/fixtures/web-framework-application/python"),
     "javascript": _row("full", "partial", "partial", "none", "tests/fixtures/web-framework-application/js"),
     "typescript": _row("full", "full", "none", "none", "tests/test_primary_analyzer_vector_contract.py"),
