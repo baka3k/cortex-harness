@@ -192,6 +192,26 @@ impl Grammar for PhpGrammar {
     }
 }
 
+// ── Rust ───────────────────────────────────────────────────────────────
+
+pub struct RustGrammar;
+
+impl Grammar for RustGrammar {
+    fn id(&self) -> &'static str {
+        "rust"
+    }
+    fn language(&self) -> Language {
+        tree_sitter_rust::LANGUAGE.into()
+    }
+    fn matches_path(&self, path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e == "rs")
+            .unwrap_or(false)
+    }
+}
+
 // ── TypeScript / TSX ───────────────────────────────────────────────────
 
 pub struct TsGrammar;
@@ -243,6 +263,7 @@ pub fn registry() -> Vec<Box<dyn Grammar>> {
         Box::new(TsGrammar),
         Box::new(CSharpGrammar),
         Box::new(PhpGrammar),
+        Box::new(RustGrammar),
     ]
 }
 
@@ -259,6 +280,7 @@ pub fn by_id(id: &str) -> Option<Box<dyn Grammar>> {
         "go" => "go",
         "csharp" | "cs" | "c#" => "csharp",
         "php" => "php",
+        "rust" | "rs" => "rust",
         _ => return None,
     };
     for g in registry() {
@@ -308,11 +330,13 @@ mod tests {
         assert_eq!(by_id("typescript").unwrap().id(), "typescript");
         assert_eq!(by_id("tsx").unwrap().id(), "tsx");
         assert_eq!(by_id("go").unwrap().id(), "go");
+        assert_eq!(by_id("rust").unwrap().id(), "rust");
+        assert_eq!(by_id("rs").unwrap().id(), "rust");
     }
 
     #[test]
     fn by_id_returns_none_for_unknown() {
-        assert!(by_id("rust").is_none());
+        assert!(by_id("cobol").is_none());
         assert!(by_id("").is_none());
     }
     #[test]
@@ -328,6 +352,7 @@ mod tests {
         assert_eq!(by_path("main.go").unwrap().id(), "go");
         assert_eq!(by_path("App.tsx").unwrap().id(), "tsx");
         assert_eq!(by_path("utils.ts").unwrap().id(), "typescript");
+        assert_eq!(by_path("src/main.rs").unwrap().id(), "rust");
     }
 
     #[test]
@@ -377,5 +402,12 @@ mod tests {
         let src = b"const App = () => <div>hello</div>;\n";
         let kind = parse_root_kind("tsx", src);
         assert_eq!(kind.as_deref(), Some("program"));
+    }
+
+    #[test]
+    fn parse_root_kind_runs_rust_grammar() {
+        let src = b"fn main() {}\n";
+        let kind = parse_root_kind("rust", src);
+        assert_eq!(kind.as_deref(), Some("source_file"));
     }
 }

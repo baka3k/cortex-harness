@@ -1,6 +1,6 @@
 ---
 title: "Multi-Language Rust Extraction Layer (Full 4-Tier)"
-status: draft
+status: in-progress
 created: 2026-07-31
 mode: hi-plan
 source: extends 260731-1030-rust-extraction-layer (cplus pilot) to all 17 base analyzers
@@ -18,6 +18,11 @@ relatedPlans:
     260714-1702-cobol-analyzer-parser,
     260713-1638-framework-parser-integration,
     260715-2011-aspnet-roslyn-analyzers,
+    260731-1800-rust-extraction-tier1-rust-lang,
+    260731-1830-rust-extraction-tier1-swift,
+    260731-1900-rust-extraction-tier2-ts,
+    260731-2000-rust-extraction-tier2-java-js-csharp-php-sql,
+    260731-2100-rust-extraction-tier3-delphi-plsql,
   ]
 supersedesPhase: "260731-1030-rust-extraction-layer / Phase 6 (stub)"
 ---
@@ -235,14 +240,29 @@ Phase 7 (integration/CI) consumes all of the above
 
 ## Success Criteria
 
-- [ ] Phase 0: go/no-go matrix complete for all 12 profiler-supported languages
-- [ ] Phase 1: C++ output byte-identical after trait refactor (no regression)
-- [ ] Phase 2: go/rust/swift Rust output == Python output (fixtures)
-- [ ] Phase 3: java/kotlin/js/csharp/php/python/ts/sql Rust output == Python output
-- [ ] Phase 4: delphi (both paths) + plsql Rust output == Python output
+- [x] Phase 0: go/no-go matrix complete for all 12 profiler-supported languages
+- [x] Phase 1: C++ output byte-identical after trait refactor (no regression)
+- [x] Phase 2 (Go): Rust output == Python output ✅ (commit 7cef6da)
+- [ ] Phase 2 (Rust-lang): → see `260731-1800-rust-extraction-tier1-rust-lang`
+- [ ] Phase 2 (Swift): → see `260731-1830-rust-extraction-tier1-swift`
+- [ ] Phase 3 (TS): → see `260731-1900-rust-extraction-tier2-ts`
+- [ ] Phase 3 (Java/JS/C#/PHP/SQL): → see `260731-2000-rust-extraction-tier2-java-js-csharp-php-sql`
+- [ ] Phase 4 (Delphi/PLSQL): → see `260731-2100-rust-extraction-tier3-delphi-plsql`
 - [ ] Phase 5: cobol/flutter/perl facts model built in Rust, == Python (after unblock)
 - [ ] Phase 6: semantic enrichment parity per language (100% of test functions)
 - [ ] Phase 7: every analyzer runs Rust-first with Python fallback; wheels published
+
+## Per-Language Sub-Plans (independent, run in any order)
+
+| Plan | Tier | Languages | Priority | Status |
+|------|------|-----------|----------|--------|
+| `260731-1800-rust-extraction-tier1-rust-lang` | 1 | Rust | 8 | pending |
+| `260731-1830-rust-extraction-tier1-swift` | 1 | Swift | 7 (borderline) | pending |
+| `260731-1900-rust-extraction-tier2-ts` | 2 | TypeScript | **1** (highest ROI) | pending |
+| `260731-2000-rust-extraction-tier2-java-js-csharp-php-sql` | 2 | Java, JS, C#, PHP, SQL | 3-9 | pending |
+| `260731-2100-rust-extraction-tier3-delphi-plsql` | 3 | Delphi, PLSQL | 4-5 | pending |
+
+**Run with:** `/hi-craft --full plans/<plan-dir>/plan.md`
 
 ## Relationship to the Pilot Plan
 

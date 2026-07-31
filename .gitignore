@@ -98,5 +98,11 @@ code-tiny/tools/common/aspnet/roslyn_worker/obj/
 .cortex/
 .cortex/**
 rust-analyzer-core/cortex_extract.so
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock
+*.pdb
 rust-analyzer-core/target/
 rust-analyzer-core/target/**
