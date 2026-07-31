@@ -152,6 +152,84 @@ impl Grammar for GoGrammar {
     }
 }
 
+// ── C# ─────────────────────────────────────────────────────────────────
+
+pub struct CSharpGrammar;
+
+impl Grammar for CSharpGrammar {
+    fn id(&self) -> &'static str {
+        "csharp"
+    }
+    fn language(&self) -> Language {
+        tree_sitter_c_sharp::LANGUAGE.into()
+    }
+    fn matches_path(&self, path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e == "cs")
+            .unwrap_or(false)
+    }
+}
+
+// ── PHP ────────────────────────────────────────────────────────────────
+
+pub struct PhpGrammar;
+
+impl Grammar for PhpGrammar {
+    fn id(&self) -> &'static str {
+        "php"
+    }
+    fn language(&self) -> Language {
+        tree_sitter_php::LANGUAGE_PHP.into()
+    }
+    fn matches_path(&self, path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e == "php")
+            .unwrap_or(false)
+    }
+}
+
+// ── TypeScript / TSX ───────────────────────────────────────────────────
+
+pub struct TsGrammar;
+
+impl Grammar for TsGrammar {
+    fn id(&self) -> &'static str {
+        "typescript"
+    }
+    fn language(&self) -> Language {
+        tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+    }
+    fn matches_path(&self, path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| matches!(e, "ts" | "mts" | "cts"))
+            .unwrap_or(false)
+    }
+}
+
+pub struct TsxGrammar;
+
+impl Grammar for TsxGrammar {
+    fn id(&self) -> &'static str {
+        "tsx"
+    }
+    fn language(&self) -> Language {
+        tree_sitter_typescript::LANGUAGE_TSX.into()
+    }
+    fn matches_path(&self, path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e == "tsx")
+            .unwrap_or(false)
+    }
+}
+
 /// All grammars the extension knows about, in declaration order.
 pub fn registry() -> Vec<Box<dyn Grammar>> {
     vec![
@@ -161,6 +239,10 @@ pub fn registry() -> Vec<Box<dyn Grammar>> {
         Box::new(PythonGrammar),
         Box::new(JsGrammar),
         Box::new(GoGrammar),
+        Box::new(TsxGrammar),
+        Box::new(TsGrammar),
+        Box::new(CSharpGrammar),
+        Box::new(PhpGrammar),
     ]
 }
 
@@ -171,8 +253,12 @@ pub fn by_id(id: &str) -> Option<Box<dyn Grammar>> {
         "c" => "c",
         "java" => "java",
         "python" | "py" => "python",
-        "javascript" | "js" | "ts" => "javascript",
+        "javascript" | "js" => "javascript",
+        "typescript" | "ts" => "typescript",
+        "tsx" => "tsx",
         "go" => "go",
+        "csharp" | "cs" | "c#" => "csharp",
+        "php" => "php",
         _ => return None,
     };
     for g in registry() {
@@ -218,7 +304,9 @@ mod tests {
         assert_eq!(by_id("python").unwrap().id(), "python");
         assert_eq!(by_id("py").unwrap().id(), "python");
         assert_eq!(by_id("js").unwrap().id(), "javascript");
-        assert_eq!(by_id("ts").unwrap().id(), "javascript");
+        assert_eq!(by_id("ts").unwrap().id(), "typescript");
+        assert_eq!(by_id("typescript").unwrap().id(), "typescript");
+        assert_eq!(by_id("tsx").unwrap().id(), "tsx");
         assert_eq!(by_id("go").unwrap().id(), "go");
     }
 
@@ -238,6 +326,8 @@ mod tests {
         assert_eq!(by_path("index.js").unwrap().id(), "javascript");
         assert_eq!(by_path("main.c").unwrap().id(), "c");
         assert_eq!(by_path("main.go").unwrap().id(), "go");
+        assert_eq!(by_path("App.tsx").unwrap().id(), "tsx");
+        assert_eq!(by_path("utils.ts").unwrap().id(), "typescript");
     }
 
     #[test]
@@ -273,5 +363,19 @@ mod tests {
         let src = b"package main\n\nfunc main() {}\n";
         let kind = parse_root_kind("go", src);
         assert_eq!(kind.as_deref(), Some("source_file"));
+    }
+
+    #[test]
+    fn parse_root_kind_runs_typescript_grammar() {
+        let src = b"const x: number = 42;\n";
+        let kind = parse_root_kind("typescript", src);
+        assert_eq!(kind.as_deref(), Some("program"));
+    }
+
+    #[test]
+    fn parse_root_kind_runs_tsx_grammar() {
+        let src = b"const App = () => <div>hello</div>;\n";
+        let kind = parse_root_kind("tsx", src);
+        assert_eq!(kind.as_deref(), Some("program"));
     }
 }
