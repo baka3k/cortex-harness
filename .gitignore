@@ -95,3 +95,5 @@ code-tiny/tools/common/aspnet/roslyn_worker/obj/
 .cortext-harness/config/dev.json
 .cortex/
 .cortex/**
+rust-analyzer-core/cortex_extract.so
+rust-analyzer-core/target/
