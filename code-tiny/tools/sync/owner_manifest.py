@@ -33,6 +33,7 @@ SUPPORTED_PARSERS: Set[str] = {
     "python",
     "go",
     "perl",
+    "shell",
     "rust",
     "js",
     "ts",
@@ -197,7 +198,7 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
 
     if ext in {".cbl", ".cob", ".cpy", ".copy"}:
         return "cobol"
-    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2"}:
+    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2", ".pc"}:
         return "cplus"
     if ext in {".pas", ".dpr", ".inc"}:
         return "delphi"
@@ -207,6 +208,8 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "go"
     if ext in {".pl", ".pm", ".t"}:
         return "perl"
+    if ext == ".sh":
+        return "shell"
     if ext == ".rs":
         return "rust"
     if ext == ".swift":
