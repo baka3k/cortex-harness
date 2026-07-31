@@ -1,0 +1,19 @@
+[package]
+name = "tree-sitter-swift"
+description = "Swift grammar for tree-sitter — vendored fork with ABI 14 (tree-sitter 0.23 compatible)"
+version = "0.7.3-vendored"
+edition = "2018"
+license = "MIT"
+links = "tree-sitter-swift"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[dev-dependencies]
+tree-sitter = "0.23.0"
+
+[build-dependencies]
+cc = "1.0"
