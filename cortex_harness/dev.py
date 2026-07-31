@@ -22,6 +22,10 @@ CLI_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = CLI_DIR.parent
 CODE_TINY = REPO_ROOT / "code-tiny"
 DOC_TINY = REPO_ROOT / "doc-tiny"
+if str(CODE_TINY) not in sys.path:
+    sys.path.insert(0, str(CODE_TINY))
+
+from tools.jp1.sniff import is_jp1_file
 
 HARNESS_CONFIG_DIR = ".cortext-harness/config"
 SYNC_STATE_DIR = ".cortext-harness/sync-state"
@@ -32,6 +36,8 @@ LANG_ANALYZERS = {
     "delphi":         CODE_TINY / "tools/delphi/delphi_analyzer.py",
     "go":             CODE_TINY / "tools/go/go_analyzer.py",
     "perl":           CODE_TINY / "tools/perl/perl_analyzer.py",
+    "shell":          CODE_TINY / "tools/shell/shell_analyzer.py",
+    "jp1":            CODE_TINY / "tools/jp1/jp1_analyzer.py",
     "kotlin":         CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
     "java":           CODE_TINY / "tools/java/java_analyzer.py",
     "ts":             CODE_TINY / "tools/ts/ts_analyzer.py",
@@ -74,6 +80,8 @@ LANG_EXTENSIONS = {
     "delphi": {".pas", ".dpr", ".inc"},
     "go":      {".go"},
     "perl":    {".pl", ".pm", ".t"},
+    "shell":   {".sh"},
+    "jp1":     set(),
     "kotlin":  {".kt", ".kts"},
     "java":    {".java"},
     "ts":      {".ts", ".tsx"},
@@ -81,7 +89,7 @@ LANG_EXTENSIONS = {
     "php":     {".php"},
     "sql":     {".sql"},
     "plsql":   {".pls", ".pkb", ".pks"},
-    "cplus":   {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx"},
+    "cplus":   {".c", ".cpp", ".cxx", ".cc", ".h", ".hpp", ".hxx", ".pc", ".pcc"},
     "csharp":  {".cs"},
     "python":  {".py"},
     "rust":    {".rs"},
@@ -592,6 +600,8 @@ def _detect_langs(folder_path: Path) -> list:
         for lang, exts in LANG_EXTENSIONS.items():
             if ext in exts:
                 counts[lang] += 1
+        if ext == ".txt" and is_jp1_file(str(f)):
+            counts["jp1"] += 1
 
     if is_android and (counts.get("java", 0) > 0 or counts.get("kotlin", 0) > 0):
         has_java   = counts.get("java", 0) > 0

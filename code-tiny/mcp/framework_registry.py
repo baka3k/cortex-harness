@@ -43,8 +43,11 @@ CONTEXT_RELATIONSHIPS = frozenset(
 CPLUS_RELATIONSHIPS = (
     "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "DECLARES", "CONTAINS",
     "USES_RESOURCE", "BINDS_CONTROL", "HANDLES_CONTROL", "OWNS_DIALOG", "DEPENDS_ON",
-    "ALIASES", "ALIAS_OF",
+    "ALIASES", "ALIAS_OF", "DEFINES",
 )
+CPLUS_LABELS = GENERIC_LABELS | frozenset({"CplusSqlStatement"})
+SHELL_LABELS = GENERIC_LABELS | frozenset({"ShellScript", "ShellFunction"})
+JP1_LABELS = GENERIC_LABELS | frozenset({"Jp1Unit", "ShellScript"})
 ANDROID_RELATIONSHIPS = (
     "CALLS", "DECLARES", "CONTAINS", "USES_RESOURCE", "DECLARES_ROUTE",
     "STARTS_WITH_ROUTE", "ROUTE_CALLS", "DECLARES_COMPONENT", "STARTS_COMPONENT",
@@ -405,13 +408,14 @@ def _generic_profile(
     backend: str = "cplus",
     support_level: str = "generic",
     features: FrozenSet[str] = GENERIC_FEATURES,
+    labels: FrozenSet[str] = GENERIC_LABELS,
 ) -> FrameworkQueryConfig:
     return FrameworkQueryConfig(
         name=name,
         aliases=frozenset(aliases),
         backend=backend,
         support_level=support_level,
-        labels=GENERIC_LABELS,
+        labels=labels,
         relationships=relationships,
         searchable_properties=GENERIC_SEARCHABLE_PROPERTIES,
         features=features,
@@ -429,7 +433,7 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     ),
     "cplus": _generic_profile(
         "cplus", {"cplus", "cpp", "c++", "c", "clang"},
-        relationships=CPLUS_RELATIONSHIPS, support_level="full",
+        relationships=CPLUS_RELATIONSHIPS, support_level="full", labels=CPLUS_LABELS,
     ),
     "python": FrameworkQueryConfig(
         name="python",
@@ -498,6 +502,18 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "jvm": _generic_profile("jvm", {"jvm", "java", "kotlin"}, relationships=ANDROID_RELATIONSHIPS),
     "go": _generic_profile("go", {"go"}),
     "perl": _generic_profile("perl", {"perl"}),
+    "shell": _generic_profile(
+        "shell",
+        {"shell", "sh", "bash"},
+        relationships=tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "REFERENCES"))),
+        labels=SHELL_LABELS,
+    ),
+    "jp1": _generic_profile(
+        "jp1",
+        {"jp1", "ajs", "jobnet"},
+        relationships=tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "NEXT", "INCLUDES"))),
+        labels=JP1_LABELS,
+    ),
     "rust": _generic_profile("rust", {"rust"}),
     "swift": _generic_profile("swift", {"swift"}),
     "delphi": _generic_profile("delphi", {"delphi", "pascal"}),

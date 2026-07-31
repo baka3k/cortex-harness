@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Legacy migration parser coverage](2026-07-31-legacy-migration-parser-coverage.md)
 - [Project topology and context tools](2026-07-25-project-topology-context-tools.md)
 - [Case-insensitive project scope](2026-07-23-case-insensitive-project-scope.md)
 - [Project-scoped MCP instances](2026-07-20-project-scoped-mcp-instances.md)

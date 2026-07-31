@@ -22,12 +22,13 @@ Primary analyzers own source files and can write graph facts and Qdrant vectors.
 | --- | --- | --- |
 | `android` | `tools/android/android_kotlin_analyzer.py` | Android Kotlin/Java/XML projects |
 | `cobol` | `tools/cobol/cobol_analyzer.py` | COBOL copybooks and programs |
-| `cplus` | `tools/cplus/cplus_analyzer.py` | C, C++, headers, Windows resources |
+| `cplus` | `tools/cplus/cplus_analyzer.py` | C, C++, Pro*C `.pc`/`.pcc`, headers, Windows resources |
 | `csharp` | `tools/csharp/csharp_analyzer.py` | C# source |
 | `dart` | `tools/flutter/flutter_analyzer.py --mode dart` | Dart packages and Flutter source |
 | `delphi` | `tools/delphi/delphi_analyzer.py` | Delphi/Object Pascal |
 | `go` | `tools/go/go_analyzer.py` | Go source |
 | `java` | `tools/java/java_analyzer.py` | Java source |
+| `jp1` | `tools/jp1/jp1_analyzer.py` | Content-sniffed JP1/AJS jobnet definitions |
 | `js` | `tools/js/js_analyzer.py` | JavaScript/JSX |
 | `kotlin` | `tools/kotlin/kotlin_analyzer.py` | Kotlin source |
 | `perl` | `tools/perl/perl_analyzer.py` | Perl 5 `.pl`, `.pm`, and `.t` |
@@ -35,6 +36,7 @@ Primary analyzers own source files and can write graph facts and Qdrant vectors.
 | `plsql` | `tools/plsql/plsql_analyzer.py` | PL/SQL source |
 | `python` | `tools/python/python_analyzer.py` | Python source |
 | `rust` | `tools/rust/rust_analyzer.py` | Rust source |
+| `shell` | `tools/shell/shell_analyzer.py` | Shell functions, script calls, and INI references |
 | `sql` | `tools/sql/sql_analyzer.py` | SQL source |
 | `swift` | `tools/swift/swift_analyzer.py` | Swift source |
 | `ts` | `tools/ts/ts_analyzer.py` | TypeScript/TSX |

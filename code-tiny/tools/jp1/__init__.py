@@ -1,0 +1,1 @@
+"""Static JP1/AJS jobnet analysis."""

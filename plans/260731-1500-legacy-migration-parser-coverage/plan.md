@@ -1,6 +1,6 @@
 ---
 title: "Legacy Migration Parser Coverage: Pro*C, Shell, JP1 Jobnet, INI"
-status: pending
+status: completed
 created: 2026-07-31
 mode: hi-plan --full
 source: REDACTED JavaMigration sample tree (/Users/hieplq1.rpm/JavaMigration/REDACTED/00.CustomerSupply)
@@ -132,3 +132,9 @@ Mirrors the BOM-sniff + fallback-chain shape already in `cplus/rc_parser.py`, ge
 3. [Phase 03: Shell Script Analyzer](phase-03-shell-script-analyzer.md)
 4. [Phase 04: JP1 Jobnet Analyzer](phase-04-jp1-jobnet-analyzer.md)
 5. [Phase 05: INI Descriptor, DAT Resource Entry, Registration Sweep](phase-05-ini-dat-registration-sweep.md)
+
+## Completion
+
+Completed 2026-07-31. Implemented shared legacy decoding, Pro*C SQL facts, shell and JP1 analyzers, INI/DAT topology coverage, primary analyzer registration, MCP capabilities, vector synchronization, incremental cleanup, and project-root path confinement.
+
+Validation: `28 passed, 78 subtests passed` across the focused parser, topology, integration, registry, and MCP acceptance suites. Shell and JP1 dry-run CLIs also passed with the argument shape emitted by incremental sync.

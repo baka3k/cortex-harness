@@ -34,6 +34,8 @@ EXPECTED_PRIMARY = {
     "kotlin",
     "php",
     "perl",
+    "shell",
+    "jp1",
     "plsql",
     "python",
     "rust",
@@ -87,12 +89,13 @@ class CommonAnalyzerRegistryTest(unittest.TestCase):
     def test_primary_file_ownership_includes_previously_unrouted_analyzers(self):
         with tempfile.TemporaryDirectory() as tmp:
             grouped = _group_paths_by_parser(
-                ["src/main.go", "src/lib.pm", "src/test.t", "src/lib.rs", "src/app.swift", "lib/main.dart"],
+                ["src/main.go", "src/lib.pm", "src/test.t", "src/run.sh", "src/lib.rs", "src/app.swift", "lib/main.dart"],
                 root=tmp,
             )
 
         self.assertEqual(grouped["go"], {"src/main.go"})
         self.assertEqual(grouped["perl"], {"src/lib.pm", "src/test.t"})
+        self.assertEqual(grouped["shell"], {"src/run.sh"})
         self.assertEqual(grouped["rust"], {"src/lib.rs"})
         self.assertEqual(grouped["swift"], {"src/app.swift"})
         self.assertEqual(grouped["dart"], {"lib/main.dart"})

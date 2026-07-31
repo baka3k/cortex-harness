@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from tools.vb.vb_path_classifier import VBPathClassifier
+from tools.jp1.sniff import is_jp1_file
 
 _ANDROID_PLUGIN_MARKERS = (
     "com.android.application",
@@ -33,6 +34,8 @@ SUPPORTED_PARSERS: Set[str] = {
     "python",
     "go",
     "perl",
+    "shell",
+    "jp1",
     "rust",
     "js",
     "ts",
@@ -197,7 +200,7 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
 
     if ext in {".cbl", ".cob", ".cpy", ".copy"}:
         return "cobol"
-    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2"}:
+    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".pc", ".pcc", ".rc", ".rc2"}:
         return "cplus"
     if ext in {".pas", ".dpr", ".inc"}:
         return "delphi"
@@ -207,6 +210,10 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "go"
     if ext in {".pl", ".pm", ".t"}:
         return "perl"
+    if ext == ".sh":
+        return "shell"
+    if ext == ".txt" and is_jp1_file(os.path.join(classifier.root, path)):
+        return "jp1"
     if ext == ".rs":
         return "rust"
     if ext == ".swift":
