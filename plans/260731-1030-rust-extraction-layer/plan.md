@@ -7,7 +7,7 @@ source: profiling-driven Rust rewrite evaluation
 target: code-tiny/tools/ (all language analyzers, pilot: cplus)
 scope: Port tree-sitter AST walk + extraction + semantic enrichment to a Rust native extension; keep embedding/graph-write in Python
 blockedBy: []
-relatedPlans: []
+relatedPlans: [260731-1400-graph-write-optimization]
 ---
 
 # Rust Extraction Layer for Analyzer Pipeline
