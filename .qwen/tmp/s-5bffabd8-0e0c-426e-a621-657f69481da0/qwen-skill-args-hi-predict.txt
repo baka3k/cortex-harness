@@ -1,0 +1,6 @@
+TÔi cần optmize perfomance Users/hieplq1.rpm/AI/cortex-harness/code-tiny/tools
+Hiện tại các tool parser đang dùng python để excute 2 loại
+- GraphCode, parser dùng TreeSitter và Rotley để tiền xử lý rồi đưa xuống cache json
+- Semantic , python dùng các mô hình model để đưa code/doc vào semantic
+tôi đang hểuu phần GraphCode có thẻ đổi sang rust, phần semantic dùng python
+như vậy nhanh hơn đúng ko ?
