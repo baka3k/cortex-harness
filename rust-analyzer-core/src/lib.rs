@@ -590,6 +590,37 @@ fn extract_batch(
             return Ok(list.into());
         }
 
+        // Route Rust to the Rust pipeline (Tier 1 — list-typed payload).
+        if language == "rust" || language == "rs" {
+            let pool = if threads == 0 {
+                rayon::ThreadPoolBuilder::new().build().map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                })?
+            } else {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .map_err(|e| {
+                        pyo3::exceptions::PyRuntimeError::new_err(format!("rayon init: {}", e))
+                    })?
+            };
+
+            let results: Vec<Option<rust_lang::RustParseOutput>> = pool.install(|| {
+                use rayon::prelude::*;
+                paths
+                    .par_iter()
+                    .map(|p| parse_rust_path_to_output(p, &root))
+                    .collect()
+            });
+
+            let list = PyList::empty(py);
+            for out in results.into_iter().flatten() {
+                let dict = payload::build_rust_payload(py, &out)?;
+                list.append(dict)?;
+            }
+            return Ok(list.into());
+        }
+
         let force_is_cpp = match language.as_str() {
             "c" => Some(false),
             "cpp" | "cplus" => Some(true),
@@ -678,6 +709,8 @@ fn cortex_extract(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_sql, m)?)?;
     m.add_function(wrap_pyfunction!(extract_ts, m)?)?;
     m.add_function(wrap_pyfunction!(extract_ts_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_rust, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_rust_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_batch, m)?)?;
     m.add_function(wrap_pyfunction!(is_cpp_file, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_batch, m)?)?;
