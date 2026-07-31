@@ -90,6 +90,7 @@ SUPPORT_DIMENSIONS = ("symbols", "calls", "endpoints", "database")
 PUBLIC_QUERY_ENGINES = MappingProxyType({
     "android": "android_graph",
     "cplus": "graph_generic",
+    "shell": "graph_generic",
     "fast": "fast_graph",
 })
 CAPABILITY_CONTRACT_VERSION = 1
@@ -502,6 +503,7 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "jvm": _generic_profile("jvm", {"jvm", "java", "kotlin"}, relationships=ANDROID_RELATIONSHIPS),
     "go": _generic_profile("go", {"go"}),
     "perl": _generic_profile("perl", {"perl"}),
+    "shell": _generic_profile("shell", {"shell", "sh", "bash", "posix-shell"}),
     "rust": _generic_profile("rust", {"rust"}),
     "swift": _generic_profile("swift", {"swift"}),
     "delphi": _generic_profile("delphi", {"delphi", "pascal"}),

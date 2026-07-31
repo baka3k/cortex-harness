@@ -37,6 +37,7 @@ EXPECTED_PRIMARY = {
     "plsql",
     "python",
     "rust",
+    "shell",
     "sql",
     "swift",
     "ts",
