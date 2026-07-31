@@ -107,6 +107,7 @@ ANALYZERS: Dict[str, AnalyzerConfig] = {
     "go": AnalyzerConfig("go", os.path.join(_ROOT_DIR, "tools", "go", "go_analyzer.py"), True),
     "perl": AnalyzerConfig("perl", os.path.join(_ROOT_DIR, "tools", "perl", "perl_analyzer.py"), True),
     "shell": AnalyzerConfig("shell", os.path.join(_ROOT_DIR, "tools", "shell", "shell_analyzer.py"), True),
+    "jp1": AnalyzerConfig("jp1", os.path.join(_ROOT_DIR, "tools", "jp1", "jp1_analyzer.py"), True),
     "rust": AnalyzerConfig("rust", os.path.join(_ROOT_DIR, "tools", "rust", "rust_analyzer.py"), True),
     "swift": AnalyzerConfig("swift", os.path.join(_ROOT_DIR, "tools", "swift", "swift_analyzer.py"), True),
     "js": AnalyzerConfig("js", os.path.join(_ROOT_DIR, "tools", "js", "js_analyzer.py"), True),
@@ -493,12 +494,36 @@ class _AndroidPathClassifier:
         return False
 
 
-def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_classifier: VBPathClassifier) -> Optional[str]:
+def _looks_like_jp1_unit_file(path: str, root: str) -> bool:
+    try:
+        from tools.jp1.jp1_parser import looks_like_jp1_unit_definition
+    except Exception:
+        return False
+    try:
+        abs_path = path if os.path.isabs(path) else os.path.join(root, path)
+        with open(abs_path, "rb") as handle:
+            head = handle.read(256)
+    except OSError:
+        return False
+    for encoding in ("utf-8", "cp932"):
+        try:
+            text = head.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = head.decode("utf-8", errors="ignore")
+    return looks_like_jp1_unit_definition(text)
+
+
+def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_classifier: VBPathClassifier, root: str = "") -> Optional[str]:
     rel = path.replace("\\", "/")
     lower = rel.lower()
     name = os.path.basename(lower)
     ext = os.path.splitext(lower)[1]
 
+    if ext == ".txt" and root and _looks_like_jp1_unit_file(path, root):
+        return "jp1"
     if ext in {".cbl", ".cob", ".cpy", ".copy"}:
         return "cobol"
     if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2", ".pc"}:
@@ -550,7 +575,7 @@ def _group_paths_by_parser(paths: Iterable[str], *, root: str) -> Dict[str, Set[
     classifier = _AndroidPathClassifier(root)
     vb_classifier = VBPathClassifier(root)
     for path in paths:
-        parser = _select_parser_for_path(path, classifier, vb_classifier)
+        parser = _select_parser_for_path(path, classifier, vb_classifier, root=root)
         if not parser:
             continue
         grouped.setdefault(parser, set()).add(path)
@@ -1213,6 +1238,7 @@ _SOURCE_EXTENSIONS: Set[str] = {
     ".go",
     ".pl", ".pm", ".t",
     ".sh",
+    ".txt",
     ".rs", ".swift", ".dart", ".arb",
     ".js", ".jsx",
     ".ts", ".tsx",

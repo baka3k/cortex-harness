@@ -668,6 +668,41 @@ def parse_csharp_file(path: str, root: str) -> Tuple[
     FileDef,
     Dict[str, Any],
 ]:
+    try:
+        from tools.common._rust_accel import extract as _rust_extract
+        payload = _rust_extract("csharp", path, root)
+        if payload is not None:
+            from tools.common._rust_accel import (
+                materialize_dataclass as _mat,
+                materialize_list as _mat_list,
+            )
+            return (
+                _mat_list(payload.get("functions"), FunctionDef),
+                _mat_list(payload.get("calls"), CallEdge),
+                _mat_list(payload.get("types"), TypeDef),
+                _mat_list(payload.get("namespaces"), NamespaceDef),
+                _mat_list(payload.get("relations"), RelationEdge),
+                _mat(payload.get("file_def"), FileDef),
+                payload.get("parse_meta") or {},
+            )
+    except Exception:
+        try:
+            from tools.common._rust_accel import warn_fallback
+            warn_fallback("csharp")
+        except Exception:
+            pass
+    return _python_parse_csharp_file(path, root)
+
+
+def _python_parse_csharp_file(path: str, root: str) -> Tuple[
+    List[FunctionDef],
+    List[CallEdge],
+    List[TypeDef],
+    List[NamespaceDef],
+    List[RelationEdge],
+    FileDef,
+    Dict[str, Any],
+]:
     rel_path = os.path.relpath(path, root)
     tree, source_bytes = _parse_file(path)
     has_error, error_nodes = _tree_error_stats(tree)

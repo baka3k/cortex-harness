@@ -38,6 +38,7 @@ EXPECTED_PRIMARY = {
     "python",
     "rust",
     "shell",
+    "jp1",
     "sql",
     "swift",
     "ts",

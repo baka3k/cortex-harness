@@ -1085,6 +1085,45 @@ def parse_delphi_file(path: str, root: str) -> Tuple[
     List[str],
     Dict[str, Any],
 ]:
+    try:
+        from tools.common._rust_accel import extract as _rust_extract
+        payload = _rust_extract("delphi", path, root)
+        if payload is not None:
+            from tools.common._rust_accel import (
+                materialize_dataclass as _mat,
+                materialize_list as _mat_list,
+            )
+            return (
+                _mat_list(payload.get("functions"), FunctionDef),
+                _mat_list(payload.get("calls"), CallEdge),
+                _mat_list(payload.get("types"), TypeDef),
+                _mat_list(payload.get("namespaces"), NamespaceDef),
+                _mat_list(payload.get("fields"), FieldDef),
+                _mat_list(payload.get("relations"), RelationEdge),
+                _mat(payload.get("file_def"), FileDef),
+                list(payload.get("uses_units") or []),
+                payload.get("parse_meta") or {},
+            )
+    except Exception:
+        try:
+            from tools.common._rust_accel import warn_fallback
+            warn_fallback("delphi")
+        except Exception:
+            pass
+    return _python_parse_delphi_file(path, root)
+
+
+def _python_parse_delphi_file(path: str, root: str) -> Tuple[
+    List[FunctionDef],
+    List[CallEdge],
+    List[TypeDef],
+    List[NamespaceDef],
+    List[FieldDef],
+    List[RelationEdge],
+    FileDef,
+    List[str],
+    Dict[str, Any],
+]:
     rel_path = os.path.relpath(path, root)
     tree, source_bytes, parser_available = _parse_file(path)
     text = source_bytes.decode("utf-8", errors="ignore")

@@ -7,8 +7,9 @@ their pure-Python tree-sitter implementations.
 """
 from __future__ import annotations
 
+import dataclasses
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -71,3 +72,42 @@ def extract(lang: str, path: str, root: str) -> Optional[Dict[str, Any]]:
     except Exception:
         warn_fallback(lang)
         return None
+
+
+def materialize_list(items: Optional[Iterable[Dict[str, Any]]], dataclass_type: type) -> List[Any]:
+    """Convert a list of ``dict`` payloads into ``dataclass_type`` instances.
+
+    The Rust side serializes symbols as plain dicts (mirroring
+    ``dataclasses.asdict``). This helper rebuilds proper dataclass instances
+    so the consumer-side parse functions can keep their existing tuple-based
+    contracts without changing every downstream call site.
+
+    Unknown extra keys in the payload are ignored; missing keys fall back
+    to the dataclass default (if any) so partial payloads stay safe.
+    """
+    if not items:
+        return []
+    field_names = {f.name for f in dataclasses.fields(dataclass_type)}
+    results: List[Any] = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        kwargs = {k: entry[k] for k in field_names if k in entry}
+        try:
+            results.append(dataclass_type(**kwargs))
+        except TypeError:
+            # Defensive: skip entries the dataclass cannot construct (schema drift).
+            continue
+    return results
+
+
+def materialize_dataclass(payload: Optional[Dict[str, Any]], dataclass_type: type) -> Any:
+    """Convert a single dict payload into a ``dataclass_type`` instance."""
+    if not isinstance(payload, dict):
+        return dataclass_type()
+    field_names = {f.name for f in dataclasses.fields(dataclass_type)}
+    kwargs = {k: payload[k] for k in field_names if k in payload}
+    try:
+        return dataclass_type(**kwargs)
+    except TypeError:
+        return dataclass_type()

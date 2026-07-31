@@ -33,6 +33,7 @@ LANG_ANALYZERS = {
     "go":             CODE_TINY / "tools/go/go_analyzer.py",
     "perl":           CODE_TINY / "tools/perl/perl_analyzer.py",
     "shell":          CODE_TINY / "tools/shell/shell_analyzer.py",
+    "jp1":            CODE_TINY / "tools/jp1/jp1_analyzer.py",
     "kotlin":         CODE_TINY / "tools/kotlin/kotlin_analyzer.py",
     "java":           CODE_TINY / "tools/java/java_analyzer.py",
     "ts":             CODE_TINY / "tools/ts/ts_analyzer.py",
