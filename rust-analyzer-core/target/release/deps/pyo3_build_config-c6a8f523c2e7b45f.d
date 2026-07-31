@@ -1,0 +1,14 @@
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/pyo3_build_config-c6a8f523c2e7b45f.d: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/lib.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/errors.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/impl_.rs /Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config-file.txt /Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config.txt
+
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/libpyo3_build_config-c6a8f523c2e7b45f.rlib: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/lib.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/errors.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/impl_.rs /Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config-file.txt /Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config.txt
+
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/libpyo3_build_config-c6a8f523c2e7b45f.rmeta: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/lib.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/errors.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/impl_.rs /Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config-file.txt /Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config.txt
+
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/lib.rs:
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/errors.rs:
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.21.2/src/impl_.rs:
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config-file.txt:
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out/pyo3-build-config.txt:
+
+# env-dep:CARGO_PKG_VERSION=0.21.2
+# env-dep:OUT_DIR=/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/build/pyo3-build-config-a4777b2d51612016/out

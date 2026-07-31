@@ -1,0 +1,10 @@
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/stacker-326db011a9bf459d.d: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/lib.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/mod.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/macos.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/mmap_stack_restore_guard.rs
+
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/libstacker-326db011a9bf459d.rlib: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/lib.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/mod.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/macos.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/mmap_stack_restore_guard.rs
+
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/libstacker-326db011a9bf459d.rmeta: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/lib.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/mod.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/macos.rs /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/mmap_stack_restore_guard.rs
+
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/lib.rs:
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/mod.rs:
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/backends/macos.rs:
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/stacker-0.1.24/src/mmap_stack_restore_guard.rs:

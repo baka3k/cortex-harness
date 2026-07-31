@@ -1,0 +1,7 @@
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/psm-c08cfe74b1b0caa7.d: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.31/src/lib.rs
+
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/libpsm-c08cfe74b1b0caa7.rlib: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.31/src/lib.rs
+
+/Users/baka3k.rpm/AI/cortex-harness/rust-analyzer-core/target/release/deps/libpsm-c08cfe74b1b0caa7.rmeta: /Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.31/src/lib.rs
+
+/Users/baka3k.rpm/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.31/src/lib.rs:
