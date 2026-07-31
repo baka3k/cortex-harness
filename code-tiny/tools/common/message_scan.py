@@ -26,7 +26,7 @@ MESSAGE_SCHEMA_VERSION = 1
 DEFAULT_MESSAGE_VECTOR_SIZE = 1024
 
 _PARSER_EXTENSIONS: Dict[str, Tuple[str, ...]] = {
-    "cplus": (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"),
+    "cplus": (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".pc"),
     "delphi": (".pas", ".dpr", ".inc"),
     "java": (".java",),
     "csharp": (".cs",),
