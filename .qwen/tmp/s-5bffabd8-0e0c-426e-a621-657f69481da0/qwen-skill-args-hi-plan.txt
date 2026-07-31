@@ -1,0 +1,1 @@
+lên thiết kế chạy cho các phần rust mới, chir rõ các phần chạy rust, các phần buộc phải chạy python(vd cần load model embedding) viết cụ thểể cho 1 tool thì các thành phần của nó thế nào, tương tác với nhau thế nào, ví dụ với cplus analyzer
