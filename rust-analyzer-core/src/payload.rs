@@ -1594,3 +1594,122 @@ pub fn build_delphi_payload(py: Python, out: &DelphiParseOutput) -> PyResult<PyO
 
     Ok(dict.into())
 }
+
+/// Build a Python `dict` payload from a `SqlParseOutput` (Tier 3).
+///
+/// SQL is Family B 6-tuple: `functions, calls, classes, namespaces, relations,
+/// file_def`. The `FunctionDef` schema carries `exported: bool` (default false)
+/// — the shared Rust struct doesn't track this separately, so we add it as
+/// `false` in the payload to match the Python dataclass shape.
+pub fn build_sql_payload(py: Python, out: &SqlParseOutput) -> PyResult<PyObject> {
+    let dict = PyDict::new(py);
+
+    // file_def
+    let file_def = PyDict::new(py);
+    file_def.set_item("file_path", &out.file_def.file_path)?;
+    file_def.set_item("start_line", out.file_def.start_line)?;
+    file_def.set_item("end_line", out.file_def.end_line)?;
+    file_def.set_item("code", &out.file_def.code)?;
+    file_def.set_item("comment", &out.file_def.comment)?;
+    file_def.set_item("summary", &out.file_def.summary)?;
+    file_def.set_item("note", &out.file_def.note)?;
+    dict.set_item("file_def", file_def)?;
+
+    // functions
+    let funcs = PyList::empty(py);
+    for f in &out.functions {
+        let d = PyDict::new(py);
+        d.set_item("symbol_id", &f.symbol_id)?;
+        d.set_item("qualified_name", &f.qualified_name)?;
+        d.set_item("name", &f.name)?;
+        d.set_item("kind", &f.kind)?;
+        d.set_item("scope_name", f.scope_name.as_ref().unwrap_or(&String::new()))?;
+        d.set_item("file_path", &f.file_path)?;
+        d.set_item("start_line", f.start_line)?;
+        d.set_item("end_line", f.end_line)?;
+        d.set_item("start_byte", f.start_byte)?;
+        d.set_item("end_byte", f.end_byte)?;
+        d.set_item("arity", f.arity)?;
+        d.set_item("code", &f.code)?;
+        d.set_item("comment", &f.comment)?;
+        d.set_item("summary", &f.summary)?;
+        d.set_item("note", &f.note)?;
+        d.set_item("exported", false)?;
+        funcs.append(d)?;
+    }
+    dict.set_item("functions", funcs)?;
+
+    // calls
+    let calls = PyList::empty(py);
+    for c in &out.calls {
+        let d = PyDict::new(py);
+        d.set_item("caller_id", &c.caller_id)?;
+        d.set_item("caller_scope", c.caller_scope.as_ref().unwrap_or(&String::new()))?;
+        d.set_item("call_line", c.call_line)?;
+        d.set_item("callee_name", &c.callee_name)?;
+        d.set_item("callee_id", c.callee_id.as_ref().unwrap_or(&String::new()))?;
+        d.set_item("callee_arity", 0)?;
+        d.set_item("callee_raw", &c.callee_name)?;
+        d.set_item("callee_qualified", &c.callee_name)?;
+        d.set_item("callee_simple", &c.callee_name)?;
+        calls.append(d)?;
+    }
+    dict.set_item("calls", calls)?;
+
+    // classes (SQL may emit zero or more)
+    let classes = PyList::empty(py);
+    for c in &out.classes {
+        let d = PyDict::new(py);
+        d.set_item("symbol_id", &c.symbol_id)?;
+        d.set_item("qualified_name", &c.qualified_name)?;
+        d.set_item("name", &c.name)?;
+        d.set_item("kind", &c.kind)?;
+        d.set_item("file_path", &c.file_path)?;
+        d.set_item("start_line", c.start_line)?;
+        d.set_item("end_line", c.end_line)?;
+        d.set_item("code", &c.code)?;
+        d.set_item("comment", &c.comment)?;
+        d.set_item("summary", &c.summary)?;
+        d.set_item("note", &c.note)?;
+        d.set_item("exported", false)?;
+        classes.append(d)?;
+    }
+    dict.set_item("classes", classes)?;
+
+    // namespaces
+    let namespaces = PyList::new(py, out.namespaces.iter().map(|n| {
+        let d = PyDict::new(py);
+        d.set_item("symbol_id", &n.symbol_id).unwrap();
+        d.set_item("qualified_name", &n.qualified_name).unwrap();
+        d.set_item("name", &n.name).unwrap();
+        d.set_item("file_path", &n.file_path).unwrap();
+        d.set_item("start_line", n.start_line).unwrap();
+        d.set_item("end_line", n.end_line).unwrap();
+        d.set_item("code", &n.code).unwrap();
+        d.set_item("comment", &n.comment).unwrap();
+        d.set_item("summary", &n.summary).unwrap();
+        d.set_item("note", &n.note).unwrap();
+        d
+    }));
+    dict.set_item("namespaces", namespaces)?;
+
+    // relations
+    let relations = PyList::empty(py);
+    for r in &out.relations {
+        let d = PyDict::new(py);
+        d.set_item("source_id", &r.source_id)?;
+        d.set_item("source_label", &r.source_label)?;
+        d.set_item("target_id", &r.target_id)?;
+        d.set_item("target_label", &r.target_label)?;
+        d.set_item("rel_type", &r.rel_type)?;
+        let props = PyDict::new(py);
+        for (k, v) in &r.properties {
+            props.set_item(k, v)?;
+        }
+        d.set_item("properties", props)?;
+        relations.append(d)?;
+    }
+    dict.set_item("relations", relations)?;
+
+    Ok(dict.into())
+}

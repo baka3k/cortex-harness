@@ -22,11 +22,32 @@ use crate::symbols::{
     AliasDef, CallEdge, FieldDef, FileDef, FunctionDef, NamespaceDef, ParseMeta, RelationEdge,
     TemplateDef, TypeDef,
 };
-use crate::text::{extract_file_comment, node_text, node_snippet};
+use crate::text::{extract_file_comment, node_text};
 
 // ── Node-type sets (mirror the Python module constants) ─────────────────
 
 const COMMENT_TYPES: &[&str] = &["line_comment", "block_comment"];
+
+/// Compute snippet + adjusted start_line + end_line, including preceding
+/// contiguous comments. Mirrors Python `_node_snippet`.
+fn node_snippet_rust<'a>(node: Node<'a>, source: &[u8]) -> (String, u32, u32) {
+    let mut start_byte = node.start_byte();
+    let mut prev = node.prev_sibling();
+    while let Some(p) = prev {
+        if COMMENT_TYPES.contains(&p.kind()) {
+            start_byte = p.start_byte();
+            prev = p.prev_sibling();
+        } else {
+            break;
+        }
+    }
+    let snippet = std::str::from_utf8(&source[start_byte..node.end_byte()])
+        .unwrap_or("")
+        .to_string();
+    let start_line = line_from_byte(source, start_byte);
+    let end_line = node.end_position().row as u32 + 1;
+    (snippet, start_line, end_line)
+}
 
 /// Maps tree-sitter node kind → semantic type kind (struct/enum/union/trait).
 fn type_kind_for(node_kind: &str) -> Option<&'static str> {
@@ -494,7 +515,7 @@ fn walk<'a>(
             extract_name(node, ctx.source).unwrap_or_else(|| anonymous_name("Module", node));
         let qualified = qualified_name(scope_stack, &name);
         let ns_id = namespace_id(&qualified);
-        let (snippet, start_line, end_line) = node_snippet(node, ctx.source);
+        let (snippet, start_line, end_line) = node_snippet_rust(node, ctx.source);
         let comment = extract_comment(node, ctx.source);
         let namespace = NamespaceDef {
             symbol_id: ns_id.clone(),
@@ -535,7 +556,7 @@ fn walk<'a>(
             extract_name(node, ctx.source).unwrap_or_else(|| anonymous_name("Type", node));
         let qualified = qualified_name(scope_stack, &name);
         let tid = type_id(&qualified);
-        let (snippet, start_line, end_line) = node_snippet(node, ctx.source);
+        let (snippet, start_line, end_line) = node_snippet_rust(node, ctx.source);
         let comment = extract_comment(node, ctx.source);
         let type_def = TypeDef {
             symbol_id: tid.clone(),
