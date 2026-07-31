@@ -92,6 +92,7 @@ PUBLIC_QUERY_ENGINES = MappingProxyType({
     "cplus": "graph_generic",
     "shell": "graph_generic",
     "jp1": "graph_generic",
+    "batchconfig": "graph_generic",
     "fast": "fast_graph",
 })
 CAPABILITY_CONTRACT_VERSION = 1
@@ -506,6 +507,7 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "perl": _generic_profile("perl", {"perl"}),
     "shell": _generic_profile("shell", {"shell", "sh", "bash", "posix-shell"}),
     "jp1": _generic_profile("jp1", {"jp1", "ajs", "jobnet"}),
+    "batchconfig": _generic_profile("batchconfig", {"ini", "batchconfig", "config"}),
     "rust": _generic_profile("rust", {"rust"}),
     "swift": _generic_profile("swift", {"swift"}),
     "delphi": _generic_profile("delphi", {"delphi", "pascal"}),

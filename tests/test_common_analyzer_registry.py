@@ -39,6 +39,7 @@ EXPECTED_PRIMARY = {
     "rust",
     "shell",
     "jp1",
+    "batchconfig",
     "sql",
     "swift",
     "ts",

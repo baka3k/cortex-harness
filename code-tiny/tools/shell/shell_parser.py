@@ -220,21 +220,33 @@ def build_relations(script: ShellScriptFile) -> List[RelationEdge]:
 
     for read in script.config_reads:
         source_id, source_label = _source(read.enclosing_function)
-        target_id = _stable_id(
-            "config_entry", f"{read.ini_path_expr}:{read.config_key}"
-        )
+        properties = {
+            "config_key": read.config_key,
+            "ini_path_expr": read.ini_path_expr,
+            "line": str(read.line),
+        }
+        if "${" in read.ini_path_expr:
+            # Templated path (e.g. "${DIR}/${KEY}.ini"): can't resolve to a
+            # single ConfigEntry without runtime values, so scope the edge to
+            # the static directory prefix instead of guessing a file.
+            static_prefix = read.ini_path_expr.split("${", 1)[0].rstrip("/")
+            target_id = _stable_id("config_dir", static_prefix or read.ini_path_expr)
+            target_label = "ConfigDirectory"
+            properties["note"] = "templated path, resolved to directory scope"
+            properties["dir_path"] = static_prefix
+        else:
+            target_id = _stable_id(
+                "config_entry", f"{read.ini_path_expr}:{read.config_key}"
+            )
+            target_label = "ConfigEntry"
         relations.append(
             RelationEdge(
                 source_id=source_id,
                 source_label=source_label,
                 target_id=target_id,
-                target_label="ConfigEntry",
+                target_label=target_label,
                 rel_type="READS_CONFIG",
-                properties={
-                    "config_key": read.config_key,
-                    "ini_path_expr": read.ini_path_expr,
-                    "line": str(read.line),
-                },
+                properties=properties,
             )
         )
 

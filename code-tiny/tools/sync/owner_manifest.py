@@ -35,6 +35,7 @@ SUPPORTED_PARSERS: Set[str] = {
     "perl",
     "shell",
     "jp1",
+    "batchconfig",
     "rust",
     "js",
     "ts",
@@ -211,6 +212,8 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "perl"
     if ext == ".sh":
         return "shell"
+    if ext == ".ini":
+        return "batchconfig"
     if ext == ".rs":
         return "rust"
     if ext == ".swift":

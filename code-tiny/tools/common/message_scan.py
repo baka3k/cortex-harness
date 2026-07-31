@@ -44,6 +44,7 @@ _PARSER_EXTENSIONS: Dict[str, Tuple[str, ...]] = {
     "sql": (".sql", ".ddl", ".dml", ".psql"),
     "plsql": (".pls", ".plsql", ".pks", ".pkb", ".pkg", ".pck", ".spc", ".spb", ".trg", ".fnc"),
     "shell": (".sh",),
+    "batchconfig": (".ini",),
 }
 
 _CALL_PATTERN = re.compile(r"(?P<callee>[A-Za-z_][A-Za-z0-9_:.>]*)\s*\((?P<args>[^)]*)\)")
