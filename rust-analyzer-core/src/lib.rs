@@ -12,6 +12,7 @@ mod calls;
 mod grammar;
 mod parser;
 mod payload;
+mod profile;
 mod relations;
 mod resolver;
 mod semantic;
