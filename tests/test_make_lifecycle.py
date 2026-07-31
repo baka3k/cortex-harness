@@ -55,6 +55,40 @@ class MakeLifecycleTests(unittest.TestCase):
         for target in targets:
             self.assertIn(f"python3 scripts/mcp-lifecycle.py {target}", result.stdout)
 
+    def test_build_installs_and_verifies_rust_extension(self):
+        with tempfile.TemporaryDirectory() as directory:
+            venv_dir = Path(directory) / ".venv"
+            python = venv_dir / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.touch()
+
+            with mock.patch.object(LIFECYCLE, "VENV_DIR", venv_dir), mock.patch.object(
+                LIFECYCLE, "install_requirements"
+            ), mock.patch.object(LIFECYCLE, "run") as run_command:
+                LIFECYCLE.invoke_build()
+
+            run_command.assert_any_call(
+                [
+                    str(python),
+                    "-m",
+                    "pip",
+                    "install",
+                    "--force-reinstall",
+                    "--no-deps",
+                    str(ROOT / "rust-analyzer-core"),
+                ]
+            )
+            run_command.assert_any_call(
+                [str(python), "-c", "import cortex_extract"]
+            )
+
+    def test_windows_lifecycle_builds_rust_and_waits_for_mcp(self):
+        lifecycle = (ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("pip install --force-reinstall --no-deps $rustCore", lifecycle)
+        self.assertIn("Assert-RustExtension -Python $python", lifecycle)
+        self.assertIn("Wait-TcpPort -HostName $readyHost -Port $server.Port", lifecycle)
+
     def test_install_and_uninstall_use_user_local_bin(self):
         with tempfile.TemporaryDirectory() as home:
             with mock.patch.dict(os.environ, {"HOME": home}), mock.patch.object(
@@ -93,9 +127,20 @@ class MakeLifecycleTests(unittest.TestCase):
                 LIFECYCLE, "PID_FILE", pid_file
             ), mock.patch.object(LIFECYCLE, "invoke_stop"), mock.patch.object(
                 LIFECYCLE, "terminal_command", side_effect=fake_terminal_command
-            ), mock.patch.object(LIFECYCLE, "run"):
+            ), mock.patch.object(
+                LIFECYCLE, "wait_for_port", return_value=True
+            ) as wait_for_port, mock.patch.object(
+                LIFECYCLE, "run"
+            ) as run_command:
                 LIFECYCLE.invoke_start()
 
+            run_command.assert_any_call(
+                [str(LIFECYCLE.venv_python()), "-c", "import cortex_extract"]
+            )
+            self.assertEqual(
+                [mock.call("127.0.0.1", 8788), mock.call("127.0.0.1", 8789)],
+                wait_for_port.call_args_list,
+            )
             records = json.loads(pid_file.read_text(encoding="utf-8"))
             self.assertEqual([record["name"] for record in records], ["code-tiny", "doc-tiny"])
             for server in LIFECYCLE.SERVERS:
@@ -139,6 +184,8 @@ class MakeLifecycleTests(unittest.TestCase):
                 LIFECYCLE, "runtime_environment", return_value={}
             ), mock.patch.object(
                 LIFECYCLE, "terminal_command", side_effect=fake_terminal_command
+            ), mock.patch.object(
+                LIFECYCLE, "wait_for_port", return_value=True
             ), mock.patch.object(LIFECYCLE, "run"):
                 LIFECYCLE.invoke_start(options)
 
@@ -229,6 +276,14 @@ class MakeLifecycleTests(unittest.TestCase):
             LIFECYCLE.invoke_infra_up()
 
         self.assertEqual(start_service.call_count, len(LIFECYCLE.INFRA_SERVICES))
+
+    def test_http_readiness_retries_during_container_warmup(self):
+        with mock.patch.object(
+            LIFECYCLE, "http_ready", side_effect=[False, False, True]
+        ) as http_check, mock.patch.object(LIFECYCLE.time, "sleep"):
+            self.assertTrue(LIFECYCLE.wait_for_http("http://127.0.0.1:6333"))
+
+        self.assertEqual(http_check.call_count, 3)
 
     def test_infra_down_handles_missing_containers(self):
         with mock.patch.object(LIFECYCLE, "docker_command", return_value="docker"), mock.patch.object(
