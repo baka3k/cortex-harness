@@ -56,6 +56,7 @@ from tools.common.sync_scope import (
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, normalize_graph_provider, prepare_graph_args
 from tools.project_topology.registry import descriptor_spec_for_path
+from tools.jp1.sniff import is_jp1_file
 from tools.vb.vb_path_classifier import VBPathClassifier
 from tools.ts.ts_project_detector import detect_project_type as _detect_ts_project_type
 
@@ -106,6 +107,8 @@ ANALYZERS: Dict[str, AnalyzerConfig] = {
     "python": AnalyzerConfig("python", os.path.join(_ROOT_DIR, "tools", "python", "python_analyzer.py"), True),
     "go": AnalyzerConfig("go", os.path.join(_ROOT_DIR, "tools", "go", "go_analyzer.py"), True),
     "perl": AnalyzerConfig("perl", os.path.join(_ROOT_DIR, "tools", "perl", "perl_analyzer.py"), True),
+    "shell": AnalyzerConfig("shell", os.path.join(_ROOT_DIR, "tools", "shell", "shell_analyzer.py"), True),
+    "jp1": AnalyzerConfig("jp1", os.path.join(_ROOT_DIR, "tools", "jp1", "jp1_analyzer.py"), True),
     "rust": AnalyzerConfig("rust", os.path.join(_ROOT_DIR, "tools", "rust", "rust_analyzer.py"), True),
     "swift": AnalyzerConfig("swift", os.path.join(_ROOT_DIR, "tools", "swift", "swift_analyzer.py"), True),
     "js": AnalyzerConfig("js", os.path.join(_ROOT_DIR, "tools", "js", "js_analyzer.py"), True),
@@ -255,7 +258,7 @@ MESSAGE_ENABLED_PARSERS: Set[str] = {
     "plsql",
 }
 
-_SHARED_VECTOR_CLI_PARSERS: Set[str] = {"dart", "go", "perl", "rust", "swift"}
+_SHARED_VECTOR_CLI_PARSERS: Set[str] = {"dart", "go", "jp1", "perl", "rust", "shell", "swift"}
 _SCAN_RESULT_VECTORS_RE = re.compile(r"(?m)^\[SCAN_RESULT\].*\bvectors=(\d+)\b")
 
 _TS_BACKEND_SCRIPT = os.path.join(_ROOT_DIR, "tools", "ts", "ts_backend_analyzer.py")
@@ -500,7 +503,7 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
 
     if ext in {".cbl", ".cob", ".cpy", ".copy"}:
         return "cobol"
-    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2"}:
+    if ext in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".pc", ".pcc", ".rc", ".rc2"}:
         return "cplus"
     if ext in {".pas", ".dpr", ".inc"}:
         return "delphi"
@@ -510,6 +513,10 @@ def _select_parser_for_path(path: str, classifier: _AndroidPathClassifier, vb_cl
         return "go"
     if ext in {".pl", ".pm", ".t"}:
         return "perl"
+    if ext == ".sh":
+        return "shell"
+    if ext == ".txt" and is_jp1_file(os.path.join(classifier.root, path)):
+        return "jp1"
     if ext == ".rs":
         return "rust"
     if ext == ".swift":
@@ -1204,11 +1211,12 @@ def _write_summary(path: str, payload: Dict[str, object]) -> None:
 
 _SOURCE_EXTENSIONS: Set[str] = {
     ".cbl", ".cob", ".cpy", ".copy",
-    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".rc", ".rc2",
+    ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".pc", ".pcc", ".rc", ".rc2",
     ".pas", ".dpr", ".inc",
     ".py",
     ".go",
     ".pl", ".pm", ".t",
+    ".sh",
     ".rs", ".swift", ".dart", ".arb",
     ".js", ".jsx",
     ".ts", ".tsx",
@@ -1248,6 +1256,7 @@ def _walk_all_source_files(root: str) -> Set[str]:
                 ext not in _SOURCE_EXTENSIONS
                 and not lower.endswith(".gradle.kts")
                 and descriptor_spec_for_path(rel) is None
+                and not (ext == ".txt" and is_jp1_file(full))
             ):
                 continue
             found.add(rel)
@@ -1550,6 +1559,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 Path(lower).suffix in _SOURCE_EXTENSIONS
                 or lower.endswith(".gradle.kts")
                 or descriptor_spec_for_path(normalized) is not None
+                or (Path(lower).suffix == ".txt" and is_jp1_file(os.path.join(root, normalized)))
             )
 
         for scope in scopes:
