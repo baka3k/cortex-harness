@@ -104,14 +104,16 @@ This document describes the architecture of the Graph Code system after the abst
 
 ## Component Details
 
-### 1. Language Analyzers (11 Analyzers)
+### 1. Primary Language Analyzers
 
 **Purpose**: Parse source code and extract structured information
 
 **Languages Supported**:
 
 - Kotlin (`kotlin_analyzer.py`)
-- C/C++ (`cplus_analyzer.py`)
+- C/C++ and Pro*C (`cplus_analyzer.py`)
+- Shell (`shell_analyzer.py`)
+- JP1/AJS jobnets (`jp1_analyzer.py`)
 - Android Kotlin (`android_kotlin_analyzer.py`)
 - Java (`java_analyzer.py`)
 - Python (`python_analyzer.py`)

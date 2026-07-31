@@ -1,0 +1,4 @@
+int run_batch(void) {
+    EXEC SQL SELECT STATUS INTO :status FROM BATCH_CONTROL;
+    return 0;
+}

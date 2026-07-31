@@ -1,0 +1,15 @@
+unit=ROOT,,host,;
+{
+ty=n;
+unit=RUN,,host,;
+{
+ty=j;
+te="run.sh";
+}
+unit=MISSING,,host,;
+{
+ty=j;
+te="@BATCH_HOME@/missing.sh";
+}
+ar=(f=RUN,t=MISSING,seq);
+}

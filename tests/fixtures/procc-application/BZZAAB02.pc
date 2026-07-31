@@ -1,0 +1,6 @@
+int load_customer(void) {
+    EXEC SQL SELECT NAME INTO :customer_name FROM CUSTOMER
+        WHERE ID = :customer_id;
+    EXEC SQL COMMIT;
+    return 0;
+}

@@ -17,6 +17,7 @@ from .models import (
     normalize_file_path,
 )
 from .registry import DescriptorSpec, descriptor_spec_for_path
+from tools.common.legacy_encoding import read_legacy_text
 
 
 SKIP_DIRS = frozenset(
@@ -151,7 +152,11 @@ def parse_descriptor_file(
             ),
         )
     try:
-        text = absolute.read_text(encoding="utf-8", errors="replace")
+        text = (
+            read_legacy_text(absolute).text
+            if selected.name == "ini"
+            else absolute.read_text(encoding="utf-8", errors="replace")
+        )
     except OSError as exc:
         return _error_output(
             project_id=project_id,

@@ -27,6 +27,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+from tools.common.legacy_encoding import read_legacy_text
 
 from tools.common.analyzer_cache import (
     file_signature,
@@ -50,6 +51,7 @@ from tools.cplus.rc_parser import (
     parse_rc_file,
     read_rc_text,
 )
+from tools.cplus.proc_sql import extract_exec_sql_statements
 try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
@@ -76,7 +78,7 @@ def _effective_fallback_threshold(file_size: int) -> int:
     return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
-_PARSE_CACHE_VERSION = "cplus-v2026-07-15-rc1"
+_PARSE_CACHE_VERSION = "cplus-v2026-07-31-proc1"
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -598,12 +600,20 @@ def _get_c_parser() -> Parser:
     return _C_PARSER
 
 
-def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes]:
+def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes, str]:
     parser = _get_cpp_parser() if is_cpp else _get_c_parser()
-    with open(path, "rb") as handle:
-        source_bytes = handle.read()
-    tree = parser.parse(source_bytes)
-    return tree, source_bytes
+    decoded = read_legacy_text(path)
+    source_bytes = decoded.text.encode("utf-8")
+    parser_bytes = source_bytes
+    if os.path.splitext(path)[1].lower() in {".pc", ".pcc"}:
+        masked = bytearray(source_bytes)
+        for statement in extract_exec_sql_statements(decoded.text):
+            for index in range(statement.start_byte, statement.end_byte):
+                if masked[index] not in {10, 13}:
+                    masked[index] = 32
+        parser_bytes = bytes(masked)
+    tree = parser.parse(parser_bytes)
+    return tree, source_bytes, decoded.encoding
 
 
 def _tree_error_stats(tree) -> Tuple[bool, int]:
@@ -1973,7 +1983,7 @@ def parse_c_family_file(
     Dict[str, Any],
 ]:
     initial_is_cpp = is_cpp
-    tree, source_bytes = _parse_file(path, initial_is_cpp)
+    tree, source_bytes, source_encoding = _parse_file(path, initial_is_cpp)
     selected_is_cpp = initial_is_cpp
     retry_attempted = False
     retry_selected = False
@@ -1987,7 +1997,7 @@ def parse_c_family_file(
     if ext == ".h" and (initial_has_error or initial_error_nodes > 0):
         retry_attempted = True
         retry_is_cpp = not initial_is_cpp
-        retry_tree, retry_source_bytes = _parse_file(path, retry_is_cpp)
+        retry_tree, retry_source_bytes, retry_source_encoding = _parse_file(path, retry_is_cpp)
         retry_has_error, retry_error_nodes = _tree_error_stats(retry_tree)
         if (
             retry_error_nodes < initial_error_nodes
@@ -1995,13 +2005,14 @@ def parse_c_family_file(
         ):
             tree = retry_tree
             source_bytes = retry_source_bytes
+            source_encoding = retry_source_encoding
             selected_is_cpp = retry_is_cpp
             selected_has_error = retry_has_error
             selected_error_nodes = retry_error_nodes
             retry_selected = True
 
     rel_path = os.path.relpath(path, root)
-    file_code = source_bytes.decode("utf-8", errors="ignore")
+    file_code = source_bytes.decode("utf-8")
     file_lines = file_code.count("\n") + 1
     file_comment = _extract_file_comment(tree, source_bytes)
     file_summary = file_comment
@@ -2027,6 +2038,7 @@ def parse_c_family_file(
         "error_nodes_initial": initial_error_nodes,
         "header_retry_error_nodes": retry_error_nodes,
         "header_retry_has_error": retry_has_error,
+        "source_encoding": source_encoding,
     }
 
     functions: List[FunctionDef] = []
@@ -2493,7 +2505,7 @@ def _scan_c_family_files(root: str) -> List[str]:
         dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
         for name in filenames:
             if name.lower().endswith(
-                (".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx")
+                (".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx", ".pc", ".pcc")
                 + (".rc", ".rc2")
             ):
                 files.append(os.path.join(dirpath, name))
@@ -2730,6 +2742,8 @@ def _load_or_parse_payload(
             for item in resource_elements:
                 if isinstance(item, dict):
                     ensure_text_fields(item)
+        if payload.get("proc_sql_statements") is None:
+            payload["proc_sql_statements"] = []
         function_types = payload.get("function_types")
         if isinstance(function_types, list):
             for item in function_types:
@@ -2839,6 +2853,7 @@ def _load_or_parse_payload(
     # -----------------------------------------------------------------------
     if (
         _clang_parser is not None
+        and os.path.splitext(file_path)[1].lower() not in {".pc", ".pcc"}
         and parse_meta.get("error_nodes", 0) >= _effective_fallback_threshold(
             os.path.getsize(file_path)
         )
@@ -2871,6 +2886,44 @@ def _load_or_parse_payload(
                 _clang_exc,
             )
 
+    proc_sql_statements: List[Dict[str, Any]] = []
+    if os.path.splitext(file_path)[1].lower() in {".pc", ".pcc"}:
+        for statement in extract_exec_sql_statements(file_def.code):
+            owner = next(
+                (
+                    function
+                    for function in file_functions
+                    if function.start_byte <= statement.start_byte < function.end_byte
+                ),
+                None,
+            )
+            statement_id = "proc-sql::" + _stable_point_id(
+                f"{rel_path}:{statement.start_line}:{statement.raw_text}"
+            )
+            proc_sql_statements.append(
+                {
+                    "id": statement_id,
+                    "name": statement.operation or "SQL",
+                    "operation": statement.operation,
+                    "targets": list(statement.targets),
+                    "host_variables": list(statement.host_variables),
+                    "raw_text": statement.raw_text,
+                    "file_path": rel_path,
+                    "start_line": statement.start_line,
+                    "end_line": statement.end_line,
+                }
+            )
+            file_relations.append(
+                RelationEdge(
+                    source_id=owner.symbol_id if owner else rel_path,
+                    source_label="Function" if owner else "File",
+                    target_id=statement_id,
+                    target_label="CplusSqlStatement",
+                    rel_type="DEFINES",
+                    properties={"operation": statement.operation},
+                )
+            )
+
     payload = {
         "functions": [asdict(item) for item in file_functions],
         "calls": [asdict(item) for item in file_calls],
@@ -2883,6 +2936,7 @@ def _load_or_parse_payload(
         "templates": [asdict(item) for item in file_templates],
         "resources": [],
         "resource_elements": [],
+        "proc_sql_statements": proc_sql_statements,
         "file_def": asdict(file_def),
         "using_namespaces": file_using_namespaces,
         "using_imports": file_using_imports,
@@ -3431,6 +3485,7 @@ async def build_call_graph(
         buf_templates: List[Dict[str, Any]] = []
         buf_resources: List[Dict[str, Any]] = []
         buf_resource_elements: List[Dict[str, Any]] = []
+        buf_proc_sql_statements: List[Dict[str, Any]] = []
         buf_relations: List[Dict[str, Any]] = []
         buf_calls: List[Dict[str, Any]] = []
         buf_unknown_calls: List[Dict[str, Any]] = []
@@ -3522,10 +3577,29 @@ SET c.node_type = 'code',
     c.build_system = row.build_system,
     c.updated_at = datetime()
 """
+        _PROC_SQL_CYPHER = """UNWIND $rows AS row
+MERGE (s:CplusSqlStatement {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.operation = row.operation,
+    s.targets = row.targets,
+    s.host_variables = row.host_variables,
+    s.raw_text = row.raw_text,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.end_line = row.end_line,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+"""
 
         async def _flush_write_buffers() -> None:
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
             nonlocal buf_fields, buf_aliases, buf_templates, buf_resources, buf_resource_elements
+            nonlocal buf_proc_sql_statements
             nonlocal buf_relations, buf_calls, buf_unknown_calls
             nonlocal _files_in_buf, _total_files_written, _total_calls_written, _total_unknown_calls_written
             if buf_resources:
@@ -3534,9 +3608,13 @@ SET c.node_type = 'code',
                 await code_writer.write_nodes_batch(
                     "resource_elements", _RESOURCE_ELEMENTS_CYPHER, buf_resource_elements
                 )
+            if buf_proc_sql_statements:
+                await code_writer.write_nodes_batch(
+                    "proc_sql_statements", _PROC_SQL_CYPHER, buf_proc_sql_statements
+                )
             has_nodes = any([buf_files, buf_namespaces, buf_types, buf_function_types,
                              buf_functions, buf_fields, buf_aliases, buf_templates,
-                             buf_resources, buf_resource_elements])
+                             buf_resources, buf_resource_elements, buf_proc_sql_statements])
             if has_nodes or buf_relations:
                 await code_writer.write_all(
                     files=buf_files or None,
@@ -3571,6 +3649,7 @@ SET c.node_type = 'code',
             buf_files = []; buf_namespaces = []; buf_types = []; buf_function_types = []
             buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
             buf_resources = []; buf_resource_elements = []
+            buf_proc_sql_statements = []
             buf_relations = []; buf_calls = []; buf_unknown_calls = []
             _files_in_buf = 0
 
@@ -3583,6 +3662,7 @@ SET c.node_type = 'code',
             "POINTER_TO",
             "ALIASES",
             "TEMPLATES",
+            "DEFINES",
             "INCLUDES",
             "EMITS_EVENT",
             "HANDLES_EVENT",
@@ -4027,6 +4107,15 @@ SET c.node_type = 'code',
                     "comment": element.get("comment") or "",
                     "summary": element.get("summary") or "",
                     "note": element.get("note") or "",
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                })
+            for statement in payload.get("proc_sql_statements", []):
+                buf_proc_sql_statements.append({
+                    **statement,
                     "project_id": project_id,
                     "project_name": project_name,
                     "language": language,
