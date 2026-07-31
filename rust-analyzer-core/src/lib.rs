@@ -9,9 +9,12 @@
 //!   used by Phase 6.
 
 mod calls;
+mod grammar;
 mod parser;
 mod payload;
 mod relations;
+mod resolver;
+mod semantic;
 mod symbols;
 mod text;
 mod walker;
@@ -159,6 +162,38 @@ fn is_cpp_file(path: &str) -> PyResult<bool> {
     Ok(is_cpp_path(path))
 }
 
+/// Phase 3 — resolve `callee_id` for every call across a batch of payloads.
+#[pyfunction]
+fn resolve_batch(py: Python, payloads: &PyList) -> PyResult<()> {
+    resolver::resolve_batch(py, payloads)
+}
+
+/// Phase 4 — enrich functions with intent / summary / signals.
+#[pyfunction]
+fn enrich_corpus(py: Python, functions: &PyList, calls: &PyList) -> PyResult<()> {
+    semantic::enrich_corpus_py(py, functions, calls)
+}
+
+/// Phase 6 — list the languages the extension can dispatch.
+#[pyfunction]
+fn supported_languages() -> PyResult<Vec<String>> {
+    Ok(grammar::registry().iter().map(|g| g.id().to_string()).collect())
+}
+
+/// Phase 6 — resolve which grammar owns a given file path.
+#[pyfunction]
+fn detect_language(path: &str) -> PyResult<Option<String>> {
+    Ok(grammar::by_path(path).map(|g| g.id().to_string()))
+}
+
+/// Phase 6 — parse a source string with the requested grammar; return the
+/// tree-sitter root node kind. Useful as a sanity probe while the per-
+/// language walker is being implemented.
+#[pyfunction]
+fn parse_root_kind(language: &str, source: Vec<u8>) -> PyResult<Option<String>> {
+    Ok(grammar::parse_root_kind(language, &source))
+}
+
 #[pymodule]
 fn cortex_extract(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_cplus, m)?)?;
@@ -166,5 +201,10 @@ fn cortex_extract(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(extract_cplus_batch, m)?)?;
     m.add_function(wrap_pyfunction!(extract_batch, m)?)?;
     m.add_function(wrap_pyfunction!(is_cpp_file, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(enrich_corpus, m)?)?;
+    m.add_function(wrap_pyfunction!(supported_languages, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_language, m)?)?;
+    m.add_function(wrap_pyfunction!(parse_root_kind, m)?)?;
     Ok(())
 }
