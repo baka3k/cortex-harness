@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
 VENV_DIR = ROOT / ".venv"
+RUST_CORE_DIR = ROOT / "rust-analyzer-core"
 
 SERVERS = (
     {
@@ -118,6 +119,10 @@ def install_requirements(python: Path, requirements: Path) -> None:
         run([str(python), "-m", "pip", "install", "-r", str(requirements)])
 
 
+def verify_rust_extension(python: Path) -> None:
+    run([str(python), "-c", "import cortex_extract"])
+
+
 def invoke_build() -> None:
     if not VENV_DIR.exists():
         launcher = shutil.which("python3") or shutil.which("python")
@@ -134,7 +139,25 @@ def invoke_build() -> None:
     install_requirements(python, ROOT / "doc-tiny" / "requirements.txt")
     print("[build] Installing editable root package")
     run([str(python), "-m", "pip", "install", "-e", str(ROOT)])
-    print("[build] Dependency sync complete.")
+    manifest = RUST_CORE_DIR / "Cargo.toml"
+    if not manifest.is_file():
+        raise RuntimeError(f"Rust extension manifest not found: {manifest}")
+    if not shutil.which("cargo"):
+        raise RuntimeError("Cargo was not found on PATH. Install Rust before running make build.")
+    print("[build] Building and installing Rust extension")
+    run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--force-reinstall",
+            "--no-deps",
+            str(RUST_CORE_DIR),
+        ]
+    )
+    verify_rust_extension(python)
+    print("[build] Dependency and Rust extension sync complete.")
 
 
 def user_bin_dir() -> Path:
@@ -216,6 +239,15 @@ def http_ready(url: str) -> bool:
         return False
 
 
+def wait_for_http(url: str, timeout: int = 30) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if http_ready(url):
+            return True
+        time.sleep(1)
+    return False
+
+
 def container_exists(docker: str, name: str) -> bool:
     result = run(
         [docker, "ps", "-a", "--filter", f"name=^/{name}$", "--format", "{{.Names}}"],
@@ -259,8 +291,8 @@ def start_infra_service(docker: str, service: dict[str, object]) -> None:
     if not wait_for_port(host, port):
         raise RuntimeError(f"{service['name']} did not open {host}:{port} within 30 seconds.")
     ready_url = str(service["ready_url"])
-    if not http_ready(ready_url):
-        raise RuntimeError(f"{service['name']} is listening, but {ready_url} did not return a healthy response.")
+    if not wait_for_http(ready_url):
+        raise RuntimeError(f"{service['name']} is listening, but {ready_url} was not healthy within 30 seconds.")
     print(f"[infra] {service['name']} ready on {host}:{port}")
 
 
@@ -304,9 +336,13 @@ def invoke_doctor() -> None:
         failures += doctor_check("python venv", False, str(error))
 
     if python:
-        dependencies = "neo4j, falkordb, qdrant_client, requests"
-        result = run([str(python), "-c", "import neo4j, falkordb, qdrant_client, requests"], capture=True, check=False)
-        failures += doctor_check("python deps", result.returncode == 0, dependencies)
+        dependencies = "neo4j, falkordb, qdrant_client, requests, cortex_extract"
+        result = run(
+            [str(python), "-c", "import neo4j, falkordb, qdrant_client, requests, cortex_extract"],
+            capture=True,
+            check=False,
+        )
+        failures += doctor_check("python + Rust deps", result.returncode == 0, dependencies)
 
     docker = shutil.which("docker")
     docker_ready = False
@@ -499,6 +535,7 @@ def runtime_overrides(
 
 
 def invoke_start(options: argparse.Namespace | None = None) -> None:
+    verify_rust_extension(venv_python())
     custom = options is not None
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     if custom:
@@ -581,6 +618,11 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
                 }
             )
         records.append(record)
+        write_pid_records(records)
+        host = options.host if custom else "127.0.0.1"
+        if not wait_for_port(host, int(server["port"])):
+            invoke_stop(instance if custom else None)
+            raise RuntimeError(f"{server['name']} did not become ready on {host}:{server['port']}")
         label = f"{instance}/{server['name']}" if custom else str(server["name"])
         if custom:
             print(f"[start] Started {label} in terminal PID {pid} on {server['port']}")

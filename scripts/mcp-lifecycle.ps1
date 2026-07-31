@@ -174,6 +174,15 @@ function Install-Requirements {
     }
 }
 
+function Assert-RustExtension {
+    param([string]$Python)
+
+    & $Python -c "import cortex_extract"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Rust extension is unavailable. Run the build action first."
+    }
+}
+
 function Invoke-Build {
     $venvDir = Get-RootVenvDir
     if (-not (Test-Path -LiteralPath $venvDir)) {
@@ -194,7 +203,19 @@ function Invoke-Build {
     Write-Host "[build] Installing editable root package"
     & $python -m pip install -e $Root
 
-    Write-Host "[build] Dependency sync complete."
+    $rustCore = Join-Path $Root "rust-analyzer-core"
+    $rustManifest = Join-Path $rustCore "Cargo.toml"
+    if (-not (Test-Path -LiteralPath $rustManifest)) {
+        throw "Rust extension manifest not found: $rustManifest"
+    }
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        throw "Cargo was not found on PATH. Install Rust before running the build action."
+    }
+    Write-Host "[build] Building and installing Rust extension"
+    & $python -m pip install --force-reinstall --no-deps $rustCore
+    Assert-RustExtension -Python $python
+
+    Write-Host "[build] Dependency and Rust extension sync complete."
 }
 
 function Get-UserBinDir {
@@ -415,6 +436,23 @@ function Test-HttpReady {
     }
 }
 
+function Wait-HttpReady {
+    param(
+        [string]$Url,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-HttpReady -Url $Url) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    return $false
+}
+
 function Test-DockerContainerExists {
     param(
         [string]$Docker,
@@ -500,8 +538,8 @@ function Start-InfraService {
         throw "$($Service.Name) did not open $($Service.Host):$($Service.Port) within 30 seconds."
     }
 
-    if (-not (Test-HttpReady -Url $Service.ReadyUrl)) {
-        throw "$($Service.Name) is listening, but $($Service.ReadyUrl) did not return a healthy response."
+    if (-not (Wait-HttpReady -Url $Service.ReadyUrl -TimeoutSeconds 30)) {
+        throw "$($Service.Name) is listening, but $($Service.ReadyUrl) was not healthy within 30 seconds."
     }
 
     Write-Host "[infra] $($Service.Name) ready on $($Service.Host):$($Service.Port)"
@@ -574,8 +612,9 @@ function Invoke-Doctor {
     }
 
     if ($python) {
-        $depsOk = ((Invoke-NativeQuiet -Command $python -Arguments @("-c", "import neo4j, falkordb, qdrant_client, requests")) -eq 0)
-        Write-DoctorCheck -Name "python deps" -Ok $depsOk -Message "neo4j, falkordb, qdrant_client, requests"
+        $dependencies = "neo4j, falkordb, qdrant_client, requests, cortex_extract"
+        $depsOk = ((Invoke-NativeQuiet -Command $python -Arguments @("-c", "import neo4j, falkordb, qdrant_client, requests, cortex_extract")) -eq 0)
+        Write-DoctorCheck -Name "python + Rust deps" -Ok $depsOk -Message $dependencies
     }
 
     $docker = Get-CommandPath @("docker.exe", "docker")
@@ -965,6 +1004,7 @@ function Get-RuntimeOverrides {
 }
 
 function Invoke-Start {
+    Assert-RustExtension -Python (Get-RootVenvPython)
     $config = Get-StartConfiguration
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
     if ($config.Custom) {
@@ -1094,6 +1134,16 @@ Write-Host '[start]' $titleArg 'exited.'
             $record.Endpoint = "http://$($config.HostName):$($server.Port)$($config.Path)"
         }
         $records += [pscustomobject]$record
+        Write-PidRecords $records
+        $readyHost = if ($config.Custom) { $config.HostName } else { "127.0.0.1" }
+        if (-not (Wait-TcpPort -HostName $readyHost -Port $server.Port)) {
+            if ($config.Custom) {
+                Invoke-Stop -InstanceName $config.Instance
+            } else {
+                Invoke-Stop
+            }
+            throw "$($server.Name) did not become ready on ${readyHost}:$($server.Port)"
+        }
 
         if ($config.Custom) {
             Write-Host "[start] Started $label in terminal PID $($proc.Id) on $($server.Port)"
