@@ -1,0 +1,16 @@
+unit=ROOT,,host,;
+{
+ty=n;
+cm="Batch root";
+unit=FIRST,,host,;
+{
+ty=j;
+te="run.sh";
+}
+unit=SECOND,,host,;
+{
+ty=j;
+te="@BOSAPDIR@/missing.sh";
+}
+ar=(f=FIRST,t=SECOND,seq);
+}

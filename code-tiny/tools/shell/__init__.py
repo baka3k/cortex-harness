@@ -1,0 +1,1 @@
+"""Static shell-script analysis."""
