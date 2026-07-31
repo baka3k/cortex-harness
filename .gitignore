@@ -78,6 +78,8 @@ tests/fixtures/**
 !tests/fixtures/web-framework-application/**
 !tests/fixtures/database-schema-application/
 !tests/fixtures/database-schema-application/**
+!tests/fixtures/go-app/
+!tests/fixtures/go-app/**
 tests/fixtures/aspnet-core-application/**/bin/
 tests/fixtures/aspnet-core-application/**/obj/
 tests/fixtures/aspnet-framework-application/**/bin/
