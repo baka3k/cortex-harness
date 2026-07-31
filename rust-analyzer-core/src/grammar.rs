@@ -212,6 +212,26 @@ impl Grammar for RustGrammar {
     }
 }
 
+// ── Swift ───────────────────────────────────────────────────────────────
+
+pub struct SwiftGrammar;
+
+impl Grammar for SwiftGrammar {
+    fn id(&self) -> &'static str {
+        "swift"
+    }
+    fn language(&self) -> Language {
+        tree_sitter_swift::LANGUAGE.into()
+    }
+    fn matches_path(&self, path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e == "swift")
+            .unwrap_or(false)
+    }
+}
+
 // ── TypeScript / TSX ───────────────────────────────────────────────────
 
 pub struct TsGrammar;
@@ -264,6 +284,7 @@ pub fn registry() -> Vec<Box<dyn Grammar>> {
         Box::new(CSharpGrammar),
         Box::new(PhpGrammar),
         Box::new(RustGrammar),
+        Box::new(SwiftGrammar),
     ]
 }
 
@@ -281,6 +302,7 @@ pub fn by_id(id: &str) -> Option<Box<dyn Grammar>> {
         "csharp" | "cs" | "c#" => "csharp",
         "php" => "php",
         "rust" | "rs" => "rust",
+        "swift" => "swift",
         _ => return None,
     };
     for g in registry() {
@@ -332,6 +354,7 @@ mod tests {
         assert_eq!(by_id("go").unwrap().id(), "go");
         assert_eq!(by_id("rust").unwrap().id(), "rust");
         assert_eq!(by_id("rs").unwrap().id(), "rust");
+        assert_eq!(by_id("swift").unwrap().id(), "swift");
     }
 
     #[test]
@@ -353,6 +376,7 @@ mod tests {
         assert_eq!(by_path("App.tsx").unwrap().id(), "tsx");
         assert_eq!(by_path("utils.ts").unwrap().id(), "typescript");
         assert_eq!(by_path("src/main.rs").unwrap().id(), "rust");
+        assert_eq!(by_path("App.swift").unwrap().id(), "swift");
     }
 
     #[test]
@@ -408,6 +432,13 @@ mod tests {
     fn parse_root_kind_runs_rust_grammar() {
         let src = b"fn main() {}\n";
         let kind = parse_root_kind("rust", src);
+        assert_eq!(kind.as_deref(), Some("source_file"));
+    }
+
+    #[test]
+    fn parse_root_kind_runs_swift_grammar() {
+        let src = b"import Foundation\n\nclass Greeter { func hello() {} }\n";
+        let kind = parse_root_kind("swift", src);
         assert_eq!(kind.as_deref(), Some("source_file"));
     }
 }
