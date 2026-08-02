@@ -193,6 +193,12 @@ function Invoke-Build {
 
     $python = Get-RootVenvPython
 
+    Write-Host "[build] Bootstrapping pip in $venvDir"
+    & $python -m ensurepip --upgrade *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[build] ensurepip unavailable; falling back to 'python -m pip install --upgrade pip'."
+    }
+
     Write-Host "[build] Upgrading pip in $venvDir"
     & $python -m pip install --upgrade pip
 
