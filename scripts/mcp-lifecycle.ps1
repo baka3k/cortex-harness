@@ -63,6 +63,7 @@ $InfraServices = @(
         Container = "cortex-falkordb"
         Image = "falkordb/falkordb"
         Ports = @("6379:6379")
+        RunArgs = @("--maxmemory", "4gb", "--maxmemory-policy", "allkeys-lru")
         Host = "127.0.0.1"
         Port = 6379
         ReadyUrl = ""
@@ -532,6 +533,9 @@ function Start-InfraService {
             $args += @("-p", $port)
         }
         $args += $Service.Image
+        if ($Service.RunArgs) {
+            $args += @($Service.RunArgs)
+        }
 
         Write-Host "[infra] Creating container: $($Service.Container)"
         & $Docker @args | Out-Host
