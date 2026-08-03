@@ -62,7 +62,7 @@ INFRA_SERVICES = (
         "container": "cortex-falkordb",
         "image": "falkordb/falkordb",
         "ports": ("6379:6379",),
-        "run_args": ("--maxmemory", "4gb", "--maxmemory-policy", "allkeys-lru"),
+        "run_args": ("--maxmemory", "4gb", "--maxmemory-policy", "noeviction"),
         "host": "127.0.0.1",
         "port": 6379,
         "ready_url": "",
