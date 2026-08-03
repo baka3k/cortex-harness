@@ -505,12 +505,9 @@ def _discover_folders(project_dir: Path, root_prefix: str) -> list:
     base = project_dir / root_prefix
     if not base.exists():
         return result
-    for item in sorted(base.rglob("*")):
-        if not item.is_dir():
-            continue
+    for item in sorted(_walk_source_dirs(base)):
         rel = item.relative_to(project_dir)
-        if not set(rel.parts).intersection(_SCAN_EXCLUDE):
-            result.append(str(rel))
+        result.append(str(rel))
     return [root_prefix] + result
 
 
@@ -576,10 +573,41 @@ def _is_sensitive(path: Path) -> bool:
     return any(fnmatch.fnmatch(name, pat) for pat in SENSITIVE_PATTERNS)
 
 
+def _is_excluded_dir_name(name: str) -> bool:
+    """True if a directory basename matches any _SCAN_EXCLUDE pattern (exact or glob)."""
+    lname = name.lower()
+    return any(
+        p == name or p == lname or fnmatch.fnmatch(name, p) or fnmatch.fnmatch(lname, p)
+        for p in _SCAN_EXCLUDE
+    )
+
+
+def _walk_source_files(root: Path):
+    """Yield every file under *root*, pruning _SCAN_EXCLUDE directories during descent.
+
+    Unlike ``Path.rglob('*')`` — which recurses into .venv / node_modules and
+    then filters each file — this prunes excluded dirs from os.walk's ``dirs``
+    list so the traversal never enters them.  This avoids stat-ing thousands
+    of irrelevant files inside virtual-envs and build trees.
+    """
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if not _is_excluded_dir_name(d)]
+        for fname in files:
+            yield Path(dirpath, fname)
+
+
+def _walk_source_dirs(root: Path):
+    """Yield every directory under *root*, pruning _SCAN_EXCLUDE directories."""
+    for dirpath, dirs, _files in os.walk(root):
+        dirs[:] = [d for d in dirs if not _is_excluded_dir_name(d)]
+        for d in dirs:
+            yield Path(dirpath, d)
+
+
 def _is_excluded_path(path: Path, root: Path) -> bool:
     """True if path lives inside a _SCAN_EXCLUDE directory (e.g. .venv, node_modules)."""
     try:
-        return bool(set(path.relative_to(root).parts[:-1]).intersection(_SCAN_EXCLUDE))
+        return any(_is_excluded_dir_name(part) for part in path.relative_to(root).parts[:-1])
     except ValueError:
         return False
 
@@ -589,8 +617,8 @@ def _detect_langs(folder_path: Path) -> list:
     counts: Counter = Counter()
     is_android = any(folder_path.rglob("AndroidManifest.xml"))
 
-    for f in folder_path.rglob("*"):
-        if not f.is_file() or _is_sensitive(f) or _is_excluded_path(f, folder_path):
+    for f in _walk_source_files(folder_path):
+        if not f.is_file() or _is_sensitive(f):
             continue
         ext = f.suffix.lower()
         for lang, exts in LANG_EXTENSIONS.items():
@@ -729,9 +757,8 @@ def _ensure_git_repo(folder_path: Path, auto_yes: bool = False) -> bool:
 def _mtime_changed_files(folder_path: Path, since_ts: float) -> tuple:
     """Return (changed_files, []) using mtime comparison. Paths relative to folder_path."""
     changed = []
-    for f in folder_path.rglob("*"):
+    for f in _walk_source_files(folder_path):
         if (f.is_file() and not _is_sensitive(f)
-                and not _is_excluded_path(f, folder_path)
                 and f.stat().st_mtime > since_ts):
             try:
                 changed.append(str(f.relative_to(folder_path)))
@@ -764,9 +791,9 @@ def _doc_file_hash(path: Path) -> str:
 def _find_doc_files(folder_path: Path) -> list:
     """Return all supported document files under folder_path (sorted)."""
     return sorted(
-        f for f in folder_path.rglob("*")
+        f for f in _walk_source_files(folder_path)
         if (f.is_file() and f.suffix.lower() in DOC_EXTENSIONS
-                and not _is_sensitive(f) and not _is_excluded_path(f, folder_path))
+                and not _is_sensitive(f))
     )
 
 
