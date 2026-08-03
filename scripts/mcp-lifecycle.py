@@ -62,6 +62,7 @@ INFRA_SERVICES = (
         "container": "cortex-falkordb",
         "image": "falkordb/falkordb",
         "ports": ("6379:6379",),
+        "run_args": ("--maxmemory", "4gb", "--maxmemory-policy", "allkeys-lru"),
         "host": "127.0.0.1",
         "port": 6379,
         "ready_url": "",
@@ -284,6 +285,8 @@ def start_infra_service(docker: str, service: dict[str, object]) -> None:
         for port in service["ports"]:
             arguments.extend(("-p", str(port)))
         arguments.append(image)
+        for arg in service.get("run_args", ()):
+            arguments.append(str(arg))
         print(f"[infra] Creating container: {name}")
         run(arguments)
 
