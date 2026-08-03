@@ -8,6 +8,7 @@ record is a dictionary keyed by returned column name.
 
 import logging
 import re
+import time
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -161,13 +162,21 @@ class FalkorDBDriver(Neo4jDriver):
 
         # redis-py's Connection defaults to socket_timeout=5s with 0 retries.
         # Graph queries (batch MERGE, full-text, etc.) routinely exceed 5s on
-        # large codebases, so raise the socket timeout and add retry-on-timeout
-        # unless the caller explicitly provided their own values.
+        # large codebases, so raise the socket timeout and add retry-on-error.
+        #
+        # IMPORTANT: redis.exceptions.ConnectionError extends RedisError, NOT
+        # builtins.ConnectionError. Passing the builtin here meant the server's
+        # "Connection closed by server" error was never matched by the retry
+        # loop — the exception propagated immediately with zero retries.
         client_kwargs.setdefault("socket_timeout", 120)
         client_kwargs.setdefault("socket_connect_timeout", 10)
         client_kwargs.setdefault(
             "retry_on_error",
-            [ConnectionError, redis.exceptions.TimeoutError, TimeoutError],
+            [
+                redis.exceptions.ConnectionError,
+                redis.exceptions.TimeoutError,
+                TimeoutError,
+            ],
         )
 
         url = uri or client_kwargs.pop("url", None)
@@ -244,7 +253,40 @@ class FalkorDBDriver(Neo4jDriver):
     ) -> Tuple[List[Dict[str, Any]], List[str], Any]:
         graph = self._graph_for(database)
         query, params = _prepare_falkordb_query(query, parameters)
-        result = graph.query(query, params=params)
+
+        # Defense-in-depth: redis-py's built-in retry_on_error only retries the
+        # command send path once with NoBackoff. When FalkorDB drops the
+        # connection mid-query (OOM kill, idle timeout, server restart), a
+        # fresh query needs a fresh connection from the pool. Retry here with
+        # exponential backoff so transient connection loss on large batch
+        # writes doesn't abort the whole analysis run.
+        max_retries = 3
+        base_delay = 1.0
+        result = None
+        for attempt in range(max_retries + 1):
+            try:
+                result = graph.query(query, params=params)
+                break
+            except Exception as exc:
+                is_conn_error = isinstance(
+                    exc,
+                    (
+                        ConnectionError,
+                        TimeoutError,
+                    ),
+                ) or "Connection closed by server" in str(exc)
+                if not is_conn_error or attempt == max_retries:
+                    raise
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "FalkorDB connection error on attempt %d/%d, retrying in %.1fs: %s",
+                    attempt + 1,
+                    max_retries + 1,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
+
         keys = [_result_key(item) for item in result.header]
         records = [
             {
