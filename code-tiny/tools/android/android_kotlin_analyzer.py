@@ -1438,6 +1438,11 @@ _ANDROID_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
 
+    # Python virtual environments
+    ".venv", "venv", "env", ".env", "virtualenv",
+    "env.bak", "venv.bak", ".env.bak", ".venv.bak",
+    "site-packages",
+
     # Gradle
     ".gradle", "gradleCache", ".mvn",
 

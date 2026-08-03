@@ -40,6 +40,9 @@ from tools.graph.writer.language_writer import LanguageCodeWriter
 
 _SCAN_SKIP_DIRS = {
     ".git", ".hg", ".svn", ".idea", ".vs", ".vscode", "node_modules",
+    # Python virtual environments
+    ".venv", "venv", "env", ".env", "virtualenv",
+    "env.bak", "venv.bak", ".env.bak", ".venv.bak", "site-packages",
     "__pycache__", ".cache", "build", "dist", "out", "target", "tmp", "temp",
 }
 

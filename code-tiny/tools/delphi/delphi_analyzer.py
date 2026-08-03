@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fnmatch
 import gc
 import json
 import os
@@ -1657,6 +1658,11 @@ def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
         # Version control
         ".git", ".svn", ".hg",
 
+        # Python virtual environments
+        ".venv", "venv", "env", ".env", "virtualenv",
+        "env.bak", "venv.bak", ".env.bak", ".venv.bak",
+        "site-packages",
+
         # IDE
         ".idea", ".vscode",
 
@@ -1683,7 +1689,7 @@ def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
         "*.dcu", "*.dcp", "*.dpu", "*.exe", "*.dll", "*.bpl",
     }
 
-    if dir_name in ignore_patterns:
+    if any(p == dir_name or fnmatch.fnmatch(dir_name, p) for p in ignore_patterns):
         return True
 
     if dir_name.endswith((".~", ".swp", ".swo")):

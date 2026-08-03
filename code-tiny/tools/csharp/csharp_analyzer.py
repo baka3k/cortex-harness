@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fnmatch
 import gc
 import json
 import os
@@ -50,6 +51,11 @@ _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
 
+    # Python virtual environments
+    ".venv", "venv", "env", ".env", "virtualenv",
+    "env.bak", "venv.bak", ".env.bak", ".venv.bak",
+    "site-packages",
+
     # IDE
     ".idea", ".vs", ".vscode", ".settings",
 
@@ -83,6 +89,13 @@ _SCAN_SKIP_DIRS = {
     # User-specific
     "*.user", "*.suo", "*.cache",
 }
+
+
+def _is_skip_dir(name: str) -> bool:
+    return any(
+        p == name or fnmatch.fnmatch(name, p)
+        for p in _SCAN_SKIP_DIRS
+    )
 
 
 @dataclass
@@ -1043,7 +1056,7 @@ def _stable_point_id(symbol_id: str) -> str:
 def _scan_csharp_files(root: str) -> List[str]:
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [name for name in dirnames if not _is_skip_dir(name)]
         for name in filenames:
             if name.endswith(".cs"):
                 files.append(os.path.join(dirpath, name))

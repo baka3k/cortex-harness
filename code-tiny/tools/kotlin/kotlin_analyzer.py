@@ -1235,6 +1235,11 @@ def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
         # Version control
         ".git", ".svn", ".hg",
 
+        # Python virtual environments
+        "venv", ".venv", "env", ".env", "virtualenv",
+        "env.bak", "venv.bak", ".env.bak", ".venv.bak",
+        "site-packages",
+
         # Temporary
         "tmp", "temp", ".tmp", "tmpdir",
 
