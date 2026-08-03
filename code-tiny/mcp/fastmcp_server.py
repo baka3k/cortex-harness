@@ -1248,6 +1248,12 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 
 async def _list_databases() -> List[str]:
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
+        try:
+            driver = await _get_graph_driver()
+            if hasattr(driver, "list_databases"):
+                return await driver.list_databases()
+        except Exception as exc:
+            logger.warning("Failed to list FalkorDB graphs: %s", exc)
         return [_normalize_db_name(DEFAULT_GRAPH_DB)]
     driver = await _get_graph_driver()
     records, summary, keys = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
@@ -1259,7 +1265,7 @@ async def _list_databases() -> List[str]:
     return names
 
 
-@mcp_server.tool(name="list_databases", description="List available Neo4j databases.")
+@mcp_server.tool(name="list_databases", description="List available graph databases from the active provider (FalkorDB or Neo4j).")
 async def tool_list_databases() -> Dict[str, Any]:
     names = await _list_databases()
     default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
