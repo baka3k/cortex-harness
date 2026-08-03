@@ -163,12 +163,25 @@ class FalkorDBDriver(Neo4jDriver):
         # Graph queries (batch MERGE, full-text, etc.) routinely exceed 5s on
         # large codebases, so raise the socket timeout and add retry-on-timeout
         # unless the caller explicitly provided their own values.
+        #
+        # When retry_on_error is set without an explicit retry object, redis-py
+        # defaults to Retry(NoBackoff(), 1) — a single immediate retry with no
+        # delay.  In long-running batch imports (10k+ queries) FalkorDB can
+        # briefly close a connection (server-side idle eviction, memory
+        # pressure, etc.); one immediate retry is often not enough.  Supply an
+        # explicit Retry with ExponentialBackoff and 3 attempts so redis-py
+        # can ride through transient drops without escalating to the
+        # application-level retry in execute_query_sync.
+        from redis.retry import Retry
+        from redis.backoff import ExponentialBackoff
+
         client_kwargs.setdefault("socket_timeout", 120)
         client_kwargs.setdefault("socket_connect_timeout", 10)
         client_kwargs.setdefault(
             "retry_on_error",
             [ConnectionError, redis.exceptions.TimeoutError, TimeoutError],
         )
+        client_kwargs.setdefault("retry", Retry(ExponentialBackoff(), 3))
 
         url = uri or client_kwargs.pop("url", None)
         if url and "://" in url:
@@ -241,6 +254,30 @@ class FalkorDBDriver(Neo4jDriver):
             None, self.execute_query_sync, query, parameters, database
         )
 
+    # When redis-py exhausts its internal retries, the connection is left in
+    # a broken state — the next call re-enters send_command → reconnect →
+    # same failure.  This application-level retry tears down the connection
+    # pool (so the next call gets a fresh TCP socket) and retries with
+    # exponential backoff.  It is the safety net that prevents a single
+    # transient "Connection closed by server" from crashing a 10k+ batch
+    # import and forcing a full restart.
+    _RECONNECT_RETRIES = 3
+    _RECONNECT_BASE_DELAY = 1.0  # seconds
+
+    def _force_reconnect(self) -> None:
+        """Disconnect the underlying Redis connection pool.
+
+        On ConnectionError redis-py marks the connection dead but the pool
+        may still hold stale state.  Calling ``disconnect()`` forces the
+        next command to open a brand-new TCP socket.
+        """
+        try:
+            pool = getattr(self._client, "connection_pool", None)
+            if pool is not None:
+                pool.disconnect()
+        except Exception as exc:
+            logger.warning("FalkorDB pool disconnect failed during reconnect: %s", exc)
+
     def execute_query_sync(
         self,
         query: str,
@@ -249,7 +286,40 @@ class FalkorDBDriver(Neo4jDriver):
     ) -> Tuple[List[Dict[str, Any]], List[str], Any]:
         graph = self._graph_for(database)
         query, params = _prepare_falkordb_query(query, parameters)
-        result = graph.query(query, params=params)
+
+        import time
+
+        # redis.exceptions.ConnectionError subclasses the builtin
+        # ConnectionError, so catching the builtin covers both.  We also
+        # catch redis.exceptions.TimeoutError (a subclass of the builtin
+        # TimeoutError) since a timed-out socket read often indicates the
+        # server is about to drop the connection.
+        retryable_errors = (ConnectionError, TimeoutError)
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(self._RECONNECT_RETRIES + 1):
+            try:
+                result = graph.query(query, params=params)
+                break
+            except retryable_errors as exc:
+                if attempt >= self._RECONNECT_RETRIES:
+                    raise
+                last_exc = exc
+                delay = self._RECONNECT_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "FalkorDB connection error (attempt %d/%d), "
+                    "reconnecting in %.1fs: %s",
+                    attempt + 1,
+                    self._RECONNECT_RETRIES,
+                    delay,
+                    exc,
+                )
+                self._force_reconnect()
+                time.sleep(delay)
+        else:
+            if last_exc:
+                raise last_exc
+
         keys = [_result_key(item) for item in result.header]
         records = [
             {
@@ -282,16 +352,37 @@ class FalkorDBDriver(Neo4jDriver):
         if not queries:
             return []
 
-        graph = self._graph_for(database)
-        pipe = graph.client.pipeline(transaction=False)
+        import time
 
-        for query, params in queries:
-            prepared_q, prepared_p = _prepare_falkordb_query(query, params)
-            param_header = graph._build_params_header(prepared_p)
-            full_query = param_header + prepared_q
-            pipe.execute_command("GRAPH.QUERY", graph.name, full_query, "--compact")
+        retryable_errors = (ConnectionError, TimeoutError)
 
-        raw_responses = pipe.execute()
+        for attempt in range(self._RECONNECT_RETRIES + 1):
+            try:
+                graph = self._graph_for(database)
+                pipe = graph.client.pipeline(transaction=False)
+
+                for query, params in queries:
+                    prepared_q, prepared_p = _prepare_falkordb_query(query, params)
+                    param_header = graph._build_params_header(prepared_p)
+                    full_query = param_header + prepared_q
+                    pipe.execute_command("GRAPH.QUERY", graph.name, full_query, "--compact")
+
+                raw_responses = pipe.execute()
+                break
+            except retryable_errors as exc:
+                if attempt >= self._RECONNECT_RETRIES:
+                    raise
+                delay = self._RECONNECT_BASE_DELAY * (2 ** attempt)
+                logger.warning(
+                    "FalkorDB pipelined connection error (attempt %d/%d), "
+                    "reconnecting in %.1fs: %s",
+                    attempt + 1,
+                    self._RECONNECT_RETRIES,
+                    delay,
+                    exc,
+                )
+                self._force_reconnect()
+                time.sleep(delay)
 
         results: List[Tuple[List[Dict[str, Any]], List[str], Any]] = []
         from falkordb import QueryResult
