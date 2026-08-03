@@ -56,6 +56,10 @@ _SCAN_SKIP_DIRS = {
     ".git",
     ".hg",
     ".svn",
+    # Python virtual environments
+    ".venv", "venv", "env", ".env", "virtualenv",
+    "env.bak", "venv.bak", ".env.bak", ".venv.bak",
+    "site-packages",
     ".idea",
     ".vs",
     ".vscode",

@@ -54,6 +54,10 @@ _LOOP_NODES = {"loop_expression", "while_expression", "for_expression"}
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
+    # Python virtual environments
+    ".venv", "venv", "env", ".env", "virtualenv",
+    "env.bak", "venv.bak", ".env.bak", ".venv.bak",
+    "site-packages",
     # IDE
     ".idea", ".vs", ".vscode", ".eclipse", ".settings",
     # Build outputs (Rust/Cargo)

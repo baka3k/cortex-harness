@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import collections
+import fnmatch
 import gc
 import importlib.util
 import json
@@ -83,6 +84,12 @@ _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
 
+    # Python virtual environments (must be pruned BEFORE descent,
+    # otherwise site-packages leaks thousands of .h/.cpp files).
+    ".venv", "venv", "env", ".env", "virtualenv",
+    "env.bak", "venv.bak", ".env.bak", ".venv.bak",
+    "site-packages",
+
     # IDE
     ".idea", ".vs", ".vscode", ".eclipse", ".settings",
 
@@ -122,6 +129,20 @@ _SCAN_SKIP_DIRS = {
     # Misc project files
     "*.pro.user", "*.user", "*.suo",
 }
+
+
+def _is_skip_dir(name: str) -> bool:
+    """True if a directory basename should be pruned during the file scan.
+
+    Matches both exact names (e.g. ``.venv``) and glob patterns (e.g.
+    ``cmake-build-*``) in ``_SCAN_SKIP_DIRS``.  The previous ``name not in
+    _SCAN_SKIP_DIRS`` check silently ignored every glob entry.
+    """
+    return any(
+        p == name or fnmatch.fnmatch(name, p)
+        for p in _SCAN_SKIP_DIRS
+    )
+
 
 try:
     from tree_sitter_languages import get_parser as ts_get_parser
@@ -2629,7 +2650,7 @@ def _detect_git_commit_sha(root: str) -> str:
 def _scan_c_family_files(root: str) -> List[str]:
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [name for name in dirnames if not _is_skip_dir(name)]
         for name in filenames:
             if name.lower().endswith(
                 (".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx")
