@@ -359,7 +359,9 @@ class FalkorDBDriver(Neo4jDriver):
         for attempt in range(self._RECONNECT_RETRIES + 1):
             try:
                 graph = self._graph_for(database)
-                pipe = graph.client.pipeline(transaction=False)
+                # FalkorDB wraps redis.Redis internally as ``.connection``;
+                # ``graph.client`` is the FalkorDB wrapper, not redis.Redis.
+                pipe = self._client.connection.pipeline(transaction=False)
 
                 for query, params in queries:
                     prepared_q, prepared_p = _prepare_falkordb_query(query, params)

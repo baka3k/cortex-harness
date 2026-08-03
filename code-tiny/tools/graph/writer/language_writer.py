@@ -5,7 +5,7 @@ Unified writer for all language analyzers with state management and batching.
 Replaces the duplicated Neo4jWriter classes across all analyzer files.
 """
 
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable, Tuple
 import logging
 
 from tools.graph.core.base import GraphDriver
@@ -1526,6 +1526,306 @@ class LanguageCodeWriter:
             return records[0]["count"] if records else 0
 
         return await self.write_batches("workflow_steps", step_rows, write_batch, state, state_writer)
+
+    # ---------------------------------------------------------------------------
+    # Pipelined node-write queries (used by write_all_pipelined).
+    #
+    # These mirror the inline Cypher in write_files / write_namespaces_full /
+    # write_types_full / write_function_types / write_functions_full /
+    # write_fields / write_aliases / write_templates so that a single
+    # FalkorDBDriver.execute_queries_pipelined_async call can send every
+    # independent node MERGE in one TCP round-trip.
+    #
+    # Edge writes (relations, calls) are NOT included here — they MATCH on
+    # nodes and must run after Phase A completes.
+    # ---------------------------------------------------------------------------
+
+    _PIPELINE_FILES_QUERY = """
+    UNWIND $rows AS row
+    MERGE (f:File {id: row.id})
+    SET f.path = row.path,
+        f.node_type = 'code',
+        f.start_line = row.start_line,
+        f.end_line = row.end_line,
+        f.code = row.code,
+        f.comment = row.comment,
+        f.summary = row.summary,
+        f.note = row.note,
+        f.project_id = row.project_id,
+        f.project_id_normalized = row.project_id_normalized,
+        f.project_name = row.project_name,
+        f.language = row.language,
+        f.repo = row.repo,
+        f.build_system = row.build_system,
+        f.updated_at = datetime()
+    RETURN count(f) as count
+    """
+
+    _PIPELINE_NAMESPACES_QUERY = """
+    UNWIND $rows AS row
+    MERGE (n:Namespace {id: row.id})
+    SET n.name = row.name,
+        n.qualified_name = row.qualified_name,
+        n.file_path = row.file_path,
+        n.start_line = row.start_line,
+        n.end_line = row.end_line,
+        n.code = row.code,
+        n.comment = row.comment,
+        n.summary = row.summary,
+        n.note = row.note,
+        n.project_id = row.project_id,
+        n.project_id_normalized = row.project_id_normalized,
+        n.project_name = row.project_name,
+        n.language = row.language,
+        n.repo = row.repo,
+        n.build_system = row.build_system,
+        n.updated_at = datetime()
+    RETURN count(n) as count
+    """
+
+    _PIPELINE_TYPES_QUERY = """
+    UNWIND $rows AS row
+    MERGE (t:Type {id: row.id})
+    SET t.name = row.name,
+        t.qualified_name = row.qualified_name,
+        t.kind = row.kind,
+        t.file_path = row.file_path,
+        t.start_line = row.start_line,
+        t.end_line = row.end_line,
+        t.code = row.code,
+        t.comment = row.comment,
+        t.summary = row.summary,
+        t.note = row.note,
+        t.exported = coalesce(row.exported, false),
+        t.project_id = row.project_id,
+        t.project_id_normalized = row.project_id_normalized,
+        t.project_name = row.project_name,
+        t.language = row.language,
+        t.repo = row.repo,
+        t.build_system = row.build_system,
+        t.updated_at = datetime()
+    RETURN count(t) as count
+    """
+
+    _PIPELINE_FUNCTION_TYPES_QUERY = """
+    UNWIND $rows AS row
+    MERGE (ft:FunctionType {id: row.id})
+    SET ft.type_signature        = row.type_signature,
+        ft.file_path             = row.file_path,
+        ft.start_line            = row.start_line,
+        ft.end_line              = row.end_line,
+        ft.code                  = row.code,
+        ft.project_id            = row.project_id,
+        ft.project_id_normalized = row.project_id_normalized,
+        ft.project_name          = row.project_name,
+        ft.language              = row.language,
+        ft.repo                  = row.repo,
+        ft.build_system          = row.build_system
+    RETURN count(ft) AS count
+    """
+
+    _PIPELINE_FUNCTIONS_QUERY = """
+    UNWIND $rows AS row
+    MERGE (f:Function {id: row.id})
+    SET f.name = row.name,
+        f.node_type = 'code',
+        f.qualified_name = row.qualified_name,
+        f.kind = row.kind,
+        f.class_name = row.class_name,
+        f.package_name = row.package_name,
+        f.scope_name = row.scope_name,
+        f.file_path = row.file_path,
+        f.start_byte = row.start_byte,
+        f.end_byte = row.end_byte,
+        f.start_line = row.start_line,
+        f.end_line = row.end_line,
+        f.arity = row.arity,
+        f.code = row.code,
+        f.comment = row.comment,
+        f.summary = row.summary,
+        f.note = row.note,
+        f.exported = coalesce(row.exported, false),
+        f.visibility = coalesce(row.visibility, 'unknown'),
+        f.is_public_api = coalesce(row.is_public_api, false),
+        f.visibility_source = coalesce(row.visibility_source, ''),
+        f.export_evidence = coalesce(row.export_evidence, ''),
+        f.signature = coalesce(row.signature, ''),
+        f.external = coalesce(row.external, false),
+        f.builtin = coalesce(row.builtin, false),
+        f.react_role = coalesce(row.react_role, ''),
+        f.middleware_kind = coalesce(row.middleware_kind, ''),
+        f.project_id = row.project_id,
+        f.project_id_normalized = row.project_id_normalized,
+        f.project_name = row.project_name,
+        f.language = row.language,
+        f.repo = row.repo,
+        f.build_system = row.build_system,
+        f.updated_at = datetime()
+    RETURN count(f) as count
+    """
+
+    _PIPELINE_FIELDS_QUERY = """
+    UNWIND $rows AS row
+    MERGE (fld:Field {id: row.id})
+    SET fld.name                  = row.name,
+        fld.qualified_name        = row.qualified_name,
+        fld.scope_name            = row.scope_name,
+        fld.type_signature        = row.type_signature,
+        fld.file_path             = row.file_path,
+        fld.start_line            = row.start_line,
+        fld.end_line              = row.end_line,
+        fld.code                  = row.code,
+        fld.project_id            = row.project_id,
+        fld.project_id_normalized = row.project_id_normalized,
+        fld.project_name          = row.project_name,
+        fld.language              = row.language,
+        fld.repo                  = row.repo,
+        fld.build_system          = row.build_system
+    RETURN count(fld) AS count
+    """
+
+    _PIPELINE_ALIASES_QUERY = """
+    UNWIND $rows AS row
+    MERGE (a:Alias {id: row.id})
+    SET a.name                  = row.name,
+        a.qualified_name        = row.qualified_name,
+        a.kind                  = row.kind,
+        a.target_name           = row.target_name,
+        a.file_path             = row.file_path,
+        a.start_line            = row.start_line,
+        a.end_line              = row.end_line,
+        a.code                  = row.code,
+        a.project_id            = row.project_id,
+        a.project_id_normalized = row.project_id_normalized,
+        a.project_name          = row.project_name,
+        a.language              = row.language,
+        a.repo                  = row.repo,
+        a.build_system          = row.build_system
+    RETURN count(a) AS count
+    """
+
+    _PIPELINE_TEMPLATES_QUERY = """
+    UNWIND $rows AS row
+    MERGE (t:Template {id: row.id})
+    SET t.name                  = row.name,
+        t.file_path             = row.file_path,
+        t.start_line            = row.start_line,
+        t.end_line              = row.end_line,
+        t.code                  = row.code,
+        t.project_id            = row.project_id,
+        t.project_id_normalized = row.project_id_normalized,
+        t.project_name          = row.project_name,
+        t.language              = row.language,
+        t.repo                  = row.repo,
+        t.build_system          = row.build_system
+    RETURN count(t) AS count
+    """
+
+    def _chunked(self, rows: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """Split *rows* into batch_size-sized chunks."""
+        if not rows:
+            return []
+        return [rows[i : i + self.batch_size] for i in range(0, len(rows), self.batch_size)]
+
+    async def write_all_pipelined(
+        self,
+        files: List[Dict[str, Any]] = None,
+        namespaces: List[Dict[str, Any]] = None,
+        types: List[Dict[str, Any]] = None,
+        function_types: List[Dict[str, Any]] = None,
+        functions: List[Dict[str, Any]] = None,
+        fields: List[Dict[str, Any]] = None,
+        aliases: List[Dict[str, Any]] = None,
+        templates: List[Dict[str, Any]] = None,
+        relations: List[Dict[str, Any]] = None,
+        calls_with_site: List[Dict[str, Any]] = None,
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> Dict[str, int]:
+        """Write all node types in a single pipelined TCP round-trip, then
+        write edges sequentially.
+
+        Only FalkorDBDriver supports pipelining.  When the driver does not
+        expose ``execute_queries_pipelined_async`` the method transparently
+        falls back to the existing sequential :meth:`write_all`.
+
+        Node writes are independent (pure ``MERGE … SET`` keyed by ``id``)
+        so they can be sent together.  Edge writes (relations, calls) use
+        ``MATCH`` on already-created nodes and must run afterwards.
+        """
+        # --- fallback for non-FalkorDB drivers ---
+        if not hasattr(self.driver, "execute_queries_pipelined_async"):
+            return await self.write_all(
+                files=files,
+                namespaces=namespaces,
+                types=types,
+                function_types=function_types,
+                functions=functions,
+                fields=fields,
+                aliases=aliases,
+                templates=templates,
+                relations=relations,
+                calls_with_site=calls_with_site,
+                use_full_writers=True,
+                state=state,
+                state_writer=state_writer,
+            )
+
+        counts: Dict[str, int] = {}
+
+        # --- Phase A: collect all node-write batches ---
+        pipeline_queries: List[Tuple[str, Dict[str, Any]]] = []
+        node_totals: Dict[str, int] = {}
+
+        def _add_node_batches(
+            label: str,
+            rows: Optional[List[Dict[str, Any]]],
+            query: str,
+        ) -> None:
+            if not rows:
+                return
+            for row in rows:
+                row.setdefault("node_type", "code")
+            total = 0
+            for chunk in self._chunked(rows):
+                pipeline_queries.append((query, {"rows": chunk}))
+                total += len(chunk)
+            node_totals[label] = total
+
+        _add_node_batches("files", files, self._PIPELINE_FILES_QUERY)
+        _add_node_batches("namespaces", namespaces, self._PIPELINE_NAMESPACES_QUERY)
+        _add_node_batches("types", types, self._PIPELINE_TYPES_QUERY)
+        _add_node_batches("function_types", function_types, self._PIPELINE_FUNCTION_TYPES_QUERY)
+        _add_node_batches("functions", functions, self._PIPELINE_FUNCTIONS_QUERY)
+        _add_node_batches("fields", fields, self._PIPELINE_FIELDS_QUERY)
+        _add_node_batches("aliases", aliases, self._PIPELINE_ALIASES_QUERY)
+        _add_node_batches("templates", templates, self._PIPELINE_TEMPLATES_QUERY)
+
+        # --- Phase A: send all node batches in one pipeline ---
+        if pipeline_queries:
+            results = await self.driver.execute_queries_pipelined_async(
+                pipeline_queries, self.database
+            )
+            for label, expected in node_totals.items():
+                counts[label] = expected
+
+            if state is not None and state_writer:
+                for label in node_totals:
+                    state[label] = node_totals[label]
+                state_writer(state)
+
+        # --- Phase B: edge writes (sequential, depend on nodes existing) ---
+        if relations:
+            counts["relations"] = await self.write_relations_typed(
+                relations, state, state_writer
+            )
+
+        if calls_with_site:
+            counts["calls_with_site"] = await self.write_calls_with_site(
+                calls_with_site, state, state_writer
+            )
+
+        return counts
 
     async def write_all(
         self,

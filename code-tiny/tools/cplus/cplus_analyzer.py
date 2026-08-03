@@ -3678,18 +3678,34 @@ SET c.node_type = 'code',
                              buf_functions, buf_fields, buf_aliases, buf_templates,
                              buf_resources, buf_resource_elements])
             if has_nodes or buf_relations:
-                await code_writer.write_all(
-                    files=buf_files or None,
-                    namespaces=buf_namespaces or None,
-                    types=buf_types or None,
-                    function_types=buf_function_types or None,
-                    functions=buf_functions or None,
-                    fields=buf_fields or None,
-                    aliases=buf_aliases or None,
-                    templates=buf_templates or None,
-                    relations=buf_relations or None,
-                    use_full_writers=True,
+                _use_pipeline = hasattr(code_writer, "write_all_pipelined") and hasattr(
+                    code_writer.driver, "execute_queries_pipelined_async"
                 )
+                if _use_pipeline:
+                    await code_writer.write_all_pipelined(
+                        files=buf_files or None,
+                        namespaces=buf_namespaces or None,
+                        types=buf_types or None,
+                        function_types=buf_function_types or None,
+                        functions=buf_functions or None,
+                        fields=buf_fields or None,
+                        aliases=buf_aliases or None,
+                        templates=buf_templates or None,
+                        relations=buf_relations or None,
+                    )
+                else:
+                    await code_writer.write_all(
+                        files=buf_files or None,
+                        namespaces=buf_namespaces or None,
+                        types=buf_types or None,
+                        function_types=buf_function_types or None,
+                        functions=buf_functions or None,
+                        fields=buf_fields or None,
+                        aliases=buf_aliases or None,
+                        templates=buf_templates or None,
+                        relations=buf_relations or None,
+                        use_full_writers=True,
+                    )
                 _total_files_written += len(buf_files)
             if buf_calls:
                 _orig_bs = code_writer.batch_size
