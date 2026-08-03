@@ -3892,6 +3892,28 @@ SET c.node_type = 'code',
             # Events will be added through relations
             pass
 
+        # Create indexes BEFORE streaming writes so that every MATCH/MERGE
+        # in the write loop can use index lookups instead of full-graph scans.
+        # On a fresh graph this is the difference between seconds and tens of
+        # minutes for CALLS edges (each row does 2 MATCH-by-id lookups).
+        _pre_indexes = [
+            "CREATE INDEX function_id_lookup IF NOT EXISTS FOR (f:Function) ON (f.id)",
+            "CREATE INDEX file_id_lookup IF NOT EXISTS FOR (f:File) ON (f.id)",
+            "CREATE INDEX namespace_id_lookup IF NOT EXISTS FOR (n:Namespace) ON (n.id)",
+            "CREATE INDEX class_id_lookup IF NOT EXISTS FOR (c:Class) ON (c.id)",
+            "CREATE INDEX resource_id_lookup IF NOT EXISTS FOR (r:Resource) ON (r.id)",
+            "CREATE INDEX ui_control_id_lookup IF NOT EXISTS FOR (c:UIControl) ON (c.id)",
+            "CREATE INDEX unknown_function_id_lookup IF NOT EXISTS FOR (u:UnknownFunction) ON (u.id)",
+            "CREATE INDEX parse_run_id_lookup IF NOT EXISTS FOR (r:ParseRun) ON (r.id)",
+        ]
+        for _iq in _pre_indexes:
+            try:
+                await code_writer.driver.execute_query(_iq, database=code_writer.database)
+            except Exception:
+                pass
+        if verbose:
+            print("[neo4j] Pre-write indexes ensured")
+
         for payload in iter_payloads(log_parse=False):
             file_def = payload["file_def"]
             buf_files.append({
@@ -4532,23 +4554,6 @@ SET c.node_type = 'code',
                 f"[neo4j] inferred declares links: {inferred_declares}, "
                 f"inferred synthetic types: {inferred_type_nodes}"
             )
-
-        index_queries = [
-            "CREATE INDEX function_id_lookup IF NOT EXISTS FOR (f:Function) ON (f.id)",
-            "CREATE INDEX file_id_lookup IF NOT EXISTS FOR (f:File) ON (f.id)",
-            "CREATE INDEX namespace_id_lookup IF NOT EXISTS FOR (n:Namespace) ON (n.id)",
-            "CREATE INDEX class_id_lookup IF NOT EXISTS FOR (c:Class) ON (c.id)",
-            "CREATE INDEX resource_id_lookup IF NOT EXISTS FOR (r:Resource) ON (r.id)",
-            "CREATE INDEX ui_control_id_lookup IF NOT EXISTS FOR (c:UIControl) ON (c.id)",
-            "CREATE INDEX unknown_function_id_lookup IF NOT EXISTS FOR (u:UnknownFunction) ON (u.id)",
-            "CREATE INDEX parse_run_id_lookup IF NOT EXISTS FOR (r:ParseRun) ON (r.id)",
-        ]
-        for query in index_queries:
-            try:
-                await code_writer.driver.execute_query(query, database=code_writer.database)
-            except Exception as exc:
-                if verbose:
-                    print(f"[neo4j] index ensure skipped: {exc}")
 
         try:
             await code_writer.driver.execute_query(

@@ -1176,10 +1176,36 @@ async def _ensure_project_repository_graph(
     )
     resolved_graph = getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None)
     try:
+        # Core indexes that every analyzer's MATCH/MERGE-by-id depends on.
+        # Creating them here (before any analyzer subprocess starts) ensures
+        # writes use index lookups from the very first batch instead of
+        # full-graph scans.  Idempotent — safe on graphs that already have them.
         await driver.create_indexes(
             [
                 {"label": "Project", "property": "project_id"},
                 {"label": "Repository", "property": "name"},
+                {"label": "Function", "property": "id"},
+                {"label": "File", "property": "id"},
+                {"label": "Type", "property": "id"},
+                {"label": "Namespace", "property": "id"},
+                {"label": "Class", "property": "id"},
+                {"label": "Package", "property": "id"},
+                {"label": "Field", "property": "id"},
+                {"label": "Alias", "property": "id"},
+                {"label": "Template", "property": "id"},
+                {"label": "FunctionType", "property": "id"},
+                {"label": "UnknownFunction", "property": "id"},
+                {"label": "ParseRun", "property": "id"},
+                {"label": "Resource", "property": "id"},
+                {"label": "UIControl", "property": "id"},
+                {"label": "Property", "property": "id"},
+                {"label": "Event", "property": "id"},
+                {"label": "Interface", "property": "id"},
+                {"label": "Enum", "property": "id"},
+                {"label": "Constant", "property": "id"},
+                {"label": "Variable", "property": "id"},
+                {"label": "Message", "property": "id"},
+                {"label": "MessageEndpoint", "property": "id"},
             ],
             database=resolved_graph,
         )

@@ -106,3 +106,4 @@ Cargo.lock
 *.pdb
 rust-analyzer-core/target/
 rust-analyzer-core/target/**
+rust-analyzer-core/target/release/.fingerprint/cortex-extract-05afc5aa24781002/dep-lib-cortex_extract

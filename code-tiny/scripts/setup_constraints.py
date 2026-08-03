@@ -151,6 +151,34 @@ CONSTRAINTS: list[tuple[str, str]] = [
 
 INDEXES: list[tuple[str, str]] = [
     (
+        "function_id_lookup",
+        (
+            "CREATE INDEX function_id_lookup IF NOT EXISTS "
+            "FOR (f:Function) ON (f.id)"
+        ),
+    ),
+    (
+        "file_id_lookup",
+        (
+            "CREATE INDEX file_id_lookup IF NOT EXISTS "
+            "FOR (f:File) ON (f.id)"
+        ),
+    ),
+    (
+        "unknown_function_id_lookup",
+        (
+            "CREATE INDEX unknown_function_id_lookup IF NOT EXISTS "
+            "FOR (u:UnknownFunction) ON (u.id)"
+        ),
+    ),
+    (
+        "parse_run_id_lookup",
+        (
+            "CREATE INDEX parse_run_id_lookup IF NOT EXISTS "
+            "FOR (r:ParseRun) ON (r.id)"
+        ),
+    ),
+    (
         "cobol_program_project_name_idx",
         (
             "CREATE INDEX cobol_program_project_name_idx IF NOT EXISTS "
