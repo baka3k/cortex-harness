@@ -3,7 +3,7 @@ title: "Perl Tree-sitter Analyzer Parser Plan"
 status: pending
 created: 2026-07-15
 mode: hi-plan --fast
-source: /Users/hieplq1.rpm/Downloads/Analyzer_Design_Spec_Perl_Tree_Sitter.md
+source: /Users/baka3k/Downloads/Analyzer_Design_Spec_Perl_Tree_Sitter.md
 scope: Perl 5 primary parsing, normalized structural facts, graph ingestion, incremental sync, unified MCP
 blockedBy: [neo4j-to-falkordb-migration]
 relatedPlans: [260714-1603-flutter-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260716-1615-primary-vector-ingestion-completion, 260718-2159-incremental-scan-reliability, 260731-1500-legacy-migration-parser-coverage]

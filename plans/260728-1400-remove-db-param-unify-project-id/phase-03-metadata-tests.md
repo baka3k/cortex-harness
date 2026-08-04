@@ -187,7 +187,7 @@ grep -A1 'def _resolve_db_candidates' \
 # Expect: project_id: Optional[str] in all 4.
 
 # 5. Tests pass
-cd /Users/hieplq1.rpm/AI/cortex-harness
+cd /Users/baka3k/AI/cortex-harness
 python -m pytest tests/test_unified_mcp_input_coercion.py -x -q
 python -m pytest tests/test_framework_mcp_search.py -x -q
 python -m pytest tests/test_framework_mcp_flows.py -x -q
