@@ -479,6 +479,22 @@ for _framework, _labels in (
                 f"CREATE INDEX servlet_jsp_{_token}_active_lookup IF NOT EXISTS FOR (n:{_label}) ON (n.project_id, n.module_id, n.generation_id)",
             ))
 
+
+PROC_LABELS: tuple[str, ...] = (
+    "SqlStatement", "SqlDirective", "SqlCursor",
+    "SqlHostVariable", "DatabaseTable",
+)
+for _label in PROC_LABELS:
+    _token = re.sub(r"(?<!^)(?=[A-Z])", "_", _label).lower()
+    CONSTRAINTS.append((
+        f"unique_proc_{_token}_id",
+        f"CREATE CONSTRAINT unique_proc_{_token}_id IF NOT EXISTS FOR (n:{_label}) REQUIRE n.id IS UNIQUE",
+    ))
+    INDEXES.append((
+        f"proc_{_token}_project_lookup",
+        f"CREATE INDEX proc_{_token}_project_lookup IF NOT EXISTS FOR (n:{_label}) ON (n.project_id)",
+    ))
+
 CONSTRAINTS.append((
     "unique_servlet_jsp_analysis_state_id",
     "CREATE CONSTRAINT unique_servlet_jsp_analysis_state_id IF NOT EXISTS FOR (s:ServletJspAnalysisState) REQUIRE s.id IS UNIQUE",

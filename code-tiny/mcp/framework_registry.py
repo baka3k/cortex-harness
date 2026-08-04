@@ -43,8 +43,20 @@ CONTEXT_RELATIONSHIPS = frozenset(
 CPLUS_RELATIONSHIPS = (
     "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "DECLARES", "CONTAINS",
     "USES_RESOURCE", "BINDS_CONTROL", "HANDLES_CONTROL", "OWNS_DIALOG", "DEPENDS_ON",
-    "ALIASES", "ALIAS_OF", "EXEC_SQL",
+    "ALIASES", "ALIAS_OF",
+    "DECLARES_STATEMENT", "DECLARES_DIRECTIVE", "BINDS_PARAMETER",
+    "DECLARES_CURSOR", "REFERENCES_CURSOR", "REFERENCES_STATEMENT",
+    "READS_FROM", "WRITES_TO", "REFERENCES_TABLE",
 )
+CPLUS_LABELS = GENERIC_LABELS | frozenset({
+    "SqlStatement",
+    "SqlDirective",
+    "SqlCursor",
+    "SqlHostVariable",
+    "DatabaseTable",
+})
+SHELL_LABELS = GENERIC_LABELS | frozenset({"ShellScript", "ShellFunction"})
+JP1_LABELS = GENERIC_LABELS | frozenset({"Jp1Unit", "ShellScript"})
 SHELL_RELATIONSHIPS = tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "READS_CONFIG")))
 JP1_RELATIONSHIPS = tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "PRECEDES", "EXECUTES")))
 BATCHCONFIG_RELATIONSHIPS = tuple(dict.fromkeys((*GENERIC_RELATIONSHIPS, "DEFINES_CONFIG")))
@@ -433,10 +445,10 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
         support_level="full",
         features=GENERIC_FEATURES | frozenset({"android_queries"}),
     ),
-    "cplus": FrameworkQueryConfig(
+"cplus": FrameworkQueryConfig(
         name="cplus",
-        aliases=frozenset({"cplus", "cpp", "c++", "c", "clang", "pro*c", "proc"}),
-        labels=GENERIC_LABELS | frozenset({"Table", "SqlStatement"}),
+        aliases=frozenset({"cplus", "cpp", "c++", "c", "clang", "proc", "pro*c", "pro-c"}),
+        labels=CPLUS_LABELS,
         relationships=CPLUS_RELATIONSHIPS,
         searchable_properties=GENERIC_SEARCHABLE_PROPERTIES,
         support_level="full",
