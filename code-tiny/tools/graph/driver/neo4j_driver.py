@@ -96,6 +96,11 @@ _FALLBACK_ID_LOOKUP_LABELS: Tuple[str, ...] = (
     "GradleModule",
     "AndroidIntentAction",
     "AndroidAnnotation",
+    "SqlStatement",
+    "SqlDirective",
+    "SqlCursor",
+    "SqlHostVariable",
+    "DatabaseTable",
 )
 
 

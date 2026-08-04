@@ -195,7 +195,7 @@ legacy compatibility; see [Graph Provider Configuration](#graph-provider-configu
 ### 2. Start `graph_mcp`
 
 ```bash
-cd /Users/hieplq1.rpm/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
+cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
 source .venv/bin/activate
 GRAPH_PROVIDER=falkordb \
 FALKORDB_HOST=127.0.0.1 \
@@ -247,8 +247,9 @@ Select tool `activate_project` and send:
 }
 ```
 
-Use `android` for the Android backend. Java, Kotlin, C/C++, Delphi, Pascal, and
-VB-family aliases currently route through the `cplus` backend.
+Use `android` for the Android backend. Java, Kotlin, C/C++, Pro*C (`.pc`/`.pcc`),
+Delphi, Pascal, and VB-family aliases currently route through the `cplus` backend.
+Pro*C aliases (`proc`, `pro*c`, `pro-c`) canonicalize to `cplus`.
 
 `parser_type` selects a capability profile, not a separate MCP server. Call
 `list_parsers` to inspect each canonical parser's aliases, physical backend,
@@ -339,7 +340,7 @@ shape examples, not fixed snapshots of your data.
 Install dependencies from the Hyper Graph root:
 
 ```bash
-cd /Users/hieplq1.rpm/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
+cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -432,7 +433,7 @@ Then use `project_id: "neo4j"` in calls.
 ## Start The Unified MCP Server
 
 ```bash
-cd /Users/hieplq1.rpm/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
+cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
 source .venv/bin/activate
 GRAPH_PROVIDER=falkordb \
 FALKORDB_HOST=127.0.0.1 \
@@ -2575,7 +2576,7 @@ Then call `topological_sort` with the same nodes and edges:
 The repository includes an interactive MCP tester:
 
 ```bash
-cd /Users/hieplq1.rpm/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
+cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
 source .venv/bin/activate
 python testtool/mcp_tester.py --endpoint http://127.0.0.1:8788/mcp
 ```

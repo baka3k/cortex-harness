@@ -43,9 +43,18 @@ CONTEXT_RELATIONSHIPS = frozenset(
 CPLUS_RELATIONSHIPS = (
     "CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER", "DECLARES", "CONTAINS",
     "USES_RESOURCE", "BINDS_CONTROL", "HANDLES_CONTROL", "OWNS_DIALOG", "DEPENDS_ON",
-    "ALIASES", "ALIAS_OF", "DEFINES",
+    "ALIASES", "ALIAS_OF",
+    "DECLARES_STATEMENT", "DECLARES_DIRECTIVE", "BINDS_PARAMETER",
+    "DECLARES_CURSOR", "REFERENCES_CURSOR", "REFERENCES_STATEMENT",
+    "READS_FROM", "WRITES_TO", "REFERENCES_TABLE",
 )
-CPLUS_LABELS = GENERIC_LABELS | frozenset({"CplusSqlStatement"})
+CPLUS_LABELS = GENERIC_LABELS | frozenset({
+    "SqlStatement",
+    "SqlDirective",
+    "SqlCursor",
+    "SqlHostVariable",
+    "DatabaseTable",
+})
 SHELL_LABELS = GENERIC_LABELS | frozenset({"ShellScript", "ShellFunction"})
 JP1_LABELS = GENERIC_LABELS | frozenset({"Jp1Unit", "ShellScript"})
 ANDROID_RELATIONSHIPS = (
@@ -432,7 +441,7 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
         features=GENERIC_FEATURES | frozenset({"android_queries"}),
     ),
     "cplus": _generic_profile(
-        "cplus", {"cplus", "cpp", "c++", "c", "clang"},
+        "cplus", {"cplus", "cpp", "c++", "c", "clang", "proc", "pro*c", "pro-c"},
         relationships=CPLUS_RELATIONSHIPS, support_level="full", labels=CPLUS_LABELS,
     ),
     "python": FrameworkQueryConfig(

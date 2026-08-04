@@ -3,7 +3,7 @@ title: "Legacy Migration Parser Coverage: Pro*C, Shell, JP1 Jobnet, INI"
 status: completed
 created: 2026-07-31
 mode: hi-plan --full
-source: REDACTED JavaMigration sample tree (/Users/hieplq1.rpm/JavaMigration/REDACTED/00.CustomerSupply)
+source: REDACTED JavaMigration sample tree (/Users/baka3k/JavaMigration/REDACTED/00.CustomerSupply)
 target: code-tiny/tools/cplus, code-tiny/tools/shell (new), code-tiny/tools/jp1 (new), code-tiny/tools/project_topology, code-tiny/tools/sync, code-tiny/mcp
 scope: Oracle Pro*C (.pc) coverage in cplus_analyzer, new shell-script analyzer, new JP1 jobnet analyzer, INI special-file descriptor, shared legacy encoding utility, full registration/test-matrix sweep
 blockedBy: []
@@ -47,7 +47,7 @@ Pro*C source (.c / .pc)
 - Full analyzer registration requires touching 7 files in lockstep (per `/memories/repo/cortex-harness-notes.md`): `code-tiny/tools/sync/incremental_sync.py` (`ANALYZERS`, `_select_parser_for_path`, `_SOURCE_EXTENSIONS`), `code-tiny/tools/sync/owner_manifest.py` (`SUPPORTED_PARSERS` + detection function), `cortex_harness/dev.py` (`LANG_ANALYZERS`, `LANG_EXTENSIONS`), `code-tiny/mcp/framework_registry.py` (`CAPABILITIES`), `code-tiny/tools/project_topology/registry.py` (`PRIMARY_SPECIAL_FILE_COVERAGE`), `tests/test_mcp_acceptance_matrix.py` (`ACCEPTANCE_MATRIX`, `PRIMARY_TO_PROFILE`), `tests/test_common_analyzer_registry.py` (`EXPECTED_PRIMARY`).
 - `code-tiny/tools/perl/perl_analyzer.py` is the reference skeleton for a new lightweight analyzer: argparse CLI (`--root`, `--project-id`, incremental manifests, Neo4j/Qdrant args), a `pipeline.py` producing a fact result, `build_graph_rows()` mapping to the canonical `LanguageCodeWriter` row shape, and `safe_cache_root()` for incremental caching.
 - `code-tiny/tools/project_topology/parsers/make.py` is the reference skeleton for a **lightweight, non-graph** special-file descriptor (`DescriptorParseOutput` with `descriptors`/`dependencies`, no Neo4j/Qdrant writer) — the right shape for `.ini` and the `.DAT` resource entry.
-- The sample source tree lives outside the repo (`/Users/hieplq1.rpm/JavaMigration/...`) and must not be copied verbatim into fixtures (unknown license/confidentiality); fixtures must be small synthetic files that reproduce the same structural shapes (EXEC SQL block, JP1 `unit=`/`ar=` DAG, shell `grep '...ini'`, flat `KEY:VALUE` ini).
+- The sample source tree lives outside the repo (`/Users/baka3k/JavaMigration/...`) and must not be copied verbatim into fixtures (unknown license/confidentiality); fixtures must be small synthetic files that reproduce the same structural shapes (EXEC SQL block, JP1 `unit=`/`ar=` DAG, shell `grep '...ini'`, flat `KEY:VALUE` ini).
 - `neo4j-to-falkordb-migration` (in_progress) owns live provider parity; this plan targets the existing provider-neutral `LanguageCodeWriter`/`GraphDriver` contract only, same precedent as the completed COBOL plan.
 - `260715-1629-perl-analyzer-parser` (pending) and `260728-0000-unified-ingest-query-contract` (pending, itself blocked) touch the same 7 registration files / `framework_registry.py` CAPABILITIES map — coordinate before merging to avoid clobbering each other's dict entries.
 

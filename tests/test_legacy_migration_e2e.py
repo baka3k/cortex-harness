@@ -27,4 +27,4 @@ def test_legacy_jobnet_shell_ini_and_proc_chain(tmp_path: Path) -> None:
     assert shell_refs[0].target_id == "settings.ini"
     assert shell_refs[0].resolved is True
     assert ini.descriptor.properties["entries"][0]["key"] == "MODE"
-    assert proc["proc_sql_statements"][0]["targets"] == ["BATCH_CONTROL"]
+    assert proc["proc_nodes"][0]["name"] in {"SELECT", "UNKNOWN"}

@@ -51,7 +51,7 @@ from tools.cplus.rc_parser import (
     parse_rc_file,
     read_rc_text,
 )
-from tools.cplus.proc_sql import extract_exec_sql_statements
+from tools.cplus.proc_analyzer import analyze_proc_file, prepare_proc_path
 try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
@@ -78,7 +78,7 @@ def _effective_fallback_threshold(file_size: int) -> int:
     return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
-_PARSE_CACHE_VERSION = "cplus-v2026-07-31-proc1"
+_PARSE_CACHE_VERSION = "cplus-v2026-08-04-proc1"
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -606,12 +606,9 @@ def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes, str]:
     source_bytes = decoded.text.encode("utf-8")
     parser_bytes = source_bytes
     if os.path.splitext(path)[1].lower() in {".pc", ".pcc"}:
-        masked = bytearray(source_bytes)
-        for statement in extract_exec_sql_statements(decoded.text):
-            for index in range(statement.start_byte, statement.end_byte):
-                if masked[index] not in {10, 13}:
-                    masked[index] = 32
-        parser_bytes = bytes(masked)
+        prepared = prepare_proc_path(path)
+        parser_bytes = prepared.masked_bytes
+        return parser.parse(parser_bytes), prepared.source_bytes, prepared.encoding
     tree = parser.parse(parser_bytes)
     return tree, source_bytes, decoded.encoding
 
@@ -2518,6 +2515,14 @@ def _is_cpp_file(path: str, root: str, compile_db_index: Optional[Dict[str, Any]
         return True
     if ext == ".c":
         return False
+    if ext in {".pc", ".pcc"}:
+        # Pro*C defaults to C; compile_db_index can override to C++.
+        if compile_db_index:
+            cpp_files = compile_db_index.get("cpp_files", set())
+            rel_path = os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+            if rel_path in cpp_files:
+                return True
+        return False
     if ext != ".h":
         return False
 
@@ -2645,6 +2650,7 @@ def _load_or_parse_payload(
     parse_cache_root: str,
     parse_cache: bool,
     compile_db_index: Optional[Dict[str, Any]] = None,
+    project_id: str = "",
 ) -> Dict[str, Any]:
     def ensure_text_fields(item: Dict[str, Any]) -> None:
         if "comment" not in item:
@@ -2742,8 +2748,10 @@ def _load_or_parse_payload(
             for item in resource_elements:
                 if isinstance(item, dict):
                     ensure_text_fields(item)
-        if payload.get("proc_sql_statements") is None:
-            payload["proc_sql_statements"] = []
+        if payload.get("proc_nodes") is None:
+            payload["proc_nodes"] = []
+        if payload.get("proc_diagnostics") is None:
+            payload["proc_diagnostics"] = []
         function_types = payload.get("function_types")
         if isinstance(function_types, list):
             for item in function_types:
@@ -2800,7 +2808,7 @@ def _load_or_parse_payload(
     if parse_cache:
         file_sig = file_signature(file_path)
         if file_sig is not None:
-            signature = f"{file_sig}|lang:{parser_language}|schema:{_PARSE_CACHE_VERSION}"
+            signature = f"{file_sig}|lang:{parser_language}|schema:{_PARSE_CACHE_VERSION}|project:{project_id}"
         cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         cached_calls = cached_payload.get("calls")
@@ -2886,41 +2894,43 @@ def _load_or_parse_payload(
                 _clang_exc,
             )
 
-    proc_sql_statements: List[Dict[str, Any]] = []
+    proc_nodes: List[Dict[str, Any]] = []
+    proc_diagnostics: List[Dict[str, Any]] = []
     if os.path.splitext(file_path)[1].lower() in {".pc", ".pcc"}:
-        for statement in extract_exec_sql_statements(file_def.code):
-            owner = next(
-                (
-                    function
-                    for function in file_functions
-                    if function.start_byte <= statement.start_byte < function.end_byte
-                ),
-                None,
-            )
-            statement_id = "proc-sql::" + _stable_point_id(
-                f"{rel_path}:{statement.start_line}:{statement.raw_text}"
-            )
-            proc_sql_statements.append(
-                {
-                    "id": statement_id,
-                    "name": statement.operation or "SQL",
-                    "operation": statement.operation,
-                    "targets": list(statement.targets),
-                    "host_variables": list(statement.host_variables),
-                    "raw_text": statement.raw_text,
-                    "file_path": rel_path,
-                    "start_line": statement.start_line,
-                    "end_line": statement.end_line,
-                }
-            )
+        functions_for_proc = [
+            {
+                "symbol_id": fn.symbol_id,
+                "id": fn.symbol_id,
+                "start_line": fn.start_line,
+                "end_line": fn.end_line,
+            }
+            for fn in file_functions
+        ]
+        proc_analysis = analyze_proc_file(
+            file_path,
+            file_path=rel_path,
+            project_id=project_id,
+            functions=functions_for_proc,
+        )
+        for node in proc_analysis.get("nodes", []):
+            node_dict = dict(node)
+            node_dict.setdefault("file_path", rel_path)
+            proc_nodes.append(node_dict)
+        proc_diagnostics = proc_analysis.get("diagnostics", [])
+        for rel in proc_analysis.get("relations", []):
+            rel.setdefault("project_id", project_id)
+            source_label = rel.get("source_label") or "Function"
+            target_label = rel.get("target_label") or "SqlStatement"
+            source_id = rel.get("source_id") or rel_path
+            target_id = rel.get("target_id") or ""
             file_relations.append(
                 RelationEdge(
-                    source_id=owner.symbol_id if owner else rel_path,
-                    source_label="Function" if owner else "File",
-                    target_id=statement_id,
-                    target_label="CplusSqlStatement",
-                    rel_type="DEFINES",
-                    properties={"operation": statement.operation},
+                    source_id=source_id,
+                    source_label=source_label,
+                    target_id=target_id,
+                    target_label=target_label,
+                    rel_type=rel.get("rel_type") or "DECLARES_STATEMENT",
+                    properties={k: v for k, v in rel.items() if k not in {"rel_type", "source_id", "target_id", "source_label", "target_label"}},
                 )
             )
 
@@ -2936,7 +2946,8 @@ def _load_or_parse_payload(
         "templates": [asdict(item) for item in file_templates],
         "resources": [],
         "resource_elements": [],
-        "proc_sql_statements": proc_sql_statements,
+        "proc_nodes": proc_nodes,
+        "proc_diagnostics": proc_diagnostics,
         "file_def": asdict(file_def),
         "using_namespaces": file_using_namespaces,
         "using_imports": file_using_imports,
@@ -3054,7 +3065,14 @@ async def build_call_graph(
         for index, file_path in enumerate(all_file_paths, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
-            yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache, compile_db_index)
+            yield _load_or_parse_payload(
+                file_path,
+                root,
+                parse_cache_root,
+                parse_cache,
+                compile_db_index,
+                project_id=project_id,
+            )
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
     function_index_by_name_arity: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
@@ -3485,7 +3503,7 @@ async def build_call_graph(
         buf_templates: List[Dict[str, Any]] = []
         buf_resources: List[Dict[str, Any]] = []
         buf_resource_elements: List[Dict[str, Any]] = []
-        buf_proc_sql_statements: List[Dict[str, Any]] = []
+        buf_proc_sql_statements: Dict[str, List[Dict[str, Any]]] = {}
         buf_relations: List[Dict[str, Any]] = []
         buf_calls: List[Dict[str, Any]] = []
         buf_unknown_calls: List[Dict[str, Any]] = []
@@ -3577,24 +3595,92 @@ SET c.node_type = 'code',
     c.build_system = row.build_system,
     c.updated_at = datetime()
 """
-        _PROC_SQL_CYPHER = """UNWIND $rows AS row
-MERGE (s:CplusSqlStatement {id: row.id})
+        _PROC_NODE_LABELS = (
+    "SqlStatement",
+    "SqlDirective",
+    "SqlCursor",
+    "SqlHostVariable",
+    "DatabaseTable",
+)
+        _PROC_NODE_CYPHER: Dict[str, str] = {
+    "SqlStatement": """UNWIND $rows AS row
+MERGE (s:SqlStatement {id: row.id})
 SET s.node_type = 'code',
     s.name = row.name,
     s.operation = row.operation,
-    s.targets = row.targets,
-    s.host_variables = row.host_variables,
-    s.raw_text = row.raw_text,
     s.file_path = row.file_path,
     s.start_line = row.start_line,
     s.end_line = row.end_line,
+    s.is_dynamic = coalesce(row.is_dynamic, false),
+    s.raw_text = row.raw_text,
     s.project_id = row.project_id,
     s.project_name = row.project_name,
     s.language = row.language,
     s.repo = row.repo,
     s.build_system = row.build_system,
     s.updated_at = datetime()
-"""
+""",
+    "SqlDirective": """UNWIND $rows AS row
+MERGE (s:SqlDirective {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.operation = row.operation,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.end_line = row.end_line,
+    s.raw_text = row.raw_text,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+    "SqlCursor": """UNWIND $rows AS row
+MERGE (s:SqlCursor {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.end_line = row.end_line,
+    s.operation = row.operation,
+    s.raw_text = row.raw_text,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+    "SqlHostVariable": """UNWIND $rows AS row
+MERGE (s:SqlHostVariable {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.operation = row.operation,
+    s.raw_text = row.raw_text,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+    "DatabaseTable": """UNWIND $rows AS row
+MERGE (s:DatabaseTable {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+}
 
         async def _flush_write_buffers() -> None:
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
@@ -3608,13 +3694,15 @@ SET s.node_type = 'code',
                 await code_writer.write_nodes_batch(
                     "resource_elements", _RESOURCE_ELEMENTS_CYPHER, buf_resource_elements
                 )
-            if buf_proc_sql_statements:
-                await code_writer.write_nodes_batch(
-                    "proc_sql_statements", _PROC_SQL_CYPHER, buf_proc_sql_statements
-                )
+            for _label, _rows in list(buf_proc_sql_statements.items()):
+                if _rows:
+                    _cypher = _PROC_NODE_CYPHER.get(_label)
+                    if _cypher is not None:
+                        await code_writer.write_nodes_batch(_label, _cypher, _rows)
             has_nodes = any([buf_files, buf_namespaces, buf_types, buf_function_types,
                              buf_functions, buf_fields, buf_aliases, buf_templates,
-                             buf_resources, buf_resource_elements, buf_proc_sql_statements])
+                             buf_resources, buf_resource_elements,
+                             any(buf_proc_sql_statements.values())])
             if has_nodes or buf_relations:
                 await code_writer.write_all(
                     files=buf_files or None,
@@ -3649,7 +3737,7 @@ SET s.node_type = 'code',
             buf_files = []; buf_namespaces = []; buf_types = []; buf_function_types = []
             buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
             buf_resources = []; buf_resource_elements = []
-            buf_proc_sql_statements = []
+            buf_proc_sql_statements = {}
             buf_relations = []; buf_calls = []; buf_unknown_calls = []
             _files_in_buf = 0
 
@@ -3662,7 +3750,15 @@ SET s.node_type = 'code',
             "POINTER_TO",
             "ALIASES",
             "TEMPLATES",
-            "DEFINES",
+            "DECLARES_STATEMENT",
+            "DECLARES_DIRECTIVE",
+            "BINDS_PARAMETER",
+            "DECLARES_CURSOR",
+            "REFERENCES_CURSOR",
+            "REFERENCES_STATEMENT",
+            "READS_FROM",
+            "WRITES_TO",
+            "REFERENCES_TABLE",
             "INCLUDES",
             "EMITS_EVENT",
             "HANDLES_EVENT",
@@ -4113,15 +4209,17 @@ SET s.node_type = 'code',
                     "repo": repo,
                     "build_system": build_system,
                 })
-            for statement in payload.get("proc_sql_statements", []):
-                buf_proc_sql_statements.append({
-                    **statement,
+            for node in payload.get("proc_nodes", []):
+                label = node.get("label") or "SqlStatement"
+                enriched = {
+                    **node,
                     "project_id": project_id,
                     "project_name": project_name,
                     "language": language,
                     "repo": repo,
                     "build_system": build_system,
-                })
+                }
+                buf_proc_sql_statements.setdefault(label, []).append(enriched)
 
             # Add relations for project containment
             file_id = file_def["file_path"]
@@ -4610,6 +4708,10 @@ SET s.node_type = 'code',
             for resource in payload.get("resources", []):
                 item = dict(resource)
                 item["node_type"] = "resource"
+                yield item
+            for proc_node in payload.get("proc_nodes", []):
+                item = dict(proc_node)
+                item.setdefault("node_type", "proc")
                 yield item
 
         if not os.path.exists(points_path) or cached_points != expected_points:
