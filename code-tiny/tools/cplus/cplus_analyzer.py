@@ -43,16 +43,17 @@ from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qd
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.common.project_scope import enrich_project_scope
 from tools.common.text_encoding import decode_source_bytes
+from tools.common.legacy_encoding import read_legacy_text
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import add_graph_provider_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
-from tools.cplus.proc_preprocessor import EmbeddedSqlStatement, preprocess_proc_directives
 from tools.cplus.rc_parser import (
     extract_message_map_handlers,
     extract_resource_tokens,
     parse_rc_file,
     read_rc_text,
 )
+from tools.cplus.proc_analyzer import analyze_proc_file, prepare_proc_path
 try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
@@ -79,7 +80,7 @@ def _effective_fallback_threshold(file_size: int) -> int:
     return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
-_PARSE_CACHE_VERSION = "cplus-v2026-07-15-rc1"
+_PARSE_CACHE_VERSION = "cplus-v2026-08-04-proc1"
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -637,15 +638,17 @@ def _get_c_parser() -> Parser:
     return _C_PARSER
 
 
-def _parse_file(path: str, is_cpp: bool, override_bytes: Optional[bytes] = None) -> Tuple[Any, bytes]:
+def _parse_file(path: str, is_cpp: bool, override_bytes: Optional[bytes] = None) -> Tuple[Any, bytes, str]:
     parser = _get_cpp_parser() if is_cpp else _get_c_parser()
-    if override_bytes is not None:
-        source_bytes = override_bytes
-    else:
-        with open(path, "rb") as handle:
-            source_bytes = handle.read()
-    tree = parser.parse(source_bytes)
-    return tree, source_bytes
+    decoded = read_legacy_text(path)
+    source_bytes = decoded.text.encode("utf-8")
+    parser_bytes = source_bytes
+    if os.path.splitext(path)[1].lower() in {".pc", ".pcc"}:
+        prepared = prepare_proc_path(path)
+        parser_bytes = prepared.masked_bytes
+        return parser.parse(parser_bytes), prepared.source_bytes, prepared.encoding
+    tree = parser.parse(parser_bytes)
+    return tree, source_bytes, decoded.encoding
 
 
 def _tree_error_stats(tree) -> Tuple[bool, int]:
@@ -2070,17 +2073,7 @@ def _python_parse_c_family_file(
     Dict[str, Any],
 ]:
     initial_is_cpp = is_cpp
-    ext = os.path.splitext(path)[1].lower()
-    with open(path, "rb") as handle:
-        original_bytes = handle.read()
-
-    embedded_sql_statements: List[EmbeddedSqlStatement] = []
-    override_bytes: Optional[bytes] = None
-    if ext == ".pc":
-        initial_is_cpp = False
-        override_bytes, embedded_sql_statements = preprocess_proc_directives(original_bytes)
-
-    tree, source_bytes = _parse_file(path, initial_is_cpp, override_bytes=override_bytes)
+    tree, source_bytes, source_encoding = _parse_file(path, initial_is_cpp)
     selected_is_cpp = initial_is_cpp
     retry_attempted = False
     retry_selected = False
@@ -2090,10 +2083,11 @@ def _python_parse_c_family_file(
     selected_has_error = initial_has_error
     selected_error_nodes = initial_error_nodes
 
+    ext = os.path.splitext(path)[1].lower()
     if ext == ".h" and (initial_has_error or initial_error_nodes > 0):
         retry_attempted = True
         retry_is_cpp = not initial_is_cpp
-        retry_tree, retry_source_bytes = _parse_file(path, retry_is_cpp)
+        retry_tree, retry_source_bytes, retry_source_encoding = _parse_file(path, retry_is_cpp)
         retry_has_error, retry_error_nodes = _tree_error_stats(retry_tree)
         if (
             retry_error_nodes < initial_error_nodes
@@ -2101,13 +2095,14 @@ def _python_parse_c_family_file(
         ):
             tree = retry_tree
             source_bytes = retry_source_bytes
+            source_encoding = retry_source_encoding
             selected_is_cpp = retry_is_cpp
             selected_has_error = retry_has_error
             selected_error_nodes = retry_error_nodes
             retry_selected = True
 
     rel_path = os.path.relpath(path, root)
-    file_code, file_encoding, file_lossy = decode_source_bytes(original_bytes)
+    file_code = source_bytes.decode("utf-8")
     file_lines = file_code.count("\n") + 1
     file_comment = _extract_file_comment(tree, source_bytes)
     file_summary = file_comment
@@ -2133,9 +2128,7 @@ def _python_parse_c_family_file(
         "error_nodes_initial": initial_error_nodes,
         "header_retry_error_nodes": retry_error_nodes,
         "header_retry_has_error": retry_has_error,
-        "source_encoding": file_encoding,
-        "source_encoding_lossy": file_lossy,
-        "embedded_sql_statement_count": len(embedded_sql_statements),
+        "source_encoding": source_encoding,
     }
 
     functions: List[FunctionDef] = []
@@ -2172,9 +2165,6 @@ def _python_parse_c_family_file(
         type_registry,
         namespace_registry,
     )
-
-    if embedded_sql_statements:
-        _attach_embedded_sql_relations(functions, embedded_sql_statements, relations, rel_path)
 
     return (
         functions,
@@ -2534,54 +2524,6 @@ def _stable_point_id(symbol_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, symbol_id))
 
 
-def _attach_embedded_sql_relations(
-    functions: List[FunctionDef],
-    statements: List[EmbeddedSqlStatement],
-    relations: List[RelationEdge],
-    rel_path: str,
-) -> None:
-    """Emit ``EXEC_SQL`` edges from the enclosing function to each Pro*C directive.
-
-    When the statement is a SELECT/INSERT/UPDATE/DELETE and a table name was
-    regex-extracted, the edge targets a ``Table`` node (best-effort name
-    match, not a resolved schema reference); otherwise it targets a
-    synthetic ``SqlStatement`` node scoped to this file/line range.
-    """
-
-    for stmt in statements:
-        owner: Optional[FunctionDef] = None
-        for func in functions:
-            if func.start_line <= stmt.start_line and func.end_line >= stmt.end_line:
-                if owner is None or (func.end_line - func.start_line) < (owner.end_line - owner.start_line):
-                    owner = func
-        source_id = owner.symbol_id if owner is not None else f"file::{rel_path}"
-        source_label = "Function" if owner is not None else "File"
-
-        if stmt.table_name:
-            target_id = f"table::{stmt.table_name.upper()}"
-            target_label = "Table"
-        else:
-            target_id = f"sql_stmt::{_stable_point_id(f'{rel_path}:{stmt.start_line}:{stmt.end_line}:{stmt.kind}')}"
-            target_label = "SqlStatement"
-
-        relations.append(
-            RelationEdge(
-                source_id=source_id,
-                source_label=source_label,
-                target_id=target_id,
-                target_label=target_label,
-                rel_type="EXEC_SQL",
-                properties={
-                    "kind": stmt.kind,
-                    "host_vars": ",".join(stmt.host_vars),
-                    "start_line": str(stmt.start_line),
-                    "end_line": str(stmt.end_line),
-                    "raw_text": stmt.raw_text[:400],
-                },
-            )
-        )
-
-
 def _event_id(event: Dict[str, Any]) -> str:
     event_id = str(event.get("id") or "").strip()
     if event_id:
@@ -2666,6 +2608,14 @@ def _is_cpp_file(path: str, root: str, compile_db_index: Optional[Dict[str, Any]
         return True
     if ext in {".c", ".pc"}:
         # Pro*C (.pc) is C with embedded EXEC SQL directives, not a C++ file.
+        return False
+    if ext in {".pc", ".pcc"}:
+        # Pro*C defaults to C; compile_db_index can override to C++.
+        if compile_db_index:
+            cpp_files = compile_db_index.get("cpp_files", set())
+            rel_path = os.path.relpath(os.path.abspath(path), os.path.abspath(root)).replace("\\", "/")
+            if rel_path in cpp_files:
+                return True
         return False
     if ext != ".h":
         return False
@@ -2794,6 +2744,7 @@ def _load_or_parse_payload(
     parse_cache_root: str,
     parse_cache: bool,
     compile_db_index: Optional[Dict[str, Any]] = None,
+    project_id: str = "",
 ) -> Dict[str, Any]:
     def ensure_text_fields(item: Dict[str, Any]) -> None:
         if "comment" not in item:
@@ -2891,6 +2842,10 @@ def _load_or_parse_payload(
             for item in resource_elements:
                 if isinstance(item, dict):
                     ensure_text_fields(item)
+        if payload.get("proc_nodes") is None:
+            payload["proc_nodes"] = []
+        if payload.get("proc_diagnostics") is None:
+            payload["proc_diagnostics"] = []
         function_types = payload.get("function_types")
         if isinstance(function_types, list):
             for item in function_types:
@@ -2947,7 +2902,7 @@ def _load_or_parse_payload(
     if parse_cache:
         file_sig = file_signature(file_path)
         if file_sig is not None:
-            signature = f"{file_sig}|lang:{parser_language}|schema:{_PARSE_CACHE_VERSION}"
+            signature = f"{file_sig}|lang:{parser_language}|schema:{_PARSE_CACHE_VERSION}|project:{project_id}"
         cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         cached_calls = cached_payload.get("calls")
@@ -3032,6 +2987,46 @@ def _load_or_parse_payload(
                 _clang_exc,
             )
 
+    proc_nodes: List[Dict[str, Any]] = []
+    proc_diagnostics: List[Dict[str, Any]] = []
+    if os.path.splitext(file_path)[1].lower() in {".pc", ".pcc"}:
+        functions_for_proc = [
+            {
+                "symbol_id": fn.symbol_id,
+                "id": fn.symbol_id,
+                "start_line": fn.start_line,
+                "end_line": fn.end_line,
+            }
+            for fn in file_functions
+        ]
+        proc_analysis = analyze_proc_file(
+            file_path,
+            file_path=rel_path,
+            project_id=project_id,
+            functions=functions_for_proc,
+        )
+        for node in proc_analysis.get("nodes", []):
+            node_dict = dict(node)
+            node_dict.setdefault("file_path", rel_path)
+            proc_nodes.append(node_dict)
+        proc_diagnostics = proc_analysis.get("diagnostics", [])
+        for rel in proc_analysis.get("relations", []):
+            rel.setdefault("project_id", project_id)
+            source_label = rel.get("source_label") or "Function"
+            target_label = rel.get("target_label") or "SqlStatement"
+            source_id = rel.get("source_id") or rel_path
+            target_id = rel.get("target_id") or ""
+            file_relations.append(
+                RelationEdge(
+                    source_id=source_id,
+                    source_label=source_label,
+                    target_id=target_id,
+                    target_label=target_label,
+                    rel_type=rel.get("rel_type") or "DECLARES_STATEMENT",
+                    properties={k: v for k, v in rel.items() if k not in {"rel_type", "source_id", "target_id", "source_label", "target_label"}},
+                )
+            )
+
     payload = {
         "functions": [asdict(item) for item in file_functions],
         "calls": [asdict(item) for item in file_calls],
@@ -3044,6 +3039,8 @@ def _load_or_parse_payload(
         "templates": [asdict(item) for item in file_templates],
         "resources": [],
         "resource_elements": [],
+        "proc_nodes": proc_nodes,
+        "proc_diagnostics": proc_diagnostics,
         "file_def": asdict(file_def),
         "using_namespaces": file_using_namespaces,
         "using_imports": file_using_imports,
@@ -3161,7 +3158,14 @@ async def build_call_graph(
         for index, file_path in enumerate(all_file_paths, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
-            yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache, compile_db_index)
+            yield _load_or_parse_payload(
+                file_path,
+                root,
+                parse_cache_root,
+                parse_cache,
+                compile_db_index,
+                project_id=project_id,
+            )
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
     function_index_by_name_arity: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
@@ -3592,6 +3596,7 @@ async def build_call_graph(
         buf_templates: List[Dict[str, Any]] = []
         buf_resources: List[Dict[str, Any]] = []
         buf_resource_elements: List[Dict[str, Any]] = []
+        buf_proc_sql_statements: Dict[str, List[Dict[str, Any]]] = {}
         buf_relations: List[Dict[str, Any]] = []
         buf_calls: List[Dict[str, Any]] = []
         buf_unknown_calls: List[Dict[str, Any]] = []
@@ -3683,6 +3688,92 @@ SET c.node_type = 'code',
     c.build_system = row.build_system,
     c.updated_at = datetime()
 """
+        _PROC_NODE_LABELS = (
+    "SqlStatement",
+    "SqlDirective",
+    "SqlCursor",
+    "SqlHostVariable",
+    "DatabaseTable",
+)
+        _PROC_NODE_CYPHER: Dict[str, str] = {
+    "SqlStatement": """UNWIND $rows AS row
+MERGE (s:SqlStatement {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.operation = row.operation,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.end_line = row.end_line,
+    s.is_dynamic = coalesce(row.is_dynamic, false),
+    s.raw_text = row.raw_text,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+    "SqlDirective": """UNWIND $rows AS row
+MERGE (s:SqlDirective {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.operation = row.operation,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.end_line = row.end_line,
+    s.raw_text = row.raw_text,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+    "SqlCursor": """UNWIND $rows AS row
+MERGE (s:SqlCursor {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.end_line = row.end_line,
+    s.operation = row.operation,
+    s.raw_text = row.raw_text,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+    "SqlHostVariable": """UNWIND $rows AS row
+MERGE (s:SqlHostVariable {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.operation = row.operation,
+    s.raw_text = row.raw_text,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+    "DatabaseTable": """UNWIND $rows AS row
+MERGE (s:DatabaseTable {id: row.id})
+SET s.node_type = 'code',
+    s.name = row.name,
+    s.file_path = row.file_path,
+    s.start_line = row.start_line,
+    s.project_id = row.project_id,
+    s.project_name = row.project_name,
+    s.language = row.language,
+    s.repo = row.repo,
+    s.build_system = row.build_system,
+    s.updated_at = datetime()
+""",
+}
 
         async def _flush_write_buffers() -> None:
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
@@ -3695,9 +3786,15 @@ SET c.node_type = 'code',
                 await code_writer.write_nodes_batch(
                     "resource_elements", _RESOURCE_ELEMENTS_CYPHER, buf_resource_elements
                 )
+            for _label, _rows in list(buf_proc_sql_statements.items()):
+                if _rows:
+                    _cypher = _PROC_NODE_CYPHER.get(_label)
+                    if _cypher is not None:
+                        await code_writer.write_nodes_batch(_label, _cypher, _rows)
             has_nodes = any([buf_files, buf_namespaces, buf_types, buf_function_types,
                              buf_functions, buf_fields, buf_aliases, buf_templates,
-                             buf_resources, buf_resource_elements])
+                             buf_resources, buf_resource_elements,
+                             any(buf_proc_sql_statements.values())])
             if has_nodes or buf_relations:
                 _use_pipeline = hasattr(code_writer, "write_all_pipelined") and hasattr(
                     code_writer.driver, "execute_queries_pipelined_async"
@@ -3748,6 +3845,7 @@ SET c.node_type = 'code',
             buf_files = []; buf_namespaces = []; buf_types = []; buf_function_types = []
             buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
             buf_resources = []; buf_resource_elements = []
+            buf_proc_sql_statements = {}
             buf_relations = []; buf_calls = []; buf_unknown_calls = []
             _files_in_buf = 0
 
@@ -3760,6 +3858,15 @@ SET c.node_type = 'code',
             "POINTER_TO",
             "ALIASES",
             "TEMPLATES",
+            "DECLARES_STATEMENT",
+            "DECLARES_DIRECTIVE",
+            "BINDS_PARAMETER",
+            "DECLARES_CURSOR",
+            "REFERENCES_CURSOR",
+            "REFERENCES_STATEMENT",
+            "READS_FROM",
+            "WRITES_TO",
+            "REFERENCES_TABLE",
             "INCLUDES",
             "EMITS_EVENT",
             "HANDLES_EVENT",
@@ -4232,6 +4339,17 @@ SET c.node_type = 'code',
                     "repo": repo,
                     "build_system": build_system,
                 })
+            for node in payload.get("proc_nodes", []):
+                label = node.get("label") or "SqlStatement"
+                enriched = {
+                    **node,
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                }
+                buf_proc_sql_statements.setdefault(label, []).append(enriched)
 
             # Add relations for project containment
             file_id = file_def["file_path"]
@@ -4705,6 +4823,10 @@ SET c.node_type = 'code',
             for resource in payload.get("resources", []):
                 item = dict(resource)
                 item["node_type"] = "resource"
+                yield item
+            for proc_node in payload.get("proc_nodes", []):
+                item = dict(proc_node)
+                item.setdefault("node_type", "proc")
                 yield item
 
         if not os.path.exists(points_path) or cached_points != expected_points:
