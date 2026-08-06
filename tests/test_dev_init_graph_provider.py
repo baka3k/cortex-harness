@@ -12,6 +12,7 @@ from cortex_harness.dev import (
     _doc_env_for_process,
     _env_to_neo4j_args,
     _mcp_env_from_config,
+    _mcp_start_one,
     _neo4j_args_code,
     _run_with_retry,
     cli,
@@ -74,6 +75,42 @@ class DevInitGraphProviderTests(unittest.TestCase):
     def test_mcp_env_without_config_is_empty(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             self.assertEqual(_mcp_env_from_config(Path(temp_dir), "code-tiny"), {})
+
+    def test_mcp_start_scrubs_inherited_remote_endpoints_for_local_falkordb(self):
+        svc_dir = Path(__file__).resolve().parents[1] / "code-tiny"
+        svc = {
+            "dir": svc_dir,
+            "cmd": ["mcp/unified_mcp.py"],
+            "url": "http://127.0.0.1:8788/mcp",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                "os.environ",
+                {
+                    "FALKORDB_URI": "redis://localhost:6379",
+                    "FALKORDB_HOST": "localhost",
+                    "FALKORDB_PORT": "6379",
+                    "QDRANT_URL": "http://localhost:6333",
+                },
+                clear=False,
+            ), patch("cortex_harness.dev._venv_python", return_value="/fake/python"), patch(
+                "cortex_harness.dev._load_dotenv", return_value={}
+            ), patch("cortex_harness.dev.subprocess.Popen") as popen, patch(
+                "cortex_harness.dev.MCP_LOG_DIR", Path(temp_dir)
+            ):
+                popen.return_value = SimpleNamespace(pid=123)
+                _mcp_start_one(
+                    "code-tiny",
+                    svc,
+                    extra_env={"GRAPH_PROVIDER": "falkordb", "FALKORDB_PATH": "/tmp/code.rdb"},
+                )
+
+        child_env = popen.call_args.kwargs["env"]
+        self.assertNotIn("FALKORDB_URI", child_env)
+        self.assertNotIn("FALKORDB_HOST", child_env)
+        self.assertNotIn("FALKORDB_PORT", child_env)
+        self.assertNotIn("QDRANT_URL", child_env)
 
     def test_graph_args_fallback_to_falkordb_hyper_graph(self):
         self.assertIn("--graph-provider", _neo4j_args_code({}))
