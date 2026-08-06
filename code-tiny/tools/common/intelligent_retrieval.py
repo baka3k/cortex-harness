@@ -26,7 +26,7 @@ Public API
   from tools.common.intelligent_retrieval import IntelligentRetrievalEngine
 
   engine = IntelligentRetrievalEngine(
-      qdrant_url="http://localhost:6333",
+      qdrant_url="/path/to/code-store",
       graph_driver=driver,          # GraphDriver / sync graph driver
       embedder=my_embedder,         # callable: str → List[float]
       collection="ts_functions",
@@ -54,9 +54,14 @@ import math
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-import httpx
-
 from tools.common.graph_expander import GraphExpander, GraphNode
+from tools.common.local_qdrant import (
+    default_local_qdrant_path,
+    get_code_qdrant_store,
+    model_to_dict,
+    query_points,
+    vector_sizes,
+)
 from tools.common.project_scope import (
     matches_project_scope,
     normalize_project_id,
@@ -83,26 +88,14 @@ logger = logging.getLogger(__name__)
 # Defaults
 # ─────────────────────────────────────────────────────────────
 
-DEFAULT_QDRANT_URL   = "http://localhost:6333"
+DEFAULT_QDRANT_PATH  = default_local_qdrant_path()
 DEFAULT_SEED_K       = 20   # initial Qdrant retrieval count
 DEFAULT_EXPAND_DEPTH = 2    # Graph expansion depth
 DEFAULT_EXPAND_LIMIT = 50   # max graph-expanded candidates
 DEFAULT_TOP_K        = 10
 
 # ─────────────────────────────────────────────────────────────
-# Qdrant HTTP helpers (no qdrant_client dependency)
-#
-# This module talks REST directly so it doesn't have to import
-# ``qdrant_client`` (lighter dep graph for places that just need
-# read-only retrieval). The shape of the request body changes between
-# v1 (single unnamed vector) and v2 (named ``semantic``/``keywords``/
-# ``behavior``) collections — we detect the schema once per collection
-# via ``GET /collections/{name}`` and route accordingly.
-#
-# This logic intentionally mirrors
-# ``hyper_pack_core.qdrant_search.query_collection`` so v1/v2 routing
-# stays consistent between the qdrant-client and the REST paths. Keep
-# the two in lock-step when adding new schemas.
+# Qdrant local-client helpers
 # ─────────────────────────────────────────────────────────────
 
 # Default named vector to query when a collection has named-vector
@@ -132,17 +125,9 @@ def _resolve_vector_layout(
     if key in _VECTOR_LAYOUT_CACHE:
         return _VECTOR_LAYOUT_CACHE[key]
 
-    info_url = f"{qdrant_url.rstrip('/')}/collections/{collection}"
     try:
-        resp = httpx.get(info_url, timeout=timeout)
-        resp.raise_for_status()
-        config = (
-            resp.json()
-            .get("result", {})
-            .get("config", {})
-            .get("params", {})
-            .get("vectors", {})
-        )
+        del timeout
+        sizes = vector_sizes(get_code_qdrant_store(qdrant_url).get_collection_info(collection))
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "[intelligent_retrieval] get_collection(%s) failed: %s",
@@ -152,18 +137,12 @@ def _resolve_vector_layout(
         _VECTOR_LAYOUT_CACHE[key] = None
         return None
 
-    # REST schema:
-    #   * Single-vector layout:  {"size": int, "distance": str, ...}
-    #   * Named layout:          {"semantic": {...}, "keywords": {...}, ...}
-    # We detect ``size`` as a sentinel for single-vector — named-vector
-    # values are themselves dicts containing ``size``.
     chosen: Optional[str]
-    if isinstance(config, dict) and "size" not in config and config:
-        if _DEFAULT_NAMED_VECTOR in config:
+    if set(sizes) != {"default"} and sizes:
+        if _DEFAULT_NAMED_VECTOR in sizes:
             chosen = _DEFAULT_NAMED_VECTOR
         else:
-            # Deterministic fallback so two callers without a hint agree.
-            chosen = sorted(config.keys())[0]
+            chosen = sorted(sizes)[0]
     else:
         chosen = None
 
@@ -180,38 +159,27 @@ def _qdrant_search(
     project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Run a Qdrant vector search via the REST API.
+    Run a Qdrant vector search through the local client adapter.
 
     Auto-detects whether ``collection`` is single-vector (v1 pipelines)
     or named-vector (v2 ``-summaries`` collections). Uses the unified
-    Query API (``/points/query``) which accepts both schemas via the
-    ``using`` parameter.
+    The adapter accepts both schemas via the ``using`` parameter.
 
     Returns a list of hit dicts:
       {"id": …, "score": …, "payload": {…}}
     """
     named_vector = _resolve_vector_layout(qdrant_url, collection, timeout)
-    url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points/query"
-    body: Dict[str, Any] = {
-        "query": vector,
-        "limit": top_k,
-        "with_payload": True,
-    }
-    if named_vector is not None:
-        body["using"] = named_vector
     project_filter = qdrant_project_filter(project_id)
-    if project_filter is not None:
-        body["filter"] = project_filter
     try:
-        resp = httpx.post(url, json=body, timeout=timeout)
-        resp.raise_for_status()
-        # ``/points/query`` returns ``{"result": {"points": [...]}}``.
-        # The legacy ``/points/search`` returned ``{"result": [...]}``.
-        # Normalise to a flat list so the rest of this module is unchanged.
-        result = resp.json().get("result")
-        if isinstance(result, dict):
-            return list(result.get("points") or [])
-        return list(result or [])
+        del timeout
+        return query_points(
+            get_code_qdrant_store(qdrant_url),
+            collection,
+            vector,
+            limit=top_k,
+            vector_name=named_vector,
+            query_filter=project_filter,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[intelligent_retrieval] Qdrant search failed: %s", exc)
         return []
@@ -232,19 +200,12 @@ def _normalize_collection_tokens(value: Any) -> List[str]:
 
 
 def _qdrant_collection_names(qdrant_url: str, timeout: float = 10.0) -> List[str]:
-    url = f"{qdrant_url.rstrip('/')}/collections"
     try:
-        resp = httpx.get(url, timeout=timeout)
-        resp.raise_for_status()
-        collections = resp.json().get("result", {}).get("collections", [])
+        del timeout
+        return get_code_qdrant_store(qdrant_url).list_collection_names()
     except Exception as exc:  # noqa: BLE001
         logger.warning("[intelligent_retrieval] list collections failed: %s", exc)
         return []
-    names: List[str] = []
-    for item in collections:
-        if isinstance(item, dict) and isinstance(item.get("name"), str):
-            names.append(item["name"])
-    return names
 
 
 def _is_project_scope_collection(scope: str, collection: str) -> bool:
@@ -296,12 +257,17 @@ def _qdrant_search_by_ids(
     """Retrieve specific Qdrant points by ID (for graph-expanded nodes)."""
     if not ids:
         return []
-    url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points"
-    body = {"ids": ids, "with_payload": True}
     try:
-        resp = httpx.post(url, json=body, timeout=timeout)
-        resp.raise_for_status()
-        results = resp.json().get("result", [])
+        del timeout
+        results = [
+            model_to_dict(point)
+            for point in get_code_qdrant_store(qdrant_url).retrieve(
+                collection,
+                ids,
+                with_payload=True,
+                with_vectors=False,
+            )
+        ]
         if normalize_project_id(project_id) is None:
             return results
         return [
@@ -511,7 +477,7 @@ class IntelligentRetrievalEngine:
 
     def __init__(
         self,
-        qdrant_url: str = DEFAULT_QDRANT_URL,
+        qdrant_url: str = DEFAULT_QDRANT_PATH,
         collection: str = "",
         embedder: Optional[Callable[[str], List[float]]] = None,
         neo4j_driver: Optional[Any] = None,

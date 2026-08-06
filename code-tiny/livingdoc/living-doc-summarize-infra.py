@@ -24,7 +24,7 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from neo4j import GraphDatabase
+from graph_runtime import add_graph_arguments, open_graph_session, prepare_graph_arguments
 
 
 # ─── Prompts ─────────────────────────────────────────────────────────────────
@@ -83,10 +83,7 @@ def parse_args():
         description="Summarize InfraNode (Louvain community) nodes using member function summaries + LLM.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--neo4j-uri",      default=get_env("NEO4J_URI",      "bolt://localhost:7687"))
-    parser.add_argument("--neo4j-user",     default=get_env("NEO4J_USER",     "neo4j"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
-    parser.add_argument("--neo4j-db",       default=get_env("NEO4J_DB"))
+    add_graph_arguments(parser)
 
     parser.add_argument("--project-id",   default=get_env("PROJECT_ID"))
     parser.add_argument("--infra-label",  default=get_env("INFRA_LABEL",  "InfraNode"))
@@ -128,13 +125,10 @@ def parse_args():
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
-    missing = []
-    if not args.NEO4J_PASS:
-        missing.append("NEO4J_PASS/--neo4j-pass")
-    if missing:
-        print("Missing required options: " + ", ".join(missing), file=sys.stderr)
-        sys.exit(2)
-    return args
+    try:
+        return prepare_graph_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 # ─── Neo4j helpers ────────────────────────────────────────────────────────────
@@ -259,16 +253,12 @@ def main():
     args = parse_args()
     skip_existing = str(args.skip_existing) != "0"
 
-    driver = GraphDatabase.driver(
-        args.neo4j_uri, auth=(args.neo4j_user, args.NEO4J_PASS)
-    )
     headers = {
         "Content-Type":  "application/json",
         "Authorization": f"Bearer {args.llm_api_key}",
     }
 
-    try:
-        with driver.session(database=args.neo4j_db) as session:
+    with open_graph_session(args) as session:
             infra_nodes = fetch_infra_nodes(
                 session,
                 args.infra_label,
@@ -359,9 +349,6 @@ def main():
 
                 if args.llm_sleep > 0:
                     time.sleep(args.llm_sleep)
-
-    finally:
-        driver.close()
 
     print(
         f"\n[summarize-infra] Done. Total={total} Saved={saved} Skipped={skipped} Failed={failed}"

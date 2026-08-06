@@ -76,9 +76,9 @@ The registry is re-read on every call. There is no in-process cache
 
 ```python
 from tools.common.project_registry import (
+    DuplicateProjectRegistrationError,
     ProjectTargets,
     ProjectNotRegisteredError,
-    ProjectScopeRequiredError,
     list_registered_projects,
     resolve_project_targets,
     with_overrides,
@@ -98,28 +98,23 @@ targets = resolve_project_targets("cortex")
 
 ## Query Precedence (both servers)
 
-Every project-scoped tool follows this precedence:
+Every project-scoped tool follows this amended precedence:
 
 1. **`project_id` present** → resolve the shard via the registry and
    filter on `project_id_normalized`.
-2. **`project_id` absent + `search_full=True`** → query across every
-   project that shares the resolved graph/collection with no
-   `project_id_normalized` filter. The caller explicitly opts in.
-3. **`project_id` absent + `search_full=False` (default)** → raise
-   `ProjectScopeRequiredError`. No silent fallback.
+2. **`project_id` absent** → query the env-default graph/collection with no
+   `project_id_normalized` filter (implicit full search).
 
-The Cypher predicate for code-side traversals is:
+Code-side query builders include the normalized predicate only for scoped
+calls:
 
 ```cypher
-AND ($search_full OR n.project_id_normalized = $project_id_normalized)
+AND n.project_id_normalized = $project_id_normalized
 ```
 
-so a single query plan serves both per-project and cross-project modes.
-
-For Qdrant filters, `qdrant_project_filter(project_id, search_full=...)`
-returns `None` when `search_full=True` (suppressing the filter) and the
-project predicate otherwise. Filters compose with `source_id` filters via
-AND.
+For Qdrant filters, `qdrant_project_filter(project_id)` returns `None` when
+the id is absent and the normalized project predicate otherwise. Filters
+compose with `source_id` filters via AND.
 
 ---
 
@@ -218,19 +213,19 @@ call.
 
 ## Smoke Test
 
-`scripts/smoke_unified_contract.py` exercises the contract end-to-end
-against live FalkorDB + Qdrant. It gracefully skips when the services are
-unavailable.
+`scripts/smoke_unified_contract.py` is a deterministic registry preflight: it
+fails when either project is unregistered or their graph/collection targets
+collide. The automated Phase 07 fixture suite covers project-scoped document
+payloads, queries, resets, and launcher configuration without external
+services.
 
 ```bash
 python scripts/smoke_unified_contract.py --project-a cortext --project-b proj_beta
 ```
 
-The expected output for two registered projects with distinct content is:
+The expected output for two registered projects is:
 
 ```
-FalkorDB @ localhost:6379: reachable
-Qdrant    @ localhost:6333: reachable
 --- Two-project isolation ---
          default  PASS
 ```
@@ -245,8 +240,9 @@ SKIP (registry: project_id 'proj_beta' is not registered. ...)
 
 ## Migration / Backfill Playbook
 
-1. **Drop + re-ingest doc graph.** Existing doc data was written without
-   `project_id`; running `python doc-tiny/0_reset_all.py` clears it.
+1. **Inspect, then drop + re-ingest doc data.** Existing doc data was written
+   without `project_id`; run `python doc-tiny/0_reset_all.py --project-id <id>
+   --dry-run`, then repeat with `--force` to delete only that project's data.
 2. **Re-ingest with the new ingest path.** Each registered project must
    be re-ingested via
    `python doc-tiny/graphrag_ingest_langextract.py --project-id <id>`
@@ -256,9 +252,9 @@ SKIP (registry: project_id 'proj_beta' is not registered. ...)
    When the migration plan lands the FalkorDB branch, the command is
    `python code-tiny/scripts/setup_constraints.py --project-id <id>
    --provider falkordb`. Per-project indexes replace the global ones.
-4. **Update external callers.** Every harness script or skill that
-   previously called `activate_project(...)` now passes `project_id` (or
-   `search_full=True`) explicitly.
+4. **Update external callers.** Every harness script or skill that previously
+   called `activate_project(...)` passes `project_id` to scope one project, or
+   omits it for an intentional cross-project query.
 
 ---
 

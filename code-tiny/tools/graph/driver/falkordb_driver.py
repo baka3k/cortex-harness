@@ -17,6 +17,7 @@ they emit a deprecation warning and are ignored when a ``path`` is supplied.
 """
 
 import logging
+import os
 import re
 import warnings
 from collections.abc import Mapping
@@ -27,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from tools.graph.core.base import GraphProvider
 from tools.graph.driver.neo4j_driver import Neo4jDriver
 from tools.common.project_scope import prepare_project_scope_parameters
+from cortex_harness.storage.lease import StorageLease
 
 
 logger = logging.getLogger(__name__)
@@ -183,11 +185,12 @@ class FalkorDBDriver(Neo4jDriver):
         self._password = password
         self._database = graph or database or "neo4j"
         self._path: Optional[Path] = Path(path).resolve() if path is not None else None
+        self._storage_lease: Optional[StorageLease] = None
 
         # Network-style fields are deprecated. We still accept them so call
         # sites keep compiling for one release, but log + warn, and ignore
         # them when an explicit ``path`` was provided.
-        if self._path is not None and any(v is not None for v in (uri, host, port, user, password)) and ssl:
+        if self._path is not None and (any(v is not None for v in (uri, host, port, user, password)) or ssl):
             warnings.warn(
                 "FalkorDBDriver: network-style arguments (uri/host/port/user/password/ssl) "
                 "are deprecated and ignored when 'path' is supplied. Open a network client "
@@ -198,7 +201,18 @@ class FalkorDBDriver(Neo4jDriver):
 
         # Local mode (default): open the embedded FalkorDBLite backend.
         if self._path is not None:
-            self._client = _open_local_falkordb(self._path)
+            self._storage_lease = StorageLease(
+                self._path,
+                instance_id=str(kwargs.pop("instance_id", None) or os.getenv("CORTEX_STORAGE_INSTANCE", "default")),
+                owner_id=str(kwargs.pop("owner_id", None) or os.getenv("CORTEX_STORAGE_OWNER", "code")),
+                backend="falkordb",
+            ).acquire()
+            try:
+                self._client = _open_local_falkordb(self._path)
+            except Exception:
+                self._storage_lease.release()
+                self._storage_lease = None
+                raise
         else:
             # Legacy network fallback. Kept for one release so existing tests
             # that construct a network-style driver without a path keep
@@ -280,12 +294,17 @@ class FalkorDBDriver(Neo4jDriver):
         )
 
     def close(self) -> None:
-        if self._client:
-            try:
-                self._client.close()
-            except Exception as exc:  # pragma: no cover - best-effort close
-                logger.debug("FalkorDB close() raised: %s", exc)
-            logger.info("FalkorDB connection closed")
+        try:
+            if self._client:
+                try:
+                    self._client.close()
+                except Exception as exc:  # pragma: no cover - best-effort close
+                    logger.debug("FalkorDB close() raised: %s", exc)
+                logger.info("FalkorDB connection closed")
+        finally:
+            if self._storage_lease is not None:
+                self._storage_lease.release()
+                self._storage_lease = None
 
     async def execute_query(
         self,

@@ -4,12 +4,11 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List
 
-from qdrant_client import QdrantClient
-from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
 from graph_store import add_graph_store_args, create_graph_store_from_args
+from doc_local_qdrant import get_document_qdrant_store
 
 try:
     from dotenv import load_dotenv
@@ -28,20 +27,13 @@ def _load_env() -> None:
 
 
 def qdrant_search(
-    client: QdrantClient, collection: str, query_vector: List[float], top_k: int
+    client: Any, collection: str, query_vector: List[float], top_k: int
 ) -> List[Dict[str, Any]]:
-    if hasattr(client, "search"):
-        hits = client.search(
-            collection_name=collection,
-            query_vector=query_vector,
-            limit=top_k,
-        )
-    else:
-        hits = client.query_points(
-            collection_name=collection,
-            query=query_vector,
-            limit=top_k,
-        ).points
+    hits = client.search(
+        collection_name=collection,
+        query_vector=query_vector,
+        limit=top_k,
+    )
     results = []
     for hit in hits:
         if hit.payload is None:
@@ -171,10 +163,7 @@ def main() -> None:
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-pass", default=os.getenv("NEO4J_PASS", "password"))
-    parser.add_argument("--qdrant-url", default=os.getenv("QDRANT_URL"))
-    parser.add_argument("--qdrant-host", default=os.getenv("QDRANT_HOST", "localhost"))
-    parser.add_argument("--qdrant-port", type=int, default=int(os.getenv("QDRANT_PORT", "6333")))
-    parser.add_argument("--qdrant-api-key", default=os.getenv("QDRANT_KEY"))
+    parser.add_argument("--qdrant-path", default=os.getenv("QDRANT_DOC_PATH"))
     parser.add_argument("--llm-model", default=os.getenv("LANGEXTRACT_MODEL_ID", "gemini-2.5-flash"))
     parser.add_argument("--langextract-model-id", default=os.getenv("LANGEXTRACT_MODEL_ID"))
     parser.add_argument("--langextract-model-url", default=os.getenv("LANGEXTRACT_MODEL_URL"))
@@ -190,12 +179,7 @@ def main() -> None:
     embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
     query_vector = embedder.encode([args.query])[0].tolist()
 
-    if args.qdrant_url:
-        qdrant = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key)
-    else:
-        qdrant = QdrantClient(
-            host=args.qdrant_host, port=args.qdrant_port, api_key=args.qdrant_api_key
-        )
+    qdrant = get_document_qdrant_store(args.qdrant_path)
 
     hits = qdrant_search(qdrant, args.collection, query_vector, args.top_k)
     if not hits:

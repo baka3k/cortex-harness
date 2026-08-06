@@ -16,7 +16,7 @@ End-to-end guide: from initial setup to daily operations with an AI coding agent
              │ dev sync code / dev sync doc
              ▼
 ┌────────────────────────────┐   ┌──────────────────────────┐
-│  Neo4j                     │   │  Qdrant                  │
+│  FalkorDBLite              │   │  Qdrant local            │
 │  call graph, symbols,      │   │  code embeddings,        │
 │  entities, relations       │   │  doc paragraph vectors   │
 └────────────┬───────────────┘   └────────────┬─────────────┘
@@ -63,6 +63,9 @@ source .venv/bin/activate        # macOS / Linux
 pip install -r requirements.txt
 pip install -e .
 
+dev storage-init
+dev doctor
+
 ```
 
 After this step, the `dev` command can be invoked from any directory.
@@ -87,15 +90,20 @@ The wizard will prompt you for the following inputs:
 | --- | --- |
 | Project code | Short alphanumeric ID (no accents/spaces), e.g., `my-app` |
 | Project name | Display name |
-| NEO4J_URI | `bolt://localhost:7687` |
-| NEO4J_PASS | Neo4j password |
-| QDRANT_HOST | `localhost` |
+| CORTEX_STORAGE_INSTANCE | Stable local instance ID; normally `default` |
+| FALKORDB_GRAPH | Registry-resolved logical graph name |
+| QDRANT_COLLECTION | Registry-resolved logical collection name |
 | EMBEDDING_MODEL | Keep default or change to your local model |
 | device | `cpu` / `mps` (Apple Silicon) / `cuda` |
 | Source folders | Directories containing source code (e.g., `/path/to/your-project/src`) |
 | Doc folders | Directories containing documentation (e.g., `/path/to/your-project/docs`) |
 
 The configuration will be saved to `.cortext-harness/config/dev.json` within the project.
+
+Database files are not saved there. By default every registered project uses
+`~/.cortext-harness/v1/instances/default/`, with separate `code` and `doc`
+owner paths. Set `CORTEX_DATA_HOME` only when an explicit portable/test data
+root is required.
 
 ### Step 2: Initialize the Harness
 

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("build", "install", "uninstall", "infra-up", "infra-down", "doctor", "start", "stop", "help")]
+    [ValidateSet("build", "install", "uninstall", "infra-up", "infra-down", "storage-layout", "storage-init", "storage-migrate-layout", "storage-backup", "storage-stop", "doctor", "start", "stop", "help")]
     [string]$Action = "help",
     [ValidateSet("all", "code", "doc")]
     [string]$Server = "all",
@@ -19,7 +19,11 @@ param(
     [string]$Provider = "",
     [string]$Collection = "",
     [string]$CodeCollection = "",
-    [string]$DocCollection = ""
+    [string]$DocCollection = "",
+    [string]$LegacyRoot = "",
+    [switch]$Apply,
+    [ValidateSet("code", "doc")]
+    [string]$Owner = "code"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,42 +52,19 @@ $Servers = @(
     }
 )
 
-$InfraServices = @(
-    [pscustomobject]@{
-        Name = "qdrant"
-        Container = "cortex-qdrant"
-        Image = "qdrant/qdrant"
-        Ports = @("6333:6333")
-        Host = "127.0.0.1"
-        Port = 6333
-        ReadyUrl = "http://127.0.0.1:6333"
-    },
-    [pscustomobject]@{
-        Name = "falkordb"
-        Container = "cortex-falkordb"
-        Image = "falkordb/falkordb"
-        # 6379 = Redis-protocol API; 3000 = FalkorDB Browser Web UI (bundled in the image).
-        Ports = @("6379:6379", "3000:3000")
-        # Named volume so recreating the container for new port mappings keeps graph data.
-        Volumes = @("cortex-falkordb-data:/data")
-        Host = "127.0.0.1"
-        Port = 6379
-        ReadyUrl = ""
-        Protocol = "redis"
-        BrowserPort = 3000
-        BrowserReadyUrl = "http://127.0.0.1:3000"
-    }
-)
-
 function Write-Usage {
     @"
 Usage (equivalent forms):
   make build       | dev build       Create/sync virtualenvs and Python dependencies.
   make install     | dev install     Run build and install the global dev command.
   make uninstall   | dev uninstall   Remove the global dev command.
-  make infra-up    | dev infra-up    Pull/start local Qdrant and FalkorDB containers.
-  make infra-down  | dev infra-down  Stop the containers started by infra-up.
-  make doctor      | dev doctor      Check Python deps, Docker, databases, and MCP ports.
+  make infra-up    | dev infra-up    Deprecated alias for storage initialization.
+  make infra-down  | dev infra-down  Deprecated no-op for embedded storage.
+  make storage-layout               Show centralized instance paths and leases.
+  make storage-init                 Create the instance tree and manifest.
+  make storage-migrate-layout       Dry-run legacy repository-local migration.
+  make storage-backup               Create a verified owner backup.
+  make doctor      | dev doctor      Check Python 3.12, local stores, and MCP ports.
   make start       | dev start       Open each MCP server in a separate terminal window.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
 
@@ -96,10 +77,10 @@ Default MCP servers:
   code-tiny  http://127.0.0.1:8788/mcp
   doc-tiny   http://127.0.0.1:8789/mcp
 
-Default local infrastructure:
-  qdrant      http://127.0.0.1:6333
-  falkordb    redis://127.0.0.1:6379
-  falkordb ui http://127.0.0.1:3000  (FalkorDB Browser)
+Default local storage:
+  data root     ~/.cortext-harness/v1/instances/default
+  qdrant        <data-root>/qdrant/{code,doc}
+  falkordb      <data-root>/falkordb/{code,doc}/data.rdb
 "@ | Write-Host
 }
 
@@ -145,7 +126,7 @@ function Invoke-NativeQuiet {
 function Get-PythonLauncher {
     $python = Get-CommandPath @("py.exe", "python.exe", "python3", "python")
     if (-not $python) {
-        throw "Python was not found on PATH. Install Python 3.10+ before running make build."
+        throw "Python was not found on PATH. Install Python 3.12+ before running make build."
     }
     return $python
 }
@@ -354,19 +335,6 @@ function Invoke-Uninstall {
     Write-Host "[uninstall] User PATH was left unchanged."
 }
 
-function Get-DockerCommand {
-    $docker = Get-CommandPath @("docker.exe", "docker")
-    if (-not $docker) {
-        throw "Docker was not found on PATH. Install Docker Desktop before running make infra-up."
-    }
-
-    if ((Invoke-NativeQuiet -Command $docker -Arguments @("info")) -ne 0) {
-        throw "Docker was found, but the Docker daemon is not running. Start Docker Desktop and retry."
-    }
-
-    return $docker
-}
-
 function Test-TcpPort {
     param(
         [string]$HostName,
@@ -473,222 +441,26 @@ function Wait-RedisPingReady {
     return $false
 }
 
-function Test-DockerContainerExists {
-    param(
-        [string]$Docker,
-        [string]$Container
-    )
-
-    $previousErrorAction = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        $names = & $Docker ps -a --filter "name=^/$Container$" --format "{{.Names}}" 2>$null
-        return (@($names) | Where-Object { $_ -eq $Container }).Count -gt 0
-    } finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
-}
-
-function Test-DockerContainerRunning {
-    param(
-        [string]$Docker,
-        [string]$Container
-    )
-
-    $previousErrorAction = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        $running = & $Docker inspect -f "{{.State.Running}}" $Container 2>$null
-        return (($running | Select-Object -First 1) -eq "true")
-    } finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
-}
-
-function Ensure-DockerImage {
-    param(
-        [string]$Docker,
-        [string]$Image
-    )
-
-    if ((Invoke-NativeQuiet -Command $Docker -Arguments @("image", "inspect", $Image)) -eq 0) {
-        return
-    }
-
-    Write-Host "[infra] Pulling image: $Image"
-    & $Docker pull $Image
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to pull Docker image: $Image"
-    }
-}
-
-function Get-DockerContainerPorts {
-    param(
-        [string]$Docker,
-        [string]$Container
-    )
-
-    $ports = [System.Collections.Generic.HashSet[string]]::new()
-    $result = & $Docker port $Container 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $result) {
-        return @()
-    }
-    foreach ($line in @($result)) {
-        $parts = $line -split "->"
-        if ($parts.Length -eq 2) {
-            $binding = $parts[1].Trim()
-            if ($binding -match ":([0-9]+)$") {
-        [void]$ports.Add($matches[1])
-            }
-        }
-    }
-    return @($ports)
-}
-
-function Ensure-DockerVolume {
-    param(
-        [string]$Docker,
-        [string]$Volume
-    )
-
-    if ([string]::IsNullOrEmpty($Volume)) { return }
-    $existing = & $Docker volume inspect $Volume 2>$null
-    if ($LASTEXITCODE -eq 0 -and $existing) { return }
-    Write-Host "[infra] Creating volume: $Volume"
-    & $Docker volume create $Volume | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to create Docker volume: $Volume"
-    }
-}
-
-function New-DockerContainer {
-    param(
-        [string]$Docker,
-        [object]$Service
-    )
-
-    Ensure-DockerImage -Docker $Docker -Image $Service.Image
-
-    foreach ($volumeMapping in @($Service.Volumes)) {
-        $volumeName = ($volumeMapping -split ":")[0]
-        Ensure-DockerVolume -Docker $Docker -Volume $volumeName
-    }
-
-    $runArgs = @("run", "-d", "--name", $Service.Container, "--restart", "unless-stopped")
-    foreach ($port in @($Service.Ports)) {
-        $runArgs += @("-p", $port)
-    }
-    foreach ($volumeMapping in @($Service.Volumes)) {
-        $runArgs += @("-v", $volumeMapping)
-    }
-    $runArgs += $Service.Image
-
-    Write-Host "[infra] Creating container: $($Service.Container)"
-    & $Docker @runArgs | Out-Host
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to create Docker container: $($Service.Container)"
-    }
-}
-
-function Start-InfraService {
-    param(
-        [string]$Docker,
-        [object]$Service
-    )
-
-    $expectedPorts = [System.Collections.Generic.HashSet[string]]::new()
-    foreach ($port in @($Service.Ports)) {
-        [void]$expectedPorts.Add(($port -split ":")[0])
-    }
-
-    if (Test-DockerContainerExists -Docker $Docker -Container $Service.Container) {
-        $actualPorts = Get-DockerContainerPorts -Docker $Docker -Container $Service.Container
-        $missingPorts = @($expectedPorts | Where-Object { $_ -notin $actualPorts })
-        if ($missingPorts.Count -gt 0 -and $actualPorts.Count -gt 0) {
-            Write-Host "[infra] $($Service.Container) is missing host port(s) $($missingPorts -join ', '); recreating to apply the current port mapping."
-            if (Test-DockerContainerRunning -Docker $Docker -Container $Service.Container) {
-                & $Docker stop $Service.Container | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "Failed to stop Docker container: $($Service.Container)" }
-            }
-            & $Docker rm $Service.Container | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "Failed to remove Docker container: $($Service.Container)" }
-            New-DockerContainer -Docker $Docker -Service $Service
-        } elseif (Test-DockerContainerRunning -Docker $Docker -Container $Service.Container) {
-            Write-Host "[infra] $($Service.Container) is already running."
-        } else {
-            Write-Host "[infra] Starting existing container: $($Service.Container)"
-            & $Docker start $Service.Container | Out-Host
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to start Docker container: $($Service.Container)"
-            }
-        }
-    } else {
-        New-DockerContainer -Docker $Docker -Service $Service
-    }
-
-    if (-not (Wait-TcpPort -HostName $Service.Host -Port $Service.Port -TimeoutSeconds 30)) {
-        throw "$($Service.Name) did not open $($Service.Host):$($Service.Port) within 30 seconds."
-    }
-
-    if (-not (Test-HttpReady -Url $Service.ReadyUrl)) {
-        throw "$($Service.Name) is listening, but $($Service.ReadyUrl) did not return a healthy response."
-    }
-
-    # For Redis-protocol backends (FalkorDB), PING proves the DB + graph module
-    # finished loading, not just that the socket is open.
-    if ($Service.Protocol -eq "redis") {
-        if (-not (Wait-RedisPingReady -HostName $Service.Host -Port $Service.Port -TimeoutSeconds 30)) {
-            throw "$($Service.Name) port $($Service.Host):$($Service.Port) is open, but PING did not return PONG within 30 seconds (DB/module may still be loading)."
-        }
-    }
-
-    Write-Host "[infra] $($Service.Name) ready on $($Service.Host):$($Service.Port)"
-
-    # Optional FalkorDB Browser Web UI (bundled in falkordb/falkordb on port 3000).
-    if ($Service.BrowserPort) {
-        $browserUrl = if ($Service.BrowserReadyUrl) { $Service.BrowserReadyUrl } else { "http://$($Service.Host):$($Service.BrowserPort)" }
-        if (-not (Wait-TcpPort -HostName $Service.Host -Port $Service.BrowserPort -TimeoutSeconds 45)) {
-            Write-Host "[infra] WARNING: $($Service.Name) Browser Web UI did not open $($Service.Host):$($Service.BrowserPort) within 45 seconds."
-        } elseif (-not (Test-HttpReady -Url $browserUrl)) {
-            Write-Host "[infra] WARNING: $($Service.Name) Browser Web UI is listening, but $browserUrl did not return a healthy response."
-        } else {
-            Write-Host "[infra] $($Service.Name) Browser Web UI ready at $browserUrl"
-        }
-    }
-}
-
 function Invoke-InfraUp {
-    $docker = Get-DockerCommand
-
-    foreach ($service in $InfraServices) {
-        Start-InfraService -Docker $docker -Service $service
-    }
-
-    Write-Host "[infra] Local infrastructure is ready."
+    Write-Host "[warn] 'infra-up' is deprecated; initializing embedded storage instead."
+    Invoke-StorageLifecycle -StorageAction "storage-init"
 }
 
 function Invoke-InfraDown {
-    $docker = Get-DockerCommand
+    Write-Host "[warn] 'infra-down' is deprecated; embedded storage has no service to stop."
+}
 
-    foreach ($service in $InfraServices) {
-        if (-not (Test-DockerContainerExists -Docker $docker -Container $service.Container)) {
-            Write-Host "[infra] Container not found, skipping: $($service.Container)"
-            continue
-        }
-
-        if (-not (Test-DockerContainerRunning -Docker $docker -Container $service.Container)) {
-            Write-Host "[infra] Container already stopped: $($service.Container)"
-            continue
-        }
-
-        Write-Host "[infra] Stopping container: $($service.Container)"
-        & $docker stop $service.Container | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to stop Docker container: $($service.Container)"
-        }
+function Invoke-StorageLifecycle {
+    param(
+        [string]$StorageAction,
+        [string[]]$StorageArguments = @()
+    )
+    $python = Get-RootVenvPython
+    $lifecycle = Join-Path $Root "scripts/mcp-lifecycle.py"
+    & $python $lifecycle $StorageAction @StorageArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Storage lifecycle action failed: $StorageAction"
     }
-
-    Write-Host "[infra] Local infrastructure stopped."
 }
 
 function Test-SupportsColor {
@@ -738,76 +510,9 @@ function Write-DoctorCheck {
 }
 
 function Invoke-Doctor {
-    $script:DoctorFailures = 0
-    $python = $null
-
-    try {
-        $python = Get-RootVenvPython
-        Write-DoctorCheck -Name "python venv" -Ok $true -Message $python
-    } catch {
-        Write-DoctorCheck -Name "python venv" -Ok $false -Message $_.Exception.Message
-    }
-
-    if ($python) {
-        $depsOk = ((Invoke-NativeQuiet -Command $python -Arguments @("-c", "import neo4j, falkordb, qdrant_client, requests")) -eq 0)
-        Write-DoctorCheck -Name "python deps" -Ok $depsOk -Message "neo4j, falkordb, qdrant_client, requests"
-    }
-
-    $docker = Get-CommandPath @("docker.exe", "docker")
-    $dockerReady = $false
-    if ($docker) {
-        Write-DoctorCheck -Name "docker cli" -Ok $true -Message $docker
-        $dockerReady = ((Invoke-NativeQuiet -Command $docker -Arguments @("info")) -eq 0)
-        $dockerMessage = if ($dockerReady) { "Docker daemon reachable" } else { "Docker daemon not reachable" }
-        Write-DoctorCheck -Name "docker daemon" -Ok $dockerReady -Message $dockerMessage
-    } else {
-        Write-DoctorCheck -Name "docker cli" -Ok $false -Message "Docker not found on PATH"
-    }
-
-    foreach ($service in $InfraServices) {
-        $portOpen = Test-TcpPort -HostName $service.Host -Port $service.Port -TimeoutMs 1000
-        Write-DoctorCheck -Name "$($service.Name) port" -Ok $portOpen -Message "$($service.Host):$($service.Port)"
-
-        if ($service.ReadyUrl) {
-            $ready = Test-HttpReady -Url $service.ReadyUrl
-            Write-DoctorCheck -Name "$($service.Name) http" -Ok $ready -Message $service.ReadyUrl
-        }
-
-        if ($service.Protocol -eq "redis") {
-            $pingOk = Test-RedisPingReady -HostName $service.Host -Port $service.Port -TimeoutMs 2000
-            Write-DoctorCheck -Name "$($service.Name) db" -Ok $pingOk -Message "redis $($service.Host):$($service.Port) (PING/PONG)"
-        }
-
-        if ($service.BrowserPort) {
-            $webOpen = Test-TcpPort -HostName $service.Host -Port $service.BrowserPort -TimeoutMs 1000
-            Write-DoctorCheck -Name "$($service.Name) web ui" -Ok $webOpen -Message "$($service.Host):$($service.BrowserPort)" -Required $false
-        }
-
-        if ($dockerReady) {
-            $exists = Test-DockerContainerExists -Docker $docker -Container $service.Container
-            $running = $exists -and (Test-DockerContainerRunning -Docker $docker -Container $service.Container)
-            Write-DoctorCheck -Name "$($service.Name) container" -Ok $running -Message $service.Container -Required $false
-        }
-    }
-
-    foreach ($server in $Servers) {
-        $open = Test-TcpPort -HostName "127.0.0.1" -Port $server.Port -TimeoutMs 1000
-        Write-DoctorCheck -Name "$($server.Name) mcp" -Ok $open -Message "127.0.0.1:$($server.Port)" -Required $false
-    }
-
-    if ($script:DoctorFailures -gt 0) {
-        $msg = "Doctor found $script:DoctorFailures required check(s) failing."
-        if (Test-SupportsColor) {
-            Write-Host $msg -ForegroundColor Red
-        }
-        throw $msg
-    }
-
-    if (Test-SupportsColor) {
-        Write-Host "[doctor] Required checks passed." -ForegroundColor Green
-    } else {
-        Write-Host "[doctor] Required checks passed."
-    }
+    # The Python implementation owns the cross-platform local-store probes so
+    # Windows and POSIX validate exactly the same dependencies and paths.
+    Invoke-StorageLifecycle -StorageAction "doctor"
 }
 
 function Get-ShellRunner {
@@ -1023,11 +728,7 @@ function Get-DefaultGraphEnvBash {
     return @(
         'export GRAPH_PROVIDER="${GRAPH_PROVIDER:-falkordb}"',
         ('export ' + $scopedProvider + '="${' + $scopedProvider + ':-${GRAPH_PROVIDER}}"'),
-        'export FALKORDB_HOST="${FALKORDB_HOST:-localhost}"',
-        'export FALKORDB_PORT="${FALKORDB_PORT:-6379}"',
-        'export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"',
-        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-hyper_graph}"',
-        'export FALKORDB_PASSWORD="${FALKORDB_PASSWORD:-}"'
+        'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-hyper_graph}"'
     ) -join "; "
 }
 
@@ -1038,11 +739,7 @@ function Get-DefaultGraphEnvPowerShell {
     return @"
 if (-not `$env:GRAPH_PROVIDER) { `$env:GRAPH_PROVIDER = 'falkordb' }
 if (-not [Environment]::GetEnvironmentVariable('$scopedProvider', 'Process')) { [Environment]::SetEnvironmentVariable('$scopedProvider', `$env:GRAPH_PROVIDER, 'Process') }
-if (-not `$env:FALKORDB_HOST) { `$env:FALKORDB_HOST = 'localhost' }
-if (-not `$env:FALKORDB_PORT) { `$env:FALKORDB_PORT = '6379' }
-if (-not `$env:FALKORDB_URI) { `$env:FALKORDB_URI = "redis://`$(`$env:FALKORDB_HOST):`$(`$env:FALKORDB_PORT)" }
 if (-not `$env:FALKORDB_GRAPH) { `$env:FALKORDB_GRAPH = 'hyper_graph' }
-if (-not `$env:FALKORDB_PASSWORD) { `$env:FALKORDB_PASSWORD = '' }
 "@
 }
 
@@ -1136,7 +833,12 @@ function Get-RuntimeOverrides {
     $collectionName = if ($isCode -and $CodeCollection) { $CodeCollection } elseif (-not $isCode -and $DocCollection) { $DocCollection } elseif ($Collection) { $Collection } else { $Project }
     $suffix = if ($isCode) { "code" } else { "doc" }
     $mcpName = if ($Config.Servers.Count -gt 1) { "$($Config.Instance)-$suffix" } else { $Config.Instance }
-    $overrides = [ordered]@{ MCP_SERVER_NAME = $mcpName }
+    $storageInstance = $Config.Instance.ToLowerInvariant().Replace('.', '-')
+    $overrides = [ordered]@{
+        MCP_SERVER_NAME = $mcpName
+        CORTEX_STORAGE_INSTANCE = $storageInstance
+        CORTEX_STORAGE_OWNER = $suffix
+    }
     if ($Project) {
         $overrides.PROJECT_ID = $Project
         $overrides.PROJECT_NAME = $Project
@@ -1306,6 +1008,16 @@ try {
         "uninstall" { Invoke-Uninstall }
         "infra-up" { Invoke-InfraUp }
         "infra-down" { Invoke-InfraDown }
+        "storage-layout" { Invoke-StorageLifecycle -StorageAction "storage-layout" }
+        "storage-init" { Invoke-StorageLifecycle -StorageAction "storage-init" }
+        "storage-migrate-layout" {
+            $storageArgs = @()
+            if ($LegacyRoot) { $storageArgs += @("--legacy-root", $LegacyRoot) }
+            if ($Apply) { $storageArgs += "--apply" }
+            Invoke-StorageLifecycle -StorageAction "storage-migrate-layout" -StorageArguments $storageArgs
+        }
+        "storage-backup" { Invoke-StorageLifecycle -StorageAction "storage-backup" -StorageArguments @("--owner", $Owner) }
+        "storage-stop" { Write-Host "[storage-stop] Local storage has no lifecycle to stop." }
         "doctor" { Invoke-Doctor }
         "start" { Invoke-Start }
         "stop" { Invoke-Stop -InstanceName $Name }

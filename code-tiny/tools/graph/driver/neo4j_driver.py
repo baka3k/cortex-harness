@@ -8,7 +8,12 @@ import base64
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
-from neo4j import GraphDatabase, Driver, Session
+try:
+    from neo4j import GraphDatabase, Driver, Session
+except ImportError:  # Neo4j is an optional compatibility extra.
+    GraphDatabase = None  # type: ignore[assignment]
+    Driver = Any  # type: ignore[misc,assignment]
+    Session = Any  # type: ignore[misc,assignment]
 import logging
 
 from tools.graph.core.base import GraphDriver, GraphProvider
@@ -145,6 +150,10 @@ class Neo4jDriver(GraphDriver):
             password: Password
             database: Optional database name (defaults to 'neo4j')
         """
+        if GraphDatabase is None:
+            raise ImportError(
+                "Neo4j support is optional. Install cortex-harness[neo4j] to use GraphProvider.NEO4J."
+            )
         self._uri = uri
         self._user = user
         self._password = _maybe_decrypt_neo4j_password(password)

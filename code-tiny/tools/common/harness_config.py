@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 
@@ -41,12 +42,36 @@ def load_harness_config(config_path: str) -> None:
         if value and key not in os.environ:
             os.environ[key] = str(value)
 
-    # Qdrant URL — derive from host/port when not explicitly set.
-    if "QDRANT_URL" not in os.environ:
-        host = code_env.get("QDRANT_HOST", "")
-        port = code_env.get("QDRANT_PORT", "")
-        if host and port:
-            os.environ["QDRANT_URL"] = f"http://{host}:{port}"
+    # Resolve one canonical local-storage overlay for all child processes.
+    from cortex_harness.storage import resolve_storage, storage_overlay
+
+    local_keys = {
+        key: value
+        for key, value in {**doc_env, **code_env}.items()
+        if key
+        in {
+            "CORTEX_DATA_HOME",
+            "CORTEX_STORAGE_INSTANCE",
+            "CORTEX_CODE_STORAGE_OWNER",
+            "CORTEX_DOC_STORAGE_OWNER",
+            "QDRANT_PATH",
+            "QDRANT_CODE_PATH",
+            "QDRANT_DOC_PATH",
+            "FALKORDB_PATH",
+            "FALKORDB_CODE_PATH",
+            "FALKORDB_DOC_PATH",
+        }
+    }
+    config_file = Path(config_path).resolve()
+    project_root = (
+        config_file.parents[2]
+        if config_file.parent.name == "config"
+        and config_file.parent.parent.name == ".cortext-harness"
+        else config_file.parent
+    )
+    resolved = resolve_storage(project_root, config=local_keys)
+    for key, value in storage_overlay(resolved, owner="code").items():
+        os.environ.setdefault(key, value)
 
     # Qdrant collection defaults — code side reads code.env, doc side reads
     # doc.env, both fall back to ``project.code`` then the naming rule.

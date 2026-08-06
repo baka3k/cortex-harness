@@ -23,6 +23,7 @@ deleted.
 
 Usage:
     python migrate_repo_file_edges.py
+    python migrate_repo_file_edges.py --graph-provider falkordb --dry-run
     python migrate_repo_file_edges.py --neo4j-uri bolt://host:7687 --dry-run
 
 Environment variables (fallbacks):
@@ -34,42 +35,15 @@ Environment variables (fallbacks):
 from __future__ import annotations
 
 import argparse
-import base64
+import asyncio
 import os
-import re
-import sys
+from argparse import Namespace
 
-_FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
-
-
-def _maybe_decrypt_password(password: str) -> str:
-    if not _FERNET_TOKEN_RE.match(password):
-        return password
-    try:
-        from cryptography.fernet import Fernet
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    except ImportError:
-        return password
-    enc_pw = os.environ.get("HYPER_PACK_ENCRYPTION_PASSWORD", "my-secret-encryption-key-2026")
-    try:
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"static_salt_2026", iterations=100_000)
-        key = base64.urlsafe_b64encode(kdf.derive(enc_pw.encode("utf-8")))
-        return Fernet(key).decrypt(password.encode("utf-8")).decode("utf-8")
-    except Exception as exc:
-        print(f"[migrate_repo_file_edges] warning: could not decrypt NEO4J_PASS ({exc})", file=sys.stderr)
-        return password
-
-
-try:
-    from neo4j import GraphDatabase
-    from neo4j.exceptions import ClientError
-except ImportError:
-    print(
-        "ERROR: neo4j Python driver not installed.  Run: pip install neo4j",
-        file=sys.stderr,
-    )
-    sys.exit(1)
+from tools.graph.cli import (
+    add_graph_provider_args,
+    create_graph_driver_from_args,
+    env_graph_provider,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -143,54 +117,79 @@ def run_migration(
     neo4j_password: str,
     neo4j_db: str,
     dry_run: bool = False,
+    graph_provider: str | None = None,
+    falkordb_path: str | None = None,
+    falkordb_graph: str | None = None,
 ) -> None:
-    driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, _maybe_decrypt_password(neo4j_password)))
+    args = Namespace(
+        graph_provider=graph_provider or env_graph_provider(),
+        falkordb_path=falkordb_path,
+        falkordb_graph=falkordb_graph,
+        neo4j_uri=neo4j_uri,
+        neo4j_user=neo4j_user,
+        neo4j_password=neo4j_password,
+        neo4j_db=neo4j_db,
+    )
+    driver = asyncio.run(create_graph_driver_from_args(args))
+    if driver is None:
+        raise RuntimeError(
+            "Neo4j rollback mode requires URI, user, and password credentials."
+        )
     try:
-        with driver.session(database=neo4j_db) as session:
-            # ── Pass 1: backfill HAS_FILE edges ──────────────────────────────
+        # ── Pass 1: backfill HAS_FILE edges ──────────────────────────────
+        if dry_run:
+            records, _, _ = driver.execute_query_sync("""
+                MATCH (r:Repository)
+                MATCH (f:File)
+                WHERE f.repo = r.name AND NOT (r)-[:HAS_FILE]->(f)
+                RETURN count(f) AS would_create
+            """, database=args.neo4j_db)
+            would_create = (records[0] if records else {}).get("would_create", 0)
+            print(f"[DRY RUN] Pass 1: would create {would_create} HAS_FILE edges")
+        else:
+            records, _, _ = driver.execute_query_sync(
+                _BACKFILL_HAS_FILE, database=args.neo4j_db
+            )
+            created = (records[0] if records else {}).get("created", 0)
+            print(f"[OK] Pass 1: created {created} HAS_FILE edges")
+
+        # ── Pass 2: remove bad Project→File CONTAINS edges ───────────────
+        records, _, _ = driver.execute_query_sync(
+            _COUNT_BAD_EDGES, database=args.neo4j_db
+        )
+        total_bad = (records[0] if records else {}).get("total", 0)
+        print(f"     Pass 2: found {total_bad} invalid (Project)-[:CONTAINS]->(File) edges")
+
+        if total_bad > 0:
             if dry_run:
-                result = session.run("""
-                    MATCH (r:Repository)
-                    MATCH (f:File)
-                    WHERE f.repo = r.name AND NOT (r)-[:HAS_FILE]->(f)
-                    RETURN count(f) AS would_create
-                """)
-                would_create = result.single()["would_create"]
-                print(f"[DRY RUN] Pass 1: would create {would_create} HAS_FILE edges")
+                print(f"[DRY RUN] Pass 2: would delete {total_bad} edges")
             else:
-                result = session.run(_BACKFILL_HAS_FILE)
-                created = result.single()["created"]
-                print(f"[OK] Pass 1: created {created} HAS_FILE edges")
+                records, _, _ = driver.execute_query_sync(
+                    _DELETE_BAD_EDGES, database=args.neo4j_db
+                )
+                deleted = (records[0] if records else {}).get("deleted", 0)
+                print(f"[OK] Pass 2: deleted {deleted} invalid edges")
+        else:
+            print("[OK] Pass 2: nothing to clean up")
 
-            # ── Pass 2: remove bad Project→File CONTAINS edges ───────────────
-            count_result = session.run(_COUNT_BAD_EDGES)
-            total_bad = count_result.single()["total"]
-            print(f"     Pass 2: found {total_bad} invalid (Project)-[:CONTAINS]->(File) edges")
+        # ── Pass 3: merge orphan Project nodes ───────────────────────────
+        records, _, _ = driver.execute_query_sync(
+            _COUNT_ORPHAN_PROJECTS, database=args.neo4j_db
+        )
+        total_orphans = (records[0] if records else {}).get("total", 0)
+        print(f"     Pass 3: found {total_orphans} orphan Project nodes (old MERGE key)")
 
-            if total_bad > 0:
-                if dry_run:
-                    print(f"[DRY RUN] Pass 2: would delete {total_bad} edges")
-                else:
-                    del_result = session.run(_DELETE_BAD_EDGES)
-                    deleted = del_result.single()["deleted"]
-                    print(f"[OK] Pass 2: deleted {deleted} invalid edges")
+        if total_orphans > 0:
+            if dry_run:
+                print(f"[DRY RUN] Pass 3: would merge {total_orphans} orphan Project nodes")
             else:
-                print("[OK] Pass 2: nothing to clean up")
-
-            # ── Pass 3: merge orphan Project nodes ───────────────────────────
-            count_result3 = session.run(_COUNT_ORPHAN_PROJECTS)
-            total_orphans = count_result3.single()["total"]
-            print(f"     Pass 3: found {total_orphans} orphan Project nodes (old MERGE key)")
-
-            if total_orphans > 0:
-                if dry_run:
-                    print(f"[DRY RUN] Pass 3: would merge {total_orphans} orphan Project nodes")
-                else:
-                    merge_result = session.run(_MIGRATE_ORPHAN_PROJECTS)
-                    merged = merge_result.single()["merged"]
-                    print(f"[OK] Pass 3: merged {merged} orphan Project nodes into canonical form")
-            else:
-                print("[OK] Pass 3: no orphan Project nodes found")
+                records, _, _ = driver.execute_query_sync(
+                    _MIGRATE_ORPHAN_PROJECTS, database=args.neo4j_db
+                )
+                merged = (records[0] if records else {}).get("merged", 0)
+                print(f"[OK] Pass 3: merged {merged} orphan Project nodes into canonical form")
+        else:
+            print("[OK] Pass 3: no orphan Project nodes found")
 
     finally:
         driver.close()
@@ -215,6 +214,7 @@ def main() -> None:
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASSWORD", ""))
     parser.add_argument("--neo4j-db", default=os.getenv("NEO4J_DB", "neo4j"))
+    add_graph_provider_args(parser)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -224,13 +224,16 @@ def main() -> None:
     args = parser.parse_args()
 
     mode = "DRY RUN" if args.dry_run else "LIVE"
-    print(f"Running migration [{mode}] on {args.neo4j_uri} / db={args.neo4j_db}")
+    print(f"Running migration [{mode}] provider={args.graph_provider} / db={args.neo4j_db}")
     run_migration(
         neo4j_uri=args.neo4j_uri,
         neo4j_user=args.neo4j_user,
         neo4j_password=args.neo4j_password,
         neo4j_db=args.neo4j_db,
         dry_run=args.dry_run,
+        graph_provider=args.graph_provider,
+        falkordb_path=args.falkordb_path,
+        falkordb_graph=args.falkordb_graph,
     )
 
 

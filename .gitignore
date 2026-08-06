@@ -18,8 +18,10 @@ dist/
 .vscode/
 .DS_Store
 
-# Local cache/storage (vector db, temporary state)
-storage/
+# Local cache/storage (vector db, temporary state). Anchor this to the
+# repository root so the tracked ``cortex_harness.storage`` package is not
+# accidentally excluded.
+/storage/
 
 # Allow the resources folder (screenshots, images) to be tracked
 !resources/
@@ -87,6 +89,20 @@ tests/fixtures/**
 !tests/fixtures/web-framework-application/**
 !tests/fixtures/database-schema-application/
 !tests/fixtures/database-schema-application/**
+!tests/fixtures/unified_contract/
+!tests/fixtures/unified_contract/proj_alpha/
+!tests/fixtures/unified_contract/proj_alpha/src/
+!tests/fixtures/unified_contract/proj_alpha/src/alpha.py
+!tests/fixtures/unified_contract/proj_alpha/docs/
+!tests/fixtures/unified_contract/proj_alpha/docs/overview.md
+!tests/fixtures/unified_contract/proj_beta/
+!tests/fixtures/unified_contract/proj_beta/src/
+!tests/fixtures/unified_contract/proj_beta/src/beta.py
+!tests/fixtures/unified_contract/proj_beta/docs/
+!tests/fixtures/unified_contract/proj_beta/docs/overview.md
+!tests/fixtures/unified_contract/config/
+!tests/fixtures/unified_contract/config/proj_alpha.json
+!tests/fixtures/unified_contract/config/proj_beta.json
 tests/fixtures/aspnet-core-application/**/bin/
 tests/fixtures/aspnet-core-application/**/obj/
 tests/fixtures/aspnet-framework-application/**/bin/

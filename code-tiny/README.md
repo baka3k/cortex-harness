@@ -115,13 +115,18 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-FalkorDB/Neo4j and Qdrant are external services. Start the services required by your chosen persistence mode before running a non-dry scan.
+The supported default is embedded storage. From the repository root, run
+`dev storage-init`; code data then lives under
+`~/.cortext-harness/v1/instances/default/qdrant/code` and
+`~/.cortext-harness/v1/instances/default/falkordb/code/data.rdb`. No database
+service or port is required. Python 3.12+ is required.
 
 ## Preferred workflow: incremental orchestration
 
 For a configured Cortex Harness project, prefer the root CLI. It detects primary languages and framework overlays, derives scoped collection names, propagates embedding settings, and manages incremental state.
 
-`dev init` configures FalkorDB by default. The direct examples below also pass `--graph-provider falkordb` explicitly so they do not depend on legacy analyzer-local provider defaults.
+`dev init` configures FalkorDB by default. Prefer `dev sync code`, which applies
+the active project's registry targets and owner-local paths consistently.
 
 ```powershell
 dev init C:\projects\digital_key
@@ -131,7 +136,11 @@ dev sync code --project-dir C:\projects\digital_key --full-scan
 dev sync code --project-dir C:\projects\digital_key --change-detection hash --reconcile
 ```
 
-The underlying orchestrator can also be called directly:
+The old host/port examples below describe the optional legacy remote backend
+and are not the local-runtime quick start. Direct embedded invocation must use
+the resolved `FALKORDB_PATH` and `QDRANT_CODE_PATH` supplied by the launcher.
+
+The underlying orchestrator can also be called directly for legacy remote compatibility:
 
 ```powershell
 python tools/sync/incremental_sync.py `
