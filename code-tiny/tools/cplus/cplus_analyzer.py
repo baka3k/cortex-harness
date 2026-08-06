@@ -2757,6 +2757,18 @@ def _load_or_parse_payload(
                     ensure_text_fields(item)
         if payload.get("proc_nodes") is None:
             payload["proc_nodes"] = []
+        elif isinstance(payload["proc_nodes"], list):
+            for item in payload["proc_nodes"]:
+                if isinstance(item, dict):
+                    ensure_text_fields(item)
+                    item.setdefault("code", item.get("raw_text") or item.get("name") or "")
+                    item.setdefault("symbol_id", item.get("id") or "")
+                    item.setdefault("qualified_name", item.get("name") or "")
+                    item.setdefault("kind", item.get("label") or "SqlStatement")
+                    item.setdefault("scope_name", None)
+                    item.setdefault("arity", 0)
+                    item.setdefault("start_byte", 0)
+                    item.setdefault("end_byte", 0)
         if payload.get("proc_diagnostics") is None:
             payload["proc_diagnostics"] = []
         function_types = payload.get("function_types")
