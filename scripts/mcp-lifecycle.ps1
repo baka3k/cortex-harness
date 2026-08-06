@@ -62,10 +62,16 @@ $InfraServices = @(
         Name = "falkordb"
         Container = "cortex-falkordb"
         Image = "falkordb/falkordb"
-        Ports = @("6379:6379")
+        # 6379 = Redis-protocol API; 3000 = FalkorDB Browser Web UI (bundled in the image).
+        Ports = @("6379:6379", "3000:3000")
+        # Named volume so recreating the container for new port mappings keeps graph data.
+        Volumes = @("cortex-falkordb-data:/data")
         Host = "127.0.0.1"
         Port = 6379
         ReadyUrl = ""
+        Protocol = "redis"
+        BrowserPort = 3000
+        BrowserReadyUrl = "http://127.0.0.1:3000"
     }
 )
 
@@ -91,8 +97,9 @@ Default MCP servers:
   doc-tiny   http://127.0.0.1:8789/mcp
 
 Default local infrastructure:
-  qdrant    http://127.0.0.1:6333
-  falkordb  redis://127.0.0.1:6379
+  qdrant      http://127.0.0.1:6333
+  falkordb    redis://127.0.0.1:6379
+  falkordb ui http://127.0.0.1:3000  (FalkorDB Browser)
 "@ | Write-Host
 }
 
@@ -415,6 +422,57 @@ function Test-HttpReady {
     }
 }
 
+function Test-RedisPingReady {
+    param(
+        [string]$HostName,
+        [int]$Port,
+        [int]$TimeoutMs = 2000
+    )
+
+    # A listening socket is not enough; PING->PONG proves the server and its
+    # modules (FalkorDB graph) finished loading and can serve commands.
+    try {
+        $client = New-Object System.Net.Sockets.TcpClient
+        $iar = $client.BeginConnect($HostName, $Port, $null, $null)
+        $connected = $iar.AsyncWaitHandle.WaitOne($TimeoutMs)
+        if (-not $connected -or -not $client.Connected) {
+            $client.Close()
+            return $false
+        }
+        $client.SendTimeout = $TimeoutMs
+        $client.ReceiveTimeout = $TimeoutMs
+        $stream = $client.GetStream()
+        # RESP inline PING: "*1\r\n$4\r\nPING\r\n"
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes("*1`r`n`$4`r`nPING`r`n")
+        $stream.Write($bytes, 0, $bytes.Length)
+        $buffer = New-Object byte[] 64
+        $read = $stream.Read($buffer, 0, 64)
+        $client.Close()
+        if ($read -le 0) { return $false }
+        $response = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+        return $response.StartsWith("+PONG")
+    } catch {
+        return $false
+    }
+}
+
+function Wait-RedisPingReady {
+    param(
+        [string]$HostName,
+        [int]$Port,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-RedisPingReady -HostName $HostName -Port $Port -TimeoutMs 2000) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
 function Test-DockerContainerExists {
     param(
         [string]$Docker,
@@ -464,14 +522,98 @@ function Ensure-DockerImage {
     }
 }
 
+function Get-DockerContainerPorts {
+    param(
+        [string]$Docker,
+        [string]$Container
+    )
+
+    $ports = [System.Collections.Generic.HashSet[string]]::new()
+    $result = & $Docker port $Container 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $result) {
+        return @()
+    }
+    foreach ($line in @($result)) {
+        $parts = $line -split "->"
+        if ($parts.Length -eq 2) {
+            $binding = $parts[1].Trim()
+            if ($binding -match ":([0-9]+)$") {
+        [void]$ports.Add($matches[1])
+            }
+        }
+    }
+    return @($ports)
+}
+
+function Ensure-DockerVolume {
+    param(
+        [string]$Docker,
+        [string]$Volume
+    )
+
+    if ([string]::IsNullOrEmpty($Volume)) { return }
+    $existing = & $Docker volume inspect $Volume 2>$null
+    if ($LASTEXITCODE -eq 0 -and $existing) { return }
+    Write-Host "[infra] Creating volume: $Volume"
+    & $Docker volume create $Volume | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create Docker volume: $Volume"
+    }
+}
+
+function New-DockerContainer {
+    param(
+        [string]$Docker,
+        [object]$Service
+    )
+
+    Ensure-DockerImage -Docker $Docker -Image $Service.Image
+
+    foreach ($volumeMapping in @($Service.Volumes)) {
+        $volumeName = ($volumeMapping -split ":")[0]
+        Ensure-DockerVolume -Docker $Docker -Volume $volumeName
+    }
+
+    $runArgs = @("run", "-d", "--name", $Service.Container, "--restart", "unless-stopped")
+    foreach ($port in @($Service.Ports)) {
+        $runArgs += @("-p", $port)
+    }
+    foreach ($volumeMapping in @($Service.Volumes)) {
+        $runArgs += @("-v", $volumeMapping)
+    }
+    $runArgs += $Service.Image
+
+    Write-Host "[infra] Creating container: $($Service.Container)"
+    & $Docker @runArgs | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create Docker container: $($Service.Container)"
+    }
+}
+
 function Start-InfraService {
     param(
         [string]$Docker,
         [object]$Service
     )
 
+    $expectedPorts = [System.Collections.Generic.HashSet[string]]::new()
+    foreach ($port in @($Service.Ports)) {
+        [void]$expectedPorts.Add(($port -split ":")[0])
+    }
+
     if (Test-DockerContainerExists -Docker $Docker -Container $Service.Container) {
-        if (Test-DockerContainerRunning -Docker $Docker -Container $Service.Container) {
+        $actualPorts = Get-DockerContainerPorts -Docker $Docker -Container $Service.Container
+        $missingPorts = @($expectedPorts | Where-Object { $_ -notin $actualPorts })
+        if ($missingPorts.Count -gt 0 -and $actualPorts.Count -gt 0) {
+            Write-Host "[infra] $($Service.Container) is missing host port(s) $($missingPorts -join ', '); recreating to apply the current port mapping."
+            if (Test-DockerContainerRunning -Docker $Docker -Container $Service.Container) {
+                & $Docker stop $Service.Container | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "Failed to stop Docker container: $($Service.Container)" }
+            }
+            & $Docker rm $Service.Container | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "Failed to remove Docker container: $($Service.Container)" }
+            New-DockerContainer -Docker $Docker -Service $Service
+        } elseif (Test-DockerContainerRunning -Docker $Docker -Container $Service.Container) {
             Write-Host "[infra] $($Service.Container) is already running."
         } else {
             Write-Host "[infra] Starting existing container: $($Service.Container)"
@@ -481,19 +623,7 @@ function Start-InfraService {
             }
         }
     } else {
-        Ensure-DockerImage -Docker $Docker -Image $Service.Image
-
-        $args = @("run", "-d", "--name", $Service.Container, "--restart", "unless-stopped")
-        foreach ($port in @($Service.Ports)) {
-            $args += @("-p", $port)
-        }
-        $args += $Service.Image
-
-        Write-Host "[infra] Creating container: $($Service.Container)"
-        & $Docker @args | Out-Host
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to create Docker container: $($Service.Container)"
-        }
+        New-DockerContainer -Docker $Docker -Service $Service
     }
 
     if (-not (Wait-TcpPort -HostName $Service.Host -Port $Service.Port -TimeoutSeconds 30)) {
@@ -504,7 +634,27 @@ function Start-InfraService {
         throw "$($Service.Name) is listening, but $($Service.ReadyUrl) did not return a healthy response."
     }
 
+    # For Redis-protocol backends (FalkorDB), PING proves the DB + graph module
+    # finished loading, not just that the socket is open.
+    if ($Service.Protocol -eq "redis") {
+        if (-not (Wait-RedisPingReady -HostName $Service.Host -Port $Service.Port -TimeoutSeconds 30)) {
+            throw "$($Service.Name) port $($Service.Host):$($Service.Port) is open, but PING did not return PONG within 30 seconds (DB/module may still be loading)."
+        }
+    }
+
     Write-Host "[infra] $($Service.Name) ready on $($Service.Host):$($Service.Port)"
+
+    # Optional FalkorDB Browser Web UI (bundled in falkordb/falkordb on port 3000).
+    if ($Service.BrowserPort) {
+        $browserUrl = if ($Service.BrowserReadyUrl) { $Service.BrowserReadyUrl } else { "http://$($Service.Host):$($Service.BrowserPort)" }
+        if (-not (Wait-TcpPort -HostName $Service.Host -Port $Service.BrowserPort -TimeoutSeconds 45)) {
+            Write-Host "[infra] WARNING: $($Service.Name) Browser Web UI did not open $($Service.Host):$($Service.BrowserPort) within 45 seconds."
+        } elseif (-not (Test-HttpReady -Url $browserUrl)) {
+            Write-Host "[infra] WARNING: $($Service.Name) Browser Web UI is listening, but $browserUrl did not return a healthy response."
+        } else {
+            Write-Host "[infra] $($Service.Name) Browser Web UI ready at $browserUrl"
+        }
+    }
 }
 
 function Invoke-InfraUp {
@@ -541,6 +691,13 @@ function Invoke-InfraDown {
     Write-Host "[infra] Local infrastructure stopped."
 }
 
+function Test-SupportsColor {
+    # Honor the de-facto NO_COLOR standard and disable colors when output is
+    # redirected/piped, so logs stay clean and grep-friendly.
+    if ($env:NO_COLOR) { return $false }
+    return [Console]::IsOutputRedirected -eq $false
+}
+
 function Write-DoctorCheck {
     param(
         [string]$Name,
@@ -550,15 +707,33 @@ function Write-DoctorCheck {
     )
 
     if ($Ok) {
-        Write-Host "[doctor][ok]   $Name - $Message"
+        if (Test-SupportsColor) {
+            Write-Host "[doctor]" -NoNewline
+            Write-Host "[ok]" -ForegroundColor Green -NoNewline
+            Write-Host "   $Name - $Message"
+        } else {
+            Write-Host "[doctor][ok]   $Name - $Message"
+        }
         return
     }
 
     if ($Required) {
         $script:DoctorFailures += 1
-        Write-Host "[doctor][fail] $Name - $Message"
+        if (Test-SupportsColor) {
+            Write-Host "[doctor]" -NoNewline
+            Write-Host "[fail]" -ForegroundColor Red -NoNewline
+            Write-Host " $Name - $Message"
+        } else {
+            Write-Host "[doctor][fail] $Name - $Message"
+        }
     } else {
-        Write-Host "[doctor][warn] $Name - $Message"
+        if (Test-SupportsColor) {
+            Write-Host "[doctor]" -NoNewline
+            Write-Host "[warn]" -ForegroundColor Yellow -NoNewline
+            Write-Host " $Name - $Message"
+        } else {
+            Write-Host "[doctor][warn] $Name - $Message"
+        }
     }
 }
 
@@ -598,6 +773,16 @@ function Invoke-Doctor {
             Write-DoctorCheck -Name "$($service.Name) http" -Ok $ready -Message $service.ReadyUrl
         }
 
+        if ($service.Protocol -eq "redis") {
+            $pingOk = Test-RedisPingReady -HostName $service.Host -Port $service.Port -TimeoutMs 2000
+            Write-DoctorCheck -Name "$($service.Name) db" -Ok $pingOk -Message "redis $($service.Host):$($service.Port) (PING/PONG)"
+        }
+
+        if ($service.BrowserPort) {
+            $webOpen = Test-TcpPort -HostName $service.Host -Port $service.BrowserPort -TimeoutMs 1000
+            Write-DoctorCheck -Name "$($service.Name) web ui" -Ok $webOpen -Message "$($service.Host):$($service.BrowserPort)" -Required $false
+        }
+
         if ($dockerReady) {
             $exists = Test-DockerContainerExists -Docker $docker -Container $service.Container
             $running = $exists -and (Test-DockerContainerRunning -Docker $docker -Container $service.Container)
@@ -611,10 +796,18 @@ function Invoke-Doctor {
     }
 
     if ($script:DoctorFailures -gt 0) {
-        throw "Doctor found $script:DoctorFailures required check(s) failing."
+        $msg = "Doctor found $script:DoctorFailures required check(s) failing."
+        if (Test-SupportsColor) {
+            Write-Host $msg -ForegroundColor Red
+        }
+        throw $msg
     }
 
-    Write-Host "[doctor] Required checks passed."
+    if (Test-SupportsColor) {
+        Write-Host "[doctor] Required checks passed." -ForegroundColor Green
+    } else {
+        Write-Host "[doctor] Required checks passed."
+    }
 }
 
 function Get-ShellRunner {
