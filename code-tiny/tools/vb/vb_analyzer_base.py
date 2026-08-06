@@ -792,7 +792,7 @@ async def build_call_graph(
         )
 
         if verbose:
-            print(f"[neo4j] write stats: {len(functions_rows)} functions, {len(calls_rows)} calls, {len(relations_rows)} relations")
+            print(f"[graph] write stats: {len(functions_rows)} functions, {len(calls_rows)} calls, {len(relations_rows)} relations")
 
     if qdrant_writer and embedder:
         qdrant_writer.ensure_collection()
