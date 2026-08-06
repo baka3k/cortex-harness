@@ -11,11 +11,21 @@ relatedPlans:
   - 260719-0100-mcp-query-capability-hardening
   - make-mcp-lifecycle
   - 260731-1500-legacy-migration-parser-coverage
+  - 260806-1648-local-file-storage
 amendedBy:
   - 260728-0900-simplify-search-full-removal
   - 260728-1400-remove-db-param-unify-project-id
 reviewed: 2026-07-28
 ---
+
+> **LOCAL STORAGE NOTE (2026-08-06):** Plan
+> `260806-1648-local-file-storage` preserves this plan's registry-owned graph
+> and collection names but replaces launcher URL/host/port resolution with
+> project-root local paths. Phase 06 must emit `QDRANT_PATH`,
+> `QDRANT_CODE_PATH`, `QDRANT_DOC_PATH`, and `FALKORDB_PATH`; it must not
+> synthesize `QDRANT_URL` or `FALKORDB_URI` for the default local runtime.
+> Qdrant's exclusive local-directory lock requires code and document roles to
+> use separate subdirectories while retaining their existing collection names.
 
 > **CROSS-PLAN NOTE (2026-07-31):** `260731-1500-legacy-migration-parser-coverage` adds new
 > `shell`/`jp1` entries to `code-tiny/mcp/framework_registry.py` CAPABILITIES. Both plans are

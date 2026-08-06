@@ -2769,6 +2769,9 @@ def _load_or_parse_payload(
                     item.setdefault("arity", 0)
                     item.setdefault("start_byte", 0)
                     item.setdefault("end_byte", 0)
+                    item.setdefault("start_line", int(item.get("start_line") or 0))
+                    item.setdefault("end_line", int(item.get("end_line") or item.get("start_line") or 0))
+                    item.setdefault("file_path", "")
         if payload.get("proc_diagnostics") is None:
             payload["proc_diagnostics"] = []
         function_types = payload.get("function_types")
@@ -4599,20 +4602,19 @@ SET s.node_type = 'code',
                 f"inferred synthetic types: {inferred_type_nodes}"
             )
 
-        index_queries = [
-            "CREATE INDEX function_id_lookup IF NOT EXISTS FOR (f:Function) ON (f.id)",
-            "CREATE INDEX file_id_lookup IF NOT EXISTS FOR (f:File) ON (f.id)",
-            "CREATE INDEX resource_id_lookup IF NOT EXISTS FOR (r:Resource) ON (r.id)",
-            "CREATE INDEX ui_control_id_lookup IF NOT EXISTS FOR (c:UIControl) ON (c.id)",
-            "CREATE INDEX unknown_function_id_lookup IF NOT EXISTS FOR (u:UnknownFunction) ON (u.id)",
-            "CREATE INDEX parse_run_id_lookup IF NOT EXISTS FOR (r:ParseRun) ON (r.id)",
+        index_specs = [
+            {"label": "Function", "property": "id"},
+            {"label": "File", "property": "id"},
+            {"label": "Resource", "property": "id"},
+            {"label": "UIControl", "property": "id"},
+            {"label": "UnknownFunction", "property": "id"},
+            {"label": "ParseRun", "property": "id"},
         ]
-        for query in index_queries:
-            try:
-                await code_writer.driver.execute_query(query, database=code_writer.database)
-            except Exception as exc:
-                if verbose:
-                    print(f"[neo4j] index ensure skipped: {exc}")
+        try:
+            await code_writer.driver.create_indexes(index_specs, database=code_writer.database)
+        except Exception as exc:
+            if verbose:
+                print(f"[graph] index ensure skipped: {exc}")
 
         try:
             await code_writer.driver.execute_query(

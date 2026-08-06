@@ -675,24 +675,23 @@ async def build_call_graph(
 
     if code_writer:
         # Ensure indexes exist before writing data (critical for performance)
-        index_queries = [
-            "CREATE INDEX function_id_lookup IF NOT EXISTS FOR (f:Function) ON (f.id)",
-            "CREATE INDEX file_id_lookup IF NOT EXISTS FOR (f:File) ON (f.id)",
-            "CREATE INDEX class_id_lookup IF NOT EXISTS FOR (c:Class) ON (c.id)",
-            "CREATE INDEX namespace_id_lookup IF NOT EXISTS FOR (n:Namespace) ON (n.id)",
-            "CREATE INDEX property_id_lookup IF NOT EXISTS FOR (p:Property) ON (p.id)",
-            "CREATE INDEX event_id_lookup IF NOT EXISTS FOR (e:Event) ON (e.id)",
-            "CREATE INDEX interface_id_lookup IF NOT EXISTS FOR (i:Interface) ON (i.id)",
-            "CREATE INDEX enum_id_lookup IF NOT EXISTS FOR (e:Enum) ON (e.id)",
-            "CREATE INDEX constant_id_lookup IF NOT EXISTS FOR (c:Constant) ON (c.id)",
-            "CREATE INDEX variable_id_lookup IF NOT EXISTS FOR (v:Variable) ON (v.id)",
+        index_specs = [
+            {"label": "Function", "property": "id"},
+            {"label": "File", "property": "id"},
+            {"label": "Class", "property": "id"},
+            {"label": "Namespace", "property": "id"},
+            {"label": "Property", "property": "id"},
+            {"label": "Event", "property": "id"},
+            {"label": "Interface", "property": "id"},
+            {"label": "Enum", "property": "id"},
+            {"label": "Constant", "property": "id"},
+            {"label": "Variable", "property": "id"},
         ]
-        for query in index_queries:
-            try:
-                await code_writer.driver.execute_query(query, database=code_writer.database)
-            except Exception as exc:
-                if verbose:
-                    print(f"[neo4j] index ensure skipped: {exc}")
+        try:
+            await code_writer.driver.create_indexes(index_specs, database=code_writer.database)
+        except Exception as exc:
+            if verbose:
+                print(f"[graph] index ensure skipped: {exc}")
 
         projects = [{"id": project_id, "name": project_name, "language": language, "repo": repo, "root": root, "build_system": build_system}]
         files_rows: List[Dict[str, Any]] = []

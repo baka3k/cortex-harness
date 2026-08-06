@@ -39,9 +39,11 @@ _CALL_IMPORTING_SUBQUERY_RE = re.compile(
 def _normalize_query(query: str) -> str:
     """Rewrite Cypher constructs FalkorDB doesn't understand.
 
-    Currently rewrites Neo4j 5 ``CALL (var) { ... }`` (importing-variable
-    subquery) to ``CALL { WITH var ... }`` which both FalkorDB and Neo4j
-    accept.
+    Rewrites Neo4j 5 ``CALL (var) { ... }`` (importing-variable subquery)
+    to ``CALL { WITH var ... }`` which both FalkorDB and Neo4j accept.
+
+    Index creation must go through ``driver.create_indexes()`` — never raw
+    ``CREATE INDEX`` Cypher — so each backend uses its native API.
     """
     return _CALL_IMPORTING_SUBQUERY_RE.sub(r"CALL { WITH \1", query)
 
