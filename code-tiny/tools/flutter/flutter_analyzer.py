@@ -177,7 +177,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--deleted-files-manifest")
     parser.add_argument("--cache-dir", default=os.environ.get("QDRANT_CACHE_DIR"))
     parser.add_argument("--ignore-cache", action="store_true")
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION"))
     parser.add_argument("--embed-model", default=os.environ.get("CODE_EMBEDDING_MODEL", ""))
     parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))

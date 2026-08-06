@@ -1,6 +1,7 @@
 import argparse
 import os
 import re
+import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,12 +11,13 @@ from pypdf import PdfReader
 from docx import Document
 from pptx import Presentation
 from openpyxl import load_workbook
-from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
 from graph_store import add_graph_store_args, create_graph_store_from_args
+from doc_local_qdrant import get_document_qdrant_store
+from project_contract import ProjectNotRegisteredError, resolve_project_targets
 
 try:
     from dotenv import load_dotenv
@@ -555,14 +557,14 @@ def ingest_to_graph_batch(
             )
 
 
-def create_collection(client: QdrantClient, name: str, vector_size: int) -> None:
+def create_collection(client: Any, name: str, vector_size: int) -> None:
     try:
-        client.get_collection(name)
+        client.get_collection_info(name)
         return
     except Exception:
         pass
     client.create_collection(
-        collection_name=name,
+        name,
         vectors_config=qmodels.VectorParams(size=vector_size, distance=qmodels.Distance.COSINE),
     )
 
@@ -571,13 +573,15 @@ _PRINTED_COLLECTIONS: set[str] = set()
 
 
 def ingest_to_qdrant(
-    client: QdrantClient,
+    client: Any,
     collection: str,
     paragraph: str,
     paragraph_id: int,
     embedder: SentenceTransformer,
     nodes: Dict[str, Dict[str, str]],
     source_id: str,
+    project_id: str | None = None,
+    project_id_normalized: str | None = None,
     extra_payload: Dict[str, Any] | None = None,
 ) -> None:
     vector = embedder.encode([paragraph])[0]
@@ -604,6 +608,8 @@ def ingest_to_qdrant(
     }
     if extra_payload:
         payload.update(extra_payload)
+    payload["project_id"] = project_id
+    payload["project_id_normalized"] = project_id_normalized
     point = qmodels.PointStruct(
         id=str(uuid.uuid4()),
         vector=vector.tolist(),
@@ -667,7 +673,7 @@ def process_text(
     source_id: str,
     args: argparse.Namespace,
     driver,
-    qdrant: QdrantClient,
+    qdrant: Any,
     embedder: SentenceTransformer,
     nlp=None,
     gliner_model=None,
@@ -732,7 +738,11 @@ def process_text(
                 if len(graph_batch) >= args.graph_batch_size:
                     flush_graph_batch()
                 print("Ingesting to Qdrant...")
-                ingest_to_qdrant(qdrant, args.collection, paragraph, idx, embedder, {}, source_id)
+                ingest_to_qdrant(
+                    qdrant, args.collection, paragraph, idx, embedder, {}, source_id,
+                    project_id=(args.project_id or args.source_id or None),
+                    project_id_normalized=project_id_normalized,
+                )
                 print("Qdrant ingestion complete.")
             else:
                 print(f"Paragraph {idx + 1}/{len(paragraphs)}: skipped (len={len(paragraph)})")
@@ -776,7 +786,11 @@ def process_text(
                 if len(graph_batch) >= args.graph_batch_size:
                     flush_graph_batch()
                 print("Ingesting to Qdrant...")
-                ingest_to_qdrant(qdrant, args.collection, paragraph, idx, embedder, nodes, source_id)
+                ingest_to_qdrant(
+                    qdrant, args.collection, paragraph, idx, embedder, nodes, source_id,
+                    project_id=(args.project_id or args.source_id or None),
+                    project_id_normalized=project_id_normalized,
+                )
                 print("Qdrant ingestion complete.")
     else:
         for idx, paragraph in long_paragraphs:
@@ -806,7 +820,11 @@ def process_text(
             if len(graph_batch) >= args.graph_batch_size:
                 flush_graph_batch()
             print("Ingesting to Qdrant...")
-            ingest_to_qdrant(qdrant, args.collection, paragraph, idx, embedder, nodes, source_id)
+            ingest_to_qdrant(
+                qdrant, args.collection, paragraph, idx, embedder, nodes, source_id,
+                project_id=(args.project_id or args.source_id or None),
+                project_id_normalized=project_id_normalized,
+            )
             print("Qdrant ingestion complete.")
     flush_graph_batch()
 
@@ -816,8 +834,9 @@ def process_xlsx_structured(
     source_id: str,
     args: argparse.Namespace,
     driver,
-    qdrant: QdrantClient,
+    qdrant: Any,
     embedder: SentenceTransformer,
+    project_id_normalized: str | None = None,
 ) -> None:
     from extractor.excel.excel_table_pipeline_skeleton import (
         apply_merged_cell_fill,
@@ -918,6 +937,7 @@ def process_xlsx_structured(
                     [],
                     merge_entities=not args.no_entity_merge,
                     normalize_mode=args.entity_normalize_mode,
+                    project_id_normalized=project_id_normalized,
                 )
                 row_counter += 1
                 paragraph_text = row.serialized
@@ -947,6 +967,8 @@ def process_xlsx_structured(
                     embedder,
                     nodes,
                     source_id,
+                    project_id=(args.project_id or args.source_id or None),
+                    project_id_normalized=project_id_normalized,
                     extra_payload=extra_payload,
                 )
                 graph_batch.append(
@@ -1044,7 +1066,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--collection",
-        default=os.getenv("QDRANT_COLLECTION_DOC", "graphrag_entities"),
+        default=os.getenv("QDRANT_COLLECTION_DOC"),
     )
     parser.add_argument("--embedding-model", default=None)
     parser.add_argument("--embedding-device", default=None)
@@ -1129,10 +1151,7 @@ def main() -> None:
     parser.add_argument("--neo4j-uri", default=os.getenv("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-pass", default=os.getenv("NEO4J_PASS", "password"))
-    parser.add_argument("--qdrant-url", default=os.getenv("QDRANT_URL"))
-    parser.add_argument("--qdrant-host", default=os.getenv("QDRANT_HOST", "localhost"))
-    parser.add_argument("--qdrant-port", type=int, default=int(os.getenv("QDRANT_PORT", "6333")))
-    parser.add_argument("--qdrant-api-key", default=os.getenv("QDRANT_KEY"))
+    parser.add_argument("--qdrant-path", default=os.getenv("QDRANT_DOC_PATH"))
     parser.set_defaults(no_batch=True)
     args = parser.parse_args()
 
@@ -1153,6 +1172,28 @@ def main() -> None:
     # in code-tiny. We inline the helper here because doc-tiny does not
     # have a Python package layout that can import from code-tiny.
     project_id_normalized = raw_project_id.casefold() if raw_project_id else None
+
+    # Route ingest through the same registry contract used by mind_mcp. An
+    # explicit CLI/env target remains an escape hatch; otherwise project_id
+    # determines both the document graph and vector collection.
+    if raw_project_id:
+        try:
+            targets = resolve_project_targets(raw_project_id)
+        except ProjectNotRegisteredError as exc:
+            raise SystemExit(str(exc)) from exc
+        if not args.collection:
+            args.collection = targets.doc_qdrant_collection
+        graph_was_explicit = (
+            "--falkordb-graph" in sys.argv
+            or bool(os.getenv("FALKORDB_GRAPH"))
+            or bool(os.getenv("FALKORDB_DATABASE"))
+        )
+        if not graph_was_explicit:
+            args.falkordb_graph = targets.doc_graph
+    if not args.collection:
+        args.collection = (
+            f"{raw_project_id}_doc" if raw_project_id else "graphrag_entities"
+        )
 
     if args.gliner_model_path:
         gliner_model_choice = args.gliner_model_path
@@ -1191,12 +1232,7 @@ def main() -> None:
     device = resolve_embedding_device(args.embedding_device)
     embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
 
-    if args.qdrant_url:
-        qdrant = QdrantClient(url=args.qdrant_url, api_key=args.qdrant_api_key)
-    else:
-        qdrant = QdrantClient(
-            host=args.qdrant_host, port=args.qdrant_port, api_key=args.qdrant_api_key
-        )
+    qdrant = get_document_qdrant_store(args.qdrant_path)
     create_collection(qdrant, args.collection, vector_size=embedder.get_sentence_embedding_dimension())
 
     driver = create_graph_store_from_args(args)
@@ -1231,6 +1267,7 @@ def main() -> None:
                 embedder,
                 nlp=shared_nlp,
                 gliner_model=shared_gliner,
+                project_id_normalized=project_id_normalized,
             )
         return
 
@@ -1325,7 +1362,15 @@ def main() -> None:
             raise FileNotFoundError(xlsx_path)
         source_id = args.source_id or xlsx_path.stem
         if args.xlsx_structured:
-            process_xlsx_structured(xlsx_path, source_id, args, driver, qdrant, embedder)
+            process_xlsx_structured(
+                xlsx_path,
+                source_id,
+                args,
+                driver,
+                qdrant,
+                embedder,
+                project_id_normalized=project_id_normalized,
+            )
         else:
             raw_text = read_xlsx_text(xlsx_path)
             process_text(
@@ -1341,7 +1386,15 @@ def main() -> None:
 
     raw_text = args.raw_text.strip()
     source_id = args.source_id or "raw_text"
-    process_text(raw_text, source_id, args, driver, qdrant, embedder)
+    process_text(
+        raw_text,
+        source_id,
+        args,
+        driver,
+        qdrant,
+        embedder,
+        project_id_normalized=project_id_normalized,
+    )
 
 
 if __name__ == "__main__":

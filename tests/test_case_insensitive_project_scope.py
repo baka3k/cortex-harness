@@ -117,18 +117,7 @@ class _GraphDriver:
         self.indexes.extend(indexes)
 
 
-class _Response:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self._payload
-
-
-class _QdrantSession:
+class _LocalQdrantStore:
     def __init__(self):
         self.points = [
             {"id": 1, "payload": {"project_id": "HIEP", "name": "one"}},
@@ -147,32 +136,44 @@ class _QdrantSession:
         self.payload_updates = []
         self.index_updates = []
 
-    def post(self, url, json, timeout):
-        if url.endswith("/points/scroll"):
-            self.scroll_requests.append(dict(json))
-            start = int(json.get("offset") or 0)
-            end = min(start + int(json["limit"]), len(self.points))
-            next_offset = end if end < len(self.points) else None
-            return _Response(
-                {
-                    "result": {
-                        "points": self.points[start:end],
-                        "next_page_offset": next_offset,
-                    }
-                }
-            )
-        if url.endswith("/points/payload?wait=true"):
-            self.payload_updates.append(dict(json))
-            point_ids = set(json["points"])
-            for point in self.points:
-                if point["id"] in point_ids:
-                    point["payload"].update(json["payload"])
-            return _Response({"status": "ok"})
-        raise AssertionError(url)
+    def scroll(
+        self,
+        collection_name,
+        *,
+        scroll_filter,
+        limit,
+        offset,
+        with_payload,
+        with_vectors,
+    ):
+        self.scroll_requests.append(
+            {
+                "collection_name": collection_name,
+                "scroll_filter": scroll_filter,
+                "limit": limit,
+                "offset": offset,
+                "with_payload": with_payload,
+                "with_vectors": with_vectors,
+            }
+        )
+        start = int(offset or 0)
+        end = min(start + int(limit), len(self.points))
+        next_offset = end if end < len(self.points) else None
+        return self.points[start:end], next_offset
 
-    def put(self, url, json, timeout):
-        self.index_updates.append((url, dict(json)))
-        return _Response({"status": "ok"})
+    def set_payload(self, collection, payload, *, points, wait):
+        self.payload_updates.append(
+            {"collection": collection, "payload": dict(payload), "points": list(points), "wait": wait}
+        )
+        point_ids = set(points)
+        for point in self.points:
+            if point["id"] in point_ids:
+                point["payload"].update(payload)
+
+    def create_payload_index(self, collection, field_name, *, wait):
+        self.index_updates.append(
+            {"collection": collection, "field_name": field_name, "wait": wait}
+        )
 
 
 class ProjectScopeBackfillTests(unittest.IsolatedAsyncioTestCase):
@@ -223,11 +224,11 @@ class ProjectScopeBackfillTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(driver.indexes, [{"label": "Function", "property": "project_id_normalized"}])
 
     def test_qdrant_backfill_is_paginated_and_repeatable(self):
-        session = _QdrantSession()
+        session = _LocalQdrantStore()
 
         first = BACKFILL.backfill_qdrant_collection(
             session,
-            qdrant_url="http://qdrant:6333",
+            qdrant_url="local-code-store",
             collection="code",
             apply=True,
             page_size=2,
@@ -236,7 +237,7 @@ class ProjectScopeBackfillTests(unittest.IsolatedAsyncioTestCase):
         )
         second = BACKFILL.backfill_qdrant_collection(
             session,
-            qdrant_url="http://qdrant:6333",
+            qdrant_url="local-code-store",
             collection="code",
             apply=True,
             page_size=2,
@@ -252,7 +253,7 @@ class ProjectScopeBackfillTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first.collisions, {"hiep": ["HIEP", "hiEp", "hiep"]})
         self.assertEqual(second.needs_update, 0)
         self.assertEqual(second.updated, 0)
-        self.assertTrue(all(request["with_vector"] is False for request in session.scroll_requests))
+        self.assertTrue(all(request["with_vectors"] is False for request in session.scroll_requests))
         self.assertEqual(len(session.payload_updates), 2)
         self.assertEqual(len(session.index_updates), 2)
         self.assertTrue(all(point["payload"].get("name") for point in session.points))

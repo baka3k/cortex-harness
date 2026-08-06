@@ -1,7 +1,8 @@
-"""setup_constraints.py
+"""Provider-neutral graph schema setup.
 
-One-time (idempotent) migration script that adds uniqueness constraints to
-Neo4j so that concurrent MERGE operations are safe under parallelism.
+One-time (idempotent) migration script that applies the shared range,
+full-text, and uniqueness schema to Neo4j or FalkorDB so concurrent MERGE
+operations are safe under parallelism.
 
 WHY THIS IS NECESSARY
 ---------------------
@@ -21,20 +22,39 @@ Run once after initial setup or when adding a new database:
 
     python setup_constraints.py
     python setup_constraints.py --neo4j-uri bolt://host:7687 --neo4j-db mydb
+    python setup_constraints.py --graph-provider falkordb --falkordb-graph mygraph
 
 Environment variables (fallbacks):
     NEO4J_URI       bolt://localhost:7687
     NEO4J_USER      neo4j
     NEO4J_PASSWORD  (empty)
     NEO4J_DB        neo4j
+    GRAPH_PROVIDER  neo4j or falkordb
+    FALKORDB_GRAPH  selected FalkorDB graph
 """
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import os
 import re
 import sys
+import time
+from pathlib import Path
+from typing import Any, Iterable, Sequence
+
+_CODE_ROOT = Path(__file__).resolve().parents[1]
+if str(_CODE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_CODE_ROOT))
+
+from tools.graph.cli import (
+    add_graph_provider_args,
+    create_graph_driver_from_args,
+    normalize_graph_provider,
+    prepare_graph_args,
+)
+from tools.graph.core.base import GraphProvider
 
 _FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
 
@@ -62,8 +82,10 @@ try:
     from neo4j import GraphDatabase
     from neo4j.exceptions import ClientError
 except ImportError:
-    print("ERROR: neo4j Python driver not installed.  Run: pip install neo4j", file=sys.stderr)
-    sys.exit(1)
+    GraphDatabase = None
+
+    class ClientError(Exception):
+        """Fallback used when only the FalkorDB provider is installed."""
 
 
 # ---------------------------------------------------------------------------
@@ -518,17 +540,203 @@ BACKFILL_PROJECT_ID = (
 )
 
 
+_INDEX_RE = re.compile(
+    r"FOR\s*\([A-Za-z_][A-Za-z0-9_]*:(?P<label>[A-Za-z_][A-Za-z0-9_]*)\)"
+    r"\s*ON\s*\((?P<properties>[^)]+)\)",
+    re.IGNORECASE | re.DOTALL,
+)
+_CONSTRAINT_RE = re.compile(
+    r"FOR\s*\([A-Za-z_][A-Za-z0-9_]*:(?P<label>[A-Za-z_][A-Za-z0-9_]*)\)"
+    r"\s*REQUIRE\s*(?P<properties>.+?)\s+IS\s+UNIQUE",
+    re.IGNORECASE | re.DOTALL,
+)
+_FULLTEXT_RE = re.compile(
+    r"FOR\s*\([A-Za-z_][A-Za-z0-9_]*:(?P<labels>[A-Za-z0-9_|]+)\)"
+    r"\s*ON\s+EACH\s*\[(?P<properties>[^]]+)\]",
+    re.IGNORECASE | re.DOTALL,
+)
+_PROPERTY_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\.([A-Za-z_][A-Za-z0-9_]*)\b")
+_CONSTRAINT_READY = {"active", "enabled", "operational", "ready"}
+_CONSTRAINT_FAILED = {"error", "failed", "failure"}
+
+
+def _properties_from_expression(expression: str) -> tuple[str, ...]:
+    properties = tuple(dict.fromkeys(_PROPERTY_RE.findall(expression)))
+    if not properties:
+        raise ValueError(f"Could not extract schema properties from: {expression!r}")
+    return properties
+
+
+def parse_range_index(statement: str) -> tuple[str, tuple[str, ...]]:
+    """Return FalkorDB label/properties from one Neo4j range-index DDL string."""
+    match = _INDEX_RE.search(statement)
+    if not match:
+        raise ValueError(f"Unsupported range-index statement: {statement}")
+    return match.group("label"), _properties_from_expression(match.group("properties"))
+
+
+def parse_unique_constraint(statement: str) -> tuple[str, tuple[str, ...]]:
+    """Return FalkorDB label/properties from one Neo4j uniqueness DDL string."""
+    match = _CONSTRAINT_RE.search(statement)
+    if not match:
+        raise ValueError(f"Unsupported unique-constraint statement: {statement}")
+    return match.group("label"), _properties_from_expression(match.group("properties"))
+
+
+def parse_fulltext_index(statement: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Expand a Neo4j multi-label full-text DDL into FalkorDB labels/properties."""
+    match = _FULLTEXT_RE.search(statement)
+    if not match:
+        raise ValueError(f"Unsupported full-text statement: {statement}")
+    labels = tuple(label for label in match.group("labels").split("|") if label)
+    return labels, _properties_from_expression(match.group("properties"))
+
+
+def _schema_exists_error(exc: Exception) -> bool:
+    message = str(exc).casefold()
+    return any(token in message for token in ("already exists", "already indexed", "already constrained"))
+
+
+def _normalize_constraint_properties(value: Any) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)):
+        value = [value]
+    normalized = []
+    for item in value or []:
+        if isinstance(item, bytes):
+            item = item.decode("utf-8", errors="replace")
+        normalized.append(str(item))
+    return tuple(normalized)
+
+
+def wait_for_falkordb_constraint(
+    graph: Any,
+    label: str,
+    properties: Sequence[str],
+    *,
+    timeout: float = 30.0,
+    interval: float = 0.25,
+) -> dict[str, Any]:
+    """Poll FalkorDB's asynchronous constraint state and fail on timeout/error."""
+    expected_properties = tuple(properties)
+    deadline = time.monotonic() + max(timeout, 0.0)
+    last_status = "not listed"
+    while True:
+        constraints = graph.list_constraints()
+        for item in constraints:
+            item_label = str(item.get("label", ""))
+            item_type = str(item.get("type", "")).casefold()
+            entity_type = str(item.get("entitytype", item.get("entity_type", "NODE"))).casefold()
+            item_properties = _normalize_constraint_properties(item.get("properties"))
+            if (
+                item_label == label
+                and item_type == "unique"
+                and entity_type in {"node", ""}
+                and item_properties == expected_properties
+            ):
+                last_status = str(item.get("status", "")).casefold()
+                if last_status in _CONSTRAINT_READY:
+                    return dict(item)
+                if last_status in _CONSTRAINT_FAILED:
+                    raise RuntimeError(
+                        f"FalkorDB constraint {label}{expected_properties} failed with status {last_status!r}"
+                    )
+
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"Timed out waiting for FalkorDB constraint {label}{expected_properties}; "
+                f"last status: {last_status}"
+            )
+        time.sleep(max(interval, 0.0))
+
+
+def ensure_falkordb_unique_constraint(
+    graph: Any,
+    label: str,
+    properties: Sequence[str],
+    *,
+    timeout: float = 30.0,
+    interval: float = 0.25,
+) -> dict[str, Any]:
+    """Create prerequisite range index and an idempotent async unique constraint."""
+    properties = tuple(properties)
+    try:
+        graph.create_node_range_index(label, *properties)
+    except Exception as exc:
+        if not _schema_exists_error(exc):
+            raise
+    try:
+        graph.create_node_unique_constraint(label, *properties)
+    except Exception as exc:
+        if not _schema_exists_error(exc):
+            raise
+    return wait_for_falkordb_constraint(
+        graph,
+        label,
+        properties,
+        timeout=timeout,
+        interval=interval,
+    )
+
+
+def apply_falkordb_schema(
+    driver: Any,
+    *,
+    constraint_statements: Iterable[tuple[str, str]] = CONSTRAINTS,
+    index_statements: Iterable[tuple[str, str]] = INDEXES,
+    fulltext_statements: Iterable[tuple[str, str]] = FULLTEXT_INDEXES,
+    constraint_timeout: float = 30.0,
+    poll_interval: float = 0.25,
+) -> dict[str, int]:
+    """Apply the shared schema through FalkorDB's native, idempotent APIs."""
+    graph = driver.graph
+    summary = {"constraints": 0, "indexes": 0, "fulltext_indexes": 0}
+
+    for _, statement in index_statements:
+        label, properties = parse_range_index(statement)
+        try:
+            graph.create_node_range_index(label, *properties)
+        except Exception as exc:
+            if not _schema_exists_error(exc):
+                raise
+        summary["indexes"] += 1
+
+    for _, statement in constraint_statements:
+        label, properties = parse_unique_constraint(statement)
+        ensure_falkordb_unique_constraint(
+            graph,
+            label,
+            properties,
+            timeout=constraint_timeout,
+            interval=poll_interval,
+        )
+        summary["constraints"] += 1
+
+    for _, statement in fulltext_statements:
+        labels, properties = parse_fulltext_index(statement)
+        for label in labels:
+            try:
+                graph.create_node_fulltext_index(label, *properties)
+            except Exception as exc:
+                if not _schema_exists_error(exc):
+                    raise
+            summary["fulltext_indexes"] += 1
+
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
 
-def apply_constraints(
+def apply_neo4j_schema(
     neo4j_uri: str,
     neo4j_user: str,
     neo4j_password: str,
     neo4j_db: str,
 ) -> None:
+    if GraphDatabase is None:
+        raise RuntimeError("Neo4j provider requires the 'neo4j' Python package")
     driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, _maybe_decrypt_password(neo4j_password)))
     ok = 0
     skipped = 0
@@ -593,6 +801,45 @@ def apply_constraints(
     )
 
 
+# Backward-compatible name used by older automation.
+apply_constraints = apply_neo4j_schema
+
+
+async def apply_selected_schema(args: argparse.Namespace) -> dict[str, int] | None:
+    """Apply schema for the selected provider and close provider resources."""
+    provider = normalize_graph_provider(args.graph_provider)
+    if provider == GraphProvider.NEO4J:
+        apply_neo4j_schema(
+            neo4j_uri=args.neo4j_uri,
+            neo4j_user=args.neo4j_user,
+            neo4j_password=args.neo4j_password,
+            neo4j_db=args.neo4j_db,
+        )
+        return None
+
+    prepare_graph_args(args)
+    driver = await create_graph_driver_from_args(args)
+    if driver is None:
+        raise RuntimeError("FalkorDB provider could not be configured")
+    try:
+        # Preserve the project-id backfill before constraints become active.
+        driver.execute_query_sync(BACKFILL_PROJECT_ID, database=args.neo4j_db)
+        summary = apply_falkordb_schema(
+            driver,
+            constraint_timeout=args.constraint_timeout,
+            poll_interval=args.constraint_poll_interval,
+        )
+        print(
+            "Done: "
+            f"constraints {summary['constraints']} operational, "
+            f"indexes {summary['indexes']} ensured, "
+            f"fulltext {summary['fulltext_indexes']} ensured."
+        )
+        return summary
+    finally:
+        driver.close()
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -600,8 +847,9 @@ def apply_constraints(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Apply Neo4j uniqueness constraints required for safe concurrent scanning."
+        description="Apply provider-neutral graph indexes and uniqueness constraints."
     )
+    add_graph_provider_args(parser)
     parser.add_argument(
         "--neo4j-uri",
         default=os.getenv("NEO4J_URI", "bolt://localhost:7687"),
@@ -622,16 +870,25 @@ def main() -> None:
         default=os.getenv("NEO4J_DB", "neo4j"),
         help="Neo4j database name.",
     )
+    parser.add_argument(
+        "--constraint-timeout",
+        type=float,
+        default=float(os.getenv("FALKORDB_CONSTRAINT_TIMEOUT", "30")),
+        help="Seconds to wait for each asynchronous FalkorDB constraint.",
+    )
+    parser.add_argument(
+        "--constraint-poll-interval",
+        type=float,
+        default=float(os.getenv("FALKORDB_CONSTRAINT_POLL_INTERVAL", "0.25")),
+        help="Seconds between FalkorDB constraint-status checks.",
+    )
 
     args = parser.parse_args()
 
-    print(f"Applying constraints to {args.neo4j_uri} / db={args.neo4j_db}")
-    apply_constraints(
-        neo4j_uri=args.neo4j_uri,
-        neo4j_user=args.neo4j_user,
-        neo4j_password=args.neo4j_password,
-        neo4j_db=args.neo4j_db,
-    )
+    provider = normalize_graph_provider(args.graph_provider)
+    target = args.neo4j_uri if provider == GraphProvider.NEO4J else args.falkordb_graph
+    print(f"Applying {provider.value} schema to {target}")
+    asyncio.run(apply_selected_schema(args))
 
 
 if __name__ == "__main__":

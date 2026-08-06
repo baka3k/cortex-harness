@@ -1,6 +1,6 @@
 """ingest_workflows.py
 ─────────────────────
-Derives :Workflow nodes from NAVIGATE edges between screen files in Neo4j.
+Derives :Workflow nodes from NAVIGATE edges between screen files in the configured graph.
 
 Algorithm
 ─────────
@@ -21,6 +21,8 @@ Usage
 ─────
     python scripts/ingest_workflows.py \\
         [--project-id  mfx-miniapps] \\
+        [--graph-provider falkordb] \\
+        [--falkordb-path ~/.cortext-harness/.../data.rdb] \\
         [--neo4j-uri   bolt://localhost:7687] \\
         [--neo4j-user  neo4j] \\
         [--neo4j-password <pw>] \\
@@ -29,48 +31,21 @@ Usage
         [--no-ollama]  \\
         [--ollama-model llama3.2:latest]
 
-Environment fallbacks: NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD, NEO4J_DB
+Neo4j is a rollback-only provider selected explicitly with
+``--graph-provider neo4j`` and requires URI, user, and password credentials.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import hashlib
 import json
 import os
 import re
-import sys
 from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-_FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
-
-
-def _maybe_decrypt_password(password: str) -> str:
-    if not _FERNET_TOKEN_RE.match(password):
-        return password
-    try:
-        from cryptography.fernet import Fernet
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    except ImportError:
-        return password
-    enc_pw = os.environ.get("HYPER_PACK_ENCRYPTION_PASSWORD", "my-secret-encryption-key-2026")
-    try:
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"static_salt_2026", iterations=100_000)
-        key = base64.urlsafe_b64encode(kdf.derive(enc_pw.encode("utf-8")))
-        return Fernet(key).decrypt(password.encode("utf-8")).decode("utf-8")
-    except Exception as exc:
-        print(f"[ingest_workflows] warning: could not decrypt NEO4J_PASS ({exc})", file=sys.stderr)
-        return password
-
-
-try:
-    from neo4j import AsyncGraphDatabase
-except ImportError:
-    print("ERROR: neo4j package not installed. Run: pip install neo4j", file=sys.stderr)
-    sys.exit(1)
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args
 
 # ── Domain lookup: dir name → domain ─────────────────────────────────────────
 _DIR_DOMAIN: Dict[str, str] = {
@@ -228,7 +203,7 @@ def _bfs_reachable(start: str, forward: Dict[str, List[str]]) -> List[str]:
     return result
 
 
-# ── Neo4j queries ─────────────────────────────────────────────────────────────
+# ── Graph queries ─────────────────────────────────────────────────────────────
 
 QUERY_NAVIGATE_EDGES = """
 MATCH (a)-[:NAVIGATE]->(b)
@@ -236,10 +211,10 @@ WHERE a.file_path CONTAINS '/screens/' OR b.file_path CONTAINS '/screens/'
 RETURN
     a.file_path   AS src_fp,
     a.name        AS src_name,
-    elementId(a)  AS src_eid,
+    coalesce(a.symbol_id, a.id, a.file_path) AS src_eid,
     b.file_path   AS tgt_fp,
     b.name        AS tgt_name,
-    elementId(b)  AS tgt_eid
+    coalesce(b.symbol_id, b.id, b.file_path) AS tgt_eid
 """
 
 DELETE_OLD_WORKFLOWS = """
@@ -338,9 +313,9 @@ async def build_workflows(
 ) -> List[Dict[str, Any]]:
 
     # 1. Load all NAVIGATE edges involving screen paths
-    async with driver.session(database=database) as session:
-        result = await session.run(QUERY_NAVIGATE_EDGES)
-        edge_recs = [dict(r) async for r in result]
+    edge_recs, _, _ = await driver.execute_query(
+        QUERY_NAVIGATE_EDGES, database=database
+    )
 
     print(f"  Found {len(edge_recs)} NAVIGATE edges involving /screens/")
     if not edge_recs:
@@ -402,7 +377,7 @@ async def build_workflows(
     return workflows
 
 
-async def write_to_neo4j(
+async def write_to_graph(
     driver,
     database: str,
     workflows: List[Dict[str, Any]],
@@ -425,10 +400,10 @@ async def write_to_neo4j(
         return
 
     # Delete old workflows
-    async with driver.session(database=database) as session:
-        r = await session.run(DELETE_OLD_WORKFLOWS, {"project": project_id})
-        await r.consume()
-        print(f"\n  Deleted old Workflow nodes for project='{project_id}'")
+    await driver.execute_query(
+        DELETE_OLD_WORKFLOWS, {"project": project_id}, database
+    )
+    print(f"\n  Deleted old Workflow nodes for project='{project_id}'")
 
     # Write Workflow nodes
     wf_rows = [{
@@ -441,10 +416,11 @@ async def write_to_neo4j(
         "project":       w["project"],
     } for w in workflows]
 
-    async with driver.session(database=database) as session:
-        r = await session.run(MERGE_WORKFLOW, {"rows": wf_rows})
-        rec = await r.single()
-        print(f"  Wrote {rec['written']} :Workflow nodes")
+    records, _, _ = await driver.execute_query(
+        MERGE_WORKFLOW, {"rows": wf_rows}, database
+    )
+    rec = records[0] if records else {}
+    print(f"  Wrote {rec.get('written', 0)} :Workflow nodes")
 
     # Write HAS_STEP edges in batches
     step_rows = []
@@ -455,22 +431,27 @@ async def write_to_neo4j(
     total_steps = 0
     for i in range(0, len(step_rows), 200):
         batch = step_rows[i:i+200]
-        async with driver.session(database=database) as session:
-            r = await session.run(MERGE_HAS_STEP, {"rows": batch})
-            rec = await r.single()
-            total_steps += rec["written"] if rec else 0
+        records, _, _ = await driver.execute_query(
+            MERGE_HAS_STEP, {"rows": batch}, database
+        )
+        rec = records[0] if records else {}
+        total_steps += int(rec.get("written", 0))
 
     print(f"  Wrote {total_steps} :HAS_STEP edges (screen nodes only, ordered by navigation)")
 
 
 async def main_async(args: argparse.Namespace) -> None:
-    print(f"Connecting to Neo4j: {args.neo4j_uri}  db={args.neo4j_db}")
-    driver = AsyncGraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, _maybe_decrypt_password(args.neo4j_password)))
+    driver = await create_graph_driver_from_args(args)
+    if driver is None:
+        raise RuntimeError(
+            "Neo4j rollback mode requires --neo4j-uri, --neo4j-user, "
+            "and --neo4j-password."
+        )
+    print(f"Connecting to {driver.provider.value}: db={args.neo4j_db}")
 
     try:
-        async with driver.session(database=args.neo4j_db) as session:
-            result = await session.run("RETURN 1 AS ok")
-            await result.single()
+        if not await driver.verify_connection():
+            raise RuntimeError("Graph connection verification failed")
         print("  Connection OK\n")
 
         ollama_model = None if args.no_ollama else args.ollama_model
@@ -483,11 +464,11 @@ async def main_async(args: argparse.Namespace) -> None:
             print("No NAVIGATE edges found between screen nodes. Ensure the parser ran.")
             return
 
-        print(f"Step 2: Writing to Neo4j (dry_run={args.dry_run})…")
-        await write_to_neo4j(driver, args.neo4j_db, workflows, args.project_id, args.dry_run)
+        print(f"Step 2: Writing to graph (dry_run={args.dry_run})…")
+        await write_to_graph(driver, args.neo4j_db, workflows, args.project_id, args.dry_run)
         print("\nDone.")
     finally:
-        await driver.close()
+        driver.close()
 
 
 def main() -> None:
@@ -495,8 +476,9 @@ def main() -> None:
     p.add_argument("--project-id",     default=os.environ.get("PROJECT_ID", "mfx-miniapps"))
     p.add_argument("--neo4j-uri",      default=os.environ.get("NEO4J_URI",      "bolt://localhost:7687"))
     p.add_argument("--neo4j-user",     default=os.environ.get("NEO4J_USER",     "neo4j"))
-    p.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD", "neo4j"))
+    p.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD") or os.environ.get("NEO4J_PASS", ""))
     p.add_argument("--neo4j-db",       default=os.environ.get("NEO4J_DB",       "neo4j"))
+    add_graph_provider_args(p)
     p.add_argument("--ollama-model",   default="llama3.2:latest")
     p.add_argument("--no-ollama",      action="store_true", help="Skip Ollama, use heuristic names")
     p.add_argument("--dry-run",        action="store_true", help="Preview without writing")

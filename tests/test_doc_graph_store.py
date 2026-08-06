@@ -21,9 +21,10 @@ from graph_store import (
 class FakeDriver:
     def __init__(self):
         self.calls = []
+        self.database = "docs"
 
-    def execute_query_sync(self, query, parameters=None):
-        self.calls.append((query, parameters))
+    def execute_query_sync(self, query, parameters=None, database=None):
+        self.calls.append((query, parameters, database))
         return [{"id": "entity-1"}], ["id"], object()
 
 
@@ -58,7 +59,10 @@ class DocGraphStoreTests(unittest.TestCase):
 
         self.assertIsInstance(result, FalkorDBResult)
         self.assertEqual(result.single(), {"id": "entity-1"})
-        self.assertEqual(driver.calls[0], ("RETURN $id", {"id": "base", "limit": 1}))
+        self.assertEqual(
+            driver.calls[0],
+            ("RETURN $id", {"id": "base", "limit": 1}, "docs"),
+        )
 
     def test_create_graph_store_from_args_can_select_falkordb(self):
         args = Namespace(
@@ -75,10 +79,12 @@ class DocGraphStoreTests(unittest.TestCase):
             neo4j_pass="password",
         )
 
-        with patch("falkordb.FalkorDB", FakeFalkorDB):
+        with patch("graph_store.FalkorDBDriver", return_value=FakeDriver()) as driver:
             store = create_graph_store_from_args(args)
 
         self.assertEqual(store.provider, "falkordb")
+        self.assertTrue(driver.call_args.kwargs["path"])
+        self.assertEqual(driver.call_args.kwargs["graph"], "docs")
 
 
 if __name__ == "__main__":

@@ -2,8 +2,15 @@
 
 ## Requirements
 
-- Neo4j running at `http://localhost:7474`
-- Qdrant running at `http://localhost:6333`
+- Python 3.12+
+- `qdrant-client==1.18.0` local mode
+- `falkordblite==0.10.0`
+
+Run `dev storage-init` once. The document owner uses
+`~/.cortext-harness/v1/instances/default/qdrant/doc` and
+`~/.cortext-harness/v1/instances/default/falkordb/doc/data.rdb` unless
+`CORTEX_DATA_HOME` or `CORTEX_STORAGE_INSTANCE` explicitly overrides them.
+No Qdrant/FalkorDB network service is required.
 
 ## Install
 
@@ -48,11 +55,7 @@ When set, `mcp_graph_rag.py` will load embeddings from `EMBEDDING_MODEL_PATH`.
 Create `.env` at the repo root:
 
 ```
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASS=neo4j_pass
-QDRANT_HOST=localhost
-QDRANT_PORT=6333
+CORTEX_STORAGE_INSTANCE=default
 QDRANT_COLLECTION_DOC=graph_rag_entities
 
 TEXT_EMBEDDING_MODEL=BAAI/bge-m3 # 1024
@@ -194,10 +197,7 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 - `--neo4j-user`: Neo4j user (default from `NEO4J_USER`).
 - `--neo4j-pass`: Neo4j password (default from `NEO4J_PASS`).
 - `--neo4j-batch-size`: Number of paragraphs written per Neo4j batch (default: `50`).
-- `--qdrant-url`: Qdrant URL (if set, overrides host/port).
-- `--qdrant-host`: Qdrant host (default from `QDRANT_HOST`).
-- `--qdrant-port`: Qdrant port (default from `QDRANT_PORT`).
-- `--qdrant-api-key`: Qdrant API key (default from `QDRANT_KEY`).
+- `--qdrant-path`: Embedded document-vector store path (default from `QDRANT_DOC_PATH`, then the shared storage layout).
 
 ### Compact table
 
@@ -239,10 +239,7 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 | Neo4j  | `--neo4j-user`            | Neo4j user                                                                          | env `NEO4J_USER`                                   |
 | Neo4j  | `--neo4j-pass`            | Neo4j password                                                                      | env `NEO4J_PASS`                                   |
 | Neo4j  | `--neo4j-batch-size`      | Paragraphs per batch write                                                          | `50`                                               |
-| Qdrant | `--qdrant-url`            | Qdrant URL (overrides host/port)                                                    | env `QDRANT_URL`                                   |
-| Qdrant | `--qdrant-host`           | Qdrant host                                                                         | env `QDRANT_HOST`                                  |
-| Qdrant | `--qdrant-port`           | Qdrant port                                                                         | env `QDRANT_PORT`                                  |
-| Qdrant | `--qdrant-api-key`        | Qdrant API key                                                                      | env `QDRANT_KEY`                                   |
+| Qdrant | `--qdrant-path`           | Embedded document-vector store path                                                 | env `QDRANT_DOC_PATH`, then shared storage default |
 
 - `--pdf`: Path to a single PDF file.
 - `--text-file`: Path to a UTF-8 text file (.txt).
@@ -280,10 +277,7 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 - `--neo4j-user`: Neo4j user (default from `NEO4J_USER`).
 - `--neo4j-pass`: Neo4j password (default from `NEO4J_PASS`).
 - `--neo4j-batch-size`: Number of paragraphs written per Neo4j batch (default: `50`).
-- `--qdrant-url`: Qdrant URL (if set, overrides host/port).
-- `--qdrant-host`: Qdrant host (default from `QDRANT_HOST`).
-- `--qdrant-port`: Qdrant port (default from `QDRANT_PORT`).
-- `--qdrant-api-key`: Qdrant API key (default from `QDRANT_KEY`).
+- `--qdrant-path`: Embedded document-vector store path (default from `QDRANT_DOC_PATH`, then the shared storage layout).
 
 ### Example (GLiNER)
 

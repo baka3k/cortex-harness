@@ -1,56 +1,56 @@
-"""Smoke test for the unified ingest/query contract.
+"""Registry preflight for the unified ingest/query contract.
 
-Per Phase 07 of the unified ingest/query contract plan, this script
-exercises the full contract end-to-end against live FalkorDB + Qdrant
-for two distinct registered projects. It prints a pass/fail matrix.
-
-The script gracefully skips when the backing services are unavailable so
-it can be run as a CI pre-flight without false failures.
+This deterministic check verifies that two registered projects resolve to
+disjoint code/document graph and collection targets. Embedded-storage and
+ingest/query/reset behavior is covered by the Phase 07 fixture test suite.
 
 Usage::
 
     python scripts/smoke_unified_contract.py [--project-a NAME] [--project-b NAME]
 
-Exit code is 0 when every check passes (or every check is skipped due to
-missing services). Exit code is 1 when any check fails.
+Exit code is 0 when every check passes and 1 when registration or isolation
+validation fails.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import socket
 import sys
+from pathlib import Path
 from typing import List, Tuple
 
 
-def _service_reachable(host: str, port: int, timeout: float = 0.5) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+DEFAULT_FIXTURE_CONFIG = (
+    Path(__file__).resolve().parents[1]
+    / "tests"
+    / "fixtures"
+    / "unified_contract"
+    / "config"
+)
 
 
-def _resolve_targets(project_id: str) -> dict:
+def _resolve_targets(project_id: str, config_dir: Path) -> dict:
     """Resolve the registry targets for ``project_id``."""
     # Lazy import so the script can run without code-tiny on sys.path.
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "code-tiny"))
     try:
         from tools.common.project_registry import resolve_project_targets
 
-        return resolve_project_targets(project_id).__dict__
+        return resolve_project_targets(project_id, config_dir=config_dir).__dict__
     finally:
         # No path cleanup — running multiple times is harmless.
         pass
 
 
-def _check_pair(name: str, project_a: str, project_b: str) -> Tuple[str, str]:
+def _check_pair(
+    name: str, project_a: str, project_b: str, config_dir: Path
+) -> Tuple[str, str]:
     try:
-        a = _resolve_targets(project_a)
-        b = _resolve_targets(project_b)
+        a = _resolve_targets(project_a, config_dir)
+        b = _resolve_targets(project_b, config_dir)
     except Exception as exc:
-        return name, f"SKIP (registry: {exc})"
+        return name, f"FAIL (registry: {exc})"
 
     failures: List[str] = []
     if a["code_graph"] == b["code_graph"]:
@@ -71,51 +71,37 @@ def _check_pair(name: str, project_a: str, project_b: str) -> Tuple[str, str]:
 
 def main(argv: List[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--project-a", default="cortext")
+    parser.add_argument("--project-a", default="proj_alpha")
     parser.add_argument("--project-b", default="proj_beta")
-    parser.add_argument("--falkordb-host", default="localhost")
-    parser.add_argument("--falkordb-port", type=int, default=6379)
-    parser.add_argument("--qdrant-host", default="localhost")
-    parser.add_argument("--qdrant-port", type=int, default=6333)
+    parser.add_argument(
+        "--config-dir",
+        type=Path,
+        default=DEFAULT_FIXTURE_CONFIG,
+        help="Project-registry directory (defaults to the two-project fixture).",
+    )
     args = parser.parse_args(argv)
 
     print("=" * 60)
-    print("Unified Ingest/Query Contract — smoke test")
+    print("Unified Ingest/Query Contract — registry preflight")
     print("=" * 60)
     print(f"Project A: {args.project_a}")
     print(f"Project B: {args.project_b}")
 
-    falkordb_ok = _service_reachable(args.falkordb_host, args.falkordb_port)
-    qdrant_ok = _service_reachable(args.qdrant_host, args.qdrant_port)
-    print()
-    print(
-        f"FalkorDB @ {args.falkordb_host}:{args.falkordb_port}: "
-        f"{'reachable' if falkordb_ok else 'NOT reachable'}"
-    )
-    print(
-        f"Qdrant    @ {args.qdrant_host}:{args.qdrant_port}: "
-        f"{'reachable' if qdrant_ok else 'NOT reachable'}"
-    )
-
-    if not (falkordb_ok and qdrant_ok):
-        print()
-        print(
-            "One or more backing services are unavailable. Skipping live "
-            "checks. Start FalkorDB and Qdrant and re-run for live smoke."
-        )
-        return 0
-
     print()
     print("--- Two-project isolation ---")
+    failed = False
     for name, project_a, project_b in (
         ("default", args.project_a, args.project_b),
     ):
-        check_name, status = _check_pair(name, project_a, project_b)
+        check_name, status = _check_pair(
+            name, project_a, project_b, args.config_dir
+        )
         print(f"{check_name:>16}  {status}")
+        failed = failed or status.startswith("FAIL")
 
     print()
     print("Done.")
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

@@ -20,12 +20,17 @@ from cortex_harness.storage.config import (
 )
 
 
-def test_defaults_are_project_root_relative(tmp_path: Path) -> None:
+def test_defaults_are_centralized_under_account_home(tmp_path: Path, monkeypatch) -> None:
+    fake_home = tmp_path / "account"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
     resolved = resolve_storage(tmp_path)
-    assert resolved.qdrant_base == (tmp_path / DEFAULT_QDRANT_PATH).resolve()
-    assert resolved.qdrant_code_path == (tmp_path / "local_qdrant_db" / "code").resolve()
-    assert resolved.qdrant_doc_path == (tmp_path / "local_qdrant_db" / "doc").resolve()
-    assert resolved.falkordb_path == (tmp_path / DEFAULT_FALKORDB_PATH).resolve()
+    instance = fake_home / ".cortext-harness" / "v1" / "instances" / "default"
+    assert resolved.data_root == fake_home / ".cortext-harness"
+    assert resolved.qdrant_base == instance / "qdrant"
+    assert resolved.qdrant_code_path == instance / "qdrant" / "code"
+    assert resolved.qdrant_doc_path == instance / "qdrant" / "doc"
+    assert resolved.falkordb_code_path == instance / "falkordb" / "code" / "data.rdb"
+    assert resolved.falkordb_doc_path == instance / "falkordb" / "doc" / "data.rdb"
     assert resolved.has_legacy_keys is False
 
 
@@ -36,12 +41,15 @@ def test_qdrant_role_subdirectories_are_distinct(tmp_path: Path) -> None:
     assert resolved.qdrant_doc_path.name == "doc"
 
 
-def test_path_resolution_independent_of_cwd(tmp_path: Path, monkeypatch) -> None:
-    """resolve_storage must anchor paths to project_root, never cwd."""
+def test_path_resolution_independent_of_project_and_cwd(tmp_path: Path, monkeypatch) -> None:
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
     monkeypatch.chdir(tmp_path.parent)
-    resolved = resolve_storage(tmp_path)
-    assert resolved.qdrant_code_path.is_relative_to(tmp_path.resolve())
-    assert resolved.falkordb_path.is_relative_to(tmp_path.resolve())
+    first = resolve_storage(tmp_path / "project-a")
+    second = resolve_storage(tmp_path / "unrelated" / "project-b")
+    assert first.qdrant_code_path == second.qdrant_code_path
+    assert first.falkordb_path == second.falkordb_path
+    assert not first.qdrant_code_path.is_relative_to(first.project_root)
 
 
 def test_config_overrides_wins_over_defaults(tmp_path: Path) -> None:
@@ -142,12 +150,14 @@ def test_env_to_config_round_trip() -> None:
 
 
 def test_invocation_outside_project_root(tmp_path: Path, monkeypatch) -> None:
-    """Calling resolve_storage from a sibling directory must still anchor to project_root."""
+    """Default database paths must stay centralized when invoked elsewhere."""
+    fake_home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
     sibling = tmp_path.parent / "sibling"
     sibling.mkdir()
     monkeypatch.chdir(sibling)
     resolved = resolve_storage(tmp_path)
-    assert resolved.qdrant_code_path.is_relative_to(tmp_path.resolve())
+    assert resolved.qdrant_code_path.is_relative_to(fake_home / ".cortext-harness")
 
 
 def test_default_roles_match_storage_role_enum(tmp_path: Path) -> None:
@@ -156,7 +166,52 @@ def test_default_roles_match_storage_role_enum(tmp_path: Path) -> None:
     # correspond to the StorageRole enum values; the underlying logical role
     # is "code" / "document".
     assert resolved.qdrant_code_path.name == StorageRole.CODE.value
-    assert resolved.qdrant_doc_path.name == "doc"  # short subdir name on disk
+    assert resolved.qdrant_doc_path.name == StorageRole.DOCUMENT.value
+
+
+def test_instance_and_owner_isolation(tmp_path: Path) -> None:
+    a = resolve_storage(tmp_path, data_home=tmp_path / "data", instance_id="alpha")
+    b = resolve_storage(tmp_path, data_home=tmp_path / "data", instance_id="beta")
+    assert a.qdrant_code_path != b.qdrant_code_path
+    assert a.falkordb_code_path != b.falkordb_code_path
+    assert a.qdrant_code_path != a.qdrant_doc_path
+    assert a.falkordb_code_path != a.falkordb_doc_path
+
+
+def test_data_home_override_is_not_project_relative_when_absolute(tmp_path: Path) -> None:
+    data_home = tmp_path.parent / "central-data"
+    resolved = resolve_storage(tmp_path, data_home=data_home)
+    assert resolved.data_root == data_home.resolve()
+
+
+def test_project_local_config_discovery_does_not_change_default_data_root(tmp_path: Path, monkeypatch) -> None:
+    fake_home = tmp_path / "account"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    project = tmp_path / "source"
+    (project / ".cortext-harness" / "config").mkdir(parents=True)
+    resolved = resolve_storage(project)
+    assert resolved.data_root == fake_home / ".cortext-harness"
+
+
+def test_ten_unrelated_projects_share_owner_paths_and_keep_logical_targets(tmp_path: Path) -> None:
+    data_home = tmp_path / "central"
+    resolved = []
+    for index in range(10):
+        project_id = f"project-{index:02d}"
+        project_root = tmp_path / f"volume-{index}" / "src" / project_id
+        item = resolve_storage(
+            project_root,
+            data_home=data_home,
+            code_graph=project_id,
+            doc_graph=f"{project_id}_doc",
+            code_collection=project_id,
+            doc_collection=f"{project_id}_doc",
+        )
+        resolved.append(item)
+    assert len({item.qdrant_code_path for item in resolved}) == 1
+    assert len({item.falkordb_doc_path for item in resolved}) == 1
+    assert len({item.code_graph for item in resolved}) == 10
+    assert all(not item.qdrant_code_path.is_relative_to(item.project_root) for item in resolved)
 
 
 def test_legacy_remote_only_triggers_for_known_keys(tmp_path: Path) -> None:

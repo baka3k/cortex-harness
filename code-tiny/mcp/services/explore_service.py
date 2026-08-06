@@ -18,11 +18,11 @@ Produces the structured ``PackedResult`` envelope defined in the spec:
   }
 
 Configuration is read from environment variables:
-  QDRANT_URL          (default: http://localhost:6333)
+  QDRANT_CODE_PATH    (owner-scoped local storage path)
   QDRANT_COLLECTION   (default: empty — auto-discovered)
   EMBED_MODEL         (default: empty — uses cplus_mcp DEFAULT_MODEL)
   CODE_GRAPH_PROVIDER / GRAPH_PROVIDER (default: falkordb)
-  FALKORDB_URI or FALKORDB_HOST / FALKORDB_PORT
+  FALKORDB_PATH      (owner-scoped local storage path)
   FALKORDB_GRAPH       (default: hyper_graph)
   NEO4J_URI / NEO4J_USER / NEO4J_PASS / NEO4J_DB (legacy/Neo4j mode)
 
@@ -46,7 +46,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Callable, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 logger = logging.getLogger("project_call_graph.mcp.explore")
@@ -55,7 +56,7 @@ logger = logging.getLogger("project_call_graph.mcp.explore")
 # Environment defaults
 # ─────────────────────────────────────────────────────────────────────────────
 
-_DEFAULT_QDRANT_URL  = os.environ.get("QDRANT_URL", "http://localhost:6333")
+_DEFAULT_QDRANT_PATH = os.environ.get("QDRANT_CODE_PATH", "")
 _DEFAULT_COLLECTION  = os.environ.get("QDRANT_COLLECTION", "")
 _DEFAULT_MODEL       = os.environ.get("EMBED_MODEL", "")
 _DEFAULT_NEO4J_URI   = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
@@ -138,8 +139,7 @@ async def _make_graph_driver(
     """
     Build a graph driver using the shared GraphDriverFactory.
 
-    Despite the legacy NEO4J_* environment variable names, the factory may
-    return a Neo4jDriver or a FalkorDBDriver depending on provider/URI config.
+    Neo4j remains an explicit legacy option; FalkorDB uses its local file.
     """
     provider_text = (provider or _DEFAULT_GRAPH_PROVIDER or "falkordb").strip().lower()
     if provider_text in {"falkor", "falkor-db"}:
@@ -154,27 +154,23 @@ async def _make_graph_driver(
         )
         return None
     try:
-        from tools.graph import GraphDriverFactory, GraphProvider
+        from tools.graph import GraphProvider
+        from tools.graph.core.shared_runtime import get_shared_graph_driver
 
         if use_falkor:
-            falkor_uri = (
-                os.environ.get("FALKORDB_URI")
-                or os.environ.get("FALKORDB_URL")
-                or (uri if _is_falkordb_uri(uri) else None)
-            )
+            from cortex_harness.storage import resolve_storage
+
             config = {
-                "uri": falkor_uri,
-                "host": os.environ.get("FALKORDB_HOST", "localhost"),
-                "port": int(os.environ.get("FALKORDB_PORT", "6379")),
-                "user": os.environ.get("FALKORDB_USER") or os.environ.get("FALKORDB_USERNAME") or user,
-                "password": os.environ.get("FALKORDB_PASSWORD", password or ""),
+                "path": os.environ.get("FALKORDB_PATH")
+                or str(resolve_storage(Path.cwd()).falkordb_code_path),
                 "database": database,
                 "graph": database,
-                "ssl": os.environ.get("FALKORDB_SSL", "").lower() in {"1", "true", "yes", "on"},
+                "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+                "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
             }
-            return await GraphDriverFactory.create_driver(GraphProvider.FALKORDB, config)
+            return await get_shared_graph_driver(GraphProvider.FALKORDB, config)
 
-        return await GraphDriverFactory.create_driver(
+        return await get_shared_graph_driver(
             GraphProvider.NEO4J,
             {"uri": uri, "user": user, "password": password, "database": database},
         )
@@ -231,7 +227,9 @@ class ExploreService:
         neo4j_db:     Optional[str] = None,
         graph_provider: Optional[str] = None,
     ) -> None:
-        self._qdrant_url  = qdrant_url  or _DEFAULT_QDRANT_URL
+        # MCP requests cannot select arbitrary filesystem-backed stores.
+        # The process owns exactly the configured code store.
+        self._qdrant_url  = _DEFAULT_QDRANT_PATH
         self._collection  = collection  or _DEFAULT_COLLECTION
         self._model_name  = model_name  or _DEFAULT_MODEL
         self._neo4j_uri   = neo4j_uri   or _DEFAULT_NEO4J_URI
@@ -281,8 +279,11 @@ class ExploreService:
             return _empty_response(mode)
 
         mode = mode if mode in _VALID_MODES else MODE_HYBRID
-        active_collection = collection or self._collection
-        active_db         = db or self._neo4j_db
+        search_targets = self._resolve_search_targets(
+            db=db,
+            collection=collection,
+            project_id=project_id,
+        )
 
         # 1. Query understanding
         understanding = self._parse_query(query)
@@ -301,7 +302,7 @@ class ExploreService:
                 self._neo4j_uri,
                 self._neo4j_user,
                 self._neo4j_pass,
-                active_db,
+                search_targets[0][1],
                 provider=self._graph_provider,
             )
             if mode != MODE_SEMANTIC
@@ -309,20 +310,24 @@ class ExploreService:
         )
 
         # 3. Run retrieval (sync engine → offload to thread)
-        scored_results = await self._run_retrieval(
-            understanding  = understanding,
-            embedder       = embedder,
-            graph_driver   = graph_driver,
-            database       = active_db,
-            collection     = active_collection,
-            top_k          = top_k,
-            mode           = mode,
-            debug          = debug,
-            graph_rel_types= graph_rel_types,
-            searchable_labels= searchable_labels,
-            searchable_properties= searchable_properties,
-            project_id     = project_id,
-        )
+        target_results: List[Tuple[str, list]] = []
+        for target_project_id, target_db, target_collection in search_targets:
+            scored = await self._run_retrieval(
+                understanding  = understanding,
+                embedder       = embedder,
+                graph_driver   = graph_driver,
+                database       = target_db,
+                collection     = target_collection,
+                top_k          = top_k,
+                mode           = mode,
+                debug          = debug,
+                graph_rel_types= graph_rel_types,
+                searchable_labels= searchable_labels,
+                searchable_properties= searchable_properties,
+                project_id     = project_id,
+            )
+            target_results.append((target_project_id, scored))
+        scored_results = self._merge_target_results(target_results, top_k)
 
         # 4. Package results
         packed = self._pack(scored_results, understanding, mode)
@@ -331,7 +336,9 @@ class ExploreService:
         graph_requested = mode != MODE_SEMANTIC
         response["retrieval"] = {
             "graph_provider": self._graph_provider,
-            "graph_database": active_db,
+            "graph_database": search_targets[0][1] if len(search_targets) == 1 else None,
+            "graph_databases": [target[1] for target in search_targets],
+            "qdrant_collections": [target[2] for target in search_targets],
             "graph_requested": graph_requested,
             "graph_connected": graph_driver is not None,
             "graph_expansion_requested": bool(_MODE_EXPAND_GRAPH.get(mode, False)),
@@ -339,6 +346,81 @@ class ExploreService:
             "degraded": bool(graph_requested and graph_driver is None),
         }
         return response
+
+    def _resolve_search_targets(
+        self,
+        *,
+        db: Optional[str],
+        collection: Optional[str],
+        project_id: Optional[str],
+    ) -> List[Tuple[str, str, str]]:
+        """Return deterministic project/graph/collection targets for a search."""
+        from tools.common.project_registry import (
+            ProjectNotRegisteredError,
+            list_registered_projects,
+            resolve_project_targets,
+        )
+
+        if project_id:
+            try:
+                target = resolve_project_targets(project_id)
+                return [(
+                    target.project_id_normalized,
+                    db or target.code_graph,
+                    collection or target.code_qdrant_collection,
+                )]
+            except ProjectNotRegisteredError:
+                normalized = str(project_id).strip().casefold()
+                return [(normalized, db or str(project_id), collection or str(project_id))]
+
+        # An explicit physical target remains a single-target request. The
+        # implicit contract (no project and no target overrides) searches all
+        # registered shards.
+        if db or collection:
+            return [("", db or self._neo4j_db, collection or self._collection)]
+
+        resolved: List[Tuple[str, str, str]] = []
+        seen: set[Tuple[str, str]] = set()
+        for registered_project in list_registered_projects():
+            target = resolve_project_targets(registered_project)
+            key = (target.code_graph, target.code_qdrant_collection)
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved.append((
+                target.project_id_normalized,
+                target.code_graph,
+                target.code_qdrant_collection,
+            ))
+        return resolved or [("", self._neo4j_db, self._collection)]
+
+    @staticmethod
+    def _merge_target_results(
+        target_results: List[Tuple[str, list]],
+        top_k: int,
+    ) -> list:
+        """Stable global rank/dedup across independently searched shards."""
+        best: Dict[Tuple[str, str], Tuple[int, Any]] = {}
+        ordinal = 0
+        for target_project_id, results in target_results:
+            for result in results:
+                node = result.node or {}
+                result_project = str(
+                    node.get("project_id_normalized")
+                    or node.get("project_id")
+                    or target_project_id
+                    or ""
+                ).casefold()
+                key = (result_project, str(result.node_id))
+                current = best.get(key)
+                if current is None or float(result.score) > float(current[1].score):
+                    best[key] = (ordinal if current is None else current[0], result)
+                ordinal += 1
+        ranked = sorted(
+            best.values(),
+            key=lambda item: (-float(item[1].score), item[0]),
+        )
+        return [result for _, result in ranked[:top_k]]
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 

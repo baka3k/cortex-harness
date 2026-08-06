@@ -48,8 +48,7 @@ from tools.common.url_normalizer import (
     merge_base_url,
     normalize_http_method,
 )
-from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, prepare_graph_args
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
 _semantic_engine = SemanticInferenceEngine()
@@ -398,7 +397,10 @@ async def _write_api_calls(
     await _run(_UPSERT_CALLS_API_UNWIND, api_calls, "CALLS_API")
 
 
-class QdrantWriter:
+from tools.common.local_qdrant import LocalQdrantWriter
+
+
+class QdrantWriter(LocalQdrantWriter):
     def __init__(
         self,
         url: str,
@@ -408,78 +410,15 @@ class QdrantWriter:
         retries: int = 3,
         retry_sleep: float = 2.0,
     ) -> None:
-        self.url = url.rstrip("/")
-        self.collection = collection
-        self.vector_size = vector_size
-        self.timeout = timeout
-        self.retries = retries
-        self.retry_sleep = retry_sleep
-
-    def ensure_collection(self) -> None:
-        for attempt in range(self.retries + 1):
-            try:
-                response = requests.get(
-                    f"{self.url}/collections/{self.collection}",
-                    timeout=self.timeout,
-                )
-                if response.status_code == 200:
-                    existing_size = self._extract_vector_size(response)
-                    if existing_size and existing_size != self.vector_size:
-                        raise ValueError(
-                            "Qdrant collection vector size mismatch: "
-                            f"{self.collection} has size {existing_size}, "
-                            f"but embedder produces size {self.vector_size}. "
-                            "Use a matching embedder or recreate the collection."
-                        )
-                    return
-                payload = {
-                    "vectors": {"size": self.vector_size, "distance": "Cosine"},
-                }
-                response = requests.put(
-                    f"{self.url}/collections/{self.collection}",
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                return
-            except requests.RequestException:
-                if attempt >= self.retries:
-                    raise
-                time.sleep(self.retry_sleep)
-
-    @staticmethod
-    def _extract_vector_size(response: requests.Response) -> Optional[int]:
-        try:
-            data = response.json()
-        except ValueError:
-            return None
-        result = data.get("result", {})
-        config = result.get("config", {})
-        params = config.get("params", {})
-        vectors = params.get("vectors", {})
-        if isinstance(vectors, dict):
-            size = vectors.get("size")
-            if isinstance(size, int):
-                return size
-        return None
-
-    def upsert(self, points: List[Dict]) -> None:
-        if not points:
-            return
-        payload = {"points": enrich_project_scope(points)}
-        for attempt in range(self.retries + 1):
-            try:
-                response = requests.put(
-                    f"{self.url}/collections/{self.collection}/points?wait=true",
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                return
-            except requests.RequestException:
-                if attempt >= self.retries:
-                    raise
-                time.sleep(self.retry_sleep)
+        super().__init__(
+            url,
+            collection,
+            vector_size,
+            timeout,
+            retries,
+            retry_sleep,
+            point_transform=enrich_project_scope,
+        )
 
 
 def _should_trust_remote_code(model_name: str) -> bool:
@@ -1924,7 +1863,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument(
         "--qdrant-collection",
         default=os.environ.get("QDRANT_COLLECTION", "typescript_functions"),
@@ -2007,12 +1946,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
     code_writer = None
     driver = None
     if prepare_graph_args(args):
-        driver = await GraphDriverFactory.create_driver(
-            provider=GraphProvider.NEO4J,
-            uri=args.neo4j_uri,
-            user=args.neo4j_user,
-            password=args.neo4j_password,
-        )
+        driver = await create_graph_driver_from_args(args)
         code_writer = LanguageCodeWriter(
             driver=driver,
             database=args.neo4j_db,

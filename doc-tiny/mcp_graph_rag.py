@@ -1,18 +1,23 @@
 import argparse
+import logging
 import os
 import signal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
-from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
-from graph_store import create_graph_store_from_env
+from graph_store import (
+    create_graph_store_for_project,
+    create_graph_store_from_env,
+    env_graph_provider,
+)
+from doc_local_qdrant import get_document_qdrant_store
 from project_contract import (
-    ProjectNotRegisteredError,
+    list_registered_projects,
     qdrant_project_filter as _pc_qdrant_project_filter,
     resolve_project_targets,
 )
@@ -34,9 +39,6 @@ NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASS = os.getenv("NEO4J_PASS") or os.getenv("NEO4J_PASS", "password")
 
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
-QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION_DOC", "documents")
 
 DEFAULT_TEXT_EMBEDDING_MODEL = "BAAI/bge-m3"
@@ -69,18 +71,16 @@ ENTITY_TYPES_DEFAULT = _parse_entity_types(
 ) or DEFAULT_ENTITY_TYPES
 
 
-_qdrant_client: Optional[QdrantClient] = None
+_qdrant_client = None
 _neo4j_driver = None
 _embedder: Optional[SentenceTransformer] = None
+logger = logging.getLogger("graph_rag.mcp")
 
 
-def get_qdrant() -> QdrantClient:
+def get_qdrant():
     global _qdrant_client
     if _qdrant_client is None:
-        if QDRANT_URL:
-            _qdrant_client = QdrantClient(url=QDRANT_URL)
-        else:
-            _qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+        _qdrant_client = get_document_qdrant_store()
     return _qdrant_client
 
 
@@ -102,6 +102,63 @@ def get_neo4j():
     return _neo4j_driver
 
 
+def _acquire_graph_store(project_id: Optional[str]):
+    if project_id and env_graph_provider() == "neo4j":
+        # Preserve the legacy Neo4j request-scoped database session behavior.
+        return create_graph_store_for_project(project_id), True
+    base = get_neo4j()
+    if not project_id:
+        return base, False
+    if getattr(base, "provider", None) == "falkordb":
+        targets = resolve_project_targets(project_id)
+        return base.for_graph(targets.doc_graph), False
+    return base, False
+
+
+def _graph_store_candidates(project_id: Optional[str]):
+    """Return deterministic graph stores for scoped or full-search queries."""
+    if project_id:
+        return [_acquire_graph_store(project_id)]
+    base = get_neo4j()
+    if getattr(base, "provider", None) != "falkordb":
+        return [(base, False)]
+
+    graph_names: List[str] = []
+    for registered_project in list_registered_projects():
+        graph_name = resolve_project_targets(registered_project).doc_graph
+        if graph_name and graph_name not in graph_names:
+            graph_names.append(graph_name)
+    if not graph_names:
+        return [(base, False)]
+    return [(base.for_graph(graph_name), False) for graph_name in graph_names]
+
+
+def _resolve_doc_collection(
+    project_id: Optional[str], collection: Optional[str] = None
+) -> str:
+    if collection:
+        return collection
+    if project_id:
+        return resolve_project_targets(project_id).doc_qdrant_collection
+    return QDRANT_COLLECTION
+
+
+def _resolve_doc_collections(
+    project_id: Optional[str], collection: Optional[str] = None
+) -> List[str]:
+    if collection:
+        return [collection]
+    if project_id:
+        return [resolve_project_targets(project_id).doc_qdrant_collection]
+
+    collections: List[str] = []
+    for registered_project in list_registered_projects():
+        name = resolve_project_targets(registered_project).doc_qdrant_collection
+        if name and name not in collections:
+            collections.append(name)
+    return collections or [QDRANT_COLLECTION]
+
+
 def qdrant_search_entity_payload(
     query_vector: List[float],
     top_k: int,
@@ -110,19 +167,7 @@ def qdrant_search_entity_payload(
     project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     qdrant = get_qdrant()
-    # Resolve the collection through the registry when ``project_id`` is
-    # given and the caller did not pass an explicit ``collection`` arg.
-    if collection:
-        collection_name = collection
-    elif project_id:
-        try:
-            targets = resolve_project_targets(project_id)
-        except ProjectNotRegisteredError:
-            collection_name = QDRANT_COLLECTION
-        else:
-            collection_name = targets.doc_qdrant_collection
-    else:
-        collection_name = QDRANT_COLLECTION
+    collection_names = _resolve_doc_collections(project_id, collection)
 
     # Build the Qdrant filter. The project filter combines with the
     # ``source_id`` filter via AND. A missing ``project_id`` produces no
@@ -149,77 +194,151 @@ def qdrant_search_entity_payload(
                 )
     qdrant_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
 
-    if hasattr(qdrant, "search"):
-        hits = qdrant.search(
-            collection_name=collection_name,
-            query_vector=query_vector,
-            limit=top_k,
-            query_filter=qdrant_filter,
-        )
-    else:
-        hits = qdrant.query_points(
-            collection_name=collection_name,
-            query=query_vector,
-            limit=top_k,
-            query_filter=qdrant_filter,
-        ).points
+    available = None
+    if hasattr(qdrant, "list_collection_names"):
+        available = set(qdrant.list_collection_names())
 
-    payloads = []
-    for h in hits:
-        if not h.payload:
+    payloads_by_key: Dict[Any, Dict[str, Any]] = {}
+    for collection_name in collection_names:
+        if available is not None and collection_name not in available:
             continue
-        payloads.append(
-            {
-                "score": getattr(h, "score", None),
-                "text": h.payload.get("text"),
-                "source_id": h.payload.get("source_id"),
-                "paragraph_id": h.payload.get("paragraph_id"),
-                "entity_ids": h.payload.get("entity_ids") or [],
-                "entity_mentions": h.payload.get("entity_mentions") or [],
+        try:
+            if hasattr(qdrant, "search"):
+                hits = qdrant.search(
+                    collection_name=collection_name,
+                    query_vector=query_vector,
+                    limit=top_k,
+                    query_filter=qdrant_filter,
+                )
+            else:
+                hits = qdrant.query_points(
+                    collection_name=collection_name,
+                    query=query_vector,
+                    limit=top_k,
+                    query_filter=qdrant_filter,
+                ).points
+        except Exception as exc:
+            if len(collection_names) == 1:
+                raise
+            logger.warning("Skipping unavailable doc collection %s: %s", collection_name, exc)
+            continue
+
+        for hit in hits:
+            if not hit.payload:
+                continue
+            key = (
+                hit.payload.get("project_id_normalized"),
+                hit.payload.get("source_id"),
+                hit.payload.get("paragraph_id"),
+                hit.payload.get("text"),
+            )
+            row = {
+                "score": getattr(hit, "score", None),
+                "text": hit.payload.get("text"),
+                "source_id": hit.payload.get("source_id"),
+                "paragraph_id": hit.payload.get("paragraph_id"),
+                "project_id": hit.payload.get("project_id"),
+                "project_id_normalized": hit.payload.get("project_id_normalized"),
+                "entity_ids": hit.payload.get("entity_ids") or [],
+                "entity_mentions": hit.payload.get("entity_mentions") or [],
+                "collection": collection_name,
             }
-        )
-    return payloads
+            existing = payloads_by_key.get(key)
+            if existing is None or float(row.get("score") or 0.0) > float(
+                existing.get("score") or 0.0
+            ):
+                payloads_by_key[key] = row
+    payloads = list(payloads_by_key.values())
+    payloads.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
+    return payloads[:top_k]
 
 
-def fetch_entities_by_ids(entity_ids: List[str]) -> List[Dict[str, Any]]:
+def fetch_entities_by_ids(
+    entity_ids: List[str], project_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
     if not entity_ids:
         return []
-    with get_neo4j().session() as session:
-        result = session.run(
-            """
-            MATCH (e:Entity)
-            WHERE e.id IN $ids
-            RETURN e.id AS id, e.name AS name, e.type AS type
-            """,
-            ids=entity_ids,
-        )
-        return [dict(r) for r in result]
+    entities: List[Dict[str, Any]] = []
+    seen = set()
+    for store, owned in _graph_store_candidates(project_id):
+        try:
+            with store.session() as session:
+                result = session.run(
+                    """
+                    MATCH (e:Entity)
+                    WHERE e.id IN $ids
+                      AND ($project_id_normalized IS NULL OR
+                           e.project_id_normalized = $project_id_normalized)
+                    RETURN e.id AS id, e.name AS name, e.type AS type
+                    """,
+                    ids=entity_ids,
+                    project_id_normalized=(project_id.strip().casefold() if project_id else None),
+                )
+                for record in result:
+                    row = dict(record)
+                    key = row.get("id") or (row.get("name"), row.get("type"))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    entities.append(row)
+        finally:
+            if owned:
+                store.close()
+    return entities[: len(entity_ids)]
 
 
 def fetch_relations_by_entity_ids(
     entity_ids: List[str],
     entity_types: Optional[List[str]],
     related_k: int,
+    project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     if not entity_ids or related_k <= 0:
         return []
     entity_types = entity_types or []
-    with get_neo4j().session() as session:
-        result = session.run(
-            """
-            UNWIND $ids AS id
-            MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)
-            WHERE $types = [] OR e.type IN $types OR e2.type IN $types
-            RETURN e.id AS source_id, e.name AS source, e.type AS source_type,
-                   r.type AS relation,
-                   e2.id AS target_id, e2.name AS target, e2.type AS target_type
-            LIMIT $limit
-            """,
-            ids=entity_ids,
-            types=entity_types,
-            limit=related_k,
-        )
-        return [dict(r) for r in result]
+    relations: List[Dict[str, Any]] = []
+    seen = set()
+    for store, owned in _graph_store_candidates(project_id):
+        remaining = related_k - len(relations)
+        if remaining <= 0:
+            break
+        try:
+            with store.session() as session:
+                result = session.run(
+                    """
+                    UNWIND $ids AS id
+                    MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)
+                    WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)
+                      AND ($project_id_normalized IS NULL OR
+                           (e.project_id_normalized = $project_id_normalized AND
+                            e2.project_id_normalized = $project_id_normalized))
+                    RETURN e.id AS source_id, e.name AS source, e.type AS source_type,
+                           r.type AS relation,
+                           e2.id AS target_id, e2.name AS target, e2.type AS target_type
+                    LIMIT $limit
+                    """,
+                    ids=entity_ids,
+                    types=entity_types,
+                    limit=remaining,
+                    project_id_normalized=(project_id.strip().casefold() if project_id else None),
+                )
+                for record in result:
+                    row = dict(record)
+                    key = (
+                        row.get("source_id"),
+                        row.get("relation"),
+                        row.get("target_id"),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    relations.append(row)
+                    if len(relations) >= related_k:
+                        break
+        finally:
+            if owned:
+                store.close()
+    return relations
 
 
 def _filter_entity_ids_for_expansion(
@@ -248,6 +367,7 @@ def fetch_relations_with_depth(
     entity_types: Optional[List[str]],
     related_k: int,
     depth: int,
+    project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     if not entity_ids or related_k <= 0 or depth <= 0:
         return []
@@ -261,7 +381,7 @@ def fetch_relations_with_depth(
         if not frontier or remaining <= 0:
             break
         step_relations = fetch_relations_by_entity_ids(
-            frontier, entity_types, remaining
+            frontier, entity_types, remaining, project_id=project_id
         )
         new_frontier = set()
         for rel in step_relations:
@@ -349,50 +469,82 @@ def _apply_heuristic_rerank(
 def fetch_paragraph_by_source(
     source_id: str,
     paragraph_id: int,
+    project_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    with get_neo4j().session() as session:
-        result = session.run(
-            """
-            MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
-            RETURN p.text AS text,
-                   p.short AS short,
-                   p.source_id AS source_id,
-                   p.paragraph_id AS paragraph_id
-            """,
-            source_id=source_id,
-            paragraph_id=paragraph_id,
-        )
-        record = result.single()
-        return dict(record) if record else None
+    for store, owned in _graph_store_candidates(project_id):
+        try:
+            with store.session() as session:
+                result = session.run(
+                    """
+                    MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
+                    WHERE $project_id_normalized IS NULL OR
+                          p.project_id_normalized = $project_id_normalized
+                    RETURN p.text AS text,
+                           p.short AS short,
+                           p.source_id AS source_id,
+                           p.paragraph_id AS paragraph_id
+                    """,
+                    source_id=source_id,
+                    paragraph_id=paragraph_id,
+                    project_id_normalized=(project_id.strip().casefold() if project_id else None),
+                )
+                record = result.single()
+                if record:
+                    return dict(record)
+        finally:
+            if owned:
+                store.close()
+    return None
 
 
 
 
 def register_tools(mcp: FastMCP) -> None:
     @mcp.tool()
-    def list_source_ids(limit = 50) -> List[str]:
+    def list_source_ids(limit=50, project_id=None) -> List[str]:
         """List available source_id values from Neo4j (Paragraph nodes)."""
-        limit_val = int(limit)
-        with get_neo4j().session() as session:
-            result = session.run(
-                """
-                MATCH (p:Paragraph)
-                WHERE p.source_id IS NOT NULL
-                RETURN DISTINCT p.source_id AS source_id
-                ORDER BY source_id
-                LIMIT $limit
-                """,
-                limit=limit_val,
-            )
-            return [r["source_id"] for r in result]
+        limit_val = max(0, int(limit))
+        source_ids: List[str] = []
+        seen = set()
+        for store, owned in _graph_store_candidates(project_id):
+            if len(source_ids) >= limit_val:
+                break
+            try:
+                with store.session() as session:
+                    result = session.run(
+                        """
+                        MATCH (p:Paragraph)
+                        WHERE p.source_id IS NOT NULL
+                          AND ($project_id_normalized IS NULL OR
+                               p.project_id_normalized = $project_id_normalized)
+                        RETURN DISTINCT p.source_id AS source_id
+                        ORDER BY source_id
+                        LIMIT $limit
+                        """,
+                        limit=limit_val - len(source_ids),
+                        project_id_normalized=(project_id.strip().casefold() if project_id else None),
+                    )
+                    for record in result:
+                        source_id = record["source_id"]
+                        if source_id not in seen:
+                            seen.add(source_id)
+                            source_ids.append(source_id)
+            finally:
+                if owned:
+                    store.close()
+        return source_ids[:limit_val]
 
     @mcp.tool()
-    def list_qdrant_collections() -> List[str]:
+    def list_qdrant_collections(project_id=None) -> List[str]:
         """List Qdrant collections."""
         qdrant = get_qdrant()
-        return [c.name for c in qdrant.get_collections().collections]
+        names = qdrant.list_collection_names()
+        if not project_id:
+            return names
+        expected = _resolve_doc_collection(project_id)
+        return [name for name in names if name == expected]
 
-    # @mcp.tool()
+    @mcp.tool()
     def semantic_search(
         query,
         top_k=5,
@@ -452,7 +604,8 @@ def register_tools(mcp: FastMCP) -> None:
             "query": query,
             "top_k": top_k,
             "source_id": source_id,
-            "collection": collection or QDRANT_COLLECTION,
+            "collection": _resolve_doc_collection(project_id, collection),
+            "collections_searched": _resolve_doc_collections(project_id, collection),
             "passages": passages,
         }
 
@@ -476,6 +629,7 @@ def register_tools(mcp: FastMCP) -> None:
         rerank_type_weight=0.1,
         rerank_confidence_weight=0.3,
         rerank_length_penalty=0.0002,
+        project_id=None,
     ):
         """
         Query Qdrant for top-k passages with entity_ids payload, then fetch related
@@ -507,7 +661,11 @@ def register_tools(mcp: FastMCP) -> None:
             entity_types = [t.strip() for t in entity_types.split(",") if t.strip()]
 
         payloads = qdrant_search_entity_payload(
-            q_vec, top_k=top_k, source_id=source_id, collection=collection
+            q_vec,
+            top_k=top_k,
+            source_id=source_id,
+            collection=collection,
+            project_id=project_id,
         )
 
         passages = []
@@ -535,11 +693,15 @@ def register_tools(mcp: FastMCP) -> None:
             min_entity_occurrences=min_entity_occurrences,
         )
 
-        entities = fetch_entities_by_ids(entity_ids) if include_entities else []
+        entities = (
+            fetch_entities_by_ids(entity_ids, project_id=project_id)
+            if include_entities else []
+        )
         relations = []
         if include_relations and expand_related:
             relations = fetch_relations_with_depth(
-                entity_ids, entity_types, related_k, graph_depth
+                entity_ids, entity_types, related_k, graph_depth,
+                project_id=project_id,
             )
 
         if rerank:
@@ -561,7 +723,8 @@ def register_tools(mcp: FastMCP) -> None:
             "query": query,
             "top_k": top_k,
             "source_id": source_id,
-            "collection": collection or QDRANT_COLLECTION,
+            "collection": _resolve_doc_collection(project_id, collection),
+            "collections_searched": _resolve_doc_collections(project_id, collection),
             "graph_depth": graph_depth,
             "min_score_to_expand": min_score_to_expand,
             "min_entity_occurrences": min_entity_occurrences,
@@ -576,6 +739,7 @@ def register_tools(mcp: FastMCP) -> None:
     def get_paragraph_text(
         source_id,
         paragraph_id,
+        project_id=None,
     ):
         """Fetch a paragraph's text by source_id + paragraph_id from Neo4j."""
         # Type coercion to handle n8n passing strings
@@ -584,7 +748,9 @@ def register_tools(mcp: FastMCP) -> None:
         
         if not source_id:
             return {"warning": "source_id is required."}
-        record = fetch_paragraph_by_source(source_id, paragraph_id)
+        record = fetch_paragraph_by_source(
+            source_id, paragraph_id, project_id=project_id
+        )
         if not record:
             return {
                 "source_id": source_id,

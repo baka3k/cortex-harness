@@ -1,0 +1,9 @@
+{
+  "project": {
+    "code": "proj_beta",
+    "name": "Project Beta",
+    "parser_type": "python"
+  },
+  "code": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+  "doc": {"env": {}}
+}

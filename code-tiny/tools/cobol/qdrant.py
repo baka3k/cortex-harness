@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 import uuid
 from typing import Any, Iterable
-from urllib.parse import urlparse
+
+from tools.common.local_qdrant import delete_by_filter, ensure_collection, get_code_qdrant_store
 
 from tools.common.project_scope import (
     PROJECT_ID_NORMALIZED_FIELD,
@@ -29,13 +30,9 @@ _COLLECTION_RE = re.compile(r"^[A-Za-z0-9_.-]{1,255}$")
 
 
 def _validate_target(url: str, collection: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("Qdrant URL must be an absolute http(s) URL")
-    if parsed.username or parsed.password:
-        raise ValueError("Qdrant URL must not embed credentials")
     if not _COLLECTION_RE.fullmatch(collection):
         raise ValueError("Qdrant collection must contain only letters, digits, '_', '-', or '.'")
+    get_code_qdrant_store(url)
 
 
 def point_id(node_id: str) -> str:
@@ -80,30 +77,8 @@ def semantic_documents(result: AnalysisResult, *, max_chars: int = 800) -> list[
     return documents
 
 
-def _ensure_collection(requests, url: str, collection: str, vector_size: int) -> None:
-    endpoint = f"{url.rstrip('/')}/collections/{collection}"
-    response = requests.get(endpoint, timeout=60)
-    if response.status_code == 200:
-        result = response.json().get("result", {})
-        vectors = result.get("config", {}).get("params", {}).get("vectors", {})
-        existing_size = vectors.get("size") if isinstance(vectors, dict) else None
-        if existing_size and int(existing_size) != vector_size:
-            raise ValueError(
-                f"Qdrant collection {collection} has vector size {existing_size}; embedder produces {vector_size}"
-            )
-        return
-    if response.status_code != 404:
-        response.raise_for_status()
-    created = requests.put(
-        endpoint,
-        json={"vectors": {"size": vector_size, "distance": "Cosine"}},
-        timeout=60,
-    )
-    created.raise_for_status()
-
-
 def _delete_stale(
-    requests,
+    store,
     *,
     url: str,
     collection: str,
@@ -124,12 +99,8 @@ def _delete_stale(
     point_filter: dict[str, Any] = {"must": must}
     if keep_ids:
         point_filter["must_not"] = [{"has_id": keep_ids}]
-    response = requests.post(
-        f"{url.rstrip('/')}/collections/{collection}/points/delete?wait=true",
-        json={"filter": point_filter},
-        timeout=60,
-    )
-    response.raise_for_status()
+    del url
+    delete_by_filter(store, collection, point_filter)
 
 
 def sync_qdrant(
@@ -148,10 +119,9 @@ def sync_qdrant(
     """Embed first, then upsert and remove only stale points in the affected scope."""
     _validate_target(url, collection)
     try:
-        import requests
         from sentence_transformers import SentenceTransformer
     except ImportError as exc:
-        raise RuntimeError("Qdrant indexing requires requests and sentence-transformers") from exc
+        raise RuntimeError("Qdrant indexing requires sentence-transformers") from exc
 
     documents = semantic_documents(result, max_chars=max_chars)
     if not documents:
@@ -166,20 +136,16 @@ def sync_qdrant(
         normalize_embeddings=True,
     )
     vector_size = int(vectors.shape[1])
-    _ensure_collection(requests, url, collection, vector_size)
+    store = get_code_qdrant_store(url)
+    ensure_collection(store, collection, vector_size)
     points = [
         {"id": document["id"], "vector": vector.tolist(), "payload": document["payload"]}
         for document, vector in zip(documents, vectors)
     ]
     for start in range(0, len(points), max(1, batch_size)):
-        response = requests.put(
-            f"{url.rstrip('/')}/collections/{collection}/points?wait=true",
-            json={"points": points[start:start + max(1, batch_size)]},
-            timeout=120,
-        )
-        response.raise_for_status()
+        store.upsert(collection, points[start:start + max(1, batch_size)], wait=True)
     _delete_stale(
-        requests,
+        store,
         url=url,
         collection=collection,
         project_id=result.project_id,

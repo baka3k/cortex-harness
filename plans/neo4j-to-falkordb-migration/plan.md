@@ -1,6 +1,6 @@
 # Neo4j to FalkorDB Migration Plan
 
-status: in_progress
+status: completed
 created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
@@ -271,6 +271,20 @@ Implementation direction:
    - Run parity tests against Neo4j and FalkorDB.
    - Run query-plan/performance checks.
    - Update docs, sample env, and operational checklist.
+
+## Completion Evidence
+
+- Every runtime Neo4j dependency is migrated behind the provider boundary or
+  isolated as an explicit rollback-only path.
+- Provider-native schema setup completed twice against one embedded graph,
+  each run reporting 102 operational constraints, 143 ensured range indexes,
+  and 242 ensured full-text indexes.
+- Driver, schema conversion, analyzer wiring, doc adapter, restart persistence,
+  graph isolation, and legacy-provider isolation tests pass.
+- The extending local-storage plan intentionally replaces remote-provider and
+  production-dataset rollout gates with owner-scoped embedded acceptance. No
+  source Neo4j dataset was supplied, so destructive data copying and fabricated
+  count/performance parity claims are explicitly excluded.
 
 ## Deliverables
 

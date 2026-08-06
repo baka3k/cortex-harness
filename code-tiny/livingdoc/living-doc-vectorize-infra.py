@@ -27,25 +27,19 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-import urllib.error
-import urllib.request
 
 from sentence_transformers import SentenceTransformer
-from neo4j import GraphDatabase
+from tools.common.local_qdrant import (
+    default_local_qdrant_path,
+    ensure_collection as _ensure_local_collection,
+    get_code_qdrant_store,
+    scroll_points,
+)
+from graph_runtime import add_graph_arguments, open_graph_session, prepare_graph_arguments
 
 
 def get_env(name, default=None):
     return os.getenv(name, default)
-
-
-def http_json(method, url, headers=None, payload=None, timeout=60):
-    data = None
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read()
-        return resp.status, json.loads(body.decode("utf-8")) if body else None
 
 
 def parse_args():
@@ -53,10 +47,7 @@ def parse_args():
         description="Vectorize InfraNode summaries and store embeddings in Qdrant.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--neo4j-uri",      default=get_env("NEO4J_URI",      "bolt://localhost:7687"))
-    parser.add_argument("--neo4j-user",     default=get_env("NEO4J_USER",     "neo4j"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
-    parser.add_argument("--neo4j-db",       default=get_env("NEO4J_DB"))
+    add_graph_arguments(parser)
 
     parser.add_argument("--project-id",  default=get_env("PROJECT_ID"))
     parser.add_argument("--infra-label", default=get_env("INFRA_LABEL", "InfraNode"))
@@ -70,7 +61,7 @@ def parse_args():
     parser.add_argument("--embed-device", default=get_env("EMBEDDING_DEVICE", "mps"))
     parser.add_argument("--embed-trust-remote-code", action="store_true")
 
-    parser.add_argument("--qdrant-url",        default=get_env("QDRANT_URL",        "http://localhost:6333"))
+    parser.add_argument("--qdrant-url",        default=default_local_qdrant_path())
     parser.add_argument("--collection",        default=get_env("QDRANT_COLLECTION_CODE"))
     parser.add_argument("--qdrant-collection", dest="collection", help="Alias for --collection")
     parser.add_argument("--qdrant-api-key",    default=get_env("QDRANT_API_KEY"))
@@ -90,14 +81,15 @@ def parse_args():
 
     args = parser.parse_args()
     missing = []
-    if not args.NEO4J_PASS:
-        missing.append("NEO4J_PASS/--neo4j-pass")
     if not args.collection:
         missing.append("QDRANT_COLLECTION_CODE/--collection")
     if missing:
         print("Missing required options: " + ", ".join(missing), file=sys.stderr)
         sys.exit(2)
-    return args
+    try:
+        return prepare_graph_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 # ─── Resume cache ─────────────────────────────────────────────────────────────
@@ -149,50 +141,30 @@ def fetch_infra_nodes(session, infra_label, done_status, project_id):
 # ─── Qdrant ───────────────────────────────────────────────────────────────────
 
 def ensure_collection(qdrant_url, headers, collection, vector_size, create_enabled, timeout=30):
-    url = f"{qdrant_url.rstrip('/')}/collections/{collection}"
-    try:
-        status, _ = http_json("GET", url, headers=headers, timeout=timeout)
-        if status == 200:
-            return
-    except urllib.error.HTTPError as exc:
-        if exc.code != 404:
-            raise
-    if str(create_enabled) == "0":
-        print(f"Collection not found: {collection}", file=sys.stderr)
-        sys.exit(2)
-    payload = {"vectors": {"size": vector_size, "distance": "Cosine"}}
-    http_json("PUT", url, headers=headers, payload=payload, timeout=timeout)
+    del headers, timeout
+    _ensure_local_collection(
+        get_code_qdrant_store(qdrant_url), collection, vector_size,
+        create=str(create_enabled) != "0",
+    )
     print(f"[vectorize-infra] Created Qdrant collection: {collection} dim={vector_size}")
 
 
 def qdrant_has_node(qdrant_url, headers, collection, node_id, timeout=30):
-    url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points/scroll"
-    payload = {
-        "limit": 1,
-        "filter": {"must": [{"key": "node_id", "match": {"value": node_id}}]},
-        "with_payload": False,
-        "with_vectors": False,
-    }
-    try:
-        status, data = http_json("POST", url, headers=headers, payload=payload, timeout=timeout)
-        if status != 200 or not data:
-            return False
-        points = data.get("result", {}).get("points", [])
-        return len(points) > 0
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Qdrant scroll failed: {exc.code} {body}") from exc
+    del headers, timeout
+    points, _ = scroll_points(
+        get_code_qdrant_store(qdrant_url), collection, limit=1,
+        query_filter={"must": [{"key": "node_id", "match": {"value": node_id}}]},
+        with_payload=False,
+    )
+    return bool(points)
 
 
 def upsert_point(qdrant_url, headers, collection, vector, payload_data, timeout=30):
-    url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points?wait=true"
     point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, payload_data["node_id"]))
-    body = {"points": [{"id": point_id, "vector": vector, "payload": payload_data}]}
-    try:
-        http_json("PUT", url, headers=headers, payload=body, timeout=timeout)
-    except urllib.error.HTTPError as exc:
-        body_text = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Qdrant upsert failed: {exc.code} {body_text}") from exc
+    del headers, timeout
+    get_code_qdrant_store(qdrant_url).upsert(
+        collection, [{"id": point_id, "vector": vector, "payload": payload_data}], wait=True,
+    )
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -229,9 +201,7 @@ def main():
     if vectorized_ids and args.verbose:
         print(f"[vectorize-infra] Already vectorized (local cache): {len(vectorized_ids)}")
 
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.NEO4J_PASS))
-    try:
-        with driver.session(database=args.neo4j_db) as session:
+    with open_graph_session(args) as session:
             infra_nodes = fetch_infra_nodes(
                 session, args.infra_label, args.done_status, args.project_id
             )
@@ -306,9 +276,6 @@ def main():
                 except Exception as exc:
                     print(f"  [ERROR] upsert {node_id}: {exc}")
                     failed += 1
-    finally:
-        driver.close()
-
     print(
         f"\n[vectorize-infra] Done. "
         f"Total={total} Upserted={upserted} Skipped={skipped} Failed={failed}"

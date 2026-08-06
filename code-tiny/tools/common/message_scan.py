@@ -9,10 +9,9 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-import requests
-
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.incremental_cleanup import cleanup_qdrant_for_files
+from tools.common.local_qdrant import delete_by_filter, ensure_collection, get_code_qdrant_store
 from tools.common.message_detectors import get_detector, has_specific_detector, supported_parsers
 from tools.common.message_detectors.base import BaseMessageDetector, unquote
 from tools.common.project_scope import (
@@ -383,26 +382,17 @@ def _qdrant_delete_by_project(
     retries: int,
     retry_sleep: float,
 ) -> None:
-    endpoint = qdrant_url.rstrip("/") + f"/collections/{collection}/points/delete?wait=true"
-    payload = {
-        "filter": {
-            "must": [{
-                "key": PROJECT_ID_NORMALIZED_FIELD,
-                "match": {"value": project_id_lookup_key(project_id)},
-            }]
-        }
+    del timeout, retries, retry_sleep
+    store = get_code_qdrant_store(qdrant_url)
+    if not store.collection_exists(collection):
+        return
+    point_filter = {
+        "must": [{
+            "key": PROJECT_ID_NORMALIZED_FIELD,
+            "match": {"value": project_id_lookup_key(project_id)},
+        }]
     }
-    for attempt in range(retries + 1):
-        try:
-            response = requests.post(endpoint, json=payload, timeout=timeout)
-            if response.status_code == 404:
-                return
-            response.raise_for_status()
-            return
-        except requests.RequestException:
-            if attempt >= retries:
-                raise
-            time.sleep(retry_sleep)
+    delete_by_filter(store, collection, point_filter)
 
 
 def _ensure_qdrant_collection(
@@ -414,48 +404,8 @@ def _ensure_qdrant_collection(
     retries: int,
     retry_sleep: float,
 ) -> None:
-    def _extract_existing_size(resp: requests.Response) -> Optional[int]:
-        try:
-            data = resp.json()
-        except ValueError:
-            return None
-        result = data.get("result", {})
-        config = result.get("config", {})
-        params = config.get("params", {})
-        vectors = params.get("vectors", {})
-        if isinstance(vectors, dict):
-            size = vectors.get("size")
-            if isinstance(size, int):
-                return size
-        return None
-
-    for attempt in range(retries + 1):
-        try:
-            response = requests.get(
-                qdrant_url.rstrip("/") + f"/collections/{collection}",
-                timeout=timeout,
-            )
-            if response.status_code == 200:
-                existing_size = _extract_existing_size(response)
-                if existing_size and existing_size != vector_size:
-                    raise ValueError(
-                        "Qdrant message collection vector size mismatch: "
-                        f"{collection} has size {existing_size}, expected {vector_size}. "
-                        "Use matching size or recreate collection."
-                    )
-                return
-            payload = {"vectors": {"size": vector_size, "distance": "Cosine"}}
-            create_resp = requests.put(
-                qdrant_url.rstrip("/") + f"/collections/{collection}",
-                json=payload,
-                timeout=timeout,
-            )
-            create_resp.raise_for_status()
-            return
-        except requests.RequestException:
-            if attempt >= retries:
-                raise
-            time.sleep(retry_sleep)
+    del timeout, retries, retry_sleep
+    ensure_collection(get_code_qdrant_store(qdrant_url), collection, vector_size)
 
 
 def _ensure_qdrant_project_scope_index(
@@ -466,20 +416,12 @@ def _ensure_qdrant_project_scope_index(
     retries: int,
     retry_sleep: float,
 ) -> None:
-    endpoint = qdrant_url.rstrip("/") + f"/collections/{collection}/index?wait=true"
-    payload = {
-        "field_name": PROJECT_ID_NORMALIZED_FIELD,
-        "field_schema": "keyword",
-    }
-    for attempt in range(retries + 1):
-        try:
-            response = requests.put(endpoint, json=payload, timeout=timeout)
-            response.raise_for_status()
-            return
-        except requests.RequestException:
-            if attempt >= retries:
-                raise
-            time.sleep(retry_sleep)
+    del timeout, retries, retry_sleep
+    get_code_qdrant_store(qdrant_url).create_payload_index(
+        collection,
+        PROJECT_ID_NORMALIZED_FIELD,
+        wait=True,
+    )
 
 
 def _hash_vector(text: str, size: int) -> List[float]:
@@ -543,7 +485,7 @@ def upsert_messages_to_qdrant(
         retries=retries,
         retry_sleep=retry_sleep,
     )
-    endpoint = qdrant_url.rstrip("/") + f"/collections/{collection}/points?wait=true"
+    store = get_code_qdrant_store(qdrant_url)
     total = len(records)
     sent = 0
     for offset in range(0, total, max(1, batch_size)):
@@ -582,16 +524,7 @@ def upsert_messages_to_qdrant(
                     "payload": _message_point_payload(record, project_name),
                 }
             )
-        payload = {"points": points}
-        for attempt in range(retries + 1):
-            try:
-                response = requests.put(endpoint, json=payload, timeout=timeout)
-                response.raise_for_status()
-                break
-            except requests.RequestException:
-                if attempt >= retries:
-                    raise
-                time.sleep(retry_sleep)
+        store.upsert(collection, points, wait=True)
         sent += len(points)
         if verbose:
             print(f"[message][qdrant] upsert {sent}/{total}")
@@ -829,7 +762,7 @@ async def run_message_scan_pipeline(
                     batch_size=qdrant_batch_size,
                     verbose=verbose,
                 )
-            except requests.RequestException:
+            except Exception:
                 if verbose:
                     print(
                         "[message][cleanup][qdrant] skip: collection unavailable or cleanup failed (%s)"

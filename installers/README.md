@@ -1,5 +1,18 @@
 # CortexHarness 1-Click Context Menu Installer
 
+## Runtime prerequisites
+
+- Python 3.12 or newer.
+- The pinned packages from the repository requirements, including
+  `qdrant-client==1.18.0` and `falkordblite==0.10.0`.
+- On macOS, the OpenMP runtime required by the FalkorDBLite binary.
+
+The installer does not provision or start database containers. Persistent
+Qdrant and FalkorDBLite files live under
+`Path.home() / ".cortext-harness" / "v1" / "instances" / <instance>` by
+default. Run `dev storage-init` after installation and `dev doctor` to verify
+the local backends. `CORTEX_DATA_HOME` is the supported portable/test override.
+
 ## Implementation Progress Summary
 
 This document summarizes the implementation progress of the 1-Click Context Menu Installer for CortexHarness across Windows, macOS, and Ubuntu platforms.

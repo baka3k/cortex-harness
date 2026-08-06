@@ -22,9 +22,13 @@ CLI_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = CLI_DIR.parent
 CODE_TINY = REPO_ROOT / "code-tiny"
 DOC_TINY = REPO_ROOT / "doc-tiny"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
+from cortex_harness.storage import StorageRole, resolve_storage, storage_overlay
+from cortex_harness.storage.config import LEGACY_REMOTE_KEYS
 from tools.jp1.sniff import is_jp1_file
 
 HARNESS_CONFIG_DIR = ".cortext-harness/config"
@@ -347,66 +351,42 @@ def _graph_provider(env: dict, scoped_key: str) -> str:
 
 
 def _env_to_neo4j_args(env: dict) -> list:
-    """For doc-tiny ingestor. Includes FalkorDB flags when selected."""
+    """Build doc-tiny graph arguments without synthesizing remote endpoints."""
     provider = _graph_provider(env, "DOC_GRAPH_PROVIDER")
     args = ["--graph-provider", provider]
     if provider == "falkordb":
+        if env.get("FALKORDB_PATH"):
+            args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
+        args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
+    else:
         args += [
-            "--falkordb-uri", env.get("FALKORDB_URI", ""),
-            "--falkordb-host", env.get("FALKORDB_HOST", "localhost"),
-            "--falkordb-port", str(env.get("FALKORDB_PORT", "6379")),
-            "--falkordb-user", env.get("FALKORDB_USER", ""),
-            "--falkordb-pass", env.get("FALKORDB_PASSWORD", ""),
-            "--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph"),
+            "--neo4j-uri", env.get("NEO4J_URI", "bolt://localhost:7687"),
+            "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
+            "--neo4j-pass", env.get("NEO4J_PASS", ""),
         ]
-        if str(env.get("FALKORDB_SSL", "")).lower() in {"1", "true", "yes", "on"}:
-            args.append("--falkordb-ssl")
-    args += [
-        "--neo4j-uri",  env.get("NEO4J_URI",  "bolt://localhost:7687"),
-        "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
-        "--neo4j-pass", env.get("NEO4J_PASS", ""),
-    ]
     return args
 
 
 def _neo4j_args_code(env: dict) -> list:
-    """For code-tiny analyzers. Includes provider-neutral graph flags."""
+    """Build code-tiny graph arguments for local FalkorDB or explicit Neo4j."""
     provider = _graph_provider(env, "CODE_GRAPH_PROVIDER")
     args = ["--graph-provider", provider]
     if provider == "falkordb":
+        if env.get("FALKORDB_PATH"):
+            args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
+        args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
+    else:
         args += [
-            "--falkordb-uri", env.get("FALKORDB_URI", ""),
-            "--falkordb-host", env.get("FALKORDB_HOST", "localhost"),
-            "--falkordb-port", str(env.get("FALKORDB_PORT", "6379")),
-            "--falkordb-user", env.get("FALKORDB_USER", ""),
-            "--falkordb-password", env.get("FALKORDB_PASSWORD", ""),
-            "--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph"),
+            "--neo4j-uri", env.get("NEO4J_URI", "bolt://localhost:7687"),
+            "--neo4j-user", env.get("NEO4J_USER", "neo4j"),
+            "--neo4j-password", env.get("NEO4J_PASS", ""),
         ]
-        if str(env.get("FALKORDB_SSL", "")).lower() in {"1", "true", "yes", "on"}:
-            args.append("--falkordb-ssl")
-    args += [
-        "--neo4j-uri",      env.get("NEO4J_URI",  "bolt://localhost:7687"),
-        "--neo4j-user",     env.get("NEO4J_USER", "neo4j"),
-        "--neo4j-password", env.get("NEO4J_PASS", ""),
-    ]
-    if env.get("NEO4J_DB"):
-        args += ["--neo4j-db", env["NEO4J_DB"]]
+        if env.get("NEO4J_DB"):
+            args += ["--neo4j-db", env["NEO4J_DB"]]
     return args
 
 
-def _env_to_qdrant_url(env: dict) -> str:
-    host = env.get("QDRANT_HOST", "localhost")
-    port = env.get("QDRANT_PORT", "6333")
-    return f"http://{host}:{port}"
-
-
-def _configured_qdrant_url(env: dict) -> str:
-    """Return a Qdrant URL only when vector storage was explicitly configured."""
-    if env.get("QDRANT_URL"):
-        return str(env["QDRANT_URL"])
-    if env.get("QDRANT_HOST") or env.get("QDRANT_PORT"):
-        return _env_to_qdrant_url(env)
-    return ""
+_REMOTE_STORAGE_KEYS = set(LEGACY_REMOTE_KEYS)
 
 
 def _code_qdrant_collection(env: dict, project: dict) -> str:
@@ -418,18 +398,54 @@ def _code_qdrant_collection(env: dict, project: dict) -> str:
     ).strip()
 
 
-def _code_env_for_process(cfg: dict) -> dict:
-    """Build process env values expected by code-tiny analyzers/MCP."""
+def _storage_targets(cfg: dict) -> tuple[str, str, str, str]:
+    """Resolve logical graph and collection targets independently from paths."""
+    project = cfg.get("project", {})
+    project_id = str(project.get("code") or "default").strip()
+    code_env = dict(cfg.get("code", {}).get("env", {}))
+    doc_env = dict(cfg.get("doc", {}).get("env", {}))
+    code_graph = str(code_env.get("FALKORDB_GRAPH") or code_env.get("NEO4J_DB") or project_id)
+    doc_graph = str(
+        doc_env.get("FALKORDB_GRAPH")
+        or doc_env.get("NEO4J_DB")
+        or f"{project_id}_doc"
+    )
+    code_collection = _code_qdrant_collection(code_env, project)
+    doc_collection = str(
+        doc_env.get("QDRANT_COLLECTION_DOC")
+        or doc_env.get("QDRANT_COLLECTION")
+        or f"{project_id}_doc"
+    )
+    return code_graph, doc_graph, code_collection, doc_collection
+
+
+def _storage_env_for_process(cfg: dict, project_root: Optional[Path], role: StorageRole) -> dict:
+    """Return the canonical owner-specific local storage environment."""
+    section = "doc" if role == StorageRole.DOCUMENT else "code"
+    env = dict(cfg.get(section, {}).get("env", {}))
+    code_graph, doc_graph, code_collection, doc_collection = _storage_targets(cfg)
+    resolved = resolve_storage(
+        Path(project_root or "."),
+        config=env,
+        code_graph=code_graph,
+        doc_graph=doc_graph,
+        code_collection=code_collection,
+        doc_collection=doc_collection,
+    )
+    return storage_overlay(resolved, owner=role)
+
+
+def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict:
+    """Build the code-owner process environment for analyzers and MCP."""
     project = cfg.get("project", {})
     env = dict(cfg.get("code", {}).get("env", {}))
-    if not env:
-        return {}
 
     collection = _code_qdrant_collection(env, project)
-    result = {k: str(v) for k, v in env.items() if v is not None}
-    qdrant_url = _configured_qdrant_url(env)
-    if qdrant_url:
-        result.setdefault("QDRANT_URL", qdrant_url)
+    result = {
+        k: str(v) for k, v in env.items()
+        if v is not None and k not in _REMOTE_STORAGE_KEYS
+    }
+    result.update(_storage_env_for_process(cfg, project_root, StorageRole.CODE))
     result.setdefault("QDRANT_COLLECTION", collection)
     result.setdefault("QDRANT_COLLECTION_CODE", collection)
     if env.get("EMBEDDING_MODEL"):
@@ -446,32 +462,41 @@ def _code_env_for_process(cfg: dict) -> dict:
     return result
 
 
-def _doc_env_for_process(cfg: dict) -> dict:
+def _doc_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict:
     env = dict(cfg.get("doc", {}).get("env", {}))
-    if not env:
-        return {}
-    result = {k: str(v) for k, v in env.items() if v is not None}
-    result.setdefault("QDRANT_URL", _env_to_qdrant_url(env))
+    result = {
+        k: str(v) for k, v in env.items()
+        if v is not None and k not in _REMOTE_STORAGE_KEYS
+    }
+    result.update(_storage_env_for_process(cfg, project_root, StorageRole.DOCUMENT))
     if env.get("EMBEDDING_MODEL"):
         result.setdefault("DOC_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
     # Per Phase 06 of the unified ingest/query contract plan, the doc
     # server's Qdrant collection is resolved through the ProjectRegistry
     # so it matches the doc graph name (``{project_id}_doc``) by default.
     # An explicit value in ``doc.env.QDRANT_COLLECTION`` still wins.
-    if "QDRANT_COLLECTION_DOC" not in result and "QDRANT_COLLECTION" not in result:
-        project_id = (cfg.get("project") or {}).get("code")
-        if project_id:
-            try:
-                # Local import — dev.py is part of the cortex_harness
-                # package; project_registry lives in code-tiny.
-                from tools.common.project_registry import resolve_project_targets
+    project_id = (cfg.get("project") or {}).get("code")
+    targets = None
+    if project_id:
+        try:
+            # Local import — dev.py is part of the cortex_harness package;
+            # project_registry lives in code-tiny.
+            from tools.common.project_registry import resolve_project_targets
 
-                targets = resolve_project_targets(project_id)
-            except Exception:
-                targets = None
-            if targets is not None:
-                result.setdefault("QDRANT_COLLECTION_DOC", targets.doc_qdrant_collection)
-                result.setdefault("FALKORDB_GRAPH", targets.doc_graph)
+            targets = resolve_project_targets(project_id)
+        except Exception:
+            targets = None
+        result.setdefault("PROJECT_ID", str(project_id))
+    doc_collection = result.get("QDRANT_COLLECTION_DOC") or result.get(
+        "QDRANT_COLLECTION"
+    )
+    if not doc_collection and targets is not None:
+        doc_collection = targets.doc_qdrant_collection
+    if doc_collection:
+        result.setdefault("QDRANT_COLLECTION_DOC", str(doc_collection))
+    if targets is not None and _graph_provider(result, "DOC_GRAPH_PROVIDER") == "falkordb":
+        result["FALKORDB_GRAPH"] = targets.doc_graph
+        result["NEO4J_DB"] = targets.doc_graph
     return result
 
 
@@ -494,9 +519,9 @@ def _mcp_env_from_config(project_dir: Path, service_name: str) -> dict:
     except (OSError, json.JSONDecodeError):
         return {}
     if service_name == "code-tiny":
-        return _code_env_for_process(cfg)
+        return _code_env_for_process(cfg, project_dir)
     if service_name == "doc-tiny":
-        return _doc_env_for_process(cfg)
+        return _doc_env_for_process(cfg, project_dir)
     return {}
 
 
@@ -853,14 +878,19 @@ def _sync_doc_folder(
     state = _load_state(project_path, f"doc:{folder}")
     mode  = force_mode if force_mode != "auto" else ("incremental" if state else "full")
 
-    qdrant_url   = _env_to_qdrant_url(env)
-    project_name = project.get("name", "project")
+    project_id = str(project.get("code") or project.get("name") or "project")
+    collection = str(
+        env.get("QDRANT_COLLECTION_DOC")
+        or env.get("QDRANT_COLLECTION")
+        or f"{project_id}_doc"
+    )
 
     base_cmd = [
         python, str(DOC_INGESTOR),
         *_env_to_neo4j_args(env),
-        "--qdrant-url",          qdrant_url,
-        "--collection",          project_name,
+        "--qdrant-path",         env["QDRANT_DOC_PATH"],
+        "--project-id",          project_id,
+        "--collection",          collection,
         "--entity-provider",     entity_provider,
         "--embedding-model",     env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
         "--embedding-device",    env.get("device", "cpu"),
@@ -887,7 +917,11 @@ def _sync_doc_folder(
             click.echo("  [warn] No supported document files found — skipping")
             return {"folder": folder, "status": "skipped", "reason": "no doc files"}
 
-        rc = _run_with_retry(base_cmd + ["--folder", str(folder_path)], dry_run=dry_run)
+        rc = _run_with_retry(
+            base_cmd + ["--folder", str(folder_path)],
+            dry_run=dry_run,
+            env=env,
+        )
         elapsed = time.time() - start_ts
 
         if rc == 0 and not dry_run:
@@ -937,7 +971,11 @@ def _sync_doc_folder(
         if not flag:
             continue
         click.echo(f"  [+] {file_path.name}")
-        rc = _run_with_retry(base_cmd + [flag, str(file_path)], dry_run=dry_run)
+        rc = _run_with_retry(
+            base_cmd + [flag, str(file_path)],
+            dry_run=dry_run,
+            env=env,
+        )
         if rc != 0:
             click.echo(f"    [error] exited {rc}")
             errors += 1
@@ -1157,7 +1195,6 @@ def _run_analyzer(
     verbose: bool,
 ) -> int:
     """Build and invoke one analyzer subprocess. Returns exit code."""
-    qdrant_url   = _env_to_qdrant_url(env)
     project_name = project.get("name", "project")
     project_id   = project.get("code", project_name)
     qdrant_collection = _code_qdrant_collection(env, project)
@@ -1167,7 +1204,6 @@ def _run_analyzer(
         python, str(analyzer),
         "--root",             str(folder_path),
         *_neo4j_args_code(env),
-        "--qdrant-url",        qdrant_url,
         "--qdrant-collection", qdrant_collection,
         "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
         "--device",            env.get("device", "cpu"),
@@ -1195,7 +1231,7 @@ def _run_analyzer(
     if verbose:
         cmd.append("--verbose")
 
-    rc = _run_with_retry(cmd, dry_run=dry_run)
+    rc = _run_with_retry(cmd, dry_run=dry_run, env=env)
 
     for m in (changed_manifest, deleted_manifest):
         if m and m.exists():
@@ -1521,10 +1557,11 @@ def cli():
       dev sync code all     # ALL analyzers on all folders (incremental if baseline)
       dev sync doc          # ingest documents -> Neo4j + Qdrant
       dev build             # create/sync the repository virtualenv
-      dev infra-up          # start Qdrant + FalkorDB from any directory
+      dev storage-init      # initialize centralized local Qdrant/FalkorDBLite storage
+      dev storage-layout    # show instance paths, manifest, and leases
       dev start             # open code-tiny + doc-tiny from any directory
       dev stop              # stop MCP processes started by dev/make start
-      dev doctor            # check local infrastructure from any directory
+      dev doctor            # check local storage from any directory
     """
 
 
@@ -1561,6 +1598,9 @@ def _run_lifecycle(action: str, arguments: Optional[list[str]] = None) -> None:
             "--collection": "-Collection",
             "--code-collection": "-CodeCollection",
             "--doc-collection": "-DocCollection",
+            "--legacy-root": "-LegacyRoot",
+            "--apply": "-Apply",
+            "--owner": "-Owner",
         }
         command.extend(windows_options.get(value, value) for value in arguments)
     else:
@@ -1623,11 +1663,33 @@ def infra_down():
 def storage_init():
     """Initialize local Qdrant and FalkorDBLite storage.
 
-    Resolves the active project root, creates the per-role Qdrant
-    subdirectories, opens and closes the embedded FalkorDBLite store,
-    and reports the logical targets.
+    Creates the centralized instance tree and versioned manifest.
     """
     _run_lifecycle("storage-init")
+
+
+@cli.command("storage-layout")
+def storage_layout():
+    """Show resolved local paths, manifest, and active owner leases."""
+    _run_lifecycle("storage-layout")
+
+
+@cli.command("storage-migrate-layout")
+@click.option("--legacy-root", type=click.Path(path_type=Path), default=REPO_ROOT, show_default=True)
+@click.option("--apply", is_flag=True, help="Copy and verify; the default is a dry-run.")
+def storage_migrate_layout(legacy_root: Path, apply: bool):
+    """Copy the repository-local legacy layout without deleting its source."""
+    arguments = ["--legacy-root", str(legacy_root)]
+    if apply:
+        arguments.append("--apply")
+    _run_lifecycle("storage-migrate-layout", arguments)
+
+
+@cli.command("storage-backup")
+@click.option("--owner", type=click.Choice(["code", "doc"]), default="code", show_default=True)
+def storage_backup(owner: str):
+    """Create a stopped-owner backup and verify copied content hashes."""
+    _run_lifecycle("storage-backup", ["--owner", owner])
 
 
 @cli.command("storage-stop")
@@ -1701,7 +1763,7 @@ def stop(name: Optional[str]):
 
 @cli.command()
 def doctor():
-    """Check Python, Docker, databases, and MCP ports."""
+    """Check Python 3.12, local storage backends, paths, and MCP ports."""
     _run_lifecycle("doctor")
 
 
@@ -1770,41 +1832,41 @@ def init(env, project_dir, path):
             })
             return provider, graph_env
 
-        falkordb_host = _p("FALKORDB_HOST", [section, "env", "FALKORDB_HOST"], "localhost")
-        falkordb_port = _p("FALKORDB_PORT", [section, "env", "FALKORDB_PORT"], "6379")
-        falkordb_ssl = _p("FALKORDB_SSL", [section, "env", "FALKORDB_SSL"], "false")
-        falkordb_uri = _p(
-            "FALKORDB_URI",
-            [section, "env", "FALKORDB_URI"],
-            f"redis://{falkordb_host}:{falkordb_port}",
-        )
         falkordb_graph = _p("FALKORDB_GRAPH", [section, "env", "FALKORDB_GRAPH"], graph_default)
-        falkordb_user = _p("FALKORDB_USER", [section, "env", "FALKORDB_USER"], "")
-        falkordb_pass = _p("FALKORDB_PASSWORD", [section, "env", "FALKORDB_PASSWORD"], "")
-        graph_env.update({
-            "FALKORDB_URI": falkordb_uri,
-            "FALKORDB_HOST": falkordb_host,
-            "FALKORDB_PORT": falkordb_port,
-            "FALKORDB_USER": falkordb_user,
-            "FALKORDB_PASSWORD": falkordb_pass,
-            "FALKORDB_GRAPH": falkordb_graph,
-            "FALKORDB_SSL": falkordb_ssl,
-            # Legacy aliases used by analyzers still accepting neo4j-* flags.
-            "NEO4J_URI": falkordb_uri,
-            "NEO4J_DB": falkordb_graph,
-            "NEO4J_USER": falkordb_user,
-            "NEO4J_PASS": falkordb_pass,
-        })
+        graph_env["FALKORDB_GRAPH"] = falkordb_graph
         return provider, graph_env
 
     click.echo("─── Project ────────────────────────────────")
     project_code = _p("Project code (short ID)", ["project", "code"], "my_project")
     project_name = _p("Project name",            ["project", "name"], project_code)
 
+    existing_code_env = existing.get("code", {}).get("env", {})
+    existing_doc_env = existing.get("doc", {}).get("env", {})
+    storage_instance_default = (
+        existing_code_env.get("CORTEX_STORAGE_INSTANCE")
+        or existing_doc_env.get("CORTEX_STORAGE_INSTANCE")
+        or "default"
+    )
+    data_home_default = (
+        existing_code_env.get("CORTEX_DATA_HOME")
+        or existing_doc_env.get("CORTEX_DATA_HOME")
+        or ""
+    )
+    click.echo("\n─── Local storage ──────────────────────────")
+    storage_instance = click.prompt(
+        "CORTEX_STORAGE_INSTANCE",
+        default=storage_instance_default,
+    )
+    data_home = click.prompt(
+        "CORTEX_DATA_HOME (blank = account default)",
+        default=data_home_default,
+    ).strip()
+    storage_env = {"CORTEX_STORAGE_INSTANCE": storage_instance}
+    if data_home:
+        storage_env["CORTEX_DATA_HOME"] = data_home
+
     click.echo("\n─── Code — Graph + Qdrant + Embedding ──────")
     code_provider, code_graph_env = _prompt_graph_env("code", "CODE_GRAPH_PROVIDER", project_code)
-    code_qdrant_host = _p("QDRANT_HOST",     ["code", "env", "QDRANT_HOST"],     "localhost")
-    code_qdrant_port = _p("QDRANT_PORT",     ["code", "env", "QDRANT_PORT"],     "6333")
     code_qdrant_collection = _p("QDRANT_COLLECTION", ["code", "env", "QDRANT_COLLECTION"], project_code)
     code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], "jinaai/jina-embeddings-v3")
     code_batch_size  = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],      "1")
@@ -1815,11 +1877,9 @@ def init(env, project_dir, path):
     _, doc_graph_env = _prompt_graph_env(
         "doc",
         "DOC_GRAPH_PROVIDER",
-        project_code,
+        f"{project_code}_doc",
         provider_default=code_provider,
     )
-    doc_qdrant_host = _p("QDRANT_HOST",     ["doc", "env", "QDRANT_HOST"],     code_qdrant_host)
-    doc_qdrant_port = _p("QDRANT_PORT",     ["doc", "env", "QDRANT_PORT"],     code_qdrant_port)
     doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], "BAAI/bge-m3")
     doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],      "1")
     doc_max_chars   = _p("MAX_EMBED_CHARS", ["doc", "env", "MAX_EMBED_CHARS"], "500")
@@ -1889,8 +1949,8 @@ def init(env, project_dir, path):
         "project": {"code": project_code, "name": project_name},
         "code": {
             "env": {
+                **storage_env,
                 **code_graph_env,
-                "QDRANT_HOST":     code_qdrant_host, "QDRANT_PORT": code_qdrant_port,
                 "QDRANT_COLLECTION": code_qdrant_collection,
                 "EMBEDDING_MODEL": code_embed_model, "BATCH_SIZE": code_batch_size,
                 "MAX_EMBED_CHARS": code_max_chars,   "device": code_device,
@@ -1899,8 +1959,8 @@ def init(env, project_dir, path):
         },
         "doc": {
             "env": {
+                **storage_env,
                 **doc_graph_env,
-                "QDRANT_HOST":     doc_qdrant_host, "QDRANT_PORT": doc_qdrant_port,
                 "EMBEDDING_MODEL": doc_embed_model, "BATCH_SIZE": doc_batch_size,
                 "MAX_EMBED_CHARS": doc_max_chars,   "device": doc_device,
             },
@@ -1952,11 +2012,25 @@ def status(project_dir):
     for section in ("code", "doc"):
         sec = cfg.get(section, {})
         env = sec.get("env", {})
+        process_env = (
+            _code_env_for_process(cfg, project_path)
+            if section == "code"
+            else _doc_env_for_process(cfg, project_path)
+        )
         src = sec.get("source", {})
         projects = _source_projects(src)
         click.echo(f"\n[{section}]")
-        click.echo(f"  Neo4j     : {env.get('NEO4J_URI')}  db={env.get('NEO4J_DB')}")
-        click.echo(f"  Qdrant    : {env.get('QDRANT_HOST')}:{env.get('QDRANT_PORT')}")
+        provider_key = "CODE_GRAPH_PROVIDER" if section == "code" else "DOC_GRAPH_PROVIDER"
+        provider = _graph_provider(env, provider_key)
+        if provider == "neo4j":
+            click.echo(f"  Neo4j     : {env.get('NEO4J_URI')}  db={env.get('NEO4J_DB')}")
+        else:
+            click.echo(
+                f"  FalkorDB  : {process_env.get('FALKORDB_PATH')}  "
+                f"graph={process_env.get('FALKORDB_GRAPH')}"
+            )
+        qdrant_key = "QDRANT_CODE_PATH" if section == "code" else "QDRANT_DOC_PATH"
+        click.echo(f"  Qdrant    : {process_env.get(qdrant_key)}")
         if section == "code":
             click.echo(f"  Collection: {_code_qdrant_collection(env, proj)}")
         click.echo(f"  Embedding : {env.get('EMBEDDING_MODEL')}  device={env.get('device')}")
@@ -2043,7 +2117,7 @@ def sync_code(
     cfg, _   = _load_active_config(project_path)
     code_cfg = cfg.get("code", {})
     env      = code_cfg.get("env", {})
-    process_env = _code_env_for_process(cfg)
+    process_env = _code_env_for_process(cfg, project_path)
     project  = cfg.get("project", {})
     folders  = _source_folders(code_cfg.get("source", {}))
 
@@ -2082,11 +2156,8 @@ def sync_code(
             "--lock-timeout-seconds", str(lock_timeout_seconds),
             "--submodules", submodules,
             "--summary-path", str(child_summary_path),
-            *_neo4j_args_code(env),
+            *_neo4j_args_code(process_env),
         ]
-        qdrant_url = _configured_qdrant_url(env)
-        if qdrant_url:
-            cmd += ["--qdrant-url", qdrant_url]
         if full_scan:
             cmd.append("--full-scan")
         if reconcile:
@@ -2138,7 +2209,7 @@ def sync_code_all(ctx):
     cfg, _       = _load_active_config(project_path)
     code_cfg     = cfg.get("code", {})
     env          = code_cfg.get("env", {})
-    process_env  = _code_env_for_process(cfg)
+    process_env  = _code_env_for_process(cfg, project_path)
     project      = cfg.get("project", {})
     folders      = _dedupe_scan_roots(_source_folders(code_cfg.get("source", {})), project_path)
 
@@ -2176,11 +2247,8 @@ def sync_code_all(ctx):
             "--lock-timeout-seconds", str(o["lock_timeout_seconds"]),
             "--submodules", o["submodules"],
             "--summary-path", str(child_summary_path),
-            *_neo4j_args_code(env),
+            *_neo4j_args_code(process_env),
         ]
-        qdrant_url = _configured_qdrant_url(env)
-        if qdrant_url:
-            cmd += ["--qdrant-url", qdrant_url]
         if o.get("full_scan"):
             cmd.append("--full-scan")
         if o.get("reconcile"):
@@ -2243,7 +2311,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
     project_path = Path(project_dir).resolve()
     cfg, _  = _load_active_config(project_path)
     doc_cfg = cfg.get("doc", {})
-    env     = doc_cfg.get("env", {})
+    env     = _doc_env_for_process(cfg, project_path)
     project = cfg.get("project", {})
     folders = _source_folders(doc_cfg.get("source", {}))
 
@@ -2294,7 +2362,7 @@ def sync_doc_all(ctx):
     project_path = Path(o["project_dir"]).resolve()
     cfg, _       = _load_active_config(project_path)
     doc_cfg      = cfg.get("doc", {})
-    env          = doc_cfg.get("env", {})
+    env          = _doc_env_for_process(cfg, project_path)
     project      = cfg.get("project", {})
     folders      = _source_folders(doc_cfg.get("source", {}))
 

@@ -116,7 +116,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--cobol-language-library", default=os.environ.get("COBOL_LANGUAGE_LIBRARY"))
     parser.add_argument("--copybook-root", action="append", default=[])
     parser.add_argument("--copybook-extension", action="append", default=[])
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION"))
     parser.add_argument("--embed-model", default=os.environ.get("EMBEDDING_MODEL"))
     parser.add_argument("--device", default="cpu")

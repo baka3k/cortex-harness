@@ -30,7 +30,10 @@ def test_matrix_covers_every_registered_primary_and_framework():
     primary = {row["name"]: row for row in matrix["primary_analyzers"]}
     frameworks = {row["name"]: row for row in matrix["framework_overlays"]}
 
-    assert set(primary) == set(ANALYZERS) == set(PRIMARY_SPECIAL_FILE_COVERAGE)
+    assert set(primary) == set(ANALYZERS)
+    # The registry also covers standalone descriptor formats such as INI and
+    # DAT, which do not have primary source analyzers of their own.
+    assert set(primary) <= set(PRIMARY_SPECIAL_FILE_COVERAGE)
     assert (
         set(frameworks)
         == set(FRAMEWORK_ANALYZERS)

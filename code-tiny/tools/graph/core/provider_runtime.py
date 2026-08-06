@@ -19,16 +19,9 @@ from tools.graph.cli import (
 
 
 def add_graph_provider_arguments(parser: argparse.ArgumentParser) -> None:
-    """Register the canonical graph arguments plus the legacy username alias."""
+    """Register the canonical local graph-provider arguments."""
 
     add_graph_provider_args(parser)
-    if not any("--falkordb-username" in action.option_strings for action in parser._actions):
-        parser.add_argument(
-            "--falkordb-username",
-            dest="falkordb_user",
-            default=argparse.SUPPRESS,
-            help=argparse.SUPPRESS,
-        )
 
 
 __all__ = [

@@ -8,19 +8,10 @@
     "env": {
       "GRAPH_PROVIDER": "falkordb",
       "CODE_GRAPH_PROVIDER": "falkordb",
-      "FALKORDB_URI": "redis://localhost:6379",
-      "FALKORDB_HOST": "localhost",
-      "FALKORDB_PORT": "6379",
-      "FALKORDB_USER": "",
-      "FALKORDB_PASSWORD": "",
+      "CORTEX_STORAGE_INSTANCE": "default",
+      "CORTEX_CODE_STORAGE_OWNER": "code",
       "FALKORDB_GRAPH": "cortext",
-      "FALKORDB_SSL": "false",
-      "NEO4J_URI": "redis://localhost:6379",
       "NEO4J_DB": "cortext",
-      "NEO4J_USER": "",
-      "NEO4J_PASS": "",
-      "QDRANT_HOST": "localhost",
-      "QDRANT_PORT": "6333",
       "QDRANT_COLLECTION": "cortext",
       "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
       "BATCH_SIZE": "1",
@@ -32,7 +23,7 @@
         {
           "git": "",
           "folder": [
-            "/Users/hieplq1.rpm/AI/cortex-harness"
+            "."
           ]
         }
       ]
@@ -42,19 +33,10 @@
     "env": {
       "GRAPH_PROVIDER": "falkordb",
       "DOC_GRAPH_PROVIDER": "falkordb",
-      "FALKORDB_URI": "redis://localhost:6379",
-      "FALKORDB_HOST": "localhost",
-      "FALKORDB_PORT": "6379",
-      "FALKORDB_USER": "",
-      "FALKORDB_PASSWORD": "",
+      "CORTEX_STORAGE_INSTANCE": "default",
+      "CORTEX_DOC_STORAGE_OWNER": "doc",
       "FALKORDB_GRAPH": "cortext_doc",
-      "FALKORDB_SSL": "false",
-      "NEO4J_URI": "redis://localhost:6379",
-      "NEO4J_DB": "cortext",
-      "NEO4J_USER": "",
-      "NEO4J_PASS": "",
-      "QDRANT_HOST": "localhost",
-      "QDRANT_PORT": "6333",
+      "NEO4J_DB": "cortext_doc",
       "QDRANT_COLLECTION": "cortext_doc",
       "EMBEDDING_MODEL": "BAAI/bge-m3",
       "BATCH_SIZE": "1",

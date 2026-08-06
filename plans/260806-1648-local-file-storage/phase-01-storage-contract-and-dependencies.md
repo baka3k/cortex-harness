@@ -146,14 +146,14 @@ between owners.
 
 ## Todo
 
-- [ ] Pin and verify FalkorDBLite package/API and supported platforms.
-- [ ] Raise Python requirement and installer checks.
-- [ ] Add versioned data-root, instance, and owner configuration.
-- [ ] Split FalkorDB paths by code/document owner.
-- [ ] Replace interactive host/port prompts with path prompts.
-- [ ] Update runtime environment resolution.
-- [ ] Add dry-run/copy/verify layout migration.
-- [ ] Add Git ignores and configuration tests.
+- [x] Pin and verify FalkorDBLite package/API and supported platforms.
+- [x] Raise Python requirement and installer checks.
+- [x] Add versioned data-root, instance, and owner configuration.
+- [x] Split FalkorDB paths by code/document owner.
+- [x] Replace interactive host/port prompts with path prompts.
+- [x] Update runtime environment resolution.
+- [x] Add dry-run/copy/verify layout migration.
+- [x] Add Git ignores and configuration tests.
 
 ## Risks
 

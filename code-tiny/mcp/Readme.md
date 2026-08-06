@@ -271,7 +271,7 @@ Select tool `search_functions` and send:
 ```json
 {
   "query": "AuthManager|validateToken",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "limit": "20",
   "project_id": "hypergraph"
 }
@@ -304,7 +304,7 @@ step 5:
 ```json
 {
   "function_id": "validateToken/1@src/auth/AuthManager.java",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "direction": "all",
   "max_depth": 2,
   "project_id": "hypergraph"
@@ -489,7 +489,7 @@ export FASTMCP_STREAMABLE_HTTP_PATH=/mcp
 | Node/function ID       | `"validateToken/1@src/auth/AuthManager.java"` | Stable graph identifier, not just a display name | Copy from search, path, or subgraph results                      |
 | Module/path token      | `"src/auth"`                                  | Substring matched against indexed file paths     | Use a repository directory or filename fragment                  |
 | `project_id`           | `"hypergraph"`                                | Ingestion scope inside a shared graph            | Copy from ingestion config/result or an existing node payload    |
-| `db`                   | `"hyper_graph"`                               | FalkorDB graph name or Neo4j database name       | Use `list_databases`; current default runtime uses `hyper_graph` |
+| `project_id`                   | `"hyper_graph"`                               | FalkorDB graph name or Neo4j database name       | Use `list_databases`; current default runtime uses `hyper_graph` |
 | Qdrant `collection`    | `"hypergraph_73eddc5fcc__python_functions"`   | Vector collection to search                      | Use `list_qdrant_collections`                                    |
 | `parser_type`          | `"cplus"`                                     | Selects the routed backend                       | Use `list_parsers` and the routing table below                   |
 
@@ -507,7 +507,7 @@ Good:
 {
   "query": "AuthManager",
   "parser_type": "python",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "limit": "20"
 }
 ```
@@ -594,7 +594,7 @@ Fullstack tools use separate scopes:
   "http_method": "GET",
   "fe_project_id": "web-client",
   "be_project_id": "user-service",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -766,7 +766,7 @@ Input:
 | Field         | Required | Type  | Meaning                                                    |
 | ------------- | -------- | ----- | ---------------------------------------------------------- |
 | `parser_type` | No       | `str` | Parser profile; uses the active profile when omitted.      |
-| `db`          | No       | `str` | FalkorDB graph name or Neo4j database name.                |
+| `project_id`          | No       | `str` | FalkorDB graph name or Neo4j database name.                |
 
 Output: Advertised/effective support for `symbols`, `calls`, `endpoints`, and
 `database`; schema status/fingerprint; missing contract evidence; and a
@@ -793,7 +793,7 @@ public `query_engine`.
 Use when:
 
 - Running several related calls against the same project/database.
-- Avoiding repeated `parser_type` and `db` parameters.
+- Avoiding repeated `parser_type` and `project_id` parameters.
 - Switching between parser profiles and graph query engines.
 
 Example:
@@ -821,7 +821,7 @@ Output: Dict with graph/database names, or a provider connection error.
 
 Use when:
 
-- You do not know the correct `db` value.
+- You do not know the correct `project_id` value.
 - You need to verify graph-provider connectivity.
 - You are switching between indexed environments.
 
@@ -842,7 +842,7 @@ Input:
 | Field             | Required | Type   | Meaning                                                                |
 | ----------------- | -------- | ------ | ---------------------------------------------------------------------- |
 | `parser_type`     | No       | `str`  | Backend alias.                                                         |
-| `db`              | No       | `str`  | Graph name/database context. Use `hyper_graph` in the current runtime. |
+| `project_id`              | No       | `str`  | Graph name/database context. Use `hyper_graph` in the current runtime. |
 | `qdrant_url`      | No       | `str`  | Qdrant HTTP URL, defaults to `QDRANT_URL` or `http://localhost:6333`.  |
 | `include_vectors` | No       | `bool` | Include vector metadata when supported.                                |
 
@@ -878,7 +878,7 @@ Input:
 | `query`      | Yes      | `str`  | Natural language query. English and Vietnamese are supported. |
 | `mode`       | No       | `str`  | `semantic`, `hybrid`, or `graph_expanded`. Default: `hybrid`. |
 | `top_k`      | No       | `str`  | Max matched nodes. Default: `10`.                             |
-| `db`         | No       | `str`  | Database override used by graph-assisted modes.               |
+| `project_id`         | No       | `str`  | Database override used by graph-assisted modes.               |
 | `collection` | No       | `str`  | Qdrant collection override.                                   |
 | `project_id` | No       | `str`  | Case-insensitive project scope for every retrieval and expansion stage. |
 | `debug`      | No       | `bool` | Include per-signal scoring details.                           |
@@ -927,7 +927,7 @@ Input:
 | ------------- | -------- | ----- | ---------------------------------------------------------------------- |
 | `query`       | Yes      | `str` | Natural language query or code snippet.                                |
 | `parser_type` | No       | `str` | Backend alias.                                                         |
-| `db`          | No       | `str` | Graph name/database context. Use `hyper_graph` in the current runtime. |
+| `project_id`          | No       | `str` | Graph name/database context. Use `hyper_graph` in the current runtime. |
 | `top_k`       | No       | `str` | Number of results.                                                     |
 | `collection`  | No       | `str` | Qdrant collection or project collection prefix.                        |
 | `project_id`  | No       | `str` | Case-insensitive project scope for indexed data.                       |
@@ -973,14 +973,14 @@ Input:
 | --------------- | -------- | ------ | ---------------------------------------------------------- | ------------------------ |
 | `query`         | Yes      | `str`  | Search terms. Backend catalog supports `termA              | termB` for alternatives. |
 | `parser_type`   | No       | `str`  | Backend alias.                                             |
-| `db`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `limit`         | No       | `str`  | Max results.                                               |
 | `node_type`     | No       | `str`  | `code` or `doc`.                                           |
 | `expand_search` | No       | `bool` | Include compact cross-domain context when supported.       |
 | `project_id`    | No       | `str`  | Project scope.                                             |
 
 Output: Dict with `functions` or backend fields such as `results`, `ids`, and
-`db`. Results include node IDs for follow-up calls.
+`project_id`. Results include node IDs for follow-up calls.
 
 Use when:
 
@@ -996,7 +996,7 @@ Example:
   "query": "handleLogin|AuthManager",
   "limit": "20",
   "parser_type": "cplus",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1011,7 +1011,7 @@ Input:
 | --------------- | -------- | ------ | --------------------------------------------------------------- |
 | `query`         | Yes      | `str`  | Code text to match. Backend search is generally case-sensitive. |
 | `parser_type`   | No       | `str`  | Backend alias.                                                  |
-| `db`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`.      |
+| `project_id`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`.      |
 | `limit`         | No       | `str`  | Max results.                                                    |
 | `node_type`     | No       | `str`  | `code` or `doc`.                                                |
 | `expand_search` | No       | `bool` | Include compact cross-domain context when supported.            |
@@ -1031,7 +1031,7 @@ Example:
 ```json
 {
   "query": "DataNormal|Authen|Login|SignIn|Account",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "limit": "500"
 }
 ```
@@ -1048,7 +1048,7 @@ Input:
 | ------------- | -------- | ----- | ---------------------------------------------------------- |
 | `node_id`     | Yes      | `str` | Node ID from search results.                               |
 | `parser_type` | No       | `str` | Backend alias.                                             |
-| `db`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `node_type`   | No       | `str` | Optional domain filter: `code` or `doc`.                   |
 | `project_id`  | No       | `str` | Project scope.                                             |
 
@@ -1067,7 +1067,7 @@ Example:
 ```json
 {
   "node_id": "func_12345",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1082,7 +1082,7 @@ Input:
 | ------------- | -------- | ----- | ---------------------------------------------------------------------------------------------------- |
 | `node_ids`    | Yes      | `str` | One ID or a comma/semicolon-separated string of IDs. Backend also accepts lists after normalization. |
 | `parser_type` | No       | `str` | Backend alias.                                                                                       |
-| `db`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`.                                           |
+| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`.                                           |
 | `node_type`   | No       | `str` | Optional domain filter.                                                                              |
 | `project_id`  | No       | `str` | Project scope.                                                                                       |
 
@@ -1099,7 +1099,7 @@ Example:
 ```json
 {
   "node_ids": "func_1,func_2,func_3",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1114,7 +1114,7 @@ Input:
 | --------------- | -------- | ------ | ---------------------------------------------------------------------------------------- |
 | `function_id`   | Yes      | `str`  | Starting function/symbol node ID.                                                        |
 | `parser_type`   | No       | `str`  | Backend alias.                                                                           |
-| `db`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`.                               |
+| `project_id`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`.                               |
 | `limit`         | No       | `str`  | Optional backend result cap.                                                             |
 | `node_type`     | No       | `str`  | Optional domain filter.                                                                  |
 | `expand_search` | No       | `bool` | Include compact cross-domain bridge context when supported.                              |
@@ -1139,7 +1139,7 @@ Example:
   "function_id": "func_main",
   "direction": "out",
   "max_depth": 3,
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1154,7 +1154,7 @@ Input:
 | `start_function_id` | Yes      | `str`  | Starting function ID.                                      |
 | `end_function_id`   | Yes      | `str`  | Target function ID.                                        |
 | `parser_type`       | No       | `str`  | Backend alias.                                             |
-| `db`                | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`                | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `limit`             | No       | `str`  | Optional max result count.                                 |
 | `node_type`         | No       | `str`  | Optional domain filter.                                    |
 | `expand_search`     | No       | `bool` | Include bridge context when supported.                     |
@@ -1192,7 +1192,7 @@ Input:
 | `source_module` | Yes      | `str` | Source file/module token.                                  |
 | `target_module` | Yes      | `str` | Target file/module token.                                  |
 | `parser_type`   | No       | `str` | Backend alias.                                             |
-| `db`            | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`            | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `limit`         | No       | `str` | Max paths.                                                 |
 | `project_id`    | No       | `str` | Project scope.                                             |
 
@@ -1228,7 +1228,7 @@ Input:
 | `modules`     | No       | `List[str]` | Explicit list of path tokens.                              |
 | `node_types`  | No       | `List[str]` | Optional filters such as `Function`, `Class`, or `Type`.   |
 | `parser_type` | No       | `str`       | Backend alias.                                             |
-| `db`          | No       | `str`       | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`          | No       | `str`       | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `project_id`  | No       | `str`       | Project scope.                                             |
 
 At least one of `file_path` or `modules` is required.
@@ -1262,7 +1262,7 @@ Input:
 | ------------- | -------- | ----- | ------------------------------------------------------------ |
 | `class_name`  | Yes      | `str` | Class/type name pattern. Routed to backend as `class_names`. |
 | `parser_type` | No       | `str` | Backend alias.                                               |
-| `db`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`.   |
+| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`.   |
 | `project_id`  | No       | `str` | Project scope.                                               |
 
 Output: Dict with `functions` or backend-specific class/method structure.
@@ -1278,7 +1278,7 @@ Example:
 ```json
 {
   "class_name": "AuthManager",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1294,7 +1294,7 @@ Input:
 | `modules`     | Yes      | `List[str]` | Module/file path tokens.                                                                         |
 | `module`      | No       | `str`       | Single-module alias for clients that cannot pass lists.                                          |
 | `parser_type` | No       | `str`       | Backend alias.                                                                                   |
-| `db`          | Yes      | `str`       | Graph name/database. The wrapper advertises legacy `neo4j`; pass `hyper_graph` in FalkorDB mode. |
+| `project_id`          | Yes      | `str`       | Graph name/database. The wrapper advertises legacy `neo4j`; pass `hyper_graph` in FalkorDB mode. |
 | `project_id`  | No       | `str`       | Project scope.                                                                                   |
 
 Output: Dict with `entrypoints`. If required fields are missing, returns
@@ -1312,7 +1312,7 @@ Example:
 ```json
 {
   "modules": ["src/api"],
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1327,7 +1327,7 @@ Input:
 | ------------- | -------- | ----- | ---------------------------------------------------------- |
 | `function_id` | No       | `str` | Optional function to scope the indirect-call lookup.       |
 | `parser_type` | No       | `str` | Backend alias.                                             |
-| `db`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `limit`       | No       | `str` | Max results.                                               |
 | `project_id`  | No       | `str` | Project scope.                                             |
 
@@ -1361,7 +1361,7 @@ Input:
 | `note`        | No       | `str` | Free-form note.                                            |
 | `tags`        | No       | `str` | Comma-separated tags.                                      |
 | `parser_type` | No       | `str` | Backend alias.                                             |
-| `db`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `project_id`  | No       | `str` | Project scope.                                             |
 
 Output: Dict with updated node/annotation data.
@@ -1396,7 +1396,7 @@ Input:
 | `start_id`    | Yes      | `str` | Start function/symbol ID.                                  |
 | `direction`   | No       | `str` | Direction filter, backend-specific.                        |
 | `parser_type` | No       | `str` | Backend alias.                                             |
-| `db`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `limit`       | No       | `str` | Max results.                                               |
 | `project_id`  | No       | `str` | Project scope.                                             |
 
@@ -1432,7 +1432,7 @@ Input:
 | `source_module` | Yes      | `str` | Source module/file token.                                  |
 | `target_module` | Yes      | `str` | Target module/file token.                                  |
 | `parser_type`   | No       | `str` | Backend alias.                                             |
-| `db`            | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`            | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `limit`         | No       | `str` | Max results.                                               |
 | `project_id`    | No       | `str` | Project scope.                                             |
 
@@ -1569,7 +1569,7 @@ Input:
 | ---------------- | -------- | ----- | ---------------------------------------- |
 | `modules`        | Yes      | `str` | Comma/semicolon-separated module tokens. |
 | `parser_type`    | No       | `str` | Backend alias.                           |
-| `db`             | No       | `str` | Database.                                |
+| `project_id`             | No       | `str` | Database.                                |
 | `edge_semantics` | No       | `str` | Default: `depends_on`.                   |
 | `on_cycle`       | No       | `str` | Default: `auto_condense_scc`.            |
 
@@ -1587,7 +1587,7 @@ Example:
 ```json
 {
   "modules": "auth,payment",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1602,7 +1602,7 @@ Input:
 | ---------------------- | -------- | ------ | ---------------------------------------- |
 | `modules`              | Yes      | `str`  | Comma/semicolon-separated module tokens. |
 | `parser_type`          | No       | `str`  | Backend alias.                           |
-| `db`                   | No       | `str`  | Database.                                |
+| `project_id`                   | No       | `str`  | Database.                                |
 | `edge_semantics`       | No       | `str`  | Default: `depends_on`.                   |
 | `on_cycle`             | No       | `str`  | Default: `auto_condense_scc`.            |
 | `include_cross_module` | No       | `bool` | Include cross-module edges.              |
@@ -1623,7 +1623,7 @@ Example:
 ```json
 {
   "modules": "auth,payment",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "include_cross_module": true
 }
 ```
@@ -1639,7 +1639,7 @@ Input:
 | -------------------------- | -------- | ------ | ----------------------------------------------------- |
 | `modules`                  | Yes      | `str`  | Comma/semicolon-separated module tokens.              |
 | `parser_type`              | No       | `str`  | Backend alias.                                        |
-| `db`                       | No       | `str`  | Database.                                             |
+| `project_id`                       | No       | `str`  | Database.                                             |
 | `edge_semantics`           | No       | `str`  | Default: `depends_on`.                                |
 | `on_cycle`                 | No       | `str`  | Default: `auto_condense_scc`.                         |
 | `include_cross_module`     | No       | `bool` | Include cross-module edges.                           |
@@ -1661,7 +1661,7 @@ Example:
 ```json
 {
   "modules": "auth,payment",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "include_cross_module": true,
   "include_lambdas": false
 }
@@ -1686,7 +1686,7 @@ Input:
 | `max_paths`              | No       | `int`  | Max workflows. Default: `100`.                                       |
 | `include_entry_function` | No       | `bool` | Reserved/optional entry metadata.                                    |
 | `include_api_calls`      | No       | `bool` | Reserved/optional API metadata.                                      |
-| `db`                     | No       | `str`  | Database.                                                            |
+| `project_id`                     | No       | `str`  | Database.                                                            |
 | `parser_type`            | No       | `str`  | Backend alias.                                                       |
 
 Output: Dict with `mode`, `direction`, `project_id`, `resolved`,
@@ -1706,7 +1706,7 @@ Example:
   "project_id": "my-app",
   "node_a": "RewardHome",
   "node_b": "GoldTransfer",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "max_hops": 8
 }
 ```
@@ -1721,7 +1721,7 @@ Input:
 | Field         | Required | Type  | Meaning                                                              |
 | ------------- | -------- | ----- | -------------------------------------------------------------------- |
 | `function_id` | Yes      | `str` | Symbol ID or function/screen ID.                                     |
-| `db`          | No       | `str` | Neo4j database used by the workflow-scoring layer. Default: `neo4j`. |
+| `project_id`          | No       | `str` | Neo4j database used by the workflow-scoring layer. Default: `neo4j`. |
 | `direction`   | No       | `str` | `downstream` or `upstream`. Default: `downstream`.                   |
 | `max_depth`   | No       | `int` | CALLS traversal depth, capped at `4`.                                |
 
@@ -1748,7 +1748,7 @@ Example:
 ```json
 {
   "function_id": "func_123",
-  "db": "neo4j",
+  "project_id": "neo4j",
   "direction": "downstream",
   "max_depth": 4
 }
@@ -1764,7 +1764,7 @@ Input:
 | Field              | Required | Type   | Meaning                                                 |
 | ------------------ | -------- | ------ | ------------------------------------------------------- |
 | `function_id`      | Yes      | `str`  | Symbol ID or file path anchor.                          |
-| `db`               | No       | `str`  | Neo4j database. Default: `neo4j`.                       |
+| `project_id`               | No       | `str`  | Neo4j database. Default: `neo4j`.                       |
 | `include_indirect` | No       | `bool` | Include CALLS-chain derived workflows. Default: `true`. |
 | `max_depth`        | No       | `int`  | Indirect traversal cap, capped at `4`.                  |
 
@@ -1785,7 +1785,7 @@ Example:
 ```json
 {
   "function_id": "func_123",
-  "db": "neo4j",
+  "project_id": "neo4j",
   "include_indirect": true,
   "max_depth": 4
 }
@@ -1805,7 +1805,7 @@ Input:
 | `sender`      | No       | `str` | Sender component pattern.                                  |
 | `receiver`    | No       | `str` | Receiver component pattern.                                |
 | `parser_type` | No       | `str` | Backend alias.                                             |
-| `db`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
+| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
 | `project_id`  | No       | `str` | Project scope.                                             |
 
 Output: Dict with `messages`, sender/receiver lists, or backend-specific IPC
@@ -1823,7 +1823,7 @@ Example:
 {
   "sender": "Activity",
   "receiver": "Service",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "project_id": "digital_key_main"
 }
 ```
@@ -1841,7 +1841,7 @@ Input:
 | `http_method`   | No       | `str` | `GET`, `POST`, `PUT`, `DELETE`, `ALL`, or empty for any. Default: `GET`. |
 | `be_project_id` | No       | `str` | Case-insensitive backend project scope.                                  |
 | `fe_project_id` | No       | `str` | Case-insensitive frontend project scope.                                 |
-| `db`            | No       | `str` | Graph database or graph name; uses active/default context.               |
+| `project_id`            | No       | `str` | Graph database or graph name; uses active/default context.               |
 
 Output: Dict with `endpoint_path`, `callers`, and `total`. Each caller
 contains function name, qualified name, React role, file path, line number,
@@ -1864,7 +1864,7 @@ Example:
   "http_method": "GET",
   "be_project_id": "backend",
   "fe_project_id": "frontend",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1882,7 +1882,7 @@ Input:
 | `fe_project_id`  | No       | `str` | Case-insensitive frontend project scope.                         |
 | `be_project_id`  | No       | `str` | Case-insensitive backend project scope.                          |
 | `max_depth`      | No       | `str` | Max frontend `CALLS` hops. Default: `5`.                         |
-| `db`             | No       | `str` | Graph database or graph name; uses active/default context.       |
+| `project_id`             | No       | `str` | Graph database or graph name; uses active/default context.       |
 
 Output: Dict with `chains` and `total`. Each chain can include frontend
 component/caller, API call, backend endpoint, controller, service, repository,
@@ -1906,7 +1906,7 @@ Example:
   "fe_project_id": "frontend",
   "be_project_id": "backend",
   "max_depth": "5",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -1925,7 +1925,7 @@ Input:
 | Field                  | Required | Type    | Meaning                                                 |
 | ---------------------- | -------- | ------- | ------------------------------------------------------- |
 | `anchor_id`            | Yes      | `str`   | Code or document anchor ID.                             |
-| `db`                   | No       | `str`   | FalkorDB graph name or Neo4j database name.             |
+| `project_id`                   | No       | `str`   | FalkorDB graph name or Neo4j database name.             |
 | `direction`            | No       | `str`   | `out`, `in`, or `both`. Default: `both`.                |
 | `include_node_details` | No       | `bool`  | Include linked node details.                            |
 | `min_score`            | No       | `float` | Minimum link score. `0.0` uses no score filter.         |
@@ -1961,7 +1961,7 @@ Input:
 | ---------------- | -------- | ------- | ------------------------------------------------------- |
 | `node_id`        | No       | `str`   | Code node ID.                                           |
 | `qualified_name` | No       | `str`   | Symbol qualified name. Used when `node_id` is unknown.  |
-| `db`             | No       | `str`   | FalkorDB graph name or Neo4j database name.             |
+| `project_id`             | No       | `str`   | FalkorDB graph name or Neo4j database name.             |
 | `min_score`      | No       | `float` | Minimum link score.                                     |
 | `status_filter`  | No       | `str`   | Link status filter.                                     |
 | `limit`          | No       | `int`   | Max links. `0` means backend default/no explicit limit. |
@@ -1995,7 +1995,7 @@ Input:
 | Field                  | Required | Type    | Meaning                                            |
 | ---------------------- | -------- | ------- | -------------------------------------------------- |
 | `source_file`          | Yes      | `str`   | Document source path, for example `docs/spec.pdf`. |
-| `db`                   | No       | `str`   | FalkorDB graph name or Neo4j database name.        |
+| `project_id`                   | No       | `str`   | FalkorDB graph name or Neo4j database name.        |
 | `min_score`            | No       | `float` | Minimum link score.                                |
 | `status_filter`        | No       | `str`   | Link status filter.                                |
 | `include_node_details` | No       | `bool`  | Include code/document node details.                |
@@ -2029,7 +2029,7 @@ Input:
 
 | Field        | Required | Type  | Meaning                                     |
 | ------------ | -------- | ----- | ------------------------------------------- |
-| `db`         | No       | `str` | FalkorDB graph name or Neo4j database name. |
+| `project_id`         | No       | `str` | FalkorDB graph name or Neo4j database name. |
 | `min_links`  | No       | `int` | Minimum links required. Default: `1`.       |
 | `limit`      | No       | `int` | Max documents.                              |
 | `project_id` | No       | `str` | Project scope.                              |
@@ -2061,7 +2061,7 @@ Input:
 
 | Field        | Required | Type  | Meaning                                                                     |
 | ------------ | -------- | ----- | --------------------------------------------------------------------------- |
-| `db`         | No       | `str` | FalkorDB graph name or Neo4j database name. Uses active context when empty. |
+| `project_id`         | No       | `str` | FalkorDB graph name or Neo4j database name. Uses active context when empty. |
 | `limit`      | No       | `int` | Maximum documents. `0` means no explicit limit.                             |
 | `project_id` | No       | `str` | Restrict results to one project.                                            |
 
@@ -2085,7 +2085,7 @@ Example:
 
 ```json
 {
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "limit": 100,
   "project_id": "hypergraph"
 }
@@ -2112,7 +2112,7 @@ Input:
 
 | Field             | Required | Type   | Meaning                                     |
 | ----------------- | -------- | ------ | ------------------------------------------- |
-| `db`              | No       | `str`  | FalkorDB graph name or Neo4j database name. |
+| `project_id`              | No       | `str`  | FalkorDB graph name or Neo4j database name. |
 | `include_orphans` | No       | `bool` | Count orphaned edges. Default: `true`.      |
 | `project_id`      | No       | `str`  | Project scope.                              |
 
@@ -2145,7 +2145,7 @@ Input:
 | `start_node_id` | Yes      | `str`   | Starting node ID.                           |
 | `max_hops`      | No       | `int`   | Hop count, usually 1 to 5. Default: `3`.    |
 | `direction`     | No       | `str`   | `out`, `in`, or `both`. Default: `both`.    |
-| `db`            | No       | `str`   | FalkorDB graph name or Neo4j database name. |
+| `project_id`            | No       | `str`   | FalkorDB graph name or Neo4j database name. |
 | `limit`         | No       | `int`   | Max paths. Default: `50`.                   |
 | `min_score`     | No       | `float` | Minimum link score.                         |
 | `project_id`    | No       | `str`   | Project scope.                              |
@@ -2180,7 +2180,7 @@ Input:
 | ----------------- | -------- | ----------- | -------------------------------------------------------------------------------- |
 | `source_file`     | Yes      | `str`       | Source code or document file path.                                               |
 | `node_types`      | No       | `List[str]` | Restrict to node types, for example `p` or `h` for document paragraphs/headings. |
-| `db`              | No       | `str`       | FalkorDB graph name or Neo4j database name.                                      |
+| `project_id`              | No       | `str`       | FalkorDB graph name or Neo4j database name.                                      |
 | `include_anchors` | No       | `bool`      | Include full anchor records. Default: `true`.                                    |
 | `limit`           | No       | `int`       | Max anchors.                                                                     |
 | `project_id`      | No       | `str`       | Project scope.                                                                   |
@@ -2215,7 +2215,7 @@ Input:
 | ------------------------- | -------- | ------- | --------------------------------------------------------------------- |
 | `sample_size`             | No       | `int`   | Number of links to validate. Default: `100`.                          |
 | `accept_threshold`        | No       | `float` | Minimum accepted score. `0.0` lets backend use env/default threshold. |
-| `db`                      | No       | `str`   | FalkorDB graph name or Neo4j database name.                           |
+| `project_id`                      | No       | `str`   | FalkorDB graph name or Neo4j database name.                           |
 | `check_nodes`             | No       | `bool`  | Check node existence. Default: `true`.                                |
 | `include_failure_details` | No       | `bool`  | Include detailed failures. Default: `true`.                           |
 | `project_id`              | No       | `str`   | Project scope.                                                        |
@@ -2263,7 +2263,7 @@ the default FalkorDB runtime because discovery starts in Qdrant.
      "collection": "hypergraph_73eddc5fcc__python_functions",
      "top_k": "10",
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2273,7 +2273,7 @@ the default FalkorDB runtime because discovery starts in Qdrant.
    {
      "node_id": "processPayment/2@src/payment/service.py",
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2285,7 +2285,7 @@ the default FalkorDB runtime because discovery starts in Qdrant.
      "direction": "all",
      "max_depth": 2,
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2304,7 +2304,7 @@ Situation: you know `validateToken` but do not know its graph ID.
      "query": "validateToken|AuthManager",
      "limit": "20",
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2314,7 +2314,7 @@ Situation: you know `validateToken` but do not know its graph ID.
    {
      "node_id": "validateToken/1@src/auth/AuthManager.java",
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2326,7 +2326,7 @@ Situation: you know `validateToken` but do not know its graph ID.
      "direction": "in",
      "max_depth": 3,
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2337,7 +2337,7 @@ Situation: you know `validateToken` but do not know its graph ID.
      "function_id": "validateToken/1@src/auth/AuthManager.java",
      "limit": "100",
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2355,7 +2355,7 @@ Use provider-aware graph tools for a concrete impact set:
      "direction": "all",
      "max_depth": 3,
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2367,7 +2367,7 @@ Use provider-aware graph tools for a concrete impact set:
      "direction": "downstream",
      "limit": "50",
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2377,7 +2377,7 @@ Use provider-aware graph tools for a concrete impact set:
    {
      "node_ids": "caller_1,caller_2,dependency_1",
      "project_id": "hypergraph",
-     "db": "hyper_graph"
+     "project_id": "hyper_graph"
    }
    ```
 
@@ -2390,7 +2390,7 @@ Use this when workflow nodes and edges exist in the active graph provider:
    ```json
    {
      "function_id": "processPayment/2@src/payment/service.py",
-    "db": "hyper_graph",
+    "project_id": "hyper_graph",
      "include_indirect": true,
      "max_depth": 4
    }
@@ -2401,7 +2401,7 @@ Use this when workflow nodes and edges exist in the active graph provider:
    ```json
    {
      "function_id": "processPayment/2@src/payment/service.py",
-    "db": "hyper_graph",
+    "project_id": "hyper_graph",
      "direction": "downstream",
      "max_depth": 4
    }
@@ -2422,7 +2422,7 @@ Starting from an endpoint, call `find_callers_of_endpoint`:
   "http_method": "GET",
   "fe_project_id": "web-client",
   "be_project_id": "user-service",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -2434,7 +2434,7 @@ Starting from a screen, call `get_api_call_chain`:
   "fe_project_id": "web-client",
   "be_project_id": "user-service",
   "max_depth": "5",
-  "db": "hyper_graph"
+  "project_id": "hyper_graph"
 }
 ```
 
@@ -2451,7 +2451,7 @@ whether the document was persisted at all.
    ```json
    {
      "project_id": "hypergraph",
-     "db": "hyper_graph",
+     "project_id": "hyper_graph",
      "limit": 200
    }
    ```
@@ -2461,7 +2461,7 @@ whether the document was persisted at all.
    ```json
    {
      "project_id": "hypergraph",
-     "db": "hyper_graph",
+     "project_id": "hyper_graph",
      "min_links": 1,
      "limit": 200
    }
@@ -2479,7 +2479,7 @@ whether the document was persisted at all.
    {
      "source_file": "docs/authentication-spec.pdf",
      "project_id": "hypergraph",
-     "db": "hyper_graph",
+     "project_id": "hyper_graph",
      "min_score": 0.65,
      "include_node_details": true
    }
@@ -2491,7 +2491,7 @@ whether the document was persisted at all.
    ```json
    {
      "project_id": "hypergraph",
-     "db": "hyper_graph",
+     "project_id": "hyper_graph",
      "include_orphans": true
    }
    ```
@@ -2499,7 +2499,7 @@ whether the document was persisted at all.
    ```json
    {
      "project_id": "hypergraph",
-     "db": "hyper_graph",
+     "project_id": "hyper_graph",
      "sample_size": 100,
      "accept_threshold": 0.65,
      "check_nodes": true,
@@ -2514,7 +2514,7 @@ For indexed modules, use `plan_dependency_order`:
 ```json
 {
   "modules": "src/auth,src/payment,src/orders",
-  "db": "hyper_graph",
+  "project_id": "hyper_graph",
   "edge_semantics": "depends_on",
   "on_cycle": "auto_condense_scc"
 }
@@ -2597,8 +2597,8 @@ python testtool/mcp_tester.py --tool search_functions --project-id my_project
 | Semantic search returns no results             | Qdrant collection missing or wrong collection name.                                 | `list_qdrant_collections`, `QDRANT_URL`, analyzer ingest logs.                                     |
 | Tool routes to unexpected backend              | Missing or wrong `parser_type`.                                                     | `activate_project`, `list_parsers`, parser routing table above.                                    |
 | Results include another project                | Shared graph without `project_id` filter.                                           | Pass `project_id`, `fe_project_id`, or `be_project_id` where relevant.                             |
-| `list_up_entrypoint` returns `missing_fields`  | Required module/db input was empty after normalization.                             | Pass `modules: ["src/api"]` or `module: "src/api"`.                                                |
-| `get_symbol` returns `symbol: null`            | Wrong ID, wrong project scope, or wrong `node_type`.                                | Re-run `search_functions` and verify `db`/`project_id`.                                            |
+| `list_up_entrypoint` returns `missing_fields`  | Required module/project_id input was empty after normalization.                             | Pass `modules: ["src/api"]` or `module: "src/api"`.                                                |
+| `get_symbol` returns `symbol: null`            | Wrong ID, wrong project scope, or wrong `node_type`.                                | Re-run `search_functions` and verify `project_id`.                                                         |
 
 ## Maintenance Notes
 

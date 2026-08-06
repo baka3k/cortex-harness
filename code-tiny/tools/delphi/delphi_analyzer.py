@@ -38,7 +38,7 @@ from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qd
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.common.project_scope import enrich_project_scope
 from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, prepare_graph_args
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
 try:
@@ -1283,7 +1283,10 @@ def _resolve_calls(functions: List[FunctionDef], calls: List[CallEdge], uses_clo
             call.callee_id = max(candidates.items(), key=lambda item: (item[1][0], item[1][1]))[0]
 
 
-class QdrantWriter:
+from tools.common.local_qdrant import LocalQdrantWriter
+
+
+class QdrantWriter(LocalQdrantWriter):
     def __init__(
         self,
         url: str,
@@ -1293,54 +1296,15 @@ class QdrantWriter:
         retries: int = 3,
         retry_sleep: float = 2.0,
     ) -> None:
-        self.url = url.rstrip("/")
-        self.collection = collection
-        self.vector_size = vector_size
-        self.timeout = timeout
-        self.retries = retries
-        self.retry_sleep = retry_sleep
-
-    def ensure_collection(self) -> None:
-        for attempt in range(self.retries + 1):
-            try:
-                response = requests.get(
-                    f"{self.url}/collections/{self.collection}",
-                    timeout=self.timeout,
-                )
-                if response.status_code == 200:
-                    return
-                payload = {
-                    "vectors": {"size": self.vector_size, "distance": "Cosine"},
-                }
-                response = requests.put(
-                    f"{self.url}/collections/{self.collection}",
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                return
-            except requests.RequestException:
-                if attempt >= self.retries:
-                    raise
-                time.sleep(self.retry_sleep)
-
-    def upsert(self, points: List[Dict]) -> None:
-        if not points:
-            return
-        payload = {"points": enrich_project_scope(points)}
-        for attempt in range(self.retries + 1):
-            try:
-                response = requests.put(
-                    f"{self.url}/collections/{self.collection}/points?wait=true",
-                    json=payload,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                return
-            except requests.RequestException:
-                if attempt >= self.retries:
-                    raise
-                time.sleep(self.retry_sleep)
+        super().__init__(
+            url,
+            collection,
+            vector_size,
+            timeout,
+            retries,
+            retry_sleep,
+            point_transform=enrich_project_scope,
+        )
 
 
 def _should_trust_remote_code(model_name: str) -> bool:
@@ -2501,7 +2465,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "delphi_functions"))
     parser.add_argument(
         "--embed-model",
@@ -2573,10 +2537,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
     driver = None
     code_writer = None
     if prepare_graph_args(args):
-        driver = await GraphDriverFactory.create_driver(
-            GraphProvider.NEO4J,
-            {"uri": args.neo4j_uri, "user": args.neo4j_user, "password": args.neo4j_password, "database": args.neo4j_db},
-        )
+        driver = await create_graph_driver_from_args(args)
         code_writer = LanguageCodeWriter(driver, database=args.neo4j_db, batch_size=args.neo4j_batch_size, verbose=args.verbose)
 
     qdrant_writer = None

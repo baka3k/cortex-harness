@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 
@@ -12,6 +13,16 @@ for path in (str(CODE_TINY), str(MCP_DIR)):
         sys.path.insert(0, path)
 
 from services.project_context_service import ProjectContextService  # noqa: E402
+
+
+def run_async_test(async_test):
+    """Run an async test without requiring an external pytest plugin."""
+
+    def sync_test():
+        asyncio.run(async_test())
+
+    sync_test.__name__ = async_test.__name__
+    return sync_test
 
 
 class RecordingRunner:
@@ -105,7 +116,7 @@ class RecordingRunner:
         return []
 
 
-@pytest.mark.asyncio
+@run_async_test
 async def test_context_methods_normalize_bounded_provider_neutral_results():
     runner = RecordingRunner()
     service = ProjectContextService(runner)
@@ -132,7 +143,7 @@ async def test_context_methods_normalize_bounded_provider_neutral_results():
     )
 
 
-@pytest.mark.asyncio
+@run_async_test
 async def test_architecture_summary_has_fixed_query_count_and_requires_scope():
     runner = RecordingRunner()
     service = ProjectContextService(runner)
@@ -148,7 +159,7 @@ async def test_architecture_summary_has_fixed_query_count_and_requires_scope():
     assert result["ingestion_provenance"]["filesystem_rescan"] is False
 
 
-@pytest.mark.asyncio
+@run_async_test
 async def test_context_rejects_missing_scope_and_negative_pagination():
     service = ProjectContextService(RecordingRunner())
     with pytest.raises(ValueError, match="project_id"):

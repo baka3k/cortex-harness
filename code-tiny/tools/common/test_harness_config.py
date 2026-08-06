@@ -48,6 +48,17 @@ harness_config = _load_module("harness_config_under_test", _HARNESS_CONFIG_PATH)
 def _scrubbed_env():
     """Scrub env vars that ``load_harness_config`` may set so tests are isolated."""
     leaked = (
+        "CORTEX_DATA_HOME",
+        "CORTEX_STORAGE_INSTANCE",
+        "CORTEX_CODE_STORAGE_OWNER",
+        "CORTEX_DOC_STORAGE_OWNER",
+        "CORTEX_STORAGE_OWNER",
+        "QDRANT_PATH",
+        "QDRANT_CODE_PATH",
+        "QDRANT_DOC_PATH",
+        "FALKORDB_PATH",
+        "FALKORDB_CODE_PATH",
+        "FALKORDB_DOC_PATH",
         "NEO4J_URI",
         "NEO4J_USER",
         "NEO4J_PASS",

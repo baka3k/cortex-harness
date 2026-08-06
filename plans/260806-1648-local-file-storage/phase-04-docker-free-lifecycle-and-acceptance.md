@@ -94,13 +94,13 @@ Replace service lifecycle management with storage lifecycle management:
 
 ## Todo
 
-- [ ] Remove Docker lifecycle code on both platforms.
-- [ ] Add local storage commands and doctor checks.
-- [ ] Add layout, migration, backup, and owner-lease diagnostics.
-- [ ] Update installers and documentation.
-- [ ] Run unit and integration suites.
-- [ ] Run simultaneous MCP and restart-persistence acceptance.
-- [ ] Confirm clean Git status except intended source changes.
+- [x] Remove Docker lifecycle code on both platforms.
+- [x] Add local storage commands and doctor checks.
+- [x] Add layout, migration, backup, and owner-lease diagnostics.
+- [x] Update installers and documentation.
+- [x] Run unit and integration suites.
+- [x] Run simultaneous MCP and restart-persistence acceptance.
+- [x] Confirm clean Git status except intended source changes.
 
 ## Risks
 

@@ -10,14 +10,20 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional
-from urllib.request import Request, urlopen
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = SCRIPT_DIR.parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+if str(ROOT_DIR / "code-tiny") not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR / "code-tiny"))
 
 from mcp_runtime_config import runtime_environment  # noqa: E402
+from cortex_harness.storage import LocalQdrantStore, QdrantStorageRole, resolve_storage  # noqa: E402
+from tools.graph.driver.falkordb_driver import FalkorDBDriver  # noqa: E402
 
 
 def _safe_segment(value: str) -> str:
@@ -87,53 +93,31 @@ def evaluate_symbol_linkage(
     }
 
 
-def _json_request(url: str, payload: Optional[dict] = None) -> dict:
-    data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    request = Request(url, data=data, headers={"Content-Type": "application/json"})
-    with urlopen(request, timeout=30) as response:  # noqa: S310 - configured local/remote service
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _qdrant_points(qdrant_url: str, collections: Iterable[str], project_id: str) -> List[dict]:
+def _qdrant_points(store: LocalQdrantStore, collections: Iterable[str], project_id: str) -> List[dict]:
     points: List[dict] = []
     for collection in collections:
         offset: object = None
         while True:
-            body = {"limit": 512, "with_payload": True, "with_vector": False}
-            if offset is not None:
-                body["offset"] = offset
-            response = _json_request(
-                f"{qdrant_url.rstrip('/')}/collections/{collection}/points/scroll",
-                body,
+            page, offset = store.scroll(
+                collection, limit=512, with_payload=True, with_vectors=False, offset=offset,
             )
-            result = response.get("result") or {}
-            for item in result.get("points") or []:
-                payload = item.get("payload") or {}
+            for item in page:
+                payload = getattr(item, "payload", None) or {}
                 if str(payload.get("project_id") or "") == project_id:
                     points.append(payload)
-            offset = result.get("next_page_offset")
             if offset is None:
                 break
     return points
 
 
-def _graph_query(env: Mapping[str, str], query: str, params: Optional[dict] = None):
-    from falkordb import FalkorDB
-
-    client = FalkorDB(
-        host=env.get("FALKORDB_HOST", "localhost"),
-        port=int(env.get("FALKORDB_PORT", "6379")),
-        username=env.get("FALKORDB_USER") or None,
-        password=env.get("FALKORDB_PASSWORD") or None,
-        ssl=env.get("FALKORDB_SSL", "false").lower() in {"1", "true", "yes", "on"},
-    )
-    graph = client.select_graph(env["FALKORDB_GRAPH"])
-    return graph.query(query, params or {}).result_set
+def _graph_query(driver: FalkorDBDriver, query: str, params: Optional[dict] = None):
+    records, keys, _ = driver.execute_query_sync(query, params or {})
+    return [[record.get(key) for key in keys] for record in records]
 
 
-def _graph_nodes(env: Mapping[str, str], project_id: str) -> Dict[str, dict]:
+def _graph_nodes(driver: FalkorDBDriver, project_id: str) -> Dict[str, dict]:
     rows = _graph_query(
-        env,
+        driver,
         """
         MATCH (n)
         WHERE n.project_id = $project_id AND coalesce(n.id, n.symbol_id) IS NOT NULL
@@ -152,8 +136,8 @@ def _graph_nodes(env: Mapping[str, str], project_id: str) -> Dict[str, dict]:
     }
 
 
-def _scalar_graph_count(env: Mapping[str, str], query: str, project_id: str) -> int:
-    rows = _graph_query(env, query, {"project_id": project_id})
+def _scalar_graph_count(driver: FalkorDBDriver, query: str, project_id: str) -> int:
+    rows = _graph_query(driver, query, {"project_id": project_id})
     return int(rows[0][0]) if rows and rows[0] else 0
 
 
@@ -192,32 +176,43 @@ def validate(root: Path, require_api: bool = False) -> Dict[str, object]:
     if env.get("GRAPH_PROVIDER") != "falkordb":
         return {"ok": False, "error": "Validation currently requires FalkorDB."}
 
-    qdrant_url = env.get("QDRANT_URL", "http://localhost:6333")
-    collection_response = _json_request(f"{qdrant_url.rstrip('/')}/collections")
-    names = [item["name"] for item in collection_response.get("result", {}).get("collections", [])]
-    collections = code_collections_for_project(names, project_id)
-    vector_points = _qdrant_points(qdrant_url, collections, project_id)
-    graph_nodes = _graph_nodes(env, project_id)
-    linkage = evaluate_symbol_linkage(vector_points, graph_nodes, project_id)
-    module_count = _scalar_graph_count(
-        env,
-        "MATCH (n:File {project_id: $project_id}) RETURN count(n)",
-        project_id,
+    resolved = resolve_storage(
+        root,
+        qdrant_code_path=env.get("QDRANT_CODE_PATH"),
+        falkordb_code_path=env.get("FALKORDB_CODE_PATH") or env.get("FALKORDB_PATH"),
     )
-    api_count = _scalar_graph_count(
-        env,
-        "MATCH (n {project_id: $project_id}) WHERE n:ApiEndpoint OR n:HttpEndpoint RETURN count(n)",
-        project_id,
+    vector_store = LocalQdrantStore(resolved, QdrantStorageRole.CODE)
+    graph_driver = FalkorDBDriver(
+        path=resolved.falkordb_code_path, graph=env["FALKORDB_GRAPH"],
+        instance_id=resolved.instance_id, owner_id=resolved.code_owner_id,
     )
-    expandable_seed_count = _scalar_graph_count(
-        env,
-        """
-        MATCH (n {project_id: $project_id})-[:CALLS|CONTAINS]-()
-        WHERE coalesce(n.id, n.symbol_id) IS NOT NULL
-        RETURN count(DISTINCT n)
-        """,
-        project_id,
-    )
+    try:
+        collections = code_collections_for_project(vector_store.list_collection_names(), project_id)
+        vector_points = _qdrant_points(vector_store, collections, project_id)
+        graph_nodes = _graph_nodes(graph_driver, project_id)
+        linkage = evaluate_symbol_linkage(vector_points, graph_nodes, project_id)
+        module_count = _scalar_graph_count(
+            graph_driver,
+            "MATCH (n:File {project_id: $project_id}) RETURN count(n)",
+            project_id,
+        )
+        api_count = _scalar_graph_count(
+            graph_driver,
+            "MATCH (n {project_id: $project_id}) WHERE n:ApiEndpoint OR n:HttpEndpoint RETURN count(n)",
+            project_id,
+        )
+        expandable_seed_count = _scalar_graph_count(
+            graph_driver,
+            """
+            MATCH (n {project_id: $project_id})-[:CALLS|CONTAINS]-()
+            WHERE coalesce(n.id, n.symbol_id) IS NOT NULL
+            RETURN count(DISTINCT n)
+            """,
+            project_id,
+        )
+    finally:
+        graph_driver.close()
+        vector_store.close()
     freshness = _freshness(root, project_id)
     ok = bool(
         linkage["ok"]

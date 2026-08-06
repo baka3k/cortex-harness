@@ -2081,7 +2081,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                    help="(reserved) Embedding model name — not used by backend analyzer.")
     p.add_argument("--max-embed-chars", type=int, default=4000,
                    help="(reserved) Max chars per embedding — not used by backend analyzer.")
-    p.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL", ""),
+    p.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH", ""),
                    help="(reserved) Qdrant URL — not used by backend analyzer.")
     p.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", ""),
                    help="(reserved) Qdrant collection — not used by backend analyzer.")

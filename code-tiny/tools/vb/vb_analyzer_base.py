@@ -24,8 +24,7 @@ from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.common.project_scope import enrich_project_scope
-from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, prepare_graph_args
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 from tools.vb.vb_common import (
     PARSE_CACHE_VERSION,
@@ -1059,7 +1058,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "vb_functions"))
     parser.add_argument(
         "--embed-model",
@@ -1176,12 +1175,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
     code_writer: Optional[LanguageCodeWriter] = None
     driver = None
     if prepare_graph_args(args):
-        driver = await GraphDriverFactory.create_driver(
-            provider=GraphProvider.NEO4J,
-            uri=args.neo4j_uri,
-            user=args.neo4j_user,
-            password=args.neo4j_password,
-        )
+        driver = await create_graph_driver_from_args(args)
         code_writer = LanguageCodeWriter(
             driver=driver,
             database=args.neo4j_db,

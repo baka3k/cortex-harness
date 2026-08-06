@@ -70,8 +70,11 @@ class McpRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(env["CODE_GRAPH_PROVIDER"], "falkordb")
         self.assertEqual(env["FALKORDB_GRAPH"], "sample-graph")
         self.assertEqual(env["NEO4J_DB"], "sample-graph")
-        self.assertEqual(env["NEO4J_URI"], "redis://graph.internal:6380")
-        self.assertEqual(env["QDRANT_URL"], "http://qdrant.internal:7333")
+        self.assertNotIn("NEO4J_URI", env)
+        self.assertNotIn("QDRANT_URL", env)
+        self.assertNotIn("FALKORDB_URI", env)
+        self.assertEqual(env["FALKORDB_PATH"], env["FALKORDB_CODE_PATH"])
+        self.assertTrue(env["QDRANT_CODE_PATH"].endswith("/qdrant/code"))
         self.assertEqual(env["PROJECT_ID"], "sample")
         self.assertEqual(env["PROJECT_NAME"], "Sample")
         self.assertEqual(env["CORTEX_HARNESS_CONFIG_PATH"], str(config_path))
@@ -93,6 +96,7 @@ class McpRuntimeConfigTests(unittest.TestCase):
                             "FALKORDB_HOST": "localhost",
                             "FALKORDB_PORT": "6379",
                             "QDRANT_URL": "https://qdrant.example.test",
+                            "QDRANT_COLLECTION": "bespoke-doc-vectors",
                         }
                     },
                 },
@@ -104,7 +108,11 @@ class McpRuntimeConfigTests(unittest.TestCase):
         self.assertNotIn("CODE_GRAPH_PROVIDER", env)
         self.assertEqual(env["FALKORDB_GRAPH"], "docs-graph")
         self.assertEqual(env["NEO4J_DB"], "docs-graph")
-        self.assertEqual(env["QDRANT_URL"], "https://qdrant.example.test")
+        self.assertNotIn("QDRANT_URL", env)
+        self.assertNotIn("FALKORDB_HOST", env)
+        self.assertEqual(env["FALKORDB_PATH"], env["FALKORDB_DOC_PATH"])
+        self.assertTrue(env["QDRANT_DOC_PATH"].endswith("/qdrant/doc"))
+        self.assertEqual(env["QDRANT_COLLECTION_DOC"], "bespoke-doc-vectors")
 
     def test_runtime_environment_is_empty_when_project_has_no_harness_config(self):
         with tempfile.TemporaryDirectory() as directory:
