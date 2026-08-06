@@ -6,23 +6,16 @@ based on configuration.
 """
 
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 from tools.graph.core.base import GraphDriver, GraphProvider
 from tools.graph.driver.falkordb_driver import FalkorDBDriver
 from tools.graph.driver.neo4j_driver import Neo4jDriver
 
 
-def _is_falkordb_uri(uri: Optional[str]) -> bool:
-    if not uri or "://" not in uri:
-        return False
-    return urlparse(uri).scheme in {"falkor", "falkors", "redis", "rediss", "unix"}
-
-
 class GraphDriverFactory:
     """
-    Factory class for creating graph database drivers
+    Factory class for creating graph database drivers.
     """
-    
+
     @staticmethod
     async def create_driver(
         provider: GraphProvider,
@@ -32,6 +25,7 @@ class GraphDriverFactory:
         user: Optional[str] = None,
         password: Optional[str] = None,
         database: Optional[str] = None,
+        path: Optional[Any] = None,
     ) -> GraphDriver:
         """
         Create a graph driver instance.
@@ -54,13 +48,18 @@ class GraphDriverFactory:
                 password="pw",
             )
 
+        For the docker-free cutover, FalkorDB can also be opened in local mode
+        by passing ``path=...`` (or supplying ``config={"path": "..."}``).
+        In that mode, ``uri/host/port/user/password/ssl`` are ignored.
+
         Args:
             provider: The database provider type
             config: Optional configuration dictionary with provider-specific settings
             uri: Neo4j URI (used when config is not provided)
-            user: Neo4j username (used when config is not provided)
+            user: Neo4j user (used when config is not provided)
             password: Neo4j password (used when config is not provided)
             database: Optional database name (used when config is not provided)
+            path: Local file path for embedded FalkorDB Lite (FalkorDB provider only)
 
         Returns:
             GraphDriver instance
@@ -75,20 +74,10 @@ class GraphDriverFactory:
                 "user": user,
                 "password": password,
                 "database": database,
+                "path": path,
             }
 
         if provider == GraphProvider.NEO4J:
-            if _is_falkordb_uri(config.get("uri") or config.get("url")):
-                return FalkorDBDriver(
-                    uri=config.get("uri") or config.get("url"),
-                    user=config.get("user") or config.get("username"),
-                    password=config.get("password"),
-                    database=config.get("database") or config.get("graph"),
-                    graph=config.get("graph"),
-                    host=config.get("host"),
-                    port=config.get("port"),
-                    ssl=bool(config.get("ssl", False)),
-                )
             return Neo4jDriver(
                 uri=config["uri"],
                 user=config["user"],
@@ -108,28 +97,26 @@ class GraphDriverFactory:
                 host=config.get("host"),
                 port=config.get("port"),
                 ssl=bool(config.get("ssl", False)),
+                path=config.get("path"),
             )
         elif provider == GraphProvider.NEPTUNE:
             # Future implementation
             raise NotImplementedError("Neptune driver not yet implemented")
         else:
             raise ValueError(f"Unsupported provider: {provider}")
-    
+
     @staticmethod
     async def create_from_env(
         provider: GraphProvider,
         env_prefix: str = "NEO4J",
     ) -> GraphDriver:
         """
-        Create driver from environment variables
+        Create driver from environment variables.
 
-        Args:
-            provider: The database provider type
-            env_prefix: Prefix for environment variables
-                       (e.g., NEO4J_URI, NEO4J_USER, NEO4J_PASS)
-
-        Returns:
-            GraphDriver instance
+        For FalkorDB, the local file path is read from ``FALKORDB_PATH``
+        (preferred after the docker-free cutover). ``FALKORDB_URI`` /
+        ``FALKORDB_HOST`` / ``FALKORDB_PORT`` are deprecated and ignored when
+        a path is present.
         """
         import os
 
@@ -143,6 +130,7 @@ class GraphDriverFactory:
             return await GraphDriverFactory.create_driver(provider, config)
         elif provider == GraphProvider.FALKORDB:
             prefix = env_prefix if env_prefix != "NEO4J" else "FALKORDB"
+            path = os.getenv("FALKORDB_PATH")
             config = {
                 "uri": os.getenv(f"{prefix}_URI") or os.getenv(f"{prefix}_URL"),
                 "host": os.getenv(f"{prefix}_HOST", "localhost"),
@@ -152,6 +140,7 @@ class GraphDriverFactory:
                 "database": os.getenv(f"{prefix}_GRAPH") or os.getenv(f"{prefix}_DATABASE", "neo4j"),
                 "graph": os.getenv(f"{prefix}_GRAPH"),
                 "ssl": os.getenv(f"{prefix}_SSL", "").lower() in {"1", "true", "yes", "on"},
+                "path": path,
             }
             return await GraphDriverFactory.create_driver(provider, config)
         else:

@@ -47,41 +47,17 @@ SERVERS = (
 )
 
 def infra_services() -> tuple[dict[str, object], ...]:
-    """Build infra service config, allowing host-port overrides via environment.
+    """Deprecated: retained for one release for compatibility only.
 
-    Container-side ports stay fixed (6379 / 3000); only the host-side binding is
-    configurable so coexisting with other local services is possible, e.g.:
-      FALKORDB_PORT=6380 FALKORDB_BROWSER_PORT=3001 make infra-up
+    The Docker-managed Qdrant + FalkorDB containers were replaced by
+    project-local persistent storage in Phase 04 of the docker-free
+    cutover. ``invoke_storage_init`` creates the same on-disk locations
+    without invoking Docker. The shape returned here still matches the
+    legacy ``{name, container, image, ports, host, port, ready_url}`` keys
+    so any caller that introspects the dict keeps compiling, but the data
+    is informational only.
     """
-    falkordb_port = int(os.environ.get("FALKORDB_PORT", "6379"))
-    browser_port = int(os.environ.get("FALKORDB_BROWSER_PORT", "3000"))
-    host = os.environ.get("FALKORDB_BIND", "127.0.0.1")
-    return (
-        {
-            "name": "qdrant",
-            "container": "cortex-qdrant",
-            "image": "qdrant/qdrant",
-            "ports": ("6333:6333",),
-            "host": "127.0.0.1",
-            "port": 6333,
-            "ready_url": "http://127.0.0.1:6333",
-        },
-        {
-            "name": "falkordb",
-            "container": "cortex-falkordb",
-            "image": "falkordb/falkordb",
-            # 6379 = Redis-protocol API; 3000 = FalkorDB Browser Web UI (bundled in the image).
-            "ports": (f"{falkordb_port}:6379", f"{browser_port}:3000"),
-            # Named volume so recreating the container for new port mappings keeps graph data.
-            "volumes": ("cortex-falkordb-data:/data",),
-            "host": "127.0.0.1",
-            "port": falkordb_port,
-            "ready_url": "",
-            "protocol": "redis",
-            "browser_port": browser_port,
-            "browser_ready_url": f"http://{host}:{browser_port}",
-        },
-    )
+    return ()
 
 USAGE = """Usage (equivalent forms):
   make build       | dev build       Create/sync virtualenvs and Python dependencies.
@@ -390,24 +366,80 @@ def create_docker_container(docker: str, name: str, image: str, service: dict[st
 
 
 def invoke_infra_up() -> None:
-    docker = docker_command()
-    for service in infra_services():
-        start_infra_service(docker, service)
-    print("[infra] Local infrastructure is ready.")
+    """Deprecated alias for ``storage-init``.
+
+    Kept for one release so existing scripts that still call
+    ``infra-up`` keep working. No Docker interaction occurs; the local
+    on-disk storage is created in the project's root.
+    """
+    print(
+        "[warn] 'infra-up' is deprecated. Use 'storage-init' instead. "
+        "Docker is no longer required."
+    )
+    invoke_storage_init()
 
 
 def invoke_infra_down() -> None:
-    docker = docker_command()
-    for service in infra_services():
-        name = str(service["container"])
-        if not container_exists(docker, name):
-            print(f"[infra] Container not found, skipping: {name}")
-        elif not container_running(docker, name):
-            print(f"[infra] Container already stopped: {name}")
-        else:
-            print(f"[infra] Stopping container: {name}")
-            run([docker, "stop", name])
-    print("[infra] Local infrastructure stopped.")
+    """Deprecated alias for ``storage-stop``.
+
+    No-op: local storage has no lifecycle to stop. Kept so existing
+    scripts keep returning exit code 0.
+    """
+    print(
+        "[warn] 'infra-down' is deprecated. Use 'storage-stop' instead. "
+        "Docker is no longer required."
+    )
+
+
+def invoke_storage_init() -> None:
+    """Resolve paths, create parent directories, open + close both stores.
+
+    Idempotent: re-running on an already-initialized project is a no-op
+    apart from a confirmation message. Reports the logical targets
+    (graph, code/doc Qdrant paths) for the doctor / acceptance sequence.
+    """
+    try:
+        from cortex_harness.storage import resolve_storage
+    except ImportError as error:
+        raise RuntimeError(
+            "cortex_harness.storage could not be imported. "
+            "Run 'make build' first to install the package in editable mode."
+        ) from error
+
+    resolved = resolve_storage(ROOT)
+    resolved.ensure_directories()
+    print(f"[storage-init] project root : {resolved.project_root}")
+    print(f"[storage-init] Qdrant base  : {resolved.qdrant_base}")
+    print(f"[storage-init] Qdrant code  : {resolved.qdrant_code_path}")
+    print(f"[storage-init] Qdrant doc   : {resolved.qdrant_doc_path}")
+    print(f"[storage-init] FalkorDBLite : {resolved.falkordb_path}")
+
+    # Round-trip both stores with a temporary collection / graph so doctor
+    # can validate write permission without polluting project data.
+    try:
+        from cortex_harness.storage import LocalQdrantStore, QdrantStorageRole, reset_clients
+        from cortex_harness.storage.qdrant import _client_lock
+
+        # Code + doc smoke test only when qdrant_client is importable.
+        try:
+            from qdrant_client.http import models as qmodels  # noqa: F401
+        except ImportError:
+            print("[storage-init] qdrant_client not installed; skipping vector round-trip.")
+            return
+
+        for role in (QdrantStorageRole.CODE, QdrantStorageRole.DOCUMENT):
+            store = LocalQdrantStore(resolved, role)
+            try:
+                collections = store.list_collection_names()
+                print(f"[storage-init] {role.value} collections: {len(collections)}")
+            finally:
+                store.close()
+                with _client_lock:
+                    from cortex_harness.storage import qdrant as _qdrant_module
+                    _qdrant_module._clients.pop(str(store.path), None)
+        reset_clients()
+    except ImportError:
+        pass
 
 
 def _supports_color() -> bool:
@@ -463,45 +495,86 @@ def invoke_doctor() -> None:
         failures += doctor_check("python venv", False, str(error))
 
     if python:
-        dependencies = "neo4j, falkordb, qdrant_client, requests"
-        result = run([str(python), "-c", "import neo4j, falkordb, qdrant_client, requests"], capture=True, check=False)
+        dependencies = "qdrant_client, falkordblite, requests"
+        result = run(
+            [
+                str(python),
+                "-c",
+                "import qdrant_client, falkordblite, requests",
+            ],
+            capture=True,
+            check=False,
+        )
         failures += doctor_check("python deps", result.returncode == 0, dependencies)
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            if stderr:
+                print(f"[doctor] {stderr.splitlines()[-1]}")
 
-    docker = shutil.which("docker")
-    docker_ready = False
-    if docker:
-        failures += doctor_check("docker cli", True, docker)
-        docker_ready = run([docker, "info"], capture=True, check=False).returncode == 0
-        message = "Docker daemon reachable" if docker_ready else "Docker daemon not reachable"
-        failures += doctor_check("docker daemon", docker_ready, message)
-    else:
-        failures += doctor_check("docker cli", False, "Docker not found on PATH")
+    # Local storage paths: report and validate writability without invoking Docker.
+    try:
+        from cortex_harness.storage import resolve_storage
+        resolved = resolve_storage(ROOT)
+        doctor_check("qdrant base path", True, str(resolved.qdrant_base))
+        doctor_check("qdrant code path", True, str(resolved.qdrant_code_path))
+        doctor_check("qdrant doc path",  True, str(resolved.qdrant_doc_path))
+        doctor_check("falkordb path",    True, str(resolved.falkordb_path))
+        resolved.ensure_directories()
+        for label, path in (
+            ("qdrant code writable", resolved.qdrant_code_path),
+            ("qdrant doc writable",  resolved.qdrant_doc_path),
+            ("falkordb writable",    resolved.falkordb_path.parent),
+        ):
+            failures += doctor_check(label, os.access(path, os.W_OK), str(path))
+    except Exception as error:
+        failures += doctor_check("local storage", False, str(error))
 
-    for service in infra_services():
-        host, port = str(service["host"]), int(service["port"])
-        failures += doctor_check(f"{service['name']} port", tcp_port_open(host, port), f"{host}:{port}")
-        if service["ready_url"]:
-            url = str(service["ready_url"])
-            failures += doctor_check(f"{service['name']} http", http_ready(url), url)
-        if str(service.get("protocol", "")) == "redis":
-            failures += doctor_check(
-                f"{service['name']} db",
-                redis_ping_ready(host, port),
-                f"redis {host}:{port} (PING/PONG)",
-            )
-        browser_port = service.get("browser_port")
-        if browser_port:
-            doctor_check(
-                f"{service['name']} web ui",
-                tcp_port_open(host, int(browser_port)),
-                f"{host}:{browser_port}",
-                required=False,
-            )
-        if docker_ready and docker:
-            running = container_exists(docker, str(service["container"])) and container_running(
-                docker, str(service["container"])
-            )
-            doctor_check(f"{service['name']} container", running, str(service["container"]), required=False)
+    # Round-trip the local Qdrant client and FalkorDBLite store in temporary
+    # collections / graphs to prove the on-disk backends are usable. We only
+    # do this when the optional dependency modules are importable.
+    try:
+        from cortex_harness.storage import LocalQdrantStore, QdrantStorageRole
+        from cortex_harness.storage.qdrant import _client_lock
+        from cortex_harness.storage import qdrant as _qdrant_module
+        from qdrant_client.http import models as qmodels
+
+        import uuid as _uuid
+
+        tmp_name = f"doctor_{_uuid.uuid4().hex[:8]}"
+        for role in (QdrantStorageRole.CODE, QdrantStorageRole.DOCUMENT):
+            store = LocalQdrantStore(resolved, role)
+            try:
+                store.create_collection(
+                    tmp_name,
+                    vectors_config=qmodels.VectorParams(size=2, distance=qmodels.Distance.COSINE),
+                )
+                store.upsert(
+                    tmp_name,
+                    points=[qmodels.PointStruct(id=1, vector=[0.0, 1.0], payload={"__doctor__": True})],
+                )
+                hits = store.retrieve(tmp_name, ids=[1])
+                failures += doctor_check(
+                    f"qdrant {role.value} round-trip",
+                    bool(hits) and bool(hits[0].payload.get("__doctor__")),
+                    str(store.path),
+                )
+            finally:
+                try:
+                    store.delete_collection(tmp_name)
+                except Exception:
+                    pass
+                store.close()
+                with _client_lock:
+                    _qdrant_module._clients.pop(str(store.path), None)
+    except ImportError as error:
+        doctor_check(
+            "qdrant round-trip",
+            False,
+            f"dependency missing: {error}",
+            required=False,
+        )
+    except Exception as error:
+        doctor_check("qdrant round-trip", False, str(error), required=False)
 
     for server in SERVERS:
         doctor_check(
@@ -770,6 +843,8 @@ ACTIONS = {
     "uninstall": invoke_uninstall,
     "infra-up": invoke_infra_up,
     "infra-down": invoke_infra_down,
+    "storage-init": invoke_storage_init,
+    "storage-stop": lambda: print("[storage-stop] Local storage has no lifecycle to stop."),
     "doctor": invoke_doctor,
     "start": invoke_start,
     "stop": invoke_stop,

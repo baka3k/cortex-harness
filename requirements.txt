@@ -1,7 +1,5 @@
-neo4j
-neo4j-graphrag
-falkordb
 qdrant-client
+falkordblite>=1.0.0
 python-dotenv
 pydantic
 openai

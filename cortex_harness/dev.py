@@ -1604,14 +1604,36 @@ def uninstall():
 
 @cli.command("infra-up")
 def infra_up():
-    """Start the local Qdrant and FalkorDB containers."""
+    """Deprecated: local storage no longer needs containers.
+
+    Kept for one release so existing scripts that still call ``dev
+    infra-up`` keep working. No Docker interaction occurs; the local
+    on-disk storage is created in the project's root.
+    """
     _run_lifecycle("infra-up")
 
 
 @cli.command("infra-down")
 def infra_down():
-    """Stop the local Qdrant and FalkorDB containers."""
+    """Deprecated: local storage has no containers to stop."""
     _run_lifecycle("infra-down")
+
+
+@cli.command("storage-init")
+def storage_init():
+    """Initialize local Qdrant and FalkorDBLite storage.
+
+    Resolves the active project root, creates the per-role Qdrant
+    subdirectories, opens and closes the embedded FalkorDBLite store,
+    and reports the logical targets.
+    """
+    _run_lifecycle("storage-init")
+
+
+@cli.command("storage-stop")
+def storage_stop():
+    """No-op for parity with the legacy ``infra-down`` command."""
+    _run_lifecycle("storage-stop")
 
 
 @cli.command()
