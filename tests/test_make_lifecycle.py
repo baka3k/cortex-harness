@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,31 @@ SPEC.loader.exec_module(LIFECYCLE)
 
 @unittest.skipIf(os.name == "nt", "POSIX lifecycle dispatch test")
 class MakeLifecycleTests(unittest.TestCase):
+    def test_lifecycle_adds_repository_root_to_source_import_path(self):
+        isolated_path = [
+            entry
+            for entry in sys.path
+            if not entry or Path(entry).resolve() != ROOT.resolve()
+        ]
+        spec = importlib.util.spec_from_file_location(
+            "mcp_lifecycle_import_path_test",
+            LIFECYCLE_PATH,
+        )
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+
+        with mock.patch.object(sys, "path", isolated_path):
+            spec.loader.exec_module(module)
+            self.assertIn(str(ROOT), sys.path)
+
+    def test_doctor_probes_the_falkordblite_backend_import(self):
+        self.assertIn(
+            "from redislite.falkordb_client import FalkorDB",
+            LIFECYCLE.PYTHON_DEPENDENCY_PROBE,
+        )
+        self.assertNotIn("import falkordblite", LIFECYCLE.PYTHON_DEPENDENCY_PROBE)
+
     def test_make_help_does_not_require_powershell(self):
         result = subprocess.run(
             ["make", "help"],

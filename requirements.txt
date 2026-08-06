@@ -1,5 +1,5 @@
 qdrant-client
-falkordblite>=1.0.0
+falkordblite
 python-dotenv
 pydantic
 openai

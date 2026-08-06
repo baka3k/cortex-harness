@@ -8,9 +8,10 @@ helpers, so all vector operations must cross one application-owned interface.
 
 ## Requirements
 
-- Store all vector data below `./local_qdrant_db`.
-- Avoid exclusive-lock failures when code and document MCP servers run
-  together.
+- Store all vector data below the versioned instance data root.
+- Avoid exclusive-lock failures by assigning every Qdrant directory one stable
+  MCP/process owner.
+- Store many project collections within each owner directory.
 - Cover every operation used by ingestion, retrieval, cleanup, reset,
   backfill, Living Docs, and validation.
 - Preserve collection naming and project-scope filter semantics.
@@ -19,10 +20,11 @@ helpers, so all vector operations must cross one application-owned interface.
 ## Architecture
 
 Implement `LocalQdrantStore`/factory modules under
-`cortex_harness/storage/`. A storage role selects either the code or document
-subdirectory. Each process owns one cached `QdrantClient` per resolved path.
-The adapter accepts current plain dictionaries where useful but translates them
-to official `qdrant_client.models` at the boundary.
+`cortex_harness/storage/`. Instance plus owner selects the code, document, or
+additional MCP subdirectory. Each process owns one cached `QdrantClient` per
+resolved path and holds the corresponding application lease. The adapter
+accepts current plain dictionaries where useful but translates them to
+official `qdrant_client.models` at the boundary.
 
 Minimum adapter surface:
 
@@ -59,8 +61,8 @@ Minimum adapter surface:
 
 1. Inventory every REST verb/path and map it to a `qdrant-client` operation;
    add a contract test row before changing each call site.
-2. Implement the local store/factory with explicit code/doc roles, project-root
-   path resolution, singleton lifecycle, and dependency injection.
+2. Implement the local store/factory with explicit instance/owner resolution,
+   data-root paths, singleton lifecycle, owner lease, and dependency injection.
 3. Migrate shared vector ingest/cleanup/retrieval modules first so analyzers can
    reuse them instead of retaining per-language HTTP writer classes.
 4. Migrate document reset, ingest, query, MCP, and legacy loader construction to
@@ -71,10 +73,12 @@ Minimum adapter surface:
    validation.
 7. Remove raw `/collections` and `/points` URL construction from active runtime
    code and delete redundant HTTP helper implementations.
-8. Close clients on MCP shutdown and short-lived script completion so locks are
-   released predictably.
+8. Close clients on MCP shutdown and short-lived script completion so locks and
+   application leases are released predictably. Do not let an ingest process
+   open a store already owned by a running MCP.
 9. Add persistence, filter, named-vector, payload-index, batch, reset, restart,
-   and simultaneous code/doc server tests using temporary role directories.
+   two-project isolation, two-instance isolation, duplicate-owner rejection,
+   and simultaneous code/doc server tests using temporary data roots.
 10. Validate cross-domain operations. If a code process needs document vectors,
     route through the owning document service or a graph link instead of opening
     the document path concurrently.
@@ -83,6 +87,7 @@ Minimum adapter surface:
 
 - [ ] Build the REST-to-client operation matrix.
 - [ ] Implement the shared local adapter.
+- [ ] Add owner lease and multi-instance path resolution.
 - [ ] Migrate shared code ingestion/retrieval paths.
 - [ ] Migrate document paths.
 - [ ] Migrate MCP, Living Docs, backfill, and validation paths.
@@ -101,9 +106,12 @@ Minimum adapter surface:
 
 ## Success Criteria
 
-- All vector operations use the shared local adapter and persist below
-  `./local_qdrant_db`.
-- Code and document MCP servers run concurrently using separate role paths.
+- All vector operations use the shared local adapter and persist below the
+  resolved versioned instance root.
+- Code and document MCP servers run concurrently using separate owner paths;
+  another process cannot open either path directly.
+- Multiple project collections coexist in one owner store with no cross-project
+  result or reset leakage.
 - An exact source search finds no active runtime assembly of Qdrant REST
   collection/point endpoints.
 - Project filters, collection names, named vectors, resets, and restart

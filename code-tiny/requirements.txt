@@ -1,4 +1,4 @@
-falkordblite>=1.0.0
+falkordblite
 # FastMCP dependencies
 fastmcp
 

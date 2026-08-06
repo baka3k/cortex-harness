@@ -21,11 +21,19 @@ reviewed: 2026-07-28
 > **LOCAL STORAGE NOTE (2026-08-06):** Plan
 > `260806-1648-local-file-storage` preserves this plan's registry-owned graph
 > and collection names but replaces launcher URL/host/port resolution with
-> project-root local paths. Phase 06 must emit `QDRANT_PATH`,
-> `QDRANT_CODE_PATH`, `QDRANT_DOC_PATH`, and `FALKORDB_PATH`; it must not
-> synthesize `QDRANT_URL` or `FALKORDB_URI` for the default local runtime.
-> Qdrant's exclusive local-directory lock requires code and document roles to
-> use separate subdirectories while retaining their existing collection names.
+> versioned machine-local paths derived from data root, harness instance, and
+> stable storage owner. Phase 06 must emit owner-specific
+> `QDRANT_CODE_PATH`/`QDRANT_DOC_PATH` and
+> `FALKORDB_CODE_PATH`/`FALKORDB_DOC_PATH`, then expose `FALKORDB_PATH` only as
+> the selected process owner's compatibility value. It must not synthesize
+> `QDRANT_URL` or `FALKORDB_URI` for the default local runtime. Qdrant's
+> exclusive local-directory lock requires different owners to use distinct
+> physical stores, while many projects remain logical collections/graphs inside
+> each owner store. `project_id` must not be used as the physical directory
+> boundary. The default physical root is the centralized per-user Cortex
+> Harness directory `Path.home() / ".cortext-harness"`, never an indexed source
+> project's checkout or cache. The home/account component is resolved at
+> runtime and must not be hardcoded.
 
 > **CROSS-PLAN NOTE (2026-07-31):** `260731-1500-legacy-migration-parser-coverage` adds new
 > `shell`/`jp1` entries to `code-tiny/mcp/framework_registry.py` CAPABILITIES. Both plans are
