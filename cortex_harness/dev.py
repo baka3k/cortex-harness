@@ -1483,6 +1483,15 @@ def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
     # Inherit env, layer service .env, then active harness config on top.
     env = {**os.environ, **_load_dotenv(svc_dir / ".env"), **(extra_env or {})}
 
+    # Local FalkorDB/Qdrant must never inherit a stale network endpoint from
+    # the shell that launched the server. This is especially important after
+    # the docker-free cutover: an old FALKORDB_URI/FALKORDB_PORT can otherwise
+    # silently route a local process back to localhost:6379.
+    scoped_provider = "DOC_GRAPH_PROVIDER" if name == "doc-tiny" else "CODE_GRAPH_PROVIDER"
+    if _graph_provider(env, scoped_provider) == "falkordb":
+        for key in _REMOTE_STORAGE_KEYS:
+            env.pop(key, None)
+
     MCP_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = MCP_LOG_DIR / f"dev-mcp-{name}.log"
     pid_file = MCP_LOG_DIR / f"dev-mcp-{name}.pid"
