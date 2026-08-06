@@ -132,7 +132,7 @@ class MyBatisFactWriter:
         )
         deleted = int((records or [{}])[0].get("deleted_nodes", 0))
         if self.verbose:
-            print(f"[cleanup][neo4j] deleted_nodes={deleted} deleted_unknown_functions=0")
+            print(f"[cleanup][graph] deleted_nodes={deleted} deleted_unknown_functions=0")
         return {"deleted_nodes": deleted}
 
 

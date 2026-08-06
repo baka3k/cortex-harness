@@ -13,6 +13,7 @@ so every collection/point/scroll/search call crosses one place. The adapter:
 
 from __future__ import annotations
 
+import atexit
 import threading
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional, Sequence
@@ -79,6 +80,12 @@ def reset_clients() -> None:
             lease.release()
         _clients.clear()
         _leases.clear()
+
+
+# Local Qdrant imports ``portalocker`` while closing.  Ensure cached clients
+# are closed before Python starts tearing down its import machinery; otherwise
+# QdrantClient.__del__ can emit ``sys.meta_path is None`` during shutdown.
+atexit.register(reset_clients)
 
 
 class LocalQdrantStore:

@@ -1954,7 +1954,7 @@ async def build_call_graph(
 
     if code_writer:
         if verbose:
-            print("[neo4j] Collecting nodes and relations for batch write...")
+            print("[graph] Collecting nodes and relations for batch write...")
 
         all_projects: List[Dict[str, Any]] = [
             {
