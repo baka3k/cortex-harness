@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from argparse import ArgumentParser, Namespace
+from pathlib import Path
 from typing import Optional
 
 from tools.graph.core.base import GraphDriver, GraphProvider
@@ -11,7 +12,7 @@ from tools.graph.core.factory import GraphDriverFactory
 
 
 def normalize_graph_provider(value: Optional[str]) -> GraphProvider:
-    provider = (value or "neo4j").strip().lower()
+    provider = (value or "falkordb").strip().lower()
     if provider in {"neo4j", "neo"}:
         return GraphProvider.NEO4J
     if provider in {"falkor", "falkordb"}:
@@ -19,7 +20,7 @@ def normalize_graph_provider(value: Optional[str]) -> GraphProvider:
     raise ValueError(f"Unsupported graph provider: {value}")
 
 
-def env_graph_provider(default: str = "neo4j") -> str:
+def env_graph_provider(default: str = "falkordb") -> str:
     return (
         os.getenv("CODE_GRAPH_PROVIDER")
         or os.getenv("GRAPH_PROVIDER")
@@ -41,28 +42,11 @@ def add_graph_provider_args(parser: ArgumentParser) -> None:
             default=env_graph_provider(),
             help="Graph database provider used for graph writes.",
         )
-    if not _has_option(parser, "--falkordb-uri"):
+    if not _has_option(parser, "--falkordb-path"):
         parser.add_argument(
-            "--falkordb-uri",
-            default=os.getenv("FALKORDB_URI") or os.getenv("FALKORDB_URL"),
-        )
-    if not _has_option(parser, "--falkordb-host"):
-        parser.add_argument("--falkordb-host", default=os.getenv("FALKORDB_HOST", "localhost"))
-    if not _has_option(parser, "--falkordb-port"):
-        parser.add_argument(
-            "--falkordb-port",
-            type=int,
-            default=int(os.getenv("FALKORDB_PORT", "6379")),
-        )
-    if not _has_option(parser, "--falkordb-user"):
-        parser.add_argument(
-            "--falkordb-user",
-            default=os.getenv("FALKORDB_USER") or os.getenv("FALKORDB_USERNAME"),
-        )
-    if not _has_option(parser, "--falkordb-password"):
-        parser.add_argument(
-            "--falkordb-password",
-            default=os.getenv("FALKORDB_PASSWORD", ""),
+            "--falkordb-path",
+            default=os.getenv("FALKORDB_PATH"),
+            help="Owner-specific FalkorDBLite .rdb path (derived when omitted).",
         )
     if not _has_option(parser, "--falkordb-graph"):
         parser.add_argument(
@@ -73,12 +57,6 @@ def add_graph_provider_args(parser: ArgumentParser) -> None:
                 "ProjectRegistry resolves this default unless an explicit "
                 "value is provided."
             ),
-        )
-    if not _has_option(parser, "--falkordb-ssl"):
-        parser.add_argument(
-            "--falkordb-ssl",
-            action="store_true",
-            default=os.getenv("FALKORDB_SSL", "").lower() in {"1", "true", "yes", "on"},
         )
 
 
@@ -104,16 +82,12 @@ def apply_project_registry_defaults(args: Namespace) -> Namespace:
         # downstream code surfaces the registry's own error.
         return args
 
-    # Only override when the user did not pass an explicit value. We
-    # distinguish "explicit value passed" from "default from env" by
-    # checking the original ``sys.argv`` (argparse drops the distinction
-    # after parsing). For simplicity we override unconditionally when
-    # the registry has a non-default value and the CLI default was used.
+    # Only fill an absent value. Any non-empty graph name is a valid explicit
+    # target, including the literal name ``neo4j`` under FalkorDB. Argparse
+    # namespaces do not preserve whether a non-empty value came from CLI or
+    # environment, so replacing one here would violate explicit precedence.
     falkordb_graph = getattr(args, "falkordb_graph", None)
-    if (
-        falkordb_graph in (None, "", "neo4j")
-        or os.getenv("FALKORDB_GRAPH") in (None, "", "neo4j")
-    ) and targets.code_graph:
+    if falkordb_graph in (None, "") and targets.code_graph:
         args.falkordb_graph = targets.code_graph
 
     qdrant_collection = getattr(args, "qdrant_collection", None)
@@ -139,14 +113,12 @@ def prepare_graph_args(args: Namespace) -> bool:
             and getattr(args, "neo4j_password", None)
         )
 
-    uri = getattr(args, "falkordb_uri", None)
-    if not uri:
-        host = getattr(args, "falkordb_host", None) or "localhost"
-        port = getattr(args, "falkordb_port", None) or 6379
-        scheme = "rediss" if getattr(args, "falkordb_ssl", False) else "redis"
-        uri = f"{scheme}://{host}:{port}"
-
-    setattr(args, "neo4j_uri", uri)
+    path = getattr(args, "falkordb_path", None)
+    if not path:
+        from cortex_harness.storage import resolve_storage
+        path = str(resolve_storage(Path.cwd()).falkordb_code_path)
+        setattr(args, "falkordb_path", path)
+    setattr(args, "neo4j_uri", None)
     setattr(args, "neo4j_user", getattr(args, "falkordb_user", None) or "")
     setattr(args, "neo4j_password", getattr(args, "falkordb_password", None) or "")
     resolved_graph = (
@@ -163,6 +135,10 @@ def prepare_graph_args(args: Namespace) -> bool:
 async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver]:
     """Create the selected graph driver, returning None when graph writes are disabled."""
 
+    # Callers may use this helper directly rather than calling
+    # ``prepare_graph_args`` first. Keep the boundary self-contained so the
+    # default FalkorDB provider always derives an embedded local path.
+    prepare_graph_args(args)
     provider = normalize_graph_provider(getattr(args, "graph_provider", None))
     if provider == GraphProvider.NEO4J:
         uri = getattr(args, "neo4j_uri", None)
@@ -188,13 +164,10 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
     return await GraphDriverFactory.create_driver(
         GraphProvider.FALKORDB,
         {
-            "uri": getattr(args, "falkordb_uri", None),
-            "host": getattr(args, "falkordb_host", None),
-            "port": getattr(args, "falkordb_port", None),
-            "user": getattr(args, "falkordb_user", None),
-            "password": getattr(args, "falkordb_password", None),
             "graph": graph_name,
             "database": graph_name,
-            "ssl": bool(getattr(args, "falkordb_ssl", False)),
+            "path": getattr(args, "falkordb_path", None),
+            "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+            "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
         },
     )

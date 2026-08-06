@@ -4,44 +4,30 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
 
-from neo4j import GraphDatabase
 from sentence_transformers import SentenceTransformer
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from tools.common.local_qdrant import default_local_qdrant_path, get_code_qdrant_store, query_points
+from graph_runtime import add_graph_arguments, open_graph_session, prepare_graph_arguments
 
 
 def get_env(name, default=None):
     return os.getenv(name, default)
 
 
-def http_json(method, url, headers=None, payload=None, timeout=60):
-    data = None
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        body = resp.read()
-        return resp.status, json.loads(body.decode("utf-8")) if body else None
-
-
 def qdrant_search(qdrant_url, headers, collection, vector, limit, filter_payload, timeout=30):
-    url = f"{qdrant_url.rstrip('/')}/collections/{collection}/points/search"
-    payload = {
-        "vector": vector,
-        "limit": limit,
-        "filter": filter_payload,
-        "with_payload": True,
-        "with_vectors": False,
-    }
-    try:
-        status, data = http_json("POST", url, headers=headers, payload=payload, timeout=timeout)
-        if status != 200 or not data:
-            return []
-        return data.get("result", [])
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Qdrant search failed: {exc.code} {body}") from exc
+    del headers, timeout
+    return query_points(
+        get_code_qdrant_store(qdrant_url),
+        collection,
+        vector,
+        limit=limit,
+        query_filter=filter_payload,
+    )
 
 
 def parse_args():
@@ -55,9 +41,7 @@ def parse_args():
     parser.add_argument("--code-label", default=get_env("CODE_LABEL"))
     parser.add_argument("--relationship", default=get_env("REL_TYPE", "IMPLEMENTS_LOGIC"))
 
-    parser.add_argument("--neo4j-uri", default=get_env("NEO4J_URI"))
-    parser.add_argument("--neo4j-user", default=get_env("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
+    add_graph_arguments(parser)
     parser.add_argument("--project-id", default=get_env("PROJECT_ID"))
 
     parser.add_argument("--embed-model", default=get_env("CODE_EMBEDDING_MODEL"))
@@ -68,7 +52,7 @@ def parse_args():
         help="Allow loading custom model code from the embedding model repo.",
     )
 
-    parser.add_argument("--qdrant-url", default=get_env("QDRANT_URL", "http://localhost:6333"))
+    parser.add_argument("--qdrant-url", default=default_local_qdrant_path())
     parser.add_argument("--qdrant-api-key", default=get_env("QDRANT_API_KEY"))
     parser.add_argument("--collection", default=get_env("QDRANT_COLLECTION_CODE"))
     parser.add_argument("--qdrant-collection", dest="collection", help="Alias for --collection")
@@ -114,18 +98,15 @@ def parse_args():
 
     args = parser.parse_args()
     missing = []
-    if not args.neo4j_uri:
-        missing.append("NEO4J_URI/--neo4j-uri")
-    if not args.neo4j_user:
-        missing.append("NEO4J_USER/--neo4j-user")
-    if not args.NEO4J_PASS:
-        missing.append("NEO4J_PASS/--neo4j-pass")
     if not args.collection:
         missing.append("QDRANT_COLLECTION_CODE/--collection")
     if missing:
         print("Missing required options: " + ", ".join(missing), file=sys.stderr)
         sys.exit(2)
-    return args
+    try:
+        return prepare_graph_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def read_cache_files(cache_dir):
@@ -269,9 +250,7 @@ def main():
         args.document_id_field,
     )
 
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.NEO4J_PASS))
-    try:
-        with driver.session() as session:
+    with open_graph_session(args) as session:
             total = 0
             linked = 0
             skipped = 0
@@ -368,9 +347,9 @@ def main():
                                 ).single()
                                 if record:
                                     if not record.get("code_exists"):
-                                        print(f"Neo4j missing code node_id={node_id}")
+                                        print(f"Graph missing code node_id={node_id}")
                                     if not record.get("doc_exists"):
-                                        print(f"Neo4j missing paragraph paragraph_id={paragraph_id}")
+                                        print(f"Graph missing paragraph paragraph_id={paragraph_id}")
                             session.run(
                                 paragraph_query,
                                 {
@@ -397,9 +376,9 @@ def main():
                                 ).single()
                                 if record:
                                     if not record.get("code_exists"):
-                                        print(f"Neo4j missing code node_id={node_id}")
+                                        print(f"Graph missing code node_id={node_id}")
                                     if not record.get("doc_exists"):
-                                        print(f"Neo4j missing document document_id={document_id}")
+                                        print(f"Graph missing document document_id={document_id}")
                             session.run(
                                 document_query,
                                 {
@@ -438,9 +417,9 @@ def main():
                             ).single()
                             if record:
                                 if not record.get("code_exists"):
-                                    print(f"Neo4j missing code node_id={node_id}")
+                                    print(f"Graph missing code node_id={node_id}")
                                 if not record.get("doc_exists"):
-                                    print(f"Neo4j missing doc doc_id={doc_id}")
+                                    print(f"Graph missing doc doc_id={doc_id}")
                         session.run(
                             query,
                             {
@@ -459,8 +438,6 @@ def main():
                     time.sleep(args.sleep)
 
             print(f"Total={total} Linked={linked} Skipped={skipped} Failed={failed} MissingIndex={missing_index}")
-    finally:
-        driver.close()
 
 
 if __name__ == "__main__":

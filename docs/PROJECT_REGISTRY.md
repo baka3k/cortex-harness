@@ -30,7 +30,7 @@ from tools.common.project_registry import (
 | `code_qdrant_collection` | Qdrant collection for code embeddings. |
 | `doc_graph` | FalkorDB graph name for the doc side. Disjoint label space from `code_graph`. |
 | `doc_qdrant_collection` | Qdrant collection for doc paragraph vectors. |
-| `parser_type` | Reserved — populated by Phase 03. Currently `None`. |
+| `parser_type` | Parser selected from `project.parser_type`, `project.parser`, or `code.env.PARSER_TYPE`; a per-call override takes precedence. |
 | `provider` | Graph backend name (`"falkordb"` or `"neo4j"`). |
 | `source` | Diagnostic only. `"registry"` when the project was found in config, `"env+defaults"` when seeded from env without a registry entry. Callers must not branch on this. |
 
@@ -69,6 +69,9 @@ silently shadowing an explicitly registered project.
   casefold round-trips identically.
 * Whitespace around the input is trimmed. `None` or empty input raises
   `ProjectNotRegisteredError`.
+* Two registry entries whose identifiers collapse to the same casefold key are
+  rejected with `DuplicateProjectRegistrationError`; resolution never depends
+  on filesystem iteration order.
 
 ---
 
@@ -108,6 +111,8 @@ is negligible; revisit if profiling shows a real bottleneck.
   that does not exist in the config and the env cannot seed an ad-hoc
   project. The exception carries `project_id` and a sorted `known` list of
   every registered project.
+* `DuplicateProjectRegistrationError` — raised when two config files register
+  identifiers that collide after trimming and case folding.
 * `ValueError` from `with_overrides` — raised when an unknown field name is
   passed (guards against typos).
 

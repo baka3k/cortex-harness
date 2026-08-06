@@ -14,7 +14,7 @@ if _ROOT_DIR not in sys.path:
 
 from tools.common.git_diff import load_manifest_paths
 from tools.graph import GraphDriverFactory, GraphProvider, add_require_neo4j_argument, resolve_require_neo4j
-from tools.graph.core.provider_runtime import add_graph_provider_arguments
+from tools.graph.core.provider_runtime import add_graph_provider_arguments, create_graph_driver_from_args
 from tools.graph.writer.servlet_jsp_writer import ServletJspFactWriter
 from tools.servlet_jsp.cache import (
     generation_snapshot_checksum,
@@ -57,7 +57,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     # Accepted for parity with shared analyzer invocations; Servlet/JSP v1
     # deliberately creates no separate vector collection.
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION"))
     parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "auto"))
     parser.add_argument("--disable-message-scan", dest="enable_message_scan", action="store_false")
@@ -266,16 +266,7 @@ async def _prior_semantic_ids(
 
 async def _create_driver(args: argparse.Namespace):
     if args.graph_provider == "falkordb":
-        driver = await GraphDriverFactory.create_driver(
-            GraphProvider.FALKORDB,
-            {
-                "host": args.falkordb_host,
-                "port": args.falkordb_port,
-                "graph": args.falkordb_graph,
-                "username": args.falkordb_user,
-                "password": args.falkordb_password,
-            },
-        )
+        driver = await create_graph_driver_from_args(args)
         verify = getattr(driver, "verify_connection", None)
         if verify is not None and not await verify():
             await _close_driver(driver)

@@ -125,6 +125,8 @@ class DevLifecycleCommandTests(unittest.TestCase):
             "uninstall",
             "infra-up",
             "infra-down",
+            "storage-layout",
+            "storage-init",
             "doctor",
             "start",
             "stop",
@@ -134,6 +136,24 @@ class DevLifecycleCommandTests(unittest.TestCase):
                 result = self.runner.invoke(cli, [action])
                 self.assertEqual(result.exit_code, 0, result.output)
                 run.assert_called_once_with(action)
+
+    def test_storage_migration_forwards_dry_run_and_apply_options(self):
+        with mock.patch("cortex_harness.dev._run_lifecycle") as run:
+            result = self.runner.invoke(
+                cli,
+                ["storage-migrate-layout", "--legacy-root", "/tmp/legacy", "--apply"],
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        run.assert_called_once_with(
+            "storage-migrate-layout",
+            ["--legacy-root", "/tmp/legacy", "--apply"],
+        )
+
+    def test_storage_backup_forwards_owner(self):
+        with mock.patch("cortex_harness.dev._run_lifecycle") as run:
+            result = self.runner.invoke(cli, ["storage-backup", "--owner", "doc"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        run.assert_called_once_with("storage-backup", ["--owner", "doc"])
 
     def test_lifecycle_failure_exit_code_is_preserved(self):
         completed = subprocess.CompletedProcess([], 7)
@@ -153,6 +173,12 @@ class DevLifecycleCommandTests(unittest.TestCase):
         self.assertIn("export CORTEX_HARNESS_ENV_FILE=$runtimeEnvFile", lifecycle)
         self.assertIn("[Environment]::SetEnvironmentVariable(`$_.Name", lifecycle)
         self.assertIn("RuntimeConfig = $runtimeJsonPath", lifecycle)
+
+    def test_windows_lifecycle_has_no_container_runtime_behavior(self):
+        lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("docker", lifecycle.casefold())
+        for action in ("storage-layout", "storage-init", "storage-migrate-layout", "storage-backup"):
+            self.assertIn(f'"{action}"', lifecycle)
 
     def test_git_bash_does_not_rewrite_the_mcp_route(self):
         for relative_path in ("code-tiny/mcp.sh", "doc-tiny/mcp.sh"):

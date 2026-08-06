@@ -1,6 +1,6 @@
 # Validation Interview
 
-status: open
+status: superseded by validation-checklist.md
 date: 2026-07-06
 
 ## Critical Questions
@@ -29,4 +29,3 @@ date: 2026-07-06
 - Use `falkordb-py`.
 - Add new FalkorDB config while keeping Neo4j rollback.
 - Treat constraint and full-text behavior as compatibility risks until verified.
-

@@ -10,19 +10,36 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
+import sys
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 
 CONFIG_DIR = Path(".cortext-harness") / "config"
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+REPO_ROOT = Path(__file__).absolute().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from cortex_harness.storage import StorageRole, resolve_storage, storage_overlay
+
+
+LOCAL_STORAGE_KEYS = frozenset({
+    "CORTEX_DATA_HOME", "CORTEX_STORAGE_INSTANCE", "CORTEX_CODE_STORAGE_OWNER",
+    "CORTEX_DOC_STORAGE_OWNER", "QDRANT_PATH", "QDRANT_CODE_PATH",
+    "QDRANT_DOC_PATH", "FALKORDB_PATH", "FALKORDB_CODE_PATH", "FALKORDB_DOC_PATH",
+})
 
 
 def load_active_config(root: Path) -> Tuple[dict, Optional[Path]]:
     """Return the active harness config, falling back to the first config."""
-    config_dir = Path(root).resolve() / CONFIG_DIR
+    # Keep the caller-visible lexical path. On macOS /var is a symlink to
+    # /private/var; resolving it here made diagnostics and tests disagree with
+    # the explicitly supplied config path.
+    config_dir = Path(os.path.abspath(root)) / CONFIG_DIR
     configs = sorted(config_dir.glob("*.json")) if config_dir.is_dir() else []
     if not configs:
         return {}, None
@@ -57,17 +74,36 @@ def _string_environment(value: object) -> Dict[str, str]:
     return result
 
 
-def _qdrant_url(env: Dict[str, str]) -> Optional[str]:
-    configured = env.get("QDRANT_URL", "").strip()
-    if configured:
-        return configured
-    host = env.get("QDRANT_HOST", "").strip()
-    if not host:
-        return None
-    port = env.get("QDRANT_PORT", "6333").strip() or "6333"
-    if host.startswith(("http://", "https://")):
-        return f"{host.rstrip('/')}:{port}"
-    return f"http://{host}:{port}"
+def active_local_storage_config(root: Path) -> Tuple[Dict[str, str], Optional[Path]]:
+    """Return one conflict-checked local-storage config for lifecycle and MCP use."""
+    config, config_path = load_active_config(root)
+    if not config_path:
+        return {}, None
+    result: Dict[str, str] = {}
+    for section_name in ("code", "doc"):
+        section = config.get(section_name) if isinstance(config, dict) else {}
+        environment = _string_environment(section.get("env") if isinstance(section, dict) else {})
+        for key in LOCAL_STORAGE_KEYS:
+            value = environment.get(key, "").strip()
+            if not value:
+                continue
+            previous = result.get(key)
+            if previous is not None and previous != value:
+                raise ValueError(
+                    f"Active config {config_path} has conflicting {key} values in code/doc sections"
+                )
+            result[key] = value
+    return result, config_path
+
+
+def resolve_active_storage(root: Path, **logical_targets: object):
+    """Resolve the active config, with explicit process-local path overrides winning."""
+    local_config, _ = active_local_storage_config(root)
+    for key in LOCAL_STORAGE_KEYS:
+        value = os.environ.get(key, "").strip()
+        if value:
+            local_config[key] = value
+    return resolve_storage(Path(root), config=local_config, **logical_targets)
 
 
 def runtime_environment(root: Path, server_name: str) -> Dict[str, str]:
@@ -93,38 +129,45 @@ def runtime_environment(root: Path, server_name: str) -> Dict[str, str]:
     provider = (
         env.get(scoped_provider)
         or env.get("GRAPH_PROVIDER")
-        or ("falkordb" if env.get("NEO4J_URI", "").startswith(("redis://", "rediss://")) else "neo4j")
+        or "falkordb"
     ).strip().lower()
     provider = "falkordb" if provider in {"falkor", "falkordb"} else "neo4j"
     env["GRAPH_PROVIDER"] = provider
     env[scoped_provider] = provider
 
     if provider == "falkordb":
-        host = env.get("FALKORDB_HOST", "localhost").strip() or "localhost"
-        port = env.get("FALKORDB_PORT", "6379").strip() or "6379"
-        uri = env.get("FALKORDB_URI", "").strip() or f"redis://{host}:{port}"
-        graph = (
-            env.get("FALKORDB_GRAPH")
-            or env.get("NEO4J_DB")
-            or project_id
-            or "neo4j"
+        explicit_graph = (env.get("FALKORDB_GRAPH") or env.get("NEO4J_DB") or "").strip()
+        graph = (explicit_graph if section_name == "code" else project_id or "default").strip()
+        doc_graph = (
+            explicit_graph if section_name == "doc" else env.get("DOC_FALKORDB_GRAPH")
+            or (f"{project_id}_doc" if project_id else "default_doc")
         ).strip()
-        env.update(
-            {
-                "FALKORDB_HOST": host,
-                "FALKORDB_PORT": port,
-                "FALKORDB_URI": uri,
-                "FALKORDB_GRAPH": graph,
-                # Compatibility aliases are normalized so legacy code cannot
-                # silently route to a different graph/database.
-                "NEO4J_URI": uri,
-                "NEO4J_DB": graph,
-            }
+        code_collection = (env.get("QDRANT_COLLECTION") or project_id or "default").strip()
+        doc_collection = (
+            env.get("QDRANT_COLLECTION_DOC")
+            or (env.get("QDRANT_COLLECTION") if section_name == "doc" else None)
+            or (f"{project_id}_doc" if project_id else "default_doc")
+        ).strip()
+        resolved = resolve_active_storage(
+            Path(root), code_graph=graph, doc_graph=doc_graph,
+            code_collection=code_collection, doc_collection=doc_collection,
         )
-
-    qdrant_url = _qdrant_url(env)
-    if qdrant_url:
-        env["QDRANT_URL"] = qdrant_url
+        role = StorageRole.DOCUMENT if section_name == "doc" else StorageRole.CODE
+        # Remove the network-era fields from the process environment. The
+        # default local runtime must not accidentally connect to a service.
+        for key in tuple(env):
+            if key.startswith("QDRANT_") and key in {"QDRANT_URL", "QDRANT_HOST", "QDRANT_PORT", "QDRANT_API_KEY"}:
+                env.pop(key, None)
+            if key in {"NEO4J_URI", "NEO4J_USER", "NEO4J_USERNAME", "NEO4J_PASS", "NEO4J_PASSWORD"}:
+                env.pop(key, None)
+            if key.startswith("FALKORDB_") and key in {
+                "FALKORDB_URI", "FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT",
+                "FALKORDB_USER", "FALKORDB_PASSWORD", "FALKORDB_SSL",
+            }:
+                env.pop(key, None)
+        env.update(storage_overlay(resolved, owner=role))
+        env["FALKORDB_GRAPH"] = doc_graph if role == StorageRole.DOCUMENT else graph
+        env["NEO4J_DB"] = env["FALKORDB_GRAPH"]
     env["CORTEX_HARNESS_CONFIG_PATH"] = str(config_path)
     return env
 

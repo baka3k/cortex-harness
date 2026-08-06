@@ -1,5 +1,6 @@
 import os
 import json
+import inspect
 import sys
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -30,9 +31,6 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "services.explore_service.get_explore_service",
             return_value=FakeExploreService(),
-        ), patch.dict(
-            unified_mcp.active_project,
-            {"database_name": "cortext"},
         ):
             with patch.object(
                 unified_mcp.cplus_backend,
@@ -46,7 +44,8 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(captured["graph_rel_types"])
         self.assertEqual(captured["project_id"], "project-a")
-        self.assertEqual(captured["db"], "cortext")
+        self.assertEqual(captured["db"], "project-a")
+        self.assertEqual(captured["collection"], "project-a")
         self.assertIn("ApiEndpoint", captured["searchable_labels"])
         self.assertEqual(result["capability"]["canonical_parser"], "spring")
 
@@ -556,44 +555,20 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             (None, "top_k must be greater than 0."),
         )
 
-    async def test_semantic_search_normalizes_numeric_knobs_before_dispatch(self):
-        captured = {}
+    def test_semantic_search_proxy_exposes_project_id_only_for_scope(self):
+        backend = unified_mcp._resolve_proxy_backend_module("semantic_search")
+        raw = getattr(backend, "tool_semantic_search")
+        fn = unified_mcp._unwrap_tool_callable(raw)
+        params = inspect.signature(fn).parameters
+        self.assertIn("project_id", params)
+        self.assertNotIn("db", params)
+        self.assertNotIn("search_full", params)
 
-        async def fake_dispatch(tool_name, payload):
-            captured["tool_name"] = tool_name
-            captured["payload"] = payload
-            return {"results": []}
-
-        tool = getattr(
-            unified_mcp.tool_semantic_search,
-            "fn",
-            unified_mcp.tool_semantic_search,
-        )
-        with patch.object(unified_mcp, "_dispatch_tool", side_effect=fake_dispatch):
-            result = await tool(
-                query="validation",
-                top_k=20,
-                graph_depth=2.0,
-                graph_limit="50",
-            )
-
-        self.assertEqual(result, {"results": []})
-        self.assertEqual(captured["tool_name"], "semantic_search")
-        self.assertEqual(captured["payload"]["top_k"], 20)
-        self.assertEqual(captured["payload"]["graph_depth"], 2)
-        self.assertEqual(captured["payload"]["graph_limit"], 50)
-
-    async def test_semantic_search_returns_tool_error_for_bad_numeric_input(self):
-        tool = getattr(
-            unified_mcp.tool_semantic_search,
-            "fn",
-            unified_mcp.tool_semantic_search,
-        )
-
-        result = await tool(query="validation", top_k="many")
-
-        self.assertEqual(result["error"]["type"], "invalid_parameters")
-        self.assertIn("top_k must be a positive integer", result["error"]["message"])
+    def test_semantic_search_catalog_accepts_project_id(self):
+        accepted = unified_mcp._accepted_params("semantic_search")
+        self.assertIn("project_id", accepted)
+        self.assertNotIn("db", accepted)
+        self.assertNotIn("search_full", accepted)
 
     async def test_explore_graph_returns_tool_error_for_bad_numeric_input(self):
         tool = getattr(

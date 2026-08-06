@@ -164,6 +164,7 @@ class DefaultNamingRuleTests(_BaseTest):
             "alpha", config_dir=self.config_dir
         )
         self.assertEqual(targets.code_graph, "alpha")
+        self.assertEqual(targets.code_graph, "alpha")
         self.assertEqual(targets.code_qdrant_collection, "alpha")
         self.assertEqual(targets.doc_graph, "alpha_doc")
         self.assertEqual(targets.doc_qdrant_collection, "alpha_doc")
@@ -233,6 +234,34 @@ class ExplicitConfigOverrideTests(_BaseTest):
         self.assertEqual(targets.code_qdrant_collection, "gamma")
         self.assertEqual(targets.doc_graph, "gamma_doc")
         self.assertEqual(targets.doc_qdrant_collection, "gamma_doc")
+
+    def test_parser_type_is_read_from_project_descriptor(self) -> None:
+        payload = {
+            "project": {"code": "gamma", "name": "gamma", "parser_type": "python"},
+            "code": {"env": {}},
+            "doc": {"env": {}},
+        }
+        (self.config_dir / "gamma.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        targets = project_registry.resolve_project_targets(
+            "gamma", config_dir=self.config_dir
+        )
+        self.assertEqual(targets.parser_type, "python")
+
+    def test_parser_type_override_wins(self) -> None:
+        payload = {
+            "project": {"code": "gamma", "name": "gamma", "parser": "python"},
+            "code": {"env": {}},
+            "doc": {"env": {}},
+        }
+        (self.config_dir / "gamma.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        targets = project_registry.resolve_project_targets(
+            "gamma", config_dir=self.config_dir, parser_type="typescript"
+        )
+        self.assertEqual(targets.parser_type, "typescript")
 
 
 class DistinctProjectsTests(_BaseTest):
@@ -358,7 +387,22 @@ class ConfigReadingTests(_BaseTest):
         targets = project_registry.resolve_project_targets(
             "alpha", config_dir=self.config_dir
         )
-        self.assertEqual(targets.code_graph, "alpha")
+
+    def test_casefold_duplicate_registrations_are_rejected(self) -> None:
+        self.write_config("Alpha")
+        payload = {
+            "project": {"code": "alpha", "name": "alpha"},
+            "code": {"env": {}},
+            "doc": {"env": {}},
+        }
+        (self.config_dir / "duplicate.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        with self.assertRaises(
+            project_registry.DuplicateProjectRegistrationError
+        ) as ctx:
+            project_registry.list_registered_projects(config_dir=self.config_dir)
+        self.assertIn("alpha", ctx.exception.collisions)
 
 
 class RegistryContractTests(_BaseTest):

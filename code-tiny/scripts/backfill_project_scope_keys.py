@@ -18,9 +18,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
-import requests
-
-
 CODE_TINY = Path(__file__).resolve().parents[1]
 if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
@@ -29,6 +26,11 @@ from tools.common.project_scope import (  # noqa: E402
     PROJECT_ID_NORMALIZED_FIELD,
     normalize_project_id,
     project_id_lookup_key,
+)
+from tools.common.local_qdrant import (  # noqa: E402
+    default_local_qdrant_path,
+    get_code_qdrant_store,
+    scroll_points,
 )
 from tools.graph import GraphDriverFactory, GraphProvider  # noqa: E402
 
@@ -146,14 +148,8 @@ def _qdrant_collections(
     qdrant_url: str,
     timeout: float,
 ) -> list[str]:
-    response = session.get(f"{qdrant_url.rstrip('/')}/collections", timeout=timeout)
-    response.raise_for_status()
-    result = response.json().get("result") or {}
-    return sorted(
-        str(item["name"])
-        for item in result.get("collections", [])
-        if isinstance(item, Mapping) and item.get("name")
-    )
+    del qdrant_url, timeout
+    return sorted(session.list_collection_names())
 
 
 def _set_qdrant_payload(
@@ -165,15 +161,13 @@ def _set_qdrant_payload(
     normalized: str,
     timeout: float,
 ) -> None:
-    response = session.post(
-        f"{qdrant_url.rstrip('/')}/collections/{collection}/points/payload?wait=true",
-        json={
-            "payload": {PROJECT_ID_NORMALIZED_FIELD: normalized},
-            "points": list(point_ids),
-        },
-        timeout=timeout,
+    del qdrant_url, timeout
+    session.set_payload(
+        collection,
+        {PROJECT_ID_NORMALIZED_FIELD: normalized},
+        points=list(point_ids),
+        wait=True,
     )
-    response.raise_for_status()
 
 
 def _ensure_qdrant_project_index(
@@ -183,15 +177,8 @@ def _ensure_qdrant_project_index(
     collection: str,
     timeout: float,
 ) -> None:
-    response = session.put(
-        f"{qdrant_url.rstrip('/')}/collections/{collection}/index?wait=true",
-        json={
-            "field_name": PROJECT_ID_NORMALIZED_FIELD,
-            "field_schema": "keyword",
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
+    del qdrant_url, timeout
+    session.create_payload_index(collection, PROJECT_ID_NORMALIZED_FIELD, wait=True)
 
 
 def backfill_qdrant_collection(
@@ -210,21 +197,14 @@ def backfill_qdrant_collection(
     effective_batch_size = max(1, batch_size)
     offset: Any = None
     while True:
-        body: Dict[str, Any] = {
-            "limit": max(1, page_size),
-            "with_payload": ["project_id", PROJECT_ID_NORMALIZED_FIELD],
-            "with_vector": False,
-        }
-        if offset is not None:
-            body["offset"] = offset
-        response = session.post(
-            f"{qdrant_url.rstrip('/')}/collections/{collection}/points/scroll",
-            json=body,
-            timeout=timeout,
+        points, next_offset = scroll_points(
+            session,
+            collection,
+            limit=max(1, page_size),
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
         )
-        response.raise_for_status()
-        result = response.json().get("result") or {}
-        points = result.get("points") or []
         pending: Dict[str, list[Any]] = defaultdict(list)
         for point in points:
             payload = point.get("payload") or {}
@@ -263,7 +243,7 @@ def backfill_qdrant_collection(
                         timeout=timeout,
                     )
                     inventory.updated += len(batch)
-        offset = result.get("next_page_offset")
+        offset = next_offset
         if offset is None or not points:
             break
 
@@ -286,14 +266,15 @@ def backfill_qdrant_collection(
 
 def _graph_config(args: argparse.Namespace) -> Dict[str, Any]:
     if args.provider == "falkordb":
+        from cortex_harness.storage import resolve_storage
+
         return {
-            "uri": args.falkordb_uri,
-            "host": args.falkordb_host,
-            "port": args.falkordb_port,
-            "user": args.falkordb_user,
-            "password": args.falkordb_password,
+            "path": args.falkordb_path
+            or str(resolve_storage(Path.cwd()).falkordb_code_path),
             "graph": args.database,
             "database": args.database,
+            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
         }
     return {
         "uri": args.neo4j_uri,
@@ -326,7 +307,7 @@ async def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 await close_result
 
     if args.qdrant_url:
-        session = requests.Session()
+        session = get_code_qdrant_store(args.qdrant_url)
         collections = args.collection or _qdrant_collections(
             session, args.qdrant_url, args.timeout
         )
@@ -360,12 +341,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI", "bolt://localhost:7687"))
     parser.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER", ""))
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS", ""))
-    parser.add_argument("--falkordb-uri", default=os.environ.get("FALKORDB_URI"))
-    parser.add_argument("--falkordb-host", default=os.environ.get("FALKORDB_HOST", "localhost"))
-    parser.add_argument("--falkordb-port", type=int, default=int(os.environ.get("FALKORDB_PORT", "6379")))
-    parser.add_argument("--falkordb-user", default=os.environ.get("FALKORDB_USER", ""))
-    parser.add_argument("--falkordb-password", default=os.environ.get("FALKORDB_PASSWORD", ""))
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL", ""))
+    parser.add_argument("--falkordb-path", default=os.environ.get("FALKORDB_PATH"))
+    parser.add_argument("--qdrant-url", default=default_local_qdrant_path())
     parser.add_argument("--collection", action="append", default=[])
     parser.add_argument("--page-size", type=int, default=256)
     parser.add_argument("--batch-size", type=int, default=256)

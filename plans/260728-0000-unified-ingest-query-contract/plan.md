@@ -1,6 +1,6 @@
 ---
 title: "Unified Ingest/Query Contract for mind_mcp and graph_mcp"
-status: pending
+status: completed
 created: 2026-07-28
 mode: hi-plan --full
 scope: code-tiny MCP query/ingest, doc-tiny MCP query/ingest, shared registry, launchers, config loaders
@@ -245,6 +245,18 @@ silent path and the `activate_project` stateful default are both removed.
 5. [Phase 05 — mind_mcp stateless query path](phase-05-mind-mcp-query.md)
 6. [Phase 06 — Unified launcher and config loader](phase-06-launcher-config.md)
 7. [Phase 07 — End-to-end validation and acceptance](phase-07-validation.md)
+
+## Completion Evidence
+
+- Code and document registry resolvers apply the same case-insensitive naming
+  contract and reject ambiguous registrations.
+- Code and document ingest/query/reset routes resolve graph and collection
+  targets per project; document entities and vector payloads carry normalized
+  project scope.
+- The deterministic two-project fixture and `smoke_unified_contract.py`
+  verify disjoint code/document targets, scoped filters, and reset isolation.
+- Both lifecycle launchers emit the same owner-scoped local path and logical
+  target semantics without synthesizing remote database endpoints.
 
 ## Cross-Plan Dependencies
 

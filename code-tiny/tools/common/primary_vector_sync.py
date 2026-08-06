@@ -9,15 +9,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-import time
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from tools.common.project_scope import (
     PROJECT_ID_NORMALIZED_FIELD,
     project_id_lookup_key,
 )
-from urllib.parse import urlparse
 import uuid
+
+from tools.common.local_qdrant import (
+    delete_by_filter,
+    ensure_collection,
+    get_code_qdrant_store,
+)
 
 
 _COLLECTION_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -53,14 +57,9 @@ def vector_configured(url: Optional[str]) -> bool:
     return bool((url or "").strip())
 
 
-def validate_target(url: str, collection: str) -> None:
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ValueError("Qdrant URL must be an absolute http(s) URL")
-    if parsed.username or parsed.password:
-        raise ValueError("Qdrant URL must not embed credentials")
-    if parsed.query or parsed.fragment:
-        raise ValueError("Qdrant URL must not contain a query string or fragment")
+def validate_target(url: str, collection: str, *, store: Any = None) -> None:
+    if store is None:
+        get_code_qdrant_store(url)
     if not collection or not _COLLECTION_RE.fullmatch(collection):
         raise ValueError("Qdrant collection must contain only letters, digits, '_', '-', or '.'")
 
@@ -181,44 +180,8 @@ def documents_from_rows(
     )
 
 
-def _request_with_retry(
-    requests_module: Any,
-    method: str,
-    url: str,
-    *,
-    timeout: float,
-    retries: int,
-    retry_sleep: float,
-    allowed_statuses: Sequence[int] = (),
-    **kwargs: Any,
-) -> Any:
-    request_exception = getattr(requests_module, "RequestException", Exception)
-    for attempt in range(max(0, retries) + 1):
-        try:
-            response = requests_module.request(method, url, timeout=timeout, **kwargs)
-            if response.status_code in allowed_statuses:
-                return response
-            response.raise_for_status()
-            return response
-        except request_exception:
-            if attempt >= max(0, retries):
-                raise
-            time.sleep(max(0.0, retry_sleep))
-    raise RuntimeError("unreachable Qdrant retry state")
-
-
-def _extract_vector_size(response: Any) -> Optional[int]:
-    try:
-        vectors = response.json()["result"]["config"]["params"]["vectors"]
-    except (KeyError, TypeError, ValueError):
-        return None
-    if isinstance(vectors, Mapping) and isinstance(vectors.get("size"), int):
-        return int(vectors["size"])
-    return None
-
-
 def _ensure_collection(
-    requests_module: Any,
+    store: Any,
     *,
     url: str,
     collection: str,
@@ -227,39 +190,12 @@ def _ensure_collection(
     retries: int,
     retry_sleep: float,
 ) -> None:
-    endpoint = f"{url.rstrip('/')}/collections/{collection}"
-    response = _request_with_retry(
-        requests_module,
-        "GET",
-        endpoint,
-        timeout=timeout,
-        retries=retries,
-        retry_sleep=retry_sleep,
-        allowed_statuses=(404,),
-    )
-    if response.status_code == 200:
-        existing_size = _extract_vector_size(response)
-        if existing_size is not None and existing_size != vector_size:
-            raise ValueError(
-                f"Qdrant collection {collection!r} has vector size {existing_size}, "
-                f"but the configured embedder produces {vector_size}"
-            )
-        return
-    if response.status_code != 404:
-        response.raise_for_status()
-    _request_with_retry(
-        requests_module,
-        "PUT",
-        endpoint,
-        json={"vectors": {"size": vector_size, "distance": "Cosine"}},
-        timeout=timeout,
-        retries=retries,
-        retry_sleep=retry_sleep,
-    )
+    del url, timeout, retries, retry_sleep
+    ensure_collection(store, collection, vector_size)
 
 
 def _ensure_project_scope_index(
-    requests_module: Any,
+    store: Any,
     *,
     url: str,
     collection: str,
@@ -267,22 +203,12 @@ def _ensure_project_scope_index(
     retries: int,
     retry_sleep: float,
 ) -> None:
-    _request_with_retry(
-        requests_module,
-        "PUT",
-        f"{url.rstrip('/')}/collections/{collection}/index?wait=true",
-        json={
-            "field_name": PROJECT_ID_NORMALIZED_FIELD,
-            "field_schema": "keyword",
-        },
-        timeout=timeout,
-        retries=retries,
-        retry_sleep=retry_sleep,
-    )
+    del url, timeout, retries, retry_sleep
+    store.create_payload_index(collection, PROJECT_ID_NORMALIZED_FIELD, wait=True)
 
 
 def _delete_stale(
-    requests_module: Any,
+    store: Any,
     *,
     url: str,
     collection: str,
@@ -312,22 +238,9 @@ def _delete_stale(
     point_filter: dict[str, Any] = {"must": must}
     if keep_ids:
         point_filter["must_not"] = [{"has_id": list(keep_ids)}]
-    endpoint = f"{url.rstrip('/')}/collections/{collection}/points/delete?wait=true"
-    try:
-        _request_with_retry(
-            requests_module,
-            "POST",
-            endpoint,
-            json={"filter": point_filter},
-            timeout=timeout,
-            retries=retries,
-            retry_sleep=retry_sleep,
-        )
-    except getattr(requests_module, "RequestException", Exception) as exc:
-        response = getattr(exc, "response", None)
-        if getattr(response, "status_code", None) == 404:
-            return
-        raise
+    del url, timeout, retries, retry_sleep
+    if store.collection_exists(collection):
+        delete_by_filter(store, collection, point_filter)
 
 
 def sync_vector_documents(
@@ -350,15 +263,13 @@ def sync_vector_documents(
     verbose: bool = False,
     requests_module: Any = None,
     embedder_factory: Any = None,
+    store: Any = None,
 ) -> int:
     """Embed, upsert, then delete stale points inside the requested scope."""
 
-    validate_target(url, collection)
-    if requests_module is None:
-        try:
-            import requests as requests_module  # type: ignore[no-redef]
-        except ImportError as exc:  # pragma: no cover - dependency environment
-            raise RuntimeError("Qdrant indexing requires requests") from exc
+    validate_target(url, collection, store=store)
+    del requests_module
+    store = store or get_code_qdrant_store(url)
 
     for document in documents:
         payload = document.payload
@@ -396,7 +307,7 @@ def sync_vector_documents(
         if vector_size <= 0:
             raise RuntimeError("Embedding model returned empty vectors")
         _ensure_collection(
-            requests_module,
+            store,
             url=url,
             collection=collection,
             vector_size=vector_size,
@@ -405,7 +316,7 @@ def sync_vector_documents(
             retry_sleep=retry_sleep,
         )
         _ensure_project_scope_index(
-            requests_module,
+            store,
             url=url,
             collection=collection,
             timeout=timeout,
@@ -418,18 +329,10 @@ def sync_vector_documents(
             points.append({"id": document.id, "vector": values, "payload": document.payload})
         size = max(1, qdrant_batch_size)
         for start in range(0, len(points), size):
-            _request_with_retry(
-                requests_module,
-                "PUT",
-                f"{url.rstrip('/')}/collections/{collection}/points?wait=true",
-                json={"points": points[start:start + size]},
-                timeout=timeout,
-                retries=retries,
-                retry_sleep=retry_sleep,
-            )
+            store.upsert(collection, points[start:start + size], wait=True)
 
     _delete_stale(
-        requests_module,
+        store,
         url=url,
         collection=collection,
         parser=parser,

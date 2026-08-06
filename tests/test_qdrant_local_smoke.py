@@ -158,3 +158,28 @@ def test_filter_query_returns_only_matching_points(tmp_path: Path) -> None:
         store.delete_collection(name)
         store.close()
         reset_clients()
+
+
+def test_two_project_collections_share_owner_but_reset_is_isolated(tmp_path: Path) -> None:
+    reset_clients()
+    resolved = _resolved(tmp_path)
+    store = LocalQdrantStore(resolved, QdrantStorageRole.CODE)
+    alpha = _unique_name("alpha")
+    beta = _unique_name("beta")
+    vector_config = qmodels.VectorParams(size=2, distance=qmodels.Distance.COSINE)
+    store.create_collection(alpha, vectors_config=vector_config)
+    store.create_collection(beta, vectors_config=vector_config)
+    try:
+        store.upsert(alpha, [qmodels.PointStruct(id=1, vector=[1.0, 0.0], payload={})])
+        store.upsert(beta, [qmodels.PointStruct(id=1, vector=[0.0, 1.0], payload={})])
+        store.delete_collection(alpha)
+        assert not store.collection_exists(alpha)
+        assert store.collection_exists(beta)
+        assert store.retrieve(beta, [1])
+    finally:
+        if store.collection_exists(alpha):
+            store.delete_collection(alpha)
+        if store.collection_exists(beta):
+            store.delete_collection(beta)
+        store.close()
+        reset_clients()

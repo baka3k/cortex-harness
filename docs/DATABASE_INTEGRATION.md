@@ -1,377 +1,112 @@
+# Local Database Integration
 
----
+Cortex Harness uses embedded, persistent storage by default:
 
-# Database Integration Guide
+- Qdrant runs through `qdrant-client==1.18.0` local mode.
+- FalkorDB runs through `falkordblite==0.10.0` and an owner-specific `.rdb` file.
+- Python 3.12 or newer is required.
+- No database container, daemon, host, port, credential, or TLS setting is part of the local contract.
 
-This document describes how to configure multiple database types for Cortex Harness, set up the environment, and run sample scan commands using Neo4j or FalkorDB.
+## Storage identity
 
-## Database Architecture
+Physical ownership and logical project scope are intentionally separate:
 
-Cortex Harness uses two main database groups:
+| Identity | Purpose |
+| --- | --- |
+| Data root | Stable account-level application data; defaults to `Path.home() / ".cortext-harness"` |
+| Schema | Versioned physical layout; currently `v1` |
+| Instance | Independent deployment/profile, such as `default` or `team-a` |
+| Owner | Exclusive embedded-store process, normally `code` or `doc` |
+| Project | Registry-resolved graph/collection/payload scope inside an owner store |
 
-| Group | Database | Role | Provider flag |
-| --- | --- | --- | --- |
-| Graph store | Neo4j | Stores code graphs, document graphs, relationships, workflows, and message edges | `--graph-provider neo4j` |
-| Graph store | FalkorDB | Stores graphs similar to Neo4j via the Redis/FalkorDB protocol | `--graph-provider falkordb` |
-| Vector store | Qdrant | Stores embeddings for code/doc/message searches | Does not use `--graph-provider`; configured via `QDRANT_*` variables |
+Ten projects may therefore share one code owner and one document owner while retaining distinct graph and collection names. Moving a source checkout updates registry metadata; it does not move database files.
 
-`code-tiny/tools` uses a shared helper `tools.graph.cli`:
+## Canonical paths
 
-* `CODE_GRAPH_PROVIDER` or `GRAPH_PROVIDER`
-* `--graph-provider neo4j|falkordb`
-* `--falkordb-*` flags when FalkorDB is selected
-* `--neo4j-*` flags are retained as compatibility aliases for legacy commands
-
-Framework graph writers use the same `GraphDriver` factory for Neo4j and FalkorDB. Spring, Servlet/JSP, and MyBatis facts merge by stable ID, carry `project_id` and `framework`, and never delete canonical Java/Kotlin nodes. Servlet/JSP facts are generation-scoped; only the generation named by `ServletJspAnalysisState.active_generation` is queryable, and failed staging leaves the prior generation active.
-
-Run `code-tiny/scripts/setup_constraints.py` after adding framework support to create the v2 full-text indexes and framework ID/project/generation indexes. The schema definitions are idempotent. When a graph service is unavailable, deterministic fake-driver tests still validate the provider-neutral query and parameter contract; live parity tests should be run before production rollout.
-
-`doc-tiny` uses its own adapter `doc-tiny/graph_store.py`:
-
-* `DOC_GRAPH_PROVIDER` or `GRAPH_PROVIDER`
-* `--graph-provider neo4j|falkordb`
-
-## Python Environment Setup
-
-Run the following commands from the repository root:
-
-```powershell
-cd C:\ai\cortex-harness
-py -3.10 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip install -e .
-
+```text
+~/.cortext-harness/
+└── v1/instances/<instance>/
+    ├── manifest.json
+    ├── qdrant/
+    │   ├── code/
+    │   └── doc/
+    ├── falkordb/
+    │   ├── code/data.rdb
+    │   └── doc/data.rdb
+    └── backups/<UTC timestamp>/
 ```
 
-If the repository already has a `.venv`, simply activate it:
+The account home is resolved at runtime. Do not hardcode `/Users/...`, `/home/...`, or `C:\\Users\\...` in configuration.
 
-```powershell
-cd C:\ai\cortex-harness
-.\.venv\Scripts\Activate.ps1
+Supported overrides:
 
+```bash
+export CORTEX_DATA_HOME=/path/to/portable-data
+export CORTEX_STORAGE_INSTANCE=team-a
 ```
 
-Verify key dependencies:
+Launchers derive `QDRANT_CODE_PATH`, `QDRANT_DOC_PATH`, `FALKORDB_CODE_PATH`, and `FALKORDB_DOC_PATH`. `FALKORDB_PATH` is the selected owner's compatibility alias. Relative explicit path overrides are resolved against the active project root; defaults never are.
 
-```powershell
-python -c "import neo4j, falkordb, qdrant_client; print('database deps ok')"
+Remote endpoint keys such as `QDRANT_URL`, `QDRANT_HOST`, `FALKORDB_URI`, and `FALKORDB_HOST` are legacy configuration. Remove them before local startup and explicitly export/re-ingest remote data; Cortex Harness will not silently substitute an empty local store.
 
+## Initialize and inspect
+
+```bash
+make build
+make storage-init
+make storage-layout
+make doctor
 ```
 
-## Running Databases Locally
+Equivalent global commands are `dev storage-init`, `dev storage-layout`, and `dev doctor`.
 
-### Neo4j
+`storage-init` creates the versioned tree and an idempotent manifest. `storage-layout` reports resolved paths and current lease metadata. `doctor` performs isolated temporary-store round trips and does not write probe collections or graphs into production owner stores.
 
-Docker example:
+## Concurrency
 
-```powershell
-docker run --name cortex-neo4j `
-  -p 7474:7474 -p 7687:7687 `
-  -e NEO4J_AUTH=neo4j/password `
-  neo4j:5
+Qdrant local directories and FalkorDBLite files are single-owner resources. Code and document MCPs use distinct paths so they can run simultaneously. A second process must not directly open an owner path while its MCP is running.
 
+Before ingest, reset, migration, or backup that directly opens an owner store:
+
+```bash
+dev stop
 ```
 
-Environment variables:
+If arbitrary concurrent clients are required, use an explicitly designed remote backend outside this local-runtime contract.
 
-```powershell
-$env:GRAPH_PROVIDER="neo4j"
-$env:CODE_GRAPH_PROVIDER="neo4j"
-$env:DOC_GRAPH_PROVIDER="neo4j"
-$env:NEO4J_URI="bolt://localhost:7687"
-$env:NEO4J_USER="neo4j"
-$env:NEO4J_PASS="password"
-$env:NEO4J_DB="neo4j"
+## Legacy repository-local migration
 
+The previous layout is recognized beneath a chosen legacy root:
+
+```text
+local_qdrant_db/{code,doc}/
+local_falkordb_db/cortex.rdb
 ```
 
-### FalkorDB
+Preview first, then apply:
 
-Docker example:
-
-```powershell
-docker run --name cortex-falkordb `
-  -p 6379:6379 `
-  falkordb/falkordb
-
+```bash
+dev storage-migrate-layout --legacy-root /path/to/cortex-harness
+dev storage-migrate-layout --legacy-root /path/to/cortex-harness --apply
 ```
 
-Environment variables:
+Migration copies and hashes content, refuses to merge divergent targets, and leaves all source files intact. Existing remote services and volumes are not modified; export/re-ingest them separately.
 
-```powershell
-$env:GRAPH_PROVIDER="falkordb"
-$env:CODE_GRAPH_PROVIDER="falkordb"
-$env:DOC_GRAPH_PROVIDER="falkordb"
-$env:FALKORDB_HOST="localhost"
-$env:FALKORDB_PORT="6379"
-$env:FALKORDB_GRAPH="neo4j"
-$env:FALKORDB_PASSWORD=""
+## Backup
 
+Stop the selected owner, then run:
+
+```bash
+dev storage-backup --owner code
+dev storage-backup --owner doc
 ```
 
-If using a URI:
+Each backup is written under the instance `backups/` directory with a manifest and SHA-256 verification. Keep the original owner data until restore validation succeeds.
 
-```powershell
-$env:FALKORDB_URI="redis://localhost:6379"
-$env:FALKORDB_GRAPH="neo4j"
+## Troubleshooting
 
-```
-
-### Qdrant
-
-Qdrant operates independently of the graph provider and is shared by both Neo4j and FalkorDB.
-
-```powershell
-docker run --name cortex-qdrant `
-  -p 6333:6333 `
-  qdrant/qdrant
-
-```
-
-Environment variables:
-
-```powershell
-$env:QDRANT_URL="http://localhost:6333"
-$env:QDRANT_COLLECTION="code_functions"
-$env:MESSAGE_QDRANT_COLLECTION="code_messages"
-
-```
-
-## Scanning Code with Neo4j
-
-Example of scanning a Python project:
-
-```powershell
-cd C:\ai\cortex-harness
-.\.venv\Scripts\Activate.ps1
-
-python code-tiny\tools\python\python_analyzer.py `
-  --root C:\path\to\project `
-  --graph-provider neo4j `
-  --neo4j-uri bolt://localhost:7687 `
-  --neo4j-user neo4j `
-  --neo4j-password password `
-  --neo4j-db neo4j `
-  --qdrant-url http://localhost:6333 `
-  --qdrant-collection my_project_functions `
-  --project-id my_project `
-  --project-name "My Project" `
-  --repo my_project `
-  --verbose
-
-```
-
-Example of scanning messages separately:
-
-```powershell
-python code-tiny\tools\sync\message_scan.py `
-  --root C:\path\to\project `
-  --graph-provider neo4j `
-  --neo4j-uri bolt://localhost:7687 `
-  --neo4j-user neo4j `
-  --neo4j-password password `
-  --neo4j-db neo4j `
-  --qdrant-url http://localhost:6333 `
-  --parsers python,ts,java `
-  --project-id my_project `
-  --project-name "My Project" `
-  --repo my_project `
-  --verbose
-
-```
-
-## Scanning Code with FalkorDB
-
-Example of scanning a Python project:
-
-```powershell
-cd C:\ai\cortex-harness
-.\.venv\Scripts\Activate.ps1
-
-python code-tiny\tools\python\python_analyzer.py `
-  --root C:\path\to\project `
-  --graph-provider falkordb `
-  --falkordb-host localhost `
-  --falkordb-port 6379 `
-  --falkordb-graph my_project_graph `
-  --qdrant-url http://localhost:6333 `
-  --qdrant-collection my_project_functions `
-  --project-id my_project `
-  --project-name "My Project" `
-  --repo my_project `
-  --verbose
-
-```
-
-Example using a URI:
-
-```powershell
-python code-tiny\tools\python\python_analyzer.py `
-  --root C:\path\to\project `
-  --graph-provider falkordb `
-  --falkordb-uri redis://localhost:6379 `
-  --falkordb-graph my_project_graph `
-  --qdrant-url http://localhost:6333 `
-  --project-id my_project `
-  --project-name "My Project" `
-  --repo my_project `
-  --verbose
-
-```
-
-Example of scanning messages separately with FalkorDB:
-
-```powershell
-python code-tiny\tools\sync\message_scan.py `
-  --root C:\path\to\project `
-  --graph-provider falkordb `
-  --falkordb-host localhost `
-  --falkordb-port 6379 `
-  --falkordb-graph my_project_graph `
-  --qdrant-url http://localhost:6333 `
-  --parsers python,ts,java `
-  --project-id my_project `
-  --project-name "My Project" `
-  --repo my_project `
-  --verbose
-
-```
-
-## Incremental Sync
-
-Neo4j:
-
-```powershell
-python code-tiny\tools\sync\incremental_sync.py `
-  --root C:\path\to\project `
-  --graph-provider neo4j `
-  --neo4j-uri bolt://localhost:7687 `
-  --neo4j-user neo4j `
-  --neo4j-password password `
-  --neo4j-db neo4j `
-  --qdrant-url http://localhost:6333 `
-  --project-id my_project `
-  --project-name "My Project" `
-  --parsers auto `
-  --allow-full-fallback `
-  --verbose
-
-```
-
-FalkorDB:
-
-```powershell
-python code-tiny\tools\sync\incremental_sync.py `
-  --root C:\path\to\project `
-  --graph-provider falkordb `
-  --falkordb-host localhost `
-  --falkordb-port 6379 `
-  --falkordb-graph my_project_graph `
-  --qdrant-url http://localhost:6333 `
-  --project-id my_project `
-  --project-name "My Project" `
-  --parsers auto `
-  --allow-full-fallback `
-  --verbose
-
-```
-
-`incremental_sync.py` forwards `CODE_GRAPH_PROVIDER` and `FALKORDB_*` variables to downstream child analyzers via the environment, so you do not need to repeat the provider flags in each subprocess.
-
-## Document Scanning with doc-tiny
-
-Neo4j:
-
-```powershell
-python doc-tiny\graphrag_ingest_langextract.py `
-  --raw-text "OpenAI builds AI systems. Azure hosts cloud services." `
-  --source-id sample_doc `
-  --collection sample_docs `
-  --graph-provider neo4j `
-  --neo4j-uri bolt://localhost:7687 `
-  --neo4j-user neo4j `
-  --neo4j-pass password `
-  --qdrant-url http://localhost:6333 `
-  --entity-provider gliner `
-  --graph-batch-size 50
-
-```
-
-FalkorDB:
-
-```powershell
-python doc-tiny\graphrag_ingest_langextract.py `
-  --raw-text "OpenAI builds AI systems. Azure hosts cloud services." `
-  --source-id sample_doc `
-  --collection sample_docs `
-  --graph-provider falkordb `
-  --falkordb-host localhost `
-  --falkordb-port 6379 `
-  --falkordb-graph sample_docs_graph `
-  --qdrant-url http://localhost:6333 `
-  --entity-provider gliner `
-  --graph-batch-size 50
-
-```
-
-Note that `--neo4j-batch-size` remains available as a legacy alias for `--graph-batch-size`.
-
-## Provider and Environment Priority
-
-`code-tiny/tools`:
-
-1. CLI `--graph-provider`
-2. `CODE_GRAPH_PROVIDER`
-3. `GRAPH_PROVIDER`
-4. Default: `neo4j`
-
-`doc-tiny`:
-
-1. CLI `--graph-provider`
-2. `DOC_GRAPH_PROVIDER`
-3. `GRAPH_PROVIDER`
-4. Default: `neo4j`
-
-## Compatibility Notes
-
-* Neo4j specifies the database name via `--neo4j-db`.
-* FalkorDB specifies the graph name via `--falkordb-graph`.
-* During this transition phase, some internal variables are still named `neo4j_db`; when using FalkorDB, these are mapped to the graph name.
-* Qdrant functions independently of Neo4j or FalkorDB; settings like `QDRANT_URL`, collection, timeout, and retries remain unchanged.
-* Legacy documentation and examples may still refer to Neo4j, as Neo4j remains a fully supported provider.
-
-## Quick Troubleshooting
-
-Verify if the CLI detects the new provider:
-
-```powershell
-python code-tiny\tools\sync\message_scan.py --help | Select-String "graph-provider|falkordb"
-python doc-tiny\graphrag_ingest_langextract.py --help | Select-String "graph-provider|falkordb|graph-batch"
-
-```
-
-If FalkorDB returns a "connection refused" error:
-
-```powershell
-docker ps
-Test-NetConnection localhost -Port 6379
-
-```
-
-If Neo4j returns an "authentication failed" error:
-
-```powershell
-$env:NEO4J_URI="bolt://localhost:7687"
-$env:NEO4J_USER="neo4j"
-$env:NEO4J_PASS="password"
-
-```
-
-If the analyzer fails to write to the graph:
-
-* Double-check the `--graph-provider` flag.
-* For Neo4j, ensure `--neo4j-uri`, `--neo4j-user`, and `--neo4j-password` are all correctly provided.
-* For FalkorDB, ensure the service is running at the specified `--falkordb-host/--falkordb-port` or `--falkordb-uri`.
-* Enable the `--verbose` flag to inspect connection and batch write logs.
+- **Unsupported Python:** install Python 3.12+ and rerun `make build`.
+- **FalkorDBLite import failure on macOS:** install the platform OpenMP runtime, rebuild the virtual environment, and rerun `make doctor`.
+- **Owner lease conflict:** stop the process named in the lease diagnostic or select another `CORTEX_STORAGE_INSTANCE`.
+- **Permission failure:** choose a writable `CORTEX_DATA_HOME`; do not run the application with elevated privileges merely to access another account's data.
+- **Remote-only configuration rejected:** export or re-ingest the remote dataset, remove endpoint/credential fields, and run `storage-init` again.

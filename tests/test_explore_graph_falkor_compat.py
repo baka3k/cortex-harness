@@ -20,6 +20,7 @@ from tools.common.intelligent_retrieval import (  # noqa: E402
     _graph_keyword_search,
 )
 from tools.graph import GraphProvider  # noqa: E402
+from tools.graph.core.shared_runtime import reset_shared_graph_drivers  # noqa: E402
 
 
 class SessionlessFalkorLikeDriver:
@@ -73,6 +74,12 @@ class SessionlessFalkorLikeDriver:
 
 
 class ExploreGraphFalkorCompatTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        reset_shared_graph_drivers()
+
+    def tearDown(self):
+        reset_shared_graph_drivers()
+
     def test_explore_defaults_match_unified_falkordb_runtime(self):
         self.assertEqual(explore_service_module._DEFAULT_GRAPH_PROVIDER, "falkordb")
         self.assertEqual(explore_service_module._DEFAULT_GRAPH_DB, "hyper_graph")
@@ -80,9 +87,10 @@ class ExploreGraphFalkorCompatTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(service._graph_provider, "falkordb")
         self.assertEqual(service._neo4j_db, "hyper_graph")
 
-    async def test_make_graph_driver_selects_falkordb_for_redis_uri(self):
+    async def test_make_graph_driver_uses_local_path_and_ignores_legacy_redis_uri(self):
         fake_driver = object()
-        with patch.dict(os.environ, {}, clear=True):
+        local_path = str(ROOT / "storage-test" / "code" / "data.rdb")
+        with patch.dict(os.environ, {"FALKORDB_PATH": local_path}, clear=True):
             with patch(
                 "tools.graph.GraphDriverFactory.create_driver",
                 new=AsyncMock(return_value=fake_driver),
@@ -97,12 +105,14 @@ class ExploreGraphFalkorCompatTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(driver, fake_driver)
         provider, config = create_driver.await_args.args
         self.assertEqual(provider, GraphProvider.FALKORDB)
-        self.assertEqual(config["uri"], "redis://localhost:6379")
+        self.assertEqual(config["path"], local_path)
         self.assertEqual(config["database"], "code_graph")
+        self.assertFalse({"uri", "host", "port", "user", "password"} & config.keys())
 
     async def test_make_graph_driver_ignores_legacy_bolt_uri_when_provider_is_falkor(self):
         fake_driver = object()
-        with patch.dict(os.environ, {}, clear=True):
+        local_path = str(ROOT / "storage-test" / "code" / "data.rdb")
+        with patch.dict(os.environ, {"FALKORDB_PATH": local_path}, clear=True):
             with patch("services.explore_service._DEFAULT_GRAPH_PROVIDER", "falkordb"):
                 with patch(
                     "tools.graph.GraphDriverFactory.create_driver",
@@ -118,10 +128,9 @@ class ExploreGraphFalkorCompatTest(unittest.IsolatedAsyncioTestCase):
         self.assertIs(driver, fake_driver)
         provider, config = create_driver.await_args.args
         self.assertEqual(provider, GraphProvider.FALKORDB)
-        self.assertIsNone(config["uri"])
-        self.assertEqual(config["host"], "localhost")
-        self.assertEqual(config["port"], 6379)
+        self.assertEqual(config["path"], local_path)
         self.assertEqual(config["database"], "code_graph")
+        self.assertFalse({"uri", "host", "port", "user", "password"} & config.keys())
 
     def test_keyword_search_uses_graph_driver_execute_query_sync(self):
         driver = SessionlessFalkorLikeDriver()

@@ -16,6 +16,8 @@ Usage
         --project-id   <uuid>          \\
         --project-name <display name>  \\
         [--project-slug <slug>]        \\
+        [--graph-provider falkordb]    \\
+        [--falkordb-path <data.rdb>]   \\
         [--neo4j-uri   bolt://...]     \\
         [--neo4j-user  neo4j]          \\
         [--neo4j-password ...]         \\
@@ -25,48 +27,16 @@ Usage
 from __future__ import annotations
 
 import argparse
-import base64
+import asyncio
 import os
-import re
-import sys
 import time
+from argparse import Namespace
 
-from neo4j import GraphDatabase
-from neo4j.exceptions import ServiceUnavailable, TransientError
-
-# ---------------------------------------------------------------------------
-# Password decryption helper (shared pattern with setup_graph_project.py)
-# ---------------------------------------------------------------------------
-
-_FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
-
-
-def _maybe_decrypt_password(password: str) -> str:
-    if not _FERNET_TOKEN_RE.match(password):
-        return password
-    try:
-        from cryptography.fernet import Fernet
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    except ImportError:
-        return password
-    enc_pw = os.environ.get("HYPER_PACK_ENCRYPTION_PASSWORD", "my-secret-encryption-key-2026")
-    try:
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=b"static_salt_2026",
-            iterations=100_000,
-        )
-        key = base64.urlsafe_b64encode(kdf.derive(enc_pw.encode("utf-8")))
-        return Fernet(key).decrypt(password.encode("utf-8")).decode("utf-8")
-    except Exception as exc:
-        print(
-            f"[link_project_repos] warning: could not decrypt NEO4J_PASS ({exc}); "
-            "using value as-is",
-            file=sys.stderr,
-        )
-        return password
+from tools.graph.cli import (
+    add_graph_provider_args,
+    create_graph_driver_from_args,
+    env_graph_provider,
+)
 
 # ---------------------------------------------------------------------------
 # Cypher
@@ -106,28 +76,48 @@ def run(
     neo4j_user: str,
     neo4j_pass: str,
     neo4j_db: str,
+    graph_provider: str | None = None,
+    falkordb_path: str | None = None,
+    falkordb_graph: str | None = None,
 ) -> int:
-    driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, _maybe_decrypt_password(neo4j_pass)))
+    args = Namespace(
+        project_id=project_id,
+        graph_provider=graph_provider or env_graph_provider(),
+        falkordb_path=falkordb_path,
+        falkordb_graph=falkordb_graph,
+        neo4j_uri=neo4j_uri,
+        neo4j_user=neo4j_user,
+        neo4j_password=neo4j_pass,
+        neo4j_db=neo4j_db,
+    )
+    driver = asyncio.run(create_graph_driver_from_args(args))
+    if driver is None:
+        raise RuntimeError(
+            "Neo4j rollback mode requires URI, user, and password credentials."
+        )
     try:
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                with driver.session(database=neo4j_db) as session:
-                    result = session.run(
-                        _LINK_REPOS_QUERY,
-                        project_id=project_id,
-                        project_name=project_name,
-                        project_slug=project_slug,
-                    )
-                    linked = result.single()["linked"]
+                records, _, _ = driver.execute_query_sync(
+                    _LINK_REPOS_QUERY,
+                    {
+                        "project_id": project_id,
+                        "project_name": project_name,
+                        "project_slug": project_slug,
+                    },
+                    args.neo4j_db,
+                )
+                linked = int((records[0] if records else {}).get("linked", 0))
+                print(
+                    f"[link_project_repos] OK  "
+                    f"project={project_id!r}  repos_linked={linked}"
+                )
+                return linked
+            except Exception as exc:
+                transient = exc.__class__.__name__ in {"TransientError", "ServiceUnavailable"}
+                if transient and attempt < _MAX_RETRIES:
                     print(
-                        f"[link_project_repos] OK  "
-                        f"project={project_id!r}  repos_linked={linked}"
-                    )
-                    return linked
-            except TransientError as exc:
-                if attempt < _MAX_RETRIES:
-                    print(
-                        f"[link_project_repos] TransientError (attempt {attempt}/{_MAX_RETRIES}): "
+                        f"[link_project_repos] transient error (attempt {attempt}/{_MAX_RETRIES}): "
                         f"{exc} — retrying in {_RETRY_DELAY}s"
                     )
                     time.sleep(_RETRY_DELAY)
@@ -163,12 +153,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--neo4j-password",
-        default=os.getenv("NEO4J_PASS", "abcd1234"),
+        default=os.getenv("NEO4J_PASS", ""),
     )
     parser.add_argument(
         "--neo4j-db",
         default=os.getenv("NEO4J_DB", "neo4j"),
     )
+    add_graph_provider_args(parser)
     args = parser.parse_args()
 
     slug = args.project_slug or args.project_name.lower().replace(" ", "-")
@@ -181,6 +172,9 @@ def main() -> None:
         neo4j_user=args.neo4j_user,
         neo4j_pass=args.neo4j_password,
         neo4j_db=args.neo4j_db,
+        graph_provider=args.graph_provider,
+        falkordb_path=args.falkordb_path,
+        falkordb_graph=args.falkordb_graph,
     )
 
 

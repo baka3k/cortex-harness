@@ -1,4 +1,5 @@
-falkordblite
+qdrant-client==1.18.0
+falkordblite==0.10.0
 # FastMCP dependencies
 fastmcp
 

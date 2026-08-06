@@ -7,6 +7,8 @@ import warnings
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 # Make sure code-tiny is on the import path so the relative `tools.graph.*`
 # imports resolve. Tests run from the repository root.
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +122,28 @@ def test_driver_close_handles_exceptions(tmp_path: Path) -> None:
     ), patch.object(FalkorDBDriver, "_graph_for", return_value=object()):
         driver = FalkorDBDriver(path=rdb, graph="hyper_graph")
     driver.close()  # must not raise
+
+
+def test_real_falkordblite_persists_and_isolates_graphs(tmp_path: Path) -> None:
+    pytest.importorskip("redislite.falkordb_client")
+    rdb = tmp_path / "owner" / "data.rdb"
+    first = FalkorDBDriver(path=rdb, graph="alpha", owner_id="code")
+    first.execute_query_sync("CREATE (:Probe {id: $id})", {"id": "one"})
+    with pytest.raises(Exception, match="already owned"):
+        FalkorDBDriver(path=rdb, graph="alpha", owner_id="code")
+    first.close()
+
+    reopened = FalkorDBDriver(path=rdb, graph="alpha", owner_id="code")
+    records, _, _ = reopened.execute_query_sync(
+        "MATCH (n:Probe {id: $id}) RETURN count(n) AS count", {"id": "one"},
+    )
+    assert records == [{"count": 1}]
+    reopened.close()
+
+    other_graph = FalkorDBDriver(path=rdb, graph="beta", owner_id="code")
+    records, _, _ = other_graph.execute_query_sync("MATCH (n:Probe) RETURN count(n) AS count")
+    assert records == [{"count": 0}]
+    other_graph.close()
 
 
 def _make_fake_client() -> object:

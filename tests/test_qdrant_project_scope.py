@@ -20,28 +20,35 @@ from java import java_mcp  # noqa: E402
 from tools.common import intelligent_retrieval  # noqa: E402
 
 
-class _Response:
-    def raise_for_status(self):
-        return None
+class _QueryResponse:
+    points = []
 
-    def json(self):
-        return {"result": {"points": []}}
+
+class _LocalStore:
+    def __init__(self):
+        self.queries = []
+
+    def query_points(self, collection_name, **kwargs):
+        self.queries.append((collection_name, kwargs))
+        return _QueryResponse()
 
 
 class QdrantProjectScopeTests(unittest.TestCase):
     def test_semantic_backends_add_server_side_project_filter(self):
         for backend in (fastmcp_server, cplus_mcp, android_mcp, java_mcp):
+            store = _LocalStore()
             with self.subTest(backend=backend.__name__), patch.object(
-                backend.httpx, "post", return_value=_Response(),
-            ) as post:
+                backend, "get_code_qdrant_store", return_value=store,
+            ) as get_store:
                 backend._qdrant_search(
-                    "symbols", [0.1, 0.2], 5, "http://qdrant",
+                    "symbols", [0.1, 0.2], 5, "local-code-store",
                     project_id="PrOjEcT-A",
                 )
 
-                request = post.call_args.kwargs["json"]
+                get_store.assert_called_once_with()
+                request = store.queries[0][1]
                 self.assertEqual(
-                    request["filter"],
+                    request["query_filter"].model_dump(exclude_none=True),
                     {"must": [{
                         "key": "project_id_normalized",
                         "match": {"value": "project-a"},
@@ -50,26 +57,29 @@ class QdrantProjectScopeTests(unittest.TestCase):
 
     def test_semantic_backends_leave_unscoped_requests_unfiltered(self):
         for backend in (fastmcp_server, cplus_mcp, android_mcp, java_mcp):
+            store = _LocalStore()
             with self.subTest(backend=backend.__name__), patch.object(
-                backend.httpx, "post", return_value=_Response(),
-            ) as post:
-                backend._qdrant_search("symbols", [0.1, 0.2], 5, "http://qdrant")
+                backend, "get_code_qdrant_store", return_value=store,
+            ):
+                backend._qdrant_search("symbols", [0.1, 0.2], 5, "local-code-store")
 
-                self.assertNotIn("filter", post.call_args.kwargs["json"])
+                self.assertIsNone(store.queries[0][1]["query_filter"])
 
     def test_explore_qdrant_search_adds_project_filter(self):
+        store = _LocalStore()
         with patch.object(
-            intelligent_retrieval.httpx, "post", return_value=_Response(),
-        ) as post, patch.object(
+            intelligent_retrieval, "get_code_qdrant_store", return_value=store,
+        ) as get_store, patch.object(
             intelligent_retrieval, "_resolve_vector_layout", return_value=None,
         ):
             intelligent_retrieval._qdrant_search(
-                "http://qdrant", "symbols", [0.1, 0.2], 5,
+                "local-code-store", "symbols", [0.1, 0.2], 5,
                 project_id="PrOjEcT-A",
             )
 
+        get_store.assert_called_once_with("local-code-store")
         self.assertEqual(
-            post.call_args.kwargs["json"]["filter"],
+            store.queries[0][1]["query_filter"].model_dump(exclude_none=True),
             {"must": [{
                 "key": "project_id_normalized",
                 "match": {"value": "project-a"},
@@ -82,6 +92,7 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
         for backend in (fastmcp_server, cplus_mcp, android_mcp, java_mcp):
             tool = getattr(backend.tool_semantic_search, "fn", backend.tool_semantic_search)
             for mode in ("comment", "code", "combined"):
+                store = _LocalStore()
                 with self.subTest(backend=backend.__name__, mode=mode), patch.object(
                     backend, "_embed_query", return_value=[0.1, 0.2],
                 ), patch.object(
@@ -93,8 +104,8 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                     "_filter_collections_for_vector",
                     AsyncMock(return_value=([("symbols", None)], [])),
                 ), patch.object(
-                    backend.httpx, "post", return_value=_Response(),
-                ) as post:
+                    backend, "get_code_qdrant_store", return_value=store,
+                ):
                     if backend in (cplus_mcp, android_mcp):
                         await tool(payload={
                             "query": "orders",
@@ -111,7 +122,7 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                         )
 
                 self.assertEqual(
-                    post.call_args.kwargs["json"]["filter"],
+                    store.queries[-1][1]["query_filter"].model_dump(exclude_none=True),
                     {"must": [{
                         "key": "project_id_normalized",
                         "match": {"value": "project-a"},

@@ -44,6 +44,20 @@ class MakeLifecycleTests(unittest.TestCase):
         )
         self.assertNotIn("import falkordblite", LIFECYCLE.PYTHON_DEPENDENCY_PROBE)
 
+    def test_embedded_storage_dependencies_are_pinned_consistently(self):
+        expected = {"qdrant-client==1.18.0", "falkordblite==0.10.0"}
+        for relative in ("requirements.txt", "code-tiny/requirements.txt", "doc-tiny/requirements.txt"):
+            with self.subTest(requirements=relative):
+                lines = {
+                    line.strip()
+                    for line in (ROOT / relative).read_text(encoding="utf-8").splitlines()
+                    if line.strip() and not line.lstrip().startswith("#")
+                }
+                self.assertTrue(expected.issubset(lines))
+        metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        for dependency in expected:
+            self.assertIn(f'"{dependency}"', metadata)
+
     def test_make_help_does_not_require_powershell(self):
         result = subprocess.run(
             ["make", "help"],
@@ -64,6 +78,10 @@ class MakeLifecycleTests(unittest.TestCase):
             "uninstall",
             "infra-up",
             "infra-down",
+            "storage-layout",
+            "storage-init",
+            "storage-migrate-layout",
+            "storage-backup",
             "doctor",
             "start",
             "stop",
@@ -78,8 +96,12 @@ class MakeLifecycleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("pwsh", result.stdout)
+        expected_python = ".venv/bin/python" if (ROOT / ".venv/bin/python").exists() else "python3"
         for target in targets:
-            self.assertIn(f"python3 scripts/mcp-lifecycle.py {target}", result.stdout)
+            self.assertIn(
+                f"{expected_python} scripts/mcp-lifecycle.py {target}",
+                result.stdout,
+            )
 
     def test_install_and_uninstall_use_user_local_bin(self):
         with tempfile.TemporaryDirectory() as home:
@@ -134,10 +156,12 @@ class MakeLifecycleTests(unittest.TestCase):
                 self.assertIn(str(server["script"]), content)
                 self.assertIn(f"export CORTEX_HARNESS_ENV_FILE={runtime_env}", content)
                 self.assertIn('export GRAPH_PROVIDER="${GRAPH_PROVIDER:-falkordb}"', content)
-                self.assertIn('export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"', content)
-                self.assertIn("export FALKORDB_GRAPH=cortext", active_content)
-                self.assertIn("export NEO4J_DB=cortext", active_content)
-                self.assertIn("export QDRANT_URL=http://localhost:6333", active_content)
+                self.assertNotIn("FALKORDB_URI", content)
+                self.assertIn("export CORTEX_STORAGE_INSTANCE=default", active_content)
+                self.assertIn("export CORTEX_DATA_HOME=", active_content)
+                self.assertIn("export FALKORDB_PATH=", active_content)
+                self.assertIn("export QDRANT_CODE_PATH=", active_content)
+                self.assertNotIn("QDRANT_URL", active_content)
                 scoped_provider = "DOC_GRAPH_PROVIDER" if server["name"] == "doc-tiny" else "CODE_GRAPH_PROVIDER"
                 self.assertIn(
                     f'export {scoped_provider}="${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}"',
@@ -248,70 +272,23 @@ class MakeLifecycleTests(unittest.TestCase):
         self.assertIn("Terminal", command[2])
         self.assertIn(str(wrapper), command[2])
 
-    def test_infra_up_visits_all_configured_services(self):
-        with mock.patch.object(LIFECYCLE, "docker_command", return_value="docker"), mock.patch.object(
-            LIFECYCLE, "start_infra_service"
-        ) as start_service:
+    def test_infra_up_delegates_to_storage_init(self):
+        with mock.patch.object(LIFECYCLE, "invoke_storage_init") as storage_init:
             LIFECYCLE.invoke_infra_up()
 
-        self.assertEqual(start_service.call_count, len(LIFECYCLE.infra_services()))
+        storage_init.assert_called_once_with()
 
-    def test_infra_down_handles_missing_containers(self):
-        with mock.patch.object(LIFECYCLE, "docker_command", return_value="docker"), mock.patch.object(
-            LIFECYCLE, "container_exists", return_value=False
-        ) as container_exists, mock.patch.object(LIFECYCLE, "run") as run_command:
+    def test_infra_down_is_embedded_storage_noop(self):
+        with mock.patch.object(LIFECYCLE, "run") as run_command:
             LIFECYCLE.invoke_infra_down()
-
-        self.assertEqual(container_exists.call_count, len(LIFECYCLE.infra_services()))
         run_command.assert_not_called()
 
-    def test_falkordb_service_exposes_browser_web_ui_port(self):
-        falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
-        # Container-side port 3000 must always be mapped so the bundled Browser Web UI is reachable.
-        self.assertIn("3000:3000", falkordb["ports"])
-        self.assertEqual(falkordb["browser_port"], 3000)
-        self.assertIn("3000", falkordb["browser_ready_url"])
+    def test_active_infra_aliases_do_not_execute_container_commands(self):
+        import inspect
 
-    def test_falkordb_browser_port_env_override(self):
-        with mock.patch.dict(os.environ, {"FALKORDB_BROWSER_PORT": "3001"}, clear=False):
-            falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
-        self.assertIn("3001:3000", falkordb["ports"])
-        self.assertEqual(falkordb["browser_port"], 3001)
-
-    def test_falkordb_data_volume_persisted(self):
-        falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
-        self.assertTrue(any(str(v).startswith("cortex-falkordb-data:") for v in falkordb["volumes"]))
-
-    def test_falkordb_marked_redis_protocol_for_db_readiness(self):
-        falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
-        self.assertEqual(falkordb["protocol"], "redis")
-
-    def test_redis_ping_ready_returns_false_on_closed_port(self):
-        # Port 1 is reserved/unassigned -> connection must fail -> not ready.
-        self.assertFalse(LIFECYCLE.redis_ping_ready("127.0.0.1", 1, timeout=0.5))
-
-    def test_redis_ping_ready_returns_true_on_pong(self):
-        class FakeSocket:
-            def __init__(self, *args, **kwargs):
-                self.sent = b""
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def settimeout(self, value):
-                pass
-
-            def sendall(self, data):
-                self.sent = data
-
-            def recv(self, size):
-                return b"+PONG\r\n"
-
-        with mock.patch.object(LIFECYCLE.socket, "create_connection", return_value=FakeSocket()):
-            self.assertTrue(LIFECYCLE.redis_ping_ready("127.0.0.1", 6379, timeout=1.0))
+        source = inspect.getsource(LIFECYCLE.invoke_infra_up) + inspect.getsource(LIFECYCLE.invoke_infra_down)
+        for command in ("docker_command", "start_infra_service", "container_exists", "container_running"):
+            self.assertNotIn(command, source)
 
 
 if __name__ == "__main__":

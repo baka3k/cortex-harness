@@ -19,7 +19,7 @@ if _ROOT_DIR not in sys.path:
 from tools.common.harness_config import load_harness_config
 
 from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, prepare_graph_args
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 
 _DEFAULT_ENTRY_NAMES = (
     "main",
@@ -223,15 +223,7 @@ async def _run_report(args: argparse.Namespace) -> Dict[str, Any]:
         "seed_sample_limit": 100,
     }
 
-    driver = await GraphDriverFactory.create_driver(
-        GraphProvider.NEO4J,
-        {
-            "uri": args.neo4j_uri,
-            "user": args.neo4j_user,
-            "password": args.neo4j_password,
-            "database": args.neo4j_db,
-        },
-    )
+    driver = await create_graph_driver_from_args(args)
 
     started = time.time()
     try:

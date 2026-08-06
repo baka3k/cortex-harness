@@ -8,6 +8,8 @@ Usage:
     python cleanup_repo_graph.py \
         --project-id <id> \
         --repo-name <project/repo> \
+        [--graph-provider falkordb] \
+        [--falkordb-path ~/.cortext-harness/.../data.rdb] \
         [--neo4j-uri bolt://localhost:7687] \
         [--neo4j-user neo4j] \
         [--neo4j-password <pw>] \
@@ -17,36 +19,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
+import asyncio
 import os
 import random
-import re
 import sys
 import time
+from argparse import Namespace
 
-from neo4j import GraphDatabase
-from neo4j.exceptions import ServiceUnavailable, TransientError
-
-_FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
-
-
-def _maybe_decrypt_password(password: str) -> str:
-    if not _FERNET_TOKEN_RE.match(password):
-        return password
-    try:
-        from cryptography.fernet import Fernet
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    except ImportError:
-        return password
-    enc_pw = os.environ.get("HYPER_PACK_ENCRYPTION_PASSWORD", "my-secret-encryption-key-2026")
-    try:
-        kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=b"static_salt_2026", iterations=100_000)
-        key = base64.urlsafe_b64encode(kdf.derive(enc_pw.encode("utf-8")))
-        return Fernet(key).decrypt(password.encode("utf-8")).decode("utf-8")
-    except Exception as exc:
-        print(f"[cleanup_repo_graph] warning: could not decrypt NEO4J_PASS ({exc})", file=sys.stderr)
-        return password
+from tools.graph.cli import (
+    add_graph_provider_args,
+    create_graph_driver_from_args,
+    env_graph_provider,
+)
 
 _MAX_RETRIES = 5
 _BASE_BACKOFF = 0.2
@@ -71,12 +55,14 @@ RETURN count(u) AS deleted_unknown
 """
 
 
-def _run_with_retry(session, query: str, **params):
+def _run_with_retry(driver, query: str, database: str, **params):
     for attempt in range(_MAX_RETRIES):
         try:
-            return session.run(query, **params)
-        except (TransientError, ServiceUnavailable) as exc:
-            if attempt >= _MAX_RETRIES - 1:
+            records, _, _ = driver.execute_query_sync(query, params, database)
+            return records
+        except Exception as exc:
+            transient = exc.__class__.__name__ in {"TransientError", "ServiceUnavailable"}
+            if not transient or attempt >= _MAX_RETRIES - 1:
                 raise
             delay = _BASE_BACKOFF * (2 ** attempt) + random.uniform(0, _BASE_BACKOFF)
             print(
@@ -94,34 +80,52 @@ def cleanup_repo_graph(
     neo4j_user: str,
     neo4j_password: str,
     neo4j_db: str,
+    graph_provider: str | None = None,
+    falkordb_path: str | None = None,
+    falkordb_graph: str | None = None,
 ) -> tuple[int, int]:
-    driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, _maybe_decrypt_password(neo4j_password)))
+    args = Namespace(
+        project_id=project_id,
+        graph_provider=graph_provider or env_graph_provider(),
+        falkordb_path=falkordb_path,
+        falkordb_graph=falkordb_graph,
+        neo4j_uri=neo4j_uri,
+        neo4j_user=neo4j_user,
+        neo4j_password=neo4j_password,
+        neo4j_db=neo4j_db,
+    )
+    driver = asyncio.run(create_graph_driver_from_args(args))
+    if driver is None:
+        raise RuntimeError(
+            "Neo4j rollback mode requires URI, user, and password credentials."
+        )
     try:
-        with driver.session(database=neo4j_db) as session:
-            deleted_nodes_result = _run_with_retry(
-                session,
-                _DELETE_REPO_SCOPED_QUERY,
-                project_id=project_id,
-                repo_name=repo_name,
-            )
-            deleted_nodes_record = deleted_nodes_result.single()
-            deleted_nodes = int((deleted_nodes_record or {}).get("deleted_nodes", 0))
+        deleted_nodes_result = _run_with_retry(
+            driver,
+            _DELETE_REPO_SCOPED_QUERY,
+            args.neo4j_db,
+            project_id=project_id,
+            repo_name=repo_name,
+        )
+        deleted_nodes_record = deleted_nodes_result[0] if deleted_nodes_result else {}
+        deleted_nodes = int(deleted_nodes_record.get("deleted_nodes", 0))
 
-            deleted_unknown_result = _run_with_retry(
-                session,
-                _DELETE_ORPHAN_UNKNOWN_FUNCTIONS,
-            )
-            deleted_unknown_record = deleted_unknown_result.single()
-            deleted_unknown = int((deleted_unknown_record or {}).get("deleted_unknown", 0))
+        deleted_unknown_result = _run_with_retry(
+            driver,
+            _DELETE_ORPHAN_UNKNOWN_FUNCTIONS,
+            args.neo4j_db,
+        )
+        deleted_unknown_record = deleted_unknown_result[0] if deleted_unknown_result else {}
+        deleted_unknown = int(deleted_unknown_record.get("deleted_unknown", 0))
 
-            return deleted_nodes, deleted_unknown
+        return deleted_nodes, deleted_unknown
     finally:
         driver.close()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Cleanup Neo4j graph data for one repository scope (project_id + repo_name)."
+        description="Cleanup graph data for one repository scope (project_id + repo_name)."
     )
     parser.add_argument("--project-id", required=True)
     parser.add_argument("--repo-name", required=True)
@@ -129,6 +133,7 @@ def main() -> int:
     parser.add_argument("--neo4j-user", default=os.getenv("NEO4J_USER", "neo4j"))
     parser.add_argument("--neo4j-password", default=os.getenv("NEO4J_PASS", ""))
     parser.add_argument("--neo4j-db", default=os.getenv("NEO4J_DB", "neo4j"))
+    add_graph_provider_args(parser)
     args = parser.parse_args()
 
     try:
@@ -139,6 +144,9 @@ def main() -> int:
             neo4j_user=args.neo4j_user,
             neo4j_password=args.neo4j_password,
             neo4j_db=args.neo4j_db,
+            graph_provider=args.graph_provider,
+            falkordb_path=args.falkordb_path,
+            falkordb_graph=args.falkordb_graph,
         )
         print(
             "[cleanup_repo_graph] OK "

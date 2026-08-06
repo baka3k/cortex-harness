@@ -6,7 +6,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-import asyncio
 from typing import Optional
 
 # Ensure the repo root (parent of this script's directory) is on sys.path
@@ -15,7 +14,8 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from neo4j import GraphDatabase
+from graph_runtime import add_graph_arguments, open_graph_session, prepare_graph_arguments
+from tools.common.local_qdrant import default_local_qdrant_path
 
 
 SYSTEM_PROMPT = (
@@ -142,12 +142,9 @@ def run_id_check(session, predicates, params, node_id_field):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Summarize Neo4j code nodes with an OpenAI-compatible LLM."
+        description="Summarize code graph nodes with an OpenAI-compatible LLM."
     )
-    parser.add_argument("--neo4j-uri", default=get_env("NEO4J_URI"))
-    parser.add_argument("--neo4j-user", default=get_env("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
-    parser.add_argument("--neo4j-db", default=get_env("NEO4J_DB"))
+    add_graph_arguments(parser)
     parser.add_argument("--project-id", default=get_env("PROJECT_ID"))
     parser.add_argument("--node-labels", default=get_env("NODE_LABELS"))
     parser.add_argument("--node-id-field", default=get_env("NODE_ID_FIELD", "id"))
@@ -195,24 +192,21 @@ def parse_args():
     parser.add_argument("--llm-sleep", type=float, default=get_env("LLM_SLEEP", "0"))
 
     # Qdrant / optional settings (exposed so all config can be passed as params)
-    parser.add_argument("--qdrant-url", default=get_env("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=default_local_qdrant_path())
     parser.add_argument("--qdrant-collection", default=get_env("QDRANT_COLLECTION_CODE", "livingdoc"))
     parser.add_argument("--qdrant-api-key", default=get_env("QDRANT_API_KEY"))
 
     args = parser.parse_args()
     missing = []
-    if not args.neo4j_uri:
-        missing.append("NEO4J_URI/--neo4j-uri")
-    if not args.neo4j_user:
-        missing.append("NEO4J_USER/--neo4j-user")
-    if not args.NEO4J_PASS:
-        missing.append("NEO4J_PASS/--neo4j-pass")
     if not args.llm_api_key:
         missing.append("LLM_API_KEY/--llm-api-key")
     if missing:
         print("Missing required options: " + ", ".join(missing), file=sys.stderr)
         sys.exit(2)
-    return args
+    try:
+        return prepare_graph_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def write_nodes_list(
@@ -225,18 +219,14 @@ def write_nodes_list(
     nodes_list_path: str,
     database: Optional[str] = None,
 ) -> int:
-    """Query Neo4j and write a JSONL list of nodes to `nodes_list_path`.
+    """Query the selected graph and write a JSONL node list.
 
     Returns number of nodes written.
     """
-    # use driver's sync execute if available
-    try:
-        records, _, _ = driver.execute_query_sync(query + (f"\nLIMIT {int(limit)}" if limit else ""), params, database=database)
-    except Exception:
-        # fallback to session run
-        with driver.session(database=database) as session:
-            result = session.run(query + (f"\nLIMIT {int(limit)}" if limit else ""), params)
-            records = [r.data() for r in result]
+    del database
+    records = driver.run(
+        query + (f"\nLIMIT {int(limit)}" if limit else ""), params
+    )
 
     written = 0
     os.makedirs(os.path.dirname(nodes_list_path) or ".", exist_ok=True)
@@ -378,9 +368,6 @@ def run_summarization(
 def main():
     args = parse_args()
     verbose = args.verbose
-    uri = args.neo4j_uri
-    user = args.neo4j_user
-    password = args.NEO4J_PASS
     project_id = args.project_id
     node_labels = args.node_labels
     node_id_field = args.node_id_field
@@ -400,28 +387,24 @@ def main():
 
     query, params, predicates = build_query(project_id, node_labels, label_match)
 
-    # Use the project's Neo4j wrapper so higher-level helpers are available
-    from tools.graph.driver.neo4j_driver import Neo4jDriver
-    driver = Neo4jDriver(uri, user, password, database=args.neo4j_db)
     nodes_list_path = args.nodes_list_path or os.path.join(cache_dir, "_nodes.jsonl")
 
-    try:
+    with open_graph_session(args) as driver:
         # Optional pre-check for node id presence
-        with driver.session() as session:
-            if require_node_id:
-                total_nodes, missing_ids = run_id_check(
-                    session,
-                    predicates,
-                    params,
-                    node_id_field,
+        if require_node_id:
+            total_nodes, missing_ids = run_id_check(
+                driver,
+                predicates,
+                params,
+                node_id_field,
+            )
+            if missing_ids:
+                print(
+                    f"Missing node id field '{node_id_field}' for {missing_ids}/{total_nodes} nodes. "
+                    "Set REQUIRE_NODE_ID=0 to allow fallback.",
+                    file=sys.stderr,
                 )
-                if missing_ids:
-                    print(
-                        f"Missing node id field '{node_id_field}' for {missing_ids}/{total_nodes} nodes. "
-                        "Set REQUIRE_NODE_ID=0 to allow fallback.",
-                        file=sys.stderr,
-                    )
-                    sys.exit(2)
+                sys.exit(2)
 
         # Step 1: list nodes
         if args.only in ("list", "both"):
@@ -454,18 +437,5 @@ def main():
                 timeout,
                 sleep_s,
             )
-    finally:
-        # Neo4jDriver.close() is async; call it synchronously here
-        try:
-            asyncio.run(driver.close())
-        except RuntimeError:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                fut = asyncio.ensure_future(driver.close())
-                time.sleep(0.1)
-            else:
-                loop.run_until_complete(driver.close())
-
-
 if __name__ == "__main__":
     main()

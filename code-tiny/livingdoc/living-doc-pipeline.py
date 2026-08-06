@@ -2,28 +2,35 @@
 LivingDoc Pipeline — run all phases in order.
 
 Phases:
-  1. summarize       — query Neo4j → LLM → cache/*.json + _index.jsonl
-  2. vectorize       — cache/*.json → embed → Neo4j SET summary + Qdrant upsert
+  1. summarize       — query local graph → LLM → cache/*.json + _index.jsonl
+  2. vectorize       — cache/*.json → embed → graph SET summary + Qdrant upsert
   3. link            — cache/*.json → embed → Qdrant search → MERGE Paragraph/Document links
-  4. louvain         — GDS Louvain → SET communityId + MERGE InfraNode + BELONGS_TO
+  4. louvain         — local Louvain → SET communityId + MERGE InfraNode + BELONGS_TO
   5. summarize-infra — query InfraNode (pending_summary) → collect member summaries → LLM → SET name/summary
   6. vectorize-infra  — InfraNode (summarized) → embed name+summary → Qdrant upsert
 
 Usage examples:
   # Run all phases with defaults:
-  python3 livingdoc/living-doc-pipeline.py --neo4j-pass abcd1234
+  python3 livingdoc/living-doc-pipeline.py
 
   # Run only vectorize:
-  python3 livingdoc/living-doc-pipeline.py --neo4j-pass abcd1234 --only vectorize
+  python3 livingdoc/living-doc-pipeline.py --only vectorize
 
   # Skip summarize (already done):
-  python3 livingdoc/living-doc-pipeline.py --neo4j-pass abcd1234 --skip-summarize
+  python3 livingdoc/living-doc-pipeline.py --skip-summarize
 """
 import argparse
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from tools.common.local_qdrant import default_local_qdrant_path
+from graph_runtime import add_graph_arguments, prepare_graph_arguments
 
 
 PHASES = ["summarize", "vectorize", "link", "louvain", "summarize-infra", "vectorize-infra"]
@@ -53,9 +60,7 @@ def parse_args():
     )
 
     # ── Common: Neo4j ─────────────────────────────────────────────────────────
-    parser.add_argument("--neo4j-uri",      default=get_env("NEO4J_URI",      "bolt://localhost:7687"))
-    parser.add_argument("--neo4j-user",     default=get_env("NEO4J_USER",     "neo4j"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
+    add_graph_arguments(parser)
     parser.add_argument("--project-id",     default=get_env("PROJECT_ID",     "digital_key_main"))
 
     # ── Common: Embedding ─────────────────────────────────────────────────────
@@ -63,7 +68,7 @@ def parse_args():
     parser.add_argument("--embed-device", default=get_env("EMBEDDING_DEVICE", "mps"))
 
     # ── Common: Qdrant ───────────────────────────────────────────────────────
-    parser.add_argument("--qdrant-url",        default=get_env("QDRANT_URL",        "http://localhost:6333"))
+    parser.add_argument("--qdrant-url",        default=default_local_qdrant_path())
     parser.add_argument("--qdrant-collection", default=get_env("QDRANT_COLLECTION_CODE", "graph_rag_entities"))
 
     # ── Common: cache ────────────────────────────────────────────────────────
@@ -140,10 +145,28 @@ def parse_args():
     parser.add_argument("--verbose", action="store_true")
 
     args = parser.parse_args()
-    if not args.NEO4J_PASS:
-        print("Missing required: NEO4J_PASS/--neo4j-pass", file=sys.stderr)
-        sys.exit(2)
-    return args
+    try:
+        return prepare_graph_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+
+def graph_cli_args(args) -> list:
+    if args.graph_provider == "falkordb":
+        return [
+            "--graph-provider", "falkordb",
+            "--falkordb-path", args.falkordb_path,
+            "--falkordb-graph", args.falkordb_graph,
+        ]
+    result = [
+        "--graph-provider", "neo4j",
+        "--neo4j-uri", args.neo4j_uri,
+        "--neo4j-user", args.neo4j_user,
+        "--neo4j-pass", args.neo4j_password,
+    ]
+    if args.neo4j_db:
+        result.extend(["--neo4j-db", args.neo4j_db])
+    return result
 
 
 def run_phase(phase: str, cmd: list):
@@ -162,9 +185,7 @@ def run_phase(phase: str, cmd: list):
 def build_summarize_cmd(args, base_dir) -> list:
     return [
         sys.executable, str(base_dir / "living-doc-summarize.py"),
-        "--neo4j-uri",       args.neo4j_uri,
-        "--neo4j-user",      args.neo4j_user,
-        "--neo4j-pass",  args.NEO4J_PASS,
+        *graph_cli_args(args),
         "--llm-api-base",    args.llm_api_base,
         "--llm-api-key",     args.llm_api_key,
         "--llm-model",       args.llm_model,
@@ -179,9 +200,7 @@ def build_summarize_cmd(args, base_dir) -> list:
 def build_vectorize_cmd(args, base_dir) -> list:
     return [
         sys.executable, str(base_dir / "living-doc-vectorize.py"),
-        "--neo4j-uri",      args.neo4j_uri,
-        "--neo4j-user",     args.neo4j_user,
-        "--neo4j-pass", args.NEO4J_PASS,
+        *graph_cli_args(args),
         "--cache-dir",      args.cache_dir,
         "--embed-model",    args.embed_model,
         "--embed-device",   args.embed_device,
@@ -196,9 +215,7 @@ def build_vectorize_cmd(args, base_dir) -> list:
 def build_link_cmd(args, base_dir) -> list:
     return [
         sys.executable, str(base_dir / "living-doc-link.py"),
-        "--neo4j-uri",       args.neo4j_uri,
-        "--neo4j-user",      args.neo4j_user,
-        "--neo4j-pass",  args.NEO4J_PASS,
+        *graph_cli_args(args),
         "--cache-dir",       args.cache_dir,
         "--collection",      args.qdrant_collection,
         "--embed-model",     args.embed_model,
@@ -214,9 +231,7 @@ def build_link_cmd(args, base_dir) -> list:
 def build_summarize_infra_cmd(args, base_dir) -> list:
     return [
         sys.executable, str(base_dir / "living-doc-summarize-infra.py"),
-        "--neo4j-uri",          args.neo4j_uri,
-        "--neo4j-user",         args.neo4j_user,
-        "--neo4j-pass",     args.NEO4J_PASS,
+        *graph_cli_args(args),
         "--project-id",         args.project_id,
         "--infra-label",        args.infra_label,
         "--belongs-rel",        args.belongs_rel,
@@ -236,9 +251,7 @@ def build_summarize_infra_cmd(args, base_dir) -> list:
 def build_vectorize_infra_cmd(args, base_dir) -> list:
     return [
         sys.executable, str(base_dir / "living-doc-vectorize-infra.py"),
-        "--neo4j-uri",      args.neo4j_uri,
-        "--neo4j-user",     args.neo4j_user,
-        "--neo4j-pass", args.NEO4J_PASS,
+        *graph_cli_args(args),
         "--project-id",     args.project_id,
         "--infra-label",    args.infra_label,
         "--done-status",    args.infra_done_status,
@@ -255,9 +268,7 @@ def build_vectorize_infra_cmd(args, base_dir) -> list:
 def build_louvain_cmd(args, base_dir) -> list:
     return [
         sys.executable, str(base_dir / "living-doc-louvain.py"),
-        "--neo4j-uri",          args.neo4j_uri,
-        "--neo4j-user",         args.neo4j_user,
-        "--neo4j-pass",     args.NEO4J_PASS,
+        *graph_cli_args(args),
         "--project-id",         args.project_id,
         "--graph-name",         args.graph_name,
         "--node-label",         args.node_label,

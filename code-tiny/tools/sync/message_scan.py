@@ -22,7 +22,7 @@ from tools.common.message_scan import (
     run_message_scan_pipeline,
 )
 from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, prepare_graph_args
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 
 
 def _safe_segment(value: str) -> str:
@@ -74,7 +74,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument("--qdrant-vector-size", type=int, default=DEFAULT_MESSAGE_VECTOR_SIZE)
     parser.add_argument("--qdrant-batch-size", type=int, default=256)
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
@@ -126,15 +126,7 @@ async def main(argv: Optional[Sequence[str]] = None) -> int:
 
     driver = None
     if prepare_graph_args(args):
-        driver = await GraphDriverFactory.create_driver(
-            GraphProvider.NEO4J,
-            {
-                "uri": args.neo4j_uri,
-                "user": args.neo4j_user,
-                "password": args.neo4j_password,
-                "database": args.neo4j_db,
-            },
-        )
+        driver = await create_graph_driver_from_args(args)
 
     exit_code = 0
     try:

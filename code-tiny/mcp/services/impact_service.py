@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Request
@@ -15,38 +16,56 @@ logger = logging.getLogger(__name__)
 class ImpactAnalyzer:
     def __init__(self):
         self.graph_service = graph_query_service
-        self._workflow_scorer: Optional[Any] = None  # WorkflowImpactScorer, lazy-init
+        self._workflow_scorers: Dict[str, Any] = {}
 
-    def _get_workflow_scorer(self, db: str) -> Optional[Any]:
+    async def _get_workflow_scorer(self, db: str) -> Optional[Any]:
         """
-        Lazy-init a WorkflowImpactScorer backed by a direct Neo4j driver.
+        Lazy-init a WorkflowImpactScorer backed by the configured graph provider.
 
         Returns None if:
         - WORKFLOW_IMPACT_DISABLED env var is set to '1'
-        - Required env vars (NEO4J_URI / NEO4J_USER / NEO4J_PASS) are missing
-        - neo4j package is not installed
+        - Explicit Neo4j rollback mode lacks URI/user/password credentials
         - Driver construction fails for any reason
         """
         if os.environ.get("WORKFLOW_IMPACT_DISABLED", "").strip() == "1":
             return None
 
-        if self._workflow_scorer is not None:
-            return self._workflow_scorer
+        if db in self._workflow_scorers:
+            return self._workflow_scorers[db]
 
         try:
-            import neo4j as _neo4j  # noqa: PLC0415
             from tools.common.workflow_impact_scorer import WorkflowImpactScorer  # noqa: PLC0415
+            from tools.graph.cli import env_graph_provider, normalize_graph_provider  # noqa: PLC0415
+            from tools.graph.core.base import GraphProvider  # noqa: PLC0415
+            from tools.graph.core.shared_runtime import get_shared_graph_driver  # noqa: PLC0415
 
-            uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-            user = os.environ.get("NEO4J_USER", "")
-            pwd = os.environ.get("NEO4J_PASS", "")
-            if user and pwd:
-                driver = _neo4j.GraphDatabase.driver(uri, auth=(user, pwd))
+            provider = normalize_graph_provider(env_graph_provider())
+            if provider == GraphProvider.FALKORDB:
+                from cortex_harness.storage import resolve_storage  # noqa: PLC0415
+
+                config = {
+                    "path": os.environ.get("FALKORDB_PATH")
+                    or str(resolve_storage(Path.cwd()).falkordb_code_path),
+                    "graph": db,
+                    "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+                    "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+                }
             else:
-                driver = _neo4j.GraphDatabase.driver(uri)
+                uri = os.environ.get("NEO4J_URI", "")
+                user = os.environ.get("NEO4J_USER", "")
+                pwd = os.environ.get("NEO4J_PASS") or os.environ.get("NEO4J_PASSWORD", "")
+                if not (uri and user and pwd):
+                    logger.debug(
+                        "WorkflowImpactScorer Neo4j rollback mode requires "
+                        "NEO4J_URI, NEO4J_USER, and NEO4J_PASS."
+                    )
+                    return None
+                config = {"uri": uri, "user": user, "password": pwd, "database": db}
 
-            self._workflow_scorer = WorkflowImpactScorer(driver, database=db)
-            return self._workflow_scorer
+            driver = await get_shared_graph_driver(provider, config)
+            scorer = WorkflowImpactScorer(driver, database=db)
+            self._workflow_scorers[db] = scorer
+            return scorer
         except Exception as exc:
             logger.debug("WorkflowImpactScorer unavailable: %s", exc)
             return None
@@ -127,7 +146,7 @@ class ImpactAnalyzer:
         # ── Workflow impact layer (non-breaking extension) ─────────────────────
         function_id = payload.get("function_id", "")
         db = payload.get("db", "neo4j")
-        scorer = self._get_workflow_scorer(db)
+        scorer = await self._get_workflow_scorer(db)
         if scorer and function_id:
             try:
                 max_depth = int(payload.get("max_depth") or 4)

@@ -5,6 +5,7 @@ Provides a centralized way to instantiate the appropriate driver
 based on configuration.
 """
 
+from pathlib import Path
 from typing import Any, Dict, Optional
 from tools.graph.core.base import GraphDriver, GraphProvider
 from tools.graph.driver.falkordb_driver import FalkorDBDriver
@@ -98,6 +99,8 @@ class GraphDriverFactory:
                 port=config.get("port"),
                 ssl=bool(config.get("ssl", False)),
                 path=config.get("path"),
+                instance_id=config.get("instance_id"),
+                owner_id=config.get("owner_id"),
             )
         elif provider == GraphProvider.NEPTUNE:
             # Future implementation
@@ -131,16 +134,15 @@ class GraphDriverFactory:
         elif provider == GraphProvider.FALKORDB:
             prefix = env_prefix if env_prefix != "NEO4J" else "FALKORDB"
             path = os.getenv("FALKORDB_PATH")
+            if not path:
+                from cortex_harness.storage import resolve_storage
+                path = str(resolve_storage(Path.cwd()).falkordb_code_path)
             config = {
-                "uri": os.getenv(f"{prefix}_URI") or os.getenv(f"{prefix}_URL"),
-                "host": os.getenv(f"{prefix}_HOST", "localhost"),
-                "port": int(os.getenv(f"{prefix}_PORT", "6379")),
-                "user": os.getenv(f"{prefix}_USER") or os.getenv(f"{prefix}_USERNAME"),
-                "password": os.getenv(f"{prefix}_PASSWORD", ""),
                 "database": os.getenv(f"{prefix}_GRAPH") or os.getenv(f"{prefix}_DATABASE", "neo4j"),
                 "graph": os.getenv(f"{prefix}_GRAPH"),
-                "ssl": os.getenv(f"{prefix}_SSL", "").lower() in {"1", "true", "yes", "on"},
                 "path": path,
+                "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+                "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
             }
             return await GraphDriverFactory.create_driver(provider, config)
         else:

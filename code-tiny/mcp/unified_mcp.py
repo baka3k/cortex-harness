@@ -62,7 +62,6 @@ from tools.common.project_registry import (  # noqa: E402
     ProjectRegistryError,
     resolve_project_targets,
 )
-from tools.graph import GraphDriverFactory, GraphProvider  # noqa: E402
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
@@ -960,7 +959,6 @@ async def tool_explore_graph(
         query:      Natural language text (keyword, sentence, or multi-line paragraph).
         mode:       "semantic" | "hybrid" (default) | "graph_expanded"
         top_k:      Max matched nodes (default 10).
-        db:         Graph database or graph name override.
         collection: Qdrant collection name override.
         debug:      Include per-signal score breakdown in each node.
         project_id: Restrict every retrieval and expansion stage to one project.
@@ -1032,12 +1030,20 @@ async def tool_explore_graph(
             return result
     service = get_explore_service()
     active_db = _resolve_graph_database(project_id=project_id or None) if project_id else None
+    resolved_collection = collection or None
+    if project_id and not resolved_collection:
+        try:
+            resolved_collection = resolve_project_targets(
+                project_id
+            ).code_qdrant_collection
+        except ProjectNotRegisteredError:
+            resolved_collection = project_id
     result = await service.explore(
         query      = q,
         top_k      = k,
         mode       = mode or "hybrid",
         db         = active_db,
-        collection = collection or None,
+        collection = resolved_collection,
         debug      = debug,
         graph_rel_types= relationship_types,
         searchable_labels= sorted(capability.labels) if capability else None,
@@ -1109,8 +1115,8 @@ async def tool_reconstruct_flow(
 # ── Frontend → Backend API Contract Bridge tools ──────────────────────────────
 
 
-def _resolve_graph_database(project_id: Optional[str] = None) -> str:
-    """Resolve one provider-neutral graph/database name for direct MCP tools.
+def _resolve_graph_database(project_id: Optional[str] = None) -> Optional[str]:
+    """Resolve a scoped graph name, or ``None`` for an all-project query.
 
     Precedence (highest first):
     1. ``project_id`` — resolves through the ProjectRegistry so the reader
@@ -1120,14 +1126,14 @@ def _resolve_graph_database(project_id: Optional[str] = None) -> str:
        own graph named after the project). This lets callers query any
        FalkorDB graph by ``project_id`` without first registering it in the
        local harness config.
-    2. Neither — falls through to env defaults (``FALKORDB_GRAPH`` /
-       ``NEO4J_DB`` / ``DEFAULT_GRAPH_DB`` / ``"hyper_graph"``). This is the
-       implicit full-search path: omit ``project_id`` to query across every
-       project.
+    2. Neither — returns ``None``. Callers pass that sentinel to the backend,
+       which enumerates every graph registered for the active instance. This
+       is the implicit full-search path: omit ``project_id`` to query across
+       every project.
 
-    Returns a non-empty graph name string. Never raises for a missing
-    ``project_id``; a present but unregistered ``project_id`` resolves to
-    itself (the per-project graph convention) rather than the env graph.
+    Never raises for a missing ``project_id``; a present but unregistered
+    ``project_id`` resolves to itself (the per-project graph convention)
+    rather than leaking into an unrelated default graph.
     """
 
     if project_id:
@@ -1144,52 +1150,36 @@ def _resolve_graph_database(project_id: Optional[str] = None) -> str:
                 # the server's env-default graph.
                 return project_id
 
-    # Full-search path: resolve from env defaults.
-    return (
-        os.environ.get("FALKORDB_GRAPH")
-        or os.environ.get("NEO4J_DB")
-        or str(cplus_backend.DEFAULT_GRAPH_DB)
-        or "hyper_graph"
-    )
+    return None
 
 
-async def _run_bridge_query(cypher: str, params: Dict[str, Any], database: str) -> List[Dict[str, Any]]:
-    provider_name = (
-        os.environ.get("CODE_GRAPH_PROVIDER")
-        or os.environ.get("GRAPH_PROVIDER")
-        or os.environ.get("MCP_GRAPH_PROVIDER")
-        or "falkordb"
-    ).strip().lower()
-    provider = GraphProvider.FALKORDB if provider_name in {"falkor", "falkordb"} else GraphProvider.NEO4J
-    if provider == GraphProvider.FALKORDB:
-        config = {
-            # Intentionally omit "uri": FalkorDB.from_url() creates a redis
-            # client whose connection buffer corrupts during nested response
-            # parsing in a long-running uvicorn server. The host/port
-            # constructor path (FalkorDB.__init__) does not have this issue.
-            "host": os.environ.get("FALKORDB_HOST", "localhost"),
-            "port": int(os.environ.get("FALKORDB_PORT", "6379")),
-            "user": os.environ.get("FALKORDB_USER", ""),
-            "password": os.environ.get("FALKORDB_PASSWORD", ""),
-            "graph": database,
-            "database": database,
-            "ssl": os.environ.get("FALKORDB_SSL", "").lower() in {"1", "true", "yes", "on"},
-        }
-    else:
-        config = {
-            "uri": os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
-            "user": os.environ.get("NEO4J_USER", ""),
-            "password": os.environ.get("NEO4J_PASS", ""),
-            "database": database,
-        }
-    driver = await GraphDriverFactory.create_driver(provider, config)
+async def _run_bridge_query(
+    cypher: str,
+    params: Dict[str, Any],
+    database: Optional[str],
+) -> List[Dict[str, Any]]:
+    # The unified server already owns cplus_backend's process-global driver.
+    # Opening another embedded driver for the same path conflicts with the
+    # storage lease. FalkorDBDriver selects ``database`` per execution; the
+    # Neo4j compatibility driver accepts the same provider-neutral contract.
+    driver = await cplus_backend._get_graph_driver()
+    databases = [database] if database else cplus_backend._resolve_db_candidates(None)
+    records: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for graph_name in databases:
+        graph_records, _, _ = await driver.execute_query(cypher, params, graph_name)
+        for record in graph_records:
+            marker = json.dumps(record, sort_keys=True, default=str, separators=(",", ":"))
+            if marker not in seen:
+                seen.add(marker)
+                records.append(record)
     try:
-        records, _, _ = await driver.execute_query(cypher, params, database)
-        return records
-    finally:
-        close_result = driver.close()
-        if hasattr(close_result, "__await__"):
-            await close_result
+        global_limit = int(params.get("limit")) if params.get("limit") is not None else None
+    except (TypeError, ValueError):
+        global_limit = None
+    if global_limit is not None and global_limit >= 0:
+        return records[:global_limit]
+    return records
 
 
 async def _run_project_context_tool(
@@ -1480,7 +1470,6 @@ async def tool_find_callers_of_endpoint(
                         ``fe_project_id`` is set — those narrow the query to
                         one project. Omit every project_id to query across
                         all projects.
-        db:            Graph database or graph name (explicit override).
 
     Returns:
         {
@@ -1609,7 +1598,6 @@ async def tool_get_api_call_chain(
                         ``be_project_id`` is set. Omit every project_id to
                         query across all projects.
         max_depth:      Max CALLS hops in FE chain (default 5).
-        db:             Graph database or graph name (explicit override).
 
     Returns:
         {
@@ -1829,7 +1817,6 @@ async def tool_analyze_workflow_impact(
     """
     Args:
         function_id: symbol_id of the function/screen to analyze
-        db:          Graph database or graph name (explicit override)
         project_id:  project_id of the shard to query. Resolved via the
                      ProjectRegistry. Omit it to query across all projects.
         direction:   'downstream' or 'upstream' (default: 'downstream')
@@ -2006,7 +1993,6 @@ async def tool_find_workflows_containing(
     """
     Args:
         function_id:      symbol_id of the function to look up
-        db:               Graph database or graph name (explicit override)
         project_id:       project_id of the shard to query. Resolved via the
                           ProjectRegistry. Omit it to query across all
                           projects.

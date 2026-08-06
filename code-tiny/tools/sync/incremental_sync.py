@@ -54,7 +54,12 @@ from tools.common.sync_scope import (
     scan_scope_id,
 )
 from tools.graph import GraphDriverFactory, GraphProvider
-from tools.graph.cli import add_graph_provider_args, normalize_graph_provider, prepare_graph_args
+from tools.graph.cli import (
+    add_graph_provider_args,
+    create_graph_driver_from_args,
+    normalize_graph_provider,
+    prepare_graph_args,
+)
 from tools.project_topology.registry import descriptor_spec_for_path
 from tools.jp1.sniff import is_jp1_file
 from tools.vb.vb_path_classifier import VBPathClassifier
@@ -830,21 +835,34 @@ async def _query_impacted_files(
     neo4j_user: str,
     neo4j_password: str,
     neo4j_db: Optional[str],
+    falkordb_path: Optional[str] = None,
     project_id: str,
     changed_paths: Sequence[str],
 ) -> Set[str]:
     if not changed_paths:
         return set()
     provider = normalize_graph_provider(graph_provider)
-    driver = await GraphDriverFactory.create_driver(
-        provider,
-        {
+    config: Dict[str, Any]
+    if provider == GraphProvider.FALKORDB:
+        if not falkordb_path:
+            from cortex_harness.storage import resolve_storage
+
+            falkordb_path = str(resolve_storage(Path.cwd()).falkordb_code_path)
+        config = {
+            "path": falkordb_path,
+            "graph": neo4j_db,
+            "database": neo4j_db,
+            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+        }
+    else:
+        config = {
             "uri": neo4j_uri,
             "user": neo4j_user,
             "password": neo4j_password,
             "database": neo4j_db,
-        },
-    )
+        }
+    driver = await GraphDriverFactory.create_driver(provider, config)
     try:
         deps_query = """
         MATCH (src:File)-[r]->(dst:File)
@@ -915,14 +933,11 @@ async def _project_topology_bootstrap_needed(
     else:
         graph_name = getattr(args, "falkordb_graph", None) or database
         config = {
-            "uri": getattr(args, "falkordb_uri", None),
-            "host": getattr(args, "falkordb_host", None),
-            "port": getattr(args, "falkordb_port", None),
-            "user": getattr(args, "falkordb_user", None),
-            "password": getattr(args, "falkordb_password", None),
+            "path": getattr(args, "falkordb_path", None),
             "graph": graph_name,
             "database": graph_name,
-            "ssl": bool(getattr(args, "falkordb_ssl", False)),
+            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
         }
     try:
         driver = await GraphDriverFactory.create_driver(provider, config)
@@ -978,22 +993,12 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
         env["NEO4J_PASS"] = args.neo4j_password
     if args.neo4j_db:
         env["NEO4J_DB"] = args.neo4j_db
-    if getattr(args, "falkordb_uri", None):
-        env["FALKORDB_URI"] = args.falkordb_uri
-    if getattr(args, "falkordb_host", None):
-        env["FALKORDB_HOST"] = str(args.falkordb_host)
-    if getattr(args, "falkordb_port", None):
-        env["FALKORDB_PORT"] = str(args.falkordb_port)
-    if getattr(args, "falkordb_user", None):
-        env["FALKORDB_USER"] = str(args.falkordb_user)
-    if getattr(args, "falkordb_password", None):
-        env["FALKORDB_PASSWORD"] = str(args.falkordb_password)
+    if getattr(args, "falkordb_path", None):
+        env["FALKORDB_PATH"] = str(args.falkordb_path)
     if getattr(args, "falkordb_graph", None):
         env["FALKORDB_GRAPH"] = str(args.falkordb_graph)
-    if getattr(args, "falkordb_ssl", False):
-        env["FALKORDB_SSL"] = "1"
     if args.qdrant_url:
-        env["QDRANT_URL"] = args.qdrant_url
+        env["QDRANT_CODE_PATH"] = args.qdrant_url
     if args.cache_dir:
         env["QDRANT_CACHE_DIR"] = args.cache_dir
     if args.embed_model:
@@ -1137,19 +1142,7 @@ async def _ensure_project_repository_graph(
         subprocess.run(setup_cmd, cwd=_ROOT_DIR, check=True, capture_output=True, text=True)
         return
 
-    driver = await GraphDriverFactory.create_driver(
-        provider,
-        {
-            "uri": getattr(args, "falkordb_uri", None),
-            "host": getattr(args, "falkordb_host", None),
-            "port": getattr(args, "falkordb_port", None),
-            "user": getattr(args, "falkordb_user", None),
-            "password": getattr(args, "falkordb_password", None),
-            "database": getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None),
-            "graph": getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None),
-            "ssl": bool(getattr(args, "falkordb_ssl", False)),
-        },
-    )
+    driver = await create_graph_driver_from_args(args)
     resolved_graph = getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None)
     try:
         await driver.create_indexes(
@@ -1796,6 +1789,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 neo4j_user=args.neo4j_user,
                 neo4j_password=args.neo4j_password,
                 neo4j_db=args.neo4j_db,
+                falkordb_path=getattr(args, "falkordb_path", None),
                 project_id=project_id,
                 changed_paths=sorted(changed_paths),
             )
@@ -2361,7 +2355,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument(
         "--embed-model",
         default=os.environ.get("CODE_EMBEDDING_MODEL") or os.environ.get("EMBED_MODEL"),

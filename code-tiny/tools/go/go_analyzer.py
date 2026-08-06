@@ -1289,7 +1289,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
-    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "go_functions"))
     parser.add_argument("--embed-model", default=os.environ.get("CODE_EMBEDDING_MODEL", ""))
     parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))

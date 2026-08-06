@@ -35,25 +35,22 @@ class FakeGraphDriver:
 class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
     async def test_falkordb_setup_uses_graph_driver_not_neo4j_subprocess(self):
         driver = FakeGraphDriver()
-        args = argparse.Namespace(
-            graph_provider="falkordb",
-            falkordb_uri="redis://localhost:6379",
-            falkordb_host="localhost",
-            falkordb_port=6379,
-            falkordb_user="",
-            falkordb_password="",
-            falkordb_graph="cortext",
-            falkordb_ssl=False,
-            neo4j_db="cortext",
-        )
-
-        async def fake_create_driver(provider, config):
-            self.assertEqual(provider, GraphProvider.FALKORDB)
-            self.assertEqual(config["uri"], "redis://localhost:6379")
-            self.assertEqual(config["graph"], "cortext")
-            return driver
-
         with tempfile.TemporaryDirectory() as root:
+            local_path = os.path.join(root, "code", "data.rdb")
+            args = argparse.Namespace(
+                graph_provider="falkordb",
+                falkordb_path=local_path,
+                falkordb_graph="cortext",
+                neo4j_db="cortext",
+            )
+
+            async def fake_create_driver(provider, config):
+                self.assertEqual(provider, GraphProvider.FALKORDB)
+                self.assertEqual(config["path"], local_path)
+                self.assertNotIn("uri", config)
+                self.assertEqual(config["graph"], "cortext")
+                return driver
+
             with patch.object(
                 incremental_sync.GraphDriverFactory,
                 "create_driver",

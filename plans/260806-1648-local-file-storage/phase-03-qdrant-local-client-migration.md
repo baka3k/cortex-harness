@@ -85,14 +85,14 @@ Minimum adapter surface:
 
 ## Todo
 
-- [ ] Build the REST-to-client operation matrix.
-- [ ] Implement the shared local adapter.
-- [ ] Add owner lease and multi-instance path resolution.
-- [ ] Migrate shared code ingestion/retrieval paths.
-- [ ] Migrate document paths.
-- [ ] Migrate MCP, Living Docs, backfill, and validation paths.
-- [ ] Delete active raw Qdrant HTTP helpers.
-- [ ] Add concurrency and persistence tests.
+- [x] Build the REST-to-client operation matrix.
+- [x] Implement the shared local adapter.
+- [x] Add owner lease and multi-instance path resolution.
+- [x] Migrate shared code ingestion/retrieval paths.
+- [x] Migrate document paths.
+- [x] Migrate MCP, Living Docs, backfill, and validation paths.
+- [x] Delete active raw Qdrant HTTP helpers.
+- [x] Add concurrency and persistence tests.
 
 ## Risks
 

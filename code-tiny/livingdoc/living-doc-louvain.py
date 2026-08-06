@@ -1,10 +1,17 @@
 import argparse
+import hashlib
 import os
 import re
 import sys
 
-from neo4j import GraphDatabase
-from neo4j.exceptions import ClientError
+import networkx as nx
+
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
+from graph_runtime import add_graph_arguments, open_graph_session, prepare_graph_arguments
+from tools.graph.core.base import GraphProvider
 
 
 def get_env(name, default=None):
@@ -21,9 +28,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Run GDS Louvain on Function nodes and materialize InfraNode communities."
     )
-    parser.add_argument("--neo4j-uri", default=get_env("NEO4J_URI"))
-    parser.add_argument("--neo4j-user", default=get_env("NEO4J_USER"))
-    parser.add_argument("--neo4j-pass", default=get_env("NEO4J_PASS"))
+    add_graph_arguments(parser)
 
     parser.add_argument("--project-id", default=get_env("PROJECT_ID"))
     parser.add_argument("--graph-name", default=get_env("GDS_GRAPH_NAME", "functionGraph"))
@@ -51,17 +56,6 @@ def parse_args():
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
 
     args = parser.parse_args()
-    missing = []
-    if not args.neo4j_uri:
-        missing.append("NEO4J_URI/--neo4j-uri")
-    if not args.neo4j_user:
-        missing.append("NEO4J_USER/--neo4j-user")
-    if not args.NEO4J_PASS:
-        missing.append("NEO4J_PASS/--neo4j-pass")
-    if missing:
-        print("Missing required options: " + ", ".join(missing), file=sys.stderr)
-        sys.exit(2)
-
     require_token("node label", args.node_label)
     require_token("relationship type", args.rel_type)
     require_token("write property", args.write_property)
@@ -79,7 +73,10 @@ def parse_args():
     if args.min_community_size < 1:
         print("min-community-size must be >= 1", file=sys.stderr)
         sys.exit(2)
-    return args
+    try:
+        return prepare_graph_arguments(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 def gds_graph_exists(session, graph_name):
@@ -88,7 +85,7 @@ def gds_graph_exists(session, graph_name):
             "CALL gds.graph.exists($name) YIELD exists", {"name": graph_name}
         ).single()
         return bool(record and record.get("exists"))
-    except ClientError as exc:
+    except Exception as exc:
         if "ProcedureNotFound" not in str(exc):
             raise
 
@@ -103,7 +100,7 @@ def gds_graph_exists(session, graph_name):
             {"name": graph_name},
         ).single()
         return bool(record and record.get("count"))
-    except ClientError as exc:
+    except Exception as exc:
         if "ProcedureNotFound" in str(exc):
             print(
                 "GDS procedures not found. Please install/enable the Neo4j GDS plugin.",
@@ -209,6 +206,84 @@ def run_louvain(session, graph_name, write_property):
     return session.run(query, {"graph_name": graph_name, "write_property": write_property}).single()
 
 
+def _stable_community_id(member_ids):
+    """Build a deterministic positive integer from the community membership."""
+    payload = "\0".join(str(item) for item in sorted(member_ids)).encode("utf-8")
+    return int(hashlib.sha256(payload).hexdigest()[:15], 16)
+
+
+def run_local_louvain(
+    session,
+    node_label,
+    rel_type,
+    orientation,
+    write_property,
+    project_id,
+):
+    """Run Louvain in-process and persist assignments through GraphDriver.
+
+    FalkorDBLite deliberately has no Neo4j GDS plugin surface.  Reading the
+    bounded project graph, clustering with NetworkX, and writing assignments
+    back keeps this phase local and provider-neutral.
+    """
+    node_where = "WHERE n.project_id CONTAINS $project_id" if project_id else ""
+    edge_where = (
+        "WHERE n.project_id CONTAINS $project_id AND m.project_id CONTAINS $project_id"
+        if project_id
+        else ""
+    )
+    params = {"project_id": project_id} if project_id else {}
+    node_rows = session.run(
+        f"MATCH (n:{node_label}) {node_where} RETURN id(n) AS node_id",
+        params,
+    )
+    edge_rows = session.run(
+        f"""
+        MATCH (n:{node_label})-[:{rel_type}]->(m:{node_label})
+        {edge_where}
+        RETURN id(n) AS source, id(m) AS target
+        """,
+        params,
+    )
+
+    graph = nx.Graph() if orientation == "UNDIRECTED" else nx.DiGraph()
+    graph.add_nodes_from(row["node_id"] for row in node_rows)
+    for row in edge_rows:
+        source, target = row["source"], row["target"]
+        graph.add_edge(target, source) if orientation == "REVERSE" else graph.add_edge(source, target)
+
+    if graph.number_of_nodes() == 0:
+        communities = []
+        modularity = 0.0
+    elif graph.number_of_edges() == 0:
+        communities = [{node_id} for node_id in graph.nodes]
+        modularity = 0.0
+    else:
+        communities = list(nx.community.louvain_communities(graph, seed=0))
+        modularity = nx.community.modularity(graph, communities)
+
+    assignments = [
+        {"node_id": node_id, "community_id": _stable_community_id(community)}
+        for community in communities
+        for node_id in community
+    ]
+    if assignments:
+        session.run(
+            f"""
+            UNWIND $rows AS row
+            MATCH (f:{node_label})
+            WHERE id(f) = row.node_id
+            SET f.{write_property} = row.community_id
+            """,
+            {"rows": assignments},
+        )
+    return {
+        "communityCount": len(communities),
+        "modularity": modularity,
+        "ranLevels": 1 if communities else 0,
+    }
+
+
 # def materialize_infra(
 #     session,
 #     node_label,
@@ -306,9 +381,18 @@ def main():
     drop_graph_flag = str(args.drop_graph) != "0"
     drop_after = str(args.drop_after) != "0"
 
-    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.NEO4J_PASS))
-    try:
-        with driver.session() as session:
+    with open_graph_session(args) as session:
+        if session.provider == GraphProvider.FALKORDB:
+            action = "local"
+            result = run_local_louvain(
+                session,
+                args.node_label,
+                args.rel_type,
+                args.orientation,
+                args.write_property,
+                args.project_id,
+            )
+        else:
             action = ensure_graph(
                 session,
                 args.graph_name,
@@ -319,38 +403,35 @@ def main():
                 args.project_id,
                 verbose=args.verbose,
             )
-            print(f"GDS graph {args.graph_name}: {action}")
-
             result = run_louvain(session, args.graph_name, args.write_property)
-            if result:
-                print(
-                    "Louvain: communities=%s modularity=%s levels=%s"
-                    % (result.get("communityCount"), result.get("modularity"), result.get("ranLevels"))
-                )
-
-            materialized = materialize_infra(
-                session,
-                args.node_label,
-                args.write_property,
-                args.infra_label,
-                args.infra_id_field,
-                args.min_community_size,
-                args.infra_status,
-                args.belongs_rel,
-                args.project_id,
-                verbose=args.verbose,
+        print(f"Community graph {args.graph_name}: {action}")
+        if result:
+            print(
+                "Louvain: communities=%s modularity=%s levels=%s"
+                % (result.get("communityCount"), result.get("modularity"), result.get("ranLevels"))
             )
-            if materialized:
-                print(
-                    "InfraNodes: %s communities=%s"
-                    % (materialized.get("infra_nodes"), materialized.get("communities"))
-                )
 
-            if drop_after:
-                drop_graph(session, args.graph_name)
-                print(f"GDS graph {args.graph_name}: dropped")
-    finally:
-        driver.close()
+        materialized = materialize_infra(
+            session,
+            args.node_label,
+            args.write_property,
+            args.infra_label,
+            args.infra_id_field,
+            args.min_community_size,
+            args.infra_status,
+            args.belongs_rel,
+            args.project_id,
+            verbose=args.verbose,
+        )
+        if materialized:
+            print(
+                "InfraNodes: %s communities=%s"
+                % (materialized.get("infra_nodes"), materialized.get("communities"))
+            )
+
+        if drop_after and session.provider == GraphProvider.NEO4J:
+            drop_graph(session, args.graph_name)
+            print(f"GDS graph {args.graph_name}: dropped")
 
 
 if __name__ == "__main__":
