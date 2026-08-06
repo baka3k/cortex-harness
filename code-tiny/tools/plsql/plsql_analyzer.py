@@ -1603,6 +1603,11 @@ def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
         # Oracle data pump directories
         "dpump", "datapump",
     }
+    try:
+        from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+        ignore_patterns = ignore_patterns | COMMON_SCAN_EXCLUDE
+    except Exception:
+        pass
 
     if dir_name in ignore_patterns:
         return True

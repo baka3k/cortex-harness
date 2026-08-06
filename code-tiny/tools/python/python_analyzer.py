@@ -1144,6 +1144,15 @@ def _stable_point_id(symbol_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, symbol_id))
 
 
+def _common_scan_exclude():
+    """Return the shared ``COMMON_SCAN_EXCLUDE`` set, with graceful fallback."""
+    try:
+        from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+        return COMMON_SCAN_EXCLUDE
+    except Exception:
+        return frozenset()
+
+
 def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
     """
     Check if a directory should be ignored during scanning.
@@ -1187,7 +1196,7 @@ def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
 
         # OS specific
         ".DS_Store", "Thumbs.db",
-    }
+    } | _common_scan_exclude()
 
     # Check directory name
     if dir_name in ignore_patterns:
