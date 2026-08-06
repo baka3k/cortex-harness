@@ -4,15 +4,25 @@ FalkorDB implementation of the graph driver interface.
 This driver keeps the public GraphDriver contract aligned with the existing
 Neo4j driver: query execution returns ``(records, keys, summary)`` where each
 record is a dictionary keyed by returned column name.
+
+Local mode (default after Phase 02 of the docker-free cutover):
+
+    FalkorDBDriver(path="/path/to/cortex.rdb", graph="hyper_graph")
+
+opens the embedded FalkorDBLite backend against an ``.rdb`` file. No URI,
+host, port, credentials, TLS, Docker, or running Redis/FalkorDB service is
+required. Network-style fields (uri, host, port, ssl, user, password) are
+still accepted for one release so existing call sites keep compiling, but
+they emit a deprecation warning and are ignored when a ``path`` is supplied.
 """
 
 import logging
 import re
-import time
+import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
 from tools.graph.core.base import GraphProvider
 from tools.graph.driver.neo4j_driver import Neo4jDriver
@@ -120,6 +130,29 @@ def _normalize_falkordb_value(value: Any) -> Any:
     return value
 
 
+def _open_local_falkordb(path: Path):
+    """Open the embedded FalkorDBLite backend against *path*.
+
+    Encapsulates the documented import path for the pinned ``falkordblite``
+    package so the rest of the driver does not have to know which class name
+    the package exposes. The package's public API has been observed at
+    ``falkordblite.FalkorDBLite``; the prior ``FalkorDBLite from
+    redislite.falkordb_client`` import documented elsewhere fails on the
+    release pinned in ``pyproject.toml``.
+    """
+    try:
+        from falkordblite import FalkorDBLite
+    except ImportError as exc:
+        raise ImportError(
+            "Local FalkorDB backend requires the 'falkordblite' package. "
+            "Install dependencies from requirements.txt or pyproject.toml."
+        ) from exc
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return FalkorDBLite(str(path))
+
+
 class FalkorDBDriver(Neo4jDriver):
     """
     FalkorDB graph driver.
@@ -127,6 +160,11 @@ class FalkorDBDriver(Neo4jDriver):
     The class inherits Neo4jDriver's high-level Cypher methods where FalkorDB
     supports the same query shape, and overrides provider-specific connection,
     schema, discovery, full-text, and ID lookup behavior.
+
+    Local mode is the supported default after the docker-free cutover. Pass
+    ``path=...`` to open an embedded FalkorDBLite backend against an ``.rdb``
+    file. URI/host/port/credentials/TLS are deprecated and ignored when a
+    path is supplied.
     """
 
     def __init__(
@@ -140,76 +178,82 @@ class FalkorDBDriver(Neo4jDriver):
         host: Optional[str] = None,
         port: Optional[int] = None,
         ssl: bool = False,
+        path: Optional[Any] = None,
         **kwargs: Any,
     ):
-        try:
-            from falkordb import FalkorDB
-            import redis
-        except ImportError as exc:
-            raise ImportError(
-                "FalkorDB provider requires the 'falkordb' package. "
-                "Install dependencies from requirements.txt or pyproject.toml."
-            ) from exc
-
         self._uri = uri
         self._user = user
         self._password = password
         self._database = graph or database or "neo4j"
+        self._path: Optional[Path] = Path(path).resolve() if path is not None else None
 
-        client_kwargs = {k: v for k, v in kwargs.items() if v is not None}
-        if user:
-            client_kwargs["username"] = user
-        if password:
-            client_kwargs["password"] = password
-
-        # redis-py's Connection defaults to socket_timeout=5s with 0 retries.
-        # Graph queries (batch MERGE, full-text, etc.) routinely exceed 5s on
-        # large codebases, so raise the socket timeout and add retry-on-error.
-        #
-        # IMPORTANT: redis.exceptions.ConnectionError extends RedisError, NOT
-        # builtins.ConnectionError. Passing the builtin here meant the server's
-        # "Connection closed by server" error was never matched by the retry
-        # loop — the exception propagated immediately with zero retries.
-        client_kwargs.setdefault("socket_timeout", 120)
-        client_kwargs.setdefault("socket_connect_timeout", 10)
-        client_kwargs.setdefault(
-            "retry_on_error",
-            [
-                redis.exceptions.ConnectionError,
-                redis.exceptions.TimeoutError,
-                TimeoutError,
-            ],
-        )
-
-        url = uri or client_kwargs.pop("url", None)
-        if url and "://" in url:
-            parsed = urlparse(url)
-            if parsed.scheme in {"falkor", "falkors", "redis", "rediss", "unix"}:
-                # redis.from_url() defaults to RESP3 (protocol=3); the
-                # falkordb package's own default is protocol=2 but is ignored
-                # on the from_url path because from_url creates its own
-                # connection pool. RESP3's parser corrupts its buffer state
-                # on nested graph-query responses in a long-running server,
-                # so pin RESP2 explicitly.
-                client_kwargs.setdefault("protocol", 2)
-                self._client = FalkorDB.from_url(url, **client_kwargs)
-            else:
-                raise ValueError(
-                    "FalkorDB URI must use falkor://, falkors://, redis://, "
-                    f"rediss://, or unix://; got {parsed.scheme!r}"
-                )
-        else:
-            if url and ":" in url and host is None:
-                parsed_host, parsed_port = url.rsplit(":", 1)
-                host = parsed_host or host
-                if parsed_port:
-                    port = int(parsed_port)
-            self._client = FalkorDB(
-                host=host or "localhost",
-                port=port or 6379,
-                ssl=ssl,
-                **client_kwargs,
+        # Network-style fields are deprecated. We still accept them so call
+        # sites keep compiling for one release, but log + warn, and ignore
+        # them when an explicit ``path`` was provided.
+        if self._path is not None and any(v is not None for v in (uri, host, port, user, password)) and ssl:
+            warnings.warn(
+                "FalkorDBDriver: network-style arguments (uri/host/port/user/password/ssl) "
+                "are deprecated and ignored when 'path' is supplied. Open a network client "
+                "explicitly if you need a remote FalkorDB instance.",
+                DeprecationWarning,
+                stacklevel=2,
             )
+
+        # Local mode (default): open the embedded FalkorDBLite backend.
+        if self._path is not None:
+            self._client = _open_local_falkordb(self._path)
+        else:
+            # Legacy network fallback. Kept for one release so existing tests
+            # that construct a network-style driver without a path keep
+            # working, but new code paths must supply ``path``.
+            warnings.warn(
+                "FalkorDBDriver opened without 'path'. Network-style usage is deprecated; "
+                "supply FALKORDB_PATH instead and re-run.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            try:
+                from falkordb import FalkorDB
+                import redis
+            except ImportError as exc:
+                raise ImportError(
+                    "FalkorDB provider requires the 'falkordb' package. "
+                    "Install dependencies from requirements.txt or pyproject.toml."
+                ) from exc
+
+            client_kwargs = {k: v for k, v in kwargs.items() if v is not None}
+            if user:
+                client_kwargs["username"] = user
+            if password:
+                client_kwargs["password"] = password
+            client_kwargs.setdefault("socket_timeout", 120)
+            client_kwargs.setdefault("socket_connect_timeout", 10)
+
+            url = uri or client_kwargs.pop("url", None)
+            if url and "://" in url:
+                from urllib.parse import urlparse
+
+                parsed = urlparse(url)
+                if parsed.scheme in {"falkor", "falkors", "redis", "rediss", "unix"}:
+                    client_kwargs.setdefault("protocol", 2)
+                    self._client = FalkorDB.from_url(url, **client_kwargs)
+                else:
+                    raise ValueError(
+                        "FalkorDB URI must use falkor://, falkors://, redis://, "
+                        f"rediss://, or unix://; got {parsed.scheme!r}"
+                    )
+            else:
+                if url and ":" in url and host is None:
+                    parsed_host, parsed_port = url.rsplit(":", 1)
+                    host = parsed_host or host
+                    if parsed_port:
+                        port = int(parsed_port)
+                self._client = FalkorDB(
+                    host=host or "localhost",
+                    port=port or 6379,
+                    ssl=ssl,
+                    **client_kwargs,
+                )
 
         self._graph = self._client.select_graph(self._database)
 
@@ -226,6 +270,10 @@ class FalkorDBDriver(Neo4jDriver):
         return self._database
 
     @property
+    def path(self) -> Optional[Path]:
+        return self._path
+
+    @property
     def graph(self) -> Any:
         return self._graph
 
@@ -236,7 +284,10 @@ class FalkorDBDriver(Neo4jDriver):
 
     def close(self) -> None:
         if self._client:
-            self._client.close()
+            try:
+                self._client.close()
+            except Exception as exc:  # pragma: no cover - best-effort close
+                logger.debug("FalkorDB close() raised: %s", exc)
             logger.info("FalkorDB connection closed")
 
     async def execute_query(
@@ -256,38 +307,19 @@ class FalkorDBDriver(Neo4jDriver):
         graph = self._graph_for(database)
         query, params = _prepare_falkordb_query(query, parameters)
 
-        # Defense-in-depth: redis-py's built-in retry_on_error only retries the
-        # command send path once with NoBackoff. When FalkorDB drops the
-        # connection mid-query (OOM kill, idle timeout, server restart), a
-        # fresh query needs a fresh connection from the pool. Retry here with
-        # exponential backoff so transient connection loss on large batch
-        # writes doesn't abort the whole analysis run.
-        max_retries = 3
-        base_delay = 1.0
+        # Local mode does not need the network retry loop, but we keep a
+        # single-shot retry so transient Python-level failures (e.g. the
+        # embedded store briefly locked during checkpoint) don't kill a
+        # large batch ingest.
         result = None
-        for attempt in range(max_retries + 1):
+        for attempt in range(2):
             try:
                 result = graph.query(query, params=params)
                 break
             except Exception as exc:
-                is_conn_error = isinstance(
-                    exc,
-                    (
-                        ConnectionError,
-                        TimeoutError,
-                    ),
-                ) or "Connection closed by server" in str(exc)
-                if not is_conn_error or attempt == max_retries:
+                if attempt == 1:
                     raise
-                delay = base_delay * (2 ** attempt)
-                logger.warning(
-                    "FalkorDB connection error on attempt %d/%d, retrying in %.1fs: %s",
-                    attempt + 1,
-                    max_retries + 1,
-                    delay,
-                    exc,
-                )
-                time.sleep(delay)
+                logger.warning("FalkorDB query failed (attempt 1), retrying: %s", exc)
 
         keys = [_result_key(item) for item in result.header]
         records = [

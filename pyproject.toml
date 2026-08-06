@@ -6,16 +6,21 @@ build-backend = "setuptools.build_meta"
 name = "cortex-harness"
 version = "0.1.0"
 description = "Unified CLI for CortexHarness code and document ingestion"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "click",
     "requests",
-    "neo4j",
-    "falkordb",
     "qdrant-client",
+    "falkordblite>=1.0.0",
     "python-dotenv>=1.2.2",
     "portalocker>=3.2,<4",
 ]
+
+[project.optional-dependencies]
+# Optional Neo4j support is isolated from the default local runtime.
+neo4j = ["neo4j", "neo4j-graphrag"]
+# Remote FalkorDB client support (not used by the default local runtime).
+falkordb-remote = ["falkordb"]
 
 [project.scripts]
 dev = "cortex_harness.dev:cli"
