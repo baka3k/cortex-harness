@@ -5,8 +5,21 @@ created: 2026-07-06
 mode: hi-plan --full
 scope: code-tiny, doc-tiny
 blocks: [260713-1638-framework-parser-integration, 260714-1603-flutter-analyzer-parser, 260714-1702-cobol-analyzer-parser, 260715-1629-perl-analyzer-parser, 260715-2011-aspnet-roslyn-analyzers, 260719-0100-mcp-query-capability-hardening, 260719-2150-parser-mcp-runtime-alignment, 260723-0908-case-insensitive-project-id, 260725-1703-project-topology-context-tools, 260728-0000-unified-ingest-query-contract]
+extendedBy: [260806-1648-local-file-storage]
 
 ## Cross-Plan Dependency
+
+The Docker-free local storage plan at
+`plans/260806-1648-local-file-storage/plan.md` reuses this plan's
+provider-neutral driver, query normalization, and `doc-tiny` graph-store
+adapter, but supersedes its deployment assumptions for the default local
+runtime. The target becomes a `falkordblite`-managed `.rdb` path rather than a
+remote `falkordb.FalkorDB` client on port 6379, and Qdrant moves from an HTTP
+service to role-scoped `QdrantClient(path=...)` stores. Do not complete this
+plan's runtime/dependency/rollout phases with host/port/Docker acceptance after
+the local-storage plan begins; merge those phases against the newer path-based
+contract. Remote-provider parity may remain an optional compatibility track,
+but it is no longer the default local acceptance target.
 
 The framework parser integration plan at `plans/260713-1638-framework-parser-integration/plan.md` depends on this migration stabilizing the provider argument/runtime contract, `GraphDriverFactory` configuration, provider-neutral query results, and schema/index setup. That plan will add MyBatis, Servlet/JSP, and Spring writers and MCP queries on top of these interfaces. Changes to `code-tiny/tools/graph`, `code-tiny/scripts/setup_constraints.py`, and `code-tiny/mcp/unified_mcp.py` must be coordinated across both plans.
 
