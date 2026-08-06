@@ -27,9 +27,24 @@ from mcp_runtime_config import format_bash_exports, runtime_environment  # noqa:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    # ``python scripts/mcp-lifecycle.py`` makes ``scripts/`` the first import
+    # root. Add the repository root explicitly so the source package works
+    # before (and independently of) an editable ``pip install -e .``.
+    sys.path.insert(0, str(ROOT))
+
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
 VENV_DIR = ROOT / ".venv"
+
+PYTHON_DEPENDENCY_PROBE = (
+    "import qdrant_client, requests; "
+    "from redislite.falkordb_client import FalkorDB; "
+    "import cortex_harness.storage"
+)
+PYTHON_DEPENDENCY_LABEL = (
+    "qdrant_client, FalkorDBLite backend, requests, cortex_harness.storage"
+)
 
 SERVERS = (
     {
@@ -63,9 +78,9 @@ USAGE = """Usage (equivalent forms):
   make build       | dev build       Create/sync virtualenvs and Python dependencies.
   make install     | dev install     Run build and install the global dev command.
   make uninstall   | dev uninstall   Remove the global dev command.
-  make infra-up    | dev infra-up    Pull/start local Qdrant and FalkorDB containers.
-  make infra-down  | dev infra-down  Stop the containers started by infra-up.
-  make doctor      | dev doctor      Check Python deps, Docker, databases, and MCP ports.
+  make infra-up    | dev infra-up    Deprecated alias for local storage initialization.
+  make infra-down  | dev infra-down  Deprecated no-op; local storage has no service lifecycle.
+  make doctor      | dev doctor      Check local Python storage runtime, paths, and MCP ports.
   make start       | dev start       Open each MCP server in a separate terminal window.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
 
@@ -80,14 +95,10 @@ Default MCP servers:
   code-tiny  http://127.0.0.1:8788/mcp
   doc-tiny   http://127.0.0.1:8789/mcp
 
-Default local infrastructure:
-  qdrant      http://127.0.0.1:6333
-  falkordb    redis://127.0.0.1:6379
-  falkordb ui http://127.0.0.1:3000  (FalkorDB Browser)
-
-FalkorDB host-side ports can be overridden to avoid conflicts with other local
-services (container-side ports stay 6379/3000):
-  FALKORDB_PORT=6380 FALKORDB_BROWSER_PORT=3001 make infra-up
+Default local storage:
+  qdrant code  ./local_qdrant_db/code
+  qdrant doc   ./local_qdrant_db/doc
+  falkordb     ./local_falkordb_db/cortex.rdb
 """
 
 INSTANCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -495,17 +506,20 @@ def invoke_doctor() -> None:
         failures += doctor_check("python venv", False, str(error))
 
     if python:
-        dependencies = "qdrant_client, falkordblite, requests"
         result = run(
             [
                 str(python),
                 "-c",
-                "import qdrant_client, falkordblite, requests",
+                PYTHON_DEPENDENCY_PROBE,
             ],
             capture=True,
             check=False,
         )
-        failures += doctor_check("python deps", result.returncode == 0, dependencies)
+        failures += doctor_check(
+            "python deps",
+            result.returncode == 0,
+            PYTHON_DEPENDENCY_LABEL,
+        )
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
             if stderr:
