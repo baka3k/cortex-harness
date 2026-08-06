@@ -133,15 +133,12 @@ def _normalize_falkordb_value(value: Any) -> Any:
 def _open_local_falkordb(path: Path):
     """Open the embedded FalkorDBLite backend against *path*.
 
-    Encapsulates the documented import path for the pinned ``falkordblite``
-    package so the rest of the driver does not have to know which class name
-    the package exposes. The package's public API has been observed at
-    ``falkordblite.FalkorDBLite``; the prior ``FalkorDBLite from
-    redislite.falkordb_client`` import documented elsewhere fails on the
-    release pinned in ``pyproject.toml``.
+    The PyPI distribution is named ``falkordblite``, but its Python API is
+    exposed through ``redislite.falkordb_client``. Keep that packaging detail
+    at this boundary so callers only depend on ``FalkorDBDriver``.
     """
     try:
-        from falkordblite import FalkorDBLite
+        from redislite.falkordb_client import FalkorDB
     except ImportError as exc:
         raise ImportError(
             "Local FalkorDB backend requires the 'falkordblite' package. "
@@ -150,7 +147,7 @@ def _open_local_falkordb(path: Path):
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return FalkorDBLite(str(path))
+    return FalkorDB(str(path))
 
 
 class FalkorDBDriver(Neo4jDriver):

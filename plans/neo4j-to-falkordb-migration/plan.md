@@ -13,13 +13,21 @@ The Docker-free local storage plan at
 `plans/260806-1648-local-file-storage/plan.md` reuses this plan's
 provider-neutral driver, query normalization, and `doc-tiny` graph-store
 adapter, but supersedes its deployment assumptions for the default local
-runtime. The target becomes a `falkordblite`-managed `.rdb` path rather than a
-remote `falkordb.FalkorDB` client on port 6379, and Qdrant moves from an HTTP
-service to role-scoped `QdrantClient(path=...)` stores. Do not complete this
-plan's runtime/dependency/rollout phases with host/port/Docker acceptance after
-the local-storage plan begins; merge those phases against the newer path-based
-contract. Remote-provider parity may remain an optional compatibility track,
-but it is no longer the default local acceptance target.
+runtime. The target becomes owner-scoped `falkordblite` `.rdb` files rather
+than a remote `falkordb.FalkorDB` client on port 6379, and Qdrant moves from an
+HTTP service to owner-scoped `QdrantClient(path=...)` stores. Physical paths
+are derived from a machine data root, layout version, harness instance, and
+stable owner ID; project isolation remains logical through registry graph and
+collection names. The machine data root is the centralized, runtime-resolved
+`Path.home() / ".cortext-harness"`, not a source-project directory or cache;
+usernames and absolute home paths must not be hardcoded. Code, document, and
+additional MCP owners must never open the same embedded path directly. Do not
+complete this plan's
+runtime/dependency/rollout phases with host/port/Docker or repository-local
+path acceptance after the local-storage plan begins; merge those phases
+against the newer ownership contract. Remote-provider parity may remain an
+optional compatibility track, but it is no longer the default local acceptance
+target.
 
 The framework parser integration plan at `plans/260713-1638-framework-parser-integration/plan.md` depends on this migration stabilizing the provider argument/runtime contract, `GraphDriverFactory` configuration, provider-neutral query results, and schema/index setup. That plan will add MyBatis, Servlet/JSP, and Spring writers and MCP queries on top of these interfaces. Changes to `code-tiny/tools/graph`, `code-tiny/scripts/setup_constraints.py`, and `code-tiny/mcp/unified_mcp.py` must be coordinated across both plans.
 

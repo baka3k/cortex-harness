@@ -11,7 +11,7 @@ dependencies = [
     "click",
     "requests",
     "qdrant-client",
-    "falkordblite>=1.0.0",
+    "falkordblite",
     "python-dotenv>=1.2.2",
     "portalocker>=3.2,<4",
 ]

@@ -85,13 +85,17 @@ def test_open_local_falkordb_creates_parent(tmp_path: Path, monkeypatch) -> None
 
     captured: dict = {}
 
-    class _StubLite:
+    class _StubFalkorDB:
         def __init__(self, path: str) -> None:
             captured["path"] = path
             captured["parent_exists"] = Path(path).parent.exists()
             return None
 
-    monkeypatch.setitem(sys.modules, "falkordblite", type("M", (), {"FalkorDBLite": _StubLite}))
+    monkeypatch.setitem(
+        sys.modules,
+        "redislite.falkordb_client",
+        type("M", (), {"FalkorDB": _StubFalkorDB}),
+    )
 
     _open_local_falkordb(target)
     assert captured["parent_exists"] is True
