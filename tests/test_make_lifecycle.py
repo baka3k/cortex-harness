@@ -228,7 +228,7 @@ class MakeLifecycleTests(unittest.TestCase):
         ) as start_service:
             LIFECYCLE.invoke_infra_up()
 
-        self.assertEqual(start_service.call_count, len(LIFECYCLE.INFRA_SERVICES))
+        self.assertEqual(start_service.call_count, len(LIFECYCLE.infra_services()))
 
     def test_infra_down_handles_missing_containers(self):
         with mock.patch.object(LIFECYCLE, "docker_command", return_value="docker"), mock.patch.object(
@@ -236,8 +236,56 @@ class MakeLifecycleTests(unittest.TestCase):
         ) as container_exists, mock.patch.object(LIFECYCLE, "run") as run_command:
             LIFECYCLE.invoke_infra_down()
 
-        self.assertEqual(container_exists.call_count, len(LIFECYCLE.INFRA_SERVICES))
+        self.assertEqual(container_exists.call_count, len(LIFECYCLE.infra_services()))
         run_command.assert_not_called()
+
+    def test_falkordb_service_exposes_browser_web_ui_port(self):
+        falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
+        # Container-side port 3000 must always be mapped so the bundled Browser Web UI is reachable.
+        self.assertIn("3000:3000", falkordb["ports"])
+        self.assertEqual(falkordb["browser_port"], 3000)
+        self.assertIn("3000", falkordb["browser_ready_url"])
+
+    def test_falkordb_browser_port_env_override(self):
+        with mock.patch.dict(os.environ, {"FALKORDB_BROWSER_PORT": "3001"}, clear=False):
+            falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
+        self.assertIn("3001:3000", falkordb["ports"])
+        self.assertEqual(falkordb["browser_port"], 3001)
+
+    def test_falkordb_data_volume_persisted(self):
+        falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
+        self.assertTrue(any(str(v).startswith("cortex-falkordb-data:") for v in falkordb["volumes"]))
+
+    def test_falkordb_marked_redis_protocol_for_db_readiness(self):
+        falkordb = next(s for s in LIFECYCLE.infra_services() if s["name"] == "falkordb")
+        self.assertEqual(falkordb["protocol"], "redis")
+
+    def test_redis_ping_ready_returns_false_on_closed_port(self):
+        # Port 1 is reserved/unassigned -> connection must fail -> not ready.
+        self.assertFalse(LIFECYCLE.redis_ping_ready("127.0.0.1", 1, timeout=0.5))
+
+    def test_redis_ping_ready_returns_true_on_pong(self):
+        class FakeSocket:
+            def __init__(self, *args, **kwargs):
+                self.sent = b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def settimeout(self, value):
+                pass
+
+            def sendall(self, data):
+                self.sent = data
+
+            def recv(self, size):
+                return b"+PONG\r\n"
+
+        with mock.patch.object(LIFECYCLE.socket, "create_connection", return_value=FakeSocket()):
+            self.assertTrue(LIFECYCLE.redis_ping_ready("127.0.0.1", 6379, timeout=1.0))
 
 
 if __name__ == "__main__":

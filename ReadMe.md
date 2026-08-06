@@ -51,7 +51,7 @@ git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
 make build       # MUST RUN FIRST  - create/reuse .venv and install root, code-tiny, and doc-tiny dependencies only
-make infra-up    # pull/start Qdrant (:6333) and FalkorDB (:6379) Docker containers
+make infra-up    # pull/start Qdrant (:6333) and FalkorDB (:6379 + Web UI :3000) Docker containers
 make install     # create/reuse .venv, install dependencies, and install global dev command
 make doctor      # check Python deps, Docker, database ports, and MCP ports
 make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
@@ -59,6 +59,16 @@ make stop        # stop MCP terminal/processes started by make start
 make infra-down  # stop the Qdrant/FalkorDB containers managed by make infra-up
 make uninstall   # remove the global dev command installed by make install
 ```
+
+After `make infra-up`, open the **FalkorDB Browser Web UI** to explore your graphs visually at http://localhost:3000. The `falkordb/falkordb` image bundles the browser, so no extra container is needed.
+
+If host ports `6379` or `3000` are already taken by another service, override the host-side binding (container-side ports stay 6379/3000):
+
+```bash
+FALKORDB_PORT=6380 FALKORDB_BROWSER_PORT=3001 make infra-up
+```
+
+Graph data is persisted in the `cortex-falkordb-data` Docker volume, so recreating the container (e.g. when changing ports) keeps your data.
 
 `make install` installs `dev.cmd` to `%USERPROFILE%\.local\bin` on Windows and `dev` to `~/.local/bin` on macOS/Linux. Make sure that directory is on your shell `PATH`.
 
