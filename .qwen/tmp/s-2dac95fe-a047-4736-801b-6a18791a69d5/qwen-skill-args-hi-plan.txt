@@ -1,1 +1,0 @@
-thêm hàm test cho các mcp mới, C:\ai\cortex-harness\code-tiny\testtool , bổ sung đầy đủ datatest, đổi ux để chọn tool dễ hơn

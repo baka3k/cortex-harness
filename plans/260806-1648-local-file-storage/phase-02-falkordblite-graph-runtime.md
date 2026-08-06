@@ -13,16 +13,20 @@ shape and Cypher compatibility behavior while changing backend ownership.
 - Preserve graph selection, query parameters, normalized rows, schema helpers,
   and driver method contracts.
 - Persist data across close/reopen and application restarts.
-- Support code and document logical graphs without external services.
+- Support many project graphs within each owner file without external
+  services.
+- Give code, document, and additional MCP owners distinct `.rdb` files.
 - Close embedded resources deterministically.
 
 ## Architecture
 
 Keep `GraphProvider.FALKORDB` as the logical provider to avoid unrelated writer
-and query churn. Extend `FalkorDBDriver` with a local `path` configuration and
-encapsulate the pinned FalkorDBLite import in one constructor helper. The
-driver continues to return `(records, keys, summary)` and to expose the selected
-graph for schema helpers.
+and query churn. Extend `FalkorDBDriver` with a role-derived local `path`
+configuration and encapsulate the pinned FalkorDBLite import in one constructor
+helper. The driver continues to return `(records, keys, summary)` and to expose
+the selected graph for schema helpers. One owner file contains multiple
+registry-resolved project graphs; different MCP owners never construct
+FalkorDBLite against the same file.
 
 ## Related Files
 
@@ -39,8 +43,10 @@ graph for schema helpers.
 
 ## Implementation Steps
 
-1. Add `path` to the driver/factory configuration and make it the canonical
-   FalkorDB setting.
+1. Add owner-aware `path` to the driver/factory configuration and make it the
+   canonical FalkorDB setting. The launcher resolves
+   `FALKORDB_CODE_PATH`/`FALKORDB_DOC_PATH` to the process-local
+   `FALKORDB_PATH` compatibility value.
 2. Instantiate the documented backend from the pinned `falkordblite` package,
    using the user-requested direct import only if the pinned version actually
    exports it.
@@ -55,11 +61,14 @@ graph for schema helpers.
    `--falkordb-graph` as the logical graph selector.
 7. Update `doc-tiny/graph_store.py` to construct the same local driver and keep
    its Neo4j-like session adapter stable for ingest/query scripts.
-8. Ensure code and document graphs either share one supported embedded owner or
-   coordinate safely through the same `.rdb`; add a two-process lifecycle test
-   before accepting shared-file operation.
-9. Add temporary-directory persistence, multiple-graph, schema, batch-write,
-   query normalization, reset, and error-path tests.
+8. Acquire the application owner lease before constructing FalkorDBLite and
+   release it only after the embedded backend is closed. A duplicate owner
+   fails before any `.rdb` access.
+9. Put all registered project graphs for a role in that role's owner file and
+   prove project-scoped reset never deletes another graph.
+10. Add temporary-directory persistence, multiple-project graph, schema,
+    batch-write, query normalization, reset, duplicate-owner, and error-path
+    tests.
 
 ## Todo
 
@@ -67,19 +76,26 @@ graph for schema helpers.
 - [ ] Remove canonical network configuration.
 - [ ] Update factory, CLI, and document adapter.
 - [ ] Verify package API and graph/schema behavior.
+- [ ] Add owner lease and separate role files.
 - [ ] Add restart and concurrent-service tests.
 
 ## Risks
 
 - FalkorDBLite still manages an embedded Redis/FalkorDB process internally;
-  close and multi-process ownership semantics must be tested, not assumed.
+  close and multi-process ownership semantics must be tested, not assumed. The
+  safe default is one process owner per `.rdb`.
 - Inheriting high-level methods from `Neo4jDriver` retains query-shape
   dependencies; existing FalkorDB normalization tests must remain green.
 - The embedded library may have platform-specific binary or OpenMP needs.
 
 ## Success Criteria
 
-- `FALKORDB_PATH` plus graph name is sufficient to construct the driver.
+- The role-derived `FALKORDB_PATH` plus registry graph name is sufficient to
+  construct the driver.
+- Code and document owners run concurrently with distinct `.rdb` files; a
+  second process using either owner is rejected with an actionable diagnostic.
+- At least two project graphs coexist in one owner file and remain isolated
+  across query and reset operations.
 - No local graph startup path needs a URI, host, port, credentials, TLS, Docker,
   or a pre-running Redis/FalkorDB service.
 - Data written to a temporary `.rdb` is readable after the driver and process
