@@ -296,7 +296,7 @@ async def cleanup_message_nodes_neo4j(
     if not normalized_paths:
         return {"deleted_messages": 0, "deleted_endpoints": 0}
     if verbose:
-        print(f"[message][cleanup][neo4j] files={len(normalized_paths)}")
+        print(f"[message][cleanup][graph] files={len(normalized_paths)}")
     delete_query = """
     WITH $project_id AS project_id, $paths AS paths
     MATCH (m:Message {project_id: project_id})
@@ -328,7 +328,7 @@ async def cleanup_message_nodes_neo4j(
     deleted_endpoints = int((records or [{}])[0].get("deleted_endpoints", 0))
     if verbose:
         print(
-            "[message][cleanup][neo4j] deleted_messages=%d deleted_endpoints=%d"
+            "[message][cleanup][graph] deleted_messages=%d deleted_endpoints=%d"
             % (deleted_messages, deleted_endpoints)
         )
     return {"deleted_messages": deleted_messages, "deleted_endpoints": deleted_endpoints}
@@ -342,7 +342,7 @@ async def cleanup_all_message_nodes_neo4j(
     verbose: bool = False,
 ) -> Dict[str, int]:
     if verbose:
-        print(f"[message][cleanup][neo4j] clear project_id={project_id}")
+        print(f"[message][cleanup][graph] clear project_id={project_id}")
     delete_query = """
     MATCH (m:Message {project_id: $project_id})
     WITH collect(m) AS nodes
@@ -629,7 +629,7 @@ async def upsert_messages_to_neo4j(
         records_result, _, _ = await driver.execute_query(query, {"rows": rows}, database=database)
         written += int((records_result or [{}])[0].get("count", 0))
         if verbose:
-            print(f"[message][neo4j] upsert {min(offset + len(batch), total)}/{total}")
+            print(f"[message][graph] upsert {min(offset + len(batch), total)}/{total}")
     return {"upserted_messages": written}
 
 
