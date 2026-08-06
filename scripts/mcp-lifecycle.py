@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -13,18 +14,16 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+from contextlib import ExitStack
+from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import urlopen
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
-
-from mcp_runtime_config import format_bash_exports, runtime_environment  # noqa: E402
-
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -65,12 +64,9 @@ def infra_services() -> tuple[dict[str, object], ...]:
     """Deprecated: retained for one release for compatibility only.
 
     The Docker-managed Qdrant + FalkorDB containers were replaced by
-    project-local persistent storage in Phase 04 of the docker-free
-    cutover. ``invoke_storage_init`` creates the same on-disk locations
-    without invoking Docker. The shape returned here still matches the
-    legacy ``{name, container, image, ports, host, port, ready_url}`` keys
-    so any caller that introspects the dict keeps compiling, but the data
-    is informational only.
+    centralized per-account persistent storage in Phase 04 of the docker-free
+    cutover. ``invoke_storage_init`` creates the canonical instance tree;
+    there are no database services to enumerate.
     """
     return ()
 
@@ -80,6 +76,10 @@ USAGE = """Usage (equivalent forms):
   make uninstall   | dev uninstall   Remove the global dev command.
   make infra-up    | dev infra-up    Deprecated alias for local storage initialization.
   make infra-down  | dev infra-down  Deprecated no-op; local storage has no service lifecycle.
+  make storage-layout               Show instance paths, manifest, and current leases.
+  make storage-init                 Create the canonical instance tree and manifest.
+  make storage-migrate-layout       Dry-run legacy repository-local migration.
+  make storage-backup               Create a verified owner backup (OWNER=code|doc).
   make doctor      | dev doctor      Check local Python storage runtime, paths, and MCP ports.
   make start       | dev start       Open each MCP server in a separate terminal window.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
@@ -96,12 +96,30 @@ Default MCP servers:
   doc-tiny   http://127.0.0.1:8789/mcp
 
 Default local storage:
-  qdrant code  ./local_qdrant_db/code
-  qdrant doc   ./local_qdrant_db/doc
-  falkordb     ./local_falkordb_db/cortex.rdb
+  data root     ~/.cortext-harness/v1/instances/default
+  qdrant code  <data-root>/qdrant/code
+  qdrant doc   <data-root>/qdrant/doc
+  falkordb     <data-root>/falkordb/{code,doc}/data.rdb
 """
 
 INSTANCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def runtime_environment(root: Path, server_name: str) -> dict[str, str]:
+    """Load runtime configuration only for start operations.
+
+    Keeping this import lazy lets `make help` and other bootstrap commands run
+    before the virtual environment dependencies have been installed.
+    """
+    from mcp_runtime_config import runtime_environment as resolve_runtime_environment
+
+    return resolve_runtime_environment(root, server_name)
+
+
+def format_bash_exports(environment: dict[str, str]) -> str:
+    from mcp_runtime_config import format_bash_exports as render_bash_exports
+
+    return render_bash_exports(environment)
 
 
 def run(arguments: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -130,7 +148,7 @@ def invoke_build() -> None:
     if not VENV_DIR.exists():
         launcher = shutil.which("python3") or shutil.which("python")
         if not launcher:
-            raise RuntimeError("Python was not found on PATH. Install Python 3.10+ before running make build.")
+            raise RuntimeError("Python was not found on PATH. Install Python 3.12+ before running make build.")
         print(f"[build] Creating venv: {VENV_DIR}")
         run([launcher, "-m", "venv", str(VENV_DIR)])
 
@@ -188,192 +206,12 @@ def invoke_uninstall() -> None:
     print("[uninstall] User PATH was left unchanged.")
 
 
-def docker_command() -> str:
-    docker = shutil.which("docker")
-    if not docker:
-        raise RuntimeError("Docker was not found on PATH. Install Docker Desktop before running make infra-up.")
-    if run([docker, "info"], capture=True, check=False).returncode != 0:
-        raise RuntimeError("Docker was found, but the Docker daemon is not running. Start Docker Desktop and retry.")
-    return docker
-
-
 def tcp_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
         return False
-
-
-def wait_for_port(host: str, port: int, timeout: int = 30) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if tcp_port_open(host, port):
-            return True
-        time.sleep(1)
-    return False
-
-
-def http_ready(url: str) -> bool:
-    if not url:
-        return True
-    try:
-        with urlopen(url, timeout=2) as response:
-            return 200 <= response.status < 400
-    except (OSError, URLError):
-        return False
-
-
-def redis_ping_ready(host: str, port: int, timeout: float = 2.0) -> bool:
-    """Return True when a Redis-protocol server (e.g. FalkorDB) answers PING with PONG.
-
-    Port-open only proves the socket is listening; PING proves the server and its
-    modules (FalkorDB graph) finished loading and can actually serve commands.
-    """
-    try:
-        with socket.create_connection((host, port), timeout=timeout) as connection:
-            connection.settimeout(timeout)
-            # RESP inline command: "*1\r\n$4\r\nPING\r\n"
-            connection.sendall(b"*1\r\n$4\r\nPING\r\n")
-            return connection.recv(64).startswith(b"+PONG")
-    except OSError:
-        return False
-
-
-def wait_for_redis_ping(host: str, port: int, timeout: int = 30) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if redis_ping_ready(host, port):
-            return True
-        time.sleep(1)
-    return False
-
-
-def container_exists(docker: str, name: str) -> bool:
-    result = run(
-        [docker, "ps", "-a", "--filter", f"name=^/{name}$", "--format", "{{.Names}}"],
-        capture=True,
-        check=False,
-    )
-    return name in result.stdout.splitlines()
-
-
-def container_running(docker: str, name: str) -> bool:
-    result = run([docker, "inspect", "-f", "{{.State.Running}}", name], capture=True, check=False)
-    return result.returncode == 0 and result.stdout.strip().splitlines()[:1] == ["true"]
-
-
-def ensure_docker_image(docker: str, image: str) -> None:
-    if run([docker, "image", "inspect", image], capture=True, check=False).returncode == 0:
-        return
-    print(f"[infra] Pulling image: {image}")
-    run([docker, "pull", image])
-
-
-def ensure_docker_volume(docker: str, volume: str) -> None:
-    if run([docker, "volume", "inspect", volume], capture=True, check=False).returncode == 0:
-        return
-    print(f"[infra] Creating volume: {volume}")
-    run([docker, "volume", "create", volume])
-
-
-def container_ports(docker: str, name: str) -> set[str]:
-    result = run([docker, "port", name], capture=True, check=False)
-    if result.returncode != 0:
-        return set()
-    bindings: set[str] = set()
-    for line in result.stdout.splitlines():
-        parts = line.split("->")
-        if len(parts) == 2:
-            binding = parts[1].strip()
-            if ":" in binding:
-                bindings.add(binding.rsplit(":", 1)[1])
-    return bindings
-
-
-def start_infra_service(docker: str, service: dict[str, object]) -> None:
-    name = str(service["container"])
-    image = str(service["image"])
-    expected_ports = {str(port).split(":", 1)[0] for port in service["ports"]}
-    if container_exists(docker, name):
-        actual_ports = container_ports(docker, name)
-        # Recreate when the current host-side port bindings do not match the desired set
-        # (e.g. a new Web UI port was added or FALKORDB_BROWSER_PORT changed). A fresh
-        # container has empty actual_ports, so only recreate on an actual mismatch.
-        port_mismatch = bool(actual_ports) and expected_ports != actual_ports
-        if port_mismatch:
-            missing = sorted(expected_ports - actual_ports)
-            extra = sorted(actual_ports - expected_ports)
-            detail = []
-            if missing:
-                detail.append(f"missing {missing}")
-            if extra:
-                detail.append(f"unexpected {extra}")
-            print(
-                f"[infra] {name} port mapping changed ({'; '.join(detail)}); "
-                f"recreating to apply the current mapping."
-            )
-            if container_running(docker, name):
-                run([docker, "stop", name])
-            run([docker, "rm", name])
-            create_docker_container(docker, name, image, service)
-        elif container_running(docker, name):
-            print(f"[infra] {name} is already running.")
-        else:
-            print(f"[infra] Starting existing container: {name}")
-            run([docker, "start", name])
-    else:
-        create_docker_container(docker, name, image, service)
-
-    host, port = str(service["host"]), int(service["port"])
-    if not wait_for_port(host, port):
-        raise RuntimeError(f"{service['name']} did not open {host}:{port} within 30 seconds.")
-    ready_url = str(service["ready_url"])
-    if not http_ready(ready_url):
-        raise RuntimeError(f"{service['name']} is listening, but {ready_url} did not return a healthy response.")
-    # For Redis-protocol backends (FalkorDB), PING proves the DB + graph module
-    # finished loading, not just that the socket is open.
-    if str(service.get("protocol", "")) == "redis":
-        if not wait_for_redis_ping(host, port):
-            raise RuntimeError(
-                f"{service['name']} port {host}:{port} is open, but PING did not return PONG within 30 seconds "
-                f"(DB/module may still be loading)."
-            )
-    print(f"[infra] {service['name']} ready on {host}:{port}")
-
-    # Optional FalkorDB Browser Web UI (bundled in falkordb/falkordb on port 3000).
-    browser_port = service.get("browser_port")
-    if browser_port:
-        browser_url = str(service.get("browser_ready_url") or f"http://127.0.0.1:{browser_port}")
-        if not wait_for_port(host, int(browser_port), timeout=45):
-            print(
-                f"[infra] WARNING: {service['name']} Browser Web UI did not open "
-                f"{host}:{browser_port} within 45 seconds."
-            )
-        elif not http_ready(browser_url):
-            print(
-                f"[infra] WARNING: {service['name']} Browser Web UI is listening, "
-                f"but {browser_url} did not return a healthy response."
-            )
-        else:
-            print(f"[infra] {service['name']} Browser Web UI ready at {browser_url}")
-
-
-def create_docker_container(docker: str, name: str, image: str, service: dict[str, object]) -> None:
-    ensure_docker_image(docker, image)
-    volumes = service.get("volumes") or ()
-    for volume_mapping in volumes:
-        volume_name = str(volume_mapping).split(":", 1)[0]
-        if volume_name:
-            ensure_docker_volume(docker, volume_name)
-    arguments = [docker, "run", "-d", "--name", name, "--restart", "unless-stopped"]
-    for port in service["ports"]:
-        arguments.extend(("-p", str(port)))
-    for volume_mapping in volumes:
-        arguments.extend(("-v", str(volume_mapping)))
-    arguments.append(image)
-    print(f"[infra] Creating container: {name}")
-    run(arguments)
 
 
 def invoke_infra_up() -> None:
@@ -402,55 +240,150 @@ def invoke_infra_down() -> None:
     )
 
 
-def invoke_storage_init() -> None:
-    """Resolve paths, create parent directories, open + close both stores.
-
-    Idempotent: re-running on an already-initialized project is a no-op
-    apart from a confirmation message. Reports the logical targets
-    (graph, code/doc Qdrant paths) for the doctor / acceptance sequence.
-    """
+def _resolved_storage(root: Path | None = None):
     try:
-        from cortex_harness.storage import resolve_storage
+        from mcp_runtime_config import resolve_active_storage
     except ImportError as error:
         raise RuntimeError(
-            "cortex_harness.storage could not be imported. "
+            "Local storage configuration could not be imported. "
             "Run 'make build' first to install the package in editable mode."
         ) from error
+    return resolve_active_storage(Path(root) if root is not None else ROOT)
 
-    resolved = resolve_storage(ROOT)
-    resolved.ensure_directories()
-    print(f"[storage-init] project root : {resolved.project_root}")
-    print(f"[storage-init] Qdrant base  : {resolved.qdrant_base}")
-    print(f"[storage-init] Qdrant code  : {resolved.qdrant_code_path}")
-    print(f"[storage-init] Qdrant doc   : {resolved.qdrant_doc_path}")
-    print(f"[storage-init] FalkorDBLite : {resolved.falkordb_path}")
 
-    # Round-trip both stores with a temporary collection / graph so doctor
-    # can validate write permission without polluting project data.
-    try:
-        from cortex_harness.storage import LocalQdrantStore, QdrantStorageRole, reset_clients
-        from cortex_harness.storage.qdrant import _client_lock
+def _storage_summary(resolved) -> dict[str, object]:
+    from cortex_harness.storage.layout import load_manifest
 
-        # Code + doc smoke test only when qdrant_client is importable.
-        try:
-            from qdrant_client.http import models as qmodels  # noqa: F401
-        except ImportError:
-            print("[storage-init] qdrant_client not installed; skipping vector round-trip.")
-            return
-
-        for role in (QdrantStorageRole.CODE, QdrantStorageRole.DOCUMENT):
-            store = LocalQdrantStore(resolved, role)
+    leases: dict[str, object] = {}
+    for owner, backend, target in (
+        (resolved.code_owner_id, "qdrant", resolved.qdrant_code_path),
+        (resolved.doc_owner_id, "qdrant", resolved.qdrant_doc_path),
+        (resolved.code_owner_id, "falkordb", resolved.falkordb_code_path),
+        (resolved.doc_owner_id, "falkordb", resolved.falkordb_doc_path),
+    ):
+        target = Path(target)
+        lock_path = target.parent / f".{target.name}.cortex-owner.lock"
+        holder: object = None
+        if lock_path.is_file():
             try:
-                collections = store.list_collection_names()
-                print(f"[storage-init] {role.value} collections: {len(collections)}")
-            finally:
-                store.close()
-                with _client_lock:
-                    from cortex_harness.storage import qdrant as _qdrant_module
-                    _qdrant_module._clients.pop(str(store.path), None)
-        reset_clients()
-    except ImportError:
-        pass
+                raw = lock_path.read_text(encoding="utf-8").strip()
+                holder = json.loads(raw) if raw else None
+            except (OSError, json.JSONDecodeError):
+                holder = "unreadable"
+        leases[f"{owner}:{backend}"] = holder
+    return {
+        "schema_version": resolved.schema_version,
+        "instance_id": resolved.instance_id,
+        "data_root": str(resolved.data_root),
+        "instance_root": str(resolved.instance_root),
+        "qdrant": {
+            resolved.code_owner_id: str(resolved.qdrant_code_path),
+            resolved.doc_owner_id: str(resolved.qdrant_doc_path),
+        },
+        "falkordb": {
+            resolved.code_owner_id: str(resolved.falkordb_code_path),
+            resolved.doc_owner_id: str(resolved.falkordb_doc_path),
+        },
+        "manifest": load_manifest(resolved),
+        "leases": leases,
+    }
+
+
+def invoke_storage_layout() -> None:
+    print(json.dumps(_storage_summary(_resolved_storage()), indent=2, sort_keys=True))
+
+
+def invoke_storage_init() -> None:
+    """Create the canonical instance tree and immutable manifest."""
+    from cortex_harness.storage.layout import ensure_layout
+
+    resolved = _resolved_storage()
+    ensure_layout(resolved)
+    print(f"[storage-init] data root     : {resolved.data_root}")
+    print(f"[storage-init] instance      : {resolved.instance_id}")
+    print(f"[storage-init] Qdrant code   : {resolved.qdrant_code_path}")
+    print(f"[storage-init] Qdrant doc    : {resolved.qdrant_doc_path}")
+    print(f"[storage-init] FalkorDB code : {resolved.falkordb_code_path}")
+    print(f"[storage-init] FalkorDB doc  : {resolved.falkordb_doc_path}")
+    print(f"[storage-init] manifest      : {resolved.manifest_path}")
+
+
+def invoke_storage_migrate_layout(legacy_root: Path, *, apply: bool) -> None:
+    from cortex_harness.storage.migration import migrate_legacy_layout
+
+    resolved = _resolved_storage()
+    report = migrate_legacy_layout(resolved, legacy_root, dry_run=not apply)
+    mode = "apply" if apply else "dry-run"
+    print(f"[storage-migrate-layout] mode: {mode}")
+    if not report:
+        print(f"[storage-migrate-layout] no legacy stores found under {Path(legacy_root).resolve()}")
+    for item in report:
+        print(f"[storage-migrate-layout] {item.action}: {item.source} -> {item.target} sha256={item.digest}")
+
+
+def _path_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    files = [path] if path.is_file() else sorted(item for item in path.rglob("*") if item.is_file())
+    for item in files:
+        digest.update((item.name if path.is_file() else item.relative_to(path).as_posix()).encode("utf-8"))
+        with item.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def invoke_storage_backup(owner: str) -> None:
+    from cortex_harness.storage.layout import ensure_layout
+    from cortex_harness.storage.lease import StorageLease
+
+    resolved = _resolved_storage()
+    ensure_layout(resolved)
+    owner = owner.casefold()
+    if owner not in {resolved.code_owner_id, resolved.doc_owner_id}:
+        raise RuntimeError(
+            f"Unknown storage owner {owner!r}; choose {resolved.code_owner_id!r} or {resolved.doc_owner_id!r}."
+        )
+    qdrant_source = resolved.qdrant_code_path if owner == resolved.code_owner_id else resolved.qdrant_doc_path
+    falkor_source = Path(resolved.falkordb_code_path if owner == resolved.code_owner_id else resolved.falkordb_doc_path)
+    with ExitStack() as leases:
+        leases.enter_context(
+            StorageLease(qdrant_source, instance_id=resolved.instance_id, owner_id=owner, backend="qdrant")
+        )
+        leases.enter_context(
+            StorageLease(falkor_source, instance_id=resolved.instance_id, owner_id=owner, backend="falkordb")
+        )
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+        destination = Path(resolved.backups_path) / timestamp
+        records: list[dict[str, str]] = []
+        for backend, source, target in (
+            ("qdrant", Path(qdrant_source), destination / "qdrant" / owner),
+            ("falkordb", falkor_source, destination / "falkordb" / owner / "data.rdb"),
+        ):
+            if not source.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_dir():
+                shutil.copytree(source, target)
+            else:
+                shutil.copy2(source, target)
+            source_digest = _path_digest(source)
+            if _path_digest(target) != source_digest:
+                raise RuntimeError(f"Backup verification failed for {source}")
+            records.append({"backend": backend, "source": str(source), "target": str(target), "sha256": source_digest})
+        manifest = {
+            "schema_version": resolved.schema_version,
+            "instance_id": resolved.instance_id,
+            "owner_id": owner,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "items": records,
+        }
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    print(f"[storage-backup] verified backup: {destination}")
 
 
 def _supports_color() -> bool:
@@ -498,6 +431,11 @@ def doctor_check(name: str, ok: bool, message: str, *, required: bool = True) ->
 
 def invoke_doctor() -> None:
     failures = 0
+    failures += doctor_check(
+        "python version",
+        sys.version_info >= (3, 12),
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro} (requires 3.12+)",
+    )
     try:
         python = venv_python()
         failures += doctor_check("python venv", True, str(python))
@@ -525,70 +463,75 @@ def invoke_doctor() -> None:
             if stderr:
                 print(f"[doctor] {stderr.splitlines()[-1]}")
 
-    # Local storage paths: report and validate writability without invoking Docker.
+    # Production paths are inspected, but write probes always use an isolated
+    # temporary data root so doctor cannot change registered project data.
     try:
-        from cortex_harness.storage import resolve_storage
-        resolved = resolve_storage(ROOT)
+        resolved = _resolved_storage()
         doctor_check("qdrant base path", True, str(resolved.qdrant_base))
         doctor_check("qdrant code path", True, str(resolved.qdrant_code_path))
         doctor_check("qdrant doc path",  True, str(resolved.qdrant_doc_path))
-        doctor_check("falkordb path",    True, str(resolved.falkordb_path))
-        resolved.ensure_directories()
-        for label, path in (
-            ("qdrant code writable", resolved.qdrant_code_path),
-            ("qdrant doc writable",  resolved.qdrant_doc_path),
-            ("falkordb writable",    resolved.falkordb_path.parent),
-        ):
-            failures += doctor_check(label, os.access(path, os.W_OK), str(path))
+        doctor_check("falkordb code path", True, str(resolved.falkordb_code_path))
+        doctor_check("falkordb doc path", True, str(resolved.falkordb_doc_path))
+        writable_parent = next((path for path in (Path(resolved.data_root), *Path(resolved.data_root).parents) if path.exists()), None)
+        failures += doctor_check(
+            "data root parent writable",
+            writable_parent is not None and os.access(writable_parent, os.W_OK),
+            str(writable_parent or resolved.data_root),
+        )
     except Exception as error:
         failures += doctor_check("local storage", False, str(error))
 
-    # Round-trip the local Qdrant client and FalkorDBLite store in temporary
-    # collections / graphs to prove the on-disk backends are usable. We only
-    # do this when the optional dependency modules are importable.
-    try:
-        from cortex_harness.storage import LocalQdrantStore, QdrantStorageRole
-        from cortex_harness.storage.qdrant import _client_lock
-        from cortex_harness.storage import qdrant as _qdrant_module
-        from qdrant_client.http import models as qmodels
+    with tempfile.TemporaryDirectory(prefix="cortex-doctor-") as temporary:
+        try:
+            from cortex_harness.storage import LocalQdrantStore, QdrantStorageRole, reset_clients, resolve_storage
+            from qdrant_client.http import models as qmodels
 
-        import uuid as _uuid
+            probe = resolve_storage(ROOT, data_home=temporary, instance_id="doctor")
+            for role in (QdrantStorageRole.CODE, QdrantStorageRole.DOCUMENT):
+                store = LocalQdrantStore(probe, role)
+                collection = f"doctor_{role.value}"
+                try:
+                    store.create_collection(
+                        collection,
+                        vectors_config=qmodels.VectorParams(size=2, distance=qmodels.Distance.COSINE),
+                    )
+                    store.upsert(
+                        collection,
+                        points=[qmodels.PointStruct(id=1, vector=[0.0, 1.0], payload={"__doctor__": True})],
+                    )
+                    hits = store.retrieve(collection, ids=[1])
+                    failures += doctor_check(
+                        f"qdrant {role.value} round-trip",
+                        bool(hits) and bool(hits[0].payload.get("__doctor__")),
+                        str(store.path),
+                    )
+                finally:
+                    store.close()
+            reset_clients()
+        except ImportError as error:
+            failures += doctor_check("qdrant round-trip", False, f"dependency missing: {error}")
+        except Exception as error:
+            failures += doctor_check("qdrant round-trip", False, str(error))
 
-        tmp_name = f"doctor_{_uuid.uuid4().hex[:8]}"
-        for role in (QdrantStorageRole.CODE, QdrantStorageRole.DOCUMENT):
-            store = LocalQdrantStore(resolved, role)
+        try:
+            from redislite.falkordb_client import FalkorDB
+
+            graph_path = Path(temporary) / "falkordb" / "doctor.rdb"
+            graph_path.parent.mkdir(parents=True, exist_ok=True)
+            client = FalkorDB(str(graph_path))
             try:
-                store.create_collection(
-                    tmp_name,
-                    vectors_config=qmodels.VectorParams(size=2, distance=qmodels.Distance.COSINE),
-                )
-                store.upsert(
-                    tmp_name,
-                    points=[qmodels.PointStruct(id=1, vector=[0.0, 1.0], payload={"__doctor__": True})],
-                )
-                hits = store.retrieve(tmp_name, ids=[1])
+                result = client.select_graph("doctor").query("RETURN 1 AS ok")
                 failures += doctor_check(
-                    f"qdrant {role.value} round-trip",
-                    bool(hits) and bool(hits[0].payload.get("__doctor__")),
-                    str(store.path),
+                    "falkordblite round-trip",
+                    bool(result.result_set) and result.result_set[0][0] == 1,
+                    str(graph_path),
                 )
             finally:
-                try:
-                    store.delete_collection(tmp_name)
-                except Exception:
-                    pass
-                store.close()
-                with _client_lock:
-                    _qdrant_module._clients.pop(str(store.path), None)
-    except ImportError as error:
-        doctor_check(
-            "qdrant round-trip",
-            False,
-            f"dependency missing: {error}",
-            required=False,
-        )
-    except Exception as error:
-        doctor_check("qdrant round-trip", False, str(error), required=False)
+                client.close()
+        except ImportError as error:
+            failures += doctor_check("falkordblite round-trip", False, f"dependency missing: {error}")
+        except Exception as error:
+            failures += doctor_check("falkordblite round-trip", False, str(error))
 
     for server in SERVERS:
         doctor_check(
@@ -698,11 +641,7 @@ def default_graph_env_exports(server_name: str) -> str:
         "# Default local graph backend for make start.\n"
         'export GRAPH_PROVIDER="${GRAPH_PROVIDER:-falkordb}"\n'
         f'export {scoped_provider}="${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}"\n'
-        'export FALKORDB_HOST="${FALKORDB_HOST:-localhost}"\n'
-        'export FALKORDB_PORT="${FALKORDB_PORT:-6379}"\n'
-        'export FALKORDB_URI="${FALKORDB_URI:-redis://${FALKORDB_HOST}:${FALKORDB_PORT}}"\n'
         'export FALKORDB_GRAPH="${FALKORDB_GRAPH:-hyper_graph}"\n'
-        'export FALKORDB_PASSWORD="${FALKORDB_PASSWORD:-}"\n'
     )
 
 
@@ -745,7 +684,11 @@ def runtime_overrides(
     collection = options.code_collection if is_code else options.doc_collection
     collection = collection or options.collection or options.project
     mcp_name = f"{instance}-{'code' if is_code else 'doc'}" if multiple_servers else instance
-    overrides = {"MCP_SERVER_NAME": mcp_name}
+    overrides = {
+        "MCP_SERVER_NAME": mcp_name,
+        "CORTEX_STORAGE_INSTANCE": instance.casefold().replace(".", "-"),
+        "CORTEX_STORAGE_OWNER": "code" if is_code else "doc",
+    }
     if options.project:
         overrides.update({"PROJECT_ID": options.project, "PROJECT_NAME": options.project})
     if database:
@@ -786,6 +729,19 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
         runtime_env = runtime_environment(ROOT, str(server["name"]))
         if custom:
             runtime_env.update(runtime_overrides(options, str(server["name"]), instance, len(servers) > 1))
+        from cortex_harness.storage import resolve_storage, storage_overlay
+
+        owner = "code" if server["name"] == "code-tiny" else "doc"
+        storage_config = resolve_storage(
+            ROOT,
+            config=runtime_env,
+            instance_id=runtime_env.get("CORTEX_STORAGE_INSTANCE", "default"),
+            code_graph=runtime_env.get("FALKORDB_GRAPH") if owner == "code" else None,
+            doc_graph=runtime_env.get("FALKORDB_GRAPH") if owner == "doc" else None,
+            code_collection=runtime_env.get("QDRANT_COLLECTION"),
+            doc_collection=runtime_env.get("QDRANT_COLLECTION_DOC"),
+        )
+        runtime_env.update(storage_overlay(storage_config, owner=owner))
         runtime_env_path.write_text(
             format_bash_exports(runtime_env) + ("\n" if runtime_env else ""),
             encoding="utf-8",
@@ -857,7 +813,10 @@ ACTIONS = {
     "uninstall": invoke_uninstall,
     "infra-up": invoke_infra_up,
     "infra-down": invoke_infra_down,
+    "storage-layout": invoke_storage_layout,
     "storage-init": invoke_storage_init,
+    "storage-migrate-layout": invoke_storage_migrate_layout,
+    "storage-backup": invoke_storage_backup,
     "storage-stop": lambda: print("[storage-stop] Local storage has no lifecycle to stop."),
     "doctor": invoke_doctor,
     "start": invoke_start,
@@ -909,6 +868,19 @@ def stop_options(arguments: list[str]) -> argparse.Namespace:
     return options
 
 
+def storage_migrate_options(arguments: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="mcp-lifecycle.py storage-migrate-layout")
+    parser.add_argument("--legacy-root", type=Path, default=ROOT)
+    parser.add_argument("--apply", action="store_true", help="Copy and verify; default is dry-run.")
+    return parser.parse_args(arguments)
+
+
+def storage_backup_options(arguments: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="mcp-lifecycle.py storage-backup")
+    parser.add_argument("--owner", choices=("code", "doc"), default="code")
+    return parser.parse_args(arguments)
+
+
 def main(arguments: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if arguments is None else arguments
     action = arguments[0] if arguments else "help"
@@ -921,6 +893,12 @@ def main(arguments: list[str] | None = None) -> int:
         elif action == "stop":
             options = stop_options(arguments[1:]) if len(arguments) > 1 else None
             invoke_stop(options.name if options else None)
+        elif action == "storage-migrate-layout":
+            options = storage_migrate_options(arguments[1:])
+            invoke_storage_migrate_layout(options.legacy_root, apply=options.apply)
+        elif action == "storage-backup":
+            options = storage_backup_options(arguments[1:])
+            invoke_storage_backup(options.owner)
         elif len(arguments) > 1:
             print(USAGE, end="")
             return 2

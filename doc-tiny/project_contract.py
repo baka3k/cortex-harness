@@ -85,6 +85,27 @@ class ProjectNotRegisteredError(ProjectContractError):
         return self.args[0] if self.args else ""
 
 
+class DuplicateProjectRegistrationError(ProjectContractError):
+    """Raised when two descriptors casefold to the same project id."""
+
+    def __init__(self, collisions: Mapping[str, Iterable[str]]):
+        self.collisions = {
+            key: sorted(str(value) for value in values)
+            for key, values in sorted(collisions.items())
+        }
+        details = "; ".join(
+            f"{key}: {', '.join(values)}"
+            for key, values in self.collisions.items()
+        )
+        super().__init__(
+            "Duplicate project registrations after casefold normalization: "
+            f"{details}."
+        )
+
+    def __str__(self) -> str:
+        return self.args[0] if self.args else ""
+
+
 def _default_config_dir() -> Path:
     """Locate ``.cortext-harness/config`` from CWD, walking up."""
     cwd = Path.cwd()
@@ -120,6 +141,14 @@ def _read_project_entries(config_dir: Path) -> List[Dict[str, Any]]:
                 "doc_env": dict(payload.get("doc", {}).get("env") or {}),
             }
         )
+    variants: Dict[str, List[str]] = {}
+    for entry in entries:
+        lookup = project_id_lookup_key(entry.get("project_id"))
+        if lookup is not None:
+            variants.setdefault(lookup, []).append(str(entry["project_id"]))
+    collisions = {key: values for key, values in variants.items() if len(values) > 1}
+    if collisions:
+        raise DuplicateProjectRegistrationError(collisions)
     return entries
 
 

@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 
@@ -15,6 +16,7 @@ from services import explore_service as explore_service_module  # noqa: E402
 from services.explore_service import ExploreService  # noqa: E402
 from tools.common.graph_expander import AsyncGraphExpander, GraphExpander  # noqa: E402
 from tools.common import intelligent_retrieval as ir  # noqa: E402
+from tools.common.retrieval_scorer import ScoredResult  # noqa: E402
 
 
 class _GraphDriver:
@@ -114,6 +116,61 @@ class ExploreProjectScopeTests(unittest.TestCase):
 
 
 class ExploreProjectScopeAsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unscoped_service_searches_registered_graph_collection_pairs(self):
+        targets = {
+            "Alpha": SimpleNamespace(
+                project_id_normalized="alpha",
+                code_graph="alpha_graph",
+                code_qdrant_collection="alpha_vectors",
+            ),
+            "Beta": SimpleNamespace(
+                project_id_normalized="beta",
+                code_graph="beta_graph",
+                code_qdrant_collection="beta_vectors",
+            ),
+        }
+        service = ExploreService()
+
+        async def fake_retrieval(**kwargs):
+            project = kwargs["database"].removesuffix("_graph")
+            return [ScoredResult(
+                node_id="shared-symbol",
+                score=0.8 if project == "alpha" else 0.9,
+                node={"project_id": project, "name": project},
+            )]
+
+        with patch(
+            "tools.common.project_registry.list_registered_projects",
+            return_value=["Alpha", "Beta"],
+        ), patch(
+            "tools.common.project_registry.resolve_project_targets",
+            side_effect=lambda project_id: targets[project_id],
+        ), patch.object(
+            explore_service_module, "_make_embedder", return_value=None,
+        ), patch.object(
+            explore_service_module, "_make_graph_driver",
+            new=AsyncMock(return_value=object()),
+        ), patch.object(
+            service, "_run_retrieval", side_effect=fake_retrieval,
+        ) as run_retrieval:
+            result = await service.explore("orders", mode="hybrid", top_k=1)
+
+        calls = run_retrieval.await_args_list
+        self.assertEqual(
+            [(call.kwargs["database"], call.kwargs["collection"]) for call in calls],
+            [("alpha_graph", "alpha_vectors"), ("beta_graph", "beta_vectors")],
+        )
+        self.assertEqual(result["matched_nodes"][0]["name"], "beta")
+        self.assertIsNone(result["retrieval"]["graph_database"])
+        self.assertEqual(
+            result["retrieval"]["graph_databases"],
+            ["alpha_graph", "beta_graph"],
+        )
+        self.assertEqual(
+            result["retrieval"]["qdrant_collections"],
+            ["alpha_vectors", "beta_vectors"],
+        )
+
     async def test_async_graph_expansion_uses_same_project_predicates(self):
         class _AsyncDriver:
             def __init__(self):

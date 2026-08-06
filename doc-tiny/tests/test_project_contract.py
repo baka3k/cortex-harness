@@ -131,6 +131,21 @@ class UnknownProjectTests(_BaseTest):
             )
         self.assertIn("alpha", ctx.exception.known)
 
+    def test_casefold_duplicate_projects_are_rejected(self) -> None:
+        self.write_config("Alpha")
+        payload = {
+            "project": {"code": "alpha", "name": "alpha"},
+            "code": {"env": {}},
+            "doc": {"env": {}},
+        }
+        (self.config_dir / "duplicate.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+        with self.assertRaises(
+            project_contract.DuplicateProjectRegistrationError
+        ):
+            project_contract.list_registered_projects(config_dir=self.config_dir)
+
 
 class QdrantFilterTests(unittest.TestCase):
     def test_default_filters_by_normalized_project(self) -> None:

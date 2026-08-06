@@ -62,6 +62,27 @@ class ProjectNotRegisteredError(ProjectRegistryError):
         return self.args[0] if self.args else ""
 
 
+class DuplicateProjectRegistrationError(ProjectRegistryError):
+    """Raised when config files declare the same case-insensitive project id."""
+
+    def __init__(self, collisions: Mapping[str, Iterable[str]]):
+        normalized = {
+            key: sorted(str(value) for value in values)
+            for key, values in sorted(collisions.items())
+        }
+        details = "; ".join(
+            f"{key}: {', '.join(values)}" for key, values in normalized.items()
+        )
+        super().__init__(
+            "Duplicate project registrations after casefold normalization: "
+            f"{details}. Keep exactly one config descriptor per logical project."
+        )
+        self.collisions = normalized
+
+    def __str__(self) -> str:
+        return self.args[0] if self.args else ""
+
+
 # ---------------------------------------------------------------------------
 # Defaults and env layout
 # ---------------------------------------------------------------------------
@@ -168,11 +189,24 @@ def _project_entries(documents: Iterable[Mapping[str, Any]]) -> List[Dict[str, A
         entry: Dict[str, Any] = {
             "project_id": str(project_id),
             "project_name": project_section.get(_PROJECT_NAME_KEY),
+            "parser_type": (
+                project_section.get("parser_type")
+                or project_section.get("parser")
+                or (document.get("code", {}).get("env") or {}).get("PARSER_TYPE")
+            ),
             "code_env": dict(document.get("code", {}).get("env") or {}),
             "doc_env": dict(document.get("doc", {}).get("env") or {}),
             "active": bool(document.get("active", False)),
         }
         entries.append(entry)
+    variants: Dict[str, List[str]] = {}
+    for entry in entries:
+        lookup = project_id_lookup_key(entry.get("project_id"))
+        if lookup is not None:
+            variants.setdefault(lookup, []).append(str(entry["project_id"]))
+    collisions = {key: values for key, values in variants.items() if len(values) > 1}
+    if collisions:
+        raise DuplicateProjectRegistrationError(collisions)
     return entries
 
 
@@ -299,7 +333,7 @@ def _resolve_targets(
                 return env_value
         return f"{canonical_project_id}_doc"
 
-    parser_type = parser_type_override  # None for now; populated later phases.
+    parser_type = parser_type_override or (match or {}).get("parser_type")
     provider = (
         provider_override
         or code_env.get("GRAPH_PROVIDER")

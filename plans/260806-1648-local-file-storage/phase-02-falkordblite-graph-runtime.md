@@ -72,12 +72,12 @@ FalkorDBLite against the same file.
 
 ## Todo
 
-- [ ] Implement local backend construction.
-- [ ] Remove canonical network configuration.
-- [ ] Update factory, CLI, and document adapter.
-- [ ] Verify package API and graph/schema behavior.
-- [ ] Add owner lease and separate role files.
-- [ ] Add restart and concurrent-service tests.
+- [x] Implement local backend construction.
+- [x] Remove canonical network configuration.
+- [x] Update factory, CLI, and document adapter.
+- [x] Verify package API and graph/schema behavior.
+- [x] Add owner lease and separate role files.
+- [x] Add restart and concurrent-service tests.
 
 ## Risks
 

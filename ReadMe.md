@@ -44,31 +44,43 @@ The goal is to provide a foundational layer for building reliable AI-native syst
 
 Clone the repo once, install the `dev` command globally — no aliases, no path prefixes needed.
 
-The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windows. Python 3.10+ is required.
+The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windows. Python 3.12+ is required. Qdrant and FalkorDBLite run as embedded, file-backed libraries; no database daemon or container runtime is required.
 
 ```bash
 git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
-make build       # MUST RUN FIRST  - create/reuse .venv and install root, code-tiny, and doc-tiny dependencies only
-make infra-up    # pull/start Qdrant (:6333) and FalkorDB (:6379 + Web UI :3000) Docker containers
+make build       # create/reuse .venv and install pinned local-storage dependencies
+make storage-init # create ~/.cortext-harness/v1/instances/default and its manifest
+make storage-layout # show resolved owner paths, manifest, and leases
 make install     # create/reuse .venv, install dependencies, and install global dev command
-make doctor      # check Python deps, Docker, database ports, and MCP ports
+make doctor      # isolated Qdrant/FalkorDBLite round-trips plus MCP port diagnostics
 make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
 make stop        # stop MCP terminal/processes started by make start
-make infra-down  # stop the Qdrant/FalkorDB containers managed by make infra-up
 make uninstall   # remove the global dev command installed by make install
 ```
 
-After `make infra-up`, open the **FalkorDB Browser Web UI** to explore your graphs visually at http://localhost:3000. The `falkordb/falkordb` image bundles the browser, so no extra container is needed.
+The default persistent-data tree is independent of every indexed source checkout:
 
-If host ports `6379` or `3000` are already taken by another service, override the host-side binding (container-side ports stay 6379/3000):
-
-```bash
-FALKORDB_PORT=6380 FALKORDB_BROWSER_PORT=3001 make infra-up
+```text
+~/.cortext-harness/v1/instances/default/
+├── manifest.json
+├── qdrant/{code,doc}/
+├── falkordb/{code,doc}/data.rdb
+└── backups/
 ```
 
-Graph data is persisted in the `cortex-falkordb-data` Docker volume, so recreating the container (e.g. when changing ports) keeps your data.
+Set `CORTEX_DATA_HOME` for an isolated test/portable root and `CORTEX_STORAGE_INSTANCE` for a disjoint named deployment. Code and document processes own distinct stores; stop an owner before backup, migration, reset, or another direct open.
+
+Legacy repository-local data is copied, verified, and retained:
+
+```bash
+make storage-migrate-layout                         # dry-run
+make storage-migrate-layout MIGRATE_ARGS="--apply" # copy and verify
+make storage-backup OWNER=code
+```
+
+`infra-up` and `infra-down` remain one-release compatibility aliases for storage initialization/no-op. They do not start or stop external services.
 
 `make install` installs `dev.cmd` to `%USERPROFILE%\.local\bin` on Windows and `dev` to `~/.local/bin` on macOS/Linux. Make sure that directory is on your shell `PATH`.
 
@@ -79,14 +91,17 @@ dev help
 dev build
 dev install
 dev uninstall
-dev infra-up
-dev infra-down
+dev storage-layout
+dev storage-init
+dev storage-migrate-layout                 # dry-run
+dev storage-migrate-layout --apply
+dev storage-backup --owner code
 dev doctor
 dev start
 dev stop
 ```
 
-For example, `dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory. The same one-to-one mapping applies to `build`, `install`, `uninstall`, `infra-up`, `infra-down`, `doctor`, `stop`, and `help`.
+For example, `dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory. Storage commands resolve the same centralized paths from any working directory.
 
 `dev start` and `make start` keep that behavior when called without parameters. Parameterized starts create named instances that can run alongside one another:
 

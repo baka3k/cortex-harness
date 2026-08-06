@@ -217,7 +217,9 @@ contract.py`) is the only place real embeddings run, and it is opt-in.
 
 **Location:** Cross-plan dependency section.
 
-This plan is `blockedBy: neo4j-to-falkordb-migration` (status: in_progress).
+At review time this plan was blocked by `neo4j-to-falkordb-migration`; that
+migration and this contract are now completed together with the local-storage
+cutover.
 Both plans touch: `code-tiny/scripts/setup_constraints.py`,
 `code-tiny/tools/graph/writer/language_writer.py` (via provider-neutral
 contract), `code-tiny/mcp/unified_mcp.py`, and `doc-tiny/graph_store.py`. If

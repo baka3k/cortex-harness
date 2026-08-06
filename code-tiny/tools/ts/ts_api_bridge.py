@@ -56,6 +56,7 @@ from tools.common.api_match_engine import (
     MultiSignalMatcher,
 )
 from tools.graph import GraphDriverFactory, GraphProvider
+from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +317,7 @@ async def _main() -> None:
     p.add_argument("--neo4j-user",     default=os.environ.get("NEO4J_USER"))
     p.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     p.add_argument("--neo4j-db",       default=os.environ.get("NEO4J_DB", "neo4j"))
+    add_graph_provider_args(p)
     p.add_argument("--dry-run",  action="store_true",
                    help="Score matches but do not write to Neo4j")
     p.add_argument("--verbose",  action="store_true",
@@ -324,23 +326,17 @@ async def _main() -> None:
                    help="Print per-signal score breakdown for every match")
     args = p.parse_args()
 
-    if not args.neo4j_uri:
-        print("[api-bridge] ERROR: --neo4j-uri or NEO4J_URI required", file=sys.stderr)
+    driver = await create_graph_driver_from_args(args)
+    if driver is None:
+        print("[api-bridge] ERROR: graph provider configuration is incomplete", file=sys.stderr)
         sys.exit(1)
-
-    driver_factory = GraphDriverFactory(
-        uri=args.neo4j_uri,
-        user=args.neo4j_user or "",
-        password=args.neo4j_password or "",
-        provider=GraphProvider.NEO4J,
-    )
-    driver = await driver_factory.create()
+    database = args.falkordb_graph or args.neo4j_db
     try:
         stats = await link_api_calls_to_endpoints(
             fe_project_id=args.fe_project,
             be_project_id=args.be_project,
             driver=driver,
-            database=args.neo4j_db,
+            database=database,
             min_confidence=args.min_confidence,
             dry_run=args.dry_run,
             verbose=args.verbose or args.explain,
@@ -354,7 +350,9 @@ async def _main() -> None:
             f"structural={tier['structural']} weak={tier['weak']})"
         )
     finally:
-        await driver.close()
+        close_result = driver.close()
+        if hasattr(close_result, "__await__"):
+            await close_result
 
 
 if __name__ == "__main__":

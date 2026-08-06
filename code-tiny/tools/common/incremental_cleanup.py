@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import time
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
-import requests
-
-
-class _QdrantCollectionMissing(Exception):
-    """Raised when the target Qdrant collection does not exist."""
+from tools.common.local_qdrant import delete_by_filter, get_code_qdrant_store
 
 
 def _normalize_files(paths: Iterable[str]) -> List[str]:
@@ -28,29 +23,6 @@ def _chunks(items: Sequence[str], size: int) -> Iterable[List[str]]:
     batch_size = max(1, size)
     for idx in range(0, len(items), batch_size):
         yield list(items[idx : idx + batch_size])
-
-
-def _post_qdrant_delete(
-    *,
-    endpoint: str,
-    payload: Dict[str, Any],
-    timeout: float,
-    retries: int,
-    retry_sleep: float,
-) -> None:
-    for attempt in range(retries + 1):
-        try:
-            response = requests.post(endpoint, json=payload, timeout=timeout)
-            response.raise_for_status()
-            return
-        except requests.RequestException as exc:
-            if isinstance(exc, requests.HTTPError):
-                response = getattr(exc, "response", None)
-                if response is not None and getattr(response, "status_code", None) == 404:
-                    raise _QdrantCollectionMissing() from exc
-            if attempt >= retries:
-                raise
-            time.sleep(retry_sleep)
 
 
 async def cleanup_neo4j_for_files(
@@ -123,75 +95,43 @@ def cleanup_qdrant_for_files(
     retry_sleep: float = 2.0,
     batch_size: int = 256,
     verbose: bool = False,
+    store: Any = None,
 ) -> Dict[str, int]:
     paths = _normalize_files(file_paths)
     if not paths:
         return {"requested_files": 0, "deleted_filters": 0, "deleted_batches": 0}
 
-    endpoint = qdrant_url.rstrip("/") + f"/collections/{collection}/points/delete?wait=true"
+    del timeout, retries, retry_sleep
+    store = store or get_code_qdrant_store(qdrant_url)
+    if not store.collection_exists(collection):
+        if verbose:
+            print(f"[cleanup][qdrant] collection '{collection}' not found; skip cleanup")
+        return {"requested_files": len(paths), "deleted_filters": 0, "deleted_batches": 0}
     deleted_batches = 0
     deleted_filters = 0
-    batch_supported = True
 
     for group in _chunks(paths, batch_size):
-        if batch_supported and len(group) > 1:
-            batch_payload = {
-                "filter": {
-                    "must": [
-                        {"key": "project_id", "match": {"value": project_id}},
-                        {"key": "file_path", "match": {"any": group}},
-                    ]
-                }
-            }
-            try:
-                _post_qdrant_delete(
-                    endpoint=endpoint,
-                    payload=batch_payload,
-                    timeout=timeout,
-                    retries=retries,
-                    retry_sleep=retry_sleep,
-                )
+        point_filter = {
+            "must": [
+                {"key": "project_id", "match": {"value": project_id}},
+                {"key": "file_path", "match": {"any": group}},
+            ]
+        }
+        try:
+            delete_by_filter(store, collection, point_filter)
+            if len(group) > 1:
                 deleted_batches += 1
-                continue
-            except _QdrantCollectionMissing:
-                if verbose:
-                    print(f"[cleanup][qdrant] collection '{collection}' not found; skip cleanup")
-                return {
-                    "requested_files": len(paths),
-                    "deleted_filters": deleted_filters,
-                    "deleted_batches": deleted_batches,
-                }
-            except requests.RequestException:
-                batch_supported = False
-                if verbose:
-                    print("[cleanup][qdrant] batch filter unsupported/failure, fallback to per-file delete")
-
-        for file_path in group:
-            payload = {
-                "filter": {
+            else:
+                deleted_filters += 1
+        except (TypeError, ValueError):
+            for file_path in group:
+                delete_by_filter(store, collection, {
                     "must": [
                         {"key": "project_id", "match": {"value": project_id}},
                         {"key": "file_path", "match": {"value": file_path}},
                     ]
-                }
-            }
-            try:
-                _post_qdrant_delete(
-                    endpoint=endpoint,
-                    payload=payload,
-                    timeout=timeout,
-                    retries=retries,
-                    retry_sleep=retry_sleep,
-                )
-            except _QdrantCollectionMissing:
-                if verbose:
-                    print(f"[cleanup][qdrant] collection '{collection}' not found; skip cleanup")
-                return {
-                    "requested_files": len(paths),
-                    "deleted_filters": deleted_filters,
-                    "deleted_batches": deleted_batches,
-                }
-            deleted_filters += 1
+                })
+                deleted_filters += 1
     if verbose:
         print(
             "[cleanup][qdrant] files=%d deleted_batches=%d deleted_filters=%d"
@@ -220,4 +160,5 @@ def cleanup_qdrant_with_writer(
         retries=int(getattr(writer, "retries", 3)),
         retry_sleep=float(getattr(writer, "retry_sleep", 2.0)),
         verbose=verbose,
+        store=getattr(writer, "_store", None),
     )

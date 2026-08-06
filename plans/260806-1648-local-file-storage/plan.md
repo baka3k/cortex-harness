@@ -1,6 +1,6 @@
 ---
 title: "Docker-Free Local Qdrant and FalkorDBLite Storage"
-status: in_progress
+status: completed
 created: 2026-08-06
 updated: 2026-08-06
 mode: hi-plan --fast
@@ -287,6 +287,18 @@ adapter—not scattered call sites—absorbs this package-surface difference.
 2. [Phase 02 — FalkorDBLite graph runtime](phase-02-falkordblite-graph-runtime.md)
 3. [Phase 03 — Qdrant local client migration](phase-03-qdrant-local-client-migration.md)
 4. [Phase 04 — Docker-free lifecycle and acceptance](phase-04-docker-free-lifecycle-and-acceptance.md)
+
+## Completion Evidence
+
+- Canonical account/instance/owner paths, manifests, leases, migration, and
+  verified backups are implemented under `cortex_harness/storage/`.
+- Qdrant and FalkorDBLite persistence and code/document owner isolation are
+  exercised against real temporary on-disk stores.
+- `make storage-init`, dry-run `make storage-migrate-layout`,
+  `make storage-backup`, and `make doctor` pass using the repository Python
+  3.12 environment without Docker or database service ports.
+- Active runtime scans contain no raw Qdrant REST resource paths or direct
+  `QdrantClient` construction outside the shared adapter boundary.
 
 ## Cross-Plan Dependencies
 

@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import signal
+from pathlib import Path
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -26,11 +27,20 @@ _MCP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _MCP_DIR not in sys.path:
     sys.path.insert(0, _MCP_DIR)
 
-from tools.graph import GraphDriverFactory, GraphProvider
+from tools.graph import GraphProvider
 from tools.graph.core.base import GraphDriver
+from tools.graph.core.shared_runtime import get_shared_graph_driver
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
+from tools.common.local_qdrant import (
+    collection_info_payload,
+    collections_payload,
+    default_local_qdrant_path,
+    get_code_qdrant_store,
+    query_points,
+)
 from tools.common.project_registry import (
     ProjectNotRegisteredError,
+    list_registered_projects,
     resolve_project_targets,
 )
 from semantic_graph_expansion import expand_semantic_results
@@ -91,7 +101,7 @@ DEFAULT_MODEL = (
     or "jinaai/jina-embeddings-v3"
 )
 PRELOAD_EMBEDDER_ON_STARTUP = os.environ.get("MCP_PRELOAD_EMBEDDER", "1")
-DEFAULT_QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333")
+DEFAULT_QDRANT_PATH = default_local_qdrant_path()
 DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "android_kotlin_functions")
 
 
@@ -111,10 +121,6 @@ DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
 DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
 DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "hyper_graph"
-DEFAULT_FALKORDB_HOST = os.environ.get("FALKORDB_HOST") or os.environ.get("MCP_FALKORDB_HOST") or "127.0.0.1"
-DEFAULT_FALKORDB_PORT = int(os.environ.get("FALKORDB_PORT") or os.environ.get("MCP_FALKORDB_PORT") or "6379")
-DEFAULT_FALKORDB_USERNAME = os.environ.get("FALKORDB_USER") or os.environ.get("FALKORDB_USERNAME") or ""
-DEFAULT_FALKORDB_PASSWORD = os.environ.get("FALKORDB_PASSWORD") or ""
 DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
 DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
@@ -178,14 +184,16 @@ async def _get_graph_driver() -> GraphDriver:
     if _graph_driver is not None:
         return _graph_driver
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
+        from cortex_harness.storage import resolve_storage
+
         config = {
-            "host": DEFAULT_FALKORDB_HOST,
-            "port": DEFAULT_FALKORDB_PORT,
-            "username": DEFAULT_FALKORDB_USERNAME,
-            "password": DEFAULT_FALKORDB_PASSWORD,
+            "path": os.environ.get("FALKORDB_PATH")
+            or str(resolve_storage(Path.cwd()).falkordb_code_path),
             "graph": DEFAULT_FALKORDB_GRAPH,
+            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
         }
-        _graph_driver = await GraphDriverFactory.create_driver(GraphProvider.FALKORDB, config)
+        _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
         return _graph_driver
     if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
         raise RuntimeError("NEO4J_USER and NEO4J_PASS must be set.")
@@ -194,7 +202,7 @@ async def _get_graph_driver() -> GraphDriver:
         "user": DEFAULT_NEO4J_USER,
         "password": DEFAULT_NEO4J_PASSWORD,
     }
-    _graph_driver = await GraphDriverFactory.create_driver(GraphProvider.NEO4J, config)
+    _graph_driver = await get_shared_graph_driver(GraphProvider.NEO4J, config)
     return _graph_driver
 
 
@@ -242,9 +250,15 @@ def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
             if graph_name and graph_name not in candidates:
                 candidates.append(graph_name)
         except ProjectNotRegisteredError:
-            pass  # Fall through to default.
-    default_db = _normalize_db_name(DEFAULT_NEO4J_DB)
-    if default_db and default_db not in candidates:
+            pass
+    else:
+        for registered_project in list_registered_projects():
+            targets = resolve_project_targets(registered_project)
+            graph_name = _normalize_db_name(targets.code_graph)
+            if graph_name and graph_name not in candidates:
+                candidates.append(graph_name)
+    default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
+    if not candidates and default_db:
         candidates.append(default_db)
     return candidates
 
@@ -761,7 +775,7 @@ def _qdrant_search(
     vector_name: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Vector search via Qdrant Query API (``/points/query``).
+    """Vector search via the local Qdrant query API.
 
     Kept byte-identical with the same function in ``fastmcp_server.py``,
     ``mcp/cplus/cplus_mcp.py`` and ``mcp/java/java_mcp.py`` — every
@@ -769,29 +783,21 @@ def _qdrant_search(
     contract. When changing this body, update those siblings too.
 
     See ``cplus_mcp.py`` for the full rationale on why this migrated
-    away from the legacy ``/points/search`` endpoint (named-vector
+    away from the legacy search operation (named-vector
     payload format was easy to malform and caused
     ``unified_mcp.semantic_search`` to return Qdrant 400 on v2 summary
     collections).
     """
-    url = qdrant_url.rstrip("/") + f"/collections/{collection}/points/query"
-    payload: Dict[str, Any] = {
-        "query": vector,
-        "limit": int(top_k),
-        "with_payload": True,
-    }
-    if vector_name:
-        payload["using"] = vector_name
     project_filter = qdrant_project_filter(project_id)
-    if project_filter is not None:
-        payload["filter"] = project_filter
-    response = httpx.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
-    body = response.json()
-    result = body.get("result")
-    if isinstance(result, dict) and "points" in result:
-        body = {**body, "result": result.get("points") or []}
-    return body
+    hits = query_points(
+        get_code_qdrant_store(),
+        collection,
+        vector,
+        limit=top_k,
+        vector_name=vector_name,
+        query_filter=project_filter,
+    )
+    return {"result": hits, "status": "ok"}
 
 
 def _normalize_collections(value: Optional[Any]) -> List[str]:
@@ -907,38 +913,14 @@ async def _fetch_qdrant_collections(
     qdrant_url: str,
     include_vectors: bool = False,
 ) -> Dict[str, Any]:
-    url = qdrant_url.rstrip("/") + "/collections"
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-    payload = response.json()
-    collections = _parse_qdrant_collections(payload)
-    response_payload: Dict[str, Any] = {"collections": collections, "raw": payload}
-    if include_vectors and collections:
-        tasks = [asyncio.create_task(_fetch_qdrant_collection_info(col, qdrant_url)) for col in collections]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        vectors_info: Dict[str, Any] = {}
-        for col, result in zip(collections, results):
-            if isinstance(result, Exception):
-                vectors_info[col] = {"error": str(result)}
-                continue
-            vectors_cfg = (
-                result.get("result", {})
-                .get("config", {})
-                .get("params", {})
-                .get("vectors")
-            )
-            vectors_info[col] = {"sizes": _collect_vector_sizes(vectors_cfg)}
-        response_payload["vectors"] = vectors_info
-    return response_payload
+    return collections_payload(
+        get_code_qdrant_store(),
+        include_vectors=include_vectors,
+    )
 
 
 async def _fetch_qdrant_collection_info(collection: str, qdrant_url: str) -> Dict[str, Any]:
-    url = qdrant_url.rstrip("/") + f"/collections/{collection}"
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-    return response.json()
+    return collection_info_payload(get_code_qdrant_store(), collection)
 
 
 def _collect_vector_sizes(vectors_config: Any) -> Dict[str, int]:
@@ -1120,15 +1102,34 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
             if default_db in available:
                 logger.warning("Falling back to default database: %s", default_db)
                 candidates = [default_db]
+    aggregate = len(candidates) > 1 and not str(params.get("project_id") or "").strip()
+    used_db: Optional[str] = None
+    merged: List[Dict[str, Any]] = []
+    seen: set[str] = set()
     for db in candidates:
         try:
             result = await _run_cypher(query, params, db)
-            return db, result
+            if not aggregate:
+                return db, result
+            used_db = used_db or db
+            for record in result:
+                marker = json.dumps(record, sort_keys=True, default=str, separators=(",", ":"))
+                if marker not in seen:
+                    seen.add(marker)
+                    merged.append(record)
         except Exception as exc:
             last_error = exc
             if _is_db_not_found(exc):
                 continue
             raise
+    if used_db is not None:
+        try:
+            global_limit = int(params.get("limit")) if params.get("limit") is not None else None
+        except (TypeError, ValueError):
+            global_limit = None
+        if global_limit is not None and global_limit >= 0:
+            return used_db, merged[:global_limit]
+        return used_db, merged
     if last_error and _is_db_not_found(last_error):
         default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
         raise RuntimeError(
@@ -1142,16 +1143,8 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 
 
 async def _list_databases() -> List[str]:
-    if DEFAULT_GRAPH_PROVIDER == "falkordb":
-        return [_normalize_db_name(DEFAULT_GRAPH_DB)]
     driver = await _get_graph_driver()
-    records, summary, keys = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
-    names: List[str] = []
-    for record in records:
-        name = record.get("name")
-        if isinstance(name, str) and name not in names:
-            names.append(name)
-    return names
+    return await driver.list_databases()
 
 
 def _load_ipc_messages_sync() -> List[Dict[str, Any]]:
@@ -1407,6 +1400,7 @@ async def tool_semantic_search(
     graph_direction: str = "both",
     graph_rel_types: Optional[Any] = None,
     graph_limit: int = 50,
+    project_id: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Any:
     payload = _merge_payload(
@@ -1429,6 +1423,7 @@ async def tool_semantic_search(
             "graph_direction": graph_direction,
             "graph_rel_types": graph_rel_types,
             "graph_limit": graph_limit,
+            "project_id": project_id,
         },
     )
     query = payload.get("query")
@@ -1450,11 +1445,16 @@ async def tool_semantic_search(
     graph_limit = payload.get("graph_limit", 50)
     db = payload.get("db")
     project_id = payload.get("project_id")
+    if project_id and not collection:
+        try:
+            collection = resolve_project_targets(project_id).code_qdrant_collection
+        except ProjectNotRegisteredError:
+            collection = str(project_id).strip()
     query = (query or "").strip()
     if not query:
         raise ValueError("query is required.")
     model_name = model_path or DEFAULT_MODEL
-    qdrant_url = qdrant_url or DEFAULT_QDRANT_URL
+    qdrant_url = qdrant_url or DEFAULT_QDRANT_PATH
     vector = _embed_query(query, model_name)
     vector_len = len(vector)
     logger.info("[semantic_search] model=%s vector_len=%s", model_name, vector_len)
@@ -1584,7 +1584,7 @@ async def tool_list_qdrant_collections(
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(payload, {"qdrant_url": qdrant_url, "include_vectors": include_vectors})
-    qdrant_url = payload.get("qdrant_url") or DEFAULT_QDRANT_URL
+    qdrant_url = payload.get("qdrant_url") or DEFAULT_QDRANT_PATH
     include_vectors = payload.get("include_vectors", False)
     return await _fetch_qdrant_collections(qdrant_url, include_vectors=include_vectors)
 

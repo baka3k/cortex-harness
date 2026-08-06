@@ -148,8 +148,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         or args.commit_sha_after
         or args.incremental
         or args.neo4j_uri
-        or args.falkordb_uri
-        or os.environ.get("FALKORDB_URI")
+        or args.falkordb_path
+        or args.graph_provider == "falkordb"
         or os.environ.get("NEO4J_URI")
     )
     if not should_write_graph:

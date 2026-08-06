@@ -10,8 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
     "click",
     "requests",
-    "qdrant-client",
-    "falkordblite",
+    "qdrant-client==1.18.0",
+    "falkordblite==0.10.0",
     "python-dotenv>=1.2.2",
     "portalocker>=3.2,<4",
 ]
