@@ -38,7 +38,7 @@ async def cleanup_neo4j_for_files(
         return {"deleted_nodes": 0, "deleted_unknown_functions": 0}
 
     if verbose:
-        print(f"[cleanup][neo4j] deleting graph data for {len(paths)} files")
+        print(f"[cleanup][graph] deleting graph data for {len(paths)} files")
 
     delete_query = """
     WITH $paths AS paths, $project_id AS project_id
@@ -75,7 +75,7 @@ async def cleanup_neo4j_for_files(
 
     if verbose:
         print(
-            "[cleanup][neo4j] deleted_nodes=%d deleted_unknown_functions=%d"
+            "[cleanup][graph] deleted_nodes=%d deleted_unknown_functions=%d"
             % (deleted_nodes, deleted_unknown)
         )
     return {

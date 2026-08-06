@@ -3452,7 +3452,7 @@ async def build_call_graph(
 
     if code_writer:
         if verbose:
-            print("[neo4j] Streaming nodes and relations to Neo4j in batches...")
+            print("[graph] Streaming nodes and relations in batches...")
         # --- Write buffers: flushed to Neo4j every _STREAM_BATCH_FILES files ---
         _STREAM_BATCH_FILES = 500
         buf_files: List[Dict[str, Any]] = []
@@ -4533,12 +4533,12 @@ SET s.node_type = 'code',
 
         if verbose:
             print(
-                f"[neo4j] Streamed {_total_files_written} files, "
+                f"[graph] Streamed {_total_files_written} files, "
                 f"{_total_calls_written} calls, "
                 f"{_total_unknown_calls_written} unknown calls"
             )
             print(
-                f"[neo4j] inferred declares links: {inferred_declares}, "
+                f"[graph] inferred declares links: {inferred_declares}, "
                 f"inferred synthetic types: {inferred_type_nodes}"
             )
 
@@ -4581,7 +4581,7 @@ SET s.node_type = 'code',
             )
         except Exception as exc:
             if verbose:
-                print(f"[neo4j] parse run node upsert skipped: {exc}")
+                print(f"[graph] parse run node upsert skipped: {exc}")
 
         # Write tail relations (event/possible-call) + inferred nodes/relations
         tail_and_inferred: List[Dict[str, Any]] = tail_relations + inferred_relations
@@ -4639,7 +4639,7 @@ SET s.node_type = 'code',
             with open(call_stats_path, "w", encoding="utf-8") as handle:
                 json.dump(stats_payload, handle, ensure_ascii=True, indent=2)
         if verbose:
-            print("[neo4j] Write complete")
+            print("[graph] Write complete")
 
     if qdrant_writer and embedder:
         if verbose:
