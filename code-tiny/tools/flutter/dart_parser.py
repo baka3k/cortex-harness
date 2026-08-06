@@ -26,7 +26,41 @@ from .models import (
 from .protocol import PROTOCOL_VERSION
 
 
-SKIPPED_DIRECTORIES = frozenset({".dart_tool", ".git", ".idea", "build"})
+SKIPPED_DIRECTORIES = frozenset(
+    {
+        ".dart_tool",
+        ".git",
+        ".idea",
+        "build",
+        # Common environment / build / cache directories shared with other
+        # analyzers; keeps ``analyze_project`` consistent with
+        # ``tools.common.scan_ignore.COMMON_SCAN_EXCLUDE`` so files inside
+        # ``.venv`` / ``node_modules`` / etc. are never scanned.
+        ".venv",
+        "venv",
+        "env",
+        "__pycache__",
+        "*.egg-info",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "node_modules",
+        "out",
+        "target",
+        ".gradle",
+        "dist",
+        "bin",
+        "obj",
+        "Pods",
+        "DerivedData",
+        "vendor",
+        ".vscode",
+        ".cache",
+        ".cortext-harness",
+        ".flutter-plugins",
+        ".flutter-plugins-dependencies",
+    }
+)
 DECLARATION_TYPES = {
     "class_definition": "class",
     "mixin_declaration": "mixin",

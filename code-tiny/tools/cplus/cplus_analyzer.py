@@ -79,6 +79,13 @@ def _effective_fallback_threshold(file_size: int) -> int:
 
 
 _PARSE_CACHE_VERSION = "cplus-v2026-08-04-proc1"
+# Imported lazily so the analyzer module stays usable when invoked outside
+# the ``code-tiny`` package layout (e.g. direct path-based tests).
+try:
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset()
+
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -121,7 +128,7 @@ _SCAN_SKIP_DIRS = {
 
     # Misc project files
     "*.pro.user", "*.user", "*.suo",
-}
+} | COMMON_SCAN_EXCLUDE
 
 try:
     from tree_sitter_languages import get_parser as ts_get_parser
