@@ -51,6 +51,11 @@ _BRANCH_NODES = {
     "default_case": "default",
 }
 _LOOP_NODES = {"for_statement", "range_clause"}
+try:
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset()
+
 _SCAN_SKIP_DIRS = {
     ".git",
     ".hg",
@@ -79,7 +84,7 @@ _SCAN_SKIP_DIRS = {
     "tmpdir",
     ".DS_Store",
     "Thumbs.db",
-}
+} | COMMON_SCAN_EXCLUDE
 
 
 @dataclass

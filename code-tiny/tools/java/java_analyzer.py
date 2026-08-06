@@ -47,6 +47,11 @@ except Exception:
     ts_get_parser = None
 
 _PARSE_CACHE_VERSION = "java-v2026-07-25-public-api-1"
+try:
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset()
+
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -81,7 +86,7 @@ _SCAN_SKIP_DIRS = {
 
     # Misc project files
     ".project", ".classpath", "*.iml", "*.ipr", "*.iws",
-}
+} | COMMON_SCAN_EXCLUDE
 
 
 @dataclass

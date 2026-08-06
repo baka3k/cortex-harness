@@ -17,6 +17,11 @@ _PARSE_CACHE_VERSION = "ts-v2026-04-06-6"
 # ─── Source extensions ────────────────────────────────────────────────────────
 _TS_SOURCE_EXTENSIONS = (".ts", ".tsx", ".mts", ".cts")
 
+try:
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset()
+
 # ─── Directories excluded from recursive scanning ─────────────────────────────
 _SCAN_SKIP_DIRS = {
     # Version control
@@ -37,7 +42,7 @@ _SCAN_SKIP_DIRS = {
     ".DS_Store", "Thumbs.db",
     # Build artifacts
     "target", ".serverless",
-}
+} | COMMON_SCAN_EXCLUDE
 
 # ─── Directory segments for role detection ────────────────────────────────────
 # NOTE: "navigation" is intentionally excluded — a navigation/ folder contains

@@ -47,6 +47,11 @@ except Exception:
 
 _PARSE_CACHE_VERSION = "js-v2026-03-09-1"
 _JS_SOURCE_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs")
+try:
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset()
+
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -77,7 +82,7 @@ _SCAN_SKIP_DIRS = {
 
     # Environment files (directories)
     ".env", ".env.local",
-}
+} | COMMON_SCAN_EXCLUDE
 
 
 @dataclass

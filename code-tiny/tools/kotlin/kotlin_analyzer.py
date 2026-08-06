@@ -1222,6 +1222,11 @@ def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
     """
     Check if a directory should be ignored during Kotlin project scanning.
     """
+    try:
+        from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+    except Exception:
+        COMMON_SCAN_EXCLUDE = frozenset()
+
     ignore_patterns = {
         # Build outputs
         "target", "build", "out", "bin", "buildSrc",
@@ -1252,7 +1257,7 @@ def _should_ignore_directory(dir_name: str, dir_path: str) -> bool:
 
         # Misc
         ".project", ".classpath",
-    }
+    } | COMMON_SCAN_EXCLUDE
 
     if dir_name in ignore_patterns:
         return True

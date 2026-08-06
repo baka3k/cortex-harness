@@ -25,6 +25,7 @@ from tools.common.primary_vector_sync import (  # noqa: E402
     sync_vector_documents,
     vector_configured,
 )
+from tools.common.scan_ignore import has_excluded_parent  # noqa: E402
 from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args  # noqa: E402
 from tools.graph.writer.language_writer import LanguageCodeWriter  # noqa: E402
 
@@ -219,7 +220,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if flutter_project is None:
             print(f"[flutter] skipped: {root} is not a Flutter project")
             return 0
-    dart_files = sorted(path for path in root.rglob("*.dart") if ".dart_tool" not in path.parts)
+    dart_files = sorted(
+        path for path in root.rglob("*.dart")
+        if not has_excluded_parent(path, root=root)
+    )
     if args.dry_run:
         print(f"Dry run: mode={args.mode} dart_files={len(dart_files)} root={root}")
         return 0

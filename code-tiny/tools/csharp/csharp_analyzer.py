@@ -46,6 +46,11 @@ except Exception:
     ts_get_parser = None
 
 _PARSE_CACHE_VERSION = "csharp-v2026-03-09-1"
+try:
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset()
+
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -82,7 +87,7 @@ _SCAN_SKIP_DIRS = {
 
     # User-specific
     "*.user", "*.suo", "*.cache",
-}
+} | COMMON_SCAN_EXCLUDE
 
 
 @dataclass

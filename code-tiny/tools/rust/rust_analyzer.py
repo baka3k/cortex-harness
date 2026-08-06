@@ -51,6 +51,11 @@ _BRANCH_NODES = {
 }
 _LOOP_NODES = {"loop_expression", "while_expression", "for_expression"}
 
+try:
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset()
+
 _SCAN_SKIP_DIRS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -68,7 +73,7 @@ _SCAN_SKIP_DIRS = {
     "tmp", "temp", ".tmp", "tmpdir",
     # OS specific
     ".DS_Store", "Thumbs.db",
-}
+} | COMMON_SCAN_EXCLUDE
 
 
 @dataclass
