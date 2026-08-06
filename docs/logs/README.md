@@ -2,6 +2,9 @@
 
 Implementation and maintenance records, newest first:
 
+- [Unified project storage contract](2026-08-06-unified-project-storage-contract.md)
+- [FalkorDBLite runtime cutover](2026-08-06-falkordblite-runtime-cutover.md)
+- [Owner-scoped local storage](2026-08-06-owner-scoped-local-storage.md)
 - [Legacy migration parser coverage](2026-07-31-legacy-migration-parser-coverage.md)
 - [Project topology and context tools](2026-07-25-project-topology-context-tools.md)
 - [Case-insensitive project scope](2026-07-23-case-insensitive-project-scope.md)
