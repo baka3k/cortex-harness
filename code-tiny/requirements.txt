@@ -1,6 +1,4 @@
-neo4j
-neo4j-graphrag
-falkordb
+falkordblite>=1.0.0
 # FastMCP dependencies
 fastmcp
 

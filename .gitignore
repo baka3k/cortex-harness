@@ -48,6 +48,15 @@ scheduled_tasks.lock
 settings.local.json
 uv.lock
 .cortext-harness/config/dev.json
+
+# Local Qdrant and FalkorDBLite persistent storage (Phase 01 cutover).
+local_qdrant_db/
+local_falkordb_db/
+# Qdrant local-mode lock files and sidecars (created next to the data dir).
+local_qdrant_db/**/.lock
+local_qdrant_db/**/storage_lock
+local_falkordb_db/**/*.lock
+local_falkordb_db/**/*.rdb.lock
 code-tiny/CLAUDE.md
 code-tiny/tools/android/CLAUDE.md
 code-tiny/tools/cplus/CLAUDE.md
