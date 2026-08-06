@@ -46,26 +46,42 @@ SERVERS = (
     },
 )
 
-INFRA_SERVICES = (
-    {
-        "name": "qdrant",
-        "container": "cortex-qdrant",
-        "image": "qdrant/qdrant",
-        "ports": ("6333:6333",),
-        "host": "127.0.0.1",
-        "port": 6333,
-        "ready_url": "http://127.0.0.1:6333",
-    },
-    {
-        "name": "falkordb",
-        "container": "cortex-falkordb",
-        "image": "falkordb/falkordb",
-        "ports": ("6379:6379",),
-        "host": "127.0.0.1",
-        "port": 6379,
-        "ready_url": "",
-    },
-)
+def infra_services() -> tuple[dict[str, object], ...]:
+    """Build infra service config, allowing host-port overrides via environment.
+
+    Container-side ports stay fixed (6379 / 3000); only the host-side binding is
+    configurable so coexisting with other local services is possible, e.g.:
+      FALKORDB_PORT=6380 FALKORDB_BROWSER_PORT=3001 make infra-up
+    """
+    falkordb_port = int(os.environ.get("FALKORDB_PORT", "6379"))
+    browser_port = int(os.environ.get("FALKORDB_BROWSER_PORT", "3000"))
+    host = os.environ.get("FALKORDB_BIND", "127.0.0.1")
+    return (
+        {
+            "name": "qdrant",
+            "container": "cortex-qdrant",
+            "image": "qdrant/qdrant",
+            "ports": ("6333:6333",),
+            "host": "127.0.0.1",
+            "port": 6333,
+            "ready_url": "http://127.0.0.1:6333",
+        },
+        {
+            "name": "falkordb",
+            "container": "cortex-falkordb",
+            "image": "falkordb/falkordb",
+            # 6379 = Redis-protocol API; 3000 = FalkorDB Browser Web UI (bundled in the image).
+            "ports": (f"{falkordb_port}:6379", f"{browser_port}:3000"),
+            # Named volume so recreating the container for new port mappings keeps graph data.
+            "volumes": ("cortex-falkordb-data:/data",),
+            "host": "127.0.0.1",
+            "port": falkordb_port,
+            "ready_url": "",
+            "protocol": "redis",
+            "browser_port": browser_port,
+            "browser_ready_url": f"http://{host}:{browser_port}",
+        },
+    )
 
 USAGE = """Usage (equivalent forms):
   make build       | dev build       Create/sync virtualenvs and Python dependencies.
@@ -89,8 +105,13 @@ Default MCP servers:
   doc-tiny   http://127.0.0.1:8789/mcp
 
 Default local infrastructure:
-  qdrant    http://127.0.0.1:6333
-  falkordb  redis://127.0.0.1:6379
+  qdrant      http://127.0.0.1:6333
+  falkordb    redis://127.0.0.1:6379
+  falkordb ui http://127.0.0.1:3000  (FalkorDB Browser)
+
+FalkorDB host-side ports can be overridden to avoid conflicts with other local
+services (container-side ports stay 6379/3000):
+  FALKORDB_PORT=6380 FALKORDB_BROWSER_PORT=3001 make infra-up
 """
 
 INSTANCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -216,6 +237,31 @@ def http_ready(url: str) -> bool:
         return False
 
 
+def redis_ping_ready(host: str, port: int, timeout: float = 2.0) -> bool:
+    """Return True when a Redis-protocol server (e.g. FalkorDB) answers PING with PONG.
+
+    Port-open only proves the socket is listening; PING proves the server and its
+    modules (FalkorDB graph) finished loading and can actually serve commands.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as connection:
+            connection.settimeout(timeout)
+            # RESP inline command: "*1\r\n$4\r\nPING\r\n"
+            connection.sendall(b"*1\r\n$4\r\nPING\r\n")
+            return connection.recv(64).startswith(b"+PONG")
+    except OSError:
+        return False
+
+
+def wait_for_redis_ping(host: str, port: int, timeout: int = 30) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if redis_ping_ready(host, port):
+            return True
+        time.sleep(1)
+    return False
+
+
 def container_exists(docker: str, name: str) -> bool:
     result = run(
         [docker, "ps", "-a", "--filter", f"name=^/{name}$", "--format", "{{.Names}}"],
@@ -237,23 +283,60 @@ def ensure_docker_image(docker: str, image: str) -> None:
     run([docker, "pull", image])
 
 
+def ensure_docker_volume(docker: str, volume: str) -> None:
+    if run([docker, "volume", "inspect", volume], capture=True, check=False).returncode == 0:
+        return
+    print(f"[infra] Creating volume: {volume}")
+    run([docker, "volume", "create", volume])
+
+
+def container_ports(docker: str, name: str) -> set[str]:
+    result = run([docker, "port", name], capture=True, check=False)
+    if result.returncode != 0:
+        return set()
+    bindings: set[str] = set()
+    for line in result.stdout.splitlines():
+        parts = line.split("->")
+        if len(parts) == 2:
+            binding = parts[1].strip()
+            if ":" in binding:
+                bindings.add(binding.rsplit(":", 1)[1])
+    return bindings
+
+
 def start_infra_service(docker: str, service: dict[str, object]) -> None:
     name = str(service["container"])
+    image = str(service["image"])
+    expected_ports = {str(port).split(":", 1)[0] for port in service["ports"]}
     if container_exists(docker, name):
-        if container_running(docker, name):
+        actual_ports = container_ports(docker, name)
+        # Recreate when the current host-side port bindings do not match the desired set
+        # (e.g. a new Web UI port was added or FALKORDB_BROWSER_PORT changed). A fresh
+        # container has empty actual_ports, so only recreate on an actual mismatch.
+        port_mismatch = bool(actual_ports) and expected_ports != actual_ports
+        if port_mismatch:
+            missing = sorted(expected_ports - actual_ports)
+            extra = sorted(actual_ports - expected_ports)
+            detail = []
+            if missing:
+                detail.append(f"missing {missing}")
+            if extra:
+                detail.append(f"unexpected {extra}")
+            print(
+                f"[infra] {name} port mapping changed ({'; '.join(detail)}); "
+                f"recreating to apply the current mapping."
+            )
+            if container_running(docker, name):
+                run([docker, "stop", name])
+            run([docker, "rm", name])
+            create_docker_container(docker, name, image, service)
+        elif container_running(docker, name):
             print(f"[infra] {name} is already running.")
         else:
             print(f"[infra] Starting existing container: {name}")
             run([docker, "start", name])
     else:
-        image = str(service["image"])
-        ensure_docker_image(docker, image)
-        arguments = [docker, "run", "-d", "--name", name, "--restart", "unless-stopped"]
-        for port in service["ports"]:
-            arguments.extend(("-p", str(port)))
-        arguments.append(image)
-        print(f"[infra] Creating container: {name}")
-        run(arguments)
+        create_docker_container(docker, name, image, service)
 
     host, port = str(service["host"]), int(service["port"])
     if not wait_for_port(host, port):
@@ -261,19 +344,61 @@ def start_infra_service(docker: str, service: dict[str, object]) -> None:
     ready_url = str(service["ready_url"])
     if not http_ready(ready_url):
         raise RuntimeError(f"{service['name']} is listening, but {ready_url} did not return a healthy response.")
+    # For Redis-protocol backends (FalkorDB), PING proves the DB + graph module
+    # finished loading, not just that the socket is open.
+    if str(service.get("protocol", "")) == "redis":
+        if not wait_for_redis_ping(host, port):
+            raise RuntimeError(
+                f"{service['name']} port {host}:{port} is open, but PING did not return PONG within 30 seconds "
+                f"(DB/module may still be loading)."
+            )
     print(f"[infra] {service['name']} ready on {host}:{port}")
+
+    # Optional FalkorDB Browser Web UI (bundled in falkordb/falkordb on port 3000).
+    browser_port = service.get("browser_port")
+    if browser_port:
+        browser_url = str(service.get("browser_ready_url") or f"http://127.0.0.1:{browser_port}")
+        if not wait_for_port(host, int(browser_port), timeout=45):
+            print(
+                f"[infra] WARNING: {service['name']} Browser Web UI did not open "
+                f"{host}:{browser_port} within 45 seconds."
+            )
+        elif not http_ready(browser_url):
+            print(
+                f"[infra] WARNING: {service['name']} Browser Web UI is listening, "
+                f"but {browser_url} did not return a healthy response."
+            )
+        else:
+            print(f"[infra] {service['name']} Browser Web UI ready at {browser_url}")
+
+
+def create_docker_container(docker: str, name: str, image: str, service: dict[str, object]) -> None:
+    ensure_docker_image(docker, image)
+    volumes = service.get("volumes") or ()
+    for volume_mapping in volumes:
+        volume_name = str(volume_mapping).split(":", 1)[0]
+        if volume_name:
+            ensure_docker_volume(docker, volume_name)
+    arguments = [docker, "run", "-d", "--name", name, "--restart", "unless-stopped"]
+    for port in service["ports"]:
+        arguments.extend(("-p", str(port)))
+    for volume_mapping in volumes:
+        arguments.extend(("-v", str(volume_mapping)))
+    arguments.append(image)
+    print(f"[infra] Creating container: {name}")
+    run(arguments)
 
 
 def invoke_infra_up() -> None:
     docker = docker_command()
-    for service in INFRA_SERVICES:
+    for service in infra_services():
         start_infra_service(docker, service)
     print("[infra] Local infrastructure is ready.")
 
 
 def invoke_infra_down() -> None:
     docker = docker_command()
-    for service in INFRA_SERVICES:
+    for service in infra_services():
         name = str(service["container"])
         if not container_exists(docker, name):
             print(f"[infra] Container not found, skipping: {name}")
@@ -285,13 +410,47 @@ def invoke_infra_down() -> None:
     print("[infra] Local infrastructure stopped.")
 
 
+def _supports_color() -> bool:
+    """Return True only when writing to a real TTY and NO_COLOR is not set.
+
+    Honors the de-facto standard `NO_COLOR` env var
+    (https://no-color.org) and disables colors when output is redirected/piped,
+    so logs stay clean and grep-friendly.
+    """
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    return sys.stdout.isatty()
+
+
+_COLOR = {
+    "reset": "\033[0m",
+    "green": "\033[32m",
+    "yellow": "\033[33m",
+    "red": "\033[31m",
+    "bold": "\033[1m",
+}
+
+
+def _color(text: str, name: str) -> str:
+    code = _COLOR.get(name)
+    if not code or not _supports_color():
+        return text
+    return f"{code}{text}{_COLOR['reset']}"
+
+
 def doctor_check(name: str, ok: bool, message: str, *, required: bool = True) -> int:
     if ok:
-        print(f"[doctor][ok]   {name} - {message}")
+        tag = _color("[ok]", "green")
+        print(f"[doctor]{tag}   {name} - {message}")
         return 0
-    level = "fail" if required else "warn"
-    print(f"[doctor][{level}] {name} - {message}")
-    return int(required)
+    if required:
+        tag = _color("[fail]", "red")
+        failures = 1
+    else:
+        tag = _color("[warn]", "yellow")
+        failures = 0
+    print(f"[doctor]{tag} {name} - {message}")
+    return failures
 
 
 def invoke_doctor() -> None:
@@ -318,12 +477,26 @@ def invoke_doctor() -> None:
     else:
         failures += doctor_check("docker cli", False, "Docker not found on PATH")
 
-    for service in INFRA_SERVICES:
+    for service in infra_services():
         host, port = str(service["host"]), int(service["port"])
         failures += doctor_check(f"{service['name']} port", tcp_port_open(host, port), f"{host}:{port}")
         if service["ready_url"]:
             url = str(service["ready_url"])
             failures += doctor_check(f"{service['name']} http", http_ready(url), url)
+        if str(service.get("protocol", "")) == "redis":
+            failures += doctor_check(
+                f"{service['name']} db",
+                redis_ping_ready(host, port),
+                f"redis {host}:{port} (PING/PONG)",
+            )
+        browser_port = service.get("browser_port")
+        if browser_port:
+            doctor_check(
+                f"{service['name']} web ui",
+                tcp_port_open(host, int(browser_port)),
+                f"{host}:{browser_port}",
+                required=False,
+            )
         if docker_ready and docker:
             running = container_exists(docker, str(service["container"])) and container_running(
                 docker, str(service["container"])
@@ -339,8 +512,8 @@ def invoke_doctor() -> None:
         )
 
     if failures:
-        raise RuntimeError(f"Doctor found {failures} required check(s) failing.")
-    print("[doctor] Required checks passed.")
+        raise RuntimeError(_color(f"Doctor found {failures} required check(s) failing.", "red"))
+    print(_color("[doctor] Required checks passed.", "green"))
 
 
 def process_table() -> dict[int, tuple[int, str]]:
