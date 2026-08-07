@@ -24,6 +24,8 @@ from tools.graph.journal import (  # noqa: E402
     install_required_write_guard,
 )
 from tools.graph.journal.consumer import resume_journal  # noqa: E402
+from tools.graph.journal.executor import compile_persisted_mutation  # noqa: E402
+from tools.graph.journal.operation import operation_for_custom_query  # noqa: E402
 from tools.graph.journal.runtime import GraphWriteJournalRuntime  # noqa: E402
 from tools.graph.writer.language_writer import LanguageCodeWriter  # noqa: E402
 
@@ -333,6 +335,18 @@ def test_config_reuses_only_compatible_open_generation(tmp_path: Path) -> None:
         generation="attempt-2",
     )
     assert resumed.metadata.generation == "attempt-1"
+
+
+def test_trusted_replay_preserves_nested_property_projection() -> None:
+    operation = operation_for_custom_query(
+        "cobol:CobolProgram",
+        "UNWIND $rows AS row "
+        "MERGE (n:CobolProgram {id: row.id}) SET n += row.properties",
+    )
+    query, _ = compile_persisted_mutation(
+        operation, [{"id": "P1", "properties": {"name": "P1"}}]
+    )
+    assert "SET n += coalesce(row.properties, {})" in query
 
 
 @pytest.mark.asyncio
