@@ -104,6 +104,11 @@ class GraphWriteJournalRuntime:
             for row in materialized:
                 canonical_json(row)
             raise RuntimeError("shadow operations do not create execution tickets")
+        if operation.reconciliation == "unsupported":
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                f"operation {operation.operation_key} has no trusted recovery compiler",
+            )
         artifact = self.journal.create_artifact(self.run.run_id, materialized)
         required_barriers, produced_barriers = self._barrier_contract(
             operation, materialized, sequence, artifact.sha256

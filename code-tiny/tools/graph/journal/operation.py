@@ -188,11 +188,14 @@ class GraphWriteOperation:
         }
 
 
-_NODE_IDENTITY_PATTERN = re.compile(
-    r"\b(?P<verb>MERGE|MATCH)\s*\(\s*(?P<variable>[A-Za-z_]\w*)\s*:"
-    r"(?P<label>[A-Za-z_]\w*)"
-    r"(?::[A-Za-z_]\w*)*\s*\{\s*(?P<identity>[A-Za-z_]\w*)\s*:"
-    r"\s*row\.(?P<row_identity>[A-Za-z_]\w*)\s*\}",
+_SAFE_NODE_QUERY_PATTERN = re.compile(
+    r"^\s*UNWIND\s+\$rows\s+AS\s+row\s+"
+    r"(?P<verb>MERGE|MATCH)\s*\(\s*(?P<variable>[A-Za-z_]\w*)\s*:"
+    r"(?P<label>[A-Za-z_]\w*)\s*\{\s*(?P<identity>[A-Za-z_]\w*)\s*:"
+    r"\s*row\.(?P<row_identity>[A-Za-z_]\w*)\s*\}\s*\)\s+"
+    r"SET\s+(?P=variable)\s*\+=\s*row"
+    r"(?:\.(?P<properties>[A-Za-z_]\w*))?\s*"
+    r"(?:RETURN\s+count\((?P=variable)\)\s+AS\s+count\s*)?$",
     re.IGNORECASE,
 )
 
@@ -200,18 +203,11 @@ _NODE_IDENTITY_PATTERN = re.compile(
 def operation_for_custom_query(label: str, cypher: str) -> GraphWriteOperation:
     """Derive only the narrow allowlisted node-identity shape from source Cypher."""
 
-    matches = list(_NODE_IDENTITY_PATTERN.finditer(cypher))
+    match = _SAFE_NODE_QUERY_PATTERN.fullmatch(cypher)
     query_fingerprint = hashlib.sha256(
         " ".join(cypher.split()).encode("utf-8")
     ).hexdigest()[:16]
-    if len(matches) == 1:
-        match = matches[0]
-        properties_pattern = re.compile(
-            rf"\bSET\s+{re.escape(match.group('variable'))}\s*\+=\s*"
-            r"row\.(?P<property>[A-Za-z_]\w*)",
-            re.IGNORECASE,
-        )
-        properties_match = properties_pattern.search(cypher)
+    if match is not None:
         return GraphWriteOperation(
             label=label,
             phase=OperationPhase.NODES,
@@ -219,21 +215,12 @@ def operation_for_custom_query(label: str, cypher: str) -> GraphWriteOperation:
             node_label=match.group("label"),
             identity_property=match.group("identity"),
             row_identity_property=match.group("row_identity"),
-            row_properties_property=(
-                properties_match.group("property") if properties_match else None
-            ),
+            row_properties_property=match.group("properties"),
             mutation_kind=match.group("verb").casefold(),
             query_fingerprint=query_fingerprint,
         )
-    base = GraphWriteOperation.for_label(label)
     return GraphWriteOperation(
-        label=base.label,
-        phase=base.phase,
-        version=base.version,
-        idempotent=base.idempotent,
-        reconciliation=base.reconciliation,
-        node_label=base.node_label,
-        identity_property=base.identity_property,
-        row_identity_property=base.row_identity_property,
+        label=label,
+        phase=phase_for_label(label),
         query_fingerprint=query_fingerprint,
     )
