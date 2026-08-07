@@ -146,6 +146,49 @@ def test_identical_duplicate_is_deterministically_normalized_and_accounted_as_re
     assert accounting.discovered == 2
 
 
+def test_function_definition_wins_over_matching_declaration():
+    declaration = _function(
+        "fn:shared",
+        "shared",
+        kind="declaration",
+        start_line=4,
+        end_line=4,
+        code="void shared();",
+    )
+    definition = _function(
+        "fn:shared",
+        "shared",
+        kind="function",
+        start_line=40,
+        end_line=44,
+        code="void shared() { work(); }",
+    )
+
+    validated, quarantine = validate_cplus_payload(
+        {
+            "file_def": {"file_path": "src/main.cpp"},
+            "functions": [declaration, definition],
+        },
+        project_id="demo",
+    )
+
+    assert validated["functions"] == [definition]
+    assert quarantine == ()
+    accounting = accounting_for_payload(validated, quarantine)
+    assert accounting.accepted == 1
+    assert accounting.rejected == 1
+    assert accounting.discovered == 2
+
+
+def test_function_declaration_and_definition_share_scan_wide_fingerprint():
+    declaration = _function("fn:shared", "shared", kind="declaration")
+    definition = _function("fn:shared", "shared", kind="function")
+
+    assert identity_merge_fingerprint(
+        "Function", declaration
+    ) == identity_merge_fingerprint("Function", definition)
+
+
 def test_unsafe_source_path_quarantines_the_entire_payload():
     validated, quarantine = validate_cplus_payload(
         {
