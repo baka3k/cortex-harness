@@ -16,9 +16,11 @@ still accepted for one release so existing call sites keep compiling, but
 they emit a deprecation warning and are ignored when a ``path`` is supplied.
 """
 
+import asyncio
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -29,6 +31,7 @@ from tools.graph.core.base import GraphProvider
 from tools.graph.driver.neo4j_driver import Neo4jDriver
 from tools.common.project_scope import prepare_project_scope_parameters
 from cortex_harness.storage.lease import StorageLease
+from cortex_harness.storage.admission import BoundedLane, LaneLimits
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +49,10 @@ logger = logging.getLogger(__name__)
 _CALL_IMPORTING_SUBQUERY_RE = re.compile(
     r"CALL\s+\(([A-Za-z_][A-Za-z0-9_]*)\)\s*\{",
 )
+_MUTATING_CYPHER_RE = re.compile(
+    r"\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP|ALTER|FOREACH|LOAD\s+CSV)\b",
+    re.IGNORECASE,
+)
 
 
 def _normalize_query(query: str) -> str:
@@ -58,6 +65,19 @@ def _normalize_query(query: str) -> str:
     ``CREATE INDEX`` Cypher — so each backend uses its native API.
     """
     return _CALL_IMPORTING_SUBQUERY_RE.sub(r"CALL { WITH \1", query)
+
+
+def _is_retryable_read(query: str) -> bool:
+    """Retry only queries that are unambiguously read-only.
+
+    A synchronous embedded call can fail after committing a mutation, so a
+    blanket retry can duplicate ingestion effects.  Read retries remain useful
+    for transient checkpoint contention.
+    """
+    first_token = query.lstrip().split(None, 1)[0].upper() if query.strip() else ""
+    return first_token in {"MATCH", "OPTIONAL", "UNWIND", "WITH", "RETURN", "SHOW", "EXPLAIN", "PROFILE"} and not bool(
+        _MUTATING_CYPHER_RE.search(query)
+    )
 
 
 def _cypher_string(value: str) -> str:
@@ -186,6 +206,12 @@ class FalkorDBDriver(Neo4jDriver):
         self._database = graph or database or "neo4j"
         self._path: Optional[Path] = Path(path).resolve() if path is not None else None
         self._storage_lease: Optional[StorageLease] = None
+        self._query_lane = BoundedLane(
+            "falkordb-query", LaneLimits(concurrency=1, max_queue_items=32)
+        )
+        self._query_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="cortex-falkordb-query"
+        )
 
         # Network-style fields are deprecated. We still accept them so call
         # sites keep compiling for one release, but log + warn, and ignore
@@ -225,7 +251,7 @@ class FalkorDBDriver(Neo4jDriver):
             )
             try:
                 from falkordb import FalkorDB
-                import redis
+                import redis  # noqa: F401  # Verify the FalkorDB client dependency is installed.
             except ImportError as exc:
                 raise ImportError(
                     "FalkorDB provider requires the 'falkordb' package. "
@@ -295,6 +321,7 @@ class FalkorDBDriver(Neo4jDriver):
 
     def close(self) -> None:
         try:
+            self._query_executor.shutdown(wait=True, cancel_futures=True)
             if self._client:
                 try:
                     self._client.close()
@@ -312,7 +339,12 @@ class FalkorDBDriver(Neo4jDriver):
         parameters: Optional[Dict[str, Any]] = None,
         database: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], List[str], Any]:
-        return self.execute_query_sync(query, parameters, database)
+        async def run() -> Tuple[List[Dict[str, Any]], List[str], Any]:
+            return await asyncio.get_running_loop().run_in_executor(
+                self._query_executor, self.execute_query_sync, query, parameters, database
+            )
+
+        return await self._query_lane.run(run)
 
     def execute_query_sync(
         self,
@@ -323,17 +355,16 @@ class FalkorDBDriver(Neo4jDriver):
         graph = self._graph_for(database)
         query, params = _prepare_falkordb_query(query, parameters)
 
-        # Local mode does not need the network retry loop, but we keep a
-        # single-shot retry so transient Python-level failures (e.g. the
-        # embedded store briefly locked during checkpoint) don't kill a
-        # large batch ingest.
+        # A mutation might have committed before a Python exception bubbles
+        # out, so only unambiguously read-only Cypher gets a single retry.
         result = None
-        for attempt in range(2):
+        attempts = 2 if _is_retryable_read(query) else 1
+        for attempt in range(attempts):
             try:
                 result = graph.query(query, params=params)
                 break
             except Exception as exc:
-                if attempt == 1:
+                if attempt == attempts - 1:
                     raise
                 logger.warning("FalkorDB query failed (attempt 1), retrying: %s", exc)
 
