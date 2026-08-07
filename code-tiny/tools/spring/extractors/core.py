@@ -42,7 +42,7 @@ def extract_core_facts(
     for unit in units:
         for cls in unit.classes:
             class_anns = annotation_map(cls.annotations)
-            class_node_ids: List[str] = []
+            class_nodes: List[Tuple[str, str]] = []
 
             app_ann = first_annotation(cls.annotations, APPLICATION_ANNOTATIONS)
             if app_ann or "SpringApplication.run" in cls.code:
@@ -62,7 +62,7 @@ def extract_core_facts(
                         exclusions=list_arg(app_ann.args if app_ann else {}, "exclude", "excludeName"),
                     )
                 )
-                class_node_ids.append(app_id)
+                class_nodes.append(("SpringApplication", app_id))
 
             config_ann = first_annotation(cls.annotations, CONFIGURATION_ANNOTATIONS)
             if config_ann:
@@ -82,7 +82,7 @@ def extract_core_facts(
                         conditions=_condition_annotations(cls.annotations),
                     )
                 )
-                class_node_ids.append(config_id)
+                class_nodes.append(("SpringConfiguration", config_id))
 
             stereotype = first_annotation(cls.annotations, COMPONENT_ANNOTATIONS)
             bean_id = ""
@@ -106,7 +106,7 @@ def extract_core_facts(
                         profiles=_annotation_values(class_anns, "Profile"),
                     )
                 )
-                class_node_ids.append(bean_id)
+                class_nodes.append(("SpringBean", bean_id))
 
             if has_annotation(cls.annotations, CONTROLLER_ANNOTATIONS):
                 controller_id = f"spring_controller::{project_id}::{stable_hash(class_owner_id(cls))}"
@@ -124,7 +124,7 @@ def extract_core_facts(
                         controller_type=first_annotation(cls.annotations, CONTROLLER_ANNOTATIONS).short_name,
                     )
                 )
-                class_node_ids.append(controller_id)
+                class_nodes.append(("Controller", controller_id))
 
             if has_annotation(cls.annotations, SERVICE_ANNOTATIONS):
                 service_id = f"spring_service::{project_id}::{stable_hash(class_owner_id(cls))}"
@@ -141,7 +141,7 @@ def extract_core_facts(
                         service_class=cls.qualified_name,
                     )
                 )
-                class_node_ids.append(service_id)
+                class_nodes.append(("Service", service_id))
 
             if has_annotation(cls.annotations, REPOSITORY_ANNOTATIONS):
                 repo_id = f"spring_repo::{project_id}::{stable_hash(class_owner_id(cls))}"
@@ -159,11 +159,11 @@ def extract_core_facts(
                         repository_kind="spring_repository_stereotype",
                     )
                 )
-                class_node_ids.append(repo_id)
+                class_nodes.append(("DataRepository", repo_id))
 
-            for node_id in class_node_ids:
+            for node_label, node_id in class_nodes:
                 relationships.append(
-                    rel("SEMANTIC_OF", node_id, class_owner_id(cls), project_id, cls.source, "Spring semantic class anchor")
+                    rel("SEMANTIC_OF", node_label, node_id, "Class", class_owner_id(cls), project_id, cls.source, "Spring semantic class anchor")
                 )
 
             method_facts, method_rels = _extract_methods(
@@ -212,9 +212,9 @@ def _extract_methods(
                     scope=_first_annotation_value(anns, "Scope"),
                 )
             )
-            relationships.append(rel("SEMANTIC_OF", produced_id, method_owner_id(method), project_id, method.source, "Bean method anchor"))
+            relationships.append(rel("SEMANTIC_OF", "SpringBean", produced_id, "Function", method_owner_id(method), project_id, method.source, "Bean method anchor"))
             if bean_id:
-                relationships.append(rel("PRODUCES_BEAN", bean_id, produced_id, project_id, method.source, "@Bean factory method"))
+                relationships.append(rel("PRODUCES_BEAN", "SpringBean", bean_id, "SpringBean", produced_id, project_id, method.source, "@Bean factory method"))
 
         if has_annotation(method.annotations, INJECTION_ANNOTATIONS) and bean_id:
             site_id = f"spring_injection::{project_id}::{stable_hash(method_owner_id(method))}"
@@ -234,7 +234,7 @@ def _extract_methods(
                     raw_value=method.params,
                 )
             )
-            relationships.append(rel("POSSIBLE_INJECTION", bean_id, site_id, project_id, method.source, "Annotated injection site", 0.72, "unresolved"))
+            relationships.append(rel("POSSIBLE_INJECTION", "SpringBean", bean_id, "SpringBean", site_id, project_id, method.source, "Annotated injection site", 0.72, "unresolved"))
 
         for value_ann in [ann for ann in method.annotations if ann.short_name in VALUE_ANNOTATIONS]:
             value_id = f"spring_config_binding::{project_id}::{stable_hash(method_owner_id(method) + value_ann.raw)}"
@@ -278,8 +278,8 @@ def _extract_methods(
                             framework="spring",
                         )
                     )
-                    relationships.append(rel("SEMANTIC_OF", endpoint_id, method_owner_id(method), project_id, method.source, "Endpoint handler anchor"))
-                    relationships.append(rel("HANDLES", controller_id, endpoint_id, project_id, method.source, "Controller handles endpoint"))
+                    relationships.append(rel("SEMANTIC_OF", "ApiEndpoint", endpoint_id, "Function", method_owner_id(method), project_id, method.source, "Endpoint handler anchor"))
+                    relationships.append(rel("HANDLES", "Controller", controller_id, "ApiEndpoint", endpoint_id, project_id, method.source, "Controller handles endpoint"))
     return facts, relationships
 
 

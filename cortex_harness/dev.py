@@ -1388,6 +1388,18 @@ def _print_summary(summaries: list, total_elapsed: float) -> None:
         if reason:
             parts.append(f"({reason})")
         click.echo("  ".join(parts))
+        quality = s.get("parse_quality") or {}
+        if isinstance(quality, dict) and quality.get("artifact"):
+            aggregates = quality.get("aggregates") or {}
+            click.echo(
+                "    parse quality: files=%s error_nodes=%s missing_nodes=%s artifact=%s"
+                % (
+                    aggregates.get("file_count", 0),
+                    aggregates.get("error_node_total", 0),
+                    aggregates.get("missing_node_total", 0),
+                    quality["artifact"],
+                )
+            )
     ok      = sum(1 for s in summaries if s.get("status") == "ok")
     skipped = sum(1 for s in summaries if s.get("status") in ("skipped", "cancelled"))
     errors  = sum(1 for s in summaries if s.get("status") == "error")
@@ -2161,6 +2173,21 @@ def sync():
     default="recursive",
     show_default=True,
 )
+@click.option(
+    "--parse-quality",
+    type=click.Choice(["off", "report", "repair"]),
+    default="report",
+    show_default=True,
+    help="C/C++ parser-quality diagnostics policy.",
+)
+@click.option("--parse-quality-max-files", type=click.IntRange(min=1), default=500, show_default=True)
+@click.option("--parse-quality-wall-seconds", type=click.IntRange(min=1), default=900, show_default=True)
+@click.option(
+    "--parse-quality-workers",
+    type=click.IntRange(min=1),
+    default=max(1, min(4, (os.cpu_count() or 2) // 2)),
+    show_default=True,
+)
 @click.pass_context
 def sync_code(
     ctx,
@@ -2173,6 +2200,10 @@ def sync_code(
     lock_timeout_seconds,
     reconcile,
     submodules,
+    parse_quality,
+    parse_quality_max_files,
+    parse_quality_wall_seconds,
+    parse_quality_workers,
 ):
     """Interactive: pick folders, auto-detect language, incremental if baseline exists.
 
@@ -2194,6 +2225,10 @@ def sync_code(
         lock_timeout_seconds=lock_timeout_seconds,
         reconcile=reconcile,
         submodules=submodules,
+        parse_quality=parse_quality,
+        parse_quality_max_files=parse_quality_max_files,
+        parse_quality_wall_seconds=parse_quality_wall_seconds,
+        parse_quality_workers=parse_quality_workers,
     )
 
     if ctx.invoked_subcommand is not None:
@@ -2245,6 +2280,10 @@ def sync_code(
                 "--lock-timeout-seconds", str(lock_timeout_seconds),
                 "--submodules", submodules,
                 "--summary-path", str(child_summary_path),
+                "--parse-quality", parse_quality,
+                "--parse-quality-max-files", str(parse_quality_max_files),
+                "--parse-quality-wall-seconds", str(parse_quality_wall_seconds),
+                "--parse-quality-workers", str(parse_quality_workers),
                 *_neo4j_args_code(process_env),
             ]
             if full_scan:
@@ -2276,6 +2315,7 @@ def sync_code(
                 "outcome": child_summary.get("outcome", "unknown"),
                 "change_sources": child_summary.get("change_sources", {}),
                 "coverage_warnings": child_summary.get("coverage_warnings", []),
+                "parse_quality": child_summary.get("parse_quality", {}),
             })
 
     _print_summary(summaries, time.time() - total_start)
@@ -2339,6 +2379,10 @@ def sync_code_all(ctx):
                 "--lock-timeout-seconds", str(o["lock_timeout_seconds"]),
                 "--submodules", o["submodules"],
                 "--summary-path", str(child_summary_path),
+                "--parse-quality", o["parse_quality"],
+                "--parse-quality-max-files", str(o["parse_quality_max_files"]),
+                "--parse-quality-wall-seconds", str(o["parse_quality_wall_seconds"]),
+                "--parse-quality-workers", str(o["parse_quality_workers"]),
                 *_neo4j_args_code(process_env),
             ]
             if o.get("full_scan"):
@@ -2370,6 +2414,7 @@ def sync_code_all(ctx):
                 "outcome": child_summary.get("outcome", "unknown"),
                 "change_sources": child_summary.get("change_sources", {}),
                 "coverage_warnings": child_summary.get("coverage_warnings", []),
+                "parse_quality": child_summary.get("parse_quality", {}),
             })
 
     _print_summary(summaries, time.time() - total_start)

@@ -4,11 +4,16 @@ status: in_progress
 created: 2026-08-04
 target: code-tiny/tools/cplus
 blockedBy: []
-blocks: []
-phaseBlockedBy: {}
+blocks:
+  - "260807-1329-parser-quality-recovery"
+phaseBlockedBy:
+  "03": [260807-1202-graph-ingest-write-path-hardening]
+  "04": [260807-1202-graph-ingest-write-path-hardening]
 relatedPlans:
   - "260731-1500-legacy-migration-parser-coverage"
   - "260804-1426-proc-cplus-analyzer"
+  - "260807-1202-graph-ingest-write-path-hardening"
+  - "260807-1329-parser-quality-recovery"
 ---
 
 # Port comprehensive Pro*C analyzer to code-tiny (replace basic proc_sql)
@@ -39,6 +44,20 @@ The patch was generated from inside `code-tiny/` (paths like `tools/cplus/...`),
 - `code-tiny/tools/sql/sql_analyzer.py` — exists, exports `_get_sql_parser()` ✓
 - `code-tiny/tools/common/incremental_cleanup.py` — exists ✓
 - `code-tiny/tools/cplus/clang_parser.py`, `rc_parser.py` — exist ✓
+
+## Active-plan coordination
+
+- `260807-1202-graph-ingest-write-path-hardening` owns the canonical schema
+  manifest, pre-stream index readiness, label-qualified relationship writes,
+  integrity accounting, and graph-run recovery. This plan continues to own
+  Pro*C extraction semantics, labels, relationships, aliases, and parser tests.
+- Phase 03 must register Pro*C labels/identities in the shared manifest rather
+  than adding another analyzer-local or standalone constraint list. Phase 04's
+  graph acceptance must use the hardening plan's readiness, explain-plan,
+  integrity, and idempotency gates.
+- Phases 01-02 parser implementation can proceed independently. The phase
+  blockers prevent graph integration from declaring completion on the current
+  post-stream index path.
 
 ## Phases
 

@@ -2874,7 +2874,7 @@ async def build_call_graph(
                 """,
                 "packages": """
                 UNWIND $rows AS row
-                MERGE (p {id: row.id})
+                MERGE (p:Package {id: row.id})
                 SET p:Package,
                     p.name = row.name,
                     p.start_line = row.start_line,
@@ -2891,7 +2891,7 @@ async def build_call_graph(
                 """,
                 "namespaces": """
                 UNWIND $rows AS row
-                MERGE (n {id: row.id})
+                MERGE (n:Namespace {id: row.id})
                 SET n:Namespace,
                     n.name = row.name,
                     n.qualified_name = row.qualified_name,
@@ -2910,7 +2910,7 @@ async def build_call_graph(
                 """,
                 "files": """
                 UNWIND $rows AS row
-                MERGE (f {id: row.id})
+                MERGE (f:File {id: row.id})
                 SET f:File,
                     f.path = row.path,
                     f.package_name = row.package_name,
@@ -2928,7 +2928,7 @@ async def build_call_graph(
                 """,
                 "directories": """
                 UNWIND $rows AS row
-                MERGE (d {id: row.id})
+                MERGE (d:Directory {id: row.id})
                 SET d:Directory,
                     d.name = row.name,
                     d.path = row.path,
@@ -2941,7 +2941,7 @@ async def build_call_graph(
                 """,
                 "classes": """
                 UNWIND $rows AS row
-                MERGE (c {id: row.id})
+                MERGE (c:Class {id: row.id})
                 SET c:Class,
                     c.name = row.name,
                     c.qualified_name = row.qualified_name,
@@ -2967,7 +2967,7 @@ async def build_call_graph(
                 """,
                 "function_types": """
                 UNWIND $rows AS row
-                MERGE (t {id: row.id})
+                MERGE (t:FunctionType {id: row.id})
                 SET t:FunctionType,
                     t.type_signature = row.type_signature,
                     t.file_path = row.file_path,
@@ -2982,7 +2982,7 @@ async def build_call_graph(
                 """,
                 "functions": """
                 UNWIND $rows AS row
-                MERGE (f {id: row.id})
+                MERGE (f:Function {id: row.id})
                 SET f:Function,
                     f.name = row.name,
                     f.qualified_name = row.qualified_name,
@@ -3011,7 +3011,7 @@ async def build_call_graph(
                 """,
                 "android_manifests": """
                 UNWIND $rows AS row
-                MERGE (m {id: row.id})
+                MERGE (m:AndroidManifest {id: row.id})
                 SET m:AndroidManifest,
                     m.package_name = row.package_name,
                     m.file_path = row.file_path,
@@ -3029,7 +3029,7 @@ async def build_call_graph(
                 """,
                 "android_components": """
                 UNWIND $rows AS row
-                MERGE (c {id: row.id})
+                MERGE (c:AndroidComponent {id: row.id})
                 SET c:AndroidComponent,
                     c.name = row.name,
                     c.component_type = row.component_type,
@@ -3058,7 +3058,7 @@ async def build_call_graph(
                 """,
                 "android_resources": """
                 UNWIND $rows AS row
-                MERGE (r {id: row.id})
+                MERGE (r:AndroidResource {id: row.id})
                 SET r:AndroidResource,
                     r.name = row.name,
                     r.res_type = row.res_type,
@@ -3074,7 +3074,7 @@ async def build_call_graph(
                 """,
                 "gradle_modules": """
                 UNWIND $rows AS row
-                MERGE (m {id: row.id})
+                MERGE (m:GradleModule {id: row.id})
                 SET m:GradleModule,
                     m.name = row.name,
                     m.module_path = row.module_path,
@@ -3092,7 +3092,7 @@ async def build_call_graph(
                 """,
                 "gradle_dependencies": """
                 UNWIND $rows AS row
-                MERGE (d {id: row.id})
+                MERGE (d:GradleDependency {id: row.id})
                 SET d:GradleDependency,
                     d.coordinate = row.coordinate,
                     d.group = row.group,
@@ -3108,7 +3108,7 @@ async def build_call_graph(
                 """,
                 "android_annotations": """
                 UNWIND $rows AS row
-                MERGE (a {id: row.id})
+                MERGE (a:AndroidAnnotation {id: row.id})
                 SET a:AndroidAnnotation,
                     a.name = row.name,
                     a.summary = row.summary,
@@ -3121,7 +3121,7 @@ async def build_call_graph(
                 """,
                 "android_nav_routes": """
                 UNWIND $rows AS row
-                MERGE (r {id: row.id})
+                MERGE (r:AndroidNavRoute {id: row.id})
                 SET r:AndroidNavRoute,
                     r.route = row.route,
                     r.file_path = row.file_path,
@@ -3135,7 +3135,7 @@ async def build_call_graph(
                 """,
                 "android_intent_actions": """
                 UNWIND $rows AS row
-                MERGE (a {id: row.id})
+                MERGE (a:AndroidIntentAction {id: row.id})
                 SET a:AndroidIntentAction,
                     a.action = row.action,
                     a.summary = row.summary,
@@ -3148,7 +3148,7 @@ async def build_call_graph(
                 """,
                 "android_handler_messages": """
                 UNWIND $rows AS row
-                MERGE (m {id: row.id})
+                MERGE (m:AndroidHandlerMessage {id: row.id})
                 SET m:AndroidHandlerMessage,
                     m.token = row.token,
                     m.summary = row.summary,
@@ -3161,7 +3161,7 @@ async def build_call_graph(
                 """,
                 "events": """
                 UNWIND $rows AS row
-                MERGE (e {id: row.id})
+                MERGE (e:Event {id: row.id})
                 SET e:Event,
                     e.name = row.name,
                     e.namespace = row.namespace,
@@ -3853,7 +3853,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": row["source_id"],
+                        "source_label": source_label,
                         "target_id": row["target_id"],
+                        "target_label": target_label,
                         "rel_type": rel_type,
                         "properties": row.get("props") or {},
                     }
@@ -3862,7 +3864,20 @@ async def build_call_graph(
             all_calls: List[Dict[str, Any]] = []
             seen_project_resources: set[str] = set()
 
-            all_relations.extend(directory_relations)
+            directory_ids = {str(row["id"]) for row in directory_rows}
+            for relation in directory_relations:
+                source_id = str(relation["source_id"])
+                target_id = str(relation["target_id"])
+                add_relation_row(
+                    "Directory" if source_id in directory_ids else "Project",
+                    "Directory" if target_id in directory_ids else "File",
+                    str(relation["rel_type"]),
+                    {
+                        "source_id": source_id,
+                        "target_id": target_id,
+                        "props": relation.get("properties") or {},
+                    },
+                )
 
             for event_rel in event_relations:
                 add_relation_row(

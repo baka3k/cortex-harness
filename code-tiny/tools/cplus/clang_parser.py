@@ -266,6 +266,7 @@ def parse_and_extract(
     path: str,
     root: str,
     compile_commands_path: str,
+    validated_args: Optional[List[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Parse a C/C++ file with libclang and return a *payload* dict.
 
@@ -284,7 +285,11 @@ def parse_and_extract(
     abs_path = os.path.abspath(path)
     rel_path = os.path.relpath(path, root)
 
-    compile_args = _get_compile_args(abs_path, compile_commands_path)
+    compile_args = (
+        list(validated_args)
+        if validated_args is not None
+        else _get_compile_args(abs_path, compile_commands_path)
+    )
 
     try:
         index = _ci.Index.create()
@@ -526,9 +531,9 @@ def parse_and_extract(
                     relations.append(
                         {
                             "source_id": p_qualified,
-                            "source_label": "TypeDef",
+                            "source_label": "Type",
                             "target_id": qualified,
-                            "target_label": "TypeDef",
+                            "target_label": "Type",
                             "rel_type": "CONTAINS",
                             "properties": {},
                         }

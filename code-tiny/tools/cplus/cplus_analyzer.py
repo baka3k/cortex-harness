@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import collections
 import gc
+import hashlib
 import importlib.util
+import importlib.metadata
 import json
 import logging
 import os
@@ -28,14 +30,26 @@ if _ROOT_DIR not in sys.path:
 from tools.common.harness_config import load_harness_config
 from tools.common.embedding_runtime import resolve_embedding_cache as _shared_resolve_embedding_cache
 from tools.common.legacy_encoding import read_legacy_text
+from tools.common.parse_quality import (
+    CandidateOutcome,
+    DamageSummary,
+    ParseContext,
+    ParserBackend,
+    RetryStage,
+    SemanticYield,
+    aggregate_quality_records,
+    atomic_write_json,
+    build_quality_record,
+    collect_tree_sitter_damage,
+    context_fingerprint,
+    source_fingerprint,
+)
 
 from tools.common.analyzer_cache import (
     file_signature,
     load_parse_cache,
-    load_state,
     safe_cache_root,
     write_parse_cache,
-    write_state,
 )
 from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
 from tools.common.git_diff import load_manifest_paths
@@ -52,6 +66,7 @@ from tools.cplus.rc_parser import (
     read_rc_text,
 )
 from tools.cplus.proc_analyzer import analyze_proc_file, prepare_proc_path
+from tools.cplus.parse_recovery import RecoveryBudgets, recover_payload_candidates
 try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
@@ -78,7 +93,7 @@ def _effective_fallback_threshold(file_size: int) -> int:
     return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
-_PARSE_CACHE_VERSION = "cplus-v2026-08-04-proc1"
+_PARSE_CACHE_VERSION = "cplus-v2026-08-07-quality1"
 # Imported lazily so the analyzer module stays usable when invoked outside
 # the ``code-tiny`` package layout (e.g. direct path-based tests).
 try:
@@ -512,10 +527,14 @@ def _load_compile_commands_index(path: str, root: str) -> Dict[str, Any]:
         "entries": 0,
         "cpp_files": set(),
         "c_files": set(),
+        "fingerprint": "",
+        "context_by_file": {},
     }
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+        with open(path, "rb") as handle:
+            raw_payload = handle.read()
+        summary["fingerprint"] = hashlib.sha256(raw_payload).hexdigest()
+        payload = json.loads(raw_payload.decode("utf-8"))
     except Exception:
         return summary
     if not isinstance(payload, list):
@@ -540,11 +559,15 @@ def _load_compile_commands_index(path: str, root: str) -> Dict[str, Any]:
             rel_file = os.path.relpath(abs_file, root_abs).replace("\\", "/")
         except ValueError:
             rel_file = abs_file.replace("\\", "/")
-        is_cpp_cmd = _command_implies_cpp(_parse_compile_command_tokens(item), abs_file)
+        command_tokens = _parse_compile_command_tokens(item)
+        is_cpp_cmd = _command_implies_cpp(command_tokens, abs_file)
         if is_cpp_cmd:
             summary["cpp_files"].add(rel_file)
         else:
             summary["c_files"].add(rel_file)
+        summary["context_by_file"][rel_file] = hashlib.sha256(
+            json.dumps(command_tokens, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         summary["entries"] += 1
     return summary
 
@@ -607,7 +630,7 @@ def _get_c_parser() -> Parser:
     return _C_PARSER
 
 
-def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes, str]:
+def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes, str, bool]:
     parser = _get_cpp_parser() if is_cpp else _get_c_parser()
     decoded = read_legacy_text(path)
     source_bytes = decoded.text.encode("utf-8")
@@ -615,15 +638,90 @@ def _parse_file(path: str, is_cpp: bool) -> Tuple[Any, bytes, str]:
     if os.path.splitext(path)[1].lower() in {".pc", ".pcc"}:
         prepared = prepare_proc_path(path)
         parser_bytes = prepared.masked_bytes
-        return parser.parse(parser_bytes), prepared.source_bytes, prepared.encoding
+        lossy_decode = any(
+            item.code == "encoding_replacement" for item in prepared.diagnostics
+        )
+        return parser.parse(parser_bytes), prepared.source_bytes, prepared.encoding, lossy_decode
     tree = parser.parse(parser_bytes)
-    return tree, source_bytes, decoded.encoding
+    lossy_decode = any(item.code == "legacy-encoding-lossy" for item in decoded.diagnostics)
+    return tree, source_bytes, decoded.encoding, lossy_decode
 
 
-def _tree_error_stats(tree) -> Tuple[bool, int]:
+def _tree_error_stats(tree) -> Tuple[bool, int, int]:
     has_error = bool(getattr(tree.root_node, "has_error", False))
     error_nodes = sum(1 for _ in _find_nodes_by_type(tree.root_node, "ERROR"))
-    return has_error, error_nodes
+    missing_nodes = 0
+    cursor = tree.root_node.walk()
+    while True:
+        if bool(getattr(cursor.node, "is_missing", False)):
+            missing_nodes += 1
+        if cursor.goto_first_child():
+            continue
+        if cursor.goto_next_sibling():
+            continue
+        while cursor.goto_parent():
+            if cursor.goto_next_sibling():
+                break
+        else:
+            break
+    return has_error, error_nodes, missing_nodes
+
+
+def _runtime_package_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
+def _grammar_version(is_cpp: bool) -> str:
+    parser = _get_cpp_parser() if is_cpp else _get_c_parser()
+    language = getattr(parser, "language", None)
+    value = getattr(language, "semantic_version", None)
+    if value is None:
+        value = getattr(language, "abi_version", None)
+    return str(value if value is not None else "unknown")
+
+
+def _parse_cache_context_signature(
+    *,
+    file_path: str,
+    rel_path: str,
+    is_cpp: bool,
+    is_resource: bool,
+    compile_db_index: Optional[Dict[str, Any]],
+    project_id: str,
+) -> Dict[str, Any]:
+    decoded = read_legacy_text(file_path)
+    source_bytes = decoded.text.encode("utf-8")
+    normalized_rel = rel_path.replace("\\", "/")
+    compile_context = str(
+        ((compile_db_index or {}).get("context_by_file") or {}).get(normalized_rel) or ""
+    )
+    ext = os.path.splitext(file_path)[1].lower()
+    context = ParseContext(
+        backend=(
+            ParserBackend.WINDOWS_RESOURCE if is_resource else ParserBackend.TREE_SITTER
+        ),
+        parser_language=("windows_rc" if is_resource else ("cpp" if is_cpp else "c")),
+        parser_version=("1" if is_resource else _runtime_package_version("tree-sitter")),
+        grammar_version=("1" if is_resource else _grammar_version(is_cpp)),
+        source_encoding=decoded.encoding,
+        lossy_decode=any(
+            item.code == "legacy-encoding-lossy" for item in decoded.diagnostics
+        ),
+        compile_context_available=bool(compile_context),
+        compile_context_fingerprint=compile_context,
+        masking_fingerprint="proc-v1" if ext in {".pc", ".pcc"} else "",
+    )
+    source_hash = source_fingerprint(source_bytes)
+    return {
+        "file": file_signature(file_path),
+        "source_fingerprint": source_hash,
+        "parse_context_fingerprint": context_fingerprint(context, source_hash),
+        "schema": _PARSE_CACHE_VERSION,
+        "project": project_id,
+    }
 
 
 def _extract_base_types(node, source_bytes: bytes) -> List[str]:
@@ -1969,6 +2067,8 @@ def parse_c_family_file(
     path: str,
     root: str,
     is_cpp: bool,
+    compile_context_available: bool = False,
+    compile_context_fingerprint: str = "",
 ) -> Tuple[
     List[FunctionDef],
     List[CallEdge],
@@ -1987,32 +2087,46 @@ def parse_c_family_file(
     Dict[str, Any],
 ]:
     initial_is_cpp = is_cpp
-    tree, source_bytes, source_encoding = _parse_file(path, initial_is_cpp)
+    tree, source_bytes, source_encoding, source_lossy_decode = _parse_file(path, initial_is_cpp)
     selected_is_cpp = initial_is_cpp
     retry_attempted = False
     retry_selected = False
     retry_has_error: Optional[bool] = None
     retry_error_nodes: Optional[int] = None
-    initial_has_error, initial_error_nodes = _tree_error_stats(tree)
+    retry_missing_nodes: Optional[int] = None
+    initial_damage = collect_tree_sitter_damage(tree.root_node, len(source_bytes))
+    initial_has_error = bool(getattr(tree.root_node, "has_error", False))
+    initial_error_nodes = initial_damage.error_count
+    initial_missing_nodes = initial_damage.missing_count
+    selected_damage = initial_damage
     selected_has_error = initial_has_error
     selected_error_nodes = initial_error_nodes
+    selected_missing_nodes = initial_missing_nodes
 
     ext = os.path.splitext(path)[1].lower()
     if ext == ".h" and (initial_has_error or initial_error_nodes > 0):
         retry_attempted = True
         retry_is_cpp = not initial_is_cpp
-        retry_tree, retry_source_bytes, retry_source_encoding = _parse_file(path, retry_is_cpp)
-        retry_has_error, retry_error_nodes = _tree_error_stats(retry_tree)
+        retry_tree, retry_source_bytes, retry_source_encoding, retry_lossy_decode = _parse_file(
+            path, retry_is_cpp
+        )
+        retry_damage = collect_tree_sitter_damage(retry_tree.root_node, len(retry_source_bytes))
+        retry_has_error = bool(getattr(retry_tree.root_node, "has_error", False))
+        retry_error_nodes = retry_damage.error_count
+        retry_missing_nodes = retry_damage.missing_count
         if (
-            retry_error_nodes < initial_error_nodes
-            or (retry_error_nodes == initial_error_nodes and (not retry_has_error and initial_has_error))
+            (retry_error_nodes, retry_missing_nodes, retry_has_error)
+            < (initial_error_nodes, initial_missing_nodes, initial_has_error)
         ):
             tree = retry_tree
             source_bytes = retry_source_bytes
             source_encoding = retry_source_encoding
+            source_lossy_decode = retry_lossy_decode
             selected_is_cpp = retry_is_cpp
             selected_has_error = retry_has_error
             selected_error_nodes = retry_error_nodes
+            selected_missing_nodes = retry_missing_nodes
+            selected_damage = retry_damage
             retry_selected = True
 
     rel_path = os.path.relpath(path, root)
@@ -2039,10 +2153,14 @@ def parse_c_family_file(
         "header_retry_selected": retry_selected,
         "has_error": selected_has_error,
         "error_nodes": selected_error_nodes,
+        "missing_nodes": selected_missing_nodes,
         "error_nodes_initial": initial_error_nodes,
+        "missing_nodes_initial": initial_missing_nodes,
         "header_retry_error_nodes": retry_error_nodes,
+        "header_retry_missing_nodes": retry_missing_nodes,
         "header_retry_has_error": retry_has_error,
         "source_encoding": source_encoding,
+        "lossy_decode": source_lossy_decode,
     }
 
     functions: List[FunctionDef] = []
@@ -2078,6 +2196,67 @@ def parse_c_family_file(
         templates,
         type_registry,
         namespace_registry,
+    )
+
+    semantic_yield = SemanticYield(
+        function_count=len(functions),
+        type_count=len(types),
+        declaration_count=len(fields) + len(aliases) + len(templates) + len(func_types),
+        stable_scope_count=sum(
+            1
+            for item in [*functions, *types, *namespaces]
+            if bool(getattr(item, "qualified_name", ""))
+        ),
+        call_count=len(calls),
+        include_count=len(file_includes),
+    )
+    retry_stages: List[RetryStage] = []
+    if source_encoding.lower().replace("_", "-") not in {"utf-8", "utf-8-sig"}:
+        retry_stages.append(RetryStage.LEGACY_DECODE)
+    if retry_attempted:
+        retry_stages.append(RetryStage.ALTERNATE_GRAMMAR)
+    if ext in {".pc", ".pcc"}:
+        retry_stages.append(RetryStage.DIALECT_MASKING)
+    context = ParseContext(
+        backend=ParserBackend.TREE_SITTER,
+        parser_language="cpp" if selected_is_cpp else "c",
+        parser_version=_runtime_package_version("tree-sitter"),
+        grammar_version=_grammar_version(selected_is_cpp),
+        source_encoding=source_encoding,
+        lossy_decode=source_lossy_decode,
+        compile_context_available=compile_context_available,
+        compile_context_fingerprint=compile_context_fingerprint,
+        masking_fingerprint="proc-v1" if ext in {".pc", ".pcc"} else "",
+    )
+    quality_record = build_quality_record(
+        root=root,
+        path=path,
+        source=source_bytes,
+        damage=selected_damage,
+        semantic_yield=semantic_yield,
+        context=context,
+        retry_stages=retry_stages,
+        candidate_outcome=(
+            CandidateOutcome.SELECTED if retry_selected else CandidateOutcome.NOT_ATTEMPTED
+        ),
+        selected_candidate=(
+            RetryStage.ALTERNATE_GRAMMAR.value if retry_selected else "baseline"
+        ),
+        selection_reason=("lower_structural_damage" if retry_selected else "first_pass"),
+    )
+    parse_meta.update(
+        {
+            "quality": quality_record.to_dict(),
+            "quality_tier": quality_record.tier.value,
+            "parser_backend": quality_record.context.backend.value,
+            "context_fingerprint": quality_record.context_fingerprint,
+            "recovery_policy_version": quality_record.context.recovery_policy_version,
+            "damaged_span_ratio": quality_record.damage.damaged_span_ratio,
+            "critical_structural_damage": quality_record.damage.critical_structural_damage,
+            "candidate_outcome": quality_record.candidate_outcome.value,
+            "selected_candidate": quality_record.selected_candidate,
+            "selection_reason": quality_record.selection_reason,
+        }
     )
 
     return (
@@ -2603,6 +2782,7 @@ def _load_or_parse_payload(
     parse_cache: bool,
     compile_db_index: Optional[Dict[str, Any]] = None,
     project_id: str = "",
+    allow_inprocess_clang_fallback: bool = False,
 ) -> Dict[str, Any]:
     def ensure_text_fields(item: Dict[str, Any]) -> None:
         if "comment" not in item:
@@ -2615,6 +2795,33 @@ def _load_or_parse_payload(
                 item.get("comment") or "",
                 item.get("summary") or "",
             )
+
+    def attach_compact_quality_provenance(payload: Dict[str, Any]) -> Dict[str, Any]:
+        parse_meta = payload.get("parse_meta") or {}
+        quality = parse_meta.get("quality") or {}
+        if not isinstance(quality, dict) or not quality:
+            return payload
+        context = quality.get("context") or {}
+        compact = {
+            "schema_version": quality.get("schema_version") or "1",
+            "tier": quality.get("tier") or "retry_required",
+            "backend": context.get("backend") or parse_meta.get("parser_backend") or "unknown",
+            "parser_language": context.get("parser_language") or parse_meta.get("parser_language") or "unknown",
+            "context_fingerprint": quality.get("context_fingerprint") or parse_meta.get("context_fingerprint") or "",
+            "recovery_policy_version": context.get("recovery_policy_version") or parse_meta.get("recovery_policy_version") or "1",
+            "selected_candidate": quality.get("selected_candidate") or "baseline",
+            "selection_reason": quality.get("selection_reason") or "first_pass",
+        }
+        payload["quality_provenance"] = compact
+        file_def = payload.get("file_def")
+        if isinstance(file_def, dict):
+            file_def["parse_quality"] = compact
+        payload["evidence_policy"] = {
+            "strong_relation_types": ["CALLS", "INHERITS", "CONTAINS"],
+            "strong_relations_allowed": compact["tier"] != "quarantined",
+            "weak_evidence_allowed": True,
+        }
+        return payload
 
     def normalize_cached_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         function_type_id_map: Dict[str, str] = {}
@@ -2667,9 +2874,14 @@ def _load_or_parse_payload(
                 "header_retry_selected": False,
                 "has_error": False,
                 "error_nodes": 0,
+                "missing_nodes": 0,
                 "error_nodes_initial": 0,
+                "missing_nodes_initial": 0,
                 "header_retry_error_nodes": None,
+                "header_retry_missing_nodes": None,
                 "header_retry_has_error": None,
+                "source_encoding": "unknown",
+                "lossy_decode": False,
             }
         else:
             parse_meta.setdefault("parser_language", "unknown")
@@ -2678,9 +2890,14 @@ def _load_or_parse_payload(
             parse_meta.setdefault("header_retry_selected", False)
             parse_meta.setdefault("has_error", False)
             parse_meta.setdefault("error_nodes", 0)
+            parse_meta.setdefault("missing_nodes", 0)
             parse_meta.setdefault("error_nodes_initial", parse_meta.get("error_nodes", 0))
+            parse_meta.setdefault("missing_nodes_initial", parse_meta.get("missing_nodes", 0))
             parse_meta.setdefault("header_retry_error_nodes", None)
+            parse_meta.setdefault("header_retry_missing_nodes", None)
             parse_meta.setdefault("header_retry_has_error", None)
+            parse_meta.setdefault("source_encoding", "unknown")
+            parse_meta.setdefault("lossy_decode", False)
         templates = payload.get("templates")
         if isinstance(templates, list):
             for item in templates:
@@ -2764,18 +2981,23 @@ def _load_or_parse_payload(
                 item.setdefault("call_arity", 0)
                 normalized_calls.append(item)
             payload["calls"] = sorted(normalized_calls, key=_call_payload_sort_key)
-        return payload
+        return attach_compact_quality_provenance(payload)
 
     rel_path = os.path.relpath(file_path, root)
     is_resource = is_windows_resource_file(file_path)
     is_cpp = False if is_resource else _is_cpp_file(file_path, root, compile_db_index)
-    parser_language = "windows-resource" if is_resource else ("cpp" if is_cpp else "c")
+    parser_language = "windows_rc" if is_resource else ("cpp" if is_cpp else "c")
     cached_payload = None
     signature = None
     if parse_cache:
-        file_sig = file_signature(file_path)
-        if file_sig is not None:
-            signature = f"{file_sig}|lang:{parser_language}|schema:{_PARSE_CACHE_VERSION}|project:{project_id}"
+        signature = _parse_cache_context_signature(
+            file_path=file_path,
+            rel_path=rel_path,
+            is_cpp=is_cpp,
+            is_resource=is_resource,
+            compile_db_index=compile_db_index,
+            project_id=project_id,
+        )
         cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         cached_calls = cached_payload.get("calls")
@@ -2793,6 +3015,47 @@ def _load_or_parse_payload(
             return normalize_cached_payload(cached_payload)
     if is_resource:
         payload = normalize_cached_payload(parse_rc_file(file_path, root))
+        decoded_resource = read_legacy_text(file_path)
+        resource_source = decoded_resource.text.encode("utf-8")
+        resource_yield = SemanticYield(
+            declaration_count=len(payload.get("resources") or ())
+            + len(payload.get("resource_elements") or ()),
+            include_count=len(payload.get("includes") or ()),
+        )
+        resource_context = ParseContext(
+            backend=ParserBackend.WINDOWS_RESOURCE,
+            parser_language="windows_rc",
+            parser_version="1",
+            grammar_version="1",
+            source_encoding=decoded_resource.encoding,
+            lossy_decode=any(
+                item.code == "legacy-encoding-lossy" for item in decoded_resource.diagnostics
+            ),
+            compile_context_available=False,
+        )
+        resource_record = build_quality_record(
+            root=root,
+            path=file_path,
+            source=resource_source,
+            damage=DamageSummary(source_bytes=len(resource_source)),
+            semantic_yield=resource_yield,
+            context=resource_context,
+        )
+        payload["parse_meta"] = {
+            **dict(payload.get("parse_meta") or {}),
+            "quality": resource_record.to_dict(),
+            "quality_tier": resource_record.tier.value,
+            "parser_backend": resource_record.context.backend.value,
+            "parser_language": "windows_rc",
+            "context_fingerprint": resource_record.context_fingerprint,
+            "recovery_policy_version": resource_record.context.recovery_policy_version,
+            "has_error": False,
+            "error_nodes": 0,
+            "missing_nodes": 0,
+            "source_encoding": decoded_resource.encoding,
+            "lossy_decode": resource_context.lossy_decode,
+        }
+        payload = attach_compact_quality_provenance(payload)
         if parse_cache and signature is not None:
             write_parse_cache(parse_cache_root, rel_path, signature, payload)
         return payload
@@ -2812,7 +3075,24 @@ def _load_or_parse_payload(
         file_includes,
         file_macros,
         parse_meta,
-    ) = parse_c_family_file(file_path, root, is_cpp)
+    ) = parse_c_family_file(
+        file_path,
+        root,
+        is_cpp,
+        compile_context_available=bool(
+            compile_db_index
+            and rel_path.replace("\\", "/")
+            in (
+                set(compile_db_index.get("cpp_files") or ())
+                | set(compile_db_index.get("c_files") or ())
+            )
+        ),
+        compile_context_fingerprint=str(
+            ((compile_db_index or {}).get("context_by_file") or {}).get(
+                rel_path.replace("\\", "/"), ""
+            )
+        ),
+    )
 
     # -----------------------------------------------------------------------
     # libclang fallback: when tree-sitter produces too many error nodes,
@@ -2827,6 +3107,8 @@ def _load_or_parse_payload(
     # gives better scope/type resolution than tree-sitter on error-heavy code.
     # -----------------------------------------------------------------------
     if (
+        allow_inprocess_clang_fallback
+        and
         _clang_parser is not None
         and os.path.splitext(file_path)[1].lower() not in {".pc", ".pcc"}
         and parse_meta.get("error_nodes", 0) >= _effective_fallback_threshold(
@@ -2923,6 +3205,7 @@ def _load_or_parse_payload(
         "parse_meta": parse_meta,
     }
     payload["calls"] = sorted(payload["calls"], key=_call_payload_sort_key)
+    payload = attach_compact_quality_provenance(payload)
     if parse_cache and signature is not None:
         write_parse_cache(parse_cache_root, rel_path, signature, payload)
     return payload
@@ -2971,7 +3254,20 @@ async def build_call_graph(
     changed_files: Optional[Iterable[str]] = None,
     deleted_files: Optional[Iterable[str]] = None,
     commit_sha_before: str = "",
+    parse_quality_policy: str = "report",
+    parse_quality_max_records: int = 10000,
+    parse_quality_max_bytes: int = 8 * 1024 * 1024,
+    parse_quality_max_files: int = 500,
+    parse_quality_wall_seconds: int = 900,
+    parse_quality_workers: int = 1,
 ) -> None:
+    if neo4j_state_path:
+        raise ValueError(
+            "C++ graph resume is disabled until durable checkpoints include "
+            "project, revision, schema, and query-shape fingerprints; remove "
+            "--neo4j-state and restart the scan"
+        )
+
     start_time = time.time()
     cache_root = safe_cache_root(cache_dir, "cplus_analyzer", project_root=root)
     parse_cache_root = os.path.join(cache_root, "parse")
@@ -3028,10 +3324,93 @@ async def build_call_graph(
                 verbose=verbose,
             )
 
+    repair_selected_payloads: Dict[str, Dict[str, Any]] = {}
+    parse_recovery_metrics: Dict[str, Any] = {
+        "queued": 0,
+        "attempted": 0,
+        "improved": 0,
+        "non_improved": 0,
+        "failed": 0,
+        "stop_reason": "disabled" if parse_quality_policy != "repair" else "no_candidates",
+    }
+    if parse_quality_policy == "repair" and all_file_paths:
+        bounded_candidates: List[Tuple[Tuple[int, int, int, int], str, Dict[str, Any]]] = []
+        for file_path in all_file_paths:
+            baseline_payload = _load_or_parse_payload(
+                file_path,
+                root,
+                parse_cache_root,
+                parse_cache,
+                compile_db_index,
+                project_id=project_id,
+                allow_inprocess_clang_fallback=False,
+            )
+            quality = (baseline_payload.get("parse_meta") or {}).get("quality") or {}
+            if quality.get("tier") not in {"retry_required", "quarantined"}:
+                continue
+            damage = quality.get("damage") or {}
+            semantic = quality.get("semantic_yield") or {}
+            context = quality.get("context") or {}
+            priority = (
+                0 if quality.get("tier") == "quarantined" else 1,
+                0 if damage.get("critical_structural_damage") else 1,
+                0 if context.get("compile_context_available") else 1,
+                int(semantic.get("function_count") or 0)
+                + int(semantic.get("type_count") or 0),
+            )
+            bounded_candidates.append((priority, file_path, baseline_payload))
+            if len(bounded_candidates) > max(1, parse_quality_max_files) * 2:
+                bounded_candidates = sorted(
+                    bounded_candidates, key=lambda item: (item[0], item[1])
+                )[:parse_quality_max_files]
+        bounded_candidates = sorted(
+            bounded_candidates, key=lambda item: (item[0], item[1])
+        )[:parse_quality_max_files]
+        if bounded_candidates:
+            try:
+                repair_selected_payloads, parse_recovery_metrics = recover_payload_candidates(
+                    root=root,
+                    candidates={path: payload for _, path, payload in bounded_candidates},
+                    queue_path=os.path.join(cache_root, "recovery", "queue.json"),
+                    compile_commands_path=str((compile_db_index or {}).get("path") or ""),
+                    budgets=RecoveryBudgets(
+                        max_files=parse_quality_max_files,
+                        wall_seconds=parse_quality_wall_seconds,
+                        workers=parse_quality_workers,
+                    ),
+                    worker_path=os.path.join(os.path.dirname(__file__), "clang_worker.py"),
+                )
+                for file_path, repaired_payload in repair_selected_payloads.items():
+                    if not parse_cache:
+                        continue
+                    rel_path = os.path.relpath(file_path, root)
+                    is_cpp = _is_cpp_file(file_path, root, compile_db_index)
+                    signature = _parse_cache_context_signature(
+                        file_path=file_path,
+                        rel_path=rel_path,
+                        is_cpp=is_cpp,
+                        is_resource=False,
+                        compile_db_index=compile_db_index,
+                        project_id=project_id,
+                    )
+                    write_parse_cache(parse_cache_root, rel_path, signature, repaired_payload)
+            except Exception as exc:
+                parse_recovery_metrics = {
+                    **parse_recovery_metrics,
+                    "failed": len(bounded_candidates),
+                    "stop_reason": "recovery_setup_failed",
+                    "error": str(exc),
+                }
+                if verbose:
+                    print(f"[parse-quality] recovery unavailable; retaining first pass: {exc}")
+
     def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
         for index, file_path in enumerate(all_file_paths, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
+            if file_path in repair_selected_payloads:
+                yield repair_selected_payloads[file_path]
+                continue
             yield _load_or_parse_payload(
                 file_path,
                 root,
@@ -3039,6 +3418,7 @@ async def build_call_graph(
                 parse_cache,
                 compile_db_index,
                 project_id=project_id,
+                allow_inprocess_clang_fallback=parse_quality_policy == "off",
             )
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
@@ -3066,9 +3446,12 @@ async def build_call_graph(
     resource_count = 0
     parse_error_file_count = 0
     parse_error_node_total = 0
+    parse_missing_node_total = 0
+    parse_lossy_decode_count = 0
     parse_error_examples: List[str] = []
     header_retry_used_count = 0
     parse_error_details: List[Dict[str, Any]] = []
+    parse_quality_records: List[Dict[str, Any]] = []
     all_files_set = set(all_scanned_paths)
     file_lookup_by_basename: Dict[str, List[str]] = {}
     for path in all_scanned_paths:
@@ -3078,13 +3461,21 @@ async def build_call_graph(
         file_def = payload.get("file_def") or {}
         file_path = file_def.get("file_path")
         parse_meta = payload.get("parse_meta") or {}
+        quality_record = parse_meta.get("quality")
+        if isinstance(quality_record, dict):
+            parse_quality_records.append(quality_record)
         has_error = bool(parse_meta.get("has_error"))
         error_nodes = int(parse_meta.get("error_nodes") or 0)
+        missing_nodes = int(parse_meta.get("missing_nodes") or 0)
+        lossy_decode = bool(parse_meta.get("lossy_decode"))
+        if lossy_decode:
+            parse_lossy_decode_count += 1
         if bool(parse_meta.get("header_retry_selected")):
             header_retry_used_count += 1
         if has_error or error_nodes > 0:
             parse_error_file_count += 1
             parse_error_node_total += error_nodes
+            parse_missing_node_total += missing_nodes
             parse_error_details.append(
                 {
                     "file_path": file_path or "",
@@ -3093,9 +3484,13 @@ async def build_call_graph(
                     "header_retry_attempted": bool(parse_meta.get("header_retry_attempted")),
                     "header_retry_selected": bool(parse_meta.get("header_retry_selected")),
                     "error_nodes": error_nodes,
+                    "missing_nodes": missing_nodes,
                     "error_nodes_initial": int(parse_meta.get("error_nodes_initial") or error_nodes),
                     "header_retry_error_nodes": parse_meta.get("header_retry_error_nodes"),
+                    "header_retry_missing_nodes": parse_meta.get("header_retry_missing_nodes"),
                     "has_error": has_error,
+                    "source_encoding": parse_meta.get("source_encoding") or "unknown",
+                    "lossy_decode": lossy_decode,
                     "header_retry_has_error": parse_meta.get("header_retry_has_error"),
                 }
             )
@@ -3163,8 +3558,14 @@ async def build_call_graph(
     if verbose:
         if parse_error_file_count:
             print(
-                "[parse] tree-sitter reported errors in %d/%d files (%d ERROR nodes)"
-                % (parse_error_file_count, total_files, parse_error_node_total)
+                "[parse] tree-sitter syntax recovery in %d/%d files "
+                "(%d ERROR nodes, %d MISSING nodes)"
+                % (
+                    parse_error_file_count,
+                    total_files,
+                    parse_error_node_total,
+                    parse_missing_node_total,
+                )
             )
             if header_retry_used_count:
                 print(f"[parse] header parser auto-retry selected alternate parser for {header_retry_used_count} files")
@@ -3174,23 +3575,58 @@ async def build_call_graph(
             print("[parse] tree-sitter parse status: no error nodes detected")
             if header_retry_used_count:
                 print(f"[parse] header parser auto-retry selected alternate parser for {header_retry_used_count} files")
+        if parse_lossy_decode_count:
+            print(f"[parse] lossy source decoding in {parse_lossy_decode_count}/{total_files} files")
 
     if parse_errors_path:
-        os.makedirs(os.path.dirname(os.path.abspath(parse_errors_path)), exist_ok=True)
-        payload = {
+        aggregates = aggregate_quality_records(parse_quality_records)
+        detail_limit = max(0, int(parse_quality_max_records))
+        selected_records = parse_quality_records[:detail_limit]
+        report_payload: Dict[str, Any] = {
+            "schema_version": "1",
             "parse_run_id": parse_run_id,
             "commit_sha": commit_sha,
-            "root": root,
-            "total_files": total_files,
-            "error_file_count": parse_error_file_count,
-            "error_node_total": parse_error_node_total,
-            "header_retry_used_count": header_retry_used_count,
-            "files": parse_error_details,
+            "policy": parse_quality_policy,
+            "aggregates": aggregates,
+            "detail_record_count": len(selected_records),
+            "detail_truncated": len(selected_records) < len(parse_quality_records),
+            "files": selected_records,
+            "legacy_aggregates": {
+                "total_files": total_files,
+                "error_file_count": parse_error_file_count,
+                "error_node_total": parse_error_node_total,
+                "missing_node_total": parse_missing_node_total,
+                "lossy_decode_file_count": parse_lossy_decode_count,
+                "header_retry_used_count": header_retry_used_count,
+            },
+            "recovery": parse_recovery_metrics,
         }
-        with open(parse_errors_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=True, indent=2)
-        if verbose:
-            print(f"[parse] wrote parse error report: {parse_errors_path}")
+        while True:
+            try:
+                written_bytes = atomic_write_json(
+                    parse_errors_path,
+                    report_payload,
+                    allowed_root=os.path.dirname(os.path.abspath(parse_errors_path)),
+                    max_bytes=max(1024, int(parse_quality_max_bytes)),
+                )
+                break
+            except ValueError as exc:
+                if "byte cap" not in str(exc) or not report_payload["files"]:
+                    raise
+                report_payload["files"] = report_payload["files"][: max(0, len(report_payload["files"]) // 2)]
+                report_payload["detail_record_count"] = len(report_payload["files"])
+                report_payload["detail_truncated"] = True
+        print(
+            "[parse-quality] artifact=%s files=%d errors=%d missing=%d bytes=%d"
+            % (
+                parse_errors_path,
+                aggregates["file_count"],
+                aggregates["error_node_total"],
+                aggregates["missing_node_total"],
+                written_bytes,
+            ),
+            flush=True,
+        )
 
     def resolve_include_path(source_file: str, include_name: str) -> Optional[str]:
         if not include_name:
@@ -3485,6 +3921,13 @@ async def build_call_graph(
         _total_files_written: int = 0
         _total_calls_written: int = 0
         _total_unknown_calls_written: int = 0
+        _stream_buffer_index: int = 0
+        _stream_files_processed: int = 0
+        _stream_buffer_total: int = (
+            (total_files + _STREAM_BATCH_FILES - 1) // _STREAM_BATCH_FILES
+            if total_files
+            else 0
+        )
 
         _UNKNOWN_CALLS_CYPHER = """UNWIND $rows AS row
 CALL {
@@ -3650,6 +4093,72 @@ SET s.node_type = 'code',
 }
 
         async def _flush_write_buffers() -> None:
+            nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
+            nonlocal buf_fields, buf_aliases, buf_templates, buf_resources, buf_resource_elements
+            nonlocal buf_proc_sql_statements
+            nonlocal buf_relations, buf_calls, buf_unknown_calls
+            nonlocal _files_in_buf, _total_files_written, _total_calls_written, _total_unknown_calls_written
+            nonlocal _stream_buffer_index, _stream_files_processed
+            if _files_in_buf <= 0:
+                return
+            _stream_buffer_index += 1
+            _buffer_size = _files_in_buf
+            _buffer_start = _stream_files_processed + 1
+            _buffer_end = min(total_files, _stream_files_processed + _buffer_size)
+            if verbose:
+                print(
+                    "[graph] buffer_started index=%d/%d files=%d-%d "
+                    "processed=%d/%d size=%d"
+                    % (
+                        _stream_buffer_index,
+                        _stream_buffer_total,
+                        _buffer_start,
+                        _buffer_end,
+                        _stream_files_processed,
+                        total_files,
+                        _buffer_size,
+                    ),
+                    flush=True,
+                )
+            _buffer_started = time.monotonic()
+            try:
+                await _write_current_stream_buffer()
+            except BaseException as exc:
+                if verbose:
+                    print(
+                        "[graph] buffer_failed index=%d/%d files=%d-%d "
+                        "processed=%d/%d elapsed=%.3fs error=%s"
+                        % (
+                            _stream_buffer_index,
+                            _stream_buffer_total,
+                            _buffer_start,
+                            _buffer_end,
+                            _stream_files_processed,
+                            total_files,
+                            time.monotonic() - _buffer_started,
+                            type(exc).__name__,
+                        ),
+                        flush=True,
+                    )
+                raise
+            _stream_files_processed = _buffer_end
+            if verbose:
+                print(
+                    "[graph] buffer_finished index=%d/%d files=%d-%d "
+                    "processed=%d/%d elapsed=%.3fs"
+                    % (
+                        _stream_buffer_index,
+                        _stream_buffer_total,
+                        _buffer_start,
+                        _buffer_end,
+                        _stream_files_processed,
+                        total_files,
+                        time.monotonic() - _buffer_started,
+                    ),
+                    flush=True,
+                )
+
+        async def _write_current_stream_buffer() -> None:
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
             nonlocal buf_fields, buf_aliases, buf_templates, buf_resources, buf_resource_elements
             nonlocal buf_proc_sql_statements
@@ -4324,7 +4833,7 @@ SET s.node_type = 'code',
                         call_column,
                         call_type,
                     )
-                    site_id = f"{parse_run_id}:{stable_site_id}"
+                    site_id = stable_site_id
                     buf_unknown_calls.append(
                         {
                             "caller_id": call["caller_id"],
@@ -4387,7 +4896,7 @@ SET s.node_type = 'code',
                     call_column,
                     call_type,
                 )
-                site_id = f"{parse_run_id}:{stable_site_id}"
+                site_id = stable_site_id
                 total, resolved = call_stats_by_file.get(call_file, (0, 0))
                 call_stats_by_file[call_file] = (total + 1, resolved + 1)
                 buf_calls.append({
@@ -4547,46 +5056,28 @@ SET s.node_type = 'code',
                 f"inferred synthetic types: {inferred_type_nodes}"
             )
 
-        index_specs = [
-            {"label": "Function", "property": "id"},
-            {"label": "File", "property": "id"},
-            {"label": "Resource", "property": "id"},
-            {"label": "UIControl", "property": "id"},
-            {"label": "UnknownFunction", "property": "id"},
-            {"label": "ParseRun", "property": "id"},
-        ]
-        try:
-            await code_writer.driver.create_indexes(index_specs, database=code_writer.database)
-        except Exception as exc:
-            if verbose:
-                print(f"[graph] index ensure skipped: {exc}")
-
-        try:
-            await code_writer.driver.execute_query(
-                """
-                MERGE (r:ParseRun {id: $parse_run_id})
-                SET r.project_id = $project_id,
-                    r.project_name = $project_name,
-                    r.language = $language,
-                    r.repo = $repo,
-                    r.build_system = $build_system,
-                    r.commit_sha = $commit_sha,
-                    r.updated_at = datetime()
-                """,
-                {
-                    "parse_run_id": parse_run_id,
-                    "project_id": project_id,
-                    "project_name": project_name,
-                    "language": language,
-                    "repo": repo,
-                    "build_system": build_system,
-                    "commit_sha": commit_sha,
-                },
-                database=code_writer.database,
-            )
-        except Exception as exc:
-            if verbose:
-                print(f"[graph] parse run node upsert skipped: {exc}")
+        await code_writer.driver.execute_query(
+            """
+            MERGE (r:ParseRun {id: $parse_run_id})
+            SET r.project_id = $project_id,
+                r.project_name = $project_name,
+                r.language = $language,
+                r.repo = $repo,
+                r.build_system = $build_system,
+                r.commit_sha = $commit_sha,
+                r.updated_at = datetime()
+            """,
+            {
+                "parse_run_id": parse_run_id,
+                "project_id": project_id,
+                "project_name": project_name,
+                "language": language,
+                "repo": repo,
+                "build_system": build_system,
+                "commit_sha": commit_sha,
+            },
+            database=code_writer.database,
+        )
 
         # Write tail relations (event/possible-call) + inferred nodes/relations
         tail_and_inferred: List[Dict[str, Any]] = tail_relations + inferred_relations
@@ -4848,8 +5339,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=50,
         help="Batch size dedicated to CALLS edges (lower helps avoid Neo4j transaction OOM)",
     )
-    parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
-    parser.add_argument("--disable-neo4j-resume", action="store_true")
+    parser.add_argument(
+        "--neo4j-state",
+        default=os.environ.get("NEO4J_STATE_PATH"),
+        help="Unsupported until durable graph checkpoint fingerprints are implemented",
+    )
+    parser.add_argument(
+        "--disable-neo4j-resume",
+        action="store_true",
+        help="Deprecated compatibility flag; C++ graph resume is always disabled",
+    )
     parser.add_argument("--qdrant-batch-size", type=int, default=512)
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
     parser.add_argument("--qdrant-retries", type=int, default=3)
@@ -4880,7 +5379,36 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--unresolved-calls-path", help="Write unresolved calls as JSONL")
     parser.add_argument(
         "--parse-errors-path",
-        help="Write tree-sitter parse error summary JSON",
+        help="Compatibility alias for --parse-quality-report",
+    )
+    parser.add_argument(
+        "--parse-quality",
+        choices=("off", "report", "repair"),
+        default="report",
+        help="Parser-quality policy (repair remains bounded and opt-in)",
+    )
+    parser.add_argument(
+        "--parse-quality-report",
+        help="Write the versioned parser-quality artifact JSON",
+    )
+    parser.add_argument(
+        "--parse-quality-max-records",
+        type=int,
+        default=10000,
+        help="Maximum detailed file records retained in the quality artifact",
+    )
+    parser.add_argument(
+        "--parse-quality-max-bytes",
+        type=int,
+        default=8 * 1024 * 1024,
+        help="Maximum parser-quality artifact size in bytes",
+    )
+    parser.add_argument("--parse-quality-max-files", type=int, default=500)
+    parser.add_argument("--parse-quality-wall-seconds", type=int, default=900)
+    parser.add_argument(
+        "--parse-quality-workers",
+        type=int,
+        default=max(1, min(4, (os.cpu_count() or 2) // 2)),
     )
     parser.add_argument(
         "--compile-commands-path",
@@ -4921,13 +5449,35 @@ async def main(argv: Optional[List[str]] = None) -> int:
     if not os.path.isdir(args.root):
         print(f"Root not found: {args.root}", file=sys.stderr)
         return 2
+    if args.neo4j_state:
+        print(
+            "[state] C++ graph resume is disabled until durable checkpoint "
+            "fingerprints are implemented; remove --neo4j-state and restart",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+
+    if (
+        min(
+            args.parse_quality_max_files,
+            args.parse_quality_wall_seconds,
+            args.parse_quality_workers,
+        ) <= 0
+        or args.parse_quality_max_records < 0
+        or args.parse_quality_max_bytes < 1024
+    ):
+        print("parse-quality limits are invalid", file=sys.stderr)
+        return 2
+    if args.parse_quality in {"report", "repair"}:
+        args.disable_compile_db_bootstrap = True
 
     compile_db_path = os.path.abspath(
         args.compile_commands_path or os.path.join(args.root, "compile_commands.json")
     )
     compile_db_index: Optional[Dict[str, Any]] = None
     if args.disable_compile_db_bootstrap:
-        print("[compile-db] bootstrap disabled; using existing file if present")
+        print("[compile-db] executable bootstrap disabled; using validated existing file if present")
     else:
         if ensure_compile_commands is None:
             print("[compile-db] bootstrap unavailable; continuing with tree-sitter heuristics only")
@@ -4968,6 +5518,17 @@ async def main(argv: Optional[List[str]] = None) -> int:
     if prepare_graph_args(args):
         driver = await create_graph_driver_from_args(args)
         code_writer = LanguageCodeWriter(driver, database=args.neo4j_db, batch_size=args.neo4j_batch_size, verbose=args.verbose)
+        schema_result = await code_writer.ensure_schema()
+        if args.verbose and schema_result is not None:
+            print(
+                "[schema] ready manifest=%s fingerprint=%s indexes=%d verified=%d"
+                % (
+                    schema_result.manifest,
+                    schema_result.fingerprint,
+                    schema_result.required_count,
+                    schema_result.verified_count,
+                )
+            )
 
     qdrant_writer = None
     embedder = None
@@ -5014,11 +5575,12 @@ async def main(argv: Optional[List[str]] = None) -> int:
             )
 
     neo4j_state_path = None
-    if not args.disable_neo4j_resume and not args.incremental:
-        cache_root = safe_cache_root(effective_cache_dir, "cplus_analyzer", project_root=args.root)
-        neo4j_state_path = args.neo4j_state or os.path.join(cache_root, "neo4j_state.json")
-    elif args.incremental and args.verbose:
-        print("[state] incremental mode disables neo4j resume state")
+    if args.verbose:
+        print(
+            "[state] C++ graph resume disabled; graph batches will be replayed "
+            "idempotently after interruption",
+            flush=True,
+        )
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
     language = args.language or "cplus"
@@ -5093,7 +5655,13 @@ async def main(argv: Optional[List[str]] = None) -> int:
             call_stats_path=args.call_stats_path,
             possible_calls_path=args.possible_calls_path,
             unresolved_calls_path=args.unresolved_calls_path,
-            parse_errors_path=args.parse_errors_path,
+            parse_errors_path=(args.parse_quality_report or args.parse_errors_path),
+            parse_quality_policy=args.parse_quality,
+            parse_quality_max_records=args.parse_quality_max_records,
+            parse_quality_max_bytes=args.parse_quality_max_bytes,
+            parse_quality_max_files=args.parse_quality_max_files,
+            parse_quality_wall_seconds=args.parse_quality_wall_seconds,
+            parse_quality_workers=args.parse_quality_workers,
             parse_run_id=parse_run_id,
             commit_sha=commit_sha,
             verbose=args.verbose,

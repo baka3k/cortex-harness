@@ -53,6 +53,7 @@ from tools.common.sync_scope import (
     resolve_sync_cache_dir,
     scan_scope_id,
 )
+from tools.common.parse_quality import atomic_write_json
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import (
     add_graph_provider_args,
@@ -60,6 +61,7 @@ from tools.graph.cli import (
     normalize_graph_provider,
     prepare_graph_args,
 )
+from tools.graph.schema import CODE_GRAPH_SCHEMA, ensure_schema
 from tools.project_topology.registry import descriptor_spec_for_path
 from tools.jp1.sniff import is_jp1_file
 from tools.vb.vb_path_classifier import VBPathClassifier
@@ -982,6 +984,23 @@ def _selected_parsers(parsers_arg: str) -> Tuple[Set[str], bool]:
 
 def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
     env = dict(os.environ)
+    if getattr(args, "no_graph", False):
+        # The sentinel is checked before provider/config normalization in every
+        # child analyzer, so a project dev.json cannot silently re-enable writes.
+        env["CORTEX_DISABLE_GRAPH"] = "1"
+        env["CODE_GRAPH_PROVIDER"] = "neo4j"
+        env["GRAPH_PROVIDER"] = "neo4j"
+        for key in (
+            "FALKORDB_PATH",
+            "FALKORDB_GRAPH",
+            "FALKORDB_DATABASE",
+            "NEO4J_URI",
+            "NEO4J_USER",
+            "NEO4J_PASS",
+            "NEO4J_DB",
+        ):
+            env.pop(key, None)
+        return env
     if getattr(args, "graph_provider", None):
         env["CODE_GRAPH_PROVIDER"] = args.graph_provider
         env["GRAPH_PROVIDER"] = args.graph_provider
@@ -1035,6 +1054,13 @@ def _build_analyzer_cmd(
     embed_device: Optional[str] = None,
     embed_batch_size: Optional[int] = None,
     max_embed_chars: Optional[int] = None,
+    parse_quality: str = "report",
+    parse_quality_report: Optional[str] = None,
+    parse_quality_max_files: int = 500,
+    parse_quality_wall_seconds: int = 900,
+    parse_quality_workers: int = 1,
+    parse_quality_max_records: int = 10000,
+    parse_quality_max_bytes: int = 8 * 1024 * 1024,
 ) -> List[str]:
     cmd = [
         python_bin,
@@ -1051,6 +1077,26 @@ def _build_analyzer_cmd(
         after_sha,
     ]
     cmd.extend(analyzer.extra_args)
+    if analyzer.parser == "cplus":
+        cmd.extend(["--parse-quality", parse_quality])
+        if parse_quality in {"report", "repair"}:
+            cmd.append("--disable-compile-db-bootstrap")
+        if parse_quality_report:
+            cmd.extend(["--parse-quality-report", parse_quality_report])
+        cmd.extend(
+            [
+                "--parse-quality-max-files",
+                str(parse_quality_max_files),
+                "--parse-quality-wall-seconds",
+                str(parse_quality_wall_seconds),
+                "--parse-quality-workers",
+                str(parse_quality_workers),
+                "--parse-quality-max-records",
+                str(parse_quality_max_records),
+                "--parse-quality-max-bytes",
+                str(parse_quality_max_bytes),
+            ]
+        )
     if analyzer.parser in _SHARED_VECTOR_CLI_PARSERS:
         if embed_model:
             cmd.extend(["--embed-model", embed_model])
@@ -1104,6 +1150,25 @@ WITH p, r
 MERGE (p)-[:HAS_REPOSITORY]->(r)
 """
 
+_NEO4J_PROJECT_REPOSITORY_CONSTRAINTS = (
+    "CREATE CONSTRAINT unique_project_id IF NOT EXISTS "
+    "FOR (p:Project) REQUIRE p.project_id IS UNIQUE",
+    "CREATE CONSTRAINT unique_repository_name IF NOT EXISTS "
+    "FOR (r:Repository) REQUIRE r.name IS UNIQUE",
+)
+
+_NEO4J_DUPLICATE_TOPOLOGY_AUDIT = """
+MATCH (p:Project)
+WITH p.project_id AS identity, count(*) AS duplicates
+WHERE identity IS NOT NULL AND duplicates > 1
+RETURN 'Project' AS label, 'project_id' AS property, identity, duplicates
+UNION ALL
+MATCH (r:Repository)
+WITH r.name AS identity, count(*) AS duplicates
+WHERE identity IS NOT NULL AND duplicates > 1
+RETURN 'Repository' AS label, 'name' AS property, identity, duplicates
+"""
+
 
 async def _ensure_project_repository_graph(
     *,
@@ -1115,43 +1180,45 @@ async def _ensure_project_repository_graph(
     provider = normalize_graph_provider(getattr(args, "graph_provider", None))
     repo_name = f"{project_name}/{os.path.basename(root)}"
 
-    if provider == GraphProvider.NEO4J:
-        setup_script = os.path.join(_ROOT_DIR, "scripts", "setup_graph_project.py")
-        if not os.path.isfile(setup_script):
-            return
-        setup_cmd = [
-            sys.executable,
-            setup_script,
-            "--project-id",
-            project_id,
-            "--project-name",
-            project_name,
-            "--source-path",
-            root,
-            "--repo-name",
-            repo_name,
-            "--neo4j-uri",
-            args.neo4j_uri,
-            "--neo4j-user",
-            args.neo4j_user,
-            "--neo4j-password",
-            args.neo4j_password,
-            "--neo4j-db",
-            args.neo4j_db,
-        ]
-        subprocess.run(setup_cmd, cwd=_ROOT_DIR, check=True, capture_output=True, text=True)
-        return
-
     driver = await create_graph_driver_from_args(args)
-    resolved_graph = getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None)
+    resolved_graph = (
+        getattr(args, "neo4j_db", None)
+        if provider == GraphProvider.NEO4J
+        else getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None)
+    )
     try:
-        await driver.create_indexes(
-            [
-                {"label": "Project", "property": "project_id"},
-                {"label": "Repository", "property": "name"},
-            ],
+        if provider == GraphProvider.NEO4J:
+            duplicates, _, _ = await driver.execute_query(
+                _NEO4J_DUPLICATE_TOPOLOGY_AUDIT,
+                database=resolved_graph,
+            )
+            if duplicates:
+                detail = ", ".join(
+                    f"{row.get('label')}.{row.get('property')}={row.get('identity')!r} "
+                    f"count={row.get('duplicates')}"
+                    for row in duplicates[:20]
+                )
+                raise RuntimeError(
+                    "duplicate graph identities block uniqueness constraints; "
+                    f"repair explicitly before sync: {detail}"
+                )
+            for statement in _NEO4J_PROJECT_REPOSITORY_CONSTRAINTS:
+                await driver.execute_query(statement, database=resolved_graph)
+        schema_result = await ensure_schema(
+            driver,
+            CODE_GRAPH_SCHEMA,
             database=resolved_graph,
         )
+        if getattr(args, "verbose", False):
+            print(
+                "[schema] ready manifest=%s fingerprint=%s indexes=%d verified=%d"
+                % (
+                    schema_result.manifest,
+                    schema_result.fingerprint,
+                    schema_result.required_count,
+                    schema_result.verified_count,
+                )
+            )
         await driver.execute_query(
             _PROJECT_REPOSITORY_SETUP_QUERY,
             {
@@ -1274,7 +1341,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     project_name = args.project_name or project_id
     control_cache_dir = resolve_sync_cache_dir(args.cache_dir, root)
     scope_id = scan_scope_id(project_id, root)
-    graph_ready = prepare_graph_args(args)
+    graph_ready = False if getattr(args, "no_graph", False) else prepare_graph_args(args)
     summary_path = args.summary_path or _default_summary_path(cache_dir=control_cache_dir, project_id=project_id, root=root)
     summary: Dict[str, object] = {
         "project_id": project_id,
@@ -1316,7 +1383,16 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "repositories": [],
         "coverage_warnings": [],
         "reconciliation": {"requested": bool(args.reconcile), "performed": False},
+        "parse_quality": {
+            "policy": args.parse_quality,
+            "artifact": "",
+            "artifacts": [],
+            "aggregates": {},
+        },
     }
+    parse_quality_artifact_dir: Optional[str] = None
+    parse_quality_manifest_path: Optional[str] = None
+    parse_quality_manifest_entries: List[Dict[str, object]] = []
     if args.verbose and args.ignore_cache:
         print("[cache] ignore-cache enabled: analyzers will run with isolated cache scope")
 
@@ -1434,10 +1510,10 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 )
                 if args.verbose:
                     print("[setup] Project+Repository nodes ensured")
-            except subprocess.CalledProcessError as exc:
-                print(f"[setup] WARNING: setup_graph_project failed (non-fatal): {exc.stderr}", file=sys.stderr)
             except Exception as exc:
-                print(f"[setup] WARNING: Project+Repository setup failed (non-fatal): {exc}", file=sys.stderr)
+                raise RuntimeError(
+                    f"graph schema/project setup failed before streaming: {exc}"
+                ) from exc
 
         if args.strict:
             missing: List[str] = []
@@ -1857,6 +1933,19 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         message_qdrant_collection = args.message_qdrant_collection or _message_collection_name(
             project_id, root, project_code=args.project_code
         )
+        parse_quality_artifact_dir = os.path.join(
+            safe_cache_root(
+                control_cache_dir,
+                "parse_quality_artifacts",
+                project_root=root,
+            ),
+            scope_id,
+            artifact_token,
+        )
+        parse_quality_manifest_path = os.path.join(parse_quality_artifact_dir, "manifest.json")
+        parse_quality_summary = summary["parse_quality"]
+        assert isinstance(parse_quality_summary, dict)
+        parse_quality_summary["artifact"] = parse_quality_manifest_path
         summary["services"]["message_qdrant_collection"] = message_qdrant_collection
         env = _build_analyzer_env(args)
         executed_parsers: List[str] = []
@@ -1910,6 +1999,15 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     message_qdrant_collection if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS else ""
                 ),
             }
+            parse_quality_report_path = (
+                os.path.join(parse_quality_artifact_dir, "cplus.json")
+                if parser == "cplus"
+                and args.parse_quality != "off"
+                and parse_quality_artifact_dir
+                else None
+            )
+            if parse_quality_report_path:
+                parser_info["parse_quality_artifact"] = parse_quality_report_path
             parser_started = time.time()
             parser_summaries.append(parser_info)
 
@@ -1957,6 +2055,13 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     embed_device=args.embed_device,
                     embed_batch_size=args.embed_batch_size,
                     max_embed_chars=args.max_embed_chars,
+                    parse_quality=args.parse_quality,
+                    parse_quality_report=parse_quality_report_path,
+                    parse_quality_max_files=args.parse_quality_max_files,
+                    parse_quality_wall_seconds=args.parse_quality_wall_seconds,
+                    parse_quality_workers=args.parse_quality_workers,
+                    parse_quality_max_records=args.parse_quality_max_records,
+                    parse_quality_max_bytes=args.parse_quality_max_bytes,
                 )
             else:
                 reason = "requested" if full_scan else "fallback"
@@ -1982,6 +2087,13 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     embed_device=args.embed_device,
                     embed_batch_size=args.embed_batch_size,
                     max_embed_chars=args.max_embed_chars,
+                    parse_quality=args.parse_quality,
+                    parse_quality_report=parse_quality_report_path,
+                    parse_quality_max_files=args.parse_quality_max_files,
+                    parse_quality_wall_seconds=args.parse_quality_wall_seconds,
+                    parse_quality_workers=args.parse_quality_workers,
+                    parse_quality_max_records=args.parse_quality_max_records,
+                    parse_quality_max_bytes=args.parse_quality_max_bytes,
                 )
             parser_info["command"] = cmd
             try:
@@ -1999,6 +2111,27 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     parser_info["vector_count"] = reported_vector_count
                 if parser_info["vector_status"] == "pending":
                     parser_info["vector_status"] = "success"
+                if parse_quality_report_path and os.path.isfile(parse_quality_report_path):
+                    try:
+                        with open(parse_quality_report_path, "r", encoding="utf-8") as handle:
+                            quality_payload = json.load(handle)
+                        quality_aggregates = dict(quality_payload.get("aggregates") or {})
+                        parser_info["parse_quality_aggregates"] = quality_aggregates
+                        parse_quality_summary = summary["parse_quality"]
+                        assert isinstance(parse_quality_summary, dict)
+                        parse_quality_summary["aggregates"] = quality_aggregates
+                        artifacts = parse_quality_summary["artifacts"]
+                        assert isinstance(artifacts, list)
+                        artifacts.append(parse_quality_report_path)
+                        parse_quality_manifest_entries.append(
+                            {
+                                "parser": parser,
+                                "path": os.path.basename(parse_quality_report_path),
+                                "aggregates": quality_aggregates,
+                            }
+                        )
+                    except (OSError, ValueError, TypeError) as exc:
+                        parser_info["parse_quality_error"] = str(exc)
                 executed_parsers.append(parser)
             finally:
                 parser_info["finished_at"] = _now_iso()
@@ -2277,6 +2410,21 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 print(f"[state] lock released: {lock_path}")
         summary["finished_at"] = _now_iso()
         summary["duration_seconds"] = round(time.time() - started_monotonic, 6)
+        if parse_quality_manifest_path and parse_quality_artifact_dir:
+            try:
+                atomic_write_json(
+                    parse_quality_manifest_path,
+                    {
+                        "schema_version": "1",
+                        "policy": args.parse_quality,
+                        "artifacts": parse_quality_manifest_entries,
+                    },
+                    allowed_root=parse_quality_artifact_dir,
+                    max_bytes=1024 * 1024,
+                )
+                print(f"[parse-quality] run artifact: {parse_quality_manifest_path}", flush=True)
+            except Exception as exc:  # pragma: no cover - filesystem edge cases
+                print(f"[parse-quality] failed writing run artifact: {exc}", file=sys.stderr)
         try:
             _write_summary(summary_path, summary)
             if args.verbose:
@@ -2355,6 +2503,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASS"))
     parser.add_argument("--neo4j-db", default=os.environ.get("NEO4J_DB"))
     add_graph_provider_args(parser)
+    parser.add_argument(
+        "--no-graph",
+        action="store_true",
+        help="Disable graph setup and graph writes for this sync invocation.",
+    )
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_CODE_PATH"))
     parser.add_argument(
         "--embed-model",
@@ -2392,8 +2545,31 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Scan all files from scratch (ignore git state / last_good_sha). Equivalent to diffing against an empty tree.",
     )
+    parser.add_argument(
+        "--parse-quality",
+        choices=("off", "report", "repair"),
+        default=os.environ.get("PARSE_QUALITY_POLICY", "report"),
+    )
+    parser.add_argument("--parse-quality-max-files", type=int, default=500)
+    parser.add_argument("--parse-quality-wall-seconds", type=int, default=900)
+    parser.add_argument(
+        "--parse-quality-workers",
+        type=int,
+        default=max(1, min(4, (os.cpu_count() or 2) // 2)),
+    )
+    parser.add_argument("--parse-quality-max-records", type=int, default=10000)
+    parser.add_argument("--parse-quality-max-bytes", type=int, default=8 * 1024 * 1024)
     parser.add_argument("--verbose", action="store_true")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if min(
+        args.parse_quality_max_files,
+        args.parse_quality_wall_seconds,
+        args.parse_quality_workers,
+        args.parse_quality_max_records,
+        args.parse_quality_max_bytes,
+    ) <= 0:
+        parser.error("parse-quality limits must be positive")
+    return args
 
 
 async def main(argv: Optional[Sequence[str]] = None) -> int:

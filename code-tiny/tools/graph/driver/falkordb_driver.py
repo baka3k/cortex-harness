@@ -20,7 +20,8 @@ import asyncio
 import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+import threading
+from concurrent.futures import Future
 import warnings
 from collections.abc import Mapping
 from datetime import datetime, timezone
@@ -35,6 +36,10 @@ from cortex_harness.storage.admission import BoundedLane, LaneLimits
 
 
 logger = logging.getLogger(__name__)
+
+
+class AmbiguousWriteTimeoutError(TimeoutError):
+    """A timed-out mutation may have committed and must be reconciled."""
 
 
 # Neo4j 5.x subquery-with-importing-variable: CALL (var) { ... }.
@@ -77,6 +82,13 @@ def _is_retryable_read(query: str) -> bool:
     first_token = query.lstrip().split(None, 1)[0].upper() if query.strip() else ""
     return first_token in {"MATCH", "OPTIONAL", "UNWIND", "WITH", "RETURN", "SHOW", "EXPLAIN", "PROFILE"} and not bool(
         _MUTATING_CYPHER_RE.search(query)
+    )
+
+
+def _is_timeout_error(exc: BaseException) -> bool:
+    message = str(exc).casefold()
+    return isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or any(
+        token in message for token in ("timed out", "timeout", "query exceeded")
     )
 
 
@@ -220,9 +232,16 @@ class FalkorDBDriver(Neo4jDriver):
         self._query_lane = BoundedLane(
             "falkordb-query", LaneLimits(concurrency=1, max_queue_items=32)
         )
-        self._query_executor = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="cortex-falkordb-query"
-        )
+        self._inflight_native_futures: set[Future[Any]] = set()
+        self._native_future_lock = threading.Lock()
+        self._deferred_close = False
+        self._resources_closed = False
+        timeout_value = kwargs.pop("query_timeout_ms", None)
+        if timeout_value in {None, ""}:
+            timeout_value = os.getenv("FALKORDB_QUERY_TIMEOUT_MS", "120000")
+        self._query_timeout_ms = int(timeout_value)
+        if self._query_timeout_ms <= 0:
+            raise ValueError("FALKORDB_QUERY_TIMEOUT_MS must be a positive integer")
 
         # Network-style fields are deprecated. We still accept them so call
         # sites keep compiling for one release, but log + warn, and ignore
@@ -330,9 +349,11 @@ class FalkorDBDriver(Neo4jDriver):
             "FalkorDBDriver does not expose Neo4j-style sessions; use execute_query instead."
         )
 
-    def close(self) -> None:
+    def _close_resources(self) -> None:
+        if self._resources_closed:
+            return
+        self._resources_closed = True
         try:
-            self._query_executor.shutdown(wait=True, cancel_futures=True)
             if self._client:
                 try:
                     self._client.close()
@@ -344,6 +365,59 @@ class FalkorDBDriver(Neo4jDriver):
                 self._storage_lease.release()
                 self._storage_lease = None
 
+    def _native_future_finished(self, future: Future[Any]) -> None:
+        with self._native_future_lock:
+            self._inflight_native_futures.discard(future)
+            should_close = self._deferred_close and not self._inflight_native_futures
+        if should_close:
+            self._close_resources()
+
+    async def _run_in_executor(self, operation: Any, *args: Any) -> Any:
+        """Run one native call without creating an interpreter-joined worker.
+
+        ``ThreadPoolExecutor`` workers are joined by CPython during process
+        shutdown even after ``shutdown(wait=False)``. A wedged embedded query
+        could therefore defeat every asyncio deadline at the final exit. The
+        bounded query lane already enforces one active call, so a dedicated
+        daemon thread gives the same isolation without extending process life.
+        """
+        native_future: Future[Any] = Future()
+        native_future.set_running_or_notify_cancel()
+        with self._native_future_lock:
+            self._inflight_native_futures.add(native_future)
+        native_future.add_done_callback(self._native_future_finished)
+
+        def invoke() -> None:
+            try:
+                result = operation(*args)
+            except BaseException as exc:
+                native_future.set_exception(exc)
+            else:
+                native_future.set_result(result)
+
+        thread = threading.Thread(
+            target=invoke,
+            name="cortex-falkordb-query",
+            daemon=True,
+        )
+        thread.start()
+        wrapped = asyncio.wrap_future(native_future)
+        return await asyncio.shield(wrapped)
+
+    def close(self) -> None:
+        with self._native_future_lock:
+            pending = [
+                future for future in self._inflight_native_futures if not future.done()
+            ]
+        if pending:
+            self._deferred_close = True
+            logger.warning(
+                "FalkorDB close deferred while %d timed/cancelled operation(s) reconcile",
+                len(pending),
+            )
+            return
+        self._close_resources()
+
     async def execute_query(
         self,
         query: str,
@@ -351,8 +425,8 @@ class FalkorDBDriver(Neo4jDriver):
         database: Optional[str] = None,
     ) -> Tuple[List[Dict[str, Any]], List[str], Any]:
         async def run() -> Tuple[List[Dict[str, Any]], List[str], Any]:
-            return await asyncio.get_running_loop().run_in_executor(
-                self._query_executor, self.execute_query_sync, query, parameters, database
+            return await self._run_in_executor(
+                self.execute_query_sync, query, parameters, database
             )
 
         return await self._query_lane.run(run)
@@ -372,9 +446,18 @@ class FalkorDBDriver(Neo4jDriver):
         attempts = 2 if _is_retryable_read(query) else 1
         for attempt in range(attempts):
             try:
-                result = graph.query(query, params=params)
+                result = graph.query(
+                    query,
+                    params=params,
+                    timeout=self._query_timeout_ms,
+                )
                 break
             except Exception as exc:
+                if _is_timeout_error(exc) and not _is_retryable_read(query):
+                    raise AmbiguousWriteTimeoutError(
+                        "FalkorDB mutation timed out; commit outcome is ambiguous and "
+                        "must be reconciled before retry"
+                    ) from exc
                 if attempt == attempts - 1:
                     raise
                 logger.warning("FalkorDB query failed (attempt 1), retrying: %s", exc)
@@ -401,6 +484,13 @@ class FalkorDBDriver(Neo4jDriver):
         database: Optional[str] = None,
     ) -> None:
         graph = self._graph_for(database)
+
+        async def run_native(operation: Any) -> None:
+            async def run() -> None:
+                await self._run_in_executor(operation)
+
+            await self._query_lane.run(run)
+
         for idx in indexes:
             label = idx["label"]
             prop = idx["property"]
@@ -408,9 +498,17 @@ class FalkorDBDriver(Neo4jDriver):
             idx_type = idx.get("type", "range")
             try:
                 if idx_type == "fulltext":
-                    graph.create_node_fulltext_index(label, *props)
+                    await run_native(
+                        lambda graph=graph, label=label, props=props: graph.create_node_fulltext_index(
+                            label, *props
+                        )
+                    )
                 else:
-                    graph.create_node_range_index(label, *props)
+                    await run_native(
+                        lambda graph=graph, label=label, props=props: graph.create_node_range_index(
+                            label, *props
+                        )
+                    )
                 logger.info("Created FalkorDB %s index on %s(%s)", idx_type, label, ", ".join(props))
             except Exception as exc:
                 if "already indexed" in str(exc).lower():
@@ -421,13 +519,68 @@ class FalkorDBDriver(Neo4jDriver):
                         ", ".join(props),
                     )
                 else:
-                    logger.warning(
-                        "Failed to create FalkorDB %s index on %s(%s): %s",
-                        idx_type,
-                        label,
-                        ", ".join(props),
-                        exc,
+                    raise RuntimeError(
+                        "Failed to create FalkorDB "
+                        f"{idx_type} index on {label}({', '.join(props)}): {exc}"
+                    ) from exc
+
+    async def inspect_indexes(
+        self,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return FalkorDB index metadata, including operational status."""
+
+        records, _, _ = await self.execute_query(
+            "CALL db.indexes()",
+            database=database,
+        )
+        normalized: List[Dict[str, Any]] = []
+        for record in records:
+            label_value = record.get("label", record.get("labelsOrTypes", ""))
+            if isinstance(label_value, (list, tuple)):
+                label_value = label_value[0] if label_value else ""
+            properties_value = record.get("properties", record.get("property", [])) or []
+            properties = (
+                [properties_value]
+                if isinstance(properties_value, str)
+                else list(properties_value)
+            )
+            type_map = record.get("types") or {}
+            if not properties and isinstance(type_map, Mapping):
+                properties = [str(item) for item in type_map]
+            common_type = str(record.get("index_type", record.get("type", ""))).casefold()
+            entity_type = str(
+                record.get("entity_type", record.get("entitytype", "node")) or "node"
+            ).casefold()
+            status = str(record.get("status", record.get("state", "")) or "").upper()
+
+            # FalkorDB reports all indexed attributes for a label in one row.
+            # They are independent single-property range indexes, not one
+            # composite index, so expose one normalized record per property.
+            for prop in properties:
+                index_types = [common_type] if common_type else []
+                if not index_types and isinstance(type_map, Mapping):
+                    values = type_map.get(prop, ())
+                    index_types = sorted({
+                        str(item).casefold()
+                        for item in (
+                            values if isinstance(values, (list, tuple, set)) else [values]
+                        )
+                        if item
+                    })
+                for index_type in index_types or [""]:
+                    if index_type == "btree":
+                        index_type = "range"
+                    normalized.append(
+                        {
+                            "label": str(label_value or ""),
+                            "properties": [str(prop)],
+                            "index_type": index_type,
+                            "entity_type": entity_type,
+                            "status": status,
+                        }
                     )
+        return normalized
 
     async def list_databases(self) -> List[str]:
         try:

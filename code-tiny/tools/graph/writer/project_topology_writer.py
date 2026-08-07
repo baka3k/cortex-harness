@@ -7,6 +7,7 @@ from typing import Any, Dict, Mapping, Optional, Sequence
 
 from tools.common.project_scope import project_id_lookup_key
 from tools.graph.core.base import GraphDriver
+from tools.graph.schema.manifest import validate_cypher_identifier
 from tools.project_topology.models import TopologyAnalysisResult, stable_fact_id
 
 
@@ -65,15 +66,18 @@ SET dependency += row, dependency.topology_owned = true
 RETURN count(dependency) AS count
 """
 
-_DEPENDENCY_EDGE_QUERY = """
-UNWIND $rows AS row
-MATCH (source:ProjectModule {id: row.source_id})
-MATCH (target {id: row.target_id})
-WHERE target:ProjectModule OR target:Dependency
-MERGE (source)-[rel:DEPENDS_ON {id: row.id}]->(target)
-SET rel += row, rel.topology_owner = 'project_topology'
-RETURN count(rel) AS count
-"""
+def _dependency_edge_query(target_label: str) -> str:
+    label = validate_cypher_identifier(target_label, kind="dependency target label")
+    if label not in {"ProjectModule", "Dependency"}:
+        raise ValueError(f"unsupported dependency target label: {label}")
+    return f"""
+    UNWIND $rows AS row
+    MATCH (source:ProjectModule {{id: row.source_id}})
+    MATCH (target:{label} {{id: row.target_id}})
+    MERGE (source)-[rel:DEPENDS_ON {{id: row.id}}]->(target)
+    SET rel += row, rel.topology_owner = 'project_topology'
+    RETURN count(rel) AS count
+    """
 
 _ENDPOINT_QUERY = """
 UNWIND $rows AS row
@@ -288,6 +292,9 @@ class ProjectTopologyWriter:
         return total
 
     async def write(self, result: TopologyAnalysisResult) -> Dict[str, int]:
+        ensure_schema = getattr(self.driver, "ensure_schema", None)
+        if callable(ensure_schema):
+            await ensure_schema(database=self.database)
         project_key = project_id_lookup_key(result.project_id)
         if project_key is None:
             raise ValueError("project_id is required")
@@ -346,7 +353,17 @@ class ProjectTopologyWriter:
                     }
                 )
             row = dependency.to_dict()
-            row.update({"source_id": source_id, "target_id": target_id})
+            row.update(
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "target_label": (
+                        "ProjectModule"
+                        if dependency.internal and dependency.target_module_path in module_ids
+                        else "Dependency"
+                    ),
+                }
+            )
             dependency_rows.append(row)
 
         endpoint_rows = []
@@ -430,6 +447,15 @@ class ProjectTopologyWriter:
             row for row in module_rows if "gradle" in row.get("build_systems", ())
         ]
 
+        dependency_count = 0
+        dependency_rows_by_label: Dict[str, list[Dict[str, Any]]] = {}
+        for row in dependency_rows:
+            dependency_rows_by_label.setdefault(str(row["target_label"]), []).append(row)
+        for target_label, rows in sorted(dependency_rows_by_label.items()):
+            dependency_count += await self._write_batches(
+                _dependency_edge_query(target_label), rows
+            )
+
         return {
             "modules": await self._write_batches(_MODULE_QUERY, module_rows),
             "gradle_compatibility_labels": await self._write_batches(
@@ -448,9 +474,7 @@ class ProjectTopologyWriter:
                     key=lambda item: item["id"],
                 ),
             ),
-            "dependencies": await self._write_batches(
-                _DEPENDENCY_EDGE_QUERY, dependency_rows
-            ),
+            "dependencies": dependency_count,
             "endpoints": await self._write_batches(_ENDPOINT_QUERY, endpoint_rows),
             "grpc_services": await self._write_batches(
                 _GRPC_SERVICE_QUERY, grpc_service_rows

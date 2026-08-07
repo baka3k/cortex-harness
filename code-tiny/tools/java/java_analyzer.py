@@ -1966,7 +1966,14 @@ async def build_call_graph(
             )
             file_id = file_def["file_path"]
             all_relations.append(
-                {"source_id": project_id, "target_id": file_id, "rel_type": "CONTAINS", "properties": {}}
+                {
+                    "source_id": project_id,
+                    "source_label": "Project",
+                    "target_id": file_id,
+                    "target_label": "File",
+                    "rel_type": "CONTAINS",
+                    "properties": {},
+                }
             )
             package_def = payload.get("package_def")
             if package_def:
@@ -2019,13 +2026,13 @@ async def build_call_graph(
                         }
                     )
                 all_relations.append(
-                    {"source_id": pkg_name, "target_id": file_id, "rel_type": "CONTAINS", "properties": {}}
+                    {"source_id": pkg_name, "source_label": "Package", "target_id": file_id, "target_label": "File", "rel_type": "CONTAINS", "properties": {}}
                 )
                 all_relations.append(
-                    {"source_id": namespace_id, "target_id": file_id, "rel_type": "CONTAINS", "properties": {}}
+                    {"source_id": namespace_id, "source_label": "Namespace", "target_id": file_id, "target_label": "File", "rel_type": "CONTAINS", "properties": {}}
                 )
                 all_relations.append(
-                    {"source_id": pkg_name, "target_id": namespace_id, "rel_type": "CONTAINS", "properties": {}}
+                    {"source_id": pkg_name, "source_label": "Package", "target_id": namespace_id, "target_label": "Namespace", "rel_type": "CONTAINS", "properties": {}}
                 )
             for class_def in payload["classes"]:
                 all_classes.append(
@@ -2056,7 +2063,7 @@ async def build_call_graph(
                 )
                 if class_def.get("file_path"):
                     all_relations.append(
-                        {"source_id": file_id, "target_id": class_def["symbol_id"], "rel_type": "CONTAINS", "properties": {}}
+                        {"source_id": file_id, "source_label": "File", "target_id": class_def["symbol_id"], "target_label": "Class", "rel_type": "CONTAINS", "properties": {}}
                     )
             for func_type in payload["function_types"]:
                 all_function_types.append(
@@ -2106,12 +2113,12 @@ async def build_call_graph(
                     }
                 )
                 all_relations.append(
-                    {"source_id": file_id, "target_id": func["symbol_id"], "rel_type": "CONTAINS", "properties": {}}
+                    {"source_id": file_id, "source_label": "File", "target_id": func["symbol_id"], "target_label": "Function", "rel_type": "CONTAINS", "properties": {}}
                 )
                 if func.get("class_name"):
                     class_id = _class_id(func.get("package_name"), func["class_name"])
                     all_relations.append(
-                        {"source_id": class_id, "target_id": func["symbol_id"], "rel_type": "DECLARES", "properties": {}}
+                        {"source_id": class_id, "source_label": "Class", "target_id": func["symbol_id"], "target_label": "Function", "rel_type": "DECLARES", "properties": {}}
                     )
             for edge in payload["type_edges"]:
                 target_name = edge["target_name"]
@@ -2131,7 +2138,9 @@ async def build_call_graph(
                     all_relations.append(
                         {
                             "source_id": edge["source_id"],
+                            "source_label": "Class",
                             "target_id": target_id,
+                            "target_label": "Class",
                             "rel_type": edge["rel_type"],
                             "properties": {},
                         }
@@ -2141,7 +2150,9 @@ async def build_call_graph(
                     all_relations.append(
                         {
                             "source_id": rel["source_id"],
+                            "source_label": rel["source_label"],
                             "target_id": rel["target_id"],
+                            "target_label": rel["target_label"],
                             "rel_type": rel["rel_type"],
                             "properties": rel["properties"],
                         }

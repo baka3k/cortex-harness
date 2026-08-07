@@ -6,6 +6,13 @@ Handles operations for document and paragraph nodes in the knowledge graph.
 
 from typing import Any, Dict, List, Optional
 from tools.graph.core.base import GraphDriver
+from tools.graph.writer.query_contract import RelationshipGroup
+
+
+async def _ensure_schema(driver: GraphDriver, database: Optional[str]) -> None:
+    ensure = getattr(driver, "ensure_schema", None)
+    if callable(ensure):
+        await ensure(database=database)
 
 
 class DocumentNodeOperations:
@@ -44,6 +51,7 @@ class DocumentNodeOperations:
         RETURN d.id as id
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             document_data,
@@ -80,6 +88,7 @@ class DocumentNodeOperations:
         RETURN p.id as id
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             paragraph_data,
@@ -114,6 +123,7 @@ class DocumentNodeOperations:
         RETURN r
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             {"document_id": document_id, "paragraph_id": paragraph_id},
@@ -130,6 +140,8 @@ class DocumentNodeOperations:
         relationship_type: str = "DOCUMENTED_BY",
         metadata: Optional[Dict[str, Any]] = None,
         database: Optional[str] = None,
+        *,
+        code_label: str = "Function",
     ) -> bool:
         """
         Link code node to documentation
@@ -145,15 +157,21 @@ class DocumentNodeOperations:
         Returns:
             True if relationship created
         """
+        from tools.graph.schema.manifest import validate_cypher_identifier
+
+        source_label = validate_cypher_identifier(code_label, kind="code label")
+        rel_type = validate_cypher_identifier(relationship_type, kind="relationship type")
+        RelationshipGroup(source_label, "Document", rel_type)
         query = f"""
-        MATCH (code {{id: $code_id}})
+        MATCH (code:{source_label} {{id: $code_id}})
         MATCH (doc:Document {{id: $document_id}})
-        MERGE (code)-[r:{relationship_type}]->(doc)
+        MERGE (code)-[r:{rel_type}]->(doc)
         """
         
         if metadata:
             for key in metadata.keys():
-                query += f"\nSET r.{key} = ${key}"
+                property_name = validate_cypher_identifier(str(key), kind="property")
+                query += f"\nSET r.{property_name} = ${property_name}"
         
         query += "\nRETURN r"
         
@@ -163,6 +181,7 @@ class DocumentNodeOperations:
             **(metadata or {})
         }
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(query, params, database)
         return len(records) > 0
     

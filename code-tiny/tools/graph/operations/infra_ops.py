@@ -7,6 +7,13 @@ graph algorithms (Louvain clustering, community detection, etc.)
 
 from typing import Any, Dict, List, Optional
 from tools.graph.core.base import GraphDriver
+from tools.graph.writer.query_contract import RelationshipGroup
+
+
+async def _ensure_schema(driver: GraphDriver, database: Optional[str]) -> None:
+    ensure = getattr(driver, "ensure_schema", None)
+    if callable(ensure):
+        await ensure(database=database)
 
 
 class InfraNodeOperations:
@@ -102,6 +109,7 @@ class InfraNodeOperations:
         RETURN i.id as id
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             infra_data,
@@ -117,6 +125,8 @@ class InfraNodeOperations:
         infra_id: str,
         relationship_type: str = "BELONGS_TO",
         database: Optional[str] = None,
+        *,
+        node_label: str = "Function",
     ) -> bool:
         """
         Link a code node to its infrastructure container
@@ -131,13 +141,19 @@ class InfraNodeOperations:
         Returns:
             True if relationship created
         """
+        from tools.graph.schema.manifest import validate_cypher_identifier
+
+        source_label = validate_cypher_identifier(node_label, kind="node label")
+        rel_type = validate_cypher_identifier(relationship_type, kind="relationship type")
+        RelationshipGroup(source_label, "InfraNode", rel_type)
         query = f"""
-        MATCH (node {{id: $node_id}})
+        MATCH (node:{source_label} {{id: $node_id}})
         MATCH (infra:InfraNode {{id: $infra_id}})
-        MERGE (node)-[r:{relationship_type}]->(infra)
+        MERGE (node)-[r:{rel_type}]->(infra)
         RETURN r
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             {"node_id": node_id, "infra_id": infra_id},
@@ -175,6 +191,7 @@ class InfraNodeOperations:
         RETURN i.id as id
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             {

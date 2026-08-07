@@ -100,6 +100,14 @@ def apply_project_registry_defaults(args: Namespace) -> Namespace:
 def prepare_graph_args(args: Namespace) -> bool:
     """Normalize selected provider into the legacy args consumed by scan scripts."""
 
+    if os.environ.get("CORTEX_DISABLE_GRAPH", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return False
+
     # Apply registry defaults before any other preparation. This lets
     # ``--project-id`` alone determine the target graph and collection
     # without requiring the caller to spell them out.

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from tools.graph.core.base import GraphDriver
 
@@ -31,6 +31,7 @@ MYBATIS_NODE_LABELS = frozenset({
     "MyBatisExtension",
     "MyBatisCache",
 })
+MYBATIS_RELATIONSHIP_NODE_LABELS = MYBATIS_NODE_LABELS | frozenset({"Class", "Function"})
 
 MYBATIS_RELATIONSHIP_TYPES = frozenset({
     "SEMANTIC_OF",
@@ -66,10 +67,21 @@ class MyBatisFactWriter:
         self.database = database
         self.batch_size = batch_size
         self.verbose = verbose
+        self._schema_ready = False
+
+    async def _ensure_schema(self) -> None:
+        if self._schema_ready:
+            return
+        ensure = getattr(self.driver, "ensure_schema", None)
+        if callable(ensure):
+            await ensure(database=self.database)
+        self._schema_ready = True
 
     async def write_fact_nodes(self, rows: List[Dict[str, Any]]) -> int:
         if not rows:
             return 0
+        _validate_rows(rows)
+        await self._ensure_schema()
         total = 0
         for offset in range(0, len(rows), self.batch_size):
             batch = rows[offset : offset + self.batch_size]
@@ -91,26 +103,36 @@ class MyBatisFactWriter:
     async def write_relationships(self, rows: List[Dict[str, Any]]) -> int:
         if not rows:
             return 0
+        _validate_relationship_rows(rows)
+        await self._ensure_schema()
         total = 0
         for offset in range(0, len(rows), self.batch_size):
             batch = rows[offset : offset + self.batch_size]
             _validate_relationship_rows(batch)
-            by_type: Dict[str, List[Dict[str, Any]]] = {}
+            grouped: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
             for row in batch:
-                by_type.setdefault(str(row["type"]), []).append(row)
-            for rel_type, rel_rows in by_type.items():
+                key = (str(row["from_label"]), str(row["type"]), str(row["to_label"]))
+                grouped.setdefault(key, []).append(row)
+            for (from_label, rel_type, to_label), rel_rows in sorted(grouped.items()):
                 records, _, _ = await self.driver.execute_query(
-                    _relationship_query(rel_type),
+                    _relationship_query(from_label, rel_type, to_label),
                     {"rows": rel_rows},
                     self.database,
                 )
-                total += int(records[0].get("count", len(rel_rows))) if records else len(rel_rows)
+                count = int(records[0].get("count", 0)) if records else 0
+                if count != len(rel_rows):
+                    raise RuntimeError(
+                        "MyBatis relationship count mismatch "
+                        f"{from_label}-[{rel_type}]->{to_label}: {count}/{len(rel_rows)}"
+                    )
+                total += count
         return total
 
     async def cleanup_files(self, project_id: str, file_paths: List[str]) -> Dict[str, int]:
         paths = _normalize_files(file_paths)
         if not paths:
             return {"deleted_nodes": 0}
+        await self._ensure_schema()
         query = """
         MATCH (n)
         WHERE n.project_id = $project_id
@@ -152,6 +174,12 @@ def _validate_relationship_rows(rows: List[Dict[str, Any]]) -> None:
         rel_type = str(row.get("type") or "")
         if rel_type not in MYBATIS_RELATIONSHIP_TYPES:
             raise ValueError(f"Unsupported MyBatis relationship type: {rel_type}")
+        from_label = str(row.get("from_label") or "")
+        to_label = str(row.get("to_label") or "")
+        if from_label not in MYBATIS_RELATIONSHIP_NODE_LABELS:
+            raise ValueError(f"Unsupported MyBatis relationship source label: {from_label}")
+        if to_label not in MYBATIS_RELATIONSHIP_NODE_LABELS:
+            raise ValueError(f"Unsupported MyBatis relationship target label: {to_label}")
         if not row.get("from_id") or not row.get("to_id"):
             raise ValueError("MyBatis relationship rows require from_id and to_id")
         if not row.get("project_id"):
@@ -170,11 +198,11 @@ def _node_query(label: str) -> str:
     """
 
 
-def _relationship_query(rel_type: str) -> str:
+def _relationship_query(from_label: str, rel_type: str, to_label: str) -> str:
     return f"""
     UNWIND $rows AS row
-    MATCH (a {{id: row.from_id}})
-    MATCH (b {{id: row.to_id}})
+    MATCH (a:{from_label} {{id: row.from_id}})
+    MATCH (b:{to_label} {{id: row.to_id}})
     WHERE a.project_id = row.project_id
       AND b.project_id = row.project_id
     MERGE (a)-[r:{rel_type}]->(b)
@@ -198,4 +226,3 @@ def _normalize_files(paths: List[str]) -> List[str]:
         seen.add(normalized)
         ordered.append(normalized)
     return ordered
-

@@ -101,7 +101,9 @@ class SpringFact:
 @dataclass(frozen=True)
 class SpringRelationship:
     type: str
+    from_label: str
     from_id: str
+    to_label: str
     to_id: str
     project_id: str
     confidence: float = 1.0
@@ -122,7 +124,9 @@ class SpringRelationship:
         props.update(self.properties)
         return {
             "type": self.type,
+            "from_label": self.from_label,
             "from_id": self.from_id,
+            "to_label": self.to_label,
             "to_id": self.to_id,
             "project_id": self.project_id,
             "confidence": self.confidence,

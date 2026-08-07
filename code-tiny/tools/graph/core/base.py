@@ -57,6 +57,24 @@ class GraphDriver(QueryExecutor):
     
     Provides core functionality for connecting to and interacting with graph databases.
     """
+
+    async def ensure_schema(
+        self,
+        manifest: Any = None,
+        database: Optional[str] = None,
+        *,
+        timeout_seconds: float = 60.0,
+    ) -> Any:
+        """Create and verify a schema manifest before graph mutation."""
+
+        from tools.graph.schema import CODE_GRAPH_SCHEMA, ensure_schema
+
+        return await ensure_schema(
+            self,
+            manifest or CODE_GRAPH_SCHEMA,
+            database=database,
+            timeout_seconds=timeout_seconds,
+        )
     
     @property
     @abstractmethod
@@ -94,6 +112,8 @@ class GraphDriver(QueryExecutor):
         self,
         edges: List[Dict[str, Any]],
         relationship_type: str,
+        source_label: str,
+        target_label: str,
         database: Optional[str] = None,
     ) -> int:
         """
@@ -102,6 +122,8 @@ class GraphDriver(QueryExecutor):
         Args:
             edges: List of edge data (must include source_id, target_id)
             relationship_type: Type of relationship
+            source_label: Concrete source node label
+            target_label: Concrete target node label
             database: Optional database name
             
         Returns:
@@ -132,6 +154,14 @@ class GraphDriver(QueryExecutor):
             indexes: List of index definitions
             database: Optional database name
         """
+        pass
+
+    @abstractmethod
+    async def inspect_indexes(
+        self,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return normalized index metadata for schema readiness verification."""
         pass
     
     @abstractmethod

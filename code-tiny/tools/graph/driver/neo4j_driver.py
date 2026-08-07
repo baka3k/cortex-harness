@@ -21,6 +21,7 @@ from tools.common.project_scope import (
     matches_project_scope,
     prepare_project_scope_parameters,
 )
+from tools.graph.writer.query_contract import RelationshipGroup
 
 
 _FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
@@ -255,6 +256,8 @@ class Neo4jDriver(GraphDriver):
         self,
         edges: List[Dict[str, Any]],
         relationship_type: str,
+        source_label: str,
+        target_label: str,
         database: Optional[str] = None,
     ) -> int:
         """
@@ -265,11 +268,17 @@ class Neo4jDriver(GraphDriver):
         if not edges:
             return 0
         
+        from tools.graph.schema.manifest import validate_cypher_identifier
+
+        rel_type = validate_cypher_identifier(relationship_type, kind="relationship type")
+        source_node_label = validate_cypher_identifier(source_label, kind="source label")
+        target_node_label = validate_cypher_identifier(target_label, kind="target label")
+        RelationshipGroup(source_node_label, target_node_label, rel_type)
         query = f"""
         UNWIND $edges AS edge
-        MATCH (source {{id: edge.source_id}})
-        MATCH (target {{id: edge.target_id}})
-        CREATE (source)-[r:{relationship_type}]->(target)
+        MATCH (source:{source_node_label} {{id: edge.source_id}})
+        MATCH (target:{target_node_label} {{id: edge.target_id}})
+        MERGE (source)-[r:{rel_type}]->(target)
         SET r = edge.properties
         RETURN count(r) as count
         """
@@ -312,10 +321,10 @@ class Neo4jDriver(GraphDriver):
             
             if isinstance(prop, list):
                 props = ", ".join([f"n.{p}" for p in prop])
-                idx_name = f"{label}_{'_'.join(prop)}_idx"
+                idx_name = f"{label}_{'_'.join(prop)}_{idx_type}_idx"
             else:
                 props = f"n.{prop}"
-                idx_name = f"{label}_{prop}_idx"
+                idx_name = f"{label}_{prop}_{idx_type}_idx"
             
             if idx_type == "fulltext":
                 query = f"""
@@ -333,8 +342,46 @@ class Neo4jDriver(GraphDriver):
             try:
                 await self.execute_query(query, database=database)
                 logger.info(f"Created index: {idx_name}")
-            except Exception as e:
-                logger.warning(f"Failed to create index {idx_name}: {e}")
+            except Exception as exc:
+                raise RuntimeError(f"Failed to create index {idx_name}: {exc}") from exc
+
+    async def inspect_indexes(
+        self,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return Neo4j index metadata in the provider-neutral preflight shape."""
+
+        records, _, _ = await self.execute_query(
+            """
+            SHOW INDEXES
+            YIELD labelsOrTypes, properties, type, entityType, state
+            RETURN labelsOrTypes, properties, type, entityType, state
+            """,
+            database=database,
+        )
+        normalized: List[Dict[str, Any]] = []
+        for record in records:
+            labels = record.get("labelsOrTypes") or []
+            label = labels[0] if isinstance(labels, (list, tuple)) and labels else labels
+            properties_value = record.get("properties") or []
+            properties = (
+                [properties_value]
+                if isinstance(properties_value, str)
+                else list(properties_value)
+            )
+            index_type = str(record.get("type", "")).casefold()
+            if index_type == "btree":
+                index_type = "range"
+            normalized.append(
+                {
+                    "label": str(label or ""),
+                    "properties": properties,
+                    "index_type": index_type,
+                    "entity_type": str(record.get("entityType") or "node").casefold(),
+                    "status": str(record.get("state") or "").upper(),
+                }
+            )
+        return normalized
     
     async def get_node_count(
         self,

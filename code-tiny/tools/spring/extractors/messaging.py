@@ -44,7 +44,7 @@ def extract_messaging_facts(
                             concurrency=listener.args.get("concurrency") or "",
                         )
                     )
-                    relationships.append(rel("HANDLED_BY", endpoint_id, method.symbol_id, project_id, method.source, "Message listener handler"))
+                    relationships.append(rel("HANDLED_BY", "MessageEndpoint", endpoint_id, "Function", method.symbol_id, project_id, method.source, "Message listener handler"))
                     for raw_destination, destination, destination_status in destinations or [("", "", "unresolved")]:
                         dest_id = f"spring_destination::{project_id}::{protocol}::{stable_hash(destination or endpoint_id)}"
                         facts.append(
@@ -66,7 +66,9 @@ def extract_messaging_facts(
                         relationships.append(
                             rel(
                                 "CONSUMES_FROM",
+                                "MessageEndpoint",
                                 endpoint_id,
+                                "MessageDestination",
                                 dest_id,
                                 project_id,
                                 method.source,
@@ -96,7 +98,7 @@ def extract_messaging_facts(
                             scheduler=scheduled.args.get("scheduler") or "",
                         )
                     )
-                    relationships.append(rel("RUNS", task_id, method.symbol_id, project_id, method.source, "Scheduled method"))
+                    relationships.append(rel("RUNS", "ScheduledTask", task_id, "Function", method.symbol_id, project_id, method.source, "Scheduled method"))
 
                 async_ann = first_annotation(method.annotations, ASYNC_ANNOTATIONS) or first_annotation(cls.annotations, ASYNC_ANNOTATIONS)
                 if async_ann:
@@ -115,7 +117,7 @@ def extract_messaging_facts(
                             target_kind="method",
                         )
                     )
-                    relationships.append(rel("EXECUTES_ASYNC", async_id, method.symbol_id, project_id, method.source, "@Async boundary"))
+                    relationships.append(rel("EXECUTES_ASYNC", "AsyncBoundary", async_id, "Function", method.symbol_id, project_id, method.source, "@Async boundary"))
 
                 event_listener = first_annotation(method.annotations, EVENT_LISTENER_ANNOTATIONS)
                 if event_listener:
@@ -138,7 +140,7 @@ def extract_messaging_facts(
                             condition=event_listener.args.get("condition") or "",
                         )
                     )
-                    relationships.append(rel("LISTENS_TO", method.symbol_id, event_id, project_id, method.source, "Spring event listener", 1.0 if event_type else 0.6))
+                    relationships.append(rel("LISTENS_TO", "Function", method.symbol_id, "ApplicationEvent", event_id, project_id, method.source, "Spring event listener", 1.0 if event_type else 0.6))
 
                 for send_call in _template_sends(method.code):
                     protocol, destination = send_call
@@ -156,7 +158,7 @@ def extract_messaging_facts(
                             raw_value=destination,
                         )
                     )
-                    relationships.append(rel("PUBLISHES_TO", method.symbol_id, dest_id, project_id, method.source, f"{protocol} template send", 0.78))
+                    relationships.append(rel("PUBLISHES_TO", "Function", method.symbol_id, "MessageDestination", dest_id, project_id, method.source, f"{protocol} template send", 0.78))
                 for event_type in _published_events(method.code):
                     event_id = f"spring_event::{project_id}::{stable_hash(event_type)}"
                     facts.append(
@@ -172,7 +174,7 @@ def extract_messaging_facts(
                             event_type=event_type,
                         )
                     )
-                    relationships.append(rel("PUBLISHES_EVENT", method.symbol_id, event_id, project_id, method.source, "ApplicationEventPublisher.publishEvent", 0.82))
+                    relationships.append(rel("PUBLISHES_EVENT", "Function", method.symbol_id, "ApplicationEvent", event_id, project_id, method.source, "ApplicationEventPublisher.publishEvent", 0.82))
     return facts, relationships
 
 

@@ -2013,7 +2013,9 @@ async def build_call_graph(
             all_relations.append(
                 {
                     "source_id": project_id,
+                    "source_label": "Project",
                     "target_id": file_id,
+                    "target_label": "File",
                     "rel_type": "CONTAINS",
                     "properties": {},
                 }
@@ -2023,7 +2025,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": file_id,
+                        "source_label": "File",
                         "target_id": dep_file,
+                        "target_label": "File",
                         "rel_type": "DEPENDS_ON",
                         "properties": {"kind": "uses"},
                     }
@@ -2052,7 +2056,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": file_id,
+                        "source_label": "File",
                         "target_id": ns["symbol_id"],
+                        "target_label": "Namespace",
                         "rel_type": "CONTAINS",
                         "properties": {},
                     }
@@ -2082,7 +2088,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": file_id,
+                        "source_label": "File",
                         "target_id": type_def["symbol_id"],
+                        "target_label": "Type",
                         "rel_type": "CONTAINS",
                         "properties": {},
                     }
@@ -2117,7 +2125,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": file_id,
+                        "source_label": "File",
                         "target_id": func["symbol_id"],
+                        "target_label": "Function",
                         "rel_type": "CONTAINS",
                         "properties": {},
                     }
@@ -2140,7 +2150,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": file_id,
+                        "source_label": "File",
                         "target_id": field["symbol_id"],
+                        "target_label": "Field",
                         "rel_type": "CONTAINS",
                         "properties": {},
                     }
@@ -2152,7 +2164,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": rel["source_id"],
+                        "source_label": rel["source_label"],
                         "target_id": rel["target_id"],
+                        "target_label": rel["target_label"],
                         "rel_type": rel["rel_type"],
                         "properties": rel.get("properties") or {},
                     }
