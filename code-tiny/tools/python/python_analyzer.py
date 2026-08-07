@@ -2065,9 +2065,6 @@ async def main(argv: Optional[List[str]] = None) -> int:
         args.message_qdrant_collection
         or default_message_collection_name(args.qdrant_collection)
     )
-    if code_writer and args.verbose:
-        print("[cloc] Disabled for python_analyzer (temporary)")
-
     try:
         if args.dry_run:
             files = _scan_python_files(args.root)

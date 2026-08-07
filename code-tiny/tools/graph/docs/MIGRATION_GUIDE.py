@@ -56,7 +56,6 @@ from tools.common.analyzer_cache import (
     write_parse_cache,
     write_state,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload
 from tools.graph import GraphDriverFactory, GraphProvider, LanguageCodeWriter  # NEW - add this
 
 try:
@@ -92,7 +91,7 @@ class Neo4jWriter:
     @staticmethod
     def write_cloc_stats(...):
         ...
-"""
+"""  # NOTE: cloc_stats support has been removed from all analyzers; see STEP 5 below.
 
 # REPLACE with one line - nothing! The LanguageCodeWriter handles this now.
 
@@ -232,46 +231,15 @@ async def build_call_graph(  # Make it async
 
 
 # ============================================================================
-# STEP 5: Update write_cloc_stats call
+# STEP 5: CLOC stats support has been removed
 # ============================================================================
-
-# OLD (in main function, around line 2550):
-"""
-    if neo4j_writer:
-        cloc_raw = collect_cloc_stats(args.root)
-        if cloc_raw:
-            cloc_stats = normalize_cloc_payload(cloc_raw)
-            neo4j_writer.write_cloc_stats(project_id, project_name, args.root, repo, language, cloc_stats)
-"""
-
-# NEW - use driver directly:
-"""
-    if code_writer:
-        cloc_raw = collect_cloc_stats(args.root)
-        if cloc_raw:
-            cloc_stats = normalize_cloc_payload(cloc_raw)
-            # Write CLOC stats directly using driver
-            query = '''
-            MERGE (p:Project {id: $project_id})
-            SET p.name = $project_name,
-                p.root = $root,
-                p.repo = $repo,
-                p.language = $language,
-                p.cloc_stats = $cloc_stats,
-                p.updated_at = datetime()
-            '''
-            await code_writer.driver.execute_query(
-                query,
-                {
-                    "project_id": project_id,
-                    "project_name": project_name,
-                    "root": args.root,
-                    "repo": repo,
-                    "language": language,
-                    "cloc_stats": cloc_stats,
-                }
-            )
-"""
+#
+# As of the cloc-cleanup, all analyzers no longer collect or write CLOC stats.
+# The `tools.common.cloc_stats` module, the `write_cloc_stats_to_neo4j` helper,
+# and every `[cloc] ...` print are gone. There is nothing to migrate here —
+# if you were relying on `Project.cloc_stats` for dashboards, rebuild them
+# from another source (e.g. ingest-side counts) or reintroduce a CLOC step
+# explicitly in your pipeline.
 
 
 # ============================================================================

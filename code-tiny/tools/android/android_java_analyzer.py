@@ -15,7 +15,6 @@ if _ROOT_DIR not in sys.path:
 from tools.common.harness_config import load_harness_config
 
 from tools.common.analyzer_cache import safe_cache_root
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
 from tools.common.git_diff import load_manifest_paths
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
@@ -919,25 +918,6 @@ async def main(argv: Optional[List[str]] = None) -> int:
         args.message_qdrant_collection
         or default_message_collection_name(args.qdrant_collection)
     )
-
-    if code_writer:
-        cloc_raw = collect_cloc_stats(args.root)
-        if cloc_raw:
-            cloc_stats = normalize_cloc_payload(cloc_raw)
-            await write_cloc_stats_to_neo4j(
-                driver=code_writer.driver,
-                database=code_writer.database,
-                project_id=project_id,
-                project_name=project_name,
-                root=args.root,
-                repo=repo,
-                language=language,
-                stats=cloc_stats,
-            )
-            if args.verbose:
-                print("[cloc] Stats stored in Neo4j")
-        elif args.verbose:
-            print("[cloc] Skipped (cloc not available or failed)")
 
     cache_root = safe_cache_root(effective_cache_dir, "java_analyzer", project_root=args.root)
     parse_cache_root = os.path.join(cache_root, "parse")
