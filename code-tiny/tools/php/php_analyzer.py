@@ -32,7 +32,6 @@ from tools.common.analyzer_cache import (
     write_parse_cache,
     write_state,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
@@ -1753,25 +1752,6 @@ async def main(argv: Optional[List[str]] = None) -> int:
         args.message_qdrant_collection
         or default_message_collection_name(args.qdrant_collection)
     )
-    if code_writer:
-        cloc_raw = collect_cloc_stats(args.root)
-        if cloc_raw:
-            cloc_stats = normalize_cloc_payload(cloc_raw)
-            await write_cloc_stats_to_neo4j(
-                driver=code_writer.driver,
-                database=code_writer.database,
-                project_id=project_id,
-                project_name=project_name,
-                root=args.root,
-                repo=repo,
-                language=language,
-                stats=cloc_stats,
-            )
-            if args.verbose:
-                print("[cloc] Stats stored in Neo4j")
-        elif args.verbose:
-            print("[cloc] Skipped (cloc not available or failed)")
-
     try:
         if args.dry_run:
             files = _scan_php_files(args.root)
