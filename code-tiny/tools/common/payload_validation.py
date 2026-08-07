@@ -178,7 +178,20 @@ def identity_merge_fingerprint(label: str, record: Mapping[str, Any]) -> str:
         for field in (*shared_fields, *label_fields.get(label, ()))
         if field in record
     }
+    if label == "Function" and semantic.get("kind") == "declaration":
+        # A C/C++ prototype and its implementation deliberately share a
+        # symbol ID.  Treat the prototype as the declaration of the function,
+        # not as a conflicting second symbol.
+        semantic["kind"] = "function"
     return _canonical(semantic)
+
+
+def _duplicate_preference(label: str, record: Mapping[str, Any]) -> int:
+    """Prefer a function body over its otherwise-equivalent declaration."""
+
+    if label == "Function" and record.get("kind") == "function":
+        return 1
+    return 0
 
 
 def _has_forbidden_control(value: str) -> bool:
@@ -453,6 +466,15 @@ def validate_cplus_payload(
             ) > 1
         }
         accepted_rows: list[dict[str, Any]] = []
+        preferred_rows = {
+            identity: max(
+                candidates,
+                key=lambda candidate: _duplicate_preference(
+                    str(candidate.get("label") or default_label), candidate
+                ),
+            )
+            for identity, candidates in by_identity.items()
+        }
         seen: set[str] = set()
         for row in prevalidated:
             label = str(row.get("label") or default_label)
@@ -478,6 +500,9 @@ def validate_cplus_payload(
                         default_path=source_path,
                     )
                 )
+                continue
+            if row is not preferred_rows[identity]:
+                rejected_count += 1
                 continue
             if identity in seen:
                 rejected_count += 1

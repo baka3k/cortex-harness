@@ -65,6 +65,9 @@ Usage (equivalent forms):
   make storage-migrate-layout       Dry-run legacy repository-local migration.
   make storage-backup               Create a verified owner backup.
   make doctor      | dev doctor      Check Python 3.12, local stores, and MCP ports.
+                                      Also reports active code/doc sync workers.
+  make sync code stop                Stop code sync workers and descendants.
+  make sync doc stop                 Stop document sync workers and descendants.
   make start       | dev start       Open each MCP server in a separate terminal window.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
 

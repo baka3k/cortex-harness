@@ -31,6 +31,11 @@ if str(CODE_TINY) not in sys.path:
 
 from cortex_harness.storage import StorageRole, resolve_storage, storage_overlay
 from cortex_harness.storage.config import LEGACY_REMOTE_KEYS
+from cortex_harness.sync_processes import (
+    embedded_falkordb_pids as _embedded_falkordb_pids,
+    stop_embedded_falkordb as _stop_embedded_falkordb,
+    stop_sync_processes,
+)
 from tools.graph.journal.config import (
     configure_journal_env,
     finalize_journal_from_env,
@@ -1631,10 +1636,20 @@ def _mcp_stop_pattern(pattern: str) -> int:
         except Exception:
             pass
     deadline = time.monotonic() + 5.0
+    remaining = list(pids)
     while pids and time.monotonic() < deadline:
-        if not _mcp_pids(pattern):
+        remaining = _mcp_pids(pattern)
+        if not remaining:
             break
         time.sleep(0.1)
+    if sys.platform != "win32":
+        for pid in remaining:
+            try:
+                subprocess.run(
+                    ["kill", "-KILL", str(pid)], check=False, capture_output=True
+                )
+            except Exception:
+                pass
     return len(pids)
 
 
@@ -1695,61 +1710,170 @@ def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
 
 
 @contextmanager
-def _pause_code_mcp_for_sync(
+def _pause_mcp_for_sync(
+    owner: str,
     process_env: dict,
     *,
     project_path: Path,
     enabled: bool,
 ):
-    """Release the embedded code store while a code sync owns it.
+    """Release one embedded store while its sync owns it.
 
     Embedded FalkorDBLite is process-exclusive.  A running code MCP therefore
     has to be paused for the duration of a real code sync; the sync's child
     analyzers acquire the same lease as they write the store.  Remote Neo4j
     and dry-runs do not need this lifecycle transition.
     """
-    if not enabled or _graph_provider(process_env, "CODE_GRAPH_PROVIDER") != "falkordb":
+    provider_key = "CODE_GRAPH_PROVIDER" if owner == "code" else "DOC_GRAPH_PROVIDER"
+    if not enabled or _graph_provider(process_env, provider_key) != "falkordb":
         yield
         return
 
-    service = MCP_SERVICES["code-tiny"]
+    service_name = f"{owner}-tiny"
+    service = MCP_SERVICES[service_name]
+    configured_path = str(process_env.get("FALKORDB_PATH") or "").strip()
+    db_path = Path(configured_path) if configured_path else None
     was_running = bool(_mcp_pids(service["pattern"]))
-    if not was_running:
+    orphan_running = bool(db_path and _embedded_falkordb_pids(db_path))
+    if not was_running and not orphan_running:
         yield
         return
 
-    click.echo("[sync] Pausing code MCP to acquire the embedded FalkorDB lease")
-    _mcp_stop_pattern(service["pattern"])
+    if was_running:
+        click.echo(
+            f"[sync] Pausing {owner} MCP to acquire the embedded FalkorDB lease"
+        )
+        _mcp_stop_pattern(service["pattern"])
+    else:
+        click.echo("[sync] Stopping orphaned embedded FalkorDB before sync")
+    if db_path is not None:
+        _stop_embedded_falkordb(db_path)
     if _mcp_pids(service["pattern"]):
         raise click.ClickException(
             "Could not stop the code MCP process; sync was not started. "
             "Stop the MCP server manually and retry."
         )
+    if db_path is not None and _embedded_falkordb_pids(db_path):
+        raise click.ClickException(
+            "Could not stop the embedded FalkorDB process; sync was not started. "
+            "Stop the local FalkorDB process manually and retry."
+        )
 
     try:
         yield
     finally:
-        try:
-            result = _mcp_start_one(
-                "code-tiny",
-                service,
-                extra_env=_mcp_env_from_config(project_path, "code-tiny"),
-            )
-        except Exception as exc:
-            click.echo(
-                f"[sync] WARNING: code MCP was paused but could not be restarted: "
-                f"{exc}",
-                err=True,
-            )
-        else:
-            if result.get("status") == "started":
-                click.echo(f"[sync] Code MCP restarted (pid={result.get('pid', '?')})")
-            else:
+        if was_running:
+            try:
+                result = _mcp_start_one(
+                    service_name,
+                    service,
+                    extra_env=_mcp_env_from_config(project_path, service_name),
+                )
+            except Exception as exc:
                 click.echo(
-                    f"[sync] WARNING: code MCP was paused but could not be restarted: "
-                    f"{result.get('reason', 'unknown error')}",
+                    f"[sync] WARNING: {owner} MCP was paused but could not be restarted: "
+                    f"{exc}",
                     err=True,
                 )
+            else:
+                if result.get("status") == "started":
+                    click.echo(
+                        f"[sync] {owner.capitalize()} MCP restarted "
+                        f"(pid={result.get('pid', '?')})"
+                    )
+                else:
+                    click.echo(
+                        f"[sync] WARNING: {owner} MCP was paused but could not be restarted: "
+                        f"{result.get('reason', 'unknown error')}",
+                        err=True,
+                    )
+
+
+@contextmanager
+def _pause_code_mcp_for_sync(
+    process_env: dict,
+    *,
+    project_path: Path,
+    enabled: bool,
+):
+    """Backward-compatible code-store lifecycle wrapper."""
+
+    with _pause_mcp_for_sync(
+        "code", process_env, project_path=project_path, enabled=enabled
+    ):
+        yield
+
+
+def _echo_sync_stop_report(report, *, prefix: str) -> None:
+    if report.matched:
+        click.echo(
+            f"[sync] {prefix}: owner={report.owner} matched={len(report.matched)} "
+            f"terminated={len(report.terminated)} forced={len(report.forced)}"
+        )
+    if report.remaining:
+        raise click.ClickException(
+            f"Could not stop {report.owner} sync process(es): "
+            + ", ".join(str(pid) for pid in report.remaining)
+        )
+
+
+def _stop_sync_workers(owner: str, process_env: dict, *, prefix: str) -> None:
+    report = stop_sync_processes(owner, root=REPO_ROOT)
+    _echo_sync_stop_report(report, prefix=prefix)
+    configured_path = str(process_env.get("FALKORDB_PATH") or "").strip()
+    if configured_path:
+        db_path = Path(configured_path)
+        stopped = _stop_embedded_falkordb(db_path)
+        if stopped:
+            click.echo(
+                f"[sync] {prefix}: stopped {len(stopped)} embedded FalkorDB process(es)"
+            )
+        remaining = _embedded_falkordb_pids(db_path)
+        if remaining:
+            raise click.ClickException(
+                "Could not stop embedded FalkorDB process(es): "
+                + ", ".join(str(pid) for pid in remaining)
+            )
+
+
+@contextmanager
+def _sync_process_scope(owner: str, process_env: dict, *, enabled: bool):
+    """Replace older sync runs and guarantee cleanup on Ctrl-C/errors."""
+
+    if not enabled:
+        yield
+        return
+    _stop_sync_workers(owner, process_env, prefix="cleared previous run")
+    try:
+        yield
+    finally:
+        _stop_sync_workers(owner, process_env, prefix="cleanup")
+
+
+def _stop_sync_command(owner: str, *, project_path: Path, process_env: dict) -> None:
+    """Stop sync workers while safely cycling an MCP that owns the same store."""
+
+    with _pause_mcp_for_sync(
+        owner, process_env, project_path=project_path, enabled=True
+    ):
+        _stop_sync_workers(owner, process_env, prefix="explicit stop")
+    click.echo(f"[sync] {owner} sync stop complete")
+
+
+@contextmanager
+def _sync_lifecycle(
+    owner: str,
+    process_env: dict,
+    *,
+    project_path: Path,
+    enabled: bool,
+):
+    """Pause the MCP, replace older runs, and restore the MCP after cleanup."""
+
+    with _pause_mcp_for_sync(
+        owner, process_env, project_path=project_path, enabled=enabled
+    ), _sync_process_scope(owner, process_env, enabled=enabled):
+        yield
 
 
 def _integrate_workspace(project_path: Path, entries: dict) -> None:
@@ -2408,8 +2532,8 @@ def sync_code(
     summaries        = []
     total_start      = time.time()
 
-    with _pause_code_mcp_for_sync(
-        process_env, project_path=project_path, enabled=not dry_run
+    with _sync_lifecycle(
+        "code", process_env, project_path=project_path, enabled=not dry_run
     ):
         for folder in selected:
             folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
@@ -2508,8 +2632,8 @@ def sync_code_all(ctx):
     summaries   = []
     total_start = time.time()
 
-    with _pause_code_mcp_for_sync(
-        process_env, project_path=project_path, enabled=not o["dry_run"]
+    with _sync_lifecycle(
+        "code", process_env, project_path=project_path, enabled=not o["dry_run"]
     ):
         for folder in folders:
             folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
@@ -2574,6 +2698,20 @@ def sync_code_all(ctx):
     _print_summary(summaries, time.time() - total_start)
 
 
+@sync_code.command("stop")
+@click.pass_context
+def sync_code_stop(ctx):
+    """Stop all running code sync workers and their embedded store process."""
+
+    project_path = Path(ctx.obj["project_dir"]).resolve()
+    cfg, _ = _load_active_config(project_path)
+    _stop_sync_command(
+        "code",
+        project_path=project_path,
+        process_env=_code_env_for_process(cfg, project_path),
+    )
+
+
 # ── sync doc ─────────────────────────────────────────────────────────────────
 
 @sync.group("doc", invoke_without_command=True)
@@ -2623,19 +2761,22 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
     summaries   = []
     total_start = time.time()
 
-    for folder in selected:
-        result = _sync_doc_folder(
-            project_path=project_path,
-            folder=folder,
-            env=env,
-            python=python,
-            project=project,
-            force_mode="auto",
-            entity_provider=entity_provider,
-            dry_run=dry_run,
-            preview=preview,
-        )
-        summaries.append(result)
+    with _sync_lifecycle(
+        "doc", env, project_path=project_path, enabled=not dry_run
+    ):
+        for folder in selected:
+            result = _sync_doc_folder(
+                project_path=project_path,
+                folder=folder,
+                env=env,
+                python=python,
+                project=project,
+                force_mode="auto",
+                entity_provider=entity_provider,
+                dry_run=dry_run,
+                preview=preview,
+            )
+            summaries.append(result)
 
     _print_summary(summaries, time.time() - total_start)
 
@@ -2671,21 +2812,38 @@ def sync_doc_all(ctx):
     summaries   = []
     total_start = time.time()
 
-    for folder in folders:
-        result = _sync_doc_folder(
-            project_path=project_path,
-            folder=folder,
-            env=env,
-            python=python,
-            project=project,
-            force_mode="full",
-            entity_provider=o["entity_provider"],
-            dry_run=o["dry_run"],
-            preview=False,
-        )
-        summaries.append(result)
+    with _sync_lifecycle(
+        "doc", env, project_path=project_path, enabled=not o["dry_run"]
+    ):
+        for folder in folders:
+            result = _sync_doc_folder(
+                project_path=project_path,
+                folder=folder,
+                env=env,
+                python=python,
+                project=project,
+                force_mode="full",
+                entity_provider=o["entity_provider"],
+                dry_run=o["dry_run"],
+                preview=False,
+            )
+            summaries.append(result)
 
     _print_summary(summaries, time.time() - total_start)
+
+
+@sync_doc.command("stop")
+@click.pass_context
+def sync_doc_stop(ctx):
+    """Stop all running document sync workers and their embedded store process."""
+
+    project_path = Path(ctx.obj["project_dir"]).resolve()
+    cfg, _ = _load_active_config(project_path)
+    _stop_sync_command(
+        "doc",
+        project_path=project_path,
+        process_env=_doc_env_for_process(cfg, project_path),
+    )
 
 
 # ── sync code add ─────────────────────────────────────────────────────────────
