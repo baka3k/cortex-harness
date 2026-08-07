@@ -42,6 +42,10 @@ class AmbiguousWriteTimeoutError(TimeoutError):
     """A timed-out mutation may have committed and must be reconciled."""
 
 
+class NativeOperationInFlightError(RuntimeError):
+    """A canceled native call is still running and owns the embedded client."""
+
+
 # Neo4j 5.x subquery-with-importing-variable: CALL (var) { ... }.
 # FalkorDB only supports the older CALL { WITH var ... } form (variables
 # imported via opening WITH clause). Rewrite the parenthesized form to the
@@ -384,6 +388,11 @@ class FalkorDBDriver(Neo4jDriver):
         native_future: Future[Any] = Future()
         native_future.set_running_or_notify_cancel()
         with self._native_future_lock:
+            if any(not future.done() for future in self._inflight_native_futures):
+                raise NativeOperationInFlightError(
+                    "previous FalkorDB native operation is still in flight; "
+                    "close this driver and reconcile the ambiguous result before retrying"
+                )
             self._inflight_native_futures.add(native_future)
         native_future.add_done_callback(self._native_future_finished)
 
@@ -409,8 +418,9 @@ class FalkorDBDriver(Neo4jDriver):
             pending = [
                 future for future in self._inflight_native_futures if not future.done()
             ]
+            if pending:
+                self._deferred_close = True
         if pending:
-            self._deferred_close = True
             logger.warning(
                 "FalkorDB close deferred while %d timed/cancelled operation(s) reconcile",
                 len(pending),

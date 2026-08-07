@@ -28,6 +28,17 @@ def env_graph_provider(default: str = "falkordb") -> str:
     )
 
 
+def graph_writes_disabled() -> bool:
+    """Return whether this process was explicitly launched graphless."""
+
+    return os.environ.get("CORTEX_DISABLE_GRAPH", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _has_option(parser: ArgumentParser, option: str) -> bool:
     return any(option in action.option_strings for action in parser._actions)
 
@@ -100,12 +111,7 @@ def apply_project_registry_defaults(args: Namespace) -> Namespace:
 def prepare_graph_args(args: Namespace) -> bool:
     """Normalize selected provider into the legacy args consumed by scan scripts."""
 
-    if os.environ.get("CORTEX_DISABLE_GRAPH", "").strip().casefold() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }:
+    if graph_writes_disabled():
         return False
 
     # Apply registry defaults before any other preparation. This lets
@@ -146,7 +152,8 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
     # Callers may use this helper directly rather than calling
     # ``prepare_graph_args`` first. Keep the boundary self-contained so the
     # default FalkorDB provider always derives an embedded local path.
-    prepare_graph_args(args)
+    if not prepare_graph_args(args):
+        return None
     provider = normalize_graph_provider(getattr(args, "graph_provider", None))
     if provider == GraphProvider.NEO4J:
         uri = getattr(args, "neo4j_uri", None)
