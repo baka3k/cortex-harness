@@ -149,6 +149,15 @@ def sanitize_compile_arguments(
             safe.extend((token, language))
             index += 2
             continue
+        if token in {"-D", "-U", "-std"}:
+            if index + 1 >= len(arguments):
+                raise ValueError(f"missing value for {token}")
+            value = str(arguments[index + 1])
+            if not value or value.startswith("-"):
+                raise ValueError(f"invalid value for {token}")
+            safe.extend((token, value))
+            index += 2
+            continue
         if token in _PATH_FLAGS:
             if index + 1 >= len(arguments):
                 raise ValueError(f"missing path for {token}")
@@ -157,7 +166,11 @@ def sanitize_compile_arguments(
             index += 2
             continue
         attached_path_flag = next(
-            (flag for flag in ("-I", "-iquote") if token.startswith(flag) and token != flag),
+            (
+                flag
+                for flag in ("-isystem", "-iquote", "-I")
+                if token.startswith(flag) and token != flag
+            ),
             None,
         )
         if attached_path_flag:
@@ -496,9 +509,14 @@ def recover_payload_candidates(
     compile_commands_path: str,
     budgets: RecoveryBudgets,
     worker_path: str,
+    compile_contexts: Optional[Mapping[str, CompileContext]] = None,
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
     budgets.validate()
-    compile_contexts = load_compile_database(compile_commands_path, root=root)
+    resolved_compile_contexts = (
+        dict(compile_contexts)
+        if compile_contexts is not None
+        else load_compile_database(compile_commands_path, root=root)
+    )
     queue = PersistentRecoveryQueue(queue_path)
     by_rel: Dict[str, Tuple[str, Dict[str, Any]]] = {}
     for path, payload in candidates.items():
@@ -506,7 +524,7 @@ def recover_payload_candidates(
         quality = (payload.get("parse_meta") or {}).get("quality") or {}
         if quality.get("tier") not in {"retry_required", "quarantined"}:
             continue
-        context = compile_contexts.get(
+        context = resolved_compile_contexts.get(
             rel_path,
             CompileContext(rel_path, (), "free-mode", free_mode=True),
         )
@@ -519,12 +537,14 @@ def recover_payload_candidates(
     trailing: List[bool] = []
     stop_reason = "queue_empty"
     selected_payloads: Dict[str, Dict[str, Any]] = {}
-    pending = queue.pending()[: budgets.max_files]
+    pending = [
+        item for item in queue.pending() if str(item.get("file_path") or "") in by_rel
+    ][: budgets.max_files]
 
     def execute(item: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         rel_path = str(item["file_path"])
         path, _ = by_rel[rel_path]
-        context = compile_contexts.get(
+        context = resolved_compile_contexts.get(
             rel_path,
             CompileContext(rel_path, (), "free-mode", free_mode=True),
         )
@@ -573,7 +593,7 @@ def recover_payload_candidates(
                     consecutive_non_improvements += 1
                     trailing.append(False)
                     continue
-                context = compile_contexts.get(
+                context = resolved_compile_contexts.get(
                     rel_path,
                     CompileContext(rel_path, (), "free-mode", free_mode=True),
                 )
@@ -628,4 +648,3 @@ def recover_payload_candidates(
         "wall_seconds": budgets.wall_seconds,
     }
     return selected_payloads, metrics
-

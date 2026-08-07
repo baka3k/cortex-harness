@@ -282,8 +282,9 @@ def parse_and_extract(
     if _ci is None:
         return None
 
-    abs_path = os.path.abspath(path)
-    rel_path = os.path.relpath(path, root)
+    abs_path = os.path.realpath(os.path.abspath(path))
+    root_path = os.path.realpath(os.path.abspath(root))
+    rel_path = os.path.relpath(abs_path, root_path)
 
     compile_args = (
         list(validated_args)
@@ -669,10 +670,42 @@ def parse_and_extract(
     # -- Parse meta -------------------------------------------------------
     error_count = 0
     has_errors = False
+    diagnostic_intervals: List[Tuple[int, int]] = []
     for diag in tu.diagnostics:
         if diag.severity >= _ci.Diagnostic.Error:
             error_count += 1
             has_errors = True
+            captured_range = False
+            try:
+                for diag_range in diag.ranges:
+                    start = max(0, int(diag_range.start.offset))
+                    end = min(len(source_bytes), max(start, int(diag_range.end.offset)))
+                    if end > start:
+                        diagnostic_intervals.append((start, end))
+                        captured_range = True
+            except Exception:
+                pass
+            if not captured_range:
+                try:
+                    start = max(0, min(len(source_bytes), int(diag.location.offset)))
+                    diagnostic_intervals.append((start, min(len(source_bytes), start + 1)))
+                except Exception:
+                    pass
+
+    damaged_bytes = 0
+    interval_start: Optional[int] = None
+    interval_end: Optional[int] = None
+    for start, end in sorted(diagnostic_intervals):
+        if interval_start is None:
+            interval_start, interval_end = start, end
+        elif interval_end is not None and start <= interval_end:
+            interval_end = max(interval_end, end)
+        else:
+            assert interval_end is not None
+            damaged_bytes += interval_end - interval_start
+            interval_start, interval_end = start, end
+    if interval_start is not None and interval_end is not None:
+        damaged_bytes += interval_end - interval_start
 
     parse_meta: Dict[str, Any] = {
         "parser_language": "clang",
@@ -680,6 +713,8 @@ def parse_and_extract(
         "has_error": has_errors,
         "error_nodes": error_count,
         "error_nodes_initial": error_count,
+        "damaged_bytes": damaged_bytes,
+        "source_bytes": len(source_bytes),
         "header_retry_attempted": False,
         "header_retry_selected": False,
         "header_retry_error_nodes": None,
