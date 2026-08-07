@@ -9,6 +9,11 @@ Cartesian product. Required identity indexes were also created after streaming,
 too late to protect those relationship writes. The corrective scope and rollout
 gates are captured in the [implementation plan](../../plans/260807-1202-graph-ingest-write-path-hardening/plan.md).
 
+Phase 04A began as the durable contract and storage foundation, then its final
+implementation pass wired that contract into graph mutation, parent-process
+publication gates, and autonomous crash recovery while keeping rollout in
+shadow mode by default.
+
 ## Change
 
 - Added a validated, fingerprinted manifest for the 156 canonical graph identity
@@ -44,16 +49,16 @@ gates are captured in the [implementation plan](../../plans/260807-1202-graph-in
   (`code-tiny/tools/graph/journal/models.py:94`,
   `code-tiny/tools/graph/journal/identity.py:26`,
   `code-tiny/tools/graph/journal/identity.py:37`,
-  `code-tiny/tools/graph/journal/sqlite_store.py:413`).
+  `code-tiny/tools/graph/journal/sqlite_store.py:441`).
 - Added a local SQLite journal using WAL, full synchronous durability, foreign
   keys, bounded storage, transactional barriers, leased claims, fenced ACKs,
   reconciliation, retries, and terminal states
-  (`code-tiny/tools/graph/journal/sqlite_store.py:247`,
-  `code-tiny/tools/graph/journal/sqlite_store.py:545`,
-  `code-tiny/tools/graph/journal/sqlite_store.py:784`,
-  `code-tiny/tools/graph/journal/sqlite_store.py:944`,
-  `code-tiny/tools/graph/journal/sqlite_store.py:1014`,
-  `code-tiny/tools/graph/journal/sqlite_store.py:1052`).
+  (`code-tiny/tools/graph/journal/sqlite_store.py:248`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:602`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:842`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:1124`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:1194`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:1232`).
 - Large payloads now stream to owner-only, content-addressed JSONL artifacts
   with fsync, atomic publication, and hash verification; focused tests cover
   deduplication, barrier ordering, stale fences, reconciliation recovery,
@@ -66,6 +71,26 @@ gates are captured in the [implementation plan](../../plans/260807-1202-graph-in
   `tests/test_graph_write_journal.py:292`,
   `tests/test_graph_write_journal.py:359`,
   `tests/test_graph_write_journal.py:532`).
+- Wired journal preparation ahead of shared-writer mutations, required-mode
+  publication behind the parent drain gate, and rollout behind the
+  `shared-shadow` default (`code-tiny/tools/graph/writer/language_writer.py:69`,
+  `code-tiny/tools/graph/writer/language_writer.py:168`,
+  `cortex_harness/dev.py:1271`, `cortex_harness/dev.py:1310`).
+- Added autonomous recovery that validates a persisted operation descriptor,
+  reloads its immutable artifact, recompiles only an allowlisted mutation, and
+  reconciles abandoned leases without needing the producer's closure
+  (`code-tiny/tools/graph/journal/consumer.py:46`,
+  `code-tiny/tools/graph/journal/executor.py:17`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:1442`).
+- Added exact receipts in the same graph transaction as each mutation; recovery
+  matches job ID, operation key, and row count before ACK. Unsupported custom
+  operations fail before durable enqueue or graph mutation
+  (`code-tiny/tools/graph/journal/guard.py:33`,
+  `code-tiny/tools/graph/journal/reconcile.py:12`,
+  `code-tiny/tools/graph/journal/runtime.py:107`,
+  `tests/test_graph_write_journal_runtime.py:286`,
+  `tests/test_graph_write_journal_runtime.py:302`,
+  `tests/test_graph_write_journal_runtime.py:354`).
 
 ## Impact
 
@@ -90,11 +115,21 @@ with no P0/P1 findings. The remaining rollout gate is the full canary against
 the original approximately 20,186-file C/Pro*C repository, whose source root is
 not mounted or discoverable in this workspace.
 
-Phase 04A retains the high risk level because this state machine will sit ahead
-of graph mutations once integrated. It provides crash-reopen durability,
-idempotent enqueue, stale-worker rejection, and explicit ambiguous-outcome
-preservation without yet changing production writers; writer integration and
-backend readback reconciliation remain Phase 04B and Phase 04C work.
+Phase 04A retains the **high** risk level because required mode now sits ahead of
+shared-writer mutations and a false ACK could publish incomplete graph state.
+The final design narrows that risk with durable enqueue-before-mutate ordering,
+fenced ownership, autonomous persisted-descriptor recovery, exact atomic
+receipts, count checks, and a fail-closed guard against direct or unsupported
+mutations. The default shadow rollout exercises serialization without changing
+journal or graph state; required mode remains an explicit promotion.
+
+Focused storage and runtime verification passed with 41 tests and one skipped
+environment-dependent case. The final review scored 9.6/10 with zero critical
+findings; recovery, receipt integrity, process-kill resume, and mutation-bypass
+coverage are anchored in `tests/test_graph_write_journal_runtime.py:261`,
+`tests/test_graph_write_journal_runtime.py:286`,
+`tests/test_graph_write_journal_runtime.py:411`, and
+`tests/test_graph_write_journal_runtime.py:560`.
 
 ## Decision
 
@@ -112,9 +147,17 @@ artifacts were chosen over a new external queue so metadata transitions stay
 transactional without placing large source-derived payloads in the database.
 Deterministic identities and fencing protect replay and ownership, while an
 expired ambiguous write remains reconciling rather than being re-executed or
-described as exactly-once (`code-tiny/tools/graph/journal/sqlite_store.py:1262`).
+described as exactly-once (`code-tiny/tools/graph/journal/sqlite_store.py:1442`).
 Cleanup consequently requires a terminal run, elapsed retention, and confirmed
-exact-scope ownership (`code-tiny/tools/graph/journal/sqlite_store.py:1379`).
+exact-scope ownership (`code-tiny/tools/graph/journal/sqlite_store.py:1669`).
+
+Recovery persists validated operation descriptors and canonical payloads, never
+executable Cypher; the consumer recompiles a trusted mutation after restart.
+Exact receipt creation is coupled to that mutation in one graph transaction, so
+a matching receipt ACKs without replay and an absent receipt permits a safe,
+fenced retry. Unknown custom query shapes remain unsupported and fail closed.
+The rollout default stays `shared-shadow` until canary evidence justifies an
+explicit required-mode promotion.
 
 ## References
 
@@ -124,3 +167,5 @@ exact-scope ownership (`code-tiny/tools/graph/journal/sqlite_store.py:1379`).
 - Commit: `6836cdb59d742cbafe99bc4934642a922a4ca4de`
 - Commit: `74b55e335a65f3553ee76201c92c829e8c2805b2`
 - Commit: `d4abf38667aaacfbf29ce13264f616765f82c9f2`
+- Commit: `4308f91c69c83d7ce6fc3903628a8cad440681f3`
+- Commit: `065bf4176adb4f6614f1fc295d78f017f18d1977`
