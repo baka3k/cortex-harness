@@ -64,7 +64,7 @@ remain only when their semantic merge key cannot use this contract.
 - [x] Fix endpoint-label grouping and checkpoint identity.
 - [x] Migrate every generic unlabeled endpoint writer from the inventory.
 - [x] Add the static no-unlabeled-identity-mutation guard.
-- [ ] Add required/optional unresolved-endpoint reconciliation.
+- [x] Add required/optional unresolved-endpoint reconciliation.
 - [x] Prove idempotent replay and project isolation.
 - [x] Remove the old unlabeled fallback after migration.
 

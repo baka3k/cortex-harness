@@ -12,6 +12,10 @@ from tools.graph.driver.falkordb_driver import FalkorDBDriver
 from tools.graph.driver.neo4j_driver import Neo4jDriver
 
 
+class GraphWritesDisabledError(RuntimeError):
+    """Driver construction was attempted in an explicitly graphless process."""
+
+
 class GraphDriverFactory:
     """
     Factory class for creating graph database drivers.
@@ -68,6 +72,13 @@ class GraphDriverFactory:
         Raises:
             ValueError: If provider is not supported or required credentials are missing
         """
+        from tools.graph.cli import graph_writes_disabled
+
+        if graph_writes_disabled():
+            raise GraphWritesDisabledError(
+                "graph driver construction is disabled by CORTEX_DISABLE_GRAPH"
+            )
+
         # Merge flat kwargs into config dict when config is not supplied directly
         if config is None:
             config = {

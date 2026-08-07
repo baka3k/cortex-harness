@@ -40,12 +40,17 @@ range.
 
 ## Automated validation
 
-- Focused schema, writer, driver, framework, C++, topology, JP1, and static
-  mutation suite: 84 tests, 3 subtests passed.
-- `code-tiny/tests`: 56 tests, 24 subtests passed.
-- Top-level non-COBOL suite: 457 tests, 185 subtests passed.
+- Final focused schema, writer, driver, framework, C++, topology, JP1, Shell,
+  COBOL endpoint-closure, and static mutation reviews found no P0/P1 issues.
+- `code-tiny/tests`: 61 tests, 24 subtests passed.
+- Top-level non-COBOL suite: 486 tests, 185 subtests passed.
 - Fresh-store index readiness, repeat verification, query-plan idempotency, and
   user-store isolation use disposable `.rdb` files.
+- A subprocess terminal-deadline test proves a cancelled 15-second native call
+  does not keep the process alive; a separate test proves the still-running call
+  retains exclusive ownership of the embedded client.
+- `--no-graph` is enforced before config normalization, at the CLI helper, and
+  at the driver factory, so child project configuration cannot restore writes.
 - Python compilation and `git diff --check` passed.
 
 The repository-wide single `pytest` invocation still has unrelated collection
