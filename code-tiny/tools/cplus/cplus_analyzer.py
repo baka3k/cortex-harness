@@ -31,7 +31,9 @@ from tools.common.harness_config import load_harness_config
 from tools.common.embedding_runtime import resolve_embedding_cache as _shared_resolve_embedding_cache
 from tools.common.legacy_encoding import read_legacy_text
 from tools.common.parse_quality import (
+    RECOVERY_POLICY_VERSION,
     CandidateOutcome,
+    CandidateSummary,
     DamageSummary,
     ParseContext,
     ParserBackend,
@@ -40,6 +42,7 @@ from tools.common.parse_quality import (
     aggregate_quality_records,
     atomic_write_json,
     build_quality_record,
+    candidate_is_strictly_better,
     collect_tree_sitter_damage,
     context_fingerprint,
     source_fingerprint,
@@ -700,6 +703,40 @@ def _tree_error_stats(tree) -> Tuple[bool, int, int]:
     return has_error, error_nodes, missing_nodes
 
 
+def _tree_selection_semantic_yield(root_node: Any) -> SemanticYield:
+    """Collect backend-neutral semantic counts used only for grammar selection."""
+
+    function_kinds = {"function_definition"}
+    type_kinds = {
+        "class_specifier",
+        "struct_specifier",
+        "union_specifier",
+        "enum_specifier",
+    }
+    declaration_kinds = {"declaration", "type_definition", "alias_declaration"}
+    stable_scope_kinds = function_kinds | type_kinds | {"namespace_definition"}
+    functions = types = declarations = stable_scopes = calls = includes = 0
+    stack = [root_node]
+    while stack:
+        node = stack.pop()
+        kind = str(getattr(node, "type", ""))
+        functions += kind in function_kinds
+        types += kind in type_kinds
+        declarations += kind in declaration_kinds
+        stable_scopes += kind in stable_scope_kinds
+        calls += kind == "call_expression"
+        includes += kind in {"preproc_include", "preproc_import"}
+        stack.extend(getattr(node, "children", ()) or ())
+    return SemanticYield(
+        function_count=functions,
+        type_count=types,
+        declaration_count=declarations,
+        stable_scope_count=stable_scopes,
+        call_count=calls,
+        include_count=includes,
+    )
+
+
 def _runtime_package_version(name: str) -> str:
     try:
         return importlib.metadata.version(name)
@@ -724,6 +761,9 @@ def _parse_cache_context_signature(
     is_resource: bool,
     compile_db_index: Optional[Dict[str, Any]],
     project_id: str,
+    selected_backend: Optional[ParserBackend] = None,
+    selected_parser_version: str = "",
+    recovery_policy_version: str = "",
 ) -> Dict[str, Any]:
     decoded = read_legacy_text(file_path)
     source_bytes = decoded.text.encode("utf-8")
@@ -732,13 +772,22 @@ def _parse_cache_context_signature(
         ((compile_db_index or {}).get("context_by_file") or {}).get(normalized_rel) or ""
     )
     ext = os.path.splitext(file_path)[1].lower()
+    backend = selected_backend or (
+        ParserBackend.WINDOWS_RESOURCE if is_resource else ParserBackend.TREE_SITTER
+    )
+    if backend == ParserBackend.LIBCLANG:
+        parser_language = "clang"
+        parser_version = selected_parser_version or _runtime_package_version("libclang")
+        grammar_version = "clang-ast"
+    else:
+        parser_language = "windows_rc" if is_resource else ("cpp" if is_cpp else "c")
+        parser_version = "1" if is_resource else _runtime_package_version("tree-sitter")
+        grammar_version = "1" if is_resource else _grammar_version(is_cpp)
     context = ParseContext(
-        backend=(
-            ParserBackend.WINDOWS_RESOURCE if is_resource else ParserBackend.TREE_SITTER
-        ),
-        parser_language=("windows_rc" if is_resource else ("cpp" if is_cpp else "c")),
-        parser_version=("1" if is_resource else _runtime_package_version("tree-sitter")),
-        grammar_version=("1" if is_resource else _grammar_version(is_cpp)),
+        backend=backend,
+        parser_language=parser_language,
+        parser_version=parser_version,
+        grammar_version=grammar_version,
         source_encoding=decoded.encoding,
         lossy_decode=any(
             item.code == "legacy-encoding-lossy" for item in decoded.diagnostics
@@ -746,6 +795,9 @@ def _parse_cache_context_signature(
         compile_context_available=bool(compile_context),
         compile_context_fingerprint=compile_context,
         masking_fingerprint="proc-v1" if ext in {".pc", ".pcc"} else "",
+        recovery_policy_version=(
+            recovery_policy_version or ParseContext().recovery_policy_version
+        ),
     )
     source_hash = source_fingerprint(source_bytes)
     return {
@@ -2147,10 +2199,17 @@ def parse_c_family_file(
         retry_has_error = bool(getattr(retry_tree.root_node, "has_error", False))
         retry_error_nodes = retry_damage.error_count
         retry_missing_nodes = retry_damage.missing_count
-        if (
-            (retry_error_nodes, retry_missing_nodes, retry_has_error)
-            < (initial_error_nodes, initial_missing_nodes, initial_has_error)
-        ):
+        initial_candidate = CandidateSummary(
+            damage=initial_damage,
+            semantic_yield=_tree_selection_semantic_yield(tree.root_node),
+            backend=ParserBackend.TREE_SITTER,
+        )
+        retry_candidate = CandidateSummary(
+            damage=retry_damage,
+            semantic_yield=_tree_selection_semantic_yield(retry_tree.root_node),
+            backend=ParserBackend.TREE_SITTER,
+        )
+        if candidate_is_strictly_better(retry_candidate, initial_candidate):
             tree = retry_tree
             source_bytes = retry_source_bytes
             source_encoding = retry_source_encoding
@@ -2816,6 +2875,7 @@ def _load_or_parse_payload(
     compile_db_index: Optional[Dict[str, Any]] = None,
     project_id: str = "",
     allow_inprocess_clang_fallback: bool = False,
+    prefer_recovered_cache: bool = False,
 ) -> Dict[str, Any]:
     def ensure_text_fields(item: Dict[str, Any]) -> None:
         if "comment" not in item:
@@ -3019,10 +3079,24 @@ def _load_or_parse_payload(
     rel_path = os.path.relpath(file_path, root)
     is_resource = is_windows_resource_file(file_path)
     is_cpp = False if is_resource else _is_cpp_file(file_path, root, compile_db_index)
-    parser_language = "windows_rc" if is_resource else ("cpp" if is_cpp else "c")
     cached_payload = None
     signature = None
     if parse_cache:
+        if (prefer_recovered_cache or allow_inprocess_clang_fallback) and not is_resource:
+            recovered_signature = _parse_cache_context_signature(
+                file_path=file_path,
+                rel_path=rel_path,
+                is_cpp=is_cpp,
+                is_resource=False,
+                compile_db_index=compile_db_index,
+                project_id=project_id,
+                selected_backend=ParserBackend.LIBCLANG,
+                selected_parser_version=_runtime_package_version("libclang"),
+                recovery_policy_version=RECOVERY_POLICY_VERSION,
+            )
+            cached_payload = load_parse_cache(
+                parse_cache_root, rel_path, recovered_signature
+            )
         signature = _parse_cache_context_signature(
             file_path=file_path,
             rel_path=rel_path,
@@ -3031,7 +3105,8 @@ def _load_or_parse_payload(
             compile_db_index=compile_db_index,
             project_id=project_id,
         )
-        cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
+        if cached_payload is None:
+            cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         cached_calls = cached_payload.get("calls")
         missing_call_metadata = isinstance(cached_calls, list) and any(
@@ -3160,8 +3235,29 @@ def _load_or_parse_payload(
                         "libclang fallback OK for %s (ts_errors=%d -> clang_errors=%d)",
                         rel_path, _ts_errors, _clang_errors,
                     )
-                    if parse_cache and signature is not None:
-                        write_parse_cache(parse_cache_root, rel_path, signature, _clang_result)
+                    if parse_cache:
+                        _clang_parse_meta = _clang_result.get("parse_meta") or {}
+                        _clang_quality_context = (
+                            (_clang_parse_meta.get("quality") or {}).get("context") or {}
+                        )
+                        _clang_signature = _parse_cache_context_signature(
+                            file_path=file_path,
+                            rel_path=rel_path,
+                            is_cpp=is_cpp,
+                            is_resource=False,
+                            compile_db_index=compile_db_index,
+                            project_id=project_id,
+                            selected_backend=ParserBackend.LIBCLANG,
+                            selected_parser_version=_runtime_package_version("libclang"),
+                            recovery_policy_version=str(
+                                _clang_quality_context.get("recovery_policy_version")
+                                or _clang_parse_meta.get("recovery_policy_version")
+                                or ""
+                            ),
+                        )
+                        write_parse_cache(
+                            parse_cache_root, rel_path, _clang_signature, _clang_result
+                        )
                     return _clang_result
                 else:
                     # Libclang not better — keep tree-sitter, no cache waste
@@ -3377,6 +3473,7 @@ async def build_call_graph(
                 compile_db_index,
                 project_id=project_id,
                 allow_inprocess_clang_fallback=False,
+                prefer_recovered_cache=True,
             )
             quality = (baseline_payload.get("parse_meta") or {}).get("quality") or {}
             if quality.get("tier") not in {"retry_required", "quarantined"}:
@@ -3447,6 +3544,20 @@ async def build_call_graph(
                         continue
                     rel_path = os.path.relpath(file_path, root)
                     is_cpp = _is_cpp_file(file_path, root, compile_db_index)
+                    repaired_parse_meta = repaired_payload.get("parse_meta") or {}
+                    repaired_quality_context = (
+                        (repaired_parse_meta.get("quality") or {}).get("context") or {}
+                    )
+                    try:
+                        selected_backend = ParserBackend(
+                            str(
+                                repaired_quality_context.get("backend")
+                                or repaired_parse_meta.get("parser_backend")
+                                or ParserBackend.TREE_SITTER.value
+                            )
+                        )
+                    except ValueError:
+                        selected_backend = ParserBackend.TREE_SITTER
                     signature = _parse_cache_context_signature(
                         file_path=file_path,
                         rel_path=rel_path,
@@ -3454,6 +3565,17 @@ async def build_call_graph(
                         is_resource=False,
                         compile_db_index=compile_db_index,
                         project_id=project_id,
+                        selected_backend=selected_backend,
+                        selected_parser_version=(
+                            _runtime_package_version("libclang")
+                            if selected_backend == ParserBackend.LIBCLANG
+                            else ""
+                        ),
+                        recovery_policy_version=str(
+                            repaired_quality_context.get("recovery_policy_version")
+                            or repaired_parse_meta.get("recovery_policy_version")
+                            or ""
+                        ),
                     )
                     write_parse_cache(parse_cache_root, rel_path, signature, repaired_payload)
             except Exception as exc:
@@ -3481,6 +3603,7 @@ async def build_call_graph(
                 compile_db_index,
                 project_id=project_id,
                 allow_inprocess_clang_fallback=parse_quality_policy == "off",
+                prefer_recovered_cache=parse_quality_policy == "repair",
             )
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}

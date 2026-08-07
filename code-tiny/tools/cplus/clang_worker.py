@@ -6,7 +6,6 @@ import json
 import os
 import socket
 import sys
-from pathlib import Path
 
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -16,25 +15,45 @@ if _ROOT_DIR not in sys.path:
 from tools.cplus import clang_parser  # noqa: E402
 from tools.cplus.parse_recovery import (  # noqa: E402
     MAX_SOURCE_BYTES,
+    MAX_WORKER_REQUEST_BYTES,
     WORKER_PROTOCOL_VERSION,
     _contained_path,
     sanitize_compile_arguments,
 )
 
 
-def _apply_limits(memory_mb: int, cpu_seconds: int) -> None:
+def _apply_limits(memory_mb: int, cpu_seconds: int, output_bytes: int) -> None:
     try:
         import resource
+    except ImportError as exc:
+        raise RuntimeError("worker resource limits are unavailable") from exc
 
-        memory_bytes = int(memory_mb) * 1024 * 1024
-        if hasattr(resource, "RLIMIT_AS"):
-            resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
-        if hasattr(resource, "RLIMIT_CPU"):
-            resource.setrlimit(resource.RLIMIT_CPU, (int(cpu_seconds), int(cpu_seconds) + 1))
+    memory_bytes = int(memory_mb) * 1024 * 1024
+    memory_limit = getattr(resource, "RLIMIT_AS", None)
+    if memory_limit is None:
+        memory_limit = getattr(resource, "RLIMIT_DATA", None)
+    required = {
+        "cpu": getattr(resource, "RLIMIT_CPU", None),
+        "output": getattr(resource, "RLIMIT_FSIZE", None),
+    }
+    if any(limit is None for limit in required.values()):
+        raise RuntimeError("required worker resource limit is unavailable")
+    try:
+        resource.setrlimit(required["cpu"], (int(cpu_seconds), int(cpu_seconds) + 1))
+        resource.setrlimit(required["output"], (int(output_bytes), int(output_bytes)))
         if hasattr(resource, "RLIMIT_CORE"):
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    except (ImportError, OSError, ValueError):
-        pass
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("failed to apply worker resource limits") from exc
+    if memory_limit is not None:
+        try:
+            resource.setrlimit(memory_limit, (memory_bytes, memory_bytes))
+        except (OSError, ValueError) as exc:
+            # Darwin exposes RLIMIT_AS/RLIMIT_DATA but rejects finite values.
+            # CPU, output, wall-time, and source-size limits remain mandatory;
+            # other platforms fail closed when their advertised memory limit fails.
+            if sys.platform != "darwin":
+                raise RuntimeError("failed to apply worker memory limit") from exc
 
 
 def _disable_network() -> None:
@@ -47,7 +66,14 @@ def _disable_network() -> None:
 
 def main() -> int:
     try:
-        request = json.load(sys.stdin)
+        if len(sys.argv) > 1:
+            with open(sys.argv[1], "rb") as handle:
+                request_bytes = handle.read(MAX_WORKER_REQUEST_BYTES + 1)
+            if len(request_bytes) > MAX_WORKER_REQUEST_BYTES:
+                raise ValueError("worker request exceeds cap")
+            request = json.loads(request_bytes.decode("utf-8"))
+        else:
+            request = json.load(sys.stdin)
         if request.get("protocol_version") != WORKER_PROTOCOL_VERSION:
             raise ValueError("worker protocol mismatch")
         root = str(request["root"])
@@ -61,7 +87,16 @@ def main() -> int:
             directory=os.path.dirname(path),
             source_path=path,
         )
-        _apply_limits(int(request.get("memory_mb") or 1024), int(request.get("cpu_seconds") or 30))
+        memory_mb = int(request.get("memory_mb") or 1024)
+        cpu_seconds = int(request.get("cpu_seconds") or 30)
+        output_bytes = int(request.get("max_output_bytes") or MAX_SOURCE_BYTES * 2)
+        if not 1 <= memory_mb <= 4096:
+            raise ValueError("worker memory limit is invalid")
+        if not 1 <= cpu_seconds <= 300:
+            raise ValueError("worker CPU limit is invalid")
+        if not 1 <= output_bytes <= MAX_SOURCE_BYTES * 2:
+            raise ValueError("worker output limit is invalid")
+        _apply_limits(memory_mb, cpu_seconds, output_bytes)
         _disable_network()
         payload = clang_parser.parse_and_extract(
             path,

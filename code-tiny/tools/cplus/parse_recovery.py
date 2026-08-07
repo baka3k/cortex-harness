@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import importlib.metadata
 import json
 import os
 import shlex
@@ -14,9 +15,10 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from tools.common.parse_quality import (
+    RECOVERY_POLICY_VERSION,
     CandidateOutcome,
     CandidateSummary,
     DamageSummary,
@@ -30,13 +32,19 @@ from tools.common.parse_quality import (
 )
 
 
-QUEUE_SCHEMA_VERSION = "1"
+QUEUE_SCHEMA_VERSION = "2"
 WORKER_PROTOCOL_VERSION = "1"
 MAX_COMPILE_DATABASE_BYTES = 32 * 1024 * 1024
 MAX_COMPILE_DATABASE_ENTRIES = 100_000
 MAX_COMPILE_TOKENS_PER_ENTRY = 2_048
 MAX_WORKER_OUTPUT_BYTES = 32 * 1024 * 1024
+MAX_WORKER_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
+
+try:
+    import psutil
+except ImportError:  # Recovery fails closed when process-tree RSS cannot be observed.
+    psutil = None  # type: ignore[assignment]
 
 
 _REJECTED_PREFIXES = (
@@ -271,19 +279,42 @@ class PersistentRecoveryQueue:
                 pass
 
     @staticmethod
-    def identity(file_path: str, context_fingerprint: str) -> str:
-        return hashlib.sha256(f"{file_path}\0{context_fingerprint}".encode("utf-8")).hexdigest()
+    def identity(
+        file_path: str,
+        context_fingerprint: str,
+        candidate_identity: str = "",
+    ) -> str:
+        return hashlib.sha256(
+            f"{file_path}\0{context_fingerprint}\0{candidate_identity}".encode("utf-8")
+        ).hexdigest()
 
-    def enqueue(self, file_path: str, quality: Mapping[str, Any], priority: Tuple[Any, ...]) -> bool:
-        identity = self.identity(file_path, str(quality.get("context_fingerprint") or ""))
+    def enqueue(
+        self,
+        file_path: str,
+        quality: Mapping[str, Any],
+        priority: Tuple[Any, ...],
+        candidate_identity: str = "",
+    ) -> bool:
+        identity = self.identity(
+            file_path,
+            str(quality.get("context_fingerprint") or ""),
+            candidate_identity,
+        )
         items = self.state.setdefault("items", {})
         existing = items.get(identity)
-        if existing and existing.get("status") in {"selected", "not_improved", "invalid"}:
+        if existing and existing.get("status") in {
+            "selected",
+            "not_improved",
+            "invalid",
+            "failed",
+            "timed_out",
+        }:
             return False
         items[identity] = {
             "id": identity,
             "file_path": file_path,
             "context_fingerprint": quality.get("context_fingerprint") or "",
+            "candidate_identity": candidate_identity,
             "priority": list(priority),
             "status": "pending",
             "attempts": int((existing or {}).get("attempts") or 0),
@@ -329,33 +360,92 @@ def run_clang_worker(
     *,
     worker_path: str,
     request: Mapping[str, Any],
-    timeout_seconds: int,
+    timeout_seconds: float,
 ) -> Dict[str, Any]:
+    request_bytes = json.dumps(dict(request), ensure_ascii=True).encode("utf-8")
+    if len(request_bytes) > MAX_WORKER_REQUEST_BYTES:
+        return {"status": "invalid", "error": "worker request exceeds cap"}
+    if psutil is None:
+        return {"status": "invalid", "error": "worker memory monitor unavailable"}
+    try:
+        memory_limit_bytes = int(request.get("memory_mb") or 1024) * 1024 * 1024
+    except (TypeError, ValueError):
+        return {"status": "invalid", "error": "worker memory limit is invalid"}
+    if memory_limit_bytes <= 0:
+        return {"status": "invalid", "error": "worker memory limit is invalid"}
+
+    deadline = time.monotonic() + max(0.001, float(timeout_seconds))
     with tempfile.TemporaryDirectory(prefix="cplus-clang-worker-") as temp_dir:
-        process = subprocess.Popen(
-            [sys.executable, worker_path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=temp_dir,
-            env=_worker_environment(temp_dir),
-            start_new_session=True,
-        )
-        try:
-            stdout, stderr = process.communicate(
-                json.dumps(dict(request), ensure_ascii=True),
-                timeout=timeout_seconds,
-            )
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except (AttributeError, ProcessLookupError):
-                process.kill()
-            process.communicate()
+        request_path = os.path.join(temp_dir, "request.json")
+        stdout_path = os.path.join(temp_dir, "stdout.json")
+        stderr_path = os.path.join(temp_dir, "stderr.log")
+        with open(request_path, "wb") as handle:
+            handle.write(request_bytes)
+        if time.monotonic() >= deadline:
             return {"status": "timed_out", "error": "worker timeout"}
-        if len(stdout.encode("utf-8")) > MAX_WORKER_OUTPUT_BYTES:
+        with open(stdout_path, "wb") as stdout_handle, open(stderr_path, "wb") as stderr_handle:
+            process = subprocess.Popen(
+                [sys.executable, worker_path, request_path],
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                cwd=temp_dir,
+                env=_worker_environment(temp_dir),
+                start_new_session=True,
+            )
+            stop_status = ""
+            while process.poll() is None:
+                if (
+                    os.path.getsize(stdout_path) > MAX_WORKER_OUTPUT_BYTES
+                    or os.path.getsize(stderr_path) > MAX_WORKER_OUTPUT_BYTES
+                ):
+                    stop_status = "output_limit"
+                    break
+                try:
+                    worker_process = psutil.Process(process.pid)
+                    rss_bytes = worker_process.memory_info().rss + sum(
+                        child.memory_info().rss
+                        for child in worker_process.children(recursive=True)
+                    )
+                except psutil.NoSuchProcess:
+                    rss_bytes = 0
+                except psutil.AccessDenied:
+                    stop_status = "memory_monitor"
+                    break
+                if rss_bytes > memory_limit_bytes:
+                    stop_status = "memory_limit"
+                    break
+                if time.monotonic() >= deadline:
+                    stop_status = "timeout"
+                    break
+                time.sleep(0.01)
+
+            if stop_status:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (AttributeError, OSError, ProcessLookupError):
+                    if process.poll() is None:
+                        process.kill()
+                process.wait()
+
+        stdout_size = os.path.getsize(stdout_path)
+        stderr_size = os.path.getsize(stderr_path)
+        if stop_status == "timeout":
+            return {"status": "timed_out", "error": "worker timeout"}
+        if stop_status == "memory_limit":
+            return {"status": "failed", "error": "worker memory limit exceeded"}
+        if stop_status == "memory_monitor":
+            return {"status": "invalid", "error": "worker memory monitor denied"}
+        if (
+            stop_status == "output_limit"
+            or stdout_size > MAX_WORKER_OUTPUT_BYTES
+            or stderr_size > MAX_WORKER_OUTPUT_BYTES
+        ):
             return {"status": "invalid", "error": "worker output exceeds cap"}
+        with open(stdout_path, "rb") as handle:
+            stdout = handle.read(MAX_WORKER_OUTPUT_BYTES + 1).decode("utf-8", errors="replace")
+        with open(stderr_path, "rb") as handle:
+            stderr = handle.read(MAX_WORKER_OUTPUT_BYTES + 1).decode("utf-8", errors="replace")
         if process.returncode != 0:
             return {
                 "status": "failed",
@@ -518,6 +608,18 @@ def recover_payload_candidates(
         else load_compile_database(compile_commands_path, root=root)
     )
     queue = PersistentRecoveryQueue(queue_path)
+    try:
+        libclang_version = importlib.metadata.version("libclang")
+    except importlib.metadata.PackageNotFoundError:
+        libclang_version = "unknown"
+    candidate_identity = ":".join(
+        (
+            ParserBackend.LIBCLANG.value,
+            libclang_version,
+            WORKER_PROTOCOL_VERSION,
+            RECOVERY_POLICY_VERSION,
+        )
+    )
     by_rel: Dict[str, Tuple[str, Dict[str, Any]]] = {}
     for path, payload in candidates.items():
         rel_path = os.path.relpath(path, root).replace("\\", "/")
@@ -528,22 +630,34 @@ def recover_payload_candidates(
             rel_path,
             CompileContext(rel_path, (), "free-mode", free_mode=True),
         )
-        queue.enqueue(rel_path, quality, _priority(quality, not context.free_mode))
+        queue.enqueue(
+            rel_path,
+            quality,
+            _priority(quality, not context.free_mode),
+            candidate_identity,
+        )
         by_rel[rel_path] = (path, payload)
 
     started = time.monotonic()
+    deadline = started + budgets.wall_seconds
     attempted = improved = non_improved = failed = 0
     consecutive_non_improvements = 0
     trailing: List[bool] = []
     stop_reason = "queue_empty"
     selected_payloads: Dict[str, Dict[str, Any]] = {}
     pending = [
-        item for item in queue.pending() if str(item.get("file_path") or "") in by_rel
+        item
+        for item in queue.pending()
+        if str(item.get("file_path") or "") in by_rel
+        and str(item.get("candidate_identity") or "") == candidate_identity
     ][: budgets.max_files]
 
     def execute(item: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         rel_path = str(item["file_path"])
         path, _ = by_rel[rel_path]
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            return item, {"status": "timed_out", "error": "run wall-time budget"}
         context = resolved_compile_contexts.get(
             rel_path,
             CompileContext(rel_path, (), "free-mode", free_mode=True),
@@ -555,13 +669,17 @@ def recover_payload_candidates(
             "compile_arguments": list(context.arguments),
             "compile_context_fingerprint": context.fingerprint,
             "memory_mb": budgets.memory_mb,
-            "cpu_seconds": max(1, budgets.per_file_timeout_seconds),
+            "cpu_seconds": max(
+                1,
+                int(min(budgets.per_file_timeout_seconds, remaining_seconds) + 0.999),
+            ),
+            "max_output_bytes": MAX_WORKER_OUTPUT_BYTES,
             "max_source_bytes": MAX_SOURCE_BYTES,
         }
         return item, run_clang_worker(
             worker_path=worker_path,
             request=request,
-            timeout_seconds=budgets.per_file_timeout_seconds,
+            timeout_seconds=min(budgets.per_file_timeout_seconds, remaining_seconds),
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=budgets.workers) as executor:
@@ -632,6 +750,9 @@ def recover_payload_candidates(
                     non_improved += 1
                     consecutive_non_improvements += 1
                     trailing.append(False)
+            if time.monotonic() >= deadline:
+                stop_reason = "wall_time_budget"
+                break
         else:
             stop_reason = "queue_empty"
 

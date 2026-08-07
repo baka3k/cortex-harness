@@ -1,7 +1,7 @@
 import json
-import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,6 +14,7 @@ if str(CODE_TINY) not in sys.path:
 
 from tools.common.analyzer_cache import load_parse_cache, write_parse_cache  # noqa: E402
 from tools.cplus import cplus_analyzer  # noqa: E402
+from tools.cplus import parse_recovery  # noqa: E402
 from tools.cplus.parse_recovery import (  # noqa: E402
     PersistentRecoveryQueue,
     RecoveryBudgets,
@@ -90,6 +91,139 @@ class CPlusQualityCacheTests(unittest.TestCase):
             write_parse_cache(root, "legacy.py", signature, {"ok": True})
             self.assertEqual(load_parse_cache(root, "legacy.py", signature), {"ok": True})
 
+    def test_libclang_recovery_uses_backend_specific_cache_identity(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root, "broken.cpp")
+            path.write_text("class Broken { public: void run( {\n", encoding="utf-8")
+            cache_root = str(Path(root, ".cache"))
+            Path(cache_root).mkdir()
+            candidate = {
+                "functions": [],
+                "calls": [],
+                "types": [],
+                "namespaces": [],
+                "relations": [],
+                "function_types": [],
+                "fields": [],
+                "aliases": [],
+                "templates": [],
+                "file_def": {"file_path": "broken.cpp"},
+                "using_namespaces": [],
+                "using_imports": {},
+                "includes": [],
+                "macros": {},
+                "parse_meta": {
+                    "error_nodes": 0,
+                    "recovery_policy_version": cplus_analyzer.RECOVERY_POLICY_VERSION,
+                },
+            }
+            original_runtime_version = cplus_analyzer._runtime_package_version
+
+            def runtime_version(name):
+                if name == "libclang":
+                    return "18.1-test"
+                return original_runtime_version(name)
+
+            with (
+                mock.patch.object(
+                    cplus_analyzer,
+                    "_clang_parser",
+                    mock.Mock(parse_and_extract=mock.Mock(return_value=candidate)),
+                ),
+                mock.patch.object(
+                    cplus_analyzer, "_effective_fallback_threshold", return_value=0
+                ),
+                mock.patch.object(
+                    cplus_analyzer,
+                    "_runtime_package_version",
+                    side_effect=runtime_version,
+                ),
+            ):
+                result = cplus_analyzer._load_or_parse_payload(
+                    str(path),
+                    root,
+                    cache_root,
+                    True,
+                    None,
+                    "demo",
+                    allow_inprocess_clang_fallback=True,
+                )
+                cached_result = cplus_analyzer._load_or_parse_payload(
+                    str(path),
+                    root,
+                    cache_root,
+                    True,
+                    None,
+                    "demo",
+                    prefer_recovered_cache=True,
+                )
+                tree_sitter_signature = cplus_analyzer._parse_cache_context_signature(
+                    file_path=str(path),
+                    rel_path="broken.cpp",
+                    is_cpp=True,
+                    is_resource=False,
+                    compile_db_index=None,
+                    project_id="demo",
+                )
+                libclang_signature = cplus_analyzer._parse_cache_context_signature(
+                    file_path=str(path),
+                    rel_path="broken.cpp",
+                    is_cpp=True,
+                    is_resource=False,
+                    compile_db_index=None,
+                    project_id="demo",
+                    selected_backend=cplus_analyzer.ParserBackend.LIBCLANG,
+                    selected_parser_version="18.1-test",
+                    recovery_policy_version=cplus_analyzer.RECOVERY_POLICY_VERSION,
+                )
+                other_libclang_version_signature = (
+                    cplus_analyzer._parse_cache_context_signature(
+                        file_path=str(path),
+                        rel_path="broken.cpp",
+                        is_cpp=True,
+                        is_resource=False,
+                        compile_db_index=None,
+                        project_id="demo",
+                        selected_backend=cplus_analyzer.ParserBackend.LIBCLANG,
+                        selected_parser_version="19.0-test",
+                        recovery_policy_version=cplus_analyzer.RECOVERY_POLICY_VERSION,
+                    )
+                )
+                other_recovery_policy_signature = (
+                    cplus_analyzer._parse_cache_context_signature(
+                        file_path=str(path),
+                        rel_path="broken.cpp",
+                        is_cpp=True,
+                        is_resource=False,
+                        compile_db_index=None,
+                        project_id="demo",
+                        selected_backend=cplus_analyzer.ParserBackend.LIBCLANG,
+                        selected_parser_version="18.1-test",
+                        recovery_policy_version="test-policy-v3",
+                    )
+                )
+
+            self.assertIs(result, candidate)
+            self.assertEqual(cached_result["parse_meta"]["error_nodes"], 0)
+            self.assertEqual(
+                cached_result["parse_meta"]["recovery_policy_version"],
+                cplus_analyzer.RECOVERY_POLICY_VERSION,
+            )
+            self.assertNotEqual(tree_sitter_signature, libclang_signature)
+            self.assertNotEqual(
+                libclang_signature, other_libclang_version_signature
+            )
+            self.assertNotEqual(
+                libclang_signature, other_recovery_policy_signature
+            )
+            self.assertIsNone(
+                load_parse_cache(cache_root, "broken.cpp", tree_sitter_signature)
+            )
+            self.assertEqual(
+                load_parse_cache(cache_root, "broken.cpp", libclang_signature),
+                candidate,
+            )
+
 
 class CPlusBoundedRecoveryTests(unittest.TestCase):
     def test_compile_arguments_are_allowlisted_and_external_paths_rejected(self):
@@ -155,6 +289,55 @@ class CPlusBoundedRecoveryTests(unittest.TestCase):
             self.assertFalse(queue.enqueue("sample.c", quality, (0,)))
             self.assertEqual(queue.pending(), [])
 
+    def test_unchanged_failed_and_timed_out_items_are_terminal(self):
+        for status in ("failed", "timed_out", "invalid"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as root:
+                queue = PersistentRecoveryQueue(str(Path(root, "queue.json")))
+                quality = {"context_fingerprint": "ctx"}
+                self.assertTrue(queue.enqueue("sample.c", quality, (0,)))
+                item = queue.pending()[0]
+                queue.finish(item["id"], status, status)
+                self.assertFalse(queue.enqueue("sample.c", quality, (0,)))
+                self.assertEqual(queue.pending(), [])
+
+    def test_candidate_version_change_reopens_terminal_queue_item(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = PersistentRecoveryQueue(str(Path(root, "queue.json")))
+            quality = {"context_fingerprint": "ctx"}
+            self.assertTrue(queue.enqueue("sample.c", quality, (0,), "libclang:18:1"))
+            item = queue.pending()[0]
+            queue.finish(item["id"], "failed", "worker crash")
+            self.assertFalse(queue.enqueue("sample.c", quality, (0,), "libclang:18:1"))
+            self.assertTrue(queue.enqueue("sample.c", quality, (0,), "libclang:19:1"))
+
+    def test_obsolete_pending_candidate_identity_is_not_executed(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root, "broken.cpp")
+            path.write_text("class Broken { public: void run( {\n", encoding="utf-8")
+            baseline = cplus_analyzer._load_or_parse_payload(
+                str(path), root, str(Path(root, ".cache")), False, None, "demo"
+            )
+            quality = (baseline.get("parse_meta") or {}).get("quality") or {}
+            queue_path = str(Path(root, "queue.json"))
+            queue = PersistentRecoveryQueue(queue_path)
+            self.assertTrue(
+                queue.enqueue("broken.cpp", quality, (0,), "libclang:obsolete:1:1")
+            )
+            with mock.patch(
+                "tools.cplus.parse_recovery.run_clang_worker",
+                return_value={"status": "failed", "error": "expected"},
+            ) as worker_mock:
+                _selected, metrics = recover_payload_candidates(
+                    root=root,
+                    candidates={str(path): baseline},
+                    queue_path=queue_path,
+                    compile_commands_path="",
+                    budgets=RecoveryBudgets(max_files=10, wall_seconds=10, workers=1),
+                    worker_path="unused",
+                )
+            self.assertEqual(worker_mock.call_count, 1)
+            self.assertEqual(metrics["queued"], 1)
+
     def test_worker_timeout_isolated_to_one_process(self):
         with tempfile.TemporaryDirectory() as root:
             worker = Path(root, "hang.py")
@@ -177,6 +360,86 @@ class CPlusBoundedRecoveryTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "failed")
             self.assertIn("boom", result["error"])
+
+    def test_worker_output_is_capped_before_parent_reads_it(self):
+        with tempfile.TemporaryDirectory() as root:
+            worker = Path(root, "noisy.py")
+            worker.write_text("import sys\nsys.stdout.write('x' * 2048)\n", encoding="utf-8")
+            with mock.patch("tools.cplus.parse_recovery.MAX_WORKER_OUTPUT_BYTES", 1024):
+                result = run_clang_worker(
+                    worker_path=str(worker),
+                    request={"protocol_version": "1"},
+                    timeout_seconds=5,
+                )
+            self.assertEqual(result["status"], "invalid")
+            self.assertIn("output", result["error"])
+
+    def test_worker_process_tree_memory_is_capped_by_parent(self):
+        with tempfile.TemporaryDirectory() as root:
+            worker = Path(root, "memory.py")
+            worker.write_text(
+                "import time\npayload = bytearray(64 * 1024 * 1024)\ntime.sleep(30)\n",
+                encoding="utf-8",
+            )
+            result = run_clang_worker(
+                worker_path=str(worker),
+                request={"protocol_version": "1", "memory_mb": 1},
+                timeout_seconds=5,
+            )
+            self.assertEqual(result["status"], "failed")
+            self.assertIn("memory", result["error"])
+
+    def test_worker_memory_monitor_permission_failure_is_terminal(self):
+        with tempfile.TemporaryDirectory() as root:
+            worker = Path(root, "hang.py")
+            worker.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            with mock.patch(
+                "tools.cplus.parse_recovery.psutil.Process",
+                side_effect=parse_recovery.psutil.AccessDenied(),
+            ):
+                result = run_clang_worker(
+                    worker_path=str(worker),
+                    request={"protocol_version": "1", "memory_mb": 1024},
+                    timeout_seconds=5,
+                )
+            self.assertEqual(result["status"], "invalid")
+            self.assertIn("monitor", result["error"])
+
+    def test_run_wall_budget_caps_each_worker_deadline(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root, "broken.cpp")
+            path.write_text("class Broken { public: void run( {\n", encoding="utf-8")
+            baseline = cplus_analyzer._load_or_parse_payload(
+                str(path), root, str(Path(root, ".cache")), False, None, "demo"
+            )
+            observed_timeouts = []
+
+            def wait_for_deadline(*, timeout_seconds, **_kwargs):
+                observed_timeouts.append(timeout_seconds)
+                time.sleep(timeout_seconds + 0.05)
+                return {"status": "timed_out", "error": "worker timeout"}
+
+            started = time.monotonic()
+            with mock.patch(
+                "tools.cplus.parse_recovery.run_clang_worker",
+                side_effect=wait_for_deadline,
+            ):
+                _selected, metrics = recover_payload_candidates(
+                    root=root,
+                    candidates={str(path): baseline},
+                    queue_path=str(Path(root, "queue.json")),
+                    compile_commands_path="",
+                    budgets=RecoveryBudgets(
+                        max_files=1,
+                        wall_seconds=1,
+                        workers=1,
+                        per_file_timeout_seconds=30,
+                    ),
+                    worker_path="unused",
+                )
+            self.assertLess(time.monotonic() - started, 2)
+            self.assertLessEqual(observed_timeouts[0], 1)
+            self.assertEqual(metrics["stop_reason"], "wall_time_budget")
 
     def test_recovery_selects_only_strict_improvement_and_caches_terminal_result(self):
         with tempfile.TemporaryDirectory() as root:

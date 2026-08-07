@@ -1,0 +1,32 @@
+{
+  "captured_at": "2026-08-07",
+  "corpus_file_count": 100,
+  "elapsed_ms": 125.203,
+  "latency_ms": {
+    "p50": 0.637,
+    "p95": 1.715
+  },
+  "peak_rss_bytes": 526041088,
+  "quality_tiers": {
+    "clean": 60,
+    "quarantined": 10,
+    "recovered": 20,
+    "retry_required": 10
+  },
+  "runtime": {
+    "clang": "21.1.7",
+    "libclang": "18.1.1",
+    "platform": "darwin",
+    "python": "3.12.12",
+    "tree-sitter": "0.25.0",
+    "tree-sitter-c": "0.24.2",
+    "tree-sitter-cpp": "0.23.4"
+  },
+  "schema_version": "1",
+  "semantic_yield": {
+    "calls": 0,
+    "functions": 60,
+    "includes": 10,
+    "types": 100
+  }
+}
