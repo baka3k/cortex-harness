@@ -46,6 +46,8 @@ class GraphWriteJournalConsumer:
     def _load(self, batch: Any) -> tuple[GraphWriteOperation, list[dict[str, Any]]]:
         try:
             operation = GraphWriteOperation.from_dict(batch.operation)
+            if operation.operation_key != batch.operation_key:
+                raise ValueError("batch and descriptor operation keys do not match")
             raw_rows = self.journal.artifacts.read_jsonl(batch.artifact)
             if not all(isinstance(row, dict) for row in raw_rows):
                 raise ValueError("artifact rows must be JSON objects")
@@ -118,7 +120,7 @@ class GraphWriteJournalConsumer:
         parameters["__journal_operation_key"] = operation.operation_key
         started = time.monotonic()
         try:
-            with journaled_mutation(batch.job_id):
+            with journaled_mutation(batch.job_id, operation.operation_key):
                 records, _, _ = await self.driver.execute_query(
                     query, parameters, self.database
                 )
