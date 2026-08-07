@@ -79,6 +79,8 @@ class GraphWriteOperation:
     node_label: str | None = None
     identity_property: str | None = None
     row_identity_property: str = "id"
+    row_properties_property: str | None = None
+    mutation_kind: str = "merge"
     query_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
@@ -88,6 +90,8 @@ class GraphWriteOperation:
             raise ValueError("operation version must be positive")
         if not self.idempotent:
             raise ValueError("journaled graph operations must be replay-safe")
+        if self.mutation_kind not in {"merge", "match"}:
+            raise ValueError("unsupported persisted mutation kind")
 
     @classmethod
     def for_label(cls, label: str) -> "GraphWriteOperation":
@@ -146,6 +150,12 @@ class GraphWriteOperation:
                 else None
             ),
             row_identity_property=str(value.get("row_identity_property", "id")),
+            row_properties_property=(
+                str(value["row_properties_property"])
+                if value.get("row_properties_property")
+                else None
+            ),
+            mutation_kind=str(value.get("mutation_kind", "merge")),
             query_fingerprint=(
                 str(value["query_fingerprint"])
                 if value.get("query_fingerprint")
@@ -172,12 +182,15 @@ class GraphWriteOperation:
             "node_label": self.node_label,
             "identity_property": self.identity_property,
             "row_identity_property": self.row_identity_property,
+            "row_properties_property": self.row_properties_property,
+            "mutation_kind": self.mutation_kind,
             "query_fingerprint": self.query_fingerprint,
         }
 
 
-_NODE_MERGE_PATTERN = re.compile(
-    r"\bMERGE\s*\(\s*[A-Za-z_]\w*\s*:(?P<label>[A-Za-z_]\w*)"
+_NODE_IDENTITY_PATTERN = re.compile(
+    r"\b(?P<verb>MERGE|MATCH)\s*\(\s*(?P<variable>[A-Za-z_]\w*)\s*:"
+    r"(?P<label>[A-Za-z_]\w*)"
     r"(?::[A-Za-z_]\w*)*\s*\{\s*(?P<identity>[A-Za-z_]\w*)\s*:"
     r"\s*row\.(?P<row_identity>[A-Za-z_]\w*)\s*\}",
     re.IGNORECASE,
@@ -187,12 +200,18 @@ _NODE_MERGE_PATTERN = re.compile(
 def operation_for_custom_query(label: str, cypher: str) -> GraphWriteOperation:
     """Derive only the narrow allowlisted node-identity shape from source Cypher."""
 
-    matches = list(_NODE_MERGE_PATTERN.finditer(cypher))
+    matches = list(_NODE_IDENTITY_PATTERN.finditer(cypher))
     query_fingerprint = hashlib.sha256(
         " ".join(cypher.split()).encode("utf-8")
     ).hexdigest()[:16]
     if len(matches) == 1:
         match = matches[0]
+        properties_pattern = re.compile(
+            rf"\bSET\s+{re.escape(match.group('variable'))}\s*\+=\s*"
+            r"row\.(?P<property>[A-Za-z_]\w*)",
+            re.IGNORECASE,
+        )
+        properties_match = properties_pattern.search(cypher)
         return GraphWriteOperation(
             label=label,
             phase=OperationPhase.NODES,
@@ -200,6 +219,10 @@ def operation_for_custom_query(label: str, cypher: str) -> GraphWriteOperation:
             node_label=match.group("label"),
             identity_property=match.group("identity"),
             row_identity_property=match.group("row_identity"),
+            row_properties_property=(
+                properties_match.group("property") if properties_match else None
+            ),
+            mutation_kind=match.group("verb").casefold(),
             query_fingerprint=query_fingerprint,
         )
     base = GraphWriteOperation.for_label(label)

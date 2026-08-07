@@ -29,11 +29,21 @@ def compile_persisted_mutation(
         validate_cypher_identifier(
             operation.row_identity_property, kind="row identity property"
         )
+        verb = "MERGE" if operation.mutation_kind == "merge" else "MATCH"
+        row_value = (
+            f"coalesce(row.{operation.row_properties_property}, {{}})"
+            if operation.row_properties_property
+            else "row"
+        )
+        if operation.row_properties_property:
+            validate_cypher_identifier(
+                operation.row_properties_property, kind="row properties property"
+            )
         query = (
             "UNWIND $rows AS row "
-            f"MERGE (n:{operation.node_label} "
+            f"{verb} (n:{operation.node_label} "
             f"{{{operation.identity_property}: row.{operation.row_identity_property}}}) "
-            "SET n += row, n.updated_at = datetime() "
+            f"SET n += {row_value}, n.updated_at = datetime() "
             "RETURN count(n) AS count"
         )
         return query, {"rows": materialized}
