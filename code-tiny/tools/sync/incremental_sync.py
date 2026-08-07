@@ -1920,7 +1920,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     if _is_framework_candidate(framework, path)
                 )
 
-        artifact_token = current_inventory.snapshot_id[:12]
+        artifact_token = (
+            f"{current_inventory.snapshot_id[:12]}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+        )
         manifest_root = os.path.join(
             safe_cache_root(control_cache_dir, "incremental_sync_manifests", project_root=root),
             scope_id,
