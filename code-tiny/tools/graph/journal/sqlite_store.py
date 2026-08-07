@@ -294,6 +294,15 @@ class SQLiteJournal:
             return
         if version == 1:
             with self._transaction():
+                active = self._connection.execute(
+                    "SELECT COUNT(*) FROM batches WHERE status != ?",
+                    (BatchStatus.DONE.value,),
+                ).fetchone()
+                if active is not None and int(active[0]) > 0:
+                    raise JournalError(
+                        TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+                        "schema v1 has active batches without replay descriptors",
+                    )
                 self._connection.execute(
                     "ALTER TABLE batches ADD COLUMN operation_json "
                     "TEXT NOT NULL DEFAULT '{}'"

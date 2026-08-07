@@ -25,6 +25,7 @@ from tools.graph.journal import (  # noqa: E402
 )
 from tools.graph.journal.consumer import resume_journal  # noqa: E402
 from tools.graph.journal.executor import compile_persisted_mutation  # noqa: E402
+from tools.graph.journal.guard import journaled_mutation  # noqa: E402
 from tools.graph.journal.operation import operation_for_custom_query  # noqa: E402
 from tools.graph.journal.runtime import GraphWriteJournalRuntime  # noqa: E402
 from tools.graph.writer.language_writer import LanguageCodeWriter  # noqa: E402
@@ -240,6 +241,23 @@ def test_schema_v1_migrates_persisted_operation_contract(tmp_path: Path) -> None
     assert "operation_json" in columns
 
 
+def test_schema_v1_rejects_active_batch_without_operation_descriptor(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.close()
+    connection = sqlite3.connect(config.path)
+    connection.execute("ALTER TABLE batches DROP COLUMN operation_json")
+    connection.execute("PRAGMA user_version = 1")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(JournalError, match="active batches"):
+        SQLiteJournal(config.path)
+
+
 @pytest.mark.asyncio
 async def test_autonomous_consumer_replays_artifact_without_producer_closure(
     tmp_path: Path,
@@ -291,16 +309,13 @@ async def test_atomic_receipt_round_trip_on_embedded_falkordb(tmp_path: Path) ->
     )
     install_required_write_guard(driver)
     try:
-        from tools.graph.journal.guard import journaled_mutation
-
-        with journaled_mutation("job-1"):
+        with journaled_mutation("job-1", "graph-write/v1/nodes/files"):
             records, _, _ = await driver.execute_query(
                 "UNWIND $rows AS row "
                 "MERGE (n:File {id: row.id}) "
                 "SET n += row RETURN count(n) AS count",
                 {
                     "rows": [{"id": "a.py"}, {"id": "b.py"}],
-                    "__journal_operation_key": "files",
                 },
                 "journal_test",
             )
@@ -314,6 +329,50 @@ async def test_atomic_receipt_round_trip_on_embedded_falkordb(tmp_path: Path) ->
         driver.close()
     assert records == [{"count": 2}]
     assert receipt == [{"count": 2}]
+
+
+@pytest.mark.asyncio
+async def test_no_return_mutation_counts_surviving_rows_and_binds_operation_key() -> None:
+    driver = _ConsumerDriver()
+    install_required_write_guard(driver)
+    with journaled_mutation("job-2", "graph-write/v1/custom/calls-api"):
+        records, _, _ = await driver.execute_query(
+            "UNWIND $rows AS row "
+            "MATCH (source:Function {id: row.source_id}) "
+            "MATCH (target:ApiCall {id: row.target_id}) "
+            "MERGE (source)-[:CALLS_API]->(target)",
+            {"rows": [{"source_id": "f", "target_id": "api"}]},
+        )
+    query, parameters = driver.calls[-1]
+    assert "WITH count(*) AS __journal_count" in query
+    assert parameters["__journal_operation_key"] == (
+        "graph-write/v1/custom/calls-api"
+    )
+    assert records == [{"count": 1}]
+
+
+def test_unsupported_custom_shape_is_rejected_before_durable_enqueue(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    operation = operation_for_custom_query(
+        "custom:fixed-property",
+        "UNWIND $rows AS row "
+        "MERGE (n:Resource {id: row.id}) "
+        "SET n.name = row.name, n.node_type = 'code'",
+    )
+    try:
+        with pytest.raises(JournalError, match="no trusted recovery compiler"):
+            runtime.prepare(
+                label=operation.label,
+                rows=[{"id": "r1", "name": "R"}],
+                sequence=0,
+                operation=operation,
+            )
+        assert runtime.journal.status_counts(runtime.run.run_id)[BatchStatus.PENDING] == 0
+    finally:
+        runtime.close()
 
 
 def test_config_reuses_only_compatible_open_generation(tmp_path: Path) -> None:

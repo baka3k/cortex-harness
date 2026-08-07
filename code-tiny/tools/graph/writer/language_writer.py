@@ -222,7 +222,8 @@ class LanguageCodeWriter:
                 total=total,
             )
             with journaled_mutation(
-                ticket.batch.job_id if ticket is not None else None
+                ticket.batch.job_id if ticket is not None else None,
+                ticket.operation.operation_key if ticket is not None else "schema",
             ):
                 write_task = asyncio.create_task(write_fn(batch))
             try:
@@ -1586,7 +1587,9 @@ class LanguageCodeWriter:
                 continue
             started = time.monotonic()
             try:
-                with journaled_mutation(claimed.batch.job_id):
+                with journaled_mutation(
+                    claimed.batch.job_id, claimed.operation.operation_key
+                ):
                     count = int(await write_fn(list(claimed.rows)))
                 self._journal_runtime.acknowledge(
                     claimed, count, int((time.monotonic() - started) * 1000)
