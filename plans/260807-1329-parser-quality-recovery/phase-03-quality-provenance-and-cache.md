@@ -48,11 +48,11 @@ diagnostics remain in the artifact; payloads carry only compact provenance.
 
 ## Todo
 
-- [ ] Add canonical context fingerprints and schema migration behavior.
-- [ ] Attach compact quality/provenance to C/C++ payloads.
-- [ ] Define strong versus weak extracted evidence categories.
-- [ ] Cache selected and terminal non-improvement outcomes.
-- [ ] Verify unrelated analyzer caches remain compatible.
+- [x] Add canonical context fingerprints and schema migration behavior.
+- [x] Attach compact quality/provenance to C/C++ payloads.
+- [x] Define strong versus weak extracted evidence categories.
+- [x] Cache selected and terminal non-improvement outcomes.
+- [x] Verify unrelated analyzer caches remain compatible.
 
 ## Risks
 

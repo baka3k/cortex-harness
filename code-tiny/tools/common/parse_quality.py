@@ -11,7 +11,7 @@ import hashlib
 import json
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
@@ -308,7 +308,24 @@ def candidate_is_strictly_better(
     candidate: CandidateSummary,
     baseline: CandidateSummary,
 ) -> bool:
-    return candidate_score(candidate) < candidate_score(baseline)
+    candidate_value = candidate_score(candidate)
+    baseline_value = candidate_score(baseline)
+    if candidate.backend != baseline.backend:
+        # Parser-specific syntax damage and diagnostic ranges are not comparable
+        # across backends. Cross-backend replacement therefore requires a strict
+        # improvement in the provider-neutral semantic-yield tuple.
+        candidate_semantic = candidate.semantic_yield
+        baseline_semantic = baseline.semantic_yield
+        return (
+            -candidate_semantic.top_level_count,
+            -candidate_semantic.stable_scope_count,
+            -candidate_semantic.useful_reference_count,
+        ) < (
+            -baseline_semantic.top_level_count,
+            -baseline_semantic.stable_scope_count,
+            -baseline_semantic.useful_reference_count,
+        )
+    return candidate_value < baseline_value
 
 
 def build_quality_record(

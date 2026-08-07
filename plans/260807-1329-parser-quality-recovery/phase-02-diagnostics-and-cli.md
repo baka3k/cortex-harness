@@ -49,11 +49,11 @@ summary. The analyzer writes the versioned Phase 01 schema atomically.
 
 ## Todo
 
-- [ ] Add CLI policy and validated budget plumbing.
-- [ ] Wire C/C++ report generation through normal sync.
-- [ ] Extend child/root summaries with artifact metadata.
-- [ ] Add atomic-write, cap, privacy, and compatibility tests.
-- [ ] Verify dry-run shows the intended arguments without writing artifacts.
+- [x] Add CLI policy and validated budget plumbing.
+- [x] Wire C/C++ report generation through normal sync.
+- [x] Extend child/root summaries with artifact metadata.
+- [x] Add atomic-write, cap, privacy, and compatibility tests.
+- [x] Verify dry-run shows the intended arguments without writing artifacts.
 
 ## Risks
 
