@@ -5,13 +5,15 @@ created: 2026-08-07
 mode: hi-plan --fast
 scope: "C/C++ parse-quality reporting, classification, provenance, cache correctness, bounded recovery, and guarded publication"
 blockedBy: []
-blocks: []
+blocks:
+  - 260807-2103-toolchain-reliability-hardening
 phaseBlockedBy:
   "05":
     - 260804-1640-port-proc-cplus-to-code-tiny
     - 260807-1202-graph-ingest-write-path-hardening
     - 260807-0929-mcp-ingest-query-concurrency
 relatedPlans:
+  - 260807-2103-toolchain-reliability-hardening
   - 260804-1640-port-proc-cplus-to-code-tiny
   - 260807-1202-graph-ingest-write-path-hardening
   - 260807-0929-mcp-ingest-query-concurrency
@@ -198,6 +200,14 @@ compatible alias during migration.
 6. [Phase 06 — security, performance, canary, and rollout](phase-06-validation-and-rollout.md)
 
 ## Cross-plan dependencies and ownership
+
+### `260807-2103-toolchain-reliability-hardening`
+
+The reliability plan consumes this plan's quality tiers, provenance, cache
+identity, and guarded-publication policy. This plan remains the owner of parser
+assessment/recovery. Its stable adapter contract blocks reliability Phases 02
+and 07; the reliability plan owns record-level envelope validation, typed
+outcomes, cross-tool certification, and operator UX.
 
 ### `260804-1640-port-proc-cplus-to-code-tiny`
 

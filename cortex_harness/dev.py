@@ -39,6 +39,7 @@ from tools.graph.journal.config import (
 )
 from tools.graph.journal.models import RunStatus
 from tools.jp1.sniff import is_jp1_file
+from tools.common.reliability import RunOutcome, RunResult, load_run_result
 
 HARNESS_CONFIG_DIR = ".cortext-harness/config"
 SYNC_STATE_DIR = ".cortext-harness/sync-state"
@@ -1114,17 +1115,46 @@ def _run_with_retry(
     dry_run: bool = False,
     env: Optional[dict] = None,
     non_retryable_exit_codes: Optional[set[int]] = None,
+    result_path: Optional[Path] = None,
 ) -> int:
     display = " ".join(str(c) for c in cmd)
     click.echo(f"  $ {display}")
     if dry_run:
         click.echo("  [dry-run] skipped")
         return 0
+    process_env = None
+    if env is not None or result_path is not None:
+        process_env = dict(os.environ)
+        process_env.update({str(key): str(value) for key, value in (env or {}).items()})
+        process_env.setdefault("CORTEX_RUN_ID", uuid.uuid4().hex)
+        process_env.setdefault("CORTEX_CORRELATION_ID", process_env["CORTEX_RUN_ID"])
+
+    def render_failure(result: RunResult) -> None:
+        failure = result.failure
+        if failure is None:
+            click.echo(
+                f"  [failure] outcome={result.outcome.value} phase={result.phase.value} "
+                f"run={result.run_id}",
+                err=True,
+            )
+            return
+        artifact = failure.artifact_references[0].path if failure.artifact_references else str(result_path or "")
+        click.echo(
+            "  [failure] code=%s phase=%s run=%s summary=%s artifact=%s action=%s"
+            % (
+                failure.code,
+                failure.phase.value,
+                failure.run_id,
+                failure.summary,
+                artifact or "none",
+                failure.safe_action,
+            ),
+            err=True,
+        )
+
     for attempt in range(1, max_retries + 1):
-        process_env = None
-        if env is not None:
-            process_env = dict(os.environ)
-            process_env.update({str(key): str(value) for key, value in env.items()})
+        if result_path is not None:
+            result_path.unlink(missing_ok=True)
         if (
             process_env is not None
             and process_env.get("CORTEX_GRAPH_JOURNAL_MODE", "").casefold()
@@ -1151,10 +1181,38 @@ def _run_with_retry(
         rc = subprocess.run([str(c) for c in cmd], env=process_env).returncode
         if rc == 0:
             return 0
-        if rc in (non_retryable_exit_codes or set()):
+        typed_result: Optional[RunResult] = None
+        if result_path is not None:
+            try:
+                typed_result = load_run_result(result_path)
+            except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+                click.echo(
+                    "  [failure] code=child_result_missing phase=finished "
+                    f"summary=child exited {rc} without a valid result artifact "
+                    f"artifact={result_path} action=inspect child logs ({type(exc).__name__})",
+                    err=True,
+                )
+                return rc
+            expected_run_id = (process_env or {}).get("CORTEX_RUN_ID", "")
+            if expected_run_id and typed_result.run_id != expected_run_id:
+                click.echo(
+                    "  [failure] code=child_result_identity_mismatch phase=finished "
+                    f"summary=result run {typed_result.run_id} does not match {expected_run_id} "
+                    f"artifact={result_path} action=discard the incompatible artifact and rerun",
+                    err=True,
+                )
+                return rc
+            render_failure(typed_result)
+            if typed_result.outcome is RunOutcome.AMBIGUOUS or not typed_result.should_retry:
+                return rc
+        if typed_result is None and rc in (non_retryable_exit_codes or set()):
             return rc
         if attempt < max_retries:
-            wait = 2 ** attempt
+            wait = (
+                typed_result.retry_after_seconds
+                if typed_result is not None and typed_result.retry_after_seconds is not None
+                else 2 ** attempt
+            )
             click.echo(f"  [retry {attempt}/{max_retries - 1}] exit={rc}, retrying in {wait}s…")
             time.sleep(wait)
     return rc
@@ -2398,6 +2456,7 @@ def sync_code(
                 dry_run=False,
                 env=process_env,
                 non_retryable_exit_codes={2},
+                result_path=child_summary_path,
             )
             elapsed = time.time() - start
             child_summary = _read_code_sync_summary(child_summary_path)
@@ -2497,6 +2556,7 @@ def sync_code_all(ctx):
                 dry_run=False,
                 env=process_env,
                 non_retryable_exit_codes={2},
+                result_path=child_summary_path,
             )
             elapsed = time.time() - start
             child_summary = _read_code_sync_summary(child_summary_path)

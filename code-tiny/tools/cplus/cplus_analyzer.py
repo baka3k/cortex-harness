@@ -47,6 +47,14 @@ from tools.common.parse_quality import (
     context_fingerprint,
     source_fingerprint,
 )
+from tools.common.payload_validation import (
+    PAYLOAD_SCHEMA_VERSION,
+    PayloadAccounting,
+    accounting_for_payload,
+    identity_merge_fingerprint,
+    quarantine_dicts,
+    validate_cplus_payload,
+)
 
 from tools.common.analyzer_cache import (
     file_signature,
@@ -2489,10 +2497,107 @@ def _resolve_embedding_model_source(model_name: str) -> str:
     return resolved_path
 
 
+EMBEDDING_CACHE_SCHEMA_VERSION = "2"
+EMBEDDING_RUNTIME_VERSION = "cplus-code-embedder-v2"
+EMBEDDING_FINGERPRINT_CACHE_VERSION = "1"
+
+
+def _embedding_source_fingerprint(model_source: str) -> str:
+    """Fingerprint local bytes once per deterministic file-manifest revision."""
+
+    resolved = os.path.realpath(model_source)
+    if not os.path.exists(resolved):
+        hasher = hashlib.sha256()
+        hasher.update(f"remote:{model_source}".encode("utf-8"))
+        return hasher.hexdigest()
+    files: List[str] = []
+    if os.path.isfile(resolved):
+        files.append(resolved)
+        root = os.path.dirname(resolved)
+    else:
+        root = resolved
+        for directory, dirnames, filenames in os.walk(resolved):
+            dirnames.sort()
+            for filename in sorted(filenames):
+                files.append(os.path.join(directory, filename))
+
+    manifest_rows = []
+    for path in files:
+        metadata = os.stat(path)
+        manifest_rows.append(
+            (
+                os.path.relpath(path, root).replace(os.sep, "/"),
+                int(metadata.st_size),
+                int(metadata.st_mtime_ns),
+                int(metadata.st_ino),
+            )
+        )
+    manifest_fingerprint = hashlib.sha256(
+        json.dumps(manifest_rows, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    cache_root = os.path.abspath(
+        os.path.expanduser(
+            os.environ.get("CORTEX_EMBEDDING_FINGERPRINT_CACHE_DIR")
+            or os.path.join("~", ".cache", "cortex-harness", "embedding_fingerprints")
+        )
+    )
+    cache_key = hashlib.sha256(resolved.encode("utf-8", errors="surrogateescape")).hexdigest()
+    cache_path = os.path.join(cache_root, f"{cache_key}.json")
+    try:
+        with open(cache_path, "r", encoding="utf-8") as handle:
+            cached = json.load(handle)
+        if (
+            cached.get("schema_version") == EMBEDDING_FINGERPRINT_CACHE_VERSION
+            and cached.get("manifest_fingerprint") == manifest_fingerprint
+            and isinstance(cached.get("content_fingerprint"), str)
+        ):
+            return str(cached["content_fingerprint"])
+    except (OSError, ValueError, TypeError):
+        pass
+
+    hasher = hashlib.sha256()
+    for path in files:
+        relative = os.path.relpath(path, root).replace(os.sep, "/")
+        hasher.update(relative.encode("utf-8", errors="surrogateescape"))
+        hasher.update(b"\0")
+        with open(path, "rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                hasher.update(chunk)
+        hasher.update(b"\0")
+    content_fingerprint = hasher.hexdigest()
+    temporary = f"{cache_path}.{os.getpid()}.{time.time_ns()}.tmp"
+    try:
+        os.makedirs(cache_root, mode=0o700, exist_ok=True)
+        os.chmod(cache_root, 0o700)
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "schema_version": EMBEDDING_FINGERPRINT_CACHE_VERSION,
+                    "manifest_fingerprint": manifest_fingerprint,
+                    "content_fingerprint": content_fingerprint,
+                },
+                handle,
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+        os.replace(temporary, cache_path)
+        os.chmod(cache_path, 0o600)
+    except OSError:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+    return content_fingerprint
+
+
 class CodeEmbedder:
     def __init__(self, model_name: str, device: str, max_embed_chars: int, chunk_embed: bool) -> None:
         model_source = _resolve_embedding_model_source(model_name)
         model_source, local_files_only = _shared_resolve_embedding_cache(model_source)
+        self.model_name = model_name
+        self.model_source = model_source
+        self.model_content_fingerprint = _embedding_source_fingerprint(model_source)
         trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
         extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
         self.tokenizer = AutoTokenizer.from_pretrained(
@@ -3435,22 +3540,6 @@ async def build_call_graph(
     total_files = len(all_file_paths)
 
     cleanup_targets = sorted(changed_set | deleted_set)
-    if incremental and cleanup_targets:
-        if code_writer:
-            await cleanup_neo4j_for_files(
-                driver=code_writer.driver,
-                database=code_writer.database,
-                project_id=project_id,
-                file_paths=cleanup_targets,
-                verbose=verbose,
-            )
-        if qdrant_writer:
-            cleanup_qdrant_with_writer(
-                writer=qdrant_writer,
-                project_id=project_id,
-                file_paths=cleanup_targets,
-                verbose=verbose,
-            )
 
     repair_selected_payloads: Dict[str, Dict[str, Any]] = {}
     parse_recovery_metrics: Dict[str, Any] = {
@@ -3587,23 +3676,128 @@ async def build_call_graph(
                 if verbose:
                     print(f"[parse-quality] recovery unavailable; retaining first pass: {exc}")
 
+    payload_quarantine_records = []
+    payload_quarantine_count = 0
+    payload_validation_accepted = 0
+    payload_validation_rejected = 0
+    accepted_payload_identities: Set[Tuple[str, str]] = {("Project", project_id)}
+    payload_validation_hasher = hashlib.sha256(
+        f"{PAYLOAD_SCHEMA_VERSION}:{parse_quality_policy}".encode("utf-8")
+    )
+
+    collection_labels = {
+        "namespaces": "Namespace",
+        "types": "Type",
+        "function_types": "FunctionType",
+        "functions": "Function",
+        "fields": "Field",
+        "aliases": "Alias",
+        "templates": "Template",
+        "resources": "Resource",
+        "resource_elements": "ResourceElement",
+        "proc_nodes": "ProcStatement",
+    }
+
+    def raw_payload_for(file_path: str) -> Dict[str, Any]:
+        if file_path in repair_selected_payloads:
+            return repair_selected_payloads[file_path]
+        return _load_or_parse_payload(
+            file_path,
+            root,
+            parse_cache_root,
+            parse_cache,
+            compile_db_index,
+            project_id=project_id,
+            allow_inprocess_clang_fallback=parse_quality_policy == "off",
+            prefer_recovered_cache=parse_quality_policy == "repair",
+        )
+
+    identity_records: Dict[Tuple[str, str], str] = {}
+    blocked_payload_identities: Set[Tuple[str, str]] = set()
+    for file_path in all_file_paths:
+        preflight_payload, _ = validate_cplus_payload(
+            raw_payload_for(file_path), project_id=project_id
+        )
+        preflight_file = preflight_payload.get("file_def") or {}
+        if preflight_file.get("file_path") and not preflight_payload.get("_quarantine_entire_payload"):
+            accepted_payload_identities.add(("File", str(preflight_file["file_path"])))
+        for collection, default_label in collection_labels.items():
+            for record in preflight_payload.get(collection, []) or []:
+                identity = str(record.get("id") or record.get("symbol_id") or "")
+                label = str(record.get("label") or default_label)
+                if not identity:
+                    continue
+                key = (label, identity)
+                canonical = identity_merge_fingerprint(label, record)
+                previous = identity_records.setdefault(key, canonical)
+                if previous != canonical:
+                    blocked_payload_identities.add(key)
+                accepted_payload_identities.add(key)
+    accepted_payload_identities.difference_update(blocked_payload_identities)
+
+    # No store is modified until every candidate payload has passed scan-wide preflight.
+    if incremental and cleanup_targets:
+        if code_writer:
+            await cleanup_neo4j_for_files(
+                driver=code_writer.driver,
+                database=code_writer.database,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+        if qdrant_writer:
+            cleanup_qdrant_with_writer(
+                writer=qdrant_writer,
+                project_id=project_id,
+                file_paths=cleanup_targets,
+                verbose=verbose,
+            )
+
     def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
+        nonlocal payload_quarantine_count
+        nonlocal payload_validation_accepted, payload_validation_rejected
         for index, file_path in enumerate(all_file_paths, start=1):
             if log_parse and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}", flush=True)
-            if file_path in repair_selected_payloads:
-                yield repair_selected_payloads[file_path]
-                continue
-            yield _load_or_parse_payload(
-                file_path,
-                root,
-                parse_cache_root,
-                parse_cache,
-                compile_db_index,
+            raw_payload = raw_payload_for(file_path)
+            validated_payload, quarantined = validate_cplus_payload(
+                raw_payload,
                 project_id=project_id,
-                allow_inprocess_clang_fallback=parse_quality_policy == "off",
-                prefer_recovered_cache=parse_quality_policy == "repair",
+                known_identities=accepted_payload_identities,
+                blocked_identities=blocked_payload_identities,
             )
+            if log_parse:
+                payload_quarantine_count += len(quarantined)
+                remaining = max(0, parse_quality_max_records - len(payload_quarantine_records))
+                payload_quarantine_records.extend(quarantined[:remaining])
+                payload_accounting = accounting_for_payload(
+                    validated_payload, quarantined
+                )
+                payload_validation_accepted += payload_accounting.accepted
+                payload_validation_rejected += payload_accounting.rejected
+                validated_file = validated_payload.get("file_def") or {}
+                if validated_file.get("file_path"):
+                    accepted_payload_identities.add(("File", str(validated_file["file_path"])))
+                for collection, default_label in collection_labels.items():
+                    for record in validated_payload.get(collection, []) or []:
+                        identity = str(record.get("id") or record.get("symbol_id") or "")
+                        label = str(record.get("label") or default_label)
+                        if identity:
+                            accepted_payload_identities.add((label, identity))
+                        if collection in {"functions", "resources", "proc_nodes"}:
+                            payload_validation_hasher.update(
+                                json.dumps(
+                                    record,
+                                    ensure_ascii=True,
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                    default=str,
+                                ).encode("utf-8")
+                            )
+                            payload_validation_hasher.update(b"\n")
+            if validated_payload.get("_quarantine_entire_payload"):
+                continue
+            yield validated_payload
 
     function_index_by_name: Dict[str, List[Dict[str, Any]]] = {}
     function_index_by_name_arity: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
@@ -3784,6 +3978,23 @@ async def build_call_graph(
                 "header_retry_used_count": header_retry_used_count,
             },
             "recovery": parse_recovery_metrics,
+            "payload_validation": {
+                "accounting": PayloadAccounting(
+                    discovered=(
+                        payload_validation_accepted
+                        + payload_quarantine_count
+                        + payload_validation_rejected
+                    ),
+                    accepted=payload_validation_accepted,
+                    quarantined=payload_quarantine_count,
+                    rejected=payload_validation_rejected,
+                ).to_dict(),
+                "quarantine_count": payload_quarantine_count,
+                "quarantine_truncated": payload_quarantine_count > len(payload_quarantine_records),
+                "quarantine": quarantine_dicts(
+                    payload_quarantine_records, limit=detail_limit
+                ),
+            },
         }
         while True:
             try:
@@ -3795,11 +4006,26 @@ async def build_call_graph(
                 )
                 break
             except ValueError as exc:
-                if "byte cap" not in str(exc) or not report_payload["files"]:
+                if "byte cap" not in str(exc):
                     raise
-                report_payload["files"] = report_payload["files"][: max(0, len(report_payload["files"]) // 2)]
+                validation_payload = report_payload.get("payload_validation") or {}
+                quarantine_samples = (
+                    validation_payload.get("quarantine", [])
+                    if isinstance(validation_payload, dict)
+                    else []
+                )
+                if not report_payload["files"] and not quarantine_samples:
+                    raise
+                report_payload["files"] = report_payload["files"][:
+                    max(0, len(report_payload["files"]) // 2)
+                ]
                 report_payload["detail_record_count"] = len(report_payload["files"])
                 report_payload["detail_truncated"] = True
+                if isinstance(validation_payload, dict) and quarantine_samples:
+                    validation_payload["quarantine"] = validation_payload["quarantine"][:
+                        max(0, len(validation_payload["quarantine"]) // 2)
+                    ]
+                    validation_payload["quarantine_truncated"] = True
         print(
             "[parse-quality] artifact=%s files=%d errors=%d missing=%d bytes=%d"
             % (
@@ -5158,9 +5384,14 @@ SET s.node_type = 'code',
                     await code_writer.close_barrier_and_drain(
                         "cplus:file-production"
                     )
-                else:
+                elif hasattr(code_writer, "write_relations_typed"):
                     await code_writer.write_relations_typed(
                         deferred_include_relations
+                    )
+                else:
+                    await code_writer.write_all(
+                        relations=deferred_include_relations,
+                        use_full_writers=True,
                     )
             except BaseException as exc:
                 if verbose:
@@ -5411,14 +5642,43 @@ SET s.node_type = 'code',
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", qdrant_writer.collection)
         points_path = os.path.join(qdrant_cache_root, f"{safe_name}_points.jsonl")
         state_path = os.path.join(qdrant_cache_root, f"{safe_name}_state.json")
+        model_config = getattr(getattr(embedder, "model", None), "config", None)
+        embedding_contract = {
+            "cache_schema_version": EMBEDDING_CACHE_SCHEMA_VERSION,
+            "runtime_version": EMBEDDING_RUNTIME_VERSION,
+            "model_name": str(getattr(embedder, "model_name", "")),
+            "model_source": str(getattr(embedder, "model_source", "")),
+            "model_content_fingerprint": str(
+                getattr(embedder, "model_content_fingerprint", "")
+            ),
+            "model_revision": str(
+                getattr(model_config, "_commit_hash", "")
+                or getattr(model_config, "_name_or_path", "")
+            ),
+            "vector_size": int(getattr(embedder, "vector_size", 0) or 0),
+            "max_embed_chars": getattr(embedder, "max_embed_chars", None),
+            "chunk_embed": bool(getattr(embedder, "chunk_embed", False)),
+            "tokenizer_max_length": int(
+                getattr(getattr(embedder, "tokenizer", None), "model_max_length", 0) or 0
+            ),
+        }
+        payload_validation_hasher.update(
+            json.dumps(
+                embedding_contract,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        validation_fingerprint = payload_validation_hasher.hexdigest()
 
-        def read_qdrant_state() -> Dict[str, int]:
+        def read_qdrant_state() -> Dict[str, Any]:
             if not os.path.exists(state_path):
                 return {}
             with open(state_path, "r", encoding="utf-8") as handle:
                 return json.load(handle)
 
-        def write_qdrant_state(state: Dict[str, int]) -> None:
+        def write_qdrant_state(state: Dict[str, Any]) -> None:
             temp_path = f"{state_path}.tmp"
             with open(temp_path, "w", encoding="utf-8") as handle:
                 json.dump(state, handle)
@@ -5438,7 +5698,11 @@ SET s.node_type = 'code',
                 item.setdefault("node_type", "proc")
                 yield item
 
-        if not os.path.exists(points_path) or cached_points != expected_points:
+        if (
+            not os.path.exists(points_path)
+            or cached_points != expected_points
+            or state.get("validation_fingerprint") != validation_fingerprint
+        ):
             print(f"[cache] Building Qdrant cache at {points_path}", flush=True)
             with open(points_path, "w", encoding="utf-8") as handle:
                 batch_funcs: List[Dict[str, Any]] = []
@@ -5521,7 +5785,11 @@ SET s.node_type = 'code',
                         }
                         handle.write(json.dumps(point, ensure_ascii=True) + "\n")
                     del texts, vectors
-            state = {"total_points": expected_points, "upserted": 0}
+            state = {
+                "total_points": expected_points,
+                "upserted": 0,
+                "validation_fingerprint": validation_fingerprint,
+            }
             write_qdrant_state(state)
         else:
             print(f"[cache] Using existing Qdrant cache at {points_path}", flush=True)
@@ -5545,13 +5813,25 @@ SET s.node_type = 'code',
                     batch_index += 1
                     print(f"[qdrant] Upsert batch {batch_index}/{total_batches}", flush=True)
                     qdrant_writer.upsert(enrich_project_scope(batch))
-                    write_qdrant_state({"total_points": total_points, "upserted": line_index})
+                    write_qdrant_state(
+                        {
+                            "total_points": total_points,
+                            "upserted": line_index,
+                            "validation_fingerprint": validation_fingerprint,
+                        }
+                    )
                     batch = []
             if batch:
                 batch_index += 1
                 print(f"[qdrant] Upsert batch {batch_index}/{total_batches}", flush=True)
                 qdrant_writer.upsert(enrich_project_scope(batch))
-                write_qdrant_state({"total_points": total_points, "upserted": line_index})
+                write_qdrant_state(
+                    {
+                        "total_points": total_points,
+                        "upserted": line_index,
+                        "validation_fingerprint": validation_fingerprint,
+                    }
+                )
         print("[qdrant] Upsert complete", flush=True)
         if not keep_cache:
             try:
