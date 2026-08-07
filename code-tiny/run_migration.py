@@ -39,8 +39,8 @@ def migrate(path):
     # Add graph imports
     if 'from tools.graph import' not in content:
         content = re.sub(
-            r'(from tools\.common\.cloc_stats import collect_cloc_stats, normalize_cloc_payload)\n',
-            r'\1\nfrom tools.graph import GraphDriverFactory, GraphProvider\nfrom tools.graph.language_writer import LanguageCodeWriter\n',
+            r'(from tools\.common\.git_diff import load_manifest_paths\n)',
+            r'\1from tools.graph import GraphDriverFactory, GraphProvider\nfrom tools.graph.language_writer import LanguageCodeWriter\n',
             content
         )
     
