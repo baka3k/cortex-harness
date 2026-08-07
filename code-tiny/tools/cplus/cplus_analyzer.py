@@ -3852,6 +3852,29 @@ async def build_call_graph(
                 resolved.append(rel_inc)
         resolved_includes_by_file[file_path] = resolved
 
+    deferred_include_relations: List[Dict[str, Any]] = [
+        {
+            "source_label": "File",
+            "target_label": "File",
+            "rel_type": "INCLUDES",
+            "source_id": file_id,
+            "target_id": inc_file,
+            "properties": {},
+        }
+        for file_id, included_files in resolved_includes_by_file.items()
+        for inc_file in included_files
+    ]
+    durable_includes_enqueued = bool(
+        deferred_include_relations
+        and isinstance(code_writer, LanguageCodeWriter)
+        and code_writer._journal_runtime is not None
+    )
+    if durable_includes_enqueued:
+        await code_writer.enqueue_deferred_relations(
+            deferred_include_relations,
+            barrier="cplus:file-production",
+        )
+
     include_closure_cache: Dict[str, set[str]] = {}
 
     def include_closure(file_path: str, stack: Optional[set[str]] = None) -> set[str]:
@@ -4385,12 +4408,25 @@ SET s.node_type = 'code',
                 _total_calls_written += len(buf_calls)
             if buf_unknown_calls:
                 _unk_bs = max(1, neo4j_calls_batch_size)
-                for _off in range(0, len(buf_unknown_calls), _unk_bs):
-                    _ubatch = buf_unknown_calls[_off : _off + _unk_bs]
-                    await code_writer.driver.execute_query(
-                        _UNKNOWN_CALLS_CYPHER, {"rows": _ubatch},
-                        database=code_writer.database,
-                    )
+                _orig_unknown_bs = code_writer.batch_size
+                code_writer.batch_size = _unk_bs
+                try:
+                    if isinstance(code_writer, LanguageCodeWriter):
+                        await code_writer.write_nodes_batch(
+                            "cplus:unknown_calls",
+                            _UNKNOWN_CALLS_CYPHER,
+                            buf_unknown_calls,
+                        )
+                    else:
+                        for _off in range(0, len(buf_unknown_calls), _unk_bs):
+                            _ubatch = buf_unknown_calls[_off : _off + _unk_bs]
+                            await code_writer.driver.execute_query(
+                                _UNKNOWN_CALLS_CYPHER,
+                                {"rows": _ubatch},
+                                database=code_writer.database,
+                            )
+                finally:
+                    code_writer.batch_size = _orig_unknown_bs
                 _total_unknown_calls_written += len(buf_unknown_calls)
             buf_files = []; buf_namespaces = []; buf_types = []; buf_function_types = []
             buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
@@ -5102,39 +5138,44 @@ SET s.node_type = 'code',
 
         # Include targets can belong to a later stream buffer. Defer these edges
         # until every File node has been written so endpoint matching is complete.
-        deferred_include_relations: List[Dict[str, Any]] = [
-            {
-                "source_label": "File",
-                "target_label": "File",
-                "rel_type": "INCLUDES",
-                "source_id": file_id,
-                "target_id": inc_file,
-                "properties": {},
-            }
-            for file_id, included_files in resolved_includes_by_file.items()
-            for inc_file in included_files
-        ]
-
         if deferred_include_relations:
             if verbose:
-                print(
-                    "[graph] deferred_includes write_started count=%d "
-                    "storage=memory-only persistent_retry_queue=false "
-                    "retry=next-full-idempotent-replay"
-                    % len(deferred_include_relations),
-                    flush=True,
-                )
+                if durable_includes_enqueued:
+                    message = (
+                        "[graph] deferred_includes write_started count=%d "
+                        "storage=journal persistent_retry_queue=true "
+                        "retry=compatible-run-resume"
+                    ) % len(deferred_include_relations)
+                else:
+                    message = (
+                        "[graph] deferred_includes write_started count=%d "
+                        "storage=memory-only persistent_retry_queue=false "
+                        "retry=next-full-idempotent-replay"
+                    ) % len(deferred_include_relations)
+                print(message, flush=True)
             try:
-                await code_writer.write_relations_typed(deferred_include_relations)
+                if durable_includes_enqueued:
+                    await code_writer.close_barrier_and_drain(
+                        "cplus:file-production"
+                    )
+                else:
+                    await code_writer.write_relations_typed(
+                        deferred_include_relations
+                    )
             except BaseException as exc:
                 if verbose:
-                    print(
-                        "[graph] deferred_includes write_failed count=%d error=%s "
-                        "persistent_retry_queue=false "
-                        "retry=next-full-idempotent-replay"
-                        % (len(deferred_include_relations), type(exc).__name__),
-                        flush=True,
-                    )
+                    if durable_includes_enqueued:
+                        message = (
+                            "[graph] deferred_includes write_failed count=%d error=%s "
+                            "persistent_retry_queue=true retry=compatible-run-resume"
+                        ) % (len(deferred_include_relations), type(exc).__name__)
+                    else:
+                        message = (
+                            "[graph] deferred_includes write_failed count=%d error=%s "
+                            "persistent_retry_queue=false "
+                            "retry=next-full-idempotent-replay"
+                        ) % (len(deferred_include_relations), type(exc).__name__)
+                    print(message, flush=True)
                 raise
             if verbose:
                 print(
@@ -5276,28 +5317,36 @@ SET s.node_type = 'code',
                 f"inferred synthetic types: {inferred_type_nodes}"
             )
 
-        await code_writer.driver.execute_query(
-            """
-            MERGE (r:ParseRun {id: $parse_run_id})
-            SET r.project_id = $project_id,
-                r.project_name = $project_name,
-                r.language = $language,
-                r.repo = $repo,
-                r.build_system = $build_system,
-                r.commit_sha = $commit_sha,
+        parse_run_query = """
+            UNWIND $rows AS row
+            MERGE (r:ParseRun {id: row.parse_run_id})
+            SET r.project_id = row.project_id,
+                r.project_name = row.project_name,
+                r.language = row.language,
+                r.repo = row.repo,
+                r.build_system = row.build_system,
+                r.commit_sha = row.commit_sha,
                 r.updated_at = datetime()
-            """,
-            {
-                "parse_run_id": parse_run_id,
-                "project_id": project_id,
-                "project_name": project_name,
-                "language": language,
-                "repo": repo,
-                "build_system": build_system,
-                "commit_sha": commit_sha,
-            },
-            database=code_writer.database,
-        )
+            """
+        parse_run_rows = [{
+            "parse_run_id": parse_run_id,
+            "project_id": project_id,
+            "project_name": project_name,
+            "language": language,
+            "repo": repo,
+            "build_system": build_system,
+            "commit_sha": commit_sha,
+        }]
+        if isinstance(code_writer, LanguageCodeWriter):
+            await code_writer.write_nodes_batch(
+                "cplus:parse_run", parse_run_query, parse_run_rows
+            )
+        else:
+            await code_writer.driver.execute_query(
+                parse_run_query,
+                {"rows": parse_run_rows},
+                database=code_writer.database,
+            )
 
         # Write tail relations (event/possible-call) + inferred nodes/relations
         tail_and_inferred: List[Dict[str, Any]] = tail_relations + inferred_relations

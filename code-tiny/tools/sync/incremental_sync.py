@@ -63,6 +63,14 @@ from tools.graph.cli import (
     prepare_graph_args,
 )
 from tools.graph.schema import CODE_GRAPH_SCHEMA, ensure_schema
+from tools.graph.journal.config import (
+    configure_journal_env,
+    finalize_journal_from_env,
+    journal_status_from_env,
+    physical_target_from_env,
+)
+from tools.graph.journal.models import RunStatus
+from tools.graph.journal.consumer import resume_journal
 from tools.project_topology.registry import descriptor_spec_for_path
 from tools.jp1.sniff import is_jp1_file
 from tools.vb.vb_path_classifier import VBPathClassifier
@@ -963,6 +971,37 @@ async def _project_topology_bootstrap_needed(
             if value is not None:
                 total = int(value)
         return total == 0
+    finally:
+        close_result = driver.close()
+        if hasattr(close_result, "__await__"):
+            await close_result
+
+
+async def _resume_configured_journal(args: argparse.Namespace, config: Any) -> int:
+    """Drain a compatible unfinished run before starting source parsing."""
+
+    if not config.required or not config.path.is_file():
+        return 0
+    provider = normalize_graph_provider(getattr(args, "graph_provider", None))
+    database = getattr(args, "neo4j_db", None) or getattr(args, "falkordb_graph", None)
+    if provider == GraphProvider.NEO4J:
+        driver_config: Dict[str, Any] = {
+            "uri": getattr(args, "neo4j_uri", None),
+            "user": getattr(args, "neo4j_user", None),
+            "password": getattr(args, "neo4j_password", None),
+            "database": database,
+        }
+    else:
+        driver_config = {
+            "path": getattr(args, "falkordb_path", None),
+            "graph": getattr(args, "falkordb_graph", None) or database,
+            "database": database,
+            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+        }
+    driver = await GraphDriverFactory.create_driver(provider, driver_config)
+    try:
+        return await resume_journal(config, driver)
     finally:
         close_result = driver.close()
         if hasattr(close_result, "__await__"):
@@ -2099,8 +2138,43 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     parse_quality_max_bytes=args.parse_quality_max_bytes,
                 )
             parser_info["command"] = cmd
+            parser_env = dict(env)
+            journal_config = None
+            if parser_env.get("CORTEX_DISABLE_GRAPH", "").casefold() not in {
+                "1", "true", "yes", "on"
+            }:
+                journal_config = configure_journal_env(
+                    parser_env,
+                    root=root,
+                    project_id=project_id,
+                    parser=parser,
+                    source_revision=after_sha or current_inventory.snapshot_id,
+                    source_snapshot=current_inventory.snapshot_id,
+                    physical_target=physical_target_from_env(parser_env),
+                    cache_dir=control_cache_dir,
+                    mode=parser_env.get(
+                        "CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"
+                    ),
+                    generation=artifact_token,
+                )
+                parser_info["journal_path"] = str(journal_config.path)
             try:
-                analyzer_output = _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=env)
+                if journal_config is not None:
+                    recovered = await _resume_configured_journal(args, journal_config)
+                    if recovered:
+                        parser_info["journal_recovered_batches"] = recovered
+                analyzer_output = _run(
+                    cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=parser_env
+                )
+                journal_status = finalize_journal_from_env(parser_env)
+                if journal_status is not None:
+                    parser_info["journal_status"] = journal_status.value
+                    parser_info["journal"] = journal_status_from_env(parser_env)
+                    if journal_status is not RunStatus.DRAINED:
+                        raise RuntimeError(
+                            f"parser '{parser}' graph journal did not drain: "
+                            f"{journal_status.value}"
+                        )
             except Exception as exc:
                 parser_info["status"] = "failed"
                 parser_info["error"] = str(exc)
@@ -2223,9 +2297,39 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 ignore_cache=bool(args.ignore_cache),
             )
             framework_info["command"] = cmd
+            framework_env = dict(env)
+            if framework_env.get("CORTEX_DISABLE_GRAPH", "").casefold() not in {
+                "1", "true", "yes", "on"
+            }:
+                framework_journal = configure_journal_env(
+                    framework_env,
+                    root=root,
+                    project_id=project_id,
+                    parser=framework,
+                    source_revision=after_sha or current_inventory.snapshot_id,
+                    source_snapshot=current_inventory.snapshot_id,
+                    physical_target=physical_target_from_env(framework_env),
+                    cache_dir=control_cache_dir,
+                    mode=framework_env.get(
+                        "CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"
+                    ),
+                    generation=artifact_token,
+                )
+                framework_info["journal_path"] = str(framework_journal.path)
             framework_started = time.time()
             try:
-                _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=env)
+                _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=framework_env)
+                framework_status = finalize_journal_from_env(framework_env)
+                if framework_status is not None:
+                    framework_info["journal_status"] = framework_status.value
+                    framework_info["journal"] = journal_status_from_env(
+                        framework_env
+                    )
+                    if framework_status is not RunStatus.DRAINED:
+                        raise RuntimeError(
+                            f"framework '{framework}' graph journal did not drain: "
+                            f"{framework_status.value}"
+                        )
             except Exception as exc:
                 framework_info["status"] = "failed"
                 framework_info["error"] = str(exc)
@@ -2294,6 +2398,25 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 ignore_cache=bool(args.ignore_cache),
             )
             topology_info["command"] = cmd
+            topology_env = dict(env)
+            if topology_env.get("CORTEX_DISABLE_GRAPH", "").casefold() not in {
+                "1", "true", "yes", "on"
+            }:
+                topology_journal = configure_journal_env(
+                    topology_env,
+                    root=root,
+                    project_id=project_id,
+                    parser="project_topology",
+                    source_revision=after_sha or current_inventory.snapshot_id,
+                    source_snapshot=current_inventory.snapshot_id,
+                    physical_target=physical_target_from_env(topology_env),
+                    cache_dir=control_cache_dir,
+                    mode=topology_env.get(
+                        "CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"
+                    ),
+                    generation=artifact_token,
+                )
+                topology_info["journal_path"] = str(topology_journal.path)
             topology_mode = (
                 "full" if full_scan
                 else "bootstrap" if topology_bootstrap_needed
@@ -2308,7 +2431,16 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 )
             )
             try:
-                _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=env)
+                _run(cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=topology_env)
+                topology_status = finalize_journal_from_env(topology_env)
+                if topology_status is not None:
+                    topology_info["journal_status"] = topology_status.value
+                    topology_info["journal"] = journal_status_from_env(topology_env)
+                    if topology_status is not RunStatus.DRAINED:
+                        raise RuntimeError(
+                            "project topology graph journal did not drain: "
+                            f"{topology_status.value}"
+                        )
             except Exception as exc:
                 topology_info["status"] = "failed"
                 topology_info["error"] = str(exc)

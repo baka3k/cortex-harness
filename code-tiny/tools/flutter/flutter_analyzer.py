@@ -105,14 +105,18 @@ async def write_graph(args: argparse.Namespace, facts, cleanup_paths: Sequence[s
                 "AND NOT n.id IN $keep_ids "
                 "DETACH DELETE n RETURN count(n) AS count"
             )
-            await driver.execute_query(
-                query,
-                {
+            cleanup_parameters = {
                     "project_id": facts.header.project_id,
                     "paths": sorted(set(cleanup_paths)),
                     "keep_ids": keep_ids,
-                },
-                args.neo4j_db,
+                }
+
+            async def cleanup_batch(batch):
+                await driver.execute_query(query, batch[0], args.neo4j_db)
+                return len(batch)
+
+            await writer.write_batches(
+                "flutter:incremental_cleanup", [cleanup_parameters], cleanup_batch
             )
         return counts
     finally:

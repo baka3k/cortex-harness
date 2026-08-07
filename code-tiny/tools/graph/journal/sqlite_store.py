@@ -115,6 +115,7 @@ def _schema_statements() -> tuple[str, ...]:
             next_attempt_at TEXT,
             required_barriers_json TEXT NOT NULL,
             produced_barriers_json TEXT NOT NULL,
+            operation_json TEXT NOT NULL,
             retry_class TEXT,
             error_code TEXT,
             error_detail TEXT,
@@ -283,10 +284,28 @@ class SQLiteJournal:
             )
         if version == JOURNAL_SCHEMA_VERSION:
             return
-        with self._transaction():
-            for statement in _schema_statements():
-                self._connection.execute(statement)
-            self._connection.execute(f"PRAGMA user_version = {JOURNAL_SCHEMA_VERSION}")
+        if version == 0:
+            with self._transaction():
+                for statement in _schema_statements():
+                    self._connection.execute(statement)
+                self._connection.execute(
+                    f"PRAGMA user_version = {JOURNAL_SCHEMA_VERSION}"
+                )
+            return
+        if version == 1:
+            with self._transaction():
+                self._connection.execute(
+                    "ALTER TABLE batches ADD COLUMN operation_json "
+                    "TEXT NOT NULL DEFAULT '{}'"
+                )
+                self._connection.execute(
+                    f"PRAGMA user_version = {JOURNAL_SCHEMA_VERSION}"
+                )
+            return
+        raise JournalError(
+            TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+            f"journal schema {version} cannot be migrated",
+        )
 
     def _validate_database(self) -> None:
         rows = self._connection.execute("PRAGMA quick_check").fetchall()
@@ -533,6 +552,35 @@ class SQLiteJournal:
             ).fetchone()
         return self._run_from_row(row) if row is not None else None
 
+    def find_resumable_run(self, metadata: RunMetadata) -> RunRecord | None:
+        """Return the newest open run with the same non-generation contract."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM runs
+                WHERE project_id = ? AND scope_id = ? AND physical_target = ?
+                  AND parser = ? AND status = ?
+                ORDER BY created_at DESC
+                """,
+                (
+                    metadata.project_id,
+                    metadata.scope_id,
+                    metadata.physical_target,
+                    metadata.parser,
+                    RunStatus.OPEN.value,
+                ),
+            ).fetchall()
+        expected = metadata.to_dict()
+        expected.pop("generation", None)
+        for row in rows:
+            candidate = self._run_from_row(row)
+            actual = candidate.metadata.to_dict()
+            actual.pop("generation", None)
+            if actual == expected:
+                return candidate
+        return None
+
     def create_artifact(self, run_id_value: str, rows: Iterable[Any]) -> ArtifactRef:
         run = self.get_run(run_id_value)
         if run is None or run.status is not RunStatus.OPEN:
@@ -636,8 +684,8 @@ class SQLiteJournal:
                     artifact_sha256, artifact_path, payload_bytes, row_count,
                     expected_count, status, max_attempts,
                     required_barriers_json, produced_barriers_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    operation_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -654,6 +702,7 @@ class SQLiteJournal:
                     spec.max_attempts,
                     json.dumps(required, separators=(",", ":")),
                     json.dumps(produced, separators=(",", ":")),
+                    canonical_json(dict(spec.operation)).decode("utf-8"),
                     now,
                     now,
                 ),
@@ -855,6 +904,76 @@ class SQLiteJournal:
             )
             return self._batch_from_row(claimed)
 
+    def claim_job(self, job_id: str, *, lease_seconds: int = 300) -> BatchRecord | None:
+        """Fence one exact executable batch without consuming adjacent work."""
+
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        now_value = self._now()
+        now = _iso(now_value)
+        lease_until = _iso(now_value + timedelta(seconds=lease_seconds))
+        with self._transaction():
+            self._recover_expired_leases_locked(now)
+            row = self._connection.execute(
+                """
+                SELECT b.* FROM batches b
+                JOIN runs r ON r.run_id = b.run_id
+                WHERE b.job_id = ?
+                  AND b.status IN (?, ?)
+                  AND (b.next_attempt_at IS NULL OR b.next_attempt_at <= ?)
+                  AND r.status IN (?, ?)
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM json_each(b.required_barriers_json) required
+                      LEFT JOIN barriers barrier
+                        ON barrier.run_id = b.run_id
+                       AND barrier.name = required.value
+                      WHERE barrier.status IS NULL OR barrier.status != ?
+                  )
+                """,
+                (
+                    job_id,
+                    BatchStatus.PENDING.value,
+                    BatchStatus.RETRY_WAIT.value,
+                    now,
+                    *_ACTIVE_RUN_STATUSES,
+                    BarrierStatus.DRAINED.value,
+                ),
+            ).fetchone()
+            if row is None:
+                return None
+            token = secrets.token_hex(16)
+            result = self._connection.execute(
+                """
+                UPDATE batches
+                SET status = ?, attempt = attempt + 1, fencing_token = ?,
+                    lease_until = ?, next_attempt_at = NULL, updated_at = ?
+                WHERE job_id = ? AND status IN (?, ?)
+                """,
+                (
+                    BatchStatus.LEASED.value,
+                    token,
+                    lease_until,
+                    now,
+                    job_id,
+                    BatchStatus.PENDING.value,
+                    BatchStatus.RETRY_WAIT.value,
+                ),
+            )
+            if result.rowcount != 1:
+                return None
+            claimed = self._connection.execute(
+                "SELECT * FROM batches WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            self._add_event(
+                run_id_value=claimed["run_id"],
+                job_id=job_id,
+                event_type="batch_leased",
+                attempt=int(claimed["attempt"]),
+                now=now,
+            )
+            return self._batch_from_row(claimed)
+
     def claim_reconciling(
         self,
         *,
@@ -905,6 +1024,58 @@ class SQLiteJournal:
             self._add_event(
                 run_id_value=claimed["run_id"],
                 job_id=claimed["job_id"],
+                event_type="batch_reconciliation_leased",
+                attempt=int(claimed["attempt"]),
+                now=now,
+            )
+            return self._batch_from_row(claimed)
+
+    def claim_reconciling_job(
+        self, job_id: str, *, lease_seconds: int = 300
+    ) -> BatchRecord | None:
+        """Fence one exact ambiguous batch for deterministic reconciliation."""
+
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        now_value = self._now()
+        now = _iso(now_value)
+        lease_until = _iso(now_value + timedelta(seconds=lease_seconds))
+        with self._transaction():
+            self._recover_expired_leases_locked(now)
+            row = self._connection.execute(
+                """
+                SELECT b.* FROM batches b
+                JOIN runs r ON r.run_id = b.run_id
+                WHERE b.job_id = ? AND b.status = ?
+                  AND b.fencing_token IS NULL
+                  AND r.status IN (?, ?)
+                """,
+                (job_id, BatchStatus.RECONCILING.value, *_ACTIVE_RUN_STATUSES),
+            ).fetchone()
+            if row is None:
+                return None
+            token = secrets.token_hex(16)
+            result = self._connection.execute(
+                """
+                UPDATE batches SET fencing_token = ?, lease_until = ?, updated_at = ?
+                WHERE job_id = ? AND status = ? AND fencing_token IS NULL
+                """,
+                (
+                    token,
+                    lease_until,
+                    now,
+                    job_id,
+                    BatchStatus.RECONCILING.value,
+                ),
+            )
+            if result.rowcount != 1:
+                return None
+            claimed = self._connection.execute(
+                "SELECT * FROM batches WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            self._add_event(
+                run_id_value=claimed["run_id"],
+                job_id=job_id,
                 event_type="batch_reconciliation_leased",
                 attempt=int(claimed["attempt"]),
                 now=now,
@@ -1259,6 +1430,71 @@ class SQLiteJournal:
         with self._transaction():
             return self._recover_expired_leases_locked(now)
 
+    def recover_run_leases_as_ambiguous(self, run_id_value: str) -> int:
+        """Take over leases left by a previous process for the same locked run.
+
+        The orchestrators serialize a project scope. A lease still present when a
+        new analyzer process opens the identical run therefore has no live owner,
+        but its graph outcome is unknown and must be reconciled before replay.
+        """
+
+        now = _iso(self._now())
+        with self._transaction():
+            rows = self._connection.execute(
+                """
+                SELECT job_id, attempt FROM batches
+                WHERE run_id = ? AND status = ?
+                """,
+                (run_id_value, BatchStatus.LEASED.value),
+            ).fetchall()
+            for row in rows:
+                self._connection.execute(
+                    """
+                    UPDATE batches
+                    SET status = ?, fencing_token = NULL, lease_until = NULL,
+                        retry_class = ?, updated_at = ?
+                    WHERE job_id = ? AND status = ?
+                    """,
+                    (
+                        BatchStatus.RECONCILING.value,
+                        RetryClass.AMBIGUOUS.value,
+                        now,
+                        row["job_id"],
+                        BatchStatus.LEASED.value,
+                    ),
+                )
+                self._add_event(
+                    run_id_value=run_id_value,
+                    job_id=row["job_id"],
+                    event_type="lease_recovered_as_ambiguous",
+                    attempt=int(row["attempt"]),
+                    now=now,
+                )
+            reconciling = self._connection.execute(
+                """
+                SELECT job_id, attempt FROM batches
+                WHERE run_id = ? AND status = ? AND fencing_token IS NOT NULL
+                """,
+                (run_id_value, BatchStatus.RECONCILING.value),
+            ).fetchall()
+            for row in reconciling:
+                self._connection.execute(
+                    """
+                    UPDATE batches SET fencing_token = NULL, lease_until = NULL,
+                        updated_at = ?
+                    WHERE job_id = ? AND status = ?
+                    """,
+                    (now, row["job_id"], BatchStatus.RECONCILING.value),
+                )
+                self._add_event(
+                    run_id_value=run_id_value,
+                    job_id=row["job_id"],
+                    event_type="reconciliation_ownership_recovered",
+                    attempt=int(row["attempt"]),
+                    now=now,
+                )
+            return len(rows) + len(reconciling)
+
     def _recover_expired_leases_locked(self, now: str) -> int:
         rows = self._connection.execute(
             """
@@ -1343,6 +1579,51 @@ class SQLiteJournal:
         counts = {status: 0 for status in BatchStatus}
         counts.update({BatchStatus(row["status"]): int(row["count"]) for row in rows})
         return counts
+
+    def status_summary(self, run_id_value: str) -> dict[str, Any]:
+        """Return payload-free operational counters for CLI and sync summaries."""
+
+        run = self.get_run(run_id_value)
+        if run is None:
+            raise JournalError(
+                TerminalErrorCode.INVALID_TRANSITION,
+                "journal run does not exist",
+            )
+        counts = self.status_counts(run_id_value)
+        with self._lock:
+            totals = self._connection.execute(
+                """
+                SELECT COUNT(*) AS produced,
+                       COALESCE(SUM(payload_bytes), 0) AS payload_bytes,
+                       COALESCE(SUM(row_count), 0) AS rows
+                FROM batches WHERE run_id = ?
+                """,
+                (run_id_value,),
+            ).fetchone()
+            oldest = self._connection.execute(
+                """
+                SELECT MIN(created_at) AS oldest_at FROM batches
+                WHERE run_id = ? AND status != ?
+                """,
+                (run_id_value, BatchStatus.DONE.value),
+            ).fetchone()
+        return {
+            "run_id": run.run_id,
+            "status": run.status.value,
+            "parser": run.metadata.parser,
+            "produced": int(totals["produced"]),
+            "acked": counts[BatchStatus.DONE],
+            "pending": counts[BatchStatus.PENDING],
+            "leased": counts[BatchStatus.LEASED],
+            "retrying": counts[BatchStatus.RETRY_WAIT],
+            "reconciling": counts[BatchStatus.RECONCILING],
+            "blocked": counts[BatchStatus.BLOCKED],
+            "dead_letter": counts[BatchStatus.DEAD_LETTER],
+            "rows": int(totals["rows"]),
+            "payload_bytes": int(totals["payload_bytes"]),
+            "oldest_unfinished_at": oldest["oldest_at"],
+            "error_code": run.error_code.value if run.error_code else None,
+        }
 
     def list_events(self, run_id_value: str) -> list[dict[str, Any]]:
         with self._lock:
@@ -1541,6 +1822,7 @@ class SQLiteJournal:
             error_code=TerminalErrorCode(row["error_code"])
             if row["error_code"]
             else None,
+            operation=json.loads(row["operation_json"]),
         )
 
     @staticmethod

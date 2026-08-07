@@ -1977,7 +1977,6 @@ async def _write_backend_graph(
         language=language,
         repo=repo,
     )
-    db = writer.database
     await writer.ensure_schema()
 
     ep_batch: List[Dict[str, Any]] = []
@@ -2037,17 +2036,12 @@ async def _write_backend_graph(
     async def _run_unwind(query: str, rows: List[Dict[str, Any]], label: str) -> None:
         if not rows:
             return
-        for i in range(0, len(rows), batch_size):
-            chunk = rows[i: i + batch_size]
-            records, _, _ = await writer.driver.execute_query(
-                query, {"rows": chunk}, db
-            )
-            matched = int(records[0].get("count", 0)) if records else 0
-            if matched != len(chunk):
-                raise RuntimeError(
-                    f"backend graph batch integrity failure label={label} "
-                    f"expected={len(chunk)} matched={matched}"
-                )
+        original_batch_size = writer.batch_size
+        writer.batch_size = batch_size
+        try:
+            await writer.write_nodes_batch(f"ts-backend:{label}", query, rows)
+        finally:
+            writer.batch_size = original_batch_size
         if verbose:
             print(f"[backend-writer] {label}: {len(rows)}")
 

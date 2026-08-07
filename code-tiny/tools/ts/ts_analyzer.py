@@ -373,7 +373,7 @@ MERGE (f)-[:CALLS_API]->(ac)
 
 
 async def _write_api_calls(
-    driver: Any,
+    writer: LanguageCodeWriter,
     api_calls: List[Dict[str, Any]],
     *,
     database: str,
@@ -385,13 +385,12 @@ async def _write_api_calls(
         return
 
     async def _run(query: str, rows: List[Dict[str, Any]], label: str) -> None:
-        for i in range(0, len(rows), batch_size):
-            chunk = rows[i: i + batch_size]
-            try:
-                await driver.execute_query(query, {"rows": chunk}, database)
-            except Exception as exc:
-                if verbose:
-                    print(f"[api-call-writer] {label} error: {exc}")
+        original_batch_size = writer.batch_size
+        writer.batch_size = batch_size
+        try:
+            await writer.write_nodes_batch(f"ts:{label}", query, rows)
+        finally:
+            writer.batch_size = original_batch_size
 
     await _run(_UPSERT_API_CALL_UNWIND, api_calls, "ApiCall")
     await _run(_UPSERT_CALLS_API_UNWIND, api_calls, "CALLS_API")
@@ -1728,7 +1727,7 @@ async def build_call_graph(
                 all_api_calls.append({**ac, "project_id": project_id, "project_name": project_name})
         if all_api_calls:
             await _write_api_calls(
-                code_writer.driver,
+                code_writer,
                 all_api_calls,
                 database=code_writer.database,
                 batch_size=neo4j_batch_size,

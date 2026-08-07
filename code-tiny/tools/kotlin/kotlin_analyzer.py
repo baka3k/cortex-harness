@@ -1660,27 +1660,15 @@ async def build_call_graph(
         # Create project node first
         if verbose:
             print("[graph] Creating project node...")
-        project_query = """
-        MERGE (p:Project {project_id: $id})
-        SET p.name = $name,
-            p.language = $language,
-            p.repo = $repo,
-            p.root = $root,
-            p.build_system = $build_system,
-            p.updated_at = datetime()
-        RETURN p.project_id as id
-        """
-        await code_writer.driver.execute_query(
-            project_query,
-            {
+        await code_writer.write_projects(
+            [{
                 "id": project_id,
                 "name": project_name,
                 "language": language,
                 "repo": repo,
                 "root": root,
                 "build_system": build_system,
-            },
-            code_writer.database
+            }]
         )
         
         if verbose:
