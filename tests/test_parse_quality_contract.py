@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import os
 import stat
@@ -80,12 +79,25 @@ class ParseQualityContractTests(unittest.TestCase):
         )
         improved = CandidateSummary(
             damage=DamageSummary(error_count=5, damaged_span_ratio=0.05),
-            semantic_yield=SemanticYield(function_count=1),
+            semantic_yield=SemanticYield(function_count=2),
             backend=ParserBackend.LIBCLANG,
         )
         self.assertLess(candidate_score(improved), candidate_score(baseline))
         self.assertTrue(candidate_is_strictly_better(improved, baseline))
         self.assertFalse(candidate_is_strictly_better(baseline, baseline))
+
+    def test_cross_backend_diagnostic_counts_do_not_break_ties(self):
+        baseline = CandidateSummary(
+            damage=DamageSummary(error_count=20, damaged_span_ratio=0.1),
+            semantic_yield=SemanticYield(function_count=1),
+            backend=ParserBackend.TREE_SITTER,
+        )
+        candidate = CandidateSummary(
+            damage=DamageSummary(error_count=1, damaged_span_ratio=0.1),
+            semantic_yield=SemanticYield(function_count=1),
+            backend=ParserBackend.LIBCLANG,
+        )
+        self.assertFalse(candidate_is_strictly_better(candidate, baseline))
 
     def test_record_is_relative_deterministic_and_private(self):
         with tempfile.TemporaryDirectory() as root:
