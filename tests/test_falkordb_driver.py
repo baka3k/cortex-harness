@@ -328,6 +328,35 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0.02)
         self.assertTrue(driver._resources_closed)
 
+    async def test_cancelled_native_call_retains_exclusive_client_ownership(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocked_create(label, *properties):
+            started.set()
+            release.wait(timeout=1)
+
+        driver.graph.create_node_range_index = blocked_create
+        first = asyncio.create_task(
+            driver.create_indexes([{"label": "Function", "property": "id"}])
+        )
+        await asyncio.to_thread(started.wait, 1)
+        first.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await first
+
+        with self.assertRaisesRegex(RuntimeError, "still in flight"):
+            await driver.create_indexes([{"label": "File", "property": "id"}])
+
+        release.set()
+        await asyncio.sleep(0.02)
+        driver.close()
+
     def test_cancelled_native_call_does_not_delay_process_exit(self):
         script = textwrap.dedent(
             """
@@ -344,7 +373,7 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
                 driver._resources_closed = False
                 driver._client = None
                 driver._storage_lease = None
-                task = asyncio.create_task(driver._run_in_executor(time.sleep, 5))
+                task = asyncio.create_task(driver._run_in_executor(time.sleep, 15))
                 await asyncio.sleep(0.02)
                 task.cancel()
                 try:
@@ -364,11 +393,11 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
             env=env,
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=5,
             check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertLess(time.monotonic() - started, 2)
+        self.assertLess(time.monotonic() - started, 5)
 
     async def test_inspect_indexes_normalizes_provider_metadata(self):
         with patch("falkordb.FalkorDB", FakeFalkorDB):

@@ -13,7 +13,7 @@ if _ROOT_DIR not in sys.path:
 
 from tools.common.git_diff import load_manifest_paths
 from tools.graph import GraphDriverFactory, GraphProvider, add_require_neo4j_argument, resolve_require_neo4j
-from tools.graph.core.provider_runtime import add_graph_provider_arguments, create_graph_driver_from_args
+from tools.graph.core.provider_runtime import add_graph_provider_arguments, create_graph_driver_from_args, graph_writes_disabled
 from tools.graph.writer.mybatis_writer import MyBatisFactWriter
 from tools.mybatis.cache import default_dependency_index_path, default_fact_artifact_path, write_dependency_index, write_fact_artifact
 from tools.mybatis.pipeline import run_mybatis_foundation
@@ -94,6 +94,8 @@ def _languages_from_arg(value: str) -> Sequence[str]:
 
 
 async def _write_graph(args: argparse.Namespace, result) -> int:
+    if graph_writes_disabled():
+        return 0
     provider = getattr(args, "graph_provider", "neo4j")
     driver = None
     database = args.neo4j_db

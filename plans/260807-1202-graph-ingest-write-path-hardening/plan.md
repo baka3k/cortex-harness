@@ -8,7 +8,9 @@ blocks:
   - 260807-0929-mcp-ingest-query-concurrency
   - 260804-1640-port-proc-cplus-to-code-tiny
   - 260807-1329-parser-quality-recovery
-phaseBlockedBy: {}
+phaseBlockedBy:
+  phase-06:
+    - original-20186-file-source-root-not-mounted
 relatedPlans:
   - 260807-0929-mcp-ingest-query-concurrency
   - 260804-1640-port-proc-cplus-to-code-tiny
@@ -32,6 +34,10 @@ node/relationship identity contract, ensure required indexes are operational
 before the first graph mutation, and generate label-qualified endpoint
 matches. Operators must not create indexes by hand. Manual schema setup remains
 only a diagnostic/repair command backed by the same canonical manifest.
+
+Implementation and disposable-store validation are complete. Final publication
+remains pending only on the original approximately 20,186-file source root,
+which is not mounted or discoverable in this workspace.
 
 This plan covers the shared graph write path rather than patching only the C++
 analyzer. It preserves Neo4j compatibility, uses local FalkorDB as the primary

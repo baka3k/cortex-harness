@@ -12,7 +12,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.graph import GraphDriverFactory, GraphProvider, add_require_neo4j_argument, resolve_require_neo4j
-from tools.graph.core.provider_runtime import add_graph_provider_arguments, create_graph_driver_from_args
+from tools.graph.core.provider_runtime import add_graph_provider_arguments, create_graph_driver_from_args, graph_writes_disabled
 from tools.graph.writer.spring_writer import SpringFactWriter
 from tools.common.git_diff import load_manifest_paths
 from tools.spring.cache import default_fact_artifact_path, write_fact_artifact
@@ -96,6 +96,8 @@ def _languages_from_arg(value: str) -> Sequence[str]:
 
 
 async def _write_graph(args: argparse.Namespace, result) -> int:
+    if graph_writes_disabled():
+        return 0
     provider = getattr(args, "graph_provider", "neo4j")
     driver = None
     database = args.neo4j_db

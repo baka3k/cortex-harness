@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -14,6 +14,7 @@ if CODE_TINY not in sys.path:
     sys.path.insert(0, CODE_TINY)
 
 from tools.graph.core.base import GraphProvider
+from tools.graph.core.factory import GraphDriverFactory, GraphWritesDisabledError
 from tools.graph.cli import prepare_graph_args
 from tools.common.harness_config import load_harness_config
 from tools.sync import incremental_sync
@@ -113,6 +114,32 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
                     project_id=None,
                 )
                 self.assertFalse(prepare_graph_args(analyzer_args))
+
+    async def test_no_graph_blocks_helper_and_direct_factory_construction(self):
+        args = argparse.Namespace(
+            graph_provider="neo4j",
+            neo4j_uri="bolt://configured-db",
+            neo4j_user="neo4j",
+            neo4j_password="secret",
+            neo4j_db="code",
+            project_id=None,
+        )
+        with patch.dict(os.environ, {"CORTEX_DISABLE_GRAPH": "1"}, clear=False), patch.object(
+            GraphDriverFactory, "create_driver", new_callable=AsyncMock
+        ) as create_driver:
+            self.assertIsNone(await incremental_sync.create_graph_driver_from_args(args))
+            create_driver.assert_not_awaited()
+
+        with patch.dict(os.environ, {"CORTEX_DISABLE_GRAPH": "1"}, clear=False):
+            with self.assertRaises(GraphWritesDisabledError):
+                await GraphDriverFactory.create_driver(
+                    GraphProvider.NEO4J,
+                    {
+                        "uri": "bolt://configured-db",
+                        "user": "neo4j",
+                        "password": "secret",
+                    },
+                )
 
     async def test_falkordb_setup_uses_graph_driver_not_neo4j_subprocess(self):
         driver = FakeGraphDriver()

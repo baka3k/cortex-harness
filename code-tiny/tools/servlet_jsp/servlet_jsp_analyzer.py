@@ -14,7 +14,7 @@ if _ROOT_DIR not in sys.path:
 
 from tools.common.git_diff import load_manifest_paths
 from tools.graph import GraphDriverFactory, GraphProvider, add_require_neo4j_argument, resolve_require_neo4j
-from tools.graph.core.provider_runtime import add_graph_provider_arguments, create_graph_driver_from_args
+from tools.graph.core.provider_runtime import add_graph_provider_arguments, create_graph_driver_from_args, graph_writes_disabled
 from tools.graph.writer.servlet_jsp_writer import ServletJspFactWriter
 from tools.servlet_jsp.cache import (
     generation_snapshot_checksum,
@@ -265,6 +265,8 @@ async def _prior_semantic_ids(
 
 
 async def _create_driver(args: argparse.Namespace):
+    if graph_writes_disabled():
+        return None, args.neo4j_db
     if args.graph_provider == "falkordb":
         driver = await create_graph_driver_from_args(args)
         verify = getattr(driver, "verify_connection", None)
