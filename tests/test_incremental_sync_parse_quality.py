@@ -149,6 +149,65 @@ class IncrementalSyncParseQualityTests(unittest.TestCase):
             self.assertNotIn(root, json.dumps(payload))
             self.assertEqual(stat.S_IMODE(os.stat(report_path).st_mode), 0o600)
 
+    def test_repair_policy_uses_bounded_parser_local_queue(self):
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "broken.cpp").write_text(
+                "class Broken { public: void run( {\n",
+                encoding="utf-8",
+            )
+            report_path = Path(root, "artifacts", "quality.json")
+            metrics = {
+                "queued": 1,
+                "attempted": 1,
+                "improved": 0,
+                "non_improved": 1,
+                "failed": 0,
+                "stop_reason": "queue_empty",
+            }
+            with mock.patch.object(
+                cplus_analyzer,
+                "recover_payload_candidates",
+                return_value=({}, metrics),
+            ) as recovery_mock:
+                asyncio.run(
+                    cplus_analyzer.build_call_graph(
+                        root=root,
+                        code_writer=None,
+                        qdrant_writer=None,
+                        embedder=None,
+                        batch_size=8,
+                        qdrant_batch_size=8,
+                        cache_dir=str(Path(root, ".cache")),
+                        keep_cache=False,
+                        parse_cache=False,
+                        neo4j_batch_size=8,
+                        neo4j_calls_batch_size=8,
+                        neo4j_state_path=None,
+                        project_id="demo",
+                        project_name="Demo",
+                        language="cplus",
+                        repo="demo",
+                        build_system="",
+                        event_map_path=None,
+                        call_stats_path=None,
+                        possible_calls_path=None,
+                        unresolved_calls_path=None,
+                        parse_errors_path=str(report_path),
+                        parse_run_id="test-repair",
+                        commit_sha="deadbeef",
+                        verbose=False,
+                        parse_quality_policy="repair",
+                        parse_quality_max_files=7,
+                        parse_quality_wall_seconds=11,
+                        parse_quality_workers=2,
+                    )
+                )
+            self.assertEqual(recovery_mock.call_count, 1)
+            budgets = recovery_mock.call_args.kwargs["budgets"]
+            self.assertEqual((budgets.max_files, budgets.wall_seconds, budgets.workers), (7, 11, 2))
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["recovery"], metrics)
+
 
 if __name__ == "__main__":
     unittest.main()

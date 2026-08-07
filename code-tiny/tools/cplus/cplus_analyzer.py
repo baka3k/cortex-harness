@@ -66,7 +66,15 @@ from tools.cplus.rc_parser import (
     read_rc_text,
 )
 from tools.cplus.proc_analyzer import analyze_proc_file, prepare_proc_path
-from tools.cplus.parse_recovery import RecoveryBudgets, recover_payload_candidates
+from tools.cplus.parse_recovery import (
+    MAX_COMPILE_DATABASE_BYTES,
+    MAX_COMPILE_DATABASE_ENTRIES,
+    MAX_COMPILE_TOKENS_PER_ENTRY,
+    CompileContext,
+    RecoveryBudgets,
+    load_compile_database,
+    recover_payload_candidates,
+)
 try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
@@ -529,18 +537,38 @@ def _load_compile_commands_index(path: str, root: str) -> Dict[str, Any]:
         "c_files": set(),
         "fingerprint": "",
         "context_by_file": {},
+        "recovery_contexts": {},
+        "error": "",
     }
     try:
+        root_real = os.path.realpath(os.path.abspath(root))
+        path_real = os.path.realpath(os.path.abspath(path))
+        if os.path.commonpath((root_real, path_real)) != root_real:
+            raise ValueError("compile database path escapes repository root")
+        if os.path.getsize(path) > MAX_COMPILE_DATABASE_BYTES:
+            raise ValueError("compile database exceeds size cap")
         with open(path, "rb") as handle:
-            raw_payload = handle.read()
+            raw_payload = handle.read(MAX_COMPILE_DATABASE_BYTES + 1)
+        if len(raw_payload) > MAX_COMPILE_DATABASE_BYTES:
+            raise ValueError("compile database exceeds size cap")
         summary["fingerprint"] = hashlib.sha256(raw_payload).hexdigest()
         payload = json.loads(raw_payload.decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        summary["error"] = str(exc)
         return summary
     if not isinstance(payload, list):
+        summary["error"] = "compile database must be a JSON array"
+        return summary
+    if len(payload) > MAX_COMPILE_DATABASE_ENTRIES:
+        summary["error"] = "compile database exceeds entry cap"
         return summary
 
-    root_abs = os.path.abspath(root)
+    try:
+        summary["recovery_contexts"] = load_compile_database(path, root=root)
+    except Exception as exc:
+        summary["error"] = str(exc)
+
+    root_abs = os.path.realpath(os.path.abspath(root))
     default_dir = os.path.dirname(os.path.abspath(path))
     for item in payload:
         if not isinstance(item, dict):
@@ -552,14 +580,19 @@ def _load_compile_commands_index(path: str, root: str) -> Dict[str, Any]:
         entry_dir = item.get("directory")
         base_dir = entry_dir if isinstance(entry_dir, str) and entry_dir.strip() else default_dir
         if os.path.isabs(file_path):
-            abs_file = os.path.abspath(file_path)
+            abs_file = os.path.realpath(os.path.abspath(file_path))
         else:
-            abs_file = os.path.abspath(os.path.join(base_dir, file_path))
+            abs_file = os.path.realpath(os.path.abspath(os.path.join(base_dir, file_path)))
         try:
+            if os.path.commonpath((root_abs, abs_file)) != root_abs:
+                continue
             rel_file = os.path.relpath(abs_file, root_abs).replace("\\", "/")
         except ValueError:
-            rel_file = abs_file.replace("\\", "/")
+            continue
         command_tokens = _parse_compile_command_tokens(item)
+        if len(command_tokens) > MAX_COMPILE_TOKENS_PER_ENTRY:
+            summary["error"] = "compile database entry exceeds token cap"
+            continue
         is_cpp_cmd = _command_implies_cpp(command_tokens, abs_file)
         if is_cpp_cmd:
             summary["cpp_files"].add(rel_file)
@@ -3368,6 +3401,34 @@ async def build_call_graph(
         )[:parse_quality_max_files]
         if bounded_candidates:
             try:
+                recovery_contexts: Dict[str, CompileContext] = dict(
+                    (compile_db_index or {}).get("recovery_contexts") or {}
+                )
+                header_candidates = {
+                    os.path.relpath(path, root).replace("\\", "/")
+                    for _, path, _ in bounded_candidates
+                    if os.path.splitext(path)[1].lower()
+                    in {".h", ".hh", ".hpp", ".hxx"}
+                }
+                if header_candidates and recovery_contexts:
+                    deps_by_source = _collect_include_graph(all_scanned_paths, root)
+                    for header_rel in sorted(header_candidates):
+                        if header_rel in recovery_contexts:
+                            continue
+                        for source_rel in sorted(deps_by_source):
+                            source_context = recovery_contexts.get(source_rel)
+                            if source_context and header_rel in deps_by_source[source_rel]:
+                                recovery_contexts[header_rel] = CompileContext(
+                                    file_path=header_rel,
+                                    arguments=source_context.arguments,
+                                    fingerprint=hashlib.sha256(
+                                        f"header:{header_rel}:{source_context.fingerprint}".encode(
+                                            "utf-8"
+                                        )
+                                    ).hexdigest(),
+                                    free_mode=False,
+                                )
+                                break
                 repair_selected_payloads, parse_recovery_metrics = recover_payload_candidates(
                     root=root,
                     candidates={path: payload for _, path, payload in bounded_candidates},
@@ -3379,6 +3440,7 @@ async def build_call_graph(
                         workers=parse_quality_workers,
                     ),
                     worker_path=os.path.join(os.path.dirname(__file__), "clang_worker.py"),
+                    compile_contexts=recovery_contexts,
                 )
                 for file_path, repaired_payload in repair_selected_payloads.items():
                     if not parse_cache:
@@ -5507,6 +5569,11 @@ async def main(argv: Optional[List[str]] = None) -> int:
             "[compile-db] loaded %d entries (cpp_files=%d, c_files=%d) from %s"
             % (entries, cpp_count, c_count, compile_db_path)
         )
+        if compile_db_index.get("error"):
+            print(
+                "[compile-db] recovery context rejected; continuing in bounded free mode: %s"
+                % compile_db_index["error"]
+            )
     else:
         print(
             "[compile-db] not found at %s; parser mode falls back to extension/content heuristics"

@@ -23,7 +23,7 @@ from project_contract import (
 )
 
 
-MCP_NAME = os.getenv("MCP_SERVER_NAME", "graph_rag")
+MCP_NAME = os.getenv("MCP_SERVER_NAME", "mind_mcp")
 
 # Load .env if present (for NEO4J_*/QDRANT_*/TEXT_EMBEDDING_MODEL).
 try:
