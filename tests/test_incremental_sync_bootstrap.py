@@ -54,6 +54,7 @@ class IncrementalSyncBootstrapTests(unittest.TestCase):
                     "--parsers",
                     "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                     "--summary-path",
                     str(summary_path),
                 ]

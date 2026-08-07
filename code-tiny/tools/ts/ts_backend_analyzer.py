@@ -60,6 +60,7 @@ from tools.graph.cli import (
     prepare_graph_args,
 )
 from tools.graph.writer.language_writer import LanguageCodeWriter
+from tools.graph.schema.manifest import validate_cypher_identifier
 
 try:
     from tree_sitter_languages import get_parser as ts_get_parser
@@ -1910,26 +1911,51 @@ SET n.name       = row.name,
 RETURN count(n) AS count
 """
 
-# {rel_type} is replaced at runtime via str.replace — NOT a Python format string
-_UPSERT_BE_EDGE_UNWIND = """\
-UNWIND $rows AS row
-MATCH (src {symbol_id: row.source_id})
-MATCH (tgt {symbol_id: row.target_id})
-MERGE (src)-[r:{rel_type}]->(tgt)
-SET r.source_file = row.source_file,
-    r.call_depth  = row.call_depth,
-    r.is_async    = row.is_async,
-    r.confidence  = row.confidence
-RETURN count(r) AS count
-"""
+_BACKEND_PHYSICAL_LABELS = {
+    "API_ENDPOINT": "ApiEndpoint",
+    "CONTROLLER": "Controller",
+    "SERVICE": "Service",
+    "REPOSITORY": "DataRepository",
+    "MIDDLEWARE": "Middleware",
+    "GUARD": "Middleware",
+    "INTERCEPTOR": "Middleware",
+    "DATABASE": "Database",
+}
 
-_UPSERT_FILE_CONTAINS_BACKEND_UNWIND = """
-UNWIND $rows AS row
-MATCH (f:File {id: row.file_id})
-MATCH (n {symbol_id: row.node_id})
-MERGE (f)-[:CONTAINS]->(n)
-RETURN count(*) AS count
-"""
+
+def _backend_label(label: str) -> str:
+    try:
+        return _BACKEND_PHYSICAL_LABELS[label]
+    except KeyError as exc:
+        raise ValueError(f"unsupported backend endpoint label: {label!r}") from exc
+
+
+def _backend_edge_query(source_label: str, rel_type: str, target_label: str) -> str:
+    source = _backend_label(source_label)
+    target = _backend_label(target_label)
+    relationship = validate_cypher_identifier(rel_type, kind="relationship type")
+    return f"""
+    UNWIND $rows AS row
+    MATCH (src:{source} {{symbol_id: row.source_id}})
+    MATCH (tgt:{target} {{symbol_id: row.target_id}})
+    MERGE (src)-[r:{relationship}]->(tgt)
+    SET r.source_file = row.source_file,
+        r.call_depth  = row.call_depth,
+        r.is_async    = row.is_async,
+        r.confidence  = row.confidence
+    RETURN count(r) AS count
+    """
+
+
+def _file_contains_backend_query(node_label: str) -> str:
+    label = _backend_label(node_label)
+    return f"""
+    UNWIND $rows AS row
+    MATCH (f:File {{id: row.file_id}})
+    MATCH (n:{label} {{symbol_id: row.node_id}})
+    MERGE (f)-[:CONTAINS]->(n)
+    RETURN count(*) AS count
+    """
 
 
 async def _write_backend_graph(
@@ -1952,6 +1978,7 @@ async def _write_backend_graph(
         repo=repo,
     )
     db = writer.database
+    await writer.ensure_schema()
 
     ep_batch: List[Dict[str, Any]] = []
     ctrl_batch: List[Dict[str, Any]] = []
@@ -1973,23 +2000,23 @@ async def _write_backend_graph(
                    "controller_class": ep.get("controller_class") or ""}
             ep_batch.append(row)
             if file_id:
-                file_contains_batch.append({"file_id": file_id, "node_id": ep["symbol_id"]})
+                file_contains_batch.append({"file_id": file_id, "node_id": ep["symbol_id"], "node_label": "API_ENDPOINT"})
         for ctrl in payload.get("controllers") or []:
             ctrl_batch.append({**ctrl, **_common, "parent_class": ctrl.get("parent_class") or ""})
             if file_id:
-                file_contains_batch.append({"file_id": file_id, "node_id": ctrl["symbol_id"]})
+                file_contains_batch.append({"file_id": file_id, "node_id": ctrl["symbol_id"], "node_label": "CONTROLLER"})
         for svc in payload.get("services") or []:
             svc_batch.append({**svc, **_common})
             if file_id:
-                file_contains_batch.append({"file_id": file_id, "node_id": svc["symbol_id"]})
+                file_contains_batch.append({"file_id": file_id, "node_id": svc["symbol_id"], "node_label": "SERVICE"})
         for r in payload.get("repositories") or []:
             repo_batch.append({**r, **_common, "orm_kind": r.get("orm_kind") or ""})
             if file_id:
-                file_contains_batch.append({"file_id": file_id, "node_id": r["symbol_id"]})
+                file_contains_batch.append({"file_id": file_id, "node_id": r["symbol_id"], "node_label": "REPOSITORY"})
         for mw in payload.get("middlewares") or []:
             mw_batch.append({**mw, **_common})
             if file_id:
-                file_contains_batch.append({"file_id": file_id, "node_id": mw["symbol_id"]})
+                file_contains_batch.append({"file_id": file_id, "node_id": mw["symbol_id"], "node_label": "MIDDLEWARE"})
         for edge in payload.get("edges") or []:
             edge_batch.append(edge)
 
@@ -2012,11 +2039,15 @@ async def _write_backend_graph(
             return
         for i in range(0, len(rows), batch_size):
             chunk = rows[i: i + batch_size]
-            try:
-                await writer.driver.execute_query(query, {"rows": chunk}, db)
-            except Exception as exc:
-                if verbose:
-                    print(f"[backend-writer] {label} write error: {exc}")
+            records, _, _ = await writer.driver.execute_query(
+                query, {"rows": chunk}, db
+            )
+            matched = int(records[0].get("count", 0)) if records else 0
+            if matched != len(chunk):
+                raise RuntimeError(
+                    f"backend graph batch integrity failure label={label} "
+                    f"expected={len(chunk)} matched={matched}"
+                )
         if verbose:
             print(f"[backend-writer] {label}: {len(rows)}")
 
@@ -2026,17 +2057,31 @@ async def _write_backend_graph(
     await _run_unwind(_UPSERT_REPOSITORY_UNWIND, repo_batch, "Repository")
     await _run_unwind(_UPSERT_MIDDLEWARE_UNWIND, mw_batch, "Middleware")
     await _run_unwind(_UPSERT_DATABASE_UNWIND, db_batch, "Database")
-    # File → CONTAINS → backend node edges (written after node upserts)
-    await _run_unwind(_UPSERT_FILE_CONTAINS_BACKEND_UNWIND, file_contains_batch, "FileContains")
+    # File -> CONTAINS -> backend nodes, grouped by physical endpoint label.
+    file_links_by_label: Dict[str, List[Dict[str, Any]]] = {}
+    for row in file_contains_batch:
+        file_links_by_label.setdefault(str(row["node_label"]), []).append(row)
+    for node_label, rows in sorted(file_links_by_label.items()):
+        await _run_unwind(
+            _file_contains_backend_query(node_label), rows, f"FileContains({node_label})"
+        )
 
     # Group backend edges by rel_type and write each group with UNWIND
     from collections import defaultdict
-    edges_by_type: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    edges_by_type: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = defaultdict(list)
     for e in edge_batch:
-        edges_by_type[e.get("rel_type", "CALLS")].append(e)
-    for rel_type, edges in edges_by_type.items():
-        q = _UPSERT_BE_EDGE_UNWIND.replace("{rel_type}", rel_type)
-        await _run_unwind(q, edges, f"Edge({rel_type})")
+        key = (
+            str(e.get("source_label") or ""),
+            str(e.get("rel_type") or "CALLS"),
+            str(e.get("target_label") or ""),
+        )
+        edges_by_type[key].append(e)
+    for (source_label, rel_type, target_label), edges in sorted(edges_by_type.items()):
+        await _run_unwind(
+            _backend_edge_query(source_label, rel_type, target_label),
+            edges,
+            f"Edge({source_label}:{rel_type}:{target_label})",
+        )
 
     if verbose:
         print(

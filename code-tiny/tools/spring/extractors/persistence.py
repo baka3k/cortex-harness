@@ -44,7 +44,7 @@ def extract_persistence_facts(
                         table_name=_annotation_value(cls.annotations, "Table", "name"),
                     )
                 )
-                relationships.append(rel("SEMANTIC_OF", entity_id, class_owner_id(cls), project_id, cls.source, "JPA entity anchor"))
+                relationships.append(rel("SEMANTIC_OF", "JpaEntity", entity_id, "Class", class_owner_id(cls), project_id, cls.source, "JPA entity anchor"))
                 entity_by_name[cls.name] = entity_id
 
     for unit in units:
@@ -74,10 +74,10 @@ def extract_persistence_facts(
                     id_type=id_type,
                 )
             )
-            relationships.append(rel("SEMANTIC_OF", repo_id, class_owner_id(cls), project_id, cls.source, "Spring Data repository anchor"))
+            relationships.append(rel("SEMANTIC_OF", "DataRepository", repo_id, "Class", class_owner_id(cls), project_id, cls.source, "Spring Data repository anchor"))
             entity_id = entity_by_name.get(entity_type.rsplit(".", 1)[-1])
             if entity_id:
-                relationships.append(rel("MANAGES_ENTITY", repo_id, entity_id, project_id, cls.source, "Repository generic entity type"))
+                relationships.append(rel("MANAGES_ENTITY", "DataRepository", repo_id, "JpaEntity", entity_id, project_id, cls.source, "Repository generic entity type"))
 
             for method in cls.methods:
                 query_ann = first_annotation(method.annotations, {"Query"})
@@ -99,7 +99,7 @@ def extract_persistence_facts(
                             modifying=bool(first_annotation(method.annotations, {"Modifying"})),
                         )
                     )
-                    relationships.append(rel("DECLARES_QUERY", repo_id, query_id, project_id, method.source, "@Query repository method"))
+                    relationships.append(rel("DECLARES_QUERY", "DataRepository", repo_id, "DataRepository", query_id, project_id, method.source, "@Query repository method"))
                 derived = _parse_derived_query(method.name)
                 if derived:
                     derived_id = f"spring_repo_derived::{project_id}::{stable_hash(method.symbol_id)}"
@@ -118,7 +118,7 @@ def extract_persistence_facts(
                             return_type=method.return_type,
                         )
                     )
-                    relationships.append(rel("DERIVES_QUERY", repo_id, derived_id, project_id, method.source, "Spring Data derived method name"))
+                    relationships.append(rel("DERIVES_QUERY", "DataRepository", repo_id, "DataRepository", derived_id, project_id, method.source, "Spring Data derived method name"))
 
     for unit in units:
         for cls in unit.classes:
@@ -170,7 +170,7 @@ def _transaction_facts_for_class(cls, project_id: str, project_name: str):
         read_only=ann.args.get("readOnly") or False,
         target_kind="class",
     )
-    return [fact_row], [rel("APPLIES_TO", tx_id, class_owner_id(cls), project_id, cls.source, "Class @Transactional")]
+    return [fact_row], [rel("APPLIES_TO", "TransactionBoundary", tx_id, "Class", class_owner_id(cls), project_id, cls.source, "Class @Transactional")]
 
 
 def _transaction_facts_for_methods(cls, project_id: str, project_name: str):
@@ -198,7 +198,7 @@ def _transaction_facts_for_methods(cls, project_id: str, project_name: str):
                 extraction_method="transaction_template" if not ann else "annotation",
             )
         )
-        relationships.append(rel("APPLIES_TO", tx_id, method.symbol_id, project_id, method.source, "Transactional boundary applies to method"))
+        relationships.append(rel("APPLIES_TO", "TransactionBoundary", tx_id, "Function", method.symbol_id, project_id, method.source, "Transactional boundary applies to method"))
     return facts, relationships
 
 

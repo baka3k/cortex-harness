@@ -55,6 +55,7 @@ from tools.graph.cli import (
     prepare_graph_args,
 )
 from tools.graph.core.base import GraphProvider
+from tools.graph.schema import CODE_GRAPH_SCHEMA
 
 _FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
 
@@ -473,6 +474,20 @@ for _label in PROC_LABELS:
     INDEXES.append((
         f"proc_{_token}_project_lookup",
         f"CREATE INDEX proc_{_token}_project_lookup IF NOT EXISTS FOR (n:{_label}) ON (n.project_id)",
+    ))
+
+# Normal ingestion and this repair CLI consume the same identity-index
+# manifest. Specialized lookup indexes above remain additive.
+for _schema_index in CODE_GRAPH_SCHEMA.indexes:
+    _token = re.sub(r"(?<!^)(?=[A-Z])", "_", _schema_index.label).lower()
+    _property_token = "_".join(_schema_index.properties)
+    _property_expr = ", ".join(f"n.{prop}" for prop in _schema_index.properties)
+    INDEXES.append((
+        f"manifest_{_token}_{_property_token}_lookup",
+        (
+            f"CREATE INDEX manifest_{_token}_{_property_token}_lookup IF NOT EXISTS "
+            f"FOR (n:{_schema_index.label}) ON ({_property_expr})"
+        ),
     ))
 
 CONSTRAINTS.append((

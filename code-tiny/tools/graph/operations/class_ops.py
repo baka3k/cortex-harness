@@ -6,6 +6,13 @@ Handles operations for class/struct/interface nodes in OOP languages
 
 from typing import Any, Dict, List, Optional
 from tools.graph.core.base import GraphDriver
+from tools.graph.writer.query_contract import RelationshipGroup
+
+
+async def _ensure_schema(driver: GraphDriver, database: Optional[str]) -> None:
+    ensure = getattr(driver, "ensure_schema", None)
+    if callable(ensure):
+        await ensure(database=database)
 
 
 class ClassNodeOperations:
@@ -128,14 +135,16 @@ class ClassNodeOperations:
         Returns:
             True if relationship created
         """
+        group = RelationshipGroup("Class", "Class", inheritance_type)
         query = f"""
         MATCH (child:Class {{id: $child_id}})
         MATCH (parent:Class {{id: $parent_id}})
-        MERGE (child)-[r:{inheritance_type}]->(parent)
+        MERGE (child)-[r:{group.relationship_type}]->(parent)
         SET r.created_at = datetime()
         RETURN r
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             {"child_id": child_id, "parent_id": parent_id},

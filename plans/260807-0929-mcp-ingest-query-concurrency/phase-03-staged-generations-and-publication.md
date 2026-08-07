@@ -10,6 +10,10 @@ generation, validate it, and publish one manifest.
 
 - Build graph and vector data in isolated generation paths that each satisfy
   the existing local-storage ownership rules.
+- Before the first staging-graph mutation, consume the automatic schema
+  preflight and indexable writer contract from
+  `260807-1202-graph-ingest-write-path-hardening`; do not implement a second
+  generation-local schema list or relationship query path.
 - Validate cross-store identity and representative retrieval before publish.
 - Atomically publish one active manifest and retain a rollback generation.
 - Retire old generations only after in-flight references drain.
@@ -33,6 +37,8 @@ the resulting pair.
 
 1. Allocate a staging generation with unique, owner-scoped graph/vector paths.
 2. Run existing parse/embed/write flows against staging-only adapters.
+   Graph writes begin only after the hardened preflight reports the required
+   manifest fingerprint operational.
 3. Validate graph schema/counts, vector collections/counts, representative
    query results, stable IDs, and source revision.
 4. Write and fsync the new manifest, atomically replace the active manifest,
