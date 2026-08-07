@@ -15,6 +15,8 @@ generation, validate it, and publish one manifest.
   `260807-1202-graph-ingest-write-path-hardening`; do not implement a second
   generation-local schema list or relationship query path.
 - Validate cross-store identity and representative retrieval before publish.
+- Require the staging generation's durable graph write journal to be drained,
+  reconciled, and free of blocked/dead-lettered work before validation/publish.
 - Atomically publish one active manifest and retain a rollback generation.
 - Retire old generations only after in-flight references drain.
 

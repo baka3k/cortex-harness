@@ -33,17 +33,47 @@ class _FakeDriver:
 
 
 class _FakeCodeWriter:
-    def __init__(self, *, fail_parse_run: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_parse_run: bool = False,
+        fail_deferred_includes: bool = False,
+    ) -> None:
         self.driver = _FakeDriver(fail_parse_run=fail_parse_run)
         self.database = "code"
         self.batch_size = 100
         self.calls = []
+        self.file_ids = set()
+        self.include_write_file_counts = []
+        self.fail_deferred_includes = fail_deferred_includes
 
     async def write_nodes_batch(self, key, cypher, rows, state=None, state_writer=None):
         return len(rows)
 
     async def write_all(self, **kwargs):
+        for file_row in kwargs.get("files") or []:
+            self.file_ids.add(file_row["id"])
+        self.record_include_relations(kwargs.get("relations") or [])
         return {}
+
+    async def write_relations_typed(self, relations, state=None, state_writer=None):
+        if self.fail_deferred_includes:
+            raise RuntimeError("deferred include failure")
+        self.record_include_relations(relations)
+        return len(relations)
+
+    def record_include_relations(self, relations):
+        for relation in relations:
+            if relation.get("rel_type") != "INCLUDES":
+                continue
+            self.assert_include_endpoints_exist(relation)
+            self.include_write_file_counts.append(len(self.file_ids))
+
+    def assert_include_endpoints_exist(self, relation):
+        if relation["source_id"] not in self.file_ids:
+            raise AssertionError(f"missing include source: {relation['source_id']}")
+        if relation["target_id"] not in self.file_ids:
+            raise AssertionError(f"missing include target: {relation['target_id']}")
 
     async def write_calls_with_site(self, calls):
         self.calls.extend(calls)
@@ -155,6 +185,43 @@ class CPlusGraphRuntimeTests(unittest.TestCase):
         )
         self.assertTrue(
             all(row["site_id"] == row["props"]["stable_site_id"] for row in first_unknown)
+        )
+
+    def test_include_edges_wait_for_targets_in_later_file_buffers(self) -> None:
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as cache:
+            Path(root, "a000.h").write_text('#include "z500.h"\n', encoding="utf-8")
+            for index in range(1, 500):
+                Path(root, f"a{index:03d}.h").write_text("", encoding="utf-8")
+            Path(root, "z500.h").write_text("", encoding="utf-8")
+
+            writer = _FakeCodeWriter()
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                _run_build(root, cache, writer, parse_run_id="run-one", verbose=True)
+
+        self.assertEqual(writer.include_write_file_counts, [501])
+        output = stdout.getvalue()
+        self.assertIn(
+            "[graph] deferred_includes write_started count=1 storage=memory-only "
+            "persistent_retry_queue=false retry=next-full-idempotent-replay",
+            output,
+        )
+        self.assertIn("[graph] deferred_includes write_finished count=1", output)
+
+    def test_failed_deferred_includes_log_replay_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as cache:
+            Path(root, "a.h").write_text('#include "z.h"\n', encoding="utf-8")
+            Path(root, "z.h").write_text("", encoding="utf-8")
+            writer = _FakeCodeWriter(fail_deferred_includes=True)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                with self.assertRaisesRegex(RuntimeError, "deferred include failure"):
+                    _run_build(root, cache, writer, parse_run_id="run-one", verbose=True)
+
+        self.assertIn(
+            "[graph] deferred_includes write_failed count=1 error=RuntimeError "
+            "persistent_retry_queue=false retry=next-full-idempotent-replay",
+            stdout.getvalue(),
         )
 
     def test_explicit_graph_resume_state_fails_before_work(self) -> None:
