@@ -15,6 +15,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
+from .contracts import PerformanceProfile
+
 
 STORAGE_SCHEMA_VERSION = "v1"
 DEFAULT_INSTANCE_ID = "default"
@@ -34,6 +36,7 @@ ENV_QDRANT_DOC = "QDRANT_DOC_PATH"
 ENV_FALKORDB_PATH = "FALKORDB_PATH"
 ENV_FALKORDB_CODE = "FALKORDB_CODE_PATH"
 ENV_FALKORDB_DOC = "FALKORDB_DOC_PATH"
+ENV_PERFORMANCE_PROFILE = "CORTEX_STORAGE_PROFILE"
 
 CFG_DATA_HOME = ENV_DATA_HOME
 CFG_INSTANCE = ENV_INSTANCE
@@ -45,6 +48,7 @@ CFG_QDRANT_DOC = ENV_QDRANT_DOC
 CFG_FALKORDB_PATH = ENV_FALKORDB_PATH
 CFG_FALKORDB_CODE = ENV_FALKORDB_CODE
 CFG_FALKORDB_DOC = ENV_FALKORDB_DOC
+CFG_PERFORMANCE_PROFILE = ENV_PERFORMANCE_PROFILE
 
 LEGACY_REMOTE_KEYS: tuple[str, ...] = (
     "QDRANT_URL", "QDRANT_HOST", "QDRANT_PORT", "QDRANT_API_KEY",
@@ -90,6 +94,43 @@ def default_data_home() -> Path:
     replace the account home without import-time leakage.
     """
     return Path.home() / DEFAULT_DATA_DIRNAME
+
+
+def resolve_performance_profile(
+    *, config: Optional[Mapping[str, object]] = None, profile: object = None
+) -> PerformanceProfile:
+    """Resolve the owner performance profile without scattered env defaults.
+
+    ``balanced`` is accepted as an explicit operator choice; the default is
+    always the one-handle-per-lane ``safe`` profile until benchmark evidence
+    promotes another configuration.
+    """
+    cfg = dict(config or {})
+    selected = str(_select(profile, _nonempty(cfg, CFG_PERFORMANCE_PROFILE), os.getenv(ENV_PERFORMANCE_PROFILE), "safe")).casefold()
+    if selected not in {"safe", "balanced", "custom"}:
+        raise ValueError("CORTEX_STORAGE_PROFILE must be safe, balanced, or custom")
+    values = {"name": selected}
+    if selected == "custom":
+        field_map = {
+            "graph_readers": "CORTEX_STORAGE_GRAPH_READERS",
+            "vector_readers": "CORTEX_STORAGE_VECTOR_READERS",
+            "writer_slots": "CORTEX_STORAGE_WRITER_SLOTS",
+            "control_slots": "CORTEX_STORAGE_CONTROL_SLOTS",
+            "max_queue_items": "CORTEX_STORAGE_MAX_QUEUE_ITEMS",
+            "max_queue_bytes": "CORTEX_STORAGE_MAX_QUEUE_BYTES",
+            "request_timeout_seconds": "CORTEX_STORAGE_REQUEST_TIMEOUT_SECONDS",
+            "disk_safety_fraction": "CORTEX_STORAGE_DISK_SAFETY_FRACTION",
+        }
+        for field_name, key in field_map.items():
+            raw = _select(_nonempty(cfg, key), os.getenv(key))
+            if raw is None:
+                continue
+            converter = float if field_name in {"request_timeout_seconds", "disk_safety_fraction"} else int
+            try:
+                values[field_name] = converter(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} is invalid: {raw!r}") from exc
+    return PerformanceProfile(**values)
 
 
 @dataclass(frozen=True)
