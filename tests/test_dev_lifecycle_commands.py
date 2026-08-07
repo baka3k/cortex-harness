@@ -7,11 +7,14 @@ from click.testing import CliRunner
 
 from cortex_harness.dev import (
     REPO_ROOT,
+    _embedded_falkordb_pids,
     _mcp_pids,
     _mcp_stop_pattern,
     _pause_code_mcp_for_sync,
+    _sync_process_scope,
     cli,
 )
+from cortex_harness.sync_processes import ProcessRecord
 
 
 class DevLifecycleCommandTests(unittest.TestCase):
@@ -122,7 +125,11 @@ class DevLifecycleCommandTests(unittest.TestCase):
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         phony = next(line for line in makefile.splitlines() if line.startswith(".PHONY:"))
         make_targets = set(phony.removeprefix(".PHONY:").split())
-        self.assertEqual(make_targets - set(cli.commands), set())
+        make_only_sync_aliases = {"code", "doc", "sync-code-stop", "sync-doc-stop"}
+        self.assertEqual(
+            make_targets - set(cli.commands) - make_only_sync_aliases,
+            set(),
+        )
 
     def test_all_lifecycle_commands_dispatch_the_matching_action(self):
         actions = (
@@ -247,25 +254,130 @@ class DevLifecycleCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_posix_mcp_stop_force_kills_process_that_ignores_term(self):
+        with mock.patch("cortex_harness.dev.sys.platform", "darwin"), mock.patch(
+            "cortex_harness.dev._mcp_pids", side_effect=[[101], [101]]
+        ), mock.patch("cortex_harness.dev.time.monotonic", side_effect=[0.0, 6.0]), mock.patch(
+            "cortex_harness.dev.subprocess.run"
+        ) as run:
+            stopped = _mcp_stop_pattern("unified_mcp.py")
+
+        self.assertEqual(stopped, 1)
+        self.assertEqual(
+            [call.args[0] for call in run.call_args_list],
+            [["kill", "-TERM", "101"], ["kill", "-KILL", "101"]],
+        )
+
+    def test_embedded_falkordb_pid_discovery_matches_exact_database(self):
+        with self.runner.isolated_filesystem():
+            root = Path.cwd()
+            target = root / "code" / "data.rdb"
+            other = root / "doc" / "data.rdb"
+            target.parent.mkdir(parents=True)
+            other.parent.mkdir(parents=True)
+            target_config = root / "target.config"
+            other_config = root / "other.config"
+            target_config.write_text(
+                f"dir '{target.parent}'\ndbfilename '{target.name}'\n",
+                encoding="utf-8",
+            )
+            other_config.write_text(
+                f"dir '{other.parent}'\ndbfilename '{other.name}'\n",
+                encoding="utf-8",
+            )
+            processes = {
+                101: ProcessRecord(
+                    pid=101,
+                    ppid=1,
+                    argv=("/opt/redislite/bin/redis-server", str(target_config)),
+                ),
+                202: ProcessRecord(
+                    pid=202,
+                    ppid=1,
+                    argv=("/opt/redislite/bin/redis-server", str(other_config)),
+                ),
+                303: ProcessRecord(pid=303, ppid=1, argv=("python", "worker.py")),
+            }
+            result = _embedded_falkordb_pids(target, processes=processes)
+
+        self.assertEqual(result, [101])
+
     def test_code_sync_pauses_and_restarts_running_local_mcp(self):
         with mock.patch(
             "cortex_harness.dev._mcp_pids", side_effect=[[9245], []]
         ) as pids, mock.patch(
             "cortex_harness.dev._mcp_stop_pattern", return_value=1
         ) as stop, mock.patch(
+            "cortex_harness.dev._stop_embedded_falkordb", return_value=(8123,)
+        ) as stop_falkor, mock.patch(
             "cortex_harness.dev._mcp_start_one",
             return_value={"status": "started", "pid": 9300},
         ) as start:
             with _pause_code_mcp_for_sync(
-                {"CODE_GRAPH_PROVIDER": "falkordb"},
+                {
+                    "CODE_GRAPH_PROVIDER": "falkordb",
+                    "FALKORDB_PATH": "/tmp/code.rdb",
+                },
                 project_path=Path("/tmp/project"),
                 enabled=True,
             ):
                 pass
 
         stop.assert_called_once_with("unified_mcp.py")
+        stop_falkor.assert_called_once_with(Path("/tmp/code.rdb"))
         start.assert_called_once()
         self.assertEqual(pids.call_count, 2)
+
+    def test_code_sync_stops_orphan_falkordb_without_restarting_mcp(self):
+        with mock.patch(
+            "cortex_harness.dev._mcp_pids", return_value=[]
+        ), mock.patch(
+            "cortex_harness.dev._embedded_falkordb_pids", side_effect=[[8123], []]
+        ), mock.patch(
+            "cortex_harness.dev._stop_embedded_falkordb", return_value=(8123,)
+        ) as stop_falkor, mock.patch(
+            "cortex_harness.dev._mcp_start_one"
+        ) as start:
+            with _pause_code_mcp_for_sync(
+                {
+                    "CODE_GRAPH_PROVIDER": "falkordb",
+                    "FALKORDB_PATH": "/tmp/code.rdb",
+                },
+                project_path=Path("/tmp/project"),
+                enabled=True,
+            ):
+                pass
+
+        stop_falkor.assert_called_once_with(Path("/tmp/code.rdb"))
+        start.assert_not_called()
+
+    def test_sync_stop_subcommands_dispatch_to_scoped_owner_cleanup(self):
+        config = {"code": {"env": {}}, "doc": {"env": {}}}
+        with mock.patch(
+            "cortex_harness.dev._load_active_config", return_value=(config, Path("dev.json"))
+        ), mock.patch(
+            "cortex_harness.dev._code_env_for_process", return_value={"owner": "code"}
+        ), mock.patch(
+            "cortex_harness.dev._doc_env_for_process", return_value={"owner": "doc"}
+        ), mock.patch("cortex_harness.dev._stop_sync_command") as stop:
+            code_result = self.runner.invoke(cli, ["sync", "code", "stop"])
+            doc_result = self.runner.invoke(cli, ["sync", "doc", "stop"])
+
+        self.assertEqual(code_result.exit_code, 0, code_result.output)
+        self.assertEqual(doc_result.exit_code, 0, doc_result.output)
+        self.assertEqual([call.args[0] for call in stop.call_args_list], ["code", "doc"])
+
+    def test_sync_scope_cleans_previous_and_interrupted_workers(self):
+        with mock.patch("cortex_harness.dev._stop_sync_workers") as stop:
+            with self.assertRaises(KeyboardInterrupt):
+                with _sync_process_scope("code", {"FALKORDB_PATH": "/tmp/code.rdb"}, enabled=True):
+                    raise KeyboardInterrupt
+
+        self.assertEqual(stop.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["prefix"] for call in stop.call_args_list],
+            ["cleared previous run", "cleanup"],
+        )
 
     def test_code_sync_does_not_pause_mcp_for_dry_run_or_remote_graph(self):
         with mock.patch("cortex_harness.dev._mcp_pids") as pids, mock.patch(

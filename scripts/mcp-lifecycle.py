@@ -20,7 +20,6 @@ from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
@@ -31,6 +30,8 @@ if str(ROOT) not in sys.path:
     # root. Add the repository root explicitly so the source package works
     # before (and independently of) an editable ``pip install -e .``.
     sys.path.insert(0, str(ROOT))
+
+from cortex_harness.sync_processes import embedded_falkordb_pids, sync_processes
 
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
@@ -81,6 +82,9 @@ USAGE = """Usage (equivalent forms):
   make storage-migrate-layout       Dry-run legacy repository-local migration.
   make storage-backup               Create a verified owner backup (OWNER=code|doc).
   make doctor      | dev doctor      Check local Python storage runtime, paths, and MCP ports.
+                                      Also reports active code/doc sync workers.
+  make sync code stop                Stop code sync workers and descendants.
+  make sync doc stop                 Stop document sync workers and descendants.
   make start       | dev start       Open each MCP server in a separate terminal window.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
 
@@ -429,8 +433,40 @@ def doctor_check(name: str, ok: bool, message: str, *, required: bool = True) ->
     return failures
 
 
+def doctor_process_checks(resolved: object | None) -> None:
+    """Report active sync workers and embedded graph processes without mutation."""
+
+    for owner in ("code", "doc"):
+        workers = sync_processes(owner, root=ROOT)
+        doctor_check(
+            f"{owner} sync workers",
+            not workers,
+            (
+                "idle"
+                if not workers
+                else "running pid(s): " + ", ".join(str(item.pid) for item in workers)
+            ),
+            required=False,
+        )
+
+    if resolved is None:
+        return
+    for owner, path in (
+        ("code", Path(resolved.falkordb_code_path)),
+        ("doc", Path(resolved.falkordb_doc_path)),
+    ):
+        pids = embedded_falkordb_pids(path)
+        doctor_check(
+            f"{owner} embedded FalkorDB",
+            not pids,
+            "idle" if not pids else "running pid(s): " + ", ".join(map(str, pids)),
+            required=False,
+        )
+
+
 def invoke_doctor() -> None:
     failures = 0
+    resolved = None
     failures += doctor_check(
         "python version",
         sys.version_info >= (3, 12),
@@ -480,6 +516,8 @@ def invoke_doctor() -> None:
         )
     except Exception as error:
         failures += doctor_check("local storage", False, str(error))
+
+    doctor_process_checks(resolved)
 
     with tempfile.TemporaryDirectory(prefix="cortex-doctor-") as temporary:
         try:
