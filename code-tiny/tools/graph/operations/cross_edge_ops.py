@@ -7,6 +7,18 @@ different types of nodes (e.g., code -> documentation, code -> infrastructure)
 
 from typing import Any, Dict, List, Optional
 from tools.graph.core.base import GraphDriver
+from tools.graph.schema.manifest import validate_cypher_identifier
+from tools.graph.writer.query_contract import (
+    RelationshipGroup,
+    compile_relationship_upsert,
+    group_typed_relations,
+)
+
+
+async def _ensure_schema(driver: GraphDriver, database: Optional[str]) -> None:
+    ensure = getattr(driver, "ensure_schema", None)
+    if callable(ensure):
+        await ensure(database=database)
 
 
 class CrossEdgeOperations:
@@ -25,6 +37,9 @@ class CrossEdgeOperations:
         confidence: float = 1.0,
         metadata: Optional[Dict[str, Any]] = None,
         database: Optional[str] = None,
+        *,
+        code_label: str = "Function",
+        document_label: str = "Paragraph",
     ) -> bool:
         """
         Create relationship between code and documentation
@@ -41,17 +56,22 @@ class CrossEdgeOperations:
         Returns:
             True if relationship created
         """
+        code_node_label = validate_cypher_identifier(code_label, kind="code label")
+        document_node_label = validate_cypher_identifier(document_label, kind="document label")
+        relationship = validate_cypher_identifier(link_type, kind="relationship type")
+        RelationshipGroup(code_node_label, document_node_label, relationship)
         query = f"""
-        MATCH (code {{id: $code_id}})
-        MATCH (doc {{id: $document_id}})
-        MERGE (code)-[r:{link_type}]->(doc)
+        MATCH (code:{code_node_label} {{id: $code_id}})
+        MATCH (doc:{document_node_label} {{id: $document_id}})
+        MERGE (code)-[r:{relationship}]->(doc)
         SET r.confidence = $confidence,
             r.created_at = datetime()
         """
         
         if metadata:
             for key in metadata.keys():
-                query += f"\nSET r.{key} = ${key}"
+                property_name = validate_cypher_identifier(str(key), kind="property")
+                query += f"\nSET r.{property_name} = ${property_name}"
         
         query += "\nRETURN r"
         
@@ -61,7 +81,7 @@ class CrossEdgeOperations:
             "confidence": confidence,
             **(metadata or {})
         }
-        
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(query, params, database)
         return len(records) > 0
     
@@ -73,6 +93,9 @@ class CrossEdgeOperations:
         similarity_score: float,
         link_reason: str,
         database: Optional[str] = None,
+        *,
+        source_label: str,
+        target_label: str,
     ) -> bool:
         """
         Create semantic similarity link between nodes
@@ -88,9 +111,12 @@ class CrossEdgeOperations:
         Returns:
             True if relationship created
         """
-        query = """
-        MATCH (source {id: $source_id})
-        MATCH (target {id: $target_id})
+        source_node_label = validate_cypher_identifier(source_label, kind="source label")
+        target_node_label = validate_cypher_identifier(target_label, kind="target label")
+        RelationshipGroup(source_node_label, target_node_label, "SIMILAR_TO")
+        query = f"""
+        MATCH (source:{source_node_label} {{id: $source_id}})
+        MATCH (target:{target_node_label} {{id: $target_id}})
         MERGE (source)-[r:SIMILAR_TO]->(target)
         SET r.similarity_score = $similarity_score,
             r.reason = $link_reason,
@@ -98,6 +124,7 @@ class CrossEdgeOperations:
         RETURN r
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             {
@@ -169,22 +196,32 @@ class CrossEdgeOperations:
         Returns:
             Number of links created
         """
-        query = f"""
-        UNWIND $links AS link
-        MATCH (source {{id: link.source_id}})
-        MATCH (target {{id: link.target_id}})
-        MERGE (source)-[r:{relationship_type}]->(target)
-        SET r = link.properties
-        RETURN count(r) as count
-        """
-        
-        records, _, _ = await driver.execute_query(
-            query,
-            {"links": links},
-            database
-        )
-        
-        return records[0]["count"] if records else 0
+        typed_rows = [
+            {
+                "source_label": link.get("source_label"),
+                "target_label": link.get("target_label"),
+                "rel_type": relationship_type,
+                "source_id": link.get("source_id"),
+                "target_id": link.get("target_id"),
+                "properties": dict(link.get("properties") or {}),
+            }
+            for link in links
+        ]
+        groups = group_typed_relations(typed_rows)
+        await _ensure_schema(driver, database)
+        total = 0
+        for group, rows in groups.items():
+            records, _, _ = await driver.execute_query(
+                compile_relationship_upsert(group), {"rows": rows}, database
+            )
+            matched = int(records[0].get("count", 0)) if records else 0
+            if matched != len(rows):
+                raise RuntimeError(
+                    f"cross-link integrity failure for {group.state_key}: "
+                    f"expected={len(rows)} matched={matched}"
+                )
+            total += matched
+        return total
     
     @staticmethod
     async def get_connected_documentation(

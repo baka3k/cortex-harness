@@ -4,10 +4,16 @@ status: pending
 created: 2026-08-07
 scope: "Embedded graph/vector owner, bounded MCP queries, staged ingestion publication"
 blockedBy: []
-blocks: []
+blocks:
+  - 260807-1329-parser-quality-recovery
+phaseBlockedBy:
+  "03": [260807-1202-graph-ingest-write-path-hardening]
+  "06": [260807-1202-graph-ingest-write-path-hardening]
 relatedPlans:
   - 260806-1648-local-file-storage
   - 260728-0000-unified-ingest-query-contract
+  - 260807-1202-graph-ingest-write-path-hardening
+  - 260807-1329-parser-quality-recovery
 ---
 # MCP ingest/query concurrency with a single embedded-store owner
 
@@ -333,15 +339,23 @@ internally inconsistent.
 
 ### Active-plan coordination
 
+- `260807-1202-graph-ingest-write-path-hardening` owns canonical graph schema
+  preflight, indexable relationship queries, batch integrity, and writer-local
+  recovery/progress. This concurrency plan owns physical-store admission,
+  staged generation lifecycle, and publication. Phase 03 must consume the
+  hardened writer contract before staging integration is considered complete;
+  Phase 06 must use its query-plan/integrity gates during rollout. Phases 01-02,
+  04, and 05 may proceed against the frozen interface without duplicating that
+  plan's schema or relationship compiler.
 - `260728-1500-testtool-runall-error-tracing` is a read-only consumer of
   `tools/list`; update its expected error/status rendering only after Phase 04
   settles structured overload and job responses. It is not a blocker.
 - Parser plans that touch `incremental_sync.py`, registries, or shared MCP
   tests must keep their edits additive. This plan owns concurrency wrappers,
   not parser-specific ingestion semantics.
-- No existing unfinished plan owns the same physical-store concurrency
-  boundary. No bidirectional plan update is required before implementation;
-  add a cross-plan note if another plan begins editing the gateway files.
+- No other unfinished plan owns the physical-store concurrency boundary. Any
+  graph-writer/schema changes remain in the hardening plan and are consumed
+  through its typed preflight and batch-result contracts.
 
 ## Expected file areas
 

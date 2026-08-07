@@ -676,7 +676,9 @@ def _build_directory_nodes_and_relations(
         relation_seen.add(key)
         relation_rows.append(
             {
+                "source_label": "Directory" if parent_dir else "Project",
                 "source_id": parent_id,
+                "target_label": "Directory",
                 "target_id": child_id,
                 "rel_type": "CONTAINS",
                 "properties": {},
@@ -694,7 +696,9 @@ def _build_directory_nodes_and_relations(
         relation_seen.add(key)
         relation_rows.append(
             {
+                "source_label": "Directory",
                 "source_id": source_id,
+                "target_label": "File",
                 "target_id": rel,
                 "rel_type": "CONTAINS",
                 "properties": {},

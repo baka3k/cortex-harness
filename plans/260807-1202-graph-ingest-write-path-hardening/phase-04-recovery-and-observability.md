@@ -1,0 +1,81 @@
+# Phase 04: Restart safety and truthful observability
+
+## Context
+
+Progress is emitted only after an awaited query returns and is duplicated via
+logger plus `print`. The final visible line therefore identifies completed
+work, while the actual in-flight query can run silently and without a local
+embedded-driver deadline. Existing resume data cannot safely survive a schema
+or query-grouping change.
+
+## Requirements
+
+- One structured progress sink with global counters and correlation IDs.
+- A running query becomes visible before execution and remains visible through
+  bounded heartbeats.
+- Cancellation, timeout, process restart, and ambiguous mutations reconcile to
+  explicit run state.
+- Incomplete runs do not publish success or advance incremental baselines.
+- Parser quality is reported separately from write health.
+
+## Architecture
+
+Introduce run/batch envelopes containing run ID, phase, global totals, schema
+fingerprint, query-shape version, attempt, and idempotency key. Persist state at
+safe batch boundaries. The driver emits lifecycle events through the same
+observer and enforces version-aware limits where FalkorDB supports write
+timeouts/memory caps.
+
+## Related files
+
+- `code-tiny/tools/graph/writer/language_writer.py`
+- `code-tiny/tools/graph/driver/falkordb_driver.py`
+- `code-tiny/tools/cplus/cplus_analyzer.py`
+- `code-tiny/tools/sync/incremental_sync.py`
+- Run-state/checkpoint and logging helpers under `code-tiny/tools/common/`
+
+## Implementation steps
+
+1. Define stable phases and event fields for schema, parse, node write,
+   relationship write, validation, publication, cancellation, and failure.
+2. Emit `batch_started` before awaiting the driver; emit periodic
+   `query_running` heartbeats with elapsed time and current label triple; emit
+   exactly one terminal event.
+3. Replace per-500-file progress denominators with full-run totals and explicit
+   buffer/batch subtotals. Remove double logger/`print` emission.
+4. Add capability/version discovery for FalkorDB timeout and memory controls.
+   Bound calls when supported and expose configured/effective values.
+5. Model a timeout as ambiguous for mutations until idempotent readback proves
+   the outcome; do not retry blindly.
+6. Persist incomplete/failed/cancelled status and prevent baseline/generation
+   publication. Validate schema/query fingerprints before resume.
+   Replace buffer-local offsets with absolute durable chunks keyed by project,
+   root, revision, parser, schema, and query version; if this cannot be proven
+   safe before staged generations land, disable resume explicitly rather than
+   pretending the imported state path is active.
+7. Add a supported doctor/status path that shows current query, elapsed time,
+   DB health, index state, and the safe recovery action.
+8. Split parse summary into `ERROR`, `MISSING`, encoding/fallback, alternate
+   parser, and compile-command coverage without changing parser semantics.
+
+## Todo
+
+- [x] Define run, batch, checkpoint, and lifecycle event contracts.
+- [x] Emit single-sink global progress and in-flight heartbeats.
+- [ ] Add version-aware database limits and ambiguous-write reconciliation.
+- [x] Prevent incomplete runs from publishing or advancing baselines.
+- [x] Reject incompatible resume fingerprints.
+- [x] Replace false buffer-local resume offsets or disable resume fail-closed.
+- [x] Separate parser-quality and graph-write health reporting.
+
+## Risks
+
+A client timeout does not prove a write was rolled back, and FalkorDB may need
+additional time to roll back a timed-out mutation. Heartbeats must not submit
+competing expensive database queries on the single embedded execution lane.
+
+## Success criteria
+
+An operator can always identify the active phase/query and elapsed time; no
+active database call is silent beyond the heartbeat interval; interrupted runs
+restart without duplicating effects or publishing partial state.

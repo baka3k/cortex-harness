@@ -36,12 +36,18 @@ The comprehensive patch adds MCP aliases, DB constraints, driver label lookups, 
 
 ### `code-tiny/scripts/setup_constraints.py`
 
-- Add `PROC_LABELS` tuple and constraint/index loop (from patch):
+- Register the Pro*C label identities in the canonical schema manifest owned by
+  `260807-1202-graph-ingest-write-path-hardening`; keep
+  `setup_constraints.py` as a thin manifest consumer. Do not add another
+  independent constraint/index loop. The labels remain:
   ```python
   PROC_LABELS = ("SqlStatement", "SqlDirective", "SqlCursor",
                   "SqlHostVariable", "DatabaseTable")
   ```
 - Each label gets uniqueness constraint + file lookup index.
+- Automatic preflight must verify required indexes are operational before the
+  first Pro*C graph batch. Uniqueness is enabled only after duplicate identity
+  audit passes.
 
 ### `code-tiny/tools/graph/driver/neo4j_driver.py`
 
@@ -57,3 +63,5 @@ The comprehensive patch adds MCP aliases, DB constraints, driver label lookups, 
 - `grep -r "CplusSqlStatement" code-tiny/` returns 0 matches.
 - `grep -r "SqlStatement" code-tiny/mcp/framework_registry.py` returns matches.
 - `grep "proc" code-tiny/mcp/framework_registry.py` shows alias entries.
+- Pro*C relationship endpoint plans use label/property index scans with no
+  endpoint all-node scan or Cartesian product.

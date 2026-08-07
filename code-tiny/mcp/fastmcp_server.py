@@ -834,7 +834,27 @@ async def _resolve_base_collections(
     resolved = _resolve_collection_scopes(tokens, available)
     if resolved:
         return resolved, explicit
-    return tokens if explicit else available, explicit
+    # No collection matched the requested scope(s). If the caller passed an
+    # explicit scope (e.g. project_id="REDACTED") but no Qdrant collection matches
+    # it, raise loudly so the surface mismatch is visible — otherwise we
+    # silently query a non-existent collection literal and return empty,
+    # which hides the real problem (incomplete sync / un-registered project).
+    if explicit:
+        missing = [t for t in tokens if t not in available]
+        scope_matches = {
+            t: [name for name in available if _is_project_scope_collection(t, name)]
+            for t in tokens
+        }
+        raise ValueError(
+            "Requested Qdrant collection scope does not match any available "
+            f"collection. scopes={tokens!r} available={available!r} "
+            f"missing_literal={missing!r} scope_matches={scope_matches!r}. "
+            "Common causes: (1) the project was not yet synced to Qdrant "
+            "(FalkorDB may have data but Qdrant is empty — see "
+            "incremental_sync summary), (2) project_id is un-registered "
+            "(run list_qdrant_collections to see the actual inventory)."
+        )
+    return available, explicit
 
 
 def _merge_qdrant_results(

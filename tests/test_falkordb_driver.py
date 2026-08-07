@@ -1,8 +1,12 @@
+import asyncio
 import os
+import subprocess
 import sys
 import threading
+import time
+import textwrap
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -48,9 +52,11 @@ class FakeGraph:
 
     def __init__(self):
         self.calls = []
+        self.timeouts = []
 
-    def query(self, query, params=None):
+    def query(self, query, params=None, timeout=None):
         self.calls.append((query, params))
+        self.timeouts.append(timeout)
         return FakeQueryResult()
 
 
@@ -165,6 +171,37 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
         driver.graph.query.assert_called_once()
         driver.close()
 
+    async def test_native_query_timeout_is_passed_to_falkordb(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {
+                    "host": "localhost",
+                    "port": 6379,
+                    "database": "test_graph",
+                    "query_timeout_ms": 4321,
+                },
+            )
+        driver.execute_query_sync("MATCH (n) RETURN n")
+        self.assertEqual(driver.graph.timeouts[-1], 4321)
+        driver.close()
+
+    async def test_mutating_timeout_is_typed_as_ambiguous_and_not_retried(self):
+        from tools.graph.driver.falkordb_driver import AmbiguousWriteTimeoutError
+
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+        driver.graph.query = Mock(side_effect=TimeoutError("query timed out"))
+
+        with self.assertRaisesRegex(AmbiguousWriteTimeoutError, "ambiguous"):
+            driver.execute_query_sync("MERGE (:Probe {id: $id})", {"id": "one"})
+
+        driver.graph.query.assert_called_once()
+        driver.close()
+
     async def test_existing_index_is_logged_as_idempotent_skip(self):
         with patch("falkordb.FalkorDB", FakeFalkorDB):
             driver = await GraphDriverFactory.create_driver(
@@ -182,6 +219,192 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
             )
 
         warning.assert_not_called()
+        driver.close()
+
+    async def test_required_index_creation_failure_propagates(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+
+        driver.graph.create_node_range_index = Mock(
+            side_effect=RuntimeError("index build failed")
+        )
+        with self.assertRaisesRegex(RuntimeError, "index build failed"):
+            await driver.create_indexes(
+                [{"label": "Function", "property": "id"}]
+            )
+        driver.close()
+
+    async def test_index_inspection_normalizes_falkordb_types_map(self):
+        driver = object.__new__(
+            __import__(
+                "tools.graph.driver.falkordb_driver",
+                fromlist=["FalkorDBDriver"],
+            ).FalkorDBDriver
+        )
+
+        async def execute_query(query, parameters=None, database=None):
+            return (
+                [
+                    {
+                        "label": "Function",
+                        "properties": ["id", "symbol_id"],
+                        "types": {"id": ["RANGE"], "symbol_id": ["RANGE"]},
+                        "entitytype": "NODE",
+                        "status": "OPERATIONAL",
+                    }
+                ],
+                [],
+                None,
+            )
+
+        driver.execute_query = execute_query
+        self.assertEqual(
+            await driver.inspect_indexes(database="code"),
+            [
+                {
+                    "label": "Function",
+                    "properties": ["id"],
+                    "index_type": "range",
+                    "entity_type": "node",
+                    "status": "OPERATIONAL",
+                },
+                {
+                    "label": "Function",
+                    "properties": ["symbol_id"],
+                    "index_type": "range",
+                    "entity_type": "node",
+                    "status": "OPERATIONAL",
+                }
+            ],
+        )
+
+    async def test_native_index_creation_uses_bounded_driver_executor(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+        caller_threads = []
+
+        def create_index(label, *properties):
+            caller_threads.append(threading.current_thread().name)
+
+        driver.graph.create_node_range_index = create_index
+        await driver.create_indexes([{"label": "Function", "property": "id"}])
+
+        self.assertEqual(len(caller_threads), 1)
+        self.assertTrue(caller_threads[0].startswith("cortex-falkordb-query"))
+        driver.close()
+
+    async def test_close_does_not_wait_for_cancelled_native_ddl(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocked_create(label, *properties):
+            started.set()
+            release.wait(timeout=1)
+
+        driver.graph.create_node_range_index = blocked_create
+        task = asyncio.create_task(
+            driver.create_indexes([{"label": "Function", "property": "id"}])
+        )
+        await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        before = time.monotonic()
+        driver.close()
+        self.assertLess(time.monotonic() - before, 0.05)
+        release.set()
+        await asyncio.sleep(0.02)
+        self.assertTrue(driver._resources_closed)
+
+    def test_cancelled_native_call_does_not_delay_process_exit(self):
+        script = textwrap.dedent(
+            """
+            import asyncio
+            import threading
+            import time
+            from tools.graph.driver.falkordb_driver import FalkorDBDriver
+
+            async def main():
+                driver = object.__new__(FalkorDBDriver)
+                driver._inflight_native_futures = set()
+                driver._native_future_lock = threading.Lock()
+                driver._deferred_close = False
+                driver._resources_closed = False
+                driver._client = None
+                driver._storage_lease = None
+                task = asyncio.create_task(driver._run_in_executor(time.sleep, 5))
+                await asyncio.sleep(0.02)
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                driver.close()
+
+            asyncio.run(main())
+            """
+        )
+        env = dict(os.environ)
+        env["PYTHONPATH"] = CODE_TINY
+        started = time.monotonic()
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertLess(time.monotonic() - started, 2)
+
+    async def test_inspect_indexes_normalizes_provider_metadata(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+        driver.execute_query = AsyncMock(
+            return_value=(
+                [
+                    {
+                        "label": "Function",
+                        "properties": ["id"],
+                        "type": "RANGE",
+                        "entitytype": "NODE",
+                        "status": "OPERATIONAL",
+                    }
+                ],
+                [],
+                None,
+            )
+        )
+
+        self.assertEqual(
+            await driver.inspect_indexes(),
+            [
+                {
+                    "label": "Function",
+                    "properties": ["id"],
+                    "index_type": "range",
+                    "entity_type": "node",
+                    "status": "OPERATIONAL",
+                }
+            ],
+        )
+        driver.close()
 
 
 if __name__ == "__main__":

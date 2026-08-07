@@ -20,6 +20,10 @@ from tools.common.git_diff import load_manifest_paths
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
+from tools.graph.writer.query_contract import (
+    compile_relationship_upsert,
+    group_typed_relations,
+)
 from tools.android import android_common
 from tools.java import java_analyzer as java_base
 
@@ -445,6 +449,7 @@ async def enrich_android_java_graph(
     driver = code_writer.driver
     database = code_writer.database
     batch_size = max(1, min(code_writer.batch_size, 1000))
+    await code_writer.ensure_schema()
 
     manifest_rows: List[Dict[str, Any]] = []
     component_rows: List[Dict[str, Any]] = []
@@ -495,7 +500,9 @@ async def enrich_android_java_graph(
         )
         relation_rows.append(
             {
+                "source_label": "Project",
                 "source_id": project_id,
+                "target_label": "AndroidManifest",
                 "target_id": manifest.symbol_id,
                 "rel_type": "CONTAINS",
                 "properties": {},
@@ -532,7 +539,9 @@ async def enrich_android_java_graph(
         )
         relation_rows.append(
             {
+                "source_label": "Project",
                 "source_id": project_id,
+                "target_label": "AndroidComponent",
                 "target_id": component.symbol_id,
                 "rel_type": "CONTAINS",
                 "properties": {},
@@ -541,7 +550,9 @@ async def enrich_android_java_graph(
         manifest_id = _manifest_symbol_id(component.file_path)
         relation_rows.append(
             {
+                "source_label": "AndroidManifest",
                 "source_id": manifest_id,
+                "target_label": "AndroidComponent",
                 "target_id": component.symbol_id,
                 "rel_type": "CONTAINS",
                 "properties": {},
@@ -557,7 +568,9 @@ async def enrich_android_java_graph(
             if class_id:
                 relation_rows.append(
                     {
+                        "source_label": "AndroidComponent",
                         "source_id": component.symbol_id,
+                        "target_label": "Class",
                         "target_id": class_id,
                         "rel_type": "MAPS_TO_CLASS",
                         "properties": {},
@@ -568,7 +581,9 @@ async def enrich_android_java_graph(
             intent_actions[action_id] = action
             relation_rows.append(
                 {
+                    "source_label": "AndroidComponent",
                     "source_id": component.symbol_id,
+                    "target_label": "AndroidIntentAction",
                     "target_id": action_id,
                     "rel_type": "DECLARES_INTENT_ACTION",
                     "properties": {},
@@ -589,7 +604,9 @@ async def enrich_android_java_graph(
         )
         relation_rows.append(
             {
+                "source_label": "Project",
                 "source_id": project_id,
+                "target_label": "AndroidIntentAction",
                 "target_id": action_id,
                 "rel_type": "CONTAINS",
                 "properties": {},
@@ -599,7 +616,9 @@ async def enrich_android_java_graph(
     for rel in event_relations:
         relation_rows.append(
             {
+                "source_label": rel["source_label"],
                 "source_id": rel["source_id"],
+                "target_label": rel["target_label"],
                 "target_id": rel["target_id"],
                 "rel_type": rel["rel_type"],
                 "properties": rel.get("props") or {},
@@ -701,18 +720,22 @@ async def enrich_android_java_graph(
         batch_size,
     )
 
-    by_type: Dict[str, List[Dict[str, Any]]] = {}
-    for rel in relation_rows:
-        by_type.setdefault(rel["rel_type"], []).append(rel)
-
-    for rel_type, rows in by_type.items():
-        query = (
-            "UNWIND $rows AS row "
-            "MATCH (a {id: row.source_id}), (b {id: row.target_id}) "
-            f"MERGE (a)-[r:{rel_type}]->(b) "
-            "SET r += row.properties"
+    # Project containment is intentionally omitted: the canonical hierarchy is
+    # Project -> Repository -> File. All other relations require concrete
+    # endpoint labels so FalkorDB can use the identity indexes.
+    relation_rows = [
+        row
+        for row in relation_rows
+        if not (row["source_label"] == "Project" and row["rel_type"] == "CONTAINS")
+    ]
+    for relationship_group, rows in group_typed_relations(relation_rows).items():
+        await _write_batched(
+            driver,
+            database,
+            compile_relationship_upsert(relationship_group),
+            rows,
+            batch_size,
         )
-        await _write_batched(driver, database, query, rows, batch_size)
 
     if verbose:
         print(

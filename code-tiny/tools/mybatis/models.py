@@ -451,7 +451,9 @@ class MyBatisFact:
 
 @dataclass(frozen=True)
 class MyBatisRelationship:
+    from_label: str
     from_id: str
+    to_label: str
     to_id: str
     type: str
     project_id: str
@@ -463,7 +465,9 @@ class MyBatisRelationship:
 
     def to_graph_relationship(self) -> Dict[str, Any]:
         row: Dict[str, Any] = {
+            "from_label": self.from_label,
             "from_id": self.from_id,
+            "to_label": self.to_label,
             "to_id": self.to_id,
             "type": self.type,
             "project_id": self.project_id,

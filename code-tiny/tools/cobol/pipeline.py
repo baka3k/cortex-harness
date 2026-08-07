@@ -56,9 +56,23 @@ def analyze_project(
 
 def select_incremental_result(result: AnalysisResult, impacted_paths: Iterable[str]) -> AnalysisResult:
     impacted = {str(path).replace("\\", "/") for path in impacted_paths}
-    nodes = tuple(node for node in result.nodes if node.file_path in impacted)
-    selected_ids = {node.id for node in nodes}
-    edges = tuple(edge for edge in result.edges if edge.source_id in selected_ids or edge.evidence.file in impacted)
+    initially_selected = tuple(node for node in result.nodes if node.file_path in impacted)
+    selected_ids = {node.id for node in initially_selected}
+    edges = tuple(
+        edge
+        for edge in result.edges
+        if edge.source_id in selected_ids or edge.evidence.file in impacted
+    )
+    endpoint_ids = {
+        identity
+        for edge in edges
+        for identity in (edge.source_id, edge.target_id)
+    }
+    nodes = tuple(
+        node
+        for node in result.nodes
+        if node.file_path in impacted or node.id in endpoint_ids
+    )
     diagnostics = tuple(
         item for item in result.diagnostics
         if item.evidence is None or item.evidence.file in impacted
@@ -81,6 +95,7 @@ def select_incremental_result(result: AnalysisResult, impacted_paths: Iterable[s
 
 def graph_rows(result: AnalysisResult) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
     nodes_by_label: dict[str, list[dict[str, Any]]] = {}
+    label_by_id = {node.id: node.label for node in result.nodes}
     for node in result.nodes:
         properties = dict(node.properties)
         properties.update({
@@ -93,7 +108,9 @@ def graph_rows(result: AnalysisResult) -> tuple[dict[str, list[dict[str, Any]]],
     relations = [
         {
             "source_id": edge.source_id,
+            "source_label": label_by_id[edge.source_id],
             "target_id": edge.target_id,
+            "target_label": label_by_id[edge.target_id],
             "rel_type": edge.relationship,
             "properties": {
                 **dict(edge.properties),

@@ -42,7 +42,7 @@ def extract_crosscutting_facts(
                         source_symbol_id=class_owner_id(cls),
                     )
                 )
-                relationships.append(rel("SEMANTIC_OF", aspect_id, class_owner_id(cls), project_id, cls.source, "Aspect class anchor"))
+                relationships.append(rel("SEMANTIC_OF", "Aspect", aspect_id, "Class", class_owner_id(cls), project_id, cls.source, "Aspect class anchor"))
 
             for method in cls.methods:
                 advice_ann = first_annotation(method.annotations, AOP_METHOD_ANNOTATIONS)
@@ -64,7 +64,7 @@ def extract_crosscutting_facts(
                             )
                         )
                         if aspect_id:
-                            relationships.append(rel("DECLARES_POINTCUT", aspect_id, pointcut_id, project_id, method.source, "@Pointcut declaration"))
+                            relationships.append(rel("DECLARES_POINTCUT", "Aspect", aspect_id, "Pointcut", pointcut_id, project_id, method.source, "@Pointcut declaration"))
                     else:
                         advice_id = f"spring_advice::{project_id}::{stable_hash(method.symbol_id + advice_ann.raw)}"
                         facts.append(
@@ -82,7 +82,7 @@ def extract_crosscutting_facts(
                             )
                         )
                         if aspect_id:
-                            relationships.append(rel("APPLIES_ADVICE", aspect_id, advice_id, project_id, method.source, "AOP advice declaration"))
+                            relationships.append(rel("APPLIES_ADVICE", "Aspect", aspect_id, "Advice", advice_id, project_id, method.source, "AOP advice declaration"))
 
                 for ann in method.annotations:
                     if ann.short_name in VALIDATION_ANNOTATIONS:
@@ -103,9 +103,9 @@ def extract_crosscutting_facts(
                                 target_position="method",
                             )
                         )
-                        relationships.append(rel("CONSTRAINED_BY", method.symbol_id, constraint_id, project_id, method.source, "Bean Validation annotation"))
+                        relationships.append(rel("CONSTRAINED_BY", "Function", method.symbol_id, "ValidationConstraint", constraint_id, project_id, method.source, "Bean Validation annotation"))
                         if ann.short_name in {"Valid", "Validated"}:
-                            relationships.append(rel("VALIDATES_CASCADE", method.symbol_id, constraint_id, project_id, method.source, "Validation cascade"))
+                            relationships.append(rel("VALIDATES_CASCADE", "Function", method.symbol_id, "ValidationConstraint", constraint_id, project_id, method.source, "Validation cascade"))
 
                 for raw, short_name, args in _parameter_validation_annotations(method.params):
                     constraint_id = f"spring_validation::{project_id}::{stable_hash(method.symbol_id + ':param:' + raw)}"
@@ -125,9 +125,9 @@ def extract_crosscutting_facts(
                             target_position="parameter",
                         )
                     )
-                    relationships.append(rel("CONSTRAINED_BY", method.symbol_id, constraint_id, project_id, method.source, "Bean Validation parameter annotation"))
+                    relationships.append(rel("CONSTRAINED_BY", "Function", method.symbol_id, "ValidationConstraint", constraint_id, project_id, method.source, "Bean Validation parameter annotation"))
                     if short_name in {"Valid", "Validated"}:
-                        relationships.append(rel("VALIDATES_CASCADE", method.symbol_id, constraint_id, project_id, method.source, "Validation cascade"))
+                        relationships.append(rel("VALIDATES_CASCADE", "Function", method.symbol_id, "ValidationConstraint", constraint_id, project_id, method.source, "Validation cascade"))
 
                 for cache_ann in [ann for ann in method.annotations if ann.short_name in CACHE_ANNOTATIONS]:
                     cache_names = list_arg(cache_ann.args, "cacheNames", "value") or ["<unresolved>"]
@@ -153,7 +153,7 @@ def extract_crosscutting_facts(
                             before_invocation=cache_ann.args.get("beforeInvocation") or False,
                         )
                     )
-                    relationships.append(rel("APPLIES_TO", operation_id, method.symbol_id, project_id, method.source, "Cache operation applies to method"))
+                    relationships.append(rel("APPLIES_TO", "CacheOperation", operation_id, "Function", method.symbol_id, project_id, method.source, "Cache operation applies to method"))
                     edge_type = "READS_CACHE" if cache_ann.short_name == "Cacheable" else ("WRITES_CACHE" if cache_ann.short_name == "CachePut" else "EVICTS_CACHE")
                     for cache_name in cache_names:
                         region_id = f"spring_cache_region::{project_id}::default::{stable_hash(cache_name)}"
@@ -172,7 +172,7 @@ def extract_crosscutting_facts(
                                 manager="default",
                             )
                         )
-                        relationships.append(rel(edge_type, operation_id, region_id, project_id, method.source, f"{cache_ann.short_name} cache effect"))
+                        relationships.append(rel(edge_type, "CacheOperation", operation_id, "CacheRegion", region_id, project_id, method.source, f"{cache_ann.short_name} cache effect"))
     return facts, relationships
 
 

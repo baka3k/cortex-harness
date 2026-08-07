@@ -21,3 +21,8 @@ def test_shell_pipeline_builds_resolved_and_unresolved_rows() -> None:
     assert [row["name"] for row in rows["functions"]] == ["run_batch"]
     calls = [row for row in rows["relations"] if row["rel_type"] == "CALLS"]
     assert {row["properties"]["resolved"] for row in calls} == {True, False}
+    assert {row["id"] for row in rows["files"]} == {"settings.ini"}
+    ini_reference = next(
+        row for row in rows["relations"] if row["rel_type"] == "REFERENCES"
+    )
+    assert ini_reference["target_id"] in {row["id"] for row in rows["files"]}
