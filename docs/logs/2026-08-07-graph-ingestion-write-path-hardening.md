@@ -38,6 +38,34 @@ gates are captured in the [implementation plan](../../plans/260807-1202-graph-in
   writes (`code-tiny/tools/graph/cli.py:31`,
   `code-tiny/tools/graph/cli.py:149`,
   `code-tiny/tools/graph/core/factory.py:75`).
+- Phase 04A added immutable compatibility metadata plus canonical run and job
+  identities, so equivalent enqueue requests resolve to the same durable work
+  item while incompatible active runs are quarantined
+  (`code-tiny/tools/graph/journal/models.py:94`,
+  `code-tiny/tools/graph/journal/identity.py:26`,
+  `code-tiny/tools/graph/journal/identity.py:37`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:413`).
+- Added a local SQLite journal using WAL, full synchronous durability, foreign
+  keys, bounded storage, transactional barriers, leased claims, fenced ACKs,
+  reconciliation, retries, and terminal states
+  (`code-tiny/tools/graph/journal/sqlite_store.py:247`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:545`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:784`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:944`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:1014`,
+  `code-tiny/tools/graph/journal/sqlite_store.py:1052`).
+- Large payloads now stream to owner-only, content-addressed JSONL artifacts
+  with fsync, atomic publication, and hash verification; focused tests cover
+  deduplication, barrier ordering, stale fences, reconciliation recovery,
+  fail-closed corruption handling, retention, and redacted events
+  (`code-tiny/tools/graph/journal/artifacts.py:289`,
+  `code-tiny/tools/graph/journal/artifacts.py:359`,
+  `tests/test_graph_write_journal.py:176`,
+  `tests/test_graph_write_journal.py:222`,
+  `tests/test_graph_write_journal.py:263`,
+  `tests/test_graph_write_journal.py:292`,
+  `tests/test_graph_write_journal.py:359`,
+  `tests/test_graph_write_journal.py:532`).
 
 ## Impact
 
@@ -62,6 +90,12 @@ with no P0/P1 findings. The remaining rollout gate is the full canary against
 the original approximately 20,186-file C/Pro*C repository, whose source root is
 not mounted or discoverable in this workspace.
 
+Phase 04A retains the high risk level because this state machine will sit ahead
+of graph mutations once integrated. It provides crash-reopen durability,
+idempotent enqueue, stale-worker rejection, and explicit ambiguous-outcome
+preservation without yet changing production writers; writer integration and
+backend readback reconciliation remain Phase 04B and Phase 04C work.
+
 ## Decision
 
 The fix is automatic and tool-owned: schema readiness is a prerequisite of the
@@ -73,9 +107,20 @@ mutation can have an ambiguous commit outcome. Optional unresolved external
 relationships are reported and skipped explicitly; required schema and identity
 contract failures remain fail-closed.
 
+For Phase 04A, a local SQLite WAL journal and immutable content-addressed
+artifacts were chosen over a new external queue so metadata transitions stay
+transactional without placing large source-derived payloads in the database.
+Deterministic identities and fencing protect replay and ownership, while an
+expired ambiguous write remains reconciling rather than being re-executed or
+described as exactly-once (`code-tiny/tools/graph/journal/sqlite_store.py:1262`).
+Cleanup consequently requires a terminal run, elapsed retention, and confirmed
+exact-scope ownership (`code-tiny/tools/graph/journal/sqlite_store.py:1379`).
+
 ## References
 
 - Plan: [Graph ingestion write-path hardening](../../plans/260807-1202-graph-ingest-write-path-hardening/plan.md)
+- Phase 04A: [Journal contract and storage](../../plans/260807-1202-graph-ingest-write-path-hardening/phase-04a-journal-contract-and-storage.md)
 - Validation: [Graph ingest hardening validation](../../plans/260807-1202-graph-ingest-write-path-hardening/reports/validation-report.md)
 - Commit: `6836cdb59d742cbafe99bc4934642a922a4ca4de`
 - Commit: `74b55e335a65f3553ee76201c92c829e8c2805b2`
+- Commit: `d4abf38667aaacfbf29ce13264f616765f82c9f2`
