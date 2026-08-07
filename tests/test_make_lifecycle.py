@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -43,6 +44,28 @@ class MakeLifecycleTests(unittest.TestCase):
             LIFECYCLE.PYTHON_DEPENDENCY_PROBE,
         )
         self.assertNotIn("import falkordblite", LIFECYCLE.PYTHON_DEPENDENCY_PROBE)
+
+    def test_doctor_reports_running_sync_and_embedded_processes(self):
+        resolved = SimpleNamespace(
+            falkordb_code_path=Path("/stores/code.rdb"),
+            falkordb_doc_path=Path("/stores/doc.rdb"),
+        )
+        worker = SimpleNamespace(pid=4242)
+        with mock.patch.object(
+            LIFECYCLE,
+            "sync_processes",
+            side_effect=[[worker], []],
+        ), mock.patch.object(
+            LIFECYCLE,
+            "embedded_falkordb_pids",
+            side_effect=[[4343], []],
+        ), mock.patch.object(LIFECYCLE, "doctor_check") as check:
+            LIFECYCLE.doctor_process_checks(resolved)
+
+        calls = {call.args[0]: call for call in check.call_args_list}
+        self.assertIn("running pid(s): 4242", calls["code sync workers"].args[2])
+        self.assertIn("running pid(s): 4343", calls["code embedded FalkorDB"].args[2])
+        self.assertEqual(calls["doc sync workers"].args[2], "idle")
 
     def test_embedded_storage_dependencies_are_pinned_consistently(self):
         expected = {"qdrant-client==1.18.0", "falkordblite==0.10.0"}
@@ -102,6 +125,23 @@ class MakeLifecycleTests(unittest.TestCase):
                 f"{expected_python} scripts/mcp-lifecycle.py {target}",
                 result.stdout,
             )
+
+    def test_make_sync_stop_aliases_dispatch_to_scoped_dev_commands(self):
+        expected_python = ".venv/bin/python" if (ROOT / ".venv/bin/python").exists() else "python3"
+        for goals, owner in ((["sync", "code", "stop"], "code"), (["sync", "doc", "stop"], "doc")):
+            with self.subTest(owner=owner):
+                result = subprocess.run(
+                    ["make", "-n", *goals],
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    f"{expected_python} cortex_harness/dev.py sync {owner} stop",
+                    result.stdout,
+                )
 
     def test_install_and_uninstall_use_user_local_bin(self):
         with tempfile.TemporaryDirectory() as home:
