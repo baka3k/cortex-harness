@@ -6,6 +6,13 @@ Handles operations for namespace nodes (C++, C#, etc.)
 
 from typing import Any, Dict, List, Optional
 from tools.graph.core.base import GraphDriver
+from tools.graph.writer.query_contract import RelationshipGroup
+
+
+async def _ensure_schema(driver: GraphDriver, database: Optional[str]) -> None:
+    ensure = getattr(driver, "ensure_schema", None)
+    if callable(ensure):
+        await ensure(database=database)
 
 
 class NamespaceNodeOperations:
@@ -157,13 +164,15 @@ class NamespaceNodeOperations:
         Returns:
             True if relationship created
         """
+        group = RelationshipGroup(entity_label, "Namespace", "IN_NAMESPACE")
         query = f"""
-        MATCH (e:{entity_label} {{id: $entity_id}})
+        MATCH (e:{group.source_label} {{id: $entity_id}})
         MATCH (n:Namespace {{id: $namespace_id}})
         MERGE (e)-[r:IN_NAMESPACE]->(n)
         RETURN r
         """
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(
             query,
             {"entity_id": entity_id, "namespace_id": namespace_id},

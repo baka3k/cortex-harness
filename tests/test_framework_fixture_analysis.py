@@ -75,6 +75,12 @@ class FrameworkFixtureAnalysisTest(unittest.TestCase):
                 self.assertTrue(
                     all(fact.source.file_path for fact in anchored_facts)
                 )
+                self.assertTrue(
+                    all(
+                        relationship.from_label and relationship.to_label
+                        for relationship in result.relationships
+                    )
+                )
 
 
 if __name__ == "__main__":

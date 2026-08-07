@@ -40,7 +40,9 @@ class FrameworkGraphContractTest(unittest.IsolatedAsyncioTestCase):
             properties={"dynamic": {"if": "name != null"}},
         )
         rel = MyBatisRelationship(
+            from_label="MyBatisSqlStatement",
             from_id="stmt-1",
+            to_label="DatabaseTable",
             to_id="table-1",
             type="READS_FROM",
             project_id="project",
@@ -50,6 +52,91 @@ class FrameworkGraphContractTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(fact.to_graph_node()["dynamic"], '{"if":"name != null"}')
         self.assertEqual(rel.to_graph_relationship()["columns"], '[{"name":"id"}]')
+        self.assertEqual(rel.to_graph_relationship()["from_label"], "MyBatisSqlStatement")
+        self.assertEqual(rel.to_graph_relationship()["to_label"], "DatabaseTable")
+
+    async def test_spring_relationship_writer_groups_by_both_endpoint_labels(self):
+        driver = CapturingGraphDriver()
+        rows = [
+            {
+                "from_label": "SpringBean",
+                "from_id": "bean-1",
+                "to_label": "Function",
+                "to_id": "fn-1",
+                "type": "SEMANTIC_OF",
+                "project_id": "project",
+                "properties": {},
+            },
+            {
+                "from_label": "Aspect",
+                "from_id": "aspect-1",
+                "to_label": "Class",
+                "to_id": "class-1",
+                "type": "SEMANTIC_OF",
+                "project_id": "project",
+                "properties": {},
+            },
+        ]
+
+        written = await SpringFactWriter(driver, database="graph").write_relationships(rows)
+
+        self.assertEqual(written, 2)
+        self.assertEqual(len(driver.calls), 2)
+        queries = "\n".join(query for query, _, _ in driver.calls)
+        self.assertIn("MATCH (a:SpringBean {id: row.from_id})", queries)
+        self.assertIn("MATCH (b:Function {id: row.to_id})", queries)
+        self.assertIn("MATCH (a:Aspect {id: row.from_id})", queries)
+        self.assertIn("MATCH (b:Class {id: row.to_id})", queries)
+        self.assertIn("a.project_id = row.project_id", queries)
+        self.assertIn("b.project_id = row.project_id", queries)
+
+    async def test_mybatis_relationship_writer_groups_by_both_endpoint_labels(self):
+        driver = CapturingGraphDriver()
+        rows = [
+            {
+                "from_label": "MyBatisMapper",
+                "from_id": "mapper-1",
+                "to_label": "Class",
+                "to_id": "class-1",
+                "type": "SEMANTIC_OF",
+                "project_id": "project",
+            },
+            {
+                "from_label": "MyBatisMapperMethod",
+                "from_id": "method-1",
+                "to_label": "Function",
+                "to_id": "fn-1",
+                "type": "SEMANTIC_OF",
+                "project_id": "project",
+            },
+        ]
+
+        written = await MyBatisFactWriter(driver, database="graph").write_relationships(rows)
+
+        self.assertEqual(written, 2)
+        self.assertEqual(len(driver.calls), 2)
+        queries = "\n".join(query for query, _, _ in driver.calls)
+        self.assertIn("MATCH (a:MyBatisMapper {id: row.from_id})", queries)
+        self.assertIn("MATCH (b:Class {id: row.to_id})", queries)
+        self.assertIn("MATCH (a:MyBatisMapperMethod {id: row.from_id})", queries)
+        self.assertIn("MATCH (b:Function {id: row.to_id})", queries)
+        self.assertIn("a.project_id = row.project_id", queries)
+        self.assertIn("b.project_id = row.project_id", queries)
+
+    async def test_framework_relationship_writers_reject_unallowlisted_labels(self):
+        row = {
+            "from_label": "InjectedLabel",
+            "from_id": "source-1",
+            "to_label": "Function",
+            "to_id": "target-1",
+            "type": "SEMANTIC_OF",
+            "project_id": "project",
+            "properties": {},
+        }
+        with self.assertRaisesRegex(ValueError, "relationship source label"):
+            await SpringFactWriter(CapturingGraphDriver()).write_relationships([row])
+        with self.assertRaisesRegex(ValueError, "relationship source label"):
+            await MyBatisFactWriter(CapturingGraphDriver()).write_relationships([row])
 
     async def test_framework_writers_scope_cleanup_to_framework_and_project(self):
         driver = CapturingGraphDriver()

@@ -48,7 +48,9 @@ def fact(
 
 def rel(
     rel_type: str,
+    from_label: str,
     from_id: str,
+    to_label: str,
     to_id: str,
     project_id: str,
     source: SourceSpan,
@@ -59,7 +61,9 @@ def rel(
 ) -> SpringRelationship:
     return SpringRelationship(
         type=rel_type,
+        from_label=from_label,
         from_id=from_id,
+        to_label=to_label,
         to_id=to_id,
         project_id=project_id,
         source=source,

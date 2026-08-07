@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import warnings
 from pathlib import Path
@@ -19,6 +20,11 @@ if str(CODE_TINY) not in sys.path:
 from tools.graph.driver.falkordb_driver import (  # noqa: E402
     FalkorDBDriver,
     _open_local_falkordb,
+)
+from tools.graph.schema import GraphSchemaManifest, SchemaIndex  # noqa: E402
+from tools.graph.writer.query_contract import (  # noqa: E402
+    RelationshipGroup,
+    compile_relationship_upsert,
 )
 
 
@@ -149,6 +155,58 @@ def test_real_falkordblite_persists_and_isolates_graphs(tmp_path: Path) -> None:
     records, _, _ = other_graph.execute_query_sync("MATCH (n:Probe) RETURN count(n) AS count")
     assert records == [{"count": 0}]
     other_graph.close()
+
+
+def test_real_falkordblite_relationship_plan_uses_both_indexes(tmp_path: Path) -> None:
+    pytest.importorskip("redislite.falkordb_client")
+    driver = FalkorDBDriver(
+        path=tmp_path / "indexed" / "data.rdb",
+        graph="code",
+        owner_id="code",
+    )
+    manifest = GraphSchemaManifest(
+        "relationship_probe",
+        1,
+        (
+            SchemaIndex("File", ("id",)),
+            SchemaIndex("Function", ("id",)),
+        ),
+    )
+    try:
+        result = asyncio.run(
+            driver.ensure_schema(manifest, database="code", timeout_seconds=20)
+        )
+        assert result.verified_count == 2
+        driver.execute_query_sync(
+            "CREATE (:File {id: $file_id}), (:Function {id: $function_id})",
+            {"file_id": "src/main.c", "function_id": "fn:main"},
+        )
+        query = compile_relationship_upsert(
+            RelationshipGroup("File", "Function", "CONTAINS")
+        )
+        rows = [
+            {
+                "source_id": "src/main.c",
+                "target_id": "fn:main",
+                "properties": {},
+            }
+        ]
+        plan = str(driver.graph.explain(query, params={"rows": rows}))
+        assert "Node By Index Scan | (a:File)" in plan
+        assert "Node By Index Scan | (b:Function)" in plan
+        assert "All Node Scan" not in plan
+        assert "Cartesian Product" not in plan
+
+        driver.execute_query_sync(query, {"rows": rows})
+        driver.execute_query_sync(query, {"rows": rows})
+        records, _, _ = driver.execute_query_sync(
+            "MATCH (:File {id: $file_id})-[r:CONTAINS]->"
+            "(:Function {id: $function_id}) RETURN count(r) AS count",
+            {"file_id": "src/main.c", "function_id": "fn:main"},
+        )
+        assert records == [{"count": 1}]
+    finally:
+        driver.close()
 
 
 def _make_fake_client() -> object:

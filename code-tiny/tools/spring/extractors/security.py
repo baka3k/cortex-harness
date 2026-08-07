@@ -37,7 +37,7 @@ def extract_security_facts(
                             chain_bean=method.name,
                         )
                     )
-                    relationships.append(rel("SEMANTIC_OF", chain_id, method.symbol_id, project_id, method.source, "SecurityFilterChain bean anchor"))
+                    relationships.append(rel("SEMANTIC_OF", "SecurityFilterChain", chain_id, "Function", method.symbol_id, project_id, method.source, "SecurityFilterChain bean anchor"))
                     for idx, rule in enumerate(_security_rules(method.code)):
                         rule_id = f"spring_security_rule::{chain_id}::{idx}"
                         facts.append(
@@ -55,7 +55,7 @@ def extract_security_facts(
                                 order=idx,
                             )
                         )
-                        relationships.append(rel("HAS_RULE", chain_id, rule_id, project_id, method.source, "Ordered Spring Security rule", order=idx))
+                        relationships.append(rel("HAS_RULE", "SecurityFilterChain", chain_id, "SecurityRule", rule_id, project_id, method.source, "Ordered Spring Security rule", order=idx))
                         for authority_kind, authority_value in _authorities_from_expression(rule.get("raw", "")):
                             auth_id = _authority_id(project_id, authority_kind, authority_value)
                             facts.append(
@@ -72,7 +72,7 @@ def extract_security_facts(
                                     raw_value=authority_value,
                                 )
                             )
-                            relationships.append(rel("REQUIRES_AUTHORITY", rule_id, auth_id, project_id, method.source, "Security rule authority"))
+                            relationships.append(rel("REQUIRES_AUTHORITY", "SecurityRule", rule_id, "Authority", auth_id, project_id, method.source, "Security rule authority"))
 
                 method_sec = first_annotation(method.annotations, SECURITY_METHOD_ANNOTATIONS)
                 if method_sec:
@@ -92,7 +92,7 @@ def extract_security_facts(
                             method_rule=True,
                         )
                     )
-                    relationships.append(rel("PROTECTS", rule_id, method.symbol_id, project_id, method.source, "Method security annotation"))
+                    relationships.append(rel("PROTECTS", "SecurityRule", rule_id, "Function", method.symbol_id, project_id, method.source, "Method security annotation"))
                     for authority_kind, authority_value in _authorities_from_annotation(method_sec):
                         auth_id = _authority_id(project_id, authority_kind, authority_value)
                         facts.append(
@@ -109,7 +109,7 @@ def extract_security_facts(
                                 raw_value=authority_value,
                             )
                         )
-                        relationships.append(rel("REQUIRES_AUTHORITY", rule_id, auth_id, project_id, method.source, "Method security authority"))
+                        relationships.append(rel("REQUIRES_AUTHORITY", "SecurityRule", rule_id, "Authority", auth_id, project_id, method.source, "Method security authority"))
     return facts, relationships
 
 

@@ -52,7 +52,18 @@ async def _write_graph(args: argparse.Namespace, result: Jp1AnalysisResult) -> d
                 verbose=args.verbose,
             )
         query = "UNWIND $rows AS row MERGE (n:Jp1Unit {id: row.id}) SET n += row"
-        return {"Jp1Unit": await writer.write_nodes_batch("jp1:units", query, rows["units"]), "relations": await writer.write_relations_typed(rows["relations"])}
+        required_relations = [
+            row for row in rows["relations"] if row.get("properties", {}).get("resolved") is not False
+        ]
+        unresolved_count = len(rows["relations"]) - len(required_relations)
+        counts = {
+            "Jp1Unit": await writer.write_nodes_batch("jp1:units", query, rows["units"]),
+            "relations": await writer.write_relations_typed(required_relations),
+            "unresolved_relations": unresolved_count,
+        }
+        if args.verbose and unresolved_count:
+            print(f"[graph] optional unresolved JP1 relations skipped={unresolved_count}")
+        return counts
     finally:
         close = getattr(driver, "close", None)
         if close:

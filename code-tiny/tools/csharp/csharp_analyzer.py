@@ -1341,7 +1341,7 @@ async def build_call_graph(
                 }
             )
             all_relations.append(
-                {"source_id": project_id, "target_id": file_id, "rel_type": "CONTAINS", "properties": {}}
+                {"source_id": project_id, "source_label": "Project", "target_id": file_id, "target_label": "File", "rel_type": "CONTAINS", "properties": {}}
             )
             for ns in payload["namespaces"]:
                 all_namespaces.append(
@@ -1364,7 +1364,7 @@ async def build_call_graph(
                     }
                 )
                 all_relations.append(
-                    {"source_id": file_id, "target_id": ns["symbol_id"], "rel_type": "CONTAINS", "properties": {}}
+                    {"source_id": file_id, "source_label": "File", "target_id": ns["symbol_id"], "target_label": "Namespace", "rel_type": "CONTAINS", "properties": {}}
                 )
             for type_def in payload["types"]:
                 all_types.append(
@@ -1389,7 +1389,7 @@ async def build_call_graph(
                     }
                 )
                 all_relations.append(
-                    {"source_id": file_id, "target_id": type_def["symbol_id"], "rel_type": "CONTAINS", "properties": {}}
+                    {"source_id": file_id, "source_label": "File", "target_id": type_def["symbol_id"], "target_label": "Type", "rel_type": "CONTAINS", "properties": {}}
                 )
             for func in payload["functions"]:
                 all_functions.append(
@@ -1418,7 +1418,7 @@ async def build_call_graph(
                     }
                 )
                 all_relations.append(
-                    {"source_id": file_id, "target_id": func["symbol_id"], "rel_type": "CONTAINS", "properties": {}}
+                    {"source_id": file_id, "source_label": "File", "target_id": func["symbol_id"], "target_label": "Function", "rel_type": "CONTAINS", "properties": {}}
                 )
             for rel in payload["relations"]:
                 if rel["rel_type"] not in allowed_rel_types:
@@ -1426,7 +1426,9 @@ async def build_call_graph(
                 all_relations.append(
                     {
                         "source_id": rel["source_id"],
+                        "source_label": rel["source_label"],
                         "target_id": rel["target_id"],
+                        "target_label": rel["target_label"],
                         "rel_type": rel["rel_type"],
                         "properties": rel["properties"],
                     }

@@ -39,6 +39,7 @@ class IncrementalSyncWorktreeTests(unittest.TestCase):
                     "--project-id", project_id,
                     "--parsers", "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                     "--summary-path", str(summary_path),
                 ]
             )
@@ -81,6 +82,7 @@ class IncrementalSyncWorktreeTests(unittest.TestCase):
                     "--parsers", "cplus",
                     "--after-sha", first_sha,
                     "--no-sync-messages",
+                    "--no-graph",
                     "--summary-path", str(summary_path),
                 ]
             )
@@ -107,6 +109,7 @@ class IncrementalSyncWorktreeTests(unittest.TestCase):
                     "--project-id", "worktree-test",
                     "--parsers", "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                     "--summary-path", str(summary_path),
                 ]
             )
@@ -162,6 +165,7 @@ class IncrementalSyncWorktreeTests(unittest.TestCase):
                     "--project-id", "revert-test",
                     "--parsers", "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                 ]
             )
 
@@ -193,6 +197,7 @@ class IncrementalSyncWorktreeTests(unittest.TestCase):
                     "--project-id", "failure-test",
                     "--parsers", "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                 ]
             )
             with patch.object(incremental_sync, "_run", return_value=""):
@@ -222,6 +227,7 @@ class IncrementalSyncWorktreeTests(unittest.TestCase):
                     "--project-id", "drift-test",
                     "--parsers", "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                     "--summary-path", str(summary_path),
                 ]
             )

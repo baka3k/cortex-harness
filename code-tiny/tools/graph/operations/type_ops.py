@@ -6,6 +6,14 @@ Handles operations for type/typedef nodes (C++, C#, typed languages)
 
 from typing import Any, Dict, List, Optional
 from tools.graph.core.base import GraphDriver
+from tools.graph.schema.manifest import validate_cypher_identifier
+from tools.graph.writer.query_contract import RelationshipGroup
+
+
+async def _ensure_schema(driver: GraphDriver, database: Optional[str]) -> None:
+    ensure = getattr(driver, "ensure_schema", None)
+    if callable(ensure):
+        await ensure(database=database)
 
 
 class TypeNodeOperations:
@@ -128,15 +136,17 @@ class TypeNodeOperations:
         Returns:
             True if relationship created
         """
+        group = RelationshipGroup(user_label, "Type", usage_kind)
         query = f"""
-        MATCH (user:{user_label} {{id: $user_id}})
+        MATCH (user:{group.source_label} {{id: $user_id}})
         MATCH (t:Type {{id: $type_id}})
-        MERGE (user)-[r:{usage_kind}]->(t)
+        MERGE (user)-[r:{group.relationship_type}]->(t)
         """
         
         if properties:
             for key in properties.keys():
-                query += f"\nSET r.{key} = ${key}"
+                property_name = validate_cypher_identifier(str(key), kind="property")
+                query += f"\nSET r.{property_name} = ${property_name}"
         
         query += "\nRETURN r"
         
@@ -146,6 +156,7 @@ class TypeNodeOperations:
             **(properties or {})
         }
         
+        await _ensure_schema(driver, database)
         records, _, _ = await driver.execute_query(query, params, database)
         return len(records) > 0
     

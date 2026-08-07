@@ -28,6 +28,7 @@ class IncrementalSyncNonGitTests(unittest.TestCase):
                     "--project-id", "unborn-test",
                     "--parsers", "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                 ]
             )
             with patch.object(incremental_sync, "_run", return_value="") as run:
@@ -46,6 +47,7 @@ class IncrementalSyncNonGitTests(unittest.TestCase):
                     "--project-id", "non-git-test",
                     "--parsers", "cplus",
                     "--no-sync-messages",
+                    "--no-graph",
                     "--summary-path", str(summary_path),
                 ]
             )

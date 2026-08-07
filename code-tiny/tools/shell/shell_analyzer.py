@@ -31,6 +31,7 @@ def build_graph_rows(result: ShellAnalysisResult, *, project_name: str, repo: st
     }
     scripts: list[dict[str, Any]] = []
     functions: list[dict[str, Any]] = []
+    referenced_files: dict[str, dict[str, Any]] = {}
     relations: list[dict[str, Any]] = []
     for file in result.files:
         scripts.append({"id": file.file_path, "name": os.path.basename(file.file_path), "file_path": file.file_path, "encoding": file.encoding, **common})
@@ -39,7 +40,22 @@ def build_graph_rows(result: ShellAnalysisResult, *, project_name: str, repo: st
             relations.append({"source_id": file.file_path, "source_label": "ShellScript", "target_id": function.symbol_id, "target_label": "ShellFunction", "rel_type": "CONTAINS", "properties": {}})
         for relation in file.relations:
             relations.append({"source_id": relation.source_id, "source_label": relation.source_label, "target_id": relation.target_id, "target_label": relation.target_label, "rel_type": relation.rel_type, "properties": {"line": relation.line, "raw_target": relation.raw_target, "resolved": relation.resolved}})
-    return {"scripts": scripts, "functions": functions, "relations": relations}
+            if relation.target_label == "File" and relation.resolved:
+                referenced_files.setdefault(
+                    relation.target_id,
+                    {
+                        "id": relation.target_id,
+                        "name": os.path.basename(relation.target_id),
+                        "file_path": relation.target_id,
+                        **common,
+                    },
+                )
+    return {
+        "scripts": scripts,
+        "functions": functions,
+        "files": list(referenced_files.values()),
+        "relations": relations,
+    }
 
 
 async def _write_graph(args: argparse.Namespace, result: ShellAnalysisResult) -> dict[str, int]:
@@ -50,6 +66,7 @@ async def _write_graph(args: argparse.Namespace, result: ShellAnalysisResult) ->
         raise RuntimeError("Graph provider was requested but no driver was created")
     try:
         writer = LanguageCodeWriter(driver, database=args.neo4j_db, batch_size=args.neo4j_batch_size, verbose=args.verbose)
+        await writer.ensure_schema()
         rows = build_graph_rows(result, project_name=args.project_name or result.project_id, repo=args.repo or result.project_id)
         cleanup_paths = sorted(set(result.changed_paths) | set(result.deleted_paths))
         if args.incremental and cleanup_paths:
@@ -62,11 +79,20 @@ async def _write_graph(args: argparse.Namespace, result: ShellAnalysisResult) ->
             )
         script_query = "UNWIND $rows AS row MERGE (n:ShellScript {id: row.id}) SET n += row"
         function_query = "UNWIND $rows AS row MERGE (n:ShellFunction {id: row.id}) SET n += row"
+        file_query = "UNWIND $rows AS row MERGE (n:File {id: row.id}) SET n += row"
         counts = {
             "ShellScript": await writer.write_nodes_batch("shell:scripts", script_query, rows["scripts"]),
             "ShellFunction": await writer.write_nodes_batch("shell:functions", function_query, rows["functions"]),
+            "File": await writer.write_nodes_batch("shell:referenced-files", file_query, rows["files"]),
         }
-        counts["relations"] = await writer.write_relations_typed(rows["relations"])
+        required_relations = [
+            row for row in rows["relations"] if row.get("properties", {}).get("resolved") is not False
+        ]
+        unresolved_count = len(rows["relations"]) - len(required_relations)
+        counts["relations"] = await writer.write_relations_typed(required_relations)
+        counts["unresolved_relations"] = unresolved_count
+        if args.verbose and unresolved_count:
+            print(f"[graph] optional unresolved shell relations skipped={unresolved_count}")
         return counts
     finally:
         close = getattr(driver, "close", None)

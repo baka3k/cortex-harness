@@ -55,7 +55,7 @@ def parse_cache_path(cache_root: str, rel_path: str) -> str:
 def load_parse_cache(
     cache_root: str,
     rel_path: str,
-    signature: Dict[str, int],
+    signature: Any,
 ) -> Optional[Dict[str, Any]]:
     path = parse_cache_path(cache_root, rel_path)
     if not os.path.exists(path):
@@ -72,7 +72,7 @@ def load_parse_cache(
 def write_parse_cache(
     cache_root: str,
     rel_path: str,
-    signature: Dict[str, int],
+    signature: Any,
     payload: Dict[str, Any],
 ) -> None:
     path = parse_cache_path(cache_root, rel_path)

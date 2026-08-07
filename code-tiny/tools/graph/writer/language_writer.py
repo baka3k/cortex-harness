@@ -5,8 +5,10 @@ Unified writer for all language analyzers with state management and batching.
 Replaces the duplicated Neo4jWriter classes across all analyzer files.
 """
 
-from typing import Any, Dict, List, Optional, Callable
-import logging
+import asyncio
+import os
+import time
+from typing import Any, Callable, Dict, List, Optional
 
 from tools.graph.core.base import GraphDriver
 from tools.graph.operations.package_ops import PackageNodeOperations
@@ -14,9 +16,14 @@ from tools.graph.operations.class_ops import ClassNodeOperations
 from tools.graph.operations.namespace_ops import NamespaceNodeOperations
 from tools.graph.operations.type_ops import TypeNodeOperations
 from tools.graph.operations.function_ops import FunctionNodeOperations
+from tools.graph.writer.query_contract import (
+    compile_relationship_upsert,
+    group_typed_relations,
+)
 
-logger = logging.getLogger(__name__)
-
+_OPTIONAL_EXTERNAL_RELATION_TYPES = frozenset(
+    {"EXTENDS", "IMPLEMENTS", "INHERITS_FROM", "MIXES_IN"}
+)
 
 class LanguageCodeWriter:
     """
@@ -46,6 +53,11 @@ class LanguageCodeWriter:
         self.database = database
         self.batch_size = batch_size
         self.verbose = verbose
+        self._schema_ready = False
+        self._progress_heartbeat_seconds = 10.0
+        self._reconciliation_timeout_seconds = float(
+            os.getenv("GRAPH_WRITE_RECONCILE_TIMEOUT_SECONDS", "30")
+        )
         
         # Initialize operations
         self.package_ops = PackageNodeOperations()
@@ -54,13 +66,37 @@ class LanguageCodeWriter:
         self.type_ops = TypeNodeOperations()
         self.function_ops = FunctionNodeOperations()
     
-    def _log_progress(self, label: str, current: int, total: int) -> None:
-        """Log batch progress"""
-        first_checkpoint = min(total, max(1, self.batch_size))
-        if self.verbose and (current == first_checkpoint or current % 1000 == 0 or current == total):
-            logger.info(f"[{self.driver.provider.value}] {label} {current}/{total}")
-            if self.verbose:
-                print(f"[{self.driver.provider.value}] {label} {current}/{total}")
+    def _provider_name(self) -> str:
+        provider = getattr(self.driver, "provider", "graph")
+        return str(getattr(provider, "value", provider))
+
+    def _emit_progress(self, event: str, label: str, **fields: Any) -> None:
+        """Emit one visible, flushed progress event for verbose CLI runs."""
+
+        if not self.verbose:
+            return
+        details = " ".join(f"{key}={value}" for key, value in fields.items())
+        suffix = f" {details}" if details else ""
+        print(
+            f"[{self._provider_name()}] {label} {event}{suffix}",
+            flush=True,
+        )
+
+    async def ensure_schema(self) -> Any:
+        """Enforce the production-driver schema invariant once per writer."""
+
+        if self._schema_ready:
+            return None
+        ensure = getattr(self.driver, "ensure_schema", None)
+        if callable(ensure):
+            result = await ensure(database=self.database)
+            self._schema_ready = True
+            return result
+        # Recording drivers in isolated unit tests intentionally expose only
+        # execute_query. Real GraphDriver implementations always provide the
+        # inherited ensure_schema method.
+        self._schema_ready = True
+        return None
     
     async def write_batches(
         self,
@@ -87,26 +123,130 @@ class LanguageCodeWriter:
         total = len(rows)
         
         if start_index >= total:
-            if self.verbose:
-                logger.info(f"[{label}] Already completed ({total} items)")
+            self._emit_progress(
+                "batch_skipped",
+                label,
+                completed=total,
+                total=total,
+                reason="already_completed",
+            )
             return 0
         
         written = 0
+        await self.ensure_schema()
         for offset in range(start_index, total, self.batch_size):
             batch = rows[offset : offset + self.batch_size]
-            
-            # Write batch
-            count = await write_fn(batch)
-            written += count
-            
-            # Update state
-            next_index = offset + len(batch)
-            if state is not None:
-                state[label] = next_index
-                if state_writer:
-                    state_writer(state)
-            
-            self._log_progress(label, next_index, total)
+
+            started = time.monotonic()
+            self._emit_progress(
+                "batch_started",
+                label,
+                offset=offset,
+                size=len(batch),
+                completed=offset,
+                total=total,
+            )
+            write_task = asyncio.create_task(write_fn(batch))
+            try:
+                while True:
+                    done, _ = await asyncio.wait(
+                        {write_task}, timeout=self._progress_heartbeat_seconds
+                    )
+                    if done:
+                        count = write_task.result()
+                        break
+                    self._emit_progress(
+                        "query_running",
+                        label,
+                        offset=offset,
+                        size=len(batch),
+                        completed=offset,
+                        total=total,
+                        elapsed=f"{time.monotonic() - started:.1f}s",
+                    )
+                written += count
+
+                # Persist only after the database call has returned successfully.
+                next_index = offset + len(batch)
+                if state is not None:
+                    state[label] = next_index
+                    if state_writer:
+                        state_writer(state)
+            except BaseException as exc:
+                if not write_task.done():
+                    self._emit_progress(
+                        "batch_reconciling",
+                        label,
+                        offset=offset,
+                        size=len(batch),
+                        reason=type(exc).__name__,
+                    )
+                    reconcile_deadline = (
+                        time.monotonic() + self._reconciliation_timeout_seconds
+                    )
+                    while not write_task.done():
+                        remaining = reconcile_deadline - time.monotonic()
+                        if remaining <= 0:
+                            self._emit_progress(
+                                "batch_reconcile_ambiguous",
+                                label,
+                                offset=offset,
+                                size=len(batch),
+                                elapsed=f"{time.monotonic() - started:.3f}s",
+                            )
+                            break
+                        done, _ = await asyncio.wait(
+                            {write_task},
+                            timeout=min(self._progress_heartbeat_seconds, remaining),
+                        )
+                        if not done:
+                            self._emit_progress(
+                                "batch_reconcile_running",
+                                label,
+                                offset=offset,
+                                size=len(batch),
+                                elapsed=f"{time.monotonic() - started:.1f}s",
+                            )
+                    if write_task.done():
+                        try:
+                            write_task.result()
+                            self._emit_progress(
+                                "batch_reconciled",
+                                label,
+                                offset=offset,
+                                size=len(batch),
+                                outcome="completed",
+                            )
+                        except BaseException as reconcile_exc:
+                            self._emit_progress(
+                                "batch_reconciled",
+                                label,
+                                offset=offset,
+                                size=len(batch),
+                                outcome=type(reconcile_exc).__name__,
+                            )
+                self._emit_progress(
+                    "batch_failed",
+                    label,
+                    offset=offset,
+                    size=len(batch),
+                    completed=offset,
+                    total=total,
+                    elapsed=f"{time.monotonic() - started:.3f}s",
+                    error=type(exc).__name__,
+                )
+                raise
+
+            self._emit_progress(
+                "batch_finished",
+                label,
+                offset=offset,
+                size=len(batch),
+                completed=next_index,
+                total=total,
+                matched=count,
+                elapsed=f"{time.monotonic() - started:.3f}s",
+            )
         
         return written
     
@@ -331,60 +471,9 @@ class LanguageCodeWriter:
         state: Optional[Dict[str, int]] = None,
         state_writer: Optional[Callable] = None,
     ) -> int:
-        """Write generic relationships in batches"""
-        if not relations:
-            return 0
-        
-        async def write_batch(batch: List[Dict[str, Any]]) -> int:
-            query = """
-            UNWIND $rows AS row
-            MATCH (source {id: row.source_id})
-            MATCH (target {id: row.target_id})
-            CALL apoc.merge.relationship(
-                source,
-                row.rel_type,
-                {},
-                row.properties,
-                target,
-                {}
-            ) YIELD rel
-            RETURN count(rel) as count
-            """
-            
-            # Fallback for systems without APOC
-            fallback_query = """
-            UNWIND $rows AS row
-            MATCH (source {id: row.source_id})
-            MATCH (target {id: row.target_id})
-            CREATE (source)-[r:RELATION]->(target)
-            SET r = row.properties,
-                r.rel_type = row.rel_type
-            RETURN count(r) as count
-            """
-            
-            try:
-                records, _, _ = await self.driver.execute_query(
-                    query,
-                    {"rows": batch},
-                    self.database
-                )
-            except Exception:
-                # Fallback if APOC not available
-                records, _, _ = await self.driver.execute_query(
-                    fallback_query,
-                    {"rows": batch},
-                    self.database
-                )
-            
-            return records[0]["count"] if records else 0
-        
-        return await self.write_batches(
-            "relations",
-            relations,
-            write_batch,
-            state,
-            state_writer
-        )
+        """Write generic relationships through the safe typed contract."""
+
+        return await self.write_relations_typed(relations, state, state_writer)
     
     async def write_calls(
         self,
@@ -1232,8 +1321,8 @@ class LanguageCodeWriter:
         """Write typed relationships using per-type batching.
 
         Each relation dict must have: source_id, target_id, rel_type, properties.
-        Relations are grouped by (source_label, target_label, rel_type) if those fields
-        are present, otherwise matched by id only.
+        Relations are grouped by (source_label, target_label, rel_type). Unlabeled
+        endpoint matching is rejected because it is both ambiguous and unindexable.
         """
         if not relations:
             return 0
@@ -1249,33 +1338,34 @@ class LanguageCodeWriter:
         if not relations:
             return 0
 
-        from collections import defaultdict
-        groups: dict = defaultdict(list)
-        for rel in relations:
-            key = rel.get("rel_type", "RELATION")
-            groups[key].append(rel)
+        groups = group_typed_relations(relations)
 
         total_written = 0
-        for rel_type, group in groups.items():
-            state_key = f"relations:{rel_type}"
+        for relationship_group, rows in groups.items():
+            state_key = relationship_group.state_key
             start_index = state.get(state_key, 0) if state else 0
-            if start_index >= len(group):
+            if start_index >= len(rows):
                 continue
 
-            async def write_batch(batch: List[Dict[str, Any]], _rel_type: str = rel_type) -> int:
-                query = (
-                    "UNWIND $rows AS row "
-                    "MATCH (a {id: row.source_id}), (b {id: row.target_id}) "
-                    f"MERGE (a)-[r:{_rel_type}]->(b) "
-                    "SET r += row.properties "
-                    "RETURN count(r) as count"
-                )
+            async def write_batch(
+                batch: List[Dict[str, Any]], _group=relationship_group
+            ) -> int:
+                query = compile_relationship_upsert(_group)
                 records, _, _ = await self.driver.execute_query(
                     query, {"rows": batch}, self.database
                 )
-                return records[0]["count"] if records else 0
+                count = int(records[0]["count"]) if records else 0
+                if count != len(batch):
+                    raise RuntimeError(
+                        f"relationship batch integrity failure for {_group.state_key}: "
+                        f"expected={len(batch)} matched={count} unresolved_or_ambiguous="
+                        f"{abs(len(batch) - count)}"
+                    )
+                return count
 
-            written = await self.write_batches(state_key, group, write_batch, state, state_writer)
+            written = await self.write_batches(
+                state_key, rows, write_batch, state, state_writer
+            )
             total_written += written
 
         return total_written
@@ -1554,7 +1644,102 @@ class LanguageCodeWriter:
         Returns:
             Dict with counts per entity type
         """
+        optional_unresolved_relations = 0
+        if relations:
+            project_ids = {
+                str(project["id"])
+                for project in projects or []
+                if project.get("id")
+            }
+            project_ids.update(
+                str(file_row["project_id"])
+                for file_row in files or []
+                if file_row.get("project_id")
+            )
+            candidate_relations = [
+                dict(relation)
+                for relation in relations
+                if not (
+                    str(relation.get("source_id") or "") in project_ids
+                    and relation.get("rel_type") == "CONTAINS"
+                )
+            ]
+            relations = []
+            for relation in candidate_relations:
+                explicitly_optional = (
+                    relation.get("required") is False
+                    or relation.get("properties", {}).get("resolved") is False
+                )
+                if explicitly_optional:
+                    optional_unresolved_relations += 1
+                    continue
+                relations.append(relation)
+
+            identity_rows = (
+                (packages, "Package"),
+                (namespaces, "Namespace"),
+                (files, "File"),
+                (classes, "Class"),
+                (types, "Type"),
+                (function_types, "FunctionType"),
+                (functions, "Function"),
+                (fields, "Field"),
+                (aliases, "Alias"),
+                (templates, "Template"),
+                (properties, "Property"),
+                (events, "Event"),
+                (interfaces, "Interface"),
+                (enums, "Enum"),
+                (constants, "Constant"),
+                (variables, "Variable"),
+                (navigators, "Navigator"),
+            )
+            labels_by_id: Dict[str, set[str]] = {}
+            for rows, label in identity_rows:
+                for row in rows or []:
+                    identity = row.get("id", row.get("symbol_id"))
+                    if identity:
+                        labels_by_id.setdefault(str(identity), set()).add(label)
+
+            resolved_relations: List[Dict[str, Any]] = []
+            for position, relation in enumerate(relations):
+                skip_optional = False
+                for role in ("source", "target"):
+                    label_key = f"{role}_label"
+                    if relation.get(label_key):
+                        continue
+                    identity = str(relation.get(f"{role}_id") or "")
+                    candidates = labels_by_id.get(identity, set())
+                    if len(candidates) != 1:
+                        if (
+                            role == "target"
+                            and not candidates
+                            and relation.get("rel_type") in _OPTIONAL_EXTERNAL_RELATION_TYPES
+                        ):
+                            optional_unresolved_relations += 1
+                            skip_optional = True
+                            break
+                        raise ValueError(
+                            f"cannot infer {label_key} for relationship row {position} "
+                            f"identity={identity!r}; candidates={sorted(candidates)}"
+                        )
+                    relation[label_key] = next(iter(candidates))
+                if not skip_optional:
+                    resolved_relations.append(relation)
+            relations = resolved_relations
+
+            # Validate the complete relation contract before schema or node
+            # mutations, so a bad producer cannot leave a partial stream.
+            group_typed_relations(relations)
+
         counts = {}
+        if optional_unresolved_relations:
+            counts["unresolved_relations"] = optional_unresolved_relations
+            self._emit_progress(
+                "optional_unresolved",
+                "relations",
+                skipped=optional_unresolved_relations,
+            )
 
         # --- Projects (always inline-Cypher) ---
         if projects:
@@ -1664,31 +1849,6 @@ class LanguageCodeWriter:
 
         # --- Relationships ---
         if relations:
-            # Strip (Project)-[:CONTAINS]->(anything) edges.
-            # Project nodes must ONLY connect to Repository nodes via HAS_REPOSITORY.
-            # The full intended hierarchy is:
-            #   (Project)-[:HAS_REPOSITORY]->(Repository)
-            #       -[:HAS_FILE]->(File)-[:CONTAINS]->(Function/Class/…)
-            # All child nodes carry project_id as a property so project-scoped
-            # queries can still find them without traversing from Project.
-            #
-            # Build the project ID set from BOTH the explicit `projects` list AND
-            # the `project_id` field on every file node.  This ensures the filter
-            # works even when a caller omits the `projects` argument (e.g.
-            # cplus_analyzer, kotlin_analyzer).
-            _project_ids: set = set()
-            if projects:
-                _project_ids.update(p["id"] for p in projects if p.get("id"))
-            if files:
-                _project_ids.update(f["project_id"] for f in files if f.get("project_id"))
-            if _project_ids:
-                relations = [
-                    r for r in relations
-                    if not (
-                        r.get("source_id") in _project_ids
-                        and r.get("rel_type") == "CONTAINS"
-                    )
-                ]
             if use_full_writers:
                 counts["relations"] = await self.write_relations_typed(relations, state, state_writer)
             else:
