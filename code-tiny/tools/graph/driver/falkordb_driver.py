@@ -167,9 +167,20 @@ def _open_local_falkordb(path: Path):
             "Install dependencies from requirements.txt or pyproject.toml."
         ) from exc
 
+    try:
+        socket_timeout = float(os.getenv("FALKORDB_SOCKET_TIMEOUT_SECONDS", "300"))
+    except ValueError as exc:
+        raise ValueError("FALKORDB_SOCKET_TIMEOUT_SECONDS must be a positive number") from exc
+    if socket_timeout <= 0:
+        raise ValueError("FALKORDB_SOCKET_TIMEOUT_SECONDS must be a positive number")
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    return FalkorDB(str(path))
+    return FalkorDB(
+        str(path),
+        socket_timeout=socket_timeout,
+        socket_connect_timeout=min(socket_timeout, 30),
+    )
 
 
 class FalkorDBDriver(Neo4jDriver):

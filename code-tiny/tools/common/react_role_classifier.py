@@ -48,6 +48,7 @@ import re
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING, List
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from tools.ts.ts_analyzer import FunctionDef
@@ -126,8 +127,25 @@ def _truncate_code(code: str, max_lines: int = 35) -> str:
 def _http_post(url: str, headers: dict, payload: dict, timeout: int) -> dict:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    target = urlsplit(url)
+    print(
+        "[network][outbound][start] purpose=classify uncertain React roles method=POST destination=%s://%s%s timeout=%s"
+        % (target.scheme, target.netloc, target.path, timeout)
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+            print(
+                "[network][outbound][complete] purpose=classify uncertain React roles method=POST destination=%s://%s%s status=%s"
+                % (target.scheme, target.netloc, target.path, getattr(resp, "status", "unknown"))
+            )
+            return body
+    except Exception as exc:
+        print(
+            "[network][outbound][failed] purpose=classify uncertain React roles method=POST destination=%s://%s%s error=%s"
+            % (target.scheme, target.netloc, target.path, exc)
+        )
+        raise
 
 
 # ── JSON extraction (robust) ──────────────────────────────────────────────────
