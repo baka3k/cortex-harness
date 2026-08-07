@@ -1,6 +1,6 @@
 ---
 title: "C/C++ parser quality diagnostics and bounded recovery"
-status: pending
+status: in_progress
 created: 2026-08-07
 mode: hi-plan --fast
 scope: "C/C++ parse-quality reporting, classification, provenance, cache correctness, bounded recovery, and guarded publication"

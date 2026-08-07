@@ -31,6 +31,8 @@ prevalidated compile context.
 - `code-tiny/tools/cplus/clang_parser.py`
 - `code-tiny/tools/cplus/cplus_analyzer.py`
 - `code-tiny/tools/cplus/bootstrap_compile_commands.py`
+- `requirements.txt`
+- `code-tiny/requirements.txt`
 - `tests/test_cplus_clang_worker.py` (new)
 - `tests/test_cplus_parse_recovery.py`
 
@@ -58,11 +60,11 @@ prevalidated compile context.
 
 ## Todo
 
-- [ ] Add persistent prioritized recovery queue.
-- [ ] Add compile database indexing and flag/path filtering.
-- [ ] Add isolated libclang worker protocol and limits.
-- [ ] Add deterministic candidate comparison and outcome caching.
-- [ ] Add crash, timeout, malformed-input, symlink, and budget tests.
+- [x] Add persistent prioritized recovery queue.
+- [x] Add compile database indexing and flag/path filtering.
+- [x] Add isolated libclang worker protocol and limits.
+- [x] Add deterministic candidate comparison and outcome caching.
+- [x] Add crash, timeout, malformed-input, symlink, and budget tests.
 
 ## Risks
 

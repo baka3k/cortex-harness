@@ -1,0 +1,16 @@
+{
+  "schema_version": "1",
+  "description": "Reviewed, deterministic 100-file C/C++ parser-quality canary specification.",
+  "cohorts": [
+    {"id": "clean-c", "count": 10, "extension": ".c", "encoding": "utf-8", "compile_context": true, "source": "int add(int a, int b) { return a + b; }\n"},
+    {"id": "clean-cpp", "count": 10, "extension": ".cpp", "encoding": "utf-8", "compile_context": true, "source": "namespace demo { class Item { public: int value() const { return 1; } }; }\n"},
+    {"id": "ambiguous-header", "count": 10, "extension": ".h", "encoding": "utf-8", "compile_context": false, "source": "template <typename T> struct Box { T value; };\n"},
+    {"id": "macro-heavy", "count": 10, "extension": ".c", "encoding": "utf-8", "compile_context": true, "source": "#define DECL(name) int name(void) { return 1; }\nDECL(generated_fn)\n"},
+    {"id": "generated", "count": 10, "extension": ".cpp", "encoding": "utf-8", "compile_context": false, "source": "/* generated */\n#define FIELD(n) int n;\nstruct Generated { FIELD(a) FIELD(b) };\n"},
+    {"id": "cp932", "count": 10, "extension": ".c", "encoding": "cp932", "compile_context": false, "source": "/* legacy japanese: 日本語 */\nint legacy(void) { return 0; }\n"},
+    {"id": "proc", "count": 10, "extension": ".pc", "encoding": "utf-8", "compile_context": true, "source": "EXEC SQL BEGIN DECLARE SECTION;\nint user_id;\nEXEC SQL END DECLARE SECTION;\nint load_user(void) { return user_id; }\n"},
+    {"id": "resource", "count": 10, "extension": ".rc", "encoding": "utf-8", "compile_context": false, "source": "#include <windows.h>\nIDD_MAIN DIALOGEX 0, 0, 120, 80\nBEGIN\nEND\n"},
+    {"id": "missing-token", "count": 10, "extension": ".c", "encoding": "utf-8", "compile_context": false, "source": "int missing_token(void) { return 1 }\n"},
+    {"id": "critical-damage", "count": 10, "extension": ".cpp", "encoding": "utf-8", "compile_context": true, "source": "class Broken { public: void run( { if (true) {\n"}
+  ]
+}

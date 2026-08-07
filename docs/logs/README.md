@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [C/C++ parser-quality recovery phases 01-04](2026-08-07-cplus-parser-quality-recovery.md)
 - [Graph ingestion write-path hardening](2026-08-07-graph-ingestion-write-path-hardening.md)
 - [Bounded embedded storage owner gateway](2026-08-07-bounded-embedded-storage-owner-gateway.md)
 - [Unified project storage contract](2026-08-06-unified-project-storage-contract.md)

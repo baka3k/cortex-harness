@@ -45,11 +45,11 @@ candidate summaries.
 
 ## Todo
 
-- [ ] Add and version the common quality schema.
-- [ ] Add structural damage and semantic-yield collectors.
-- [ ] Build and review the stratified fixture manifest.
-- [ ] Capture baseline quality, latency, and RSS results.
-- [ ] Approve deterministic candidate and quarantine rules.
+- [x] Add and version the common quality schema.
+- [x] Add structural damage and semantic-yield collectors.
+- [x] Build and review the stratified fixture manifest.
+- [x] Capture baseline quality, latency, and RSS results.
+- [x] Approve deterministic candidate and quarantine rules.
 
 ## Risks
 

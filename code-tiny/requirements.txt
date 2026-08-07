@@ -42,3 +42,4 @@ sentence-transformers
 dotenv
 PyYAML>=6.0
 portalocker>=3.2,<4
+psutil>=5.9,<8
