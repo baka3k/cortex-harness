@@ -88,8 +88,9 @@ def test_open_local_falkordb_creates_parent(tmp_path: Path, monkeypatch) -> None
     captured: dict = {}
 
     class _StubFalkorDB:
-        def __init__(self, path: str) -> None:
+        def __init__(self, path: str, **kwargs) -> None:
             captured["path"] = path
+            captured["kwargs"] = kwargs
             captured["parent_exists"] = Path(path).parent.exists()
             return None
 
@@ -102,6 +103,10 @@ def test_open_local_falkordb_creates_parent(tmp_path: Path, monkeypatch) -> None
     _open_local_falkordb(target)
     assert captured["parent_exists"] is True
     assert captured["path"] == str(target)
+    assert captured["kwargs"] == {
+        "socket_timeout": 300.0,
+        "socket_connect_timeout": 30,
+    }
 
 
 def test_driver_close_handles_exceptions(tmp_path: Path) -> None:

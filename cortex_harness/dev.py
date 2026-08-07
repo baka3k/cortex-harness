@@ -6,12 +6,14 @@ import sys
 import json
 import fnmatch
 import hashlib
+import shlex
 import shutil
 import subprocess
 import tempfile
 import time
 import uuid
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -1420,8 +1422,25 @@ def _mcp_pids(pattern: str) -> list:
         except Exception:
             return []
     try:
-        r = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True)
-        return [int(p) for p in r.stdout.split() if p.strip().isdigit()]
+        r = subprocess.run(
+            ["ps", "-ax", "-o", "pid=,command="], capture_output=True, text=True
+        )
+        pids: list[int] = []
+        for line in r.stdout.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) != 2 or not parts[0].isdigit():
+                continue
+            pid, command = int(parts[0]), parts[1]
+            try:
+                command_parts = shlex.split(command)
+                executable = Path(command_parts[0]).name.casefold()
+            except ValueError:
+                continue
+            if "python" in executable and any(
+                Path(argument).name == pattern for argument in command_parts[1:]
+            ):
+                pids.append(pid)
+        return pids
     except Exception:
         return []
 
@@ -1509,6 +1528,64 @@ def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
         "name": name, "status": "started", "pid": proc.pid,
         "url": svc["url"], "log": str(log_file),
     }
+
+
+@contextmanager
+def _pause_code_mcp_for_sync(
+    process_env: dict,
+    *,
+    project_path: Path,
+    enabled: bool,
+):
+    """Release the embedded code store while a code sync owns it.
+
+    Embedded FalkorDBLite is process-exclusive.  A running code MCP therefore
+    has to be paused for the duration of a real code sync; the sync's child
+    analyzers acquire the same lease as they write the store.  Remote Neo4j
+    and dry-runs do not need this lifecycle transition.
+    """
+    if not enabled or _graph_provider(process_env, "CODE_GRAPH_PROVIDER") != "falkordb":
+        yield
+        return
+
+    service = MCP_SERVICES["code-tiny"]
+    was_running = bool(_mcp_pids(service["pattern"]))
+    if not was_running:
+        yield
+        return
+
+    click.echo("[sync] Pausing code MCP to acquire the embedded FalkorDB lease")
+    _mcp_stop_pattern(service["pattern"])
+    if _mcp_pids(service["pattern"]):
+        raise click.ClickException(
+            "Could not stop the code MCP process; sync was not started. "
+            "Stop the MCP server manually and retry."
+        )
+
+    try:
+        yield
+    finally:
+        try:
+            result = _mcp_start_one(
+                "code-tiny",
+                service,
+                extra_env=_mcp_env_from_config(project_path, "code-tiny"),
+            )
+        except Exception as exc:
+            click.echo(
+                f"[sync] WARNING: code MCP was paused but could not be restarted: "
+                f"{exc}",
+                err=True,
+            )
+        else:
+            if result.get("status") == "started":
+                click.echo(f"[sync] Code MCP restarted (pid={result.get('pid', '?')})")
+            else:
+                click.echo(
+                    f"[sync] WARNING: code MCP was paused but could not be restarted: "
+                    f"{result.get('reason', 'unknown error')}",
+                    err=True,
+                )
 
 
 def _integrate_workspace(project_path: Path, entries: dict) -> None:
@@ -2144,59 +2221,62 @@ def sync_code(
     summaries        = []
     total_start      = time.time()
 
-    for folder in selected:
-        folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
-        if not folder_path.exists():
-            click.echo(f"\n[warn] Folder not found: {folder} — skipping")
-            continue
+    with _pause_code_mcp_for_sync(
+        process_env, project_path=project_path, enabled=not dry_run
+    ):
+        for folder in selected:
+            folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
+            if not folder_path.exists():
+                click.echo(f"\n[warn] Folder not found: {folder} — skipping")
+                continue
 
-        project_id = project.get("code", project.get("name", "project"))
-        child_summary_path = _code_sync_summary_path(
-            folder_path, project_id, process_env.get("QDRANT_CACHE_DIR")
-        )
-        cmd = [
-            python, str(incremental_sync),
-            "--root", str(folder_path),
-            "--project-id", project_id,
-            "--project-name", project.get("name", "project"),
-            "--python-bin", python,
-            "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
-            "--change-detection", change_detection,
-            "--lock-timeout-seconds", str(lock_timeout_seconds),
-            "--submodules", submodules,
-            "--summary-path", str(child_summary_path),
-            *_neo4j_args_code(process_env),
-        ]
-        if full_scan:
-            cmd.append("--full-scan")
-        if reconcile:
-            cmd.append("--reconcile")
-        if dry_run:
-            cmd.append("--verbose")
-            click.echo(f"\n[dry-run] {' '.join(cmd)}")
-            summaries.append({"folder": folder, "status": "dry_run"})
-            continue
-        if verbose:
-            cmd.append("--verbose")
+            project_id = project.get("code", project.get("name", "project"))
+            child_summary_path = _code_sync_summary_path(
+                folder_path, project_id, process_env.get("QDRANT_CACHE_DIR")
+            )
+            cmd = [
+                python, str(incremental_sync),
+                "--root", str(folder_path),
+                "--project-id", project_id,
+                "--project-name", project.get("name", "project"),
+                "--python-bin", python,
+                "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+                "--change-detection", change_detection,
+                "--lock-timeout-seconds", str(lock_timeout_seconds),
+                "--submodules", submodules,
+                "--summary-path", str(child_summary_path),
+                *_neo4j_args_code(process_env),
+            ]
+            if full_scan:
+                cmd.append("--full-scan")
+            if reconcile:
+                cmd.append("--reconcile")
+            if dry_run:
+                cmd.append("--verbose")
+                click.echo(f"\n[dry-run] {' '.join(cmd)}")
+                summaries.append({"folder": folder, "status": "dry_run"})
+                continue
+            if verbose:
+                cmd.append("--verbose")
 
-        start = time.time()
-        rc = _run_with_retry(
-            cmd,
-            dry_run=False,
-            env=process_env,
-            non_retryable_exit_codes={2},
-        )
-        elapsed = time.time() - start
-        child_summary = _read_code_sync_summary(child_summary_path)
-        summaries.append({
-            "folder": folder,
-            "status": "ok" if rc == 0 else "error",
-            "elapsed": elapsed,
-            "exit_code": rc,
-            "outcome": child_summary.get("outcome", "unknown"),
-            "change_sources": child_summary.get("change_sources", {}),
-            "coverage_warnings": child_summary.get("coverage_warnings", []),
-        })
+            start = time.time()
+            rc = _run_with_retry(
+                cmd,
+                dry_run=False,
+                env=process_env,
+                non_retryable_exit_codes={2},
+            )
+            elapsed = time.time() - start
+            child_summary = _read_code_sync_summary(child_summary_path)
+            summaries.append({
+                "folder": folder,
+                "status": "ok" if rc == 0 else "error",
+                "elapsed": elapsed,
+                "exit_code": rc,
+                "outcome": child_summary.get("outcome", "unknown"),
+                "change_sources": child_summary.get("change_sources", {}),
+                "coverage_warnings": child_summary.get("coverage_warnings", []),
+            })
 
     _print_summary(summaries, time.time() - total_start)
 
@@ -2235,59 +2315,62 @@ def sync_code_all(ctx):
     summaries   = []
     total_start = time.time()
 
-    for folder in folders:
-        folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
-        if not folder_path.exists():
-            click.echo(f"[warn] Folder not found: {folder} — skipping")
-            continue
+    with _pause_code_mcp_for_sync(
+        process_env, project_path=project_path, enabled=not o["dry_run"]
+    ):
+        for folder in folders:
+            folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
+            if not folder_path.exists():
+                click.echo(f"[warn] Folder not found: {folder} — skipping")
+                continue
 
-        project_id = project.get("code", project.get("name", "project"))
-        child_summary_path = _code_sync_summary_path(
-            folder_path, project_id, process_env.get("QDRANT_CACHE_DIR")
-        )
-        cmd = [
-            python, str(incremental_sync),
-            "--root", str(folder_path),
-            "--project-id", project_id,
-            "--project-name", project.get("name", "project"),
-            "--python-bin", python,
-            "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
-            "--change-detection", o["change_detection"],
-            "--lock-timeout-seconds", str(o["lock_timeout_seconds"]),
-            "--submodules", o["submodules"],
-            "--summary-path", str(child_summary_path),
-            *_neo4j_args_code(process_env),
-        ]
-        if o.get("full_scan"):
-            cmd.append("--full-scan")
-        if o.get("reconcile"):
-            cmd.append("--reconcile")
-        if o["dry_run"]:
-            cmd.append("--verbose")
-            click.echo(f"[dry-run] {' '.join(cmd)}")
-            summaries.append({"folder": folder, "status": "dry_run"})
-            continue
-        if o["verbose"]:
-            cmd.append("--verbose")
+            project_id = project.get("code", project.get("name", "project"))
+            child_summary_path = _code_sync_summary_path(
+                folder_path, project_id, process_env.get("QDRANT_CACHE_DIR")
+            )
+            cmd = [
+                python, str(incremental_sync),
+                "--root", str(folder_path),
+                "--project-id", project_id,
+                "--project-name", project.get("name", "project"),
+                "--python-bin", python,
+                "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+                "--change-detection", o["change_detection"],
+                "--lock-timeout-seconds", str(o["lock_timeout_seconds"]),
+                "--submodules", o["submodules"],
+                "--summary-path", str(child_summary_path),
+                *_neo4j_args_code(process_env),
+            ]
+            if o.get("full_scan"):
+                cmd.append("--full-scan")
+            if o.get("reconcile"):
+                cmd.append("--reconcile")
+            if o["dry_run"]:
+                cmd.append("--verbose")
+                click.echo(f"[dry-run] {' '.join(cmd)}")
+                summaries.append({"folder": folder, "status": "dry_run"})
+                continue
+            if o["verbose"]:
+                cmd.append("--verbose")
 
-        start = time.time()
-        rc = _run_with_retry(
-            cmd,
-            dry_run=False,
-            env=process_env,
-            non_retryable_exit_codes={2},
-        )
-        elapsed = time.time() - start
-        child_summary = _read_code_sync_summary(child_summary_path)
-        summaries.append({
-            "folder": folder,
-            "status": "ok" if rc == 0 else "error",
-            "elapsed": elapsed,
-            "exit_code": rc,
-            "outcome": child_summary.get("outcome", "unknown"),
-            "change_sources": child_summary.get("change_sources", {}),
-            "coverage_warnings": child_summary.get("coverage_warnings", []),
-        })
+            start = time.time()
+            rc = _run_with_retry(
+                cmd,
+                dry_run=False,
+                env=process_env,
+                non_retryable_exit_codes={2},
+            )
+            elapsed = time.time() - start
+            child_summary = _read_code_sync_summary(child_summary_path)
+            summaries.append({
+                "folder": folder,
+                "status": "ok" if rc == 0 else "error",
+                "elapsed": elapsed,
+                "exit_code": rc,
+                "outcome": child_summary.get("outcome", "unknown"),
+                "change_sources": child_summary.get("change_sources", {}),
+                "coverage_warnings": child_summary.get("coverage_warnings", []),
+            })
 
     _print_summary(summaries, time.time() - total_start)
 
