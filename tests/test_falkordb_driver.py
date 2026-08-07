@@ -1,5 +1,6 @@
 import os
 import sys
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -129,6 +130,40 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("$__falkordb_now", query)
         self.assertEqual(params["id"], "node-1")
         self.assertRegex(params["__falkordb_now"], r"^\d{4}-\d{2}-\d{2}T.*Z$")
+
+    async def test_async_execute_query_uses_the_bounded_driver_executor(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+        caller_threads = []
+        original_query = driver.graph.query
+
+        def query(*args, **kwargs):
+            caller_threads.append(threading.current_thread().name)
+            return original_query(*args, **kwargs)
+
+        driver.graph.query = query
+        await driver.execute_query("MATCH (n) RETURN n")
+
+        self.assertEqual(len(caller_threads), 1)
+        self.assertTrue(caller_threads[0].startswith("cortex-falkordb-query"))
+        driver.close()
+
+    async def test_mutating_query_is_not_retried_after_an_ambiguous_failure(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {"host": "localhost", "port": 6379, "database": "test_graph"},
+            )
+        driver.graph.query = Mock(side_effect=RuntimeError("connection dropped"))
+
+        with self.assertRaisesRegex(RuntimeError, "connection dropped"):
+            driver.execute_query_sync("CREATE (:Probe {id: $id})", {"id": "one"})
+
+        driver.graph.query.assert_called_once()
+        driver.close()
 
     async def test_existing_index_is_logged_as_idempotent_skip(self):
         with patch("falkordb.FalkorDB", FakeFalkorDB):
