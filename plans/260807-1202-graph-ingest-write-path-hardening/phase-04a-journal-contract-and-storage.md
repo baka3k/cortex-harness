@@ -63,11 +63,11 @@ fencing token.
 
 ## Todo
 
-- [ ] Journal contracts and schema are reviewed.
-- [ ] SQLite open/migration and durability policies are implemented.
-- [ ] Artifact persistence and hash verification are implemented.
-- [ ] Transactional state transitions and fencing are implemented.
-- [ ] Storage failure and crash-reopen tests pass.
+- [x] Journal contracts and schema are reviewed.
+- [x] SQLite open/migration and durability policies are implemented.
+- [x] Artifact persistence and hash verification are implemented.
+- [x] Transactional state transitions and fencing are implemented.
+- [x] Storage failure and crash-reopen tests pass.
 
 ## Risks
 
