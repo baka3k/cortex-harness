@@ -1,0 +1,92 @@
+"""Trusted compiler for replaying persisted graph-write descriptors."""
+
+from __future__ import annotations
+
+from typing import Any, Mapping, Sequence
+
+from tools.graph.schema.manifest import validate_cypher_identifier
+from tools.graph.writer.query_contract import (
+    compile_relationship_upsert,
+    group_typed_relations,
+)
+
+from .models import JournalError, TerminalErrorCode
+from .operation import GraphWriteOperation
+
+
+def compile_persisted_mutation(
+    operation: GraphWriteOperation,
+    rows: Sequence[Mapping[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    """Compile allowlisted operation kinds; persisted Cypher is never executed."""
+
+    materialized = [dict(row) for row in rows]
+    if operation.reconciliation == "node_identity":
+        if not operation.node_label or not operation.identity_property:
+            raise _unsupported(operation)
+        validate_cypher_identifier(operation.node_label, kind="node label")
+        validate_cypher_identifier(operation.identity_property, kind="identity property")
+        validate_cypher_identifier(
+            operation.row_identity_property, kind="row identity property"
+        )
+        query = (
+            "UNWIND $rows AS row "
+            f"MERGE (n:{operation.node_label} "
+            f"{{{operation.identity_property}: row.{operation.row_identity_property}}}) "
+            "SET n += row, n.updated_at = datetime() "
+            "RETURN count(n) AS count"
+        )
+        return query, {"rows": materialized}
+    if operation.reconciliation == "typed_relationship":
+        groups = group_typed_relations(materialized)
+        if len(groups) != 1:
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                "persisted relationship batch must contain one endpoint/type triple",
+            )
+        group, grouped_rows = next(iter(groups.items()))
+        return compile_relationship_upsert(group), {"rows": grouped_rows}
+    if operation.reconciliation == "repository_file":
+        return (
+            "UNWIND $rows AS row "
+            "MATCH (repository:Repository {name: row.repo}) "
+            "MATCH (file:File {id: row.id}) "
+            "MERGE (repository)-[edge:HAS_FILE]->(file) "
+            "RETURN count(edge) AS count",
+            {"rows": materialized},
+        )
+    if operation.reconciliation == "call_edge":
+        return (
+            "UNWIND $rows AS row "
+            "MATCH (caller:Function {id: row.caller_id}) "
+            "MATCH (callee:Function {id: row.callee_id}) "
+            "MERGE (caller)-[edge:CALLS]->(callee) "
+            "SET edge.count = row.count, edge.call_type = row.call_type, "
+            "edge.project_id = row.project_id, "
+            "edge.project_id_normalized = row.project_id_normalized, "
+            "edge.updated_at = datetime() "
+            "RETURN count(edge) AS count",
+            {"rows": materialized},
+        )
+    if operation.reconciliation == "call_site":
+        return (
+            "UNWIND $rows AS row "
+            "MATCH (caller:Function {id: row.caller_id}) "
+            "MATCH (callee:Function {id: row.callee_id}) "
+            "MERGE (caller)-[edge:CALLS {site_id: row.site_id}]->(callee) "
+            "SET edge += coalesce(row.props, {}) "
+            "RETURN count(edge) AS count",
+            {"rows": materialized},
+        )
+    raise _unsupported(operation)
+
+
+def _unsupported(operation: GraphWriteOperation) -> JournalError:
+    return JournalError(
+        TerminalErrorCode.INVALID_CONTRACT,
+        f"operation {operation.operation_key} has no trusted replay compiler",
+    )
+
+
+def result_count(records: Sequence[Mapping[str, Any]]) -> int:
+    return int(records[0].get("count", 0)) if records else 0
