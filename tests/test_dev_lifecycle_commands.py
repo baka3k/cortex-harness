@@ -1,10 +1,17 @@
 import subprocess
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from click.testing import CliRunner
 
-from cortex_harness.dev import REPO_ROOT, _mcp_pids, _mcp_stop_pattern, cli
+from cortex_harness.dev import (
+    REPO_ROOT,
+    _mcp_pids,
+    _mcp_stop_pattern,
+    _pause_code_mcp_for_sync,
+    cli,
+)
 
 
 class DevLifecycleCommandTests(unittest.TestCase):
@@ -207,6 +214,24 @@ class DevLifecycleCommandTests(unittest.TestCase):
         self.assertIn("python", command[3])
         self.assertIn("unified_mcp.py", command[3])
 
+    def test_posix_mcp_pid_discovery_ignores_its_own_process_match(self):
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=(
+                "  101 /usr/bin/python3 mcp/unified_mcp.py --port 8788\n"
+                "  202 /usr/bin/pgrep -f unified_mcp.py\n"
+                "  303 /usr/bin/node unified_mcp.py\n"
+            ),
+        )
+        with mock.patch("cortex_harness.dev.sys.platform", "darwin"), mock.patch(
+            "cortex_harness.dev.subprocess.run", return_value=completed
+        ) as run:
+            result = _mcp_pids("unified_mcp.py")
+
+        self.assertEqual(result, [101])
+        self.assertEqual(run.call_args.args[0], ["ps", "-ax", "-o", "pid=,command="])
+
     def test_windows_mcp_stop_kills_process_trees(self):
         with mock.patch("cortex_harness.dev.sys.platform", "win32"), mock.patch(
             "cortex_harness.dev._mcp_pids", side_effect=[[101, 202], []]
@@ -221,6 +246,47 @@ class DevLifecycleCommandTests(unittest.TestCase):
                 ["taskkill", "/PID", "202", "/T", "/F"],
             ],
         )
+
+    def test_code_sync_pauses_and_restarts_running_local_mcp(self):
+        with mock.patch(
+            "cortex_harness.dev._mcp_pids", side_effect=[[9245], []]
+        ) as pids, mock.patch(
+            "cortex_harness.dev._mcp_stop_pattern", return_value=1
+        ) as stop, mock.patch(
+            "cortex_harness.dev._mcp_start_one",
+            return_value={"status": "started", "pid": 9300},
+        ) as start:
+            with _pause_code_mcp_for_sync(
+                {"CODE_GRAPH_PROVIDER": "falkordb"},
+                project_path=Path("/tmp/project"),
+                enabled=True,
+            ):
+                pass
+
+        stop.assert_called_once_with("unified_mcp.py")
+        start.assert_called_once()
+        self.assertEqual(pids.call_count, 2)
+
+    def test_code_sync_does_not_pause_mcp_for_dry_run_or_remote_graph(self):
+        with mock.patch("cortex_harness.dev._mcp_pids") as pids, mock.patch(
+            "cortex_harness.dev._mcp_stop_pattern"
+        ) as stop, mock.patch("cortex_harness.dev._mcp_start_one") as start:
+            with _pause_code_mcp_for_sync(
+                {"CODE_GRAPH_PROVIDER": "falkordb"},
+                project_path=Path("/tmp/project"),
+                enabled=False,
+            ):
+                pass
+            with _pause_code_mcp_for_sync(
+                {"CODE_GRAPH_PROVIDER": "neo4j"},
+                project_path=Path("/tmp/project"),
+                enabled=True,
+            ):
+                pass
+
+        pids.assert_not_called()
+        stop.assert_not_called()
+        start.assert_not_called()
 
 
 if __name__ == "__main__":

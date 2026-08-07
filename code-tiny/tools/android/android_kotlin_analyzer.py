@@ -26,6 +26,7 @@ if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
 from tools.common.harness_config import load_harness_config
+from tools.common.embedding_runtime import resolve_embedding_cache
 
 from tools.common.analyzer_cache import (
     file_signature,
@@ -1166,15 +1167,17 @@ class CodeEmbedder:
         verbose: bool = False,
     ) -> None:
         model_source = _resolve_embedding_model_source(model_name, verbose=verbose)
+        model_source, local_files_only = resolve_embedding_cache(model_source)
         trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
         extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
 
         def _load_pretrained(cache_dir: Optional[str]) -> Tuple[Any, Any]:
             tokenizer_kwargs: Dict[str, Any] = {
                 "trust_remote_code": trust_remote_code,
+                "local_files_only": local_files_only,
                 **extra_tokenizer_kwargs,
             }
-            model_kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
+            model_kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code, "local_files_only": local_files_only}
             if (
                 "jina-embeddings-v3" in model_source.lower()
                 and (
