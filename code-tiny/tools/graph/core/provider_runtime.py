@@ -13,6 +13,7 @@ import argparse
 from tools.graph.cli import (
     add_graph_provider_args,
     create_graph_driver_from_args,
+    graph_writes_disabled,
     normalize_graph_provider,
     prepare_graph_args,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "add_graph_provider_arguments",
     "add_graph_provider_args",
     "create_graph_driver_from_args",
+    "graph_writes_disabled",
     "normalize_graph_provider",
     "prepare_graph_args",
 ]
