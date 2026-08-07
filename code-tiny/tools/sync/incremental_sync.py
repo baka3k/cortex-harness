@@ -9,7 +9,9 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
+import traceback
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,6 +57,17 @@ from tools.common.sync_scope import (
     scan_scope_id,
 )
 from tools.common.parse_quality import atomic_write_json
+from tools.common.reliability import (
+    ArtifactReference,
+    FailureClass,
+    FailureRecord,
+    RunOutcome,
+    RunPhase,
+    RunResult,
+    ReliabilityExitCode,
+    exit_code_for,
+    load_run_result,
+)
 from tools.graph import GraphDriverFactory, GraphProvider
 from tools.graph.cli import (
     add_graph_provider_args,
@@ -783,13 +796,23 @@ def _run(cmd: List[str], *, cwd: str, verbose: bool, env: Optional[Dict[str, str
         cwd=cwd,
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
     )
     scan_result = ""
     output_tail = ""
+    stderr_tail = ""
     max_output_tail_chars = 65_536
+
+    def drain_stderr() -> None:
+        nonlocal stderr_tail
+        assert process.stderr is not None
+        for line in process.stderr:
+            stderr_tail = (stderr_tail + line[-max_output_tail_chars:])[-max_output_tail_chars:]
+
+    stderr_thread = threading.Thread(target=drain_stderr, name="analyzer-stderr", daemon=True)
+    stderr_thread.start()
     try:
         assert process.stdout is not None
         for line in process.stdout:
@@ -800,10 +823,19 @@ def _run(cmd: List[str], *, cwd: str, verbose: bool, env: Optional[Dict[str, str
     except BaseException:
         process.terminate()
         process.wait()
+        stderr_thread.join(timeout=1)
         raise
     return_code = process.wait()
+    stderr_thread.join(timeout=1)
     if return_code:
-        raise subprocess.CalledProcessError(return_code, cmd, output=output_tail)
+        raise subprocess.CalledProcessError(
+            return_code,
+            cmd,
+            output=output_tail,
+            stderr=stderr_tail,
+        )
+    if stderr_tail:
+        print(stderr_tail, end="", file=sys.stderr)
     return scan_result
 
 
@@ -1292,21 +1324,214 @@ def _default_summary_path(
 
 
 def _write_summary(path: str, payload: Dict[str, object]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as handle:
-        import json
+    target = Path(path).absolute()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    encoded = (json.dumps(payload, ensure_ascii=True, indent=2) + "\n").encode("utf-8")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            descriptor = -1
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(5):
+            try:
+                os.replace(temporary, target)
+                os.chmod(target, 0o600)
+                directory_fd = os.open(target.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02 * (attempt + 1))
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
 
-        json.dump(payload, handle, ensure_ascii=True, indent=2)
-        handle.write("\n")
-    for attempt in range(5):
-        try:
-            os.replace(tmp_path, path)
-            break
-        except PermissionError:
-            if attempt == 4:
-                raise
-            time.sleep(0.02 * (attempt + 1))
+
+def _redact_debug_text(text: str, *, roots: Sequence[str] = ()) -> str:
+    redacted = text
+    sensitive_roots = [str(Path.home()), *roots]
+    for root in sorted({item for item in sensitive_roots if item}, key=len, reverse=True):
+        redacted = redacted.replace(root, "<workspace>")
+    secret_name = (
+        r"[A-Za-z0-9_.-]*(?:password|passwd|pass|secret|token|api[_-]?key|cookie)"
+        r"[A-Za-z0-9_.-]*"
+    )
+    redacted = re.sub(
+        rf"(?i)(\b{secret_name}\s*[=:]\s*)([^\s,;]+)",
+        r"\1<redacted>",
+        redacted,
+    )
+    redacted = re.sub(
+        rf"(?i)(--{secret_name}\s+)([^\s]+)",
+        r"\1<redacted>",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(\bauthorization\s*:\s*(?:basic|bearer)\s+)([^\r\n]+)",
+        r"\1<redacted>",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(\b[a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@",
+        r"\1<redacted>@",
+        redacted,
+    )
+    return redacted
+
+
+def _write_debug_artifact(
+    path: str,
+    text: str,
+    *,
+    max_bytes: int = 1024 * 1024,
+    roots: Sequence[str] = (),
+) -> ArtifactReference:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    encoded = _redact_debug_text(text, roots=roots).encode("utf-8", errors="replace")[-max_bytes:]
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            descriptor = -1
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        os.chmod(target, 0o600)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+    return ArtifactReference(
+        kind="debug",
+        path=str(target),
+        byte_count=len(encoded),
+        item_count=1,
+    )
+
+
+def _failure_record_for_exception(
+    exc: Exception,
+    *,
+    run_id: str,
+    correlation_id: str,
+    phase: RunPhase,
+    artifacts: Sequence[ArtifactReference] = (),
+) -> FailureRecord:
+    message = str(exc) or type(exc).__name__
+    lowered = message.casefold()
+    retryable = False
+    safe_action = "inspect the result artifact and correct the reported failure before retrying"
+    if isinstance(exc, SourceChangedError):
+        code = "source_changed_during_scan"
+        failure_class = FailureClass.SOURCE_CHANGED
+        safe_action = "restart discovery against the current source revision"
+    elif isinstance(exc, TimeoutError):
+        before_submission = getattr(exc, "submission_state", None) == "before_submission"
+        code = (
+            "operation_timeout_before_submission"
+            if before_submission
+            else "operation_timeout_submission_unknown"
+        )
+        failure_class = FailureClass.TIMEOUT if before_submission else FailureClass.AMBIGUOUS_MUTATION
+        retryable = before_submission
+        safe_action = (
+            "retry within the configured budget"
+            if before_submission
+            else "inspect storage state and reconcile the run before any retry"
+        )
+    elif isinstance(exc, OSError) and getattr(exc, "errno", None) == 28:
+        code = "artifact_disk_full"
+        failure_class = FailureClass.CAPACITY
+        safe_action = "free disk space without deleting the active generation, then resume"
+    elif isinstance(exc, ConnectionError):
+        before_submission = getattr(exc, "submission_state", None) == "before_submission"
+        code = "storage_unavailable" if before_submission else "storage_connection_state_unknown"
+        failure_class = (
+            FailureClass.STORAGE_UNAVAILABLE
+            if before_submission
+            else FailureClass.AMBIGUOUS_MUTATION
+        )
+        retryable = before_submission
+        safe_action = (
+            "restore the storage service, then retry within the configured budget"
+            if before_submission
+            else "reconcile storage effects before deciding whether a retry is safe"
+        )
+    elif isinstance(exc, BlockingIOError):
+        code = "storage_lock_busy"
+        failure_class = FailureClass.LOCK
+        retryable = True
+        safe_action = "retry within the lock-contention budget"
+    elif isinstance(exc, (FileNotFoundError, PermissionError)):
+        code = "storage_configuration_invalid"
+        failure_class = FailureClass.CONFIGURATION
+        safe_action = "correct the configured path or permissions before rerunning"
+    elif isinstance(exc, OSError):
+        code = "storage_os_error"
+        failure_class = FailureClass.INTERNAL_DEFECT
+        safe_action = "inspect the debug artifact before deciding whether a retry is safe"
+    elif isinstance(exc, subprocess.CalledProcessError):
+        child_stderr = str(exc.stderr or "")
+        child_output = f"{exc.output or ''}\n{child_stderr}".casefold()
+        if (
+            "relationship batch integrity failure" in child_output
+            or ("expected=" in child_output and "matched=" in child_output)
+        ):
+            code = "relationship_cardinality_mismatch"
+            failure_class = FailureClass.INTEGRITY
+            safe_action = "inspect unresolved endpoint evidence; do not retry until reconciled"
+        elif "Traceback (most recent call last)" in child_stderr:
+            code = "analyzer_internal_defect"
+            failure_class = FailureClass.INTERNAL_DEFECT
+            safe_action = "inspect the debug artifact and report the issue fingerprint"
+        else:
+            code = "analyzer_child_failed"
+            failure_class = FailureClass.PARSER_ISOLATION
+            safe_action = "inspect the child debug artifact and quarantine or correct the failing input"
+    elif isinstance(exc, ValueError):
+        code = "invalid_configuration"
+        failure_class = FailureClass.CONFIGURATION
+        safe_action = "correct the configuration or incompatible artifact before rerunning"
+    elif "integrity" in lowered or "expected=" in lowered or "unresolved" in lowered:
+        code = "storage_integrity_failure"
+        failure_class = FailureClass.INTEGRITY
+        safe_action = "inspect unresolved identities; do not retry until the mismatch is reconciled"
+    elif "journal" in lowered:
+        code = "journal_recovery_failure"
+        failure_class = FailureClass.JOURNAL_RECOVERY
+        safe_action = "run journal reconciliation and resume only a compatible run"
+    else:
+        code = "internal_defect"
+        failure_class = FailureClass.INTERNAL_DEFECT
+        safe_action = "inspect the debug artifact and report the issue fingerprint"
+    details = {"exception_type": type(exc).__name__}
+    if failure_class is FailureClass.INTERNAL_DEFECT:
+        details["issue_fingerprint"] = hashlib.sha256(
+            f"{type(exc).__name__}:{message}".encode("utf-8", errors="replace")
+        ).hexdigest()[:16]
+    return FailureRecord(
+        code=code,
+        failure_class=failure_class,
+        phase=phase,
+        component="incremental_sync",
+        retryable=retryable,
+        run_id=run_id,
+        correlation_id=correlation_id,
+        summary=message,
+        safe_action=safe_action,
+        artifact_references=tuple(artifacts),
+        details=details,
+    )
 
 
 _SOURCE_EXTENSIONS: Set[str] = {
@@ -1376,6 +1601,11 @@ def _is_git_repo(root: str) -> bool:
 
 async def _run_incremental(args: argparse.Namespace) -> int:
     started_monotonic = time.time()
+    run_id = os.environ.get("CORTEX_RUN_ID") or uuid.uuid4().hex
+    correlation_id = os.environ.get("CORTEX_CORRELATION_ID") or run_id
+    current_phase = RunPhase.DISCOVERING
+    failure_record: Optional[FailureRecord] = None
+    result_artifacts: List[ArtifactReference] = []
     root = os.path.realpath(os.path.abspath(args.root))
     project_id = args.project_id or os.path.basename(root)
     project_name = args.project_name or project_id
@@ -1384,6 +1614,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     graph_ready = False if getattr(args, "no_graph", False) else prepare_graph_args(args)
     summary_path = args.summary_path or _default_summary_path(cache_dir=control_cache_dir, project_id=project_id, root=root)
     summary: Dict[str, object] = {
+        "run_id": run_id,
+        "correlation_id": correlation_id,
+        "phase": current_phase.value,
         "project_id": project_id,
         "project_name": project_name,
         "root": root,
@@ -1490,6 +1723,18 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "owner": read_lock_metadata(lock_path),
             }
             summary["error"] = str(exc)
+            failure_record = FailureRecord(
+                code="sync_lock_busy",
+                failure_class=FailureClass.LOCK,
+                phase=current_phase,
+                component="incremental_sync",
+                retryable=True,
+                run_id=run_id,
+                correlation_id=correlation_id,
+                summary=str(exc),
+                safe_action="wait for the active run to finish, then retry",
+                details={"lock_path": lock_path},
+            )
             print(f"[state] lock busy: {exc}", file=sys.stderr)
             return 2
 
@@ -1990,6 +2235,10 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         parse_quality_summary["artifact"] = parse_quality_manifest_path
         summary["services"]["message_qdrant_collection"] = message_qdrant_collection
         env = _build_analyzer_env(args)
+        env["CORTEX_RUN_ID"] = run_id
+        env["CORTEX_CORRELATION_ID"] = correlation_id
+        current_phase = RunPhase.PARSING
+        summary["phase"] = current_phase.value
         executed_parsers: List[str] = []
         parser_summaries: List[Dict[str, object]] = []
         for parser, config in ANALYZERS.items():
@@ -2460,6 +2709,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         summary["parsers"] = (
             parser_summaries + framework_summaries + topology_summaries
         )
+        current_phase = RunPhase.VERIFYING_GENERATION
+        summary["phase"] = current_phase.value
         verification_paths = (
             set(current_inventory.entries)
             if full_scan or effective_detection == "hash" or args.reconcile
@@ -2482,6 +2733,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         }
         if post_source_paths != expected_available_paths:
             raise SourceChangedError("source file set changed during scan")
+        current_phase = RunPhase.PUBLISHING
+        summary["phase"] = current_phase.value
         inventory_path = write_inventory_generation(control_cache_dir, current_inventory)
         mark_clean(
             state_path,
@@ -2515,6 +2768,38 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         summary["status"] = "failed"
         summary["outcome"] = "source_changed" if isinstance(exc, SourceChangedError) else "failed"
         summary["error"] = str(exc)
+        debug_artifact: Optional[ArtifactReference] = None
+        provisional = _failure_record_for_exception(
+            exc,
+            run_id=run_id,
+            correlation_id=correlation_id,
+            phase=current_phase,
+        )
+        if provisional.failure_class is FailureClass.INTERNAL_DEFECT or isinstance(
+            exc, subprocess.CalledProcessError
+        ):
+            try:
+                debug_text = traceback.format_exc()
+                if isinstance(exc, subprocess.CalledProcessError):
+                    debug_text = (
+                        f"command: {' '.join(str(item) for item in exc.cmd)}\n"
+                        f"exit_code: {exc.returncode}\n"
+                        f"stdout_tail:\n{exc.output or ''}\n"
+                        f"stderr_tail:\n{exc.stderr or ''}\n"
+                    )
+                debug_artifact = _write_debug_artifact(
+                    f"{summary_path}.debug.log", debug_text, roots=(root,)
+                )
+                result_artifacts.append(debug_artifact)
+            except OSError:
+                debug_artifact = None
+        failure_record = _failure_record_for_exception(
+            exc,
+            run_id=run_id,
+            correlation_id=correlation_id,
+            phase=current_phase,
+            artifacts=((debug_artifact,) if debug_artifact else ()),
+        )
         dirty_marked = False
         if lock_acquired and state is not None and state_path:
             mark_dirty(
@@ -2560,6 +2845,52 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 print(f"[parse-quality] run artifact: {parse_quality_manifest_path}", flush=True)
             except Exception as exc:  # pragma: no cover - filesystem edge cases
                 print(f"[parse-quality] failed writing run artifact: {exc}", file=sys.stderr)
+        if parse_quality_manifest_path and os.path.exists(parse_quality_manifest_path):
+            result_artifacts.append(
+                ArtifactReference(kind="parse_quality", path=parse_quality_manifest_path)
+            )
+        if failure_record is not None:
+            if failure_record.failure_class is FailureClass.AMBIGUOUS_MUTATION:
+                result_outcome = RunOutcome.AMBIGUOUS
+            else:
+                result_outcome = (
+                    RunOutcome.FAILED_RETRYABLE
+                    if failure_record.retryable
+                    else RunOutcome.FAILED_TERMINAL
+                )
+        elif summary.get("status") == "success":
+            legacy_outcome = str(summary.get("outcome") or "")
+            if legacy_outcome == "no_changes":
+                result_outcome = RunOutcome.NO_CHANGES
+            elif legacy_outcome == "partial_coverage":
+                result_outcome = RunOutcome.SUCCESS_WITH_QUARANTINE
+            else:
+                result_outcome = RunOutcome.SUCCESS
+        else:
+            failure_record = FailureRecord(
+                code="incomplete_run_result",
+                failure_class=FailureClass.INTERNAL_DEFECT,
+                phase=current_phase,
+                component="incremental_sync",
+                retryable=False,
+                run_id=run_id,
+                correlation_id=correlation_id,
+                summary=str(summary.get("error") or "run ended without a terminal status"),
+                safe_action="inspect the summary artifact before rerunning",
+            )
+            result_outcome = RunOutcome.FAILED_TERMINAL
+        run_result = RunResult(
+            run_id=run_id,
+            correlation_id=correlation_id,
+            outcome=result_outcome,
+            phase=current_phase,
+            component="incremental_sync",
+            failure=failure_record,
+            artifacts=tuple(result_artifacts),
+            started_at=str(summary.get("started_at") or ""),
+            finished_at=str(summary.get("finished_at") or ""),
+        )
+        summary["run_result"] = run_result.to_dict()
         try:
             _write_summary(summary_path, summary)
             if args.verbose:
@@ -2627,6 +2958,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--summary-path",
         default=os.environ.get("INCREMENTAL_SUMMARY_PATH"),
         help="Optional JSON summary output path (default under .cache/incremental_sync_summaries)",
+    )
+    parser.add_argument(
+        "--reliability-mode",
+        choices=("observe", "required"),
+        default=os.environ.get("CORTEX_RELIABILITY_MODE", "observe"),
+        help="Observe preserves legacy exits; required uses the typed reliability exit map.",
     )
     parser.add_argument(
         "--allow-full-fallback",
@@ -2709,7 +3046,28 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 async def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    return await _run_incremental(args)
+    if not args.summary_path:
+        root = os.path.realpath(os.path.abspath(args.root))
+        project_id = args.project_id or os.path.basename(root)
+        args.summary_path = _default_summary_path(
+            cache_dir=args.cache_dir,
+            project_id=project_id,
+            root=root,
+        )
+    legacy_exit = await _run_incremental(args)
+    if args.reliability_mode != "required":
+        return legacy_exit
+    try:
+        result = load_run_result(args.summary_path)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(
+            "[failure] code=result_artifact_unavailable phase=finished "
+            f"summary={type(exc).__name__} artifact={args.summary_path} "
+            "action=inspect filesystem capacity and permissions",
+            file=sys.stderr,
+        )
+        return int(ReliabilityExitCode.INTERNAL_DEFECT)
+    return exit_code_for(result, observe_only=False)
 
 
 if __name__ == "__main__":

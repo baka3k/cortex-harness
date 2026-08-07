@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import os
+import stat
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +17,39 @@ CODE_TINY = ROOT / "code-tiny"
 if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
-from tools.cplus import cplus_analyzer
+from tools.cplus import cplus_analyzer  # noqa: E402
+
+
+def test_embedding_source_fingerprint_uses_owner_only_manifest_cache(tmp_path: Path):
+    model_dir = tmp_path / "model"
+    cache_dir = tmp_path / "fingerprints"
+    model_dir.mkdir()
+    weight_path = model_dir / "weights.bin"
+    weight_path.write_bytes(b"model-v1")
+
+    with mock.patch.dict(
+        os.environ,
+        {"CORTEX_EMBEDDING_FINGERPRINT_CACHE_DIR": str(cache_dir)},
+    ):
+        first = cplus_analyzer._embedding_source_fingerprint(str(model_dir))
+        original_open = open
+
+        def guarded_open(path, mode="r", *args, **kwargs):
+            if os.path.realpath(path) == os.path.realpath(weight_path) and "r" in mode:
+                raise AssertionError("cached fingerprint reread model bytes")
+            return original_open(path, mode, *args, **kwargs)
+
+        with mock.patch("builtins.open", side_effect=guarded_open):
+            second = cplus_analyzer._embedding_source_fingerprint(str(model_dir))
+
+        weight_path.write_bytes(b"model-v2")
+        third = cplus_analyzer._embedding_source_fingerprint(str(model_dir))
+
+    cache_files = list(cache_dir.glob("*.json"))
+    assert first == second
+    assert third != first
+    assert len(cache_files) == 1
+    assert stat.S_IMODE(cache_files[0].stat().st_mode) == 0o600
 
 
 class _FakeDriver:

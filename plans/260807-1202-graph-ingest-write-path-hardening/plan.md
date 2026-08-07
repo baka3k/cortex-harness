@@ -8,10 +8,12 @@ blocks:
   - 260807-0929-mcp-ingest-query-concurrency
   - 260804-1640-port-proc-cplus-to-code-tiny
   - 260807-1329-parser-quality-recovery
+  - 260807-2103-toolchain-reliability-hardening
 phaseBlockedBy:
   phase-06:
     - original-20186-file-source-root-not-mounted
 relatedPlans:
+  - 260807-2103-toolchain-reliability-hardening
   - 260807-0929-mcp-ingest-query-concurrency
   - 260804-1640-port-proc-cplus-to-code-tiny
   - 260807-1329-parser-quality-recovery
@@ -195,6 +197,11 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
 6. [Phase 06 — canary, graph recovery, and rollout](phase-06-rollout-and-backfill.md)
 
 ## Dependencies and ownership
+
+- `260807-2103-toolchain-reliability-hardening` consumes this plan's schema,
+  mutation journal, reconciliation, barrier, and integrity contracts for its
+  end-to-end outcome model and certification gates. This plan remains the owner
+  of graph write mechanics and blocks reliability Phases 03, 04, and 07.
 
 - `neo4j-to-falkordb-migration` is a completed architectural input. This plan
   strengthens its schema/query contract without reopening the migration.

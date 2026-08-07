@@ -6,10 +6,12 @@ scope: "Embedded graph/vector owner, bounded MCP queries, staged ingestion publi
 blockedBy: []
 blocks:
   - 260807-1329-parser-quality-recovery
+  - 260807-2103-toolchain-reliability-hardening
 phaseBlockedBy:
   "03": [260807-1202-graph-ingest-write-path-hardening]
   "06": [260807-1202-graph-ingest-write-path-hardening]
 relatedPlans:
+  - 260807-2103-toolchain-reliability-hardening
   - 260806-1648-local-file-storage
   - 260728-0000-unified-ingest-query-contract
   - 260807-1202-graph-ingest-write-path-hardening
@@ -339,6 +341,14 @@ internally inconsistent.
 6. [Phase 06 — mixed-load acceptance and guarded rollout](phase-06-acceptance-and-rollout.md)
 
 ## Cross-plan dependencies
+
+### Reliability umbrella coordination
+
+- `260807-2103-toolchain-reliability-hardening` consumes this plan's admission,
+  staged-generation, atomic-publication, and status lifecycle. This plan remains
+  the store-owner/concurrency authority and blocks reliability Phases 04 and
+  07. The reliability plan owns cross-process typed outcomes, analyzer
+  certification, and the end-to-end fault matrix.
 
 ### Completed plans reused
 
