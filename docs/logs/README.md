@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Bounded embedded storage owner gateway](2026-08-07-bounded-embedded-storage-owner-gateway.md)
 - [Unified project storage contract](2026-08-06-unified-project-storage-contract.md)
 - [FalkorDBLite runtime cutover](2026-08-06-falkordblite-runtime-cutover.md)
 - [Owner-scoped local storage](2026-08-06-owner-scoped-local-storage.md)
