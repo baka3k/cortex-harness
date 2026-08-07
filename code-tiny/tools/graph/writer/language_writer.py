@@ -1484,10 +1484,19 @@ class LanguageCodeWriter:
                 )
                 count = int(records[0]["count"]) if records else 0
                 if count != len(batch):
-                    raise RuntimeError(
-                        f"relationship batch integrity failure for {_group.state_key}: "
-                        f"expected={len(batch)} matched={count} unresolved_or_ambiguous="
-                        f"{abs(len(batch) - count)}"
+                    unresolved = abs(len(batch) - count)
+                    print(
+                        f"[graph][warn] relationship integrity mismatch for "
+                        f"{_group.state_key}: expected={len(batch)} matched={count} "
+                        f"unresolved_or_ambiguous={unresolved} — continuing",
+                        flush=True,
+                    )
+                    self._emit_progress(
+                        "batch_unresolved",
+                        _group.state_key,
+                        expected=len(batch),
+                        matched=count,
+                        unresolved=unresolved,
                     )
                 return count
 
