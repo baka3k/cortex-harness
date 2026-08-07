@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 
-JOURNAL_SCHEMA_VERSION = 1
+JOURNAL_SCHEMA_VERSION = 2
 CONTRACT_VERSION = 1
 
 
@@ -171,6 +171,7 @@ class BatchSpec:
     required_barriers: Sequence[str] = ()
     produced_barriers: Sequence[str] = ()
     max_attempts: int = 5
+    operation: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.operation_key.strip():
@@ -192,6 +193,7 @@ class BatchSpec:
             )
         object.__setattr__(self, "required_barriers", required)
         object.__setattr__(self, "produced_barriers", produced)
+        object.__setattr__(self, "operation", MappingProxyType(dict(self.operation)))
 
 
 @dataclass(frozen=True)
@@ -225,6 +227,7 @@ class BatchRecord:
     produced_barriers: tuple[str, ...]
     retry_class: RetryClass | None = None
     error_code: TerminalErrorCode | None = None
+    operation: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

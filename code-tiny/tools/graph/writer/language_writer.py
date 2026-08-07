@@ -20,6 +20,15 @@ from tools.graph.writer.query_contract import (
     compile_relationship_upsert,
     group_typed_relations,
 )
+from tools.graph.journal.identity import canonical_json
+from tools.graph.journal.runtime import GraphWriteJournalRuntime, JournalTicket
+from tools.graph.journal.reconcile import (
+    compile_reconciliation_readback,
+    readback_count,
+)
+from tools.graph.journal.guard import journaled_mutation
+from tools.graph.journal.operation import GraphWriteOperation, operation_for_custom_query
+from tools.graph.journal.models import BatchStatus
 
 _OPTIONAL_EXTERNAL_RELATION_TYPES = frozenset(
     {"EXTENDS", "IMPLEMENTS", "INHERITS_FROM", "MIXES_IN"}
@@ -58,6 +67,15 @@ class LanguageCodeWriter:
         self._reconciliation_timeout_seconds = float(
             os.getenv("GRAPH_WRITE_RECONCILE_TIMEOUT_SECONDS", "30")
         )
+        self._journal_config = getattr(driver, "journal_config", None)
+        self._journal_runtime = (
+            GraphWriteJournalRuntime(self._journal_config)
+            if self._journal_config is not None and self._journal_config.required
+            else None
+        )
+        self._deferred_journal_writes: list[
+            tuple[JournalTicket, Callable[[List[Dict[str, Any]]], Any]]
+        ] = []
         
         # Initialize operations
         self.package_ops = PackageNodeOperations()
@@ -89,7 +107,8 @@ class LanguageCodeWriter:
             return None
         ensure = getattr(self.driver, "ensure_schema", None)
         if callable(ensure):
-            result = await ensure(database=self.database)
+            with journaled_mutation():
+                result = await ensure(database=self.database)
             self._schema_ready = True
             return result
         # Recording drivers in isolated unit tests intentionally expose only
@@ -105,6 +124,7 @@ class LanguageCodeWriter:
         write_fn: Callable,
         state: Optional[Dict[str, int]] = None,
         state_writer: Optional[Callable] = None,
+        operation: GraphWriteOperation | None = None,
     ) -> int:
         """
         Write data in batches with state tracking
@@ -119,7 +139,14 @@ class LanguageCodeWriter:
         Returns:
             Number of items written
         """
-        start_index = state.get(label, 0) if state else 0
+        # Durable job identity supersedes legacy memory/file offsets. Required
+        # mode must reconstruct every batch so DONE jobs are verified in the
+        # journal instead of silently trusting an older analyzer state file.
+        start_index = (
+            0
+            if self._journal_runtime is not None
+            else state.get(label, 0) if state else 0
+        )
         total = len(rows)
         
         if start_index >= total:
@@ -137,6 +164,54 @@ class LanguageCodeWriter:
         for offset in range(start_index, total, self.batch_size):
             batch = rows[offset : offset + self.batch_size]
 
+            if self._journal_config is not None and self._journal_config.shadow:
+                # Shadow mode exercises the exact serialization boundary but
+                # deliberately leaves mutation execution and state unchanged.
+                for row in batch:
+                    canonical_json(row)
+
+            ticket: JournalTicket | None = None
+            if self._journal_runtime is not None:
+                ticket = self._journal_runtime.prepare(
+                    label=label,
+                    rows=batch,
+                    sequence=offset,
+                    operation=operation,
+                )
+                if ticket.reconcile:
+                    readback = compile_reconciliation_readback(
+                        ticket.operation,
+                        ticket.rows,
+                        job_id=ticket.batch.job_id,
+                    )
+                    applied: bool | None = None
+                    if readback is not None:
+                        query, parameters = readback
+                        records, _, _ = await self.driver.execute_query(
+                            query, parameters, self.database
+                        )
+                        applied = readback_count(records) == 1
+                    ticket = self._journal_runtime.resolve_reconciliation(
+                        ticket, applied=applied
+                    )
+                if not ticket.execute:
+                    next_index = offset + len(batch)
+                    written += ticket.batch.expected_count
+                    if state is not None:
+                        state[label] = next_index
+                        if state_writer:
+                            state_writer(state)
+                    self._emit_progress(
+                        "batch_skipped",
+                        label,
+                        offset=offset,
+                        size=len(batch),
+                        completed=next_index,
+                        total=total,
+                        reason="journal_done",
+                    )
+                    continue
+
             started = time.monotonic()
             self._emit_progress(
                 "batch_started",
@@ -146,7 +221,10 @@ class LanguageCodeWriter:
                 completed=offset,
                 total=total,
             )
-            write_task = asyncio.create_task(write_fn(batch))
+            with journaled_mutation(
+                ticket.batch.job_id if ticket is not None else None
+            ):
+                write_task = asyncio.create_task(write_fn(batch))
             try:
                 while True:
                     done, _ = await asyncio.wait(
@@ -155,6 +233,8 @@ class LanguageCodeWriter:
                     if done:
                         count = write_task.result()
                         break
+                    if ticket is not None:
+                        self._journal_runtime.renew(ticket)
                     self._emit_progress(
                         "query_running",
                         label,
@@ -163,6 +243,12 @@ class LanguageCodeWriter:
                         completed=offset,
                         total=total,
                         elapsed=f"{time.monotonic() - started:.1f}s",
+                    )
+                if ticket is not None:
+                    self._journal_runtime.acknowledge(
+                        ticket,
+                        int(count),
+                        int((time.monotonic() - started) * 1000),
                     )
                 written += count
 
@@ -173,6 +259,7 @@ class LanguageCodeWriter:
                     if state_writer:
                         state_writer(state)
             except BaseException as exc:
+                reconciled = False
                 if not write_task.done():
                     self._emit_progress(
                         "batch_reconciling",
@@ -200,6 +287,8 @@ class LanguageCodeWriter:
                             timeout=min(self._progress_heartbeat_seconds, remaining),
                         )
                         if not done:
+                            if ticket is not None:
+                                self._journal_runtime.renew(ticket)
                             self._emit_progress(
                                 "batch_reconcile_running",
                                 label,
@@ -209,7 +298,14 @@ class LanguageCodeWriter:
                             )
                     if write_task.done():
                         try:
-                            write_task.result()
+                            reconciled_count = int(write_task.result())
+                            if ticket is not None:
+                                self._journal_runtime.acknowledge(
+                                    ticket,
+                                    reconciled_count,
+                                    int((time.monotonic() - started) * 1000),
+                                )
+                            reconciled = True
                             self._emit_progress(
                                 "batch_reconciled",
                                 label,
@@ -225,6 +321,8 @@ class LanguageCodeWriter:
                                 size=len(batch),
                                 outcome=type(reconcile_exc).__name__,
                             )
+                if ticket is not None and not reconciled:
+                    self._journal_runtime.mark_ambiguous(ticket)
                 self._emit_progress(
                     "batch_failed",
                     label,
@@ -249,6 +347,13 @@ class LanguageCodeWriter:
             )
         
         return written
+
+    def close_journal(self) -> None:
+        """Release local journal handles; production is closed by the parent gate."""
+
+        if self._journal_runtime is not None:
+            self._journal_runtime.close()
+            self._journal_runtime = None
     
     async def write_packages(
         self,
@@ -485,6 +590,29 @@ class LanguageCodeWriter:
         if not calls:
             return 0
 
+        # Collapse duplicate observations before journaling. Replays then set
+        # the same absolute count instead of incrementing an existing edge.
+        aggregated: Dict[tuple[Any, ...], Dict[str, Any]] = {}
+        for call in calls:
+            key = (
+                call.get("caller_id"),
+                call.get("callee_id"),
+                call.get("project_id"),
+                call.get("project_id_normalized"),
+            )
+            existing = aggregated.get(key)
+            if existing is None:
+                existing = dict(call)
+                existing["count"] = int(call.get("count") or 1)
+                aggregated[key] = existing
+            else:
+                existing["count"] += int(call.get("count") or 1)
+                existing["call_type"] = min(
+                    str(existing.get("call_type") or ""),
+                    str(call.get("call_type") or ""),
+                )
+        replay_safe_calls = list(aggregated.values())
+
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             # ``enrich_project_scope`` (via the upstream pipeline) adds
             # ``project_id_normalized`` to each row. Per Phase 03 of the
@@ -497,25 +625,24 @@ class LanguageCodeWriter:
             MATCH (caller:Function {id: row.caller_id})
             MATCH (callee:Function {id: row.callee_id})
             MERGE (caller)-[r:CALLS]->(callee)
-            ON CREATE SET r.count = 1
-            ON MATCH SET r.count = COALESCE(r.count, 0) + 1
-            SET r.call_type            = row.call_type,
+            SET r.count                = row.count,
+                r.call_type            = row.call_type,
                 r.project_id           = row.project_id,
                 r.project_id_normalized = row.project_id_normalized,
                 r.updated_at           = datetime()
+            RETURN count(r) AS count
             """
 
-            await self.driver.execute_query(
+            records, _, _ = await self.driver.execute_query(
                 query,
                 {"rows": batch},
                 self.database
             )
-
-            return len(batch)
+            return records[0]["count"] if records else 0
 
         return await self.write_batches(
             "calls",
-            calls,
+            replay_safe_calls,
             write_batch,
             state,
             state_writer
@@ -1391,10 +1518,85 @@ class LanguageCodeWriter:
         _cypher = cypher  # capture for closure
 
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
-            await self.driver.execute_query(_cypher, {"rows": batch}, self.database)
+            records, _, _ = await self.driver.execute_query(
+                _cypher, {"rows": batch}, self.database
+            )
+            if records and "count" in records[0]:
+                return int(records[0]["count"])
             return len(batch)
 
-        return await self.write_batches(key, rows, write_batch, state, state_writer)
+        operation = operation_for_custom_query(key, _cypher)
+        return await self.write_batches(
+            key, rows, write_batch, state, state_writer, operation
+        )
+
+    async def enqueue_deferred_relations(
+        self, relations: List[Dict[str, Any]], *, barrier: str
+    ) -> int:
+        """Durably enqueue typed edges before their endpoint production closes."""
+
+        if not relations:
+            return 0
+        if self._journal_runtime is None:
+            raise RuntimeError("deferred durable relations require journal mode")
+        self._journal_runtime.open_barrier(barrier)
+        enqueued = 0
+        for relationship_group, rows in group_typed_relations(relations).items():
+            operation = GraphWriteOperation.for_label(relationship_group.state_key)
+
+            async def write_batch(
+                batch: List[Dict[str, Any]], _group=relationship_group
+            ) -> int:
+                query = compile_relationship_upsert(_group)
+                records, _, _ = await self.driver.execute_query(
+                    query, {"rows": batch}, self.database
+                )
+                return int(records[0]["count"]) if records else 0
+
+            for offset in range(0, len(rows), self.batch_size):
+                batch = rows[offset : offset + self.batch_size]
+                ticket = self._journal_runtime.prepare(
+                    label=relationship_group.state_key,
+                    rows=batch,
+                    sequence=offset,
+                    operation=operation,
+                    additional_required_barriers=(barrier,),
+                    defer=True,
+                )
+                if ticket.batch.status is not BatchStatus.DONE:
+                    self._deferred_journal_writes.append((ticket, write_batch))
+                enqueued += len(batch)
+        return enqueued
+
+    async def close_barrier_and_drain(self, barrier: str) -> int:
+        """Close one producer barrier and execute its now-eligible durable jobs."""
+
+        if self._journal_runtime is None:
+            raise RuntimeError("deferred durable relations require journal mode")
+        self._journal_runtime.close_barrier(barrier)
+        written = 0
+        remaining = []
+        for ticket, write_fn in self._deferred_journal_writes:
+            if barrier not in ticket.batch.required_barriers:
+                remaining.append((ticket, write_fn))
+                continue
+            claimed = self._journal_runtime.claim_deferred(ticket)
+            if not claimed.execute:
+                written += claimed.batch.expected_count
+                continue
+            started = time.monotonic()
+            try:
+                with journaled_mutation(claimed.batch.job_id):
+                    count = int(await write_fn(list(claimed.rows)))
+                self._journal_runtime.acknowledge(
+                    claimed, count, int((time.monotonic() - started) * 1000)
+                )
+                written += count
+            except BaseException:
+                self._journal_runtime.mark_ambiguous(claimed)
+                raise
+        self._deferred_journal_writes = remaining
+        return written
 
     async def write_calls_with_site(
         self,
@@ -1430,7 +1632,9 @@ class LanguageCodeWriter:
             )
             return records[0]["count"] if records else 0
 
-        return await self.write_batches("calls", calls, write_batch, state, state_writer)
+        return await self.write_batches(
+            "calls:site", calls, write_batch, state, state_writer
+        )
 
     async def write_navigators(
         self,

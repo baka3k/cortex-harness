@@ -37,13 +37,25 @@ async def write_graph(args: argparse.Namespace, result) -> Dict[str, int]:
             batch_size=args.neo4j_batch_size,
             verbose=args.verbose,
         )
-        records, _, _ = await driver.execute_query(
-            "MATCH (n:StrutsFact {project_id: $project_id}) DETACH DELETE n RETURN count(n) AS count",
-            {"project_id": result.project_id},
-            args.neo4j_db,
+        cleanup_records = []
+
+        async def cleanup_batch(batch):
+            nonlocal cleanup_records
+            cleanup_records, _, _ = await driver.execute_query(
+                "MATCH (n:StrutsFact {project_id: $project_id}) "
+                "DETACH DELETE n RETURN count(n) AS count",
+                batch[0],
+                args.neo4j_db,
+            )
+            return len(batch)
+
+        await writer.write_batches(
+            "struts:replace_cleanup",
+            [{"project_id": result.project_id}],
+            cleanup_batch,
         )
         counts: Dict[str, int] = {
-            "deleted_nodes": int((records or [{}])[0].get("count", 0)),
+            "deleted_nodes": int((cleanup_records or [{}])[0].get("count", 0)),
         }
 
         facts_by_kind: Dict[str, List[dict]] = defaultdict(list)

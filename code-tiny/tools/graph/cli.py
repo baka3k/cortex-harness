@@ -161,13 +161,20 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
         password = getattr(args, "neo4j_password", None)
         if not (uri and user and password):
             return None
-        return await GraphDriverFactory.create_driver(
+        driver = await GraphDriverFactory.create_driver(
             provider=GraphProvider.NEO4J,
             uri=uri,
             user=user,
             password=password,
             database=getattr(args, "neo4j_db", None),
         )
+        from tools.graph.journal.config import attach_journal_config
+        from tools.graph.journal.consumer import resume_journal
+
+        journal_config = attach_journal_config(driver, args)
+        if journal_config is not None and journal_config.required:
+            await resume_journal(journal_config, driver)
+        return driver
 
     graph_name = (
         getattr(args, "falkordb_graph", None)
@@ -176,7 +183,7 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
         or "neo4j"
     )
     setattr(args, "neo4j_db", graph_name)
-    return await GraphDriverFactory.create_driver(
+    driver = await GraphDriverFactory.create_driver(
         GraphProvider.FALKORDB,
         {
             "graph": graph_name,
@@ -186,3 +193,10 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
             "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
         },
     )
+    from tools.graph.journal.config import attach_journal_config
+    from tools.graph.journal.consumer import resume_journal
+
+    journal_config = attach_journal_config(driver, args)
+    if journal_config is not None and journal_config.required:
+        await resume_journal(journal_config, driver)
+    return driver

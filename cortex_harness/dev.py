@@ -31,6 +31,13 @@ if str(CODE_TINY) not in sys.path:
 
 from cortex_harness.storage import StorageRole, resolve_storage, storage_overlay
 from cortex_harness.storage.config import LEGACY_REMOTE_KEYS
+from tools.graph.journal.config import (
+    configure_journal_env,
+    finalize_journal_from_env,
+    journal_status_from_env,
+    physical_target_from_env,
+)
+from tools.graph.journal.models import RunStatus
 from tools.jp1.sniff import is_jp1_file
 
 HARNESS_CONFIG_DIR = ".cortext-harness/config"
@@ -1118,6 +1125,29 @@ def _run_with_retry(
         if env is not None:
             process_env = dict(os.environ)
             process_env.update({str(key): str(value) for key, value in env.items()})
+        if (
+            process_env is not None
+            and process_env.get("CORTEX_GRAPH_JOURNAL_MODE", "").casefold()
+            in {"required", "shared-required"}
+        ):
+            module_env = dict(process_env)
+            existing_pythonpath = module_env.get("PYTHONPATH", "")
+            module_env["PYTHONPATH"] = os.pathsep.join(
+                value
+                for value in (str(CODE_TINY), existing_pythonpath)
+                if value
+            )
+            recovery = subprocess.run(
+                [str(cmd[0]), "-m", "tools.graph.journal.consumer"],
+                cwd=str(CODE_TINY),
+                env=module_env,
+            )
+            if recovery.returncode != 0:
+                click.echo(
+                    f"  [error] graph journal recovery exited {recovery.returncode}",
+                    err=True,
+                )
+                return recovery.returncode
         rc = subprocess.run([str(c) for c in cmd], env=process_env).returncode
         if rc == 0:
             return 0
@@ -1201,6 +1231,46 @@ def _run_analyzer(
     project_id   = project.get("code", project_name)
     qdrant_collection = _code_qdrant_collection(env, project)
     repo         = folder_path.name
+    child_env = dict(env)
+    if child_env.get("CORTEX_DISABLE_GRAPH", "").casefold() not in {
+        "1", "true", "yes", "on"
+    }:
+        revision = _git_head(folder_path) or "working-tree"
+        snapshot_hash = hashlib.sha256()
+        snapshot_hash.update(revision.encode("utf-8"))
+        snapshot_paths = [Path(path) for path in changed_files]
+        if mode == "full" or not snapshot_paths:
+            snapshot_paths = [
+                path.relative_to(folder_path)
+                for path in folder_path.rglob("*")
+                if path.is_file()
+                and not _is_sensitive(path)
+                and not _is_excluded_path(path, folder_path)
+            ]
+        for relative in sorted(snapshot_paths, key=lambda item: item.as_posix()):
+            normalized = relative.as_posix()
+            snapshot_hash.update(normalized.encode("utf-8"))
+            absolute = folder_path / relative
+            if absolute.is_file():
+                with absolute.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        snapshot_hash.update(chunk)
+        for deleted in sorted(str(path) for path in deleted_files):
+            snapshot_hash.update(b"\0deleted\0")
+            snapshot_hash.update(deleted.encode("utf-8"))
+        snapshot = snapshot_hash.hexdigest()
+        configure_journal_env(
+            child_env,
+            root=folder_path,
+            project_id=str(project_id),
+            parser=lang,
+            source_revision=revision,
+            source_snapshot=snapshot,
+            physical_target=physical_target_from_env(child_env),
+            cache_dir=child_env.get("QDRANT_CACHE_DIR"),
+            mode=child_env.get("CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"),
+            generation=uuid.uuid4().hex,
+        )
 
     cmd = [
         python, str(analyzer),
@@ -1233,7 +1303,31 @@ def _run_analyzer(
     if verbose:
         cmd.append("--verbose")
 
-    rc = _run_with_retry(cmd, dry_run=dry_run, env=env)
+    rc = _run_with_retry(cmd, dry_run=dry_run, env=child_env)
+
+    if rc == 0 and not dry_run and "CORTEX_GRAPH_JOURNAL_METADATA" in child_env:
+        try:
+            journal_status = finalize_journal_from_env(child_env)
+            if journal_status is not None and journal_status is not RunStatus.DRAINED:
+                click.echo(
+                    f"  [error] {lang} graph journal did not drain: {journal_status}",
+                    err=True,
+                )
+                rc = 1
+            elif journal_status is RunStatus.DRAINED and verbose:
+                journal = journal_status_from_env(child_env) or {}
+                click.echo(
+                    "  [journal] status=drained produced=%s acked=%s rows=%s bytes=%s"
+                    % (
+                        journal.get("produced", 0),
+                        journal.get("acked", 0),
+                        journal.get("rows", 0),
+                        journal.get("payload_bytes", 0),
+                    )
+                )
+        except Exception as exc:
+            click.echo(f"  [error] {lang} graph journal gate failed: {exc}", err=True)
+            rc = 1
 
     for m in (changed_manifest, deleted_manifest):
         if m and m.exists():
