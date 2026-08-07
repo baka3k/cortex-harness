@@ -2,7 +2,7 @@
 title: "Graph ingestion write-path hardening"
 status: in_progress
 created: 2026-08-07
-scope: "Automatic schema preflight, indexable relationship writes, restart safety, and truthful progress"
+scope: "Automatic schema preflight, indexable relationship writes, durable restart safety, and truthful progress"
 blockedBy: []
 blocks:
   - 260807-0929-mcp-ingest-query-concurrency
@@ -35,9 +35,11 @@ before the first graph mutation, and generate label-qualified endpoint
 matches. Operators must not create indexes by hand. Manual schema setup remains
 only a diagnostic/repair command backed by the same canonical manifest.
 
-Implementation and disposable-store validation are complete. Final publication
-remains pending only on the original approximately 20,186-file source root,
-which is not mounted or discoverable in this workspace.
+The original schema/index/query work and disposable-store validation are
+complete. Restart recovery is reopened by the C++ cross-buffer include incident:
+deferring relationships in process memory prevents early endpoint matching but
+does not provide durable continuation. A SQLite WAL graph write journal is now
+required before the final approximately 20,186-file canary and publication.
 
 This plan covers the shared graph write path rather than patching only the C++
 analyzer. It preserves Neo4j compatibility, uses local FalkorDB as the primary
@@ -55,8 +57,16 @@ diagnostic signal rather than the cause of database write latency.
    a prerequisite for normal `dev sync code` use.
 3. **How should interrupted or partial runs recover?** A failed/timeout run is
    marked incomplete and cannot publish success or advance the incremental
-   baseline. Retry is idempotent, validates schema/query-shape fingerprints,
-   and either safely resumes a compatible staging run or starts a clean scan.
+   baseline. Validated graph operation batches are durably journaled before
+   source memory is released. A compatible retry resumes leased/pending work;
+   an incompatible journal is quarantined and never replayed blindly.
+4. **C++ only or shared writer?** The durable contract belongs to the shared
+   graph writer. C++ is the first canary, followed by all shared writers and an
+   explicit migration/blocking inventory for custom/direct mutation paths.
+5. **Local queue or external broker?** Use SQLite WAL under the resolved local
+   sync cache. It supports transactional enqueue/lease/ACK and crash recovery
+   without adding a service. StoreGateway continues to own request-level job
+   scheduling and staged-generation publication.
 
 ## Verified failure model
 
@@ -159,6 +169,14 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
 - Persist an incomplete/failed state with manifest/query fingerprints. Do not
   advance baseline or publish a generation until schema, counts, integrity,
   and representative query checks pass.
+- Persist serializable mutation batches in a writer-local SQLite WAL journal.
+  Queue delivery is at-least-once; graph effects are effectively-once only for
+  deterministic, reconciled operations. Opaque/non-idempotent operations are
+  converted or blocked before journal retry is enabled.
+- Use produced/drained node-label barriers. Relationship jobs are claimable
+  only after their required endpoint barriers drain.
+- Claim with bounded leases and fencing tokens. Timeout/cancel after submission
+  is ambiguous until deterministic graph readback reconciles the outcome.
 - Report parser health separately: files with errors, explicit `ERROR` nodes,
   `MISSING` nodes, encoding/fallback counts, alternate-parser choices, and the
   coverage gap between scanned files and compile commands.
@@ -169,6 +187,10 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
 2. [Phase 02 — canonical schema manifest and automatic preflight](phase-02-schema-preflight.md)
 3. [Phase 03 — label-qualified, integrity-aware relationship writes](phase-03-indexable-write-path.md)
 4. [Phase 04 — restart safety and truthful observability](phase-04-recovery-and-observability.md)
+   - [Phase 04A — durable journal contract and storage](phase-04a-journal-contract-and-storage.md)
+   - [Phase 04B — serializable operations, producers, and barriers](phase-04b-producer-operations-and-barriers.md)
+   - [Phase 04C — leased consumer, reconciliation, and resume](phase-04c-consumer-reconciliation-and-resume.md)
+   - [Phase 04D — CLI, observability, validation, and rollout](phase-04d-cli-observability-validation-rollout.md)
 5. [Phase 05 — correctness, query-plan, and scale gates](phase-05-tests-and-performance.md)
 6. [Phase 06 — canary, graph recovery, and rollout](phase-06-rollout-and-backfill.md)
 
@@ -178,8 +200,10 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
   strengthens its schema/query contract without reopening the migration.
 - `260807-0929-mcp-ingest-query-concurrency` owns physical-store admission,
   staged generations, and publication. This plan owns writer schema readiness,
-  query shape, batch integrity, and writer-local checkpoints. Its Phase 03 and
-  Phase 06 consume this contract.
+  query shape, batch integrity, and the durable writer mutation journal. The
+  StoreGateway ingestion queue schedules whole requests; it does not duplicate
+  journal batches. Its Phase 03 and Phase 06 consume `queue_drained` plus graph
+  validation as publication prerequisites.
 - `260804-1640-port-proc-cplus-to-code-tiny` owns Pro*C extraction semantics and
   labels. This plan owns how those labels are indexed and written. Its graph
   integration and acceptance phases consume this contract.
@@ -206,6 +230,11 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
 - Update: `code-tiny/tools/cplus/cplus_analyzer.py` and
   `code-tiny/tools/sync/incremental_sync.py` for preflight ordering, global
   progress, fingerprints, and incomplete-run handling.
+- New: `code-tiny/tools/graph/journal/` for versioned operations, SQLite WAL
+  state, immutable artifacts, barriers, leased execution, reconciliation, and
+  safe retention.
+- Update: `cortex_harness/dev.py` so outer retries preserve one stable compatible
+  run identity and expose journal status rather than restarting anonymous work.
 - Refactor: `code-tiny/scripts/setup_constraints.py` into a thin consumer of
   the canonical manifest.
 - Tests: focused root and `code-tiny/tests/` suites plus temporary-store
@@ -225,6 +254,9 @@ provisional gates, but it may not weaken the query-plan invariant.
 | Batch latency | Representative local FalkorDB p95 <= 5 s at 100k nodes; any exception requires an evidence-backed threshold revision. |
 | Integrity | Expected = matched + explicitly unresolved; no silent relationship loss; second identical run changes no final counts. |
 | Visibility | No active database query is silent for more than 10 s; progress names the in-flight query rather than only the previous batch. |
+| Durable resume | A forced exit at every enqueue/lease/commit/ACK/barrier boundary resumes only unfinished compatible work; ACKed effects are not replayed. |
+| Journal safety | No graph mutation occurs without committed enqueue; disk-full/corrupt/incompatible journals fail closed; storage is bounded by configured item/byte/retention limits. |
+| Journal overhead | Record enqueue/ACK p50/p95, peak journal/artifact bytes, restart latency, and end-to-end delta. Required-mode rollout needs <=10% warm end-to-end overhead or an evidence-backed revision. |
 | Full canary | The 20k-file repository finishes without an unbounded query and within 2x the indexed warm baseline established in Phase 01. |
 | Incident improvement | The same fixture/query improves relationship-batch p95 by at least 10x over the captured 18.6-34.1 s incident range, or the rollout stops with evidence. |
 
@@ -238,6 +270,11 @@ provisional gates, but it may not weaken the query-plan invariant.
 - Cancellation or timeout leaves the current committed generation/baseline
   unchanged. Temporary staging is retained for diagnosis or safely removed by
   generation lifecycle tooling, never by broad filesystem deletion.
+- Compatible incomplete journals resume automatically. Expired leases are
+  recovered with fencing. Incompatible fingerprints are quarantined; corrupt,
+  disk-full, integrity, and dead-letter states fail closed.
+- Database timeouts are not immediate retries. Deterministic readback ACKs
+  confirmed effects and retries only confirmed missing work.
 - Rollback disables the short-lived feature flag and selects the last validated
   generation. It does not restore the old unlabeled writer as a permanent mode.
 
@@ -254,6 +291,10 @@ provisional gates, but it may not weaken the query-plan invariant.
   paths contain no unlabeled identity upsert or endpoint lookup.
 - Missing endpoints, duplicate identities, schema failure, timeout, cancellation,
   and restart have typed, tested, non-silent outcomes.
+- Every journal-enabled operation is serializable, deterministic, reconciled,
+  and replay safe; bypass paths are migrated or explicitly rejected.
+- A compatible crash/retry resumes pending work without reparsing or replaying
+  ACKed batches, and an incompatible run cannot claim current work.
 - Progress and health output distinguish parsing, queueing, database execution,
   completion, and failure, with no duplicate lines.
 - The parser warning is quantified accurately and does not block ingestion
@@ -268,13 +309,19 @@ provisional gates, but it may not weaken the query-plan invariant.
 - Silently deleting duplicate nodes or partially written user graphs.
 - Treating timeouts, larger batches, or more CPU as substitutes for an
   indexable query plan.
+- Claiming exactly-once delivery across SQLite and the graph store. The contract
+  is at-least-once delivery plus idempotent effects and explicit reconciliation.
+- Replacing StoreGateway request scheduling or staged-generation publication
+  with the writer-local mutation journal.
 
 ## Implementation status
 
-Phases 01-05 are implemented and validated. Phase 06 remains open only for the
-full approximately 20k-file source canary and publication/rollback observation;
-the original source root is not available in this workspace. See
-[`reports/validation-report.md`](reports/validation-report.md).
+The original Phases 01-05 are implemented and validated. Phase 04A-04D now
+reopen restart safety with a durable mutation journal. Phase 06 remains blocked
+until these subphases pass and the full approximately 20k-file source canary is
+available. See [`research/durable-write-journal.md`](research/durable-write-journal.md),
+[`reports/durable-write-journal-red-team.md`](reports/durable-write-journal-red-team.md),
+and [`reports/durable-write-journal-validation.md`](reports/durable-write-journal-validation.md).
 
 ## Delivery command
 

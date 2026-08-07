@@ -14,6 +14,8 @@ clean staging rebuild from an audited in-place repair.
 - Canary the complete C++/Pro*C workload on disposable/staging storage.
 - Provide an automatic rollback and actionable operator status.
 - Remove the legacy unlabeled fallback after the rollout window.
+- Require Phase 04A-04D journal drain/reconciliation gates before full canary
+  publication.
 
 ## Architecture
 
@@ -36,7 +38,8 @@ contract during canary; the end state is one automatic hardened path.
 2. Record the old run as incomplete and capture graph/index/count/duplicate/
    orphan diagnostics without mutating it.
 3. Run a small disposable canary, then a full 20k-file C++/Pro*C staging build
-   with automatic preflight and the hardened writer.
+   with automatic preflight, the hardened writer, and durable journal enabled.
+   Kill/restart at selected enqueue/lease/commit/ACK boundaries and prove resume.
 4. Validate schema fingerprint, query plans, node/edge reconciliation, project
    isolation, representative MCP queries, parser summary, and performance SLOs.
 5. Publish/select the validated generation only after all gates pass. Retain
@@ -52,6 +55,7 @@ contract during canary; the end state is one automatic hardened path.
 
 - [ ] Audit and mark the current partial run without destructive cleanup.
 - [ ] Complete full-source staging canary (disposable schema/query/scale canaries passed).
+- [ ] Complete durable-journal crash/resume canary with no replayed ACKed work.
 - [ ] Verify all schema, integrity, query, parser, and performance gates.
 - [ ] Publish with a tested rollback to the last validated generation.
 - [x] Enable the hardened path by default.

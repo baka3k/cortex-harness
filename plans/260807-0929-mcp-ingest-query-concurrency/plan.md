@@ -81,6 +81,9 @@ multi-process embedded access remains fail-closed.
 - `code-tiny/tools/sync/incremental_sync.py` has a project/root run lock and
   ingestion state, but the lock scope is not guaranteed to equal the resolved
   physical store scope.
+- `260807-1202-graph-ingest-write-path-hardening` now owns a durable writer-local
+  graph mutation journal. This plan's request queue schedules ingestion jobs;
+  it must consume rather than duplicate mutation batch state.
 - `code-tiny/tools/common/local_qdrant.py` and the completed local-storage
   plan already provide the application-owned Qdrant boundary and role paths.
 - Existing local-storage and unified-contract plans are completed inputs; this
@@ -108,6 +111,16 @@ Ingestion request ─> idempotent job queue ─> parse/embed workers
                                                          -> atomic manifest publish
                                                          -> retire N after readers drain
 ```
+
+### Queue ownership boundary
+
+- StoreGateway queue records request admission, fairness, cancellation, source
+  revision, and staging-generation lifecycle.
+- GraphWriteJournal records serializable graph mutation batches, node barriers,
+  leases, reconciliation, and ACK state inside one ingestion job.
+- The gateway submits one stable run identity to the writer. It publishes only
+  after `queue_drained` and graph/vector validation. It never copies graph batch
+  payloads into a second request queue.
 
 ### Generation contract
 

@@ -54,7 +54,6 @@ from tools.common.analyzer_cache import (
     safe_cache_root,
     write_parse_cache,
 )
-from tools.common.cloc_stats import collect_cloc_stats, normalize_cloc_payload, write_cloc_stats_to_neo4j
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
@@ -3432,7 +3431,7 @@ async def build_call_graph(
                 )
             )
             print(f"[impact] impacted_by_includes={impacted_by_includes_count}")
-        print(f"[scan] Found {len(all_file_paths)} C/C++/resource files under {root}")
+    print(f"[scan] Found {len(all_file_paths)} C/C++/resource files under {root}", flush=True)
     total_files = len(all_file_paths)
 
     cleanup_targets = sorted(changed_set | deleted_set)
@@ -3590,8 +3589,8 @@ async def build_call_graph(
 
     def iter_payloads(log_parse: bool) -> Iterable[Dict[str, Any]]:
         for index, file_path in enumerate(all_file_paths, start=1):
-            if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
-                print(f"[parse] {index}/{total_files}: {file_path}")
+            if log_parse and (index == 1 or index % 50 == 0 or index == total_files):
+                print(f"[parse] {index}/{total_files}: {file_path}", flush=True)
             if file_path in repair_selected_payloads:
                 yield repair_selected_payloads[file_path]
                 continue
@@ -4077,8 +4076,7 @@ async def build_call_graph(
                 )
 
     if code_writer:
-        if verbose:
-            print("[graph] Streaming nodes and relations in batches...")
+        print("[graph] Streaming nodes and relations in batches...", flush=True)
         # --- Write buffers: flushed to Neo4j every _STREAM_BATCH_FILES files ---
         _STREAM_BATCH_FILES = 500
         buf_files: List[Dict[str, Any]] = []
@@ -4327,21 +4325,20 @@ SET s.node_type = 'code',
                     )
                 raise
             _stream_files_processed = _buffer_end
-            if verbose:
-                print(
-                    "[graph] buffer_finished index=%d/%d files=%d-%d "
-                    "processed=%d/%d elapsed=%.3fs"
-                    % (
-                        _stream_buffer_index,
-                        _stream_buffer_total,
-                        _buffer_start,
-                        _buffer_end,
-                        _stream_files_processed,
-                        total_files,
-                        time.monotonic() - _buffer_started,
-                    ),
-                    flush=True,
-                )
+            print(
+                "[graph] buffer_finished index=%d/%d files=%d-%d "
+                "processed=%d/%d elapsed=%.3fs"
+                % (
+                    _stream_buffer_index,
+                    _stream_buffer_total,
+                    _buffer_start,
+                    _buffer_end,
+                    _stream_files_processed,
+                    total_files,
+                    time.monotonic() - _buffer_started,
+                ),
+                flush=True,
+            )
 
         async def _write_current_stream_buffer() -> None:
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
@@ -4892,17 +4889,6 @@ SET s.node_type = 'code',
                 "target_id": file_id,
                 "properties": {},
             })
-            for inc_file in resolved_includes_by_file.get(file_id, []):
-                buf_relations.append(
-                    {
-                        "source_label": "File",
-                        "target_label": "File",
-                        "rel_type": "INCLUDES",
-                        "source_id": file_id,
-                        "target_id": inc_file,
-                        "properties": {},
-                    }
-                )
             for ns in payload["namespaces"]:
                 buf_relations.append({
                     "source_label": "File",
@@ -5114,6 +5100,55 @@ SET s.node_type = 'code',
         # Flush any remaining buffered data from the loop
         await _flush_write_buffers()
 
+        # Include targets can belong to a later stream buffer. Defer these edges
+        # until every File node has been written so endpoint matching is complete.
+        deferred_include_relations: List[Dict[str, Any]] = [
+            {
+                "source_label": "File",
+                "target_label": "File",
+                "rel_type": "INCLUDES",
+                "source_id": file_id,
+                "target_id": inc_file,
+                "properties": {},
+            }
+            for file_id, included_files in resolved_includes_by_file.items()
+            for inc_file in included_files
+        ]
+
+        if deferred_include_relations:
+            if verbose:
+                print(
+                    "[graph] deferred_includes write_started count=%d "
+                    "storage=memory-only persistent_retry_queue=false "
+                    "retry=next-full-idempotent-replay"
+                    % len(deferred_include_relations),
+                    flush=True,
+                )
+            try:
+                await code_writer.write_relations_typed(deferred_include_relations)
+            except BaseException as exc:
+                if verbose:
+                    print(
+                        "[graph] deferred_includes write_failed count=%d error=%s "
+                        "persistent_retry_queue=false "
+                        "retry=next-full-idempotent-replay"
+                        % (len(deferred_include_relations), type(exc).__name__),
+                        flush=True,
+                    )
+                raise
+            if verbose:
+                print(
+                    "[graph] deferred_includes write_finished count=%d"
+                    % len(deferred_include_relations),
+                    flush=True,
+                )
+        elif verbose:
+            print(
+                "[graph] deferred_includes write_skipped count=0 "
+                "reason=no_resolved_includes",
+                flush=True,
+            )
+
         # Add event and possible-call relations (small, built during Pass 1)
         tail_relations: List[Dict[str, Any]] = list(resource_reference_relations)
         for event_rel in event_relations:
@@ -5319,12 +5354,10 @@ SET s.node_type = 'code',
             os.makedirs(os.path.dirname(os.path.abspath(call_stats_path)), exist_ok=True)
             with open(call_stats_path, "w", encoding="utf-8") as handle:
                 json.dump(stats_payload, handle, ensure_ascii=True, indent=2)
-        if verbose:
-            print("[graph] Write complete")
+        print("[graph] Write complete", flush=True)
 
     if qdrant_writer and embedder:
-        if verbose:
-            print("[qdrant] Ensuring collection...")
+        print("[qdrant] Ensuring collection...", flush=True)
         qdrant_writer.ensure_collection()
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", qdrant_writer.collection)
         points_path = os.path.join(qdrant_cache_root, f"{safe_name}_points.jsonl")
@@ -5357,8 +5390,7 @@ SET s.node_type = 'code',
                 yield item
 
         if not os.path.exists(points_path) or cached_points != expected_points:
-            if verbose:
-                print(f"[cache] Building Qdrant cache at {points_path}")
+            print(f"[cache] Building Qdrant cache at {points_path}", flush=True)
             with open(points_path, "w", encoding="utf-8") as handle:
                 batch_funcs: List[Dict[str, Any]] = []
                 batch_index = 0
@@ -5369,8 +5401,7 @@ SET s.node_type = 'code',
                         if len(batch_funcs) < batch_size:
                             continue
                         batch_index += 1
-                        if verbose:
-                            print(f"[embed] batch {batch_index} / {total_batches}")
+                        print(f"[embed] batch {batch_index} / {total_batches}", flush=True)
                         texts = [item["note"] or item["code"] for item in batch_funcs]
                         vectors = embedder.embed(texts, batch_size=batch_size, verbose=False)
                         for func_item, vector in zip(batch_funcs, vectors):
@@ -5408,8 +5439,7 @@ SET s.node_type = 'code',
                             gc.collect()
                 if batch_funcs:
                     batch_index += 1
-                    if verbose:
-                        print(f"[embed] batch {batch_index} / {total_batches}")
+                    print(f"[embed] batch {batch_index} / {total_batches}", flush=True)
                     texts = [item["note"] or item["code"] for item in batch_funcs]
                     vectors = embedder.embed(texts, batch_size=batch_size, verbose=False)
                     for func_item, vector in zip(batch_funcs, vectors):
@@ -5445,13 +5475,11 @@ SET s.node_type = 'code',
             state = {"total_points": expected_points, "upserted": 0}
             write_qdrant_state(state)
         else:
-            if verbose:
-                print(f"[cache] Using existing Qdrant cache at {points_path}")
+            print(f"[cache] Using existing Qdrant cache at {points_path}", flush=True)
 
         total_points = state.get("total_points", expected_points)
         upserted = state.get("upserted", 0)
-        if verbose:
-            print(f"[qdrant] Resuming at {upserted}/{total_points}")
+        print(f"[qdrant] Resuming at {upserted}/{total_points}", flush=True)
         remaining = max(total_points - upserted, 0)
         total_batches = max(1, (remaining + qdrant_batch_size - 1) // qdrant_batch_size)
         batch_index = 0
@@ -5466,19 +5494,16 @@ SET s.node_type = 'code',
                 line_index += 1
                 if len(batch) >= qdrant_batch_size:
                     batch_index += 1
-                    if verbose:
-                        print(f"[qdrant] Upsert batch {batch_index}/{total_batches}")
+                    print(f"[qdrant] Upsert batch {batch_index}/{total_batches}", flush=True)
                     qdrant_writer.upsert(enrich_project_scope(batch))
                     write_qdrant_state({"total_points": total_points, "upserted": line_index})
                     batch = []
             if batch:
                 batch_index += 1
-                if verbose:
-                    print(f"[qdrant] Upsert batch {batch_index}/{total_batches}")
+                print(f"[qdrant] Upsert batch {batch_index}/{total_batches}", flush=True)
                 qdrant_writer.upsert(enrich_project_scope(batch))
                 write_qdrant_state({"total_points": total_points, "upserted": line_index})
-        if verbose:
-            print("[qdrant] Upsert complete")
+        print("[qdrant] Upsert complete", flush=True)
         if not keep_cache:
             try:
                 os.remove(points_path)
@@ -5767,10 +5792,16 @@ async def main(argv: Optional[List[str]] = None) -> int:
     neo4j_state_path = None
     if args.verbose:
         print(
-            "[state] C++ graph resume disabled; graph batches will be replayed "
-            "idempotently after interruption",
+            "[state] C++ graph resume mode=full-idempotent-replay "
+            "checkpoint=disabled persistent_retry_queue=false; interrupted work "
+            "restarts on the next analyzer attempt",
             flush=True,
         )
+    print(
+        "[start] kicking off cplus scan; this can take several minutes on a large repo "
+        "(progress will be reported below)",
+        flush=True,
+    )
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
     language = args.language or "cplus"
@@ -5783,24 +5814,6 @@ async def main(argv: Optional[List[str]] = None) -> int:
         args.message_qdrant_collection
         or default_message_collection_name(args.qdrant_collection)
     )
-    if driver:
-        cloc_raw = collect_cloc_stats(args.root)
-        if cloc_raw:
-            cloc_stats = normalize_cloc_payload(cloc_raw)
-            await write_cloc_stats_to_neo4j(
-                driver=driver,
-                database=args.neo4j_db,
-                project_id=project_id,
-                project_name=project_name,
-                root=args.root,
-                repo=repo,
-                language=language,
-                stats=cloc_stats,
-            )
-            if args.verbose:
-                print("[cloc] Stats stored in Neo4j")
-        elif args.verbose:
-            print("[cloc] Skipped (cloc not available or failed)")
 
     try:
         if args.dry_run:
