@@ -212,16 +212,21 @@ def _collect_android_events_from_function(function_code: str, function_id: str) 
     return events
 
 
-def _iter_chunks(rows: List[Dict[str, Any]], batch_size: int) -> Iterable[List[Dict[str, Any]]]:
-    for i in range(0, len(rows), batch_size):
-        yield rows[i : i + batch_size]
-
-
-async def _write_batched(driver: Any, database: Optional[str], query: str, rows: List[Dict[str, Any]], batch_size: int) -> None:
+async def _write_batched(
+    writer: LanguageCodeWriter,
+    label: str,
+    query: str,
+    rows: List[Dict[str, Any]],
+    batch_size: int,
+) -> None:
     if not rows:
         return
-    for batch in _iter_chunks(rows, batch_size):
-        await driver.execute_query(query, {"rows": batch}, database)
+    original_batch_size = writer.batch_size
+    writer.batch_size = batch_size
+    try:
+        await writer.write_nodes_batch(label, query, rows)
+    finally:
+        writer.batch_size = original_batch_size
 
 
 def _resolve_class_id(
@@ -445,8 +450,6 @@ async def enrich_android_java_graph(
             "event_relations": len(event_relations),
         }
 
-    driver = code_writer.driver
-    database = code_writer.database
     batch_size = max(1, min(code_writer.batch_size, 1000))
     await code_writer.ensure_schema()
 
@@ -625,8 +628,8 @@ async def enrich_android_java_graph(
         )
 
     await _write_batched(
-        driver,
-        database,
+        code_writer,
+        "android-java:directories",
         """
         UNWIND $rows AS row
         MERGE (d:Directory {id: row.id})
@@ -645,8 +648,8 @@ async def enrich_android_java_graph(
     )
 
     await _write_batched(
-        driver,
-        database,
+        code_writer,
+        "android-java:manifests",
         """
         UNWIND $rows AS row
         MERGE (m:AndroidManifest {id: row.id})
@@ -668,8 +671,8 @@ async def enrich_android_java_graph(
     )
 
     await _write_batched(
-        driver,
-        database,
+        code_writer,
+        "android-java:components",
         """
         UNWIND $rows AS row
         MERGE (c:AndroidComponent {id: row.id})
@@ -702,8 +705,8 @@ async def enrich_android_java_graph(
     )
 
     await _write_batched(
-        driver,
-        database,
+        code_writer,
+        "android-java:intent-actions",
         """
         UNWIND $rows AS row
         MERGE (a:AndroidIntentAction {id: row.id})
@@ -729,8 +732,8 @@ async def enrich_android_java_graph(
     ]
     for relationship_group, rows in group_typed_relations(relation_rows).items():
         await _write_batched(
-            driver,
-            database,
+            code_writer,
+            relationship_group.state_key,
             compile_relationship_upsert(relationship_group),
             rows,
             batch_size,
