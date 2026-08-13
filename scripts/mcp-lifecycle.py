@@ -28,10 +28,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     # ``python scripts/mcp-lifecycle.py`` makes ``scripts/`` the first import
     # root. Add the repository root explicitly so the source package works
-    # before (and independently of) an editable ``pip install -e .``.
+    # before (and independently of) an editable ``uv pip install -e .``.
     sys.path.insert(0, str(ROOT))
-
-from cortex_harness.sync_processes import embedded_falkordb_pids, sync_processes
 
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
@@ -60,6 +58,21 @@ SERVERS = (
         "port": 8789,
     },
 )
+
+
+def sync_processes(*args, **kwargs):
+    """Load the optional process runtime only for commands that need it."""
+    from cortex_harness.sync_processes import sync_processes as discover_sync_processes
+
+    return discover_sync_processes(*args, **kwargs)
+
+
+def embedded_falkordb_pids(*args, **kwargs):
+    """Load psutil-backed discovery lazily so build/help can bootstrap."""
+    from cortex_harness.sync_processes import embedded_falkordb_pids as discover_pids
+
+    return discover_pids(*args, **kwargs)
+
 
 def infra_services() -> tuple[dict[str, object], ...]:
     """Deprecated: retained for one release for compatibility only.
@@ -142,29 +155,46 @@ def venv_python() -> Path:
     return python
 
 
-def install_requirements(python: Path, requirements: Path) -> None:
-    if requirements.is_file():
-        print(f"[build] Installing requirements: {requirements}")
-        run([str(python), "-m", "pip", "install", "-r", str(requirements)])
+def uv_executable() -> str:
+    configured = os.environ.get("UV", "uv")
+    executable = shutil.which(configured)
+    if not executable:
+        raise RuntimeError(
+            f"uv was not found on PATH (configured as {configured!r}). "
+            "Install uv before running make build."
+        )
+    return executable
+
+
+def requirement_files() -> list[Path]:
+    candidates = (
+        ROOT / "requirements.txt",
+        ROOT / "code-tiny" / "requirements.txt",
+        ROOT / "doc-tiny" / "requirements.txt",
+    )
+    return [requirements for requirements in candidates if requirements.is_file()]
 
 
 def invoke_build() -> None:
+    uv = uv_executable()
     if not VENV_DIR.exists():
         launcher = shutil.which("python3") or shutil.which("python")
         if not launcher:
             raise RuntimeError("Python was not found on PATH. Install Python 3.12+ before running make build.")
         print(f"[build] Creating venv: {VENV_DIR}")
-        run([launcher, "-m", "venv", str(VENV_DIR)])
+        run([uv, "venv", "--python", launcher, str(VENV_DIR)])
 
     python = venv_python()
-    print(f"[build] Upgrading pip in {VENV_DIR}")
-    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
-    install_requirements(python, ROOT / "requirements.txt")
-    install_requirements(python, ROOT / "code-tiny" / "requirements.txt")
-    install_requirements(python, ROOT / "doc-tiny" / "requirements.txt")
-    print("[build] Installing editable root package")
-    run([str(python), "-m", "pip", "install", "-e", str(ROOT)])
-    print("[build] Dependency sync complete.")
+    requirements = requirement_files()
+    for requirements_file in requirements:
+        print(f"[build] Including requirements: {requirements_file}")
+    print("[build] Syncing dependencies and editable root package with uv")
+    arguments = [uv, "pip", "install", "--python", str(python)]
+    for requirements_file in requirements:
+        arguments.extend(("--requirements", str(requirements_file)))
+    arguments.extend(("--editable", str(ROOT)))
+    run(arguments)
+    print("[build] Dependency sync complete (uv).")
 
 
 def user_bin_dir() -> Path:
