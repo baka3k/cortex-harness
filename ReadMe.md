@@ -169,6 +169,39 @@ The CLI has **two independent command groups** serving different roles:
 > Use `--change-detection hash` or `--reconcile` for a full content check, `--submodules ignore` to disable recursive submodule coverage, and `--lock-timeout-seconds N` to control same-scope contention.
 > Support: C#, C/C++, Java, JavaScript, Kotlin, PHP, PL/SQL, Swift, TypeScript, Android Kotlin, Android Java, Python, Go, Perl 5 (`.pl`, `.pm`, `.t`), Rust, Delphi
 
+#### Graph and embedding phases
+
+`dev sync code` uses `--sync-mode both` by default. In this mode it writes the
+primary graph and framework overlays first, runs `project_topology`, and only
+then writes embeddings to Qdrant. This guarantees that graph and module
+topology queries are available without waiting for embedding to finish.
+
+| Mode | Runs | Storage isolation |
+| --- | --- | --- |
+| `both` | Graph, framework overlays, topology, then embedding | Normal incremental sync is supported |
+| `graph` | Graph, framework overlays, and topology only | Does not open or write Qdrant |
+| `embedding` | Embedding only | Does not open or mutate the graph database |
+
+```bash
+# Full graph + embedding pipeline
+dev sync code --full-scan --sync-mode both
+
+# Rebuild graph and project topology only
+dev sync code --full-scan --sync-mode graph
+
+# Rebuild embeddings only
+dev sync code --full-scan --sync-mode embedding
+
+# Graph-only full scan for every configured source root
+dev sync code --full-scan --sync-mode graph all
+```
+
+The specialized `graph` and `embedding` modes require `--full-scan`. They do
+not replace the shared incremental baseline; use the default `both` mode for
+normal incremental synchronization. If embedding fails in `both` mode after
+topology succeeds, the graph/topology result remains persisted and the command
+returns a non-zero status with separate phase results.
+
 ### Sync — Documentation
 
 | Command | Description |
