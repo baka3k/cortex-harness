@@ -236,16 +236,20 @@ class MakeLifecycleTests(unittest.TestCase):
 
             with mock.patch.object(LIFECYCLE, "STATE_DIR", state_dir), mock.patch.object(
                 LIFECYCLE, "PID_FILE", pid_file
-            ), mock.patch.object(LIFECYCLE, "invoke_stop"), mock.patch.object(
+            ), mock.patch.object(LIFECYCLE, "invoke_stop") as stop, mock.patch.object(
+                LIFECYCLE, "tcp_port_open", return_value=False
+            ), mock.patch.object(
                 LIFECYCLE, "terminal_command", side_effect=fake_terminal_command
             ), mock.patch.object(LIFECYCLE, "run"):
                 LIFECYCLE.invoke_start()
 
+            stop.assert_not_called()
+
             records = json.loads(pid_file.read_text(encoding="utf-8"))
             self.assertEqual([record["name"] for record in records], ["code-tiny", "doc-tiny"])
             for server in LIFECYCLE.SERVERS:
-                launcher = state_dir / f"start-{server['name']}.command"
-                runtime_env = state_dir / f"{server['name']}.active.env"
+                launcher = state_dir / f"start-cortext-{server['name']}.command"
+                runtime_env = state_dir / f"cortext-{server['name']}.active.env"
                 self.assertTrue(launcher.is_file())
                 self.assertTrue(runtime_env.is_file())
                 content = launcher.read_text(encoding="utf-8")
@@ -264,6 +268,187 @@ class MakeLifecycleTests(unittest.TestCase):
                     f'export {scoped_provider}="${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}"',
                     content,
                 )
+
+    def test_start_uses_nearest_project_dev_config_and_increments_occupied_ports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            project_root = Path(directory) / "project"
+            nested = project_root / "src" / "feature"
+            config_path = project_root / ".cortext-harness" / "config" / "dev.json"
+            config_path.parent.mkdir(parents=True)
+            nested.mkdir(parents=True)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "active": False,
+                        "project": {"code": "SHOP", "name": "Shop"},
+                        "code": {"env": {"FALKORDB_GRAPH": "shop_graph"}},
+                        "doc": {"env": {"FALKORDB_GRAPH": "shop_docs"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (config_path.parent / "prod.json").write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "project": {"code": "WRONG", "name": "Wrong config"},
+                        "code": {"env": {"FALKORDB_GRAPH": "wrong_graph"}},
+                        "doc": {"env": {"FALKORDB_GRAPH": "wrong_docs"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state_dir = Path(directory) / "state"
+            pid_file = state_dir / "pids.json"
+            state_dir.mkdir()
+            pid_file.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "code-tiny",
+                            "instance": "LEGACY",
+                            "pid": 101,
+                            "script": str(LIFECYCLE.SERVERS[0]["script"]),
+                            "port": 8788,
+                            "graph": "legacy_graph",
+                        },
+                        {
+                            "name": "doc-tiny",
+                            "instance": "LEGACY",
+                            "pid": 202,
+                            "script": str(LIFECYCLE.SERVERS[1]["script"]),
+                            "port": 8789,
+                            "graph": "legacy_docs",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_terminal_command(wrapper):
+                state_name = wrapper.stem.removeprefix("start-")
+                (state_dir / f"{state_name}.pid").write_text("12345", encoding="utf-8")
+                return ["true"]
+
+            occupied = {8788, 8789}
+            with mock.patch.object(LIFECYCLE, "STATE_DIR", state_dir), mock.patch.object(
+                LIFECYCLE, "PID_FILE", pid_file
+            ), mock.patch.object(LIFECYCLE, "invoke_stop") as stop, mock.patch.object(
+                LIFECYCLE.Path, "cwd", return_value=nested
+            ), mock.patch.object(
+                LIFECYCLE, "tcp_port_open", side_effect=lambda _host, port: port in occupied
+            ), mock.patch.object(
+                LIFECYCLE,
+                "process_table",
+                return_value={
+                    101: (1, f"bash {LIFECYCLE.SERVERS[0]['script']} --port 8788"),
+                    202: (1, f"bash {LIFECYCLE.SERVERS[1]['script']} --port 8789"),
+                },
+            ), mock.patch.object(
+                LIFECYCLE, "terminal_command", side_effect=fake_terminal_command
+            ), mock.patch.object(LIFECYCLE, "run"):
+                LIFECYCLE.invoke_start()
+
+            records = json.loads(pid_file.read_text(encoding="utf-8"))
+            shop_records = [record for record in records if record["instance"] == "SHOP"]
+            self.assertEqual([record["port"] for record in shop_records], [8790, 8791])
+            self.assertEqual([record["graph"] for record in shop_records], ["shop_graph", "shop_docs"])
+            self.assertTrue(all(record["config_path"] == str(config_path) for record in shop_records))
+            self.assertEqual([record["instance"] for record in records[:2]], ["LEGACY", "LEGACY"])
+            stop.assert_not_called()
+            self.assertIn(
+                "--port 8790",
+                (state_dir / "start-SHOP-code-tiny.command").read_text(encoding="utf-8"),
+            )
+
+    def test_start_config_falls_back_to_installation_dev_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                LIFECYCLE.resolve_start_config(Path(directory)),
+                (LIFECYCLE.ROOT, LIFECYCLE.ROOT / ".cortext-harness" / "config" / "dev.json"),
+            )
+
+    def test_running_mcp_instances_include_tracked_and_untracked_ports(self):
+        processes = {
+            101: (1, "/repo/code-tiny/mcp.sh --host 127.0.0.1 --port 8788 --path /mcp"),
+            102: (101, "python /repo/code-tiny/mcp/unified_mcp.py --port 8788"),
+            202: (1, "python /other/doc-tiny/mcp_graph_rag.py --port 8793"),
+        }
+        records = [
+            {
+                "name": "code-tiny",
+                "instance": "SHOP",
+                "pid": 101,
+                "script": "/repo/code-tiny/mcp.sh",
+                "port": 8788,
+                "host": "127.0.0.1",
+                "graph": "shop_graph",
+            }
+        ]
+
+        instances = LIFECYCLE.running_mcp_instances(processes, records)
+
+        self.assertEqual(len(instances), 2)
+        self.assertEqual(instances[0]["graph"], "shop_graph")
+        self.assertEqual(instances[0]["port"], 8788)
+        self.assertEqual(instances[1]["port"], 8793)
+        self.assertEqual(instances[1]["name"], "doc-tiny")
+
+    def test_running_mcp_instances_hydrate_legacy_records_from_active_env(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_dir = Path(directory)
+            (state_dir / "code-tiny.active.env").write_text(
+                "\n".join(
+                    (
+                        "export FALKORDB_GRAPH=legacy_graph",
+                        "export NEO4J_DB=legacy_graph",
+                        "export FALKORDB_PATH=/stores/code/data.rdb",
+                        "export CORTEX_HARNESS_CONFIG_PATH=/projects/shop/.cortext-harness/config/dev.json",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            processes = {101: (1, "/repo/code-tiny/mcp.sh")}
+            records = [{"name": "code-tiny", "pid": 101, "port": 8788}]
+
+            with mock.patch.object(LIFECYCLE, "STATE_DIR", state_dir):
+                instances = LIFECYCLE.running_mcp_instances(processes, records)
+
+        self.assertEqual(instances[0]["graph"], "legacy_graph")
+        self.assertEqual(instances[0]["database_path"], "/stores/code/data.rdb")
+        self.assertEqual(
+            instances[0]["config_path"],
+            "/projects/shop/.cortext-harness/config/dev.json",
+        )
+
+    def test_doctor_formats_each_mcp_as_readable_multiline_block_with_db_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "data.rdb"
+            database.write_bytes(b"x" * 1536)
+            instance = {
+                "name": "code-tiny",
+                "pid": 101,
+                "host": "127.0.0.1",
+                "port": 8788,
+                "path": "/mcp",
+                "graph": "shop_graph",
+                "database_path": str(database),
+                "config_path": "/projects/shop/.cortext-harness/config/dev.json",
+            }
+
+            with mock.patch.object(LIFECYCLE, "doctor_check") as check, mock.patch(
+                "builtins.print"
+            ) as output:
+                LIFECYCLE.doctor_mcp_checks([instance])
+
+        check.assert_called_once_with("mcp instances", True, "1 running", required=False)
+        rendered = "\n".join(call.args[0] for call in output.call_args_list)
+        self.assertIn("code-tiny (pid=101)", rendered)
+        self.assertIn("Endpoint : http://127.0.0.1:8788/mcp", rendered)
+        self.assertIn("Graph    : shop_graph", rendered)
+        self.assertIn(f"DB file  : {database}", rendered)
+        self.assertIn("DB size  : 1.5 KiB", rendered)
+        self.assertIn("Config   : /projects/shop/.cortext-harness/config/dev.json", rendered)
 
     def test_custom_start_creates_one_named_project_instance(self):
         options = LIFECYCLE.start_options(

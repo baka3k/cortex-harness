@@ -1940,8 +1940,9 @@ def cli():
 
 
 def _run_lifecycle(action: str, arguments: Optional[list[str]] = None) -> None:
-    """Run a repository lifecycle action independently of the caller's cwd."""
+    """Run lifecycle code from the install tree while preserving project context."""
     arguments = arguments or []
+    caller_directory = Path.cwd()
     if sys.platform == "win32":
         lifecycle = REPO_ROOT / "scripts" / "mcp-lifecycle.ps1"
         powershell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
@@ -1986,7 +1987,7 @@ def _run_lifecycle(action: str, arguments: Optional[list[str]] = None) -> None:
 
     result = subprocess.run(
         command,
-        cwd=str(REPO_ROOT),
+        cwd=str(caller_directory if action in {"start", "doctor"} else REPO_ROOT),
     )
     if result.returncode:
         raise click.exceptions.Exit(result.returncode)
