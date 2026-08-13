@@ -1104,6 +1104,44 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
     return env
 
 
+def _graph_phase_env(base_env: Dict[str, str]) -> Dict[str, str]:
+    """Return an analyzer environment that cannot open the vector store."""
+
+    env = dict(base_env)
+    # Keep explicit empty sentinels instead of deleting the variables. Primary
+    # analyzers load <root>/.cortext-harness/config/dev.json before parsing
+    # arguments; an absent value would therefore be repopulated from config.
+    for key in (
+        "QDRANT_URL",
+        "QDRANT_PATH",
+        "QDRANT_CODE_PATH",
+        "QDRANT_COLLECTION",
+        "QDRANT_COLLECTION_CODE",
+    ):
+        env[key] = ""
+    return env
+
+
+def _embedding_phase_env(base_env: Dict[str, str]) -> Dict[str, str]:
+    """Return an analyzer environment that cannot open or mutate graph storage."""
+
+    env = dict(base_env)
+    env["CORTEX_DISABLE_GRAPH"] = "1"
+    env["CODE_GRAPH_PROVIDER"] = "neo4j"
+    env["GRAPH_PROVIDER"] = "neo4j"
+    for key in (
+        "FALKORDB_PATH",
+        "FALKORDB_GRAPH",
+        "FALKORDB_DATABASE",
+        "NEO4J_URI",
+        "NEO4J_USER",
+        "NEO4J_PASS",
+        "NEO4J_DB",
+    ):
+        env.pop(key, None)
+    return env
+
+
 def _build_analyzer_cmd(
     *,
     python_bin: str,
@@ -1611,7 +1649,13 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     project_name = args.project_name or project_id
     control_cache_dir = resolve_sync_cache_dir(args.cache_dir, root)
     scope_id = scan_scope_id(project_id, root)
-    graph_ready = False if getattr(args, "no_graph", False) else prepare_graph_args(args)
+    graph_selected = args.sync_mode in {"both", "graph"}
+    embedding_selected = args.sync_mode in {"both", "embedding"}
+    graph_ready = (
+        False
+        if not graph_selected or getattr(args, "no_graph", False)
+        else prepare_graph_args(args)
+    )
     summary_path = args.summary_path or _default_summary_path(cache_dir=control_cache_dir, project_id=project_id, root=root)
     summary: Dict[str, object] = {
         "run_id": run_id,
@@ -1623,6 +1667,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "strict_mode": bool(args.strict),
         "ignore_cache": bool(args.ignore_cache),
         "full_scan": bool(args.full_scan),
+        "sync_mode": args.sync_mode,
         "bootstrap_full_scan": False,
         "started_at": _now_iso(),
         "finished_at": None,
@@ -1635,7 +1680,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "services": {
             "graph_ready": graph_ready,
             "neo4j_ready": graph_ready,
-            "qdrant_ready": bool(args.qdrant_url),
+            "qdrant_ready": bool(args.qdrant_url) and embedding_selected,
             "impact_expansion_used": False,
             "message_sync_enabled": bool(args.sync_messages),
             "message_qdrant_collection": args.message_qdrant_collection or "",
@@ -1646,6 +1691,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "primary_parsers": [],
         "framework_overlays": [],
         "topology_overlays": [],
+        "vector_embeddings": [],
         "state_before": {},
         "state_after": {},
         "dirty_marked": False,
@@ -1802,9 +1848,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
 
         if args.strict:
             missing: List[str] = []
-            if not graph_ready:
+            if graph_selected and not graph_ready:
                 missing.append("graph_store")
-            if not args.qdrant_url:
+            if embedding_selected and not args.qdrant_url:
                 missing.append("qdrant_url")
             if missing:
                 raise RuntimeError(f"strict mode missing required services: {', '.join(missing)}")
@@ -2237,11 +2283,21 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         env = _build_analyzer_env(args)
         env["CORTEX_RUN_ID"] = run_id
         env["CORTEX_CORRELATION_ID"] = correlation_id
+        graph_env = _graph_phase_env(env)
+        embedding_env = _embedding_phase_env(env)
+        run_graph_pass = bool(graph_selected and graph_ready)
+        run_embedding_pass = bool(
+            embedding_selected
+            and (args.qdrant_url or (args.sync_mode == "both" and not run_graph_pass))
+        )
         current_phase = RunPhase.PARSING
         summary["phase"] = current_phase.value
         executed_parsers: List[str] = []
         parser_summaries: List[Dict[str, object]] = []
+        summary["primary_parsers"] = parser_summaries
         for parser, config in ANALYZERS.items():
+            if not run_graph_pass:
+                continue
             if parser not in parser_filter:
                 continue
             # For TS, dynamically pick frontend vs backend analyzer based on project structure.
@@ -2280,15 +2336,11 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 ),
                 "writes_vectors": config.writes_vectors,
                 "seeded_by": list(config.seeded_by),
-                "vector_status": (
-                    "pending" if config.writes_vectors and bool(args.qdrant_url) else "disabled"
-                ),
-                "vector_count": 0 if not args.qdrant_url else None,
-                "message_scan_enabled": bool(args.sync_messages and parser in MESSAGE_ENABLED_PARSERS),
+                "vector_status": "deferred" if run_embedding_pass and config.writes_vectors else "disabled",
+                "vector_count": 0,
+                "message_scan_enabled": False,
                 "ignore_cache": bool(args.ignore_cache),
-                "message_qdrant_collection": (
-                    message_qdrant_collection if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS else ""
-                ),
+                "message_qdrant_collection": "",
             }
             parse_quality_report_path = (
                 os.path.join(parse_quality_artifact_dir, "cplus.json")
@@ -2306,9 +2358,6 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "[impact] parser=%s changed=%d impacted=%d scan=%d deleted=%d"
                 % (parser, len(parser_changed), len(parser_impacted), len(parser_scan), len(parser_deleted))
             )
-            if args.sync_messages and parser not in MESSAGE_ENABLED_PARSERS:
-                print(f"[message] parser={parser} skip (message detector not enabled for this parser)")
-
             if not config.incremental_supported and not args.allow_full_fallback:
                 if parser_auto_mode:
                     print(
@@ -2335,17 +2384,13 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     after_sha=after_sha,
                     changed_manifest=changed_manifest,
                     deleted_manifest=deleted_manifest,
-                    qdrant_collection=str(parser_info["qdrant_collection"]),
-                    message_scan_enabled=bool(args.sync_messages and parser in MESSAGE_ENABLED_PARSERS),
-                    message_output_dir=message_output_dir if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS else None,
-                    message_qdrant_collection=message_qdrant_collection if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS else None,
+                    qdrant_collection=None,
+                    message_scan_enabled=False,
+                    message_output_dir=None,
+                    message_qdrant_collection=None,
                     incremental=True,
                     verbose=args.verbose,
                     ignore_cache=bool(args.ignore_cache),
-                    embed_model=args.embed_model,
-                    embed_device=args.embed_device,
-                    embed_batch_size=args.embed_batch_size,
-                    max_embed_chars=args.max_embed_chars,
                     parse_quality=args.parse_quality,
                     parse_quality_report=parse_quality_report_path,
                     parse_quality_max_files=args.parse_quality_max_files,
@@ -2367,17 +2412,13 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     after_sha=after_sha,
                     changed_manifest=None,
                     deleted_manifest=None,
-                    qdrant_collection=str(parser_info["qdrant_collection"]),
-                    message_scan_enabled=bool(args.sync_messages and parser in MESSAGE_ENABLED_PARSERS),
-                    message_output_dir=message_output_dir if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS else None,
-                    message_qdrant_collection=message_qdrant_collection if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS else None,
+                    qdrant_collection=None,
+                    message_scan_enabled=False,
+                    message_output_dir=None,
+                    message_qdrant_collection=None,
                     incremental=False,
                     verbose=args.verbose,
                     ignore_cache=bool(args.ignore_cache),
-                    embed_model=args.embed_model,
-                    embed_device=args.embed_device,
-                    embed_batch_size=args.embed_batch_size,
-                    max_embed_chars=args.max_embed_chars,
                     parse_quality=args.parse_quality,
                     parse_quality_report=parse_quality_report_path,
                     parse_quality_max_files=args.parse_quality_max_files,
@@ -2387,7 +2428,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     parse_quality_max_bytes=args.parse_quality_max_bytes,
                 )
             parser_info["command"] = cmd
-            parser_env = dict(env)
+            parser_env = dict(graph_env)
             journal_config = None
             if parser_env.get("CORTEX_DISABLE_GRAPH", "").casefold() not in {
                 "1", "true", "yes", "on"
@@ -2427,16 +2468,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             except Exception as exc:
                 parser_info["status"] = "failed"
                 parser_info["error"] = str(exc)
-                if parser_info["vector_status"] == "pending":
-                    parser_info["vector_status"] = "failed"
                 raise
             else:
                 parser_info["status"] = "success"
-                reported_vector_count = _scan_result_vector_count(analyzer_output)
-                if reported_vector_count is not None:
-                    parser_info["vector_count"] = reported_vector_count
-                if parser_info["vector_status"] == "pending":
-                    parser_info["vector_status"] = "success"
                 if parse_quality_report_path and os.path.isfile(parse_quality_report_path):
                     try:
                         with open(parse_quality_report_path, "r", encoding="utf-8") as handle:
@@ -2464,9 +2498,12 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 parser_info["duration_seconds"] = round(time.time() - parser_started, 6)
 
         framework_summaries: List[Dict[str, object]] = []
+        summary["framework_overlays"] = framework_summaries
         for framework, framework_config in sorted(
             FRAMEWORK_ANALYZERS.items(), key=lambda item: (item[1].order, item[0])
         ):
+            if not run_graph_pass:
+                continue
             if framework not in parser_filter:
                 continue
             routed = set(framework_grouped.get(framework, set()))
@@ -2546,7 +2583,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 ignore_cache=bool(args.ignore_cache),
             )
             framework_info["command"] = cmd
-            framework_env = dict(env)
+            framework_env = dict(graph_env)
             if framework_env.get("CORTEX_DISABLE_GRAPH", "").casefold() not in {
                 "1", "true", "yes", "on"
             }:
@@ -2591,7 +2628,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 framework_info["duration_seconds"] = round(time.time() - framework_started, 6)
 
         topology_summaries: List[Dict[str, object]] = []
-        if "project_topology" in parser_filter and (
+        summary["topology_overlays"] = topology_summaries
+        if run_graph_pass and "project_topology" in parser_filter and (
             full_scan
             or topology_changed
             or topology_deleted
@@ -2647,7 +2685,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 ignore_cache=bool(args.ignore_cache),
             )
             topology_info["command"] = cmd
-            topology_env = dict(env)
+            topology_env = dict(graph_env)
             if topology_env.get("CORTEX_DISABLE_GRAPH", "").casefold() not in {
                 "1", "true", "yes", "on"
             }:
@@ -2703,11 +2741,156 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     time.time() - topology_started, 6
                 )
 
-        summary["primary_parsers"] = parser_summaries
+        vector_summaries: List[Dict[str, object]] = []
+        summary["vector_embeddings"] = vector_summaries
+        if run_embedding_pass:
+            print("[embedding] starting graph-disabled primary analyzer pass")
+        for parser, config in ANALYZERS.items():
+            if not run_embedding_pass or parser not in parser_filter or not config.writes_vectors:
+                continue
+            if parser == "ts":
+                config = _resolve_ts_analyzer(root)
+            parser_changed = set(changed_by_parser.get(parser, set()))
+            parser_deleted = set(deleted_by_parser.get(parser, set()))
+            parser_impacted = set(impacted_by_parser.get(parser, set()))
+            parser_scan = parser_changed | parser_impacted
+            if not parser_scan and not parser_deleted:
+                continue
+
+            changed_manifest = os.path.join(
+                manifest_root, f"{parser}_embedding_changed_{artifact_token}.json"
+            )
+            deleted_manifest = os.path.join(
+                manifest_root, f"{parser}_embedding_deleted_{artifact_token}.json"
+            )
+            write_manifest_paths(changed_manifest, parser_scan)
+            write_manifest_paths(deleted_manifest, parser_deleted)
+            collection = _code_collection_name(
+                project_id, root, parser, project_code=args.project_code
+            )
+            vector_info: Dict[str, object] = {
+                "parser": parser,
+                "role": "embedding",
+                "changed": len(parser_changed),
+                "impacted": len(parser_impacted),
+                "scan": len(parser_scan),
+                "deleted": len(parser_deleted),
+                "incremental_supported": bool(config.incremental_supported),
+                "status": "pending",
+                "error": "",
+                "started_at": _now_iso(),
+                "finished_at": None,
+                "duration_seconds": None,
+                "changed_manifest": changed_manifest,
+                "deleted_manifest": deleted_manifest,
+                "qdrant_collection": collection,
+                "writes_vectors": True,
+                "vector_status": "pending" if args.qdrant_url else "disabled",
+                "vector_count": None if args.qdrant_url else 0,
+                "graph_status": "disabled",
+                "message_scan_enabled": bool(
+                    args.sync_messages and parser in MESSAGE_ENABLED_PARSERS
+                ),
+                "ignore_cache": bool(args.ignore_cache),
+                "message_qdrant_collection": (
+                    message_qdrant_collection
+                    if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS
+                    else ""
+                ),
+            }
+            vector_summaries.append(vector_info)
+            vector_started = time.time()
+            if not config.incremental_supported and not args.allow_full_fallback:
+                if parser_auto_mode:
+                    vector_info["status"] = "skipped"
+                    vector_info["vector_status"] = "skipped"
+                    vector_info["finished_at"] = _now_iso()
+                    vector_info["duration_seconds"] = round(
+                        time.time() - vector_started, 6
+                    )
+                    continue
+                raise RuntimeError(
+                    f"parser '{parser}' has no incremental mode yet; rerun with --allow-full-fallback or exclude parser."
+                )
+
+            run_incrementally = bool(config.incremental_supported and not full_scan)
+            cmd = _build_analyzer_cmd(
+                python_bin=args.python_bin,
+                analyzer=config,
+                root=root,
+                project_id=project_id,
+                project_name=project_name,
+                before_sha=before_sha,
+                after_sha=after_sha,
+                changed_manifest=changed_manifest if run_incrementally else None,
+                deleted_manifest=deleted_manifest if run_incrementally else None,
+                qdrant_collection=collection if args.qdrant_url else None,
+                message_scan_enabled=bool(
+                    args.sync_messages and parser in MESSAGE_ENABLED_PARSERS
+                ),
+                message_output_dir=(
+                    message_output_dir
+                    if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS
+                    else None
+                ),
+                message_qdrant_collection=(
+                    message_qdrant_collection
+                    if args.sync_messages and parser in MESSAGE_ENABLED_PARSERS
+                    else None
+                ),
+                incremental=run_incrementally,
+                verbose=args.verbose,
+                ignore_cache=bool(args.ignore_cache),
+                embed_model=args.embed_model,
+                embed_device=args.embed_device,
+                embed_batch_size=args.embed_batch_size,
+                max_embed_chars=args.max_embed_chars,
+                parse_quality="off",
+            )
+            vector_info["command"] = cmd
+            try:
+                analyzer_output = _run(
+                    cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=dict(embedding_env)
+                )
+            except Exception as exc:
+                vector_info["status"] = "failed"
+                vector_info["vector_status"] = "failed"
+                vector_info["error"] = str(exc)
+                for parser_info in parser_summaries:
+                    if parser_info.get("parser") == parser:
+                        parser_info["vector_status"] = "failed"
+                raise
+            else:
+                vector_info["status"] = "success"
+                if args.qdrant_url:
+                    vector_info["vector_status"] = "success"
+                reported_vector_count = _scan_result_vector_count(analyzer_output)
+                if reported_vector_count is not None:
+                    vector_info["vector_count"] = reported_vector_count
+                for parser_info in parser_summaries:
+                    if parser_info.get("parser") == parser:
+                        parser_info["vector_status"] = vector_info["vector_status"]
+                        parser_info["vector_count"] = vector_info["vector_count"]
+                executed_parsers.append(f"{parser}:embedding")
+            finally:
+                vector_info["finished_at"] = _now_iso()
+                vector_info["duration_seconds"] = round(
+                    time.time() - vector_started, 6
+                )
+
+        summary["primary_parsers"] = (
+            vector_summaries
+            if args.sync_mode == "both" and not run_graph_pass
+            else parser_summaries
+        )
         summary["framework_overlays"] = framework_summaries
         summary["topology_overlays"] = topology_summaries
+        summary["vector_embeddings"] = vector_summaries
         summary["parsers"] = (
-            parser_summaries + framework_summaries + topology_summaries
+            parser_summaries
+            + framework_summaries
+            + topology_summaries
+            + vector_summaries
         )
         current_phase = RunPhase.VERIFYING_GENERATION
         summary["phase"] = current_phase.value
@@ -2735,27 +2918,46 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             raise SourceChangedError("source file set changed during scan")
         current_phase = RunPhase.PUBLISHING
         summary["phase"] = current_phase.value
-        inventory_path = write_inventory_generation(control_cache_dir, current_inventory)
-        mark_clean(
-            state_path,
-            state,
-            last_good_sha=after_sha if root_after_sha else state.last_good_sha,
-            before_sha=before_sha,
-            after_sha=after_sha,
-            snapshot_id=current_inventory.snapshot_id,
-            inventory_path=inventory_path,
-            repositories=repository_state,
-            working_tree_paths=sorted(working_tree_paths),
-        )
-        summary["state_after"] = {
-            "dirty": False,
-            "last_good_sha": state.last_good_sha,
-            "snapshot_id": current_inventory.snapshot_id,
-            "inventory_path": inventory_path,
-            "last_error": "",
-            "last_run_before": before_sha,
-            "last_run_after": after_sha,
-        }
+        if args.sync_mode == "both":
+            inventory_path = write_inventory_generation(
+                control_cache_dir, current_inventory
+            )
+            mark_clean(
+                state_path,
+                state,
+                last_good_sha=after_sha if root_after_sha else state.last_good_sha,
+                before_sha=before_sha,
+                after_sha=after_sha,
+                snapshot_id=current_inventory.snapshot_id,
+                inventory_path=inventory_path,
+                repositories=repository_state,
+                working_tree_paths=sorted(working_tree_paths),
+            )
+            summary["state_after"] = {
+                "dirty": False,
+                "last_good_sha": state.last_good_sha,
+                "snapshot_id": current_inventory.snapshot_id,
+                "inventory_path": inventory_path,
+                "last_error": "",
+                "last_run_before": before_sha,
+                "last_run_after": after_sha,
+                "baseline_advanced": True,
+            }
+        else:
+            summary["state_after"] = {
+                "dirty": bool(state.dirty),
+                "last_good_sha": state.last_good_sha,
+                "snapshot_id": state.snapshot_id,
+                "inventory_path": state.inventory_path,
+                "last_error": state.last_error,
+                "last_run_before": state.last_run_before,
+                "last_run_after": state.last_run_after,
+                "baseline_advanced": False,
+            }
+            print(
+                f"[state] {args.sync_mode}-only full scan completed; "
+                "shared incremental baseline preserved"
+            )
         summary["status"] = "success"
         summary["outcome"] = "partial_coverage" if topology_warnings else "scanned"
         print(
@@ -3018,6 +3220,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Scan all files from scratch (ignore git state / last_good_sha). Equivalent to diffing against an empty tree.",
     )
     parser.add_argument(
+        "--sync-mode",
+        choices=("both", "graph", "embedding"),
+        default="both",
+        help=(
+            "Storage stages to run: both (graph/topology then embeddings), "
+            "graph only, or embedding only. Specialized modes require --full-scan."
+        ),
+    )
+    parser.add_argument(
         "--parse-quality",
         choices=("off", "report", "repair"),
         default=os.environ.get("PARSE_QUALITY_POLICY", "report"),
@@ -3041,6 +3252,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         args.parse_quality_max_bytes,
     ) <= 0:
         parser.error("parse-quality limits must be positive")
+    if args.sync_mode != "both" and not args.full_scan:
+        parser.error("--sync-mode graph/embedding requires --full-scan")
+    if args.sync_mode == "graph" and args.no_graph:
+        parser.error("--sync-mode graph cannot be combined with --no-graph")
+    if args.sync_mode == "embedding" and not args.qdrant_url:
+        parser.error("--sync-mode embedding requires configured Qdrant storage")
     return args
 
 
