@@ -42,12 +42,13 @@ class DevLifecycleCommandTests(unittest.TestCase):
             cwd=str(REPO_ROOT),
         )
 
-    def test_doctor_dispatches_to_python_on_non_windows(self):
+    def test_doctor_dispatches_to_python_from_caller_directory_on_non_windows(self):
         completed = subprocess.CompletedProcess([], 0)
         with mock.patch("cortex_harness.dev.sys.platform", "linux"), mock.patch(
             "cortex_harness.dev.subprocess.run", return_value=completed
         ) as run:
-            result = self.runner.invoke(cli, ["doctor"])
+            with self.runner.isolated_filesystem() as caller_directory:
+                result = self.runner.invoke(cli, ["doctor"])
 
         self.assertEqual(result.exit_code, 0, result.output)
         run.assert_called_once_with(
@@ -56,7 +57,7 @@ class DevLifecycleCommandTests(unittest.TestCase):
                 str(REPO_ROOT / "scripts" / "mcp-lifecycle.py"),
                 "doctor",
             ],
-            cwd=str(REPO_ROOT),
+            cwd=str(Path(caller_directory).resolve()),
         )
 
     def test_start_matches_make_start_from_any_directory(self):
@@ -64,7 +65,7 @@ class DevLifecycleCommandTests(unittest.TestCase):
         with mock.patch("cortex_harness.dev.sys.platform", "darwin"), mock.patch(
             "cortex_harness.dev.subprocess.run", return_value=completed
         ) as run:
-            with self.runner.isolated_filesystem():
+            with self.runner.isolated_filesystem() as caller_directory:
                 result = self.runner.invoke(cli, ["start"])
 
         self.assertEqual(result.exit_code, 0, result.output)
@@ -74,7 +75,7 @@ class DevLifecycleCommandTests(unittest.TestCase):
                 str(REPO_ROOT / "scripts" / "mcp-lifecycle.py"),
                 "start",
             ],
-            cwd=str(REPO_ROOT),
+            cwd=str(Path(caller_directory).resolve()),
         )
 
     def test_custom_start_forwards_named_project_options(self):
