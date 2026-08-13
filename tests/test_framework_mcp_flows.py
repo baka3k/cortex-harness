@@ -115,7 +115,7 @@ class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
                 backend, "_list_databases", new=AsyncMock(return_value=["alpha", "beta"]),
             ), patch.object(backend, "_run_cypher", side_effect=fake_run):
                 used_db, rows = await backend._run_cypher_first(
-                    "RETURN 1", {}, ["alpha", "beta"],
+                    "RETURN 1", {}, ["alpha"],
                 )
                 self.assertEqual(used_db, "alpha")
                 self.assertEqual(calls, ["alpha", "beta"])
@@ -223,6 +223,25 @@ class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
             candidates = unified_mcp.cplus_backend._resolve_db_candidates(None)
 
         self.assertEqual(candidates, ["shared_graph", "beta_graph"])
+
+    def test_unregistered_project_candidate_never_falls_back_across_backends(self):
+        backends = (
+            unified_mcp.cplus_backend,
+            unified_mcp.android_backend,
+            unified_mcp.fast_backend,
+            java_mcp,
+        )
+        project_id = "new-project"
+        for backend in backends:
+            with self.subTest(backend=backend.__name__), patch.object(
+                backend,
+                "resolve_project_targets",
+                side_effect=backend.ProjectNotRegisteredError(project_id, []),
+            ), patch.object(backend, "DEFAULT_GRAPH_DB", "another-project"):
+                self.assertEqual(
+                    backend._resolve_db_candidates(project_id),
+                    [project_id],
+                )
 
     async def test_api_chain_supports_endpoint_directions_servlet_bridge_and_mybatis_tables(self):
         captured = {}

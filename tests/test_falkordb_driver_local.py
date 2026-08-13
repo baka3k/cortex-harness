@@ -135,6 +135,54 @@ def test_driver_close_handles_exceptions(tmp_path: Path) -> None:
     driver.close()  # must not raise
 
 
+def test_driver_routes_graphs_to_sibling_instance_files(tmp_path: Path) -> None:
+    primary_path = tmp_path / "v1" / "instances" / "default" / "falkordb" / "code" / "data.rdb"
+    sibling_path = tmp_path / "v1" / "instances" / "other" / "falkordb" / "code" / "data.rdb"
+    primary_path.parent.mkdir(parents=True)
+    sibling_path.parent.mkdir(parents=True)
+    primary_path.touch()
+    sibling_path.touch()
+
+    class _Client:
+        def __init__(self, graph_name: str) -> None:
+            self.graph_name = graph_name
+            self.graph = object()
+            self.closed = False
+
+        def list_graphs(self) -> list[str]:
+            return [self.graph_name]
+
+        def select_graph(self, name: str) -> object:
+            assert name == self.graph_name
+            return self.graph
+
+        def close(self) -> None:
+            self.closed = True
+
+    primary_client = _Client("cortext")
+    sibling_client = _Client("hyperpack")
+
+    def open_client(path: Path) -> _Client:
+        return primary_client if Path(path).resolve() == primary_path.resolve() else sibling_client
+
+    with patch(
+        "tools.graph.driver.falkordb_driver._open_local_falkordb",
+        side_effect=open_client,
+    ):
+        driver = FalkorDBDriver(
+            path=primary_path,
+            graph="cortext",
+            owner_id="code",
+            additional_paths=[sibling_path],
+        )
+        assert asyncio.run(driver.list_databases()) == ["cortext", "hyperpack"]
+        assert driver._graph_for("hyperpack") is sibling_client.graph
+        driver.close()
+
+    assert primary_client.closed is True
+    assert sibling_client.closed is True
+
+
 def test_real_falkordblite_persists_and_isolates_graphs(tmp_path: Path) -> None:
     pytest.importorskip("redislite.falkordb_client")
     rdb = tmp_path / "owner" / "data.rdb"
@@ -155,6 +203,39 @@ def test_real_falkordblite_persists_and_isolates_graphs(tmp_path: Path) -> None:
     records, _, _ = other_graph.execute_query_sync("MATCH (n:Probe) RETURN count(n) AS count")
     assert records == [{"count": 0}]
     other_graph.close()
+
+
+def test_real_falkordblite_routes_queries_across_instance_files(tmp_path: Path) -> None:
+    pytest.importorskip("redislite.falkordb_client")
+    primary_path = tmp_path / "v1" / "instances" / "default" / "falkordb" / "code" / "data.rdb"
+    sibling_path = tmp_path / "v1" / "instances" / "other" / "falkordb" / "code" / "data.rdb"
+
+    primary = FalkorDBDriver(path=primary_path, graph="alpha", owner_id="code")
+    primary.execute_query_sync("CREATE (:Probe {id: $id})", {"id": "alpha"})
+    primary.close()
+
+    sibling = FalkorDBDriver(path=sibling_path, graph="beta", owner_id="code")
+    sibling.execute_query_sync("CREATE (:Probe {id: $id})", {"id": "beta"})
+    sibling.close()
+
+    routed = FalkorDBDriver(
+        path=primary_path,
+        graph="alpha",
+        owner_id="code",
+        additional_paths=[sibling_path],
+    )
+    try:
+        assert asyncio.run(routed.list_databases()) == ["alpha", "beta"]
+        alpha_rows, _, _ = routed.execute_query_sync(
+            "MATCH (n:Probe) RETURN n.id AS id", database="alpha"
+        )
+        beta_rows, _, _ = routed.execute_query_sync(
+            "MATCH (n:Probe) RETURN n.id AS id", database="beta"
+        )
+        assert alpha_rows == [{"id": "alpha"}]
+        assert beta_rows == [{"id": "beta"}]
+    finally:
+        routed.close()
 
 
 def test_real_falkordblite_relationship_plan_uses_both_indexes(tmp_path: Path) -> None:

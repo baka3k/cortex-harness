@@ -159,6 +159,7 @@ async def _make_graph_driver(
 
         if use_falkor:
             from cortex_harness.storage import resolve_storage
+            from falkordb_discovery import discover_falkordb_data_files
 
             config = {
                 "path": os.environ.get("FALKORDB_PATH")
@@ -167,6 +168,7 @@ async def _make_graph_driver(
                 "graph": database,
                 "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
                 "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+                "additional_paths": discover_falkordb_data_files(),
             }
             return await get_shared_graph_driver(GraphProvider.FALKORDB, config)
 
