@@ -62,12 +62,12 @@ Framework overlays run after their prerequisite primary parser. They write graph
 ### Project topology overlay
 
 `project_topology` is a graph-only, non-exclusive overlay. Auto sync invokes it
-after primary and framework analyzers whenever an allowlisted descriptor
-changes. It statically reads Gradle settings/build files, Maven POMs, Ant,
-CMake, Make, Android manifests/resources, protobuf IDLs, and identity-level
-package/framework descriptors. It never runs build scripts or follows
-descriptor symlinks, bounds file/XML inputs, and redacts secret-bearing
-configuration.
+after primary and framework analyzers, and before embedding, whenever an
+allowlisted descriptor changes. It statically reads Gradle settings/build
+files, Maven POMs, Ant, CMake, Make, Android manifests/resources, protobuf IDLs,
+and identity-level package/framework descriptors. It never runs build scripts
+or follows descriptor symlinks, bounds file/XML inputs, and redacts
+secret-bearing configuration.
 
 On an affected incremental run, the overlay recomputes the bounded descriptor
 topology and replaces only nodes and relationships marked
@@ -83,11 +83,14 @@ Identity-level entries intentionally do not claim dependency or semantic depth.
 
 ```text
 source files
-  -> primary analyzer
+  -> primary graph pass
      -> FalkorDB or Neo4j graph
-     -> Qdrant primary-language vectors
-  -> detected framework overlays
+  -> detected framework graph overlays
      -> graph-only framework facts
+  -> project_topology
+     -> graph-only module and descriptor facts
+  -> graph-disabled embedding pass
+     -> Qdrant primary-language vectors
   -> unified MCP
      -> semantic seeds + bounded graph expansion
 ```
@@ -133,8 +136,18 @@ dev init C:\projects\digital_key
 dev sync code --project-dir C:\projects\digital_key
 dev sync code --project-dir C:\projects\digital_key all
 dev sync code --project-dir C:\projects\digital_key --full-scan
+dev sync code --project-dir C:\projects\digital_key --full-scan --sync-mode graph
+dev sync code --project-dir C:\projects\digital_key --full-scan --sync-mode embedding
+dev sync code --project-dir C:\projects\digital_key --full-scan --sync-mode both
 dev sync code --project-dir C:\projects\digital_key --change-detection hash --reconcile
 ```
+
+`--sync-mode both` is the default and supports normal incremental sync. Its
+phase order is primary graph, framework graph overlays, `project_topology`, then
+embedding. `--sync-mode graph` rebuilds only graph-backed data and never opens
+Qdrant; `--sync-mode embedding` rebuilds only vectors and never opens or mutates
+the graph database. The two specialized modes require `--full-scan` and preserve
+the shared incremental baseline for a later `both` run.
 
 The old host/port examples below describe the optional legacy remote backend
 and are not the local-runtime quick start. Direct embedded invocation must use
