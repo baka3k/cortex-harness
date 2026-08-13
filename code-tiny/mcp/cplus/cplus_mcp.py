@@ -1170,12 +1170,96 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 async def _list_databases() -> List[str]:
     driver = await _get_graph_driver()
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
-        return await driver.list_databases()
+        # The shared driver is bound to ONE storage instance (the one whose
+        # data.rdb it opened at startup). Other instances exist as sibling
+        # .rdb files under <data_home>/v1/instances/*/falkordb/code/data.rdb
+        # and contribute their own logical graphs. Aggregate them so callers
+        # can see every available graph, not just the ones in the current
+        # CWD-derived instance. The primary driver's graphs come first so
+        # its current graph remains the de-facto default.
+        primary_names = await driver.list_databases()
+        names: List[str] = list(primary_names)
+        seen_paths: set[str] = {str(driver.path.resolve())} if driver.path else set()
+        for path in _discover_falkordb_data_files():
+            resolved = str(Path(path).resolve())
+            if resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            local_names = await _list_graphs_in_file(path)
+            for name in local_names:
+                if name not in names:
+                    names.append(name)
+        if names:
+            return names
+        return primary_names
     records, summary, keys = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
     names: List[str] = []
     for record in records:
         name = record.get("name")
         if isinstance(name, str) and name not in names:
+            names.append(name)
+    return names
+
+
+def _discover_falkordb_data_files() -> List[Path]:
+    """Return every ``data.rdb`` under ``<data_home>/v1/instances/*/falkordb/code``.
+
+    Honours ``CORTEX_DATA_HOME`` so a relocated account home is still scanned.
+    Returns the candidate list as-is; the per-file scan in
+    :func:`_list_graphs_in_file` handles missing files and stale locks so
+    callers get a uniform best-effort result.
+    """
+    data_home_raw = os.environ.get("CORTEX_DATA_HOME")
+    if data_home_raw:
+        data_root = Path(data_home_raw).expanduser()
+    else:
+        data_root = Path.home() / ".cortext-harness"
+    instances_root = data_root / "v1" / "instances"
+    if not instances_root.is_dir():
+        return []
+    files: List[Path] = []
+    for instance_dir in sorted(instances_root.iterdir()):
+        if not instance_dir.is_dir():
+            continue
+        candidate = instance_dir / "falkordb" / "code" / "data.rdb"
+        if not candidate.is_file():
+            continue
+        files.append(candidate)
+    return files
+
+
+async def _list_graphs_in_file(path: Path) -> List[str]:
+    """Open *path* as a lightweight FalkorDBLite client and return its graphs.
+
+    A short-lived redislite client avoids acquiring the embedded store's
+    lease, so this is safe to run alongside the long-lived shared driver
+    pointing at a different instance.
+    """
+    try:
+        from redislite.falkordb_client import FalkorDB
+    except ImportError:
+        return []
+    client = None
+    try:
+        client = FalkorDB(str(path))
+        raw_names = client.list_graphs()
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.debug("Skipping %s during list_databases scan: %s", path, exc)
+        return []
+    finally:
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # pragma: no cover
+                pass
+    names: List[str] = []
+    for name in raw_names:
+        if isinstance(name, bytes):
+            try:
+                name = name.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+        if isinstance(name, str) and name:
             names.append(name)
     return names
 

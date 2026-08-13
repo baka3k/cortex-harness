@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Optional
 
 from tools.graph.core.base import GraphDriver, GraphProvider
 from tools.graph.core.factory import GraphDriverFactory
+
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_graph_provider(value: Optional[str]) -> GraphProvider:
@@ -84,13 +88,33 @@ def apply_project_registry_defaults(args: Namespace) -> Namespace:
     # Lazy import — project_registry pulls project_id_lookup_key, which is
     # safe to import anywhere; this lazy import keeps the CLI module
     # independent of the registry's optional config-loading paths.
-    from tools.common.project_registry import resolve_project_targets
+    from tools.common.project_registry import (
+        ProjectNotRegisteredError,
+        resolve_project_targets,
+    )
 
     try:
-        targets = resolve_project_targets(project_id)
-    except Exception:
-        # Unknown project + no env fallback: leave args untouched so the
-        # downstream code surfaces the registry's own error.
+        targets = resolve_project_targets(project_id, config_dir=_resolve_config_dir(args))
+    except ProjectNotRegisteredError as exc:
+        # The registry could not find this project. Surface the warning so
+        # users running from a sibling repo (or from the wrong CWD) learn
+        # that their config directory does not describe the requested
+        # project. Downstream code still falls back to ``args.project_id``,
+        # but the explicit warning prevents silent misconfiguration.
+        logger.warning(
+            "[graph-cli] project_id %r not registered in discovered config; "
+            "falling back to args.project_id for falkordb-graph. %s",
+            project_id,
+            exc,
+        )
+        return args
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.warning(
+            "[graph-cli] registry lookup for %r failed unexpectedly (%s); "
+            "falling back to args.project_id.",
+            project_id,
+            exc,
+        )
         return args
 
     # Only fill an absent value. Any non-empty graph name is a valid explicit
@@ -106,6 +130,28 @@ def apply_project_registry_defaults(args: Namespace) -> Namespace:
         args.qdrant_collection = targets.code_qdrant_collection
 
     return args
+
+
+def _resolve_config_dir(args: Namespace) -> Optional[Path]:
+    """Pick the registry's config directory using --root when available.
+
+    Walks up from --root so a scan of ``/Users/hieplq1.aip/HyperDev/hyper-pack``
+    finds ``<root>/.cortext-harness/config/*.json`` even when the process
+    CWD lives somewhere unrelated (e.g. ``/Users/hieplq1.aip/AI/cortex-harness``).
+    Falls back to ``None`` so the registry uses its default CWD-based
+    discovery when --root is not supplied.
+    """
+    raw_root = getattr(args, "root", None)
+    if not raw_root:
+        return None
+    root = Path(str(raw_root)).expanduser().resolve()
+    if not root.is_dir():
+        return None
+    for candidate in (root, *root.parents):
+        config_dir = candidate / ".cortext-harness" / "config"
+        if config_dir.is_dir():
+            return config_dir
+    return None
 
 
 def prepare_graph_args(args: Namespace) -> bool:
