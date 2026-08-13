@@ -42,6 +42,7 @@ class ImpactAnalyzer:
             provider = normalize_graph_provider(env_graph_provider())
             if provider == GraphProvider.FALKORDB:
                 from cortex_harness.storage import resolve_storage  # noqa: PLC0415
+                from falkordb_discovery import discover_falkordb_data_files  # noqa: PLC0415
 
                 config = {
                     "path": os.environ.get("FALKORDB_PATH")
@@ -49,6 +50,7 @@ class ImpactAnalyzer:
                     "graph": db,
                     "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
                     "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+                    "additional_paths": discover_falkordb_data_files(),
                 }
             else:
                 uri = os.environ.get("NEO4J_URI", "")
