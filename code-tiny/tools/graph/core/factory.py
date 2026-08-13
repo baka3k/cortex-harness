@@ -112,6 +112,7 @@ class GraphDriverFactory:
                 path=config.get("path"),
                 instance_id=config.get("instance_id"),
                 owner_id=config.get("owner_id"),
+                additional_paths=config.get("additional_paths"),
                 query_timeout_ms=config.get("query_timeout_ms"),
             )
         elif provider == GraphProvider.NEPTUNE:

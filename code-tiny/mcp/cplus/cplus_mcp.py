@@ -45,6 +45,7 @@ from tools.common.project_registry import (
 )
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
+from falkordb_discovery import discover_falkordb_data_files
 from framework_registry import (
     capability_for_parser,
     default_relationships,
@@ -197,6 +198,7 @@ async def _get_graph_driver() -> GraphDriver:
             "graph": DEFAULT_FALKORDB_GRAPH,
             "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
             "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+            "additional_paths": discover_falkordb_data_files(),
         }
         _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
         return _graph_driver
@@ -247,6 +249,19 @@ async def _select_database_name(requested: Optional[str]) -> Optional[str]:
 
 
 def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
+    """Return the ordered list of graph databases a query should target.
+
+    Scoped callers (those that passed an explicit ``project_id``) get back
+    a list anchored on that project — the registered graph when the project
+    is in the registry, or the literal ``project_id`` itself when it is not
+    so out-of-band shards stay reachable. Unscoped callers get the union of
+    every registered project's graph, so an unscoped query fans out across
+    the whole account.
+
+    ``DEFAULT_GRAPH_DB`` is used only when an unscoped registry lookup is
+    empty, allowing the query runner to start and replace that seed with all
+    graphs discovered from storage. It is never a scoped fallback.
+    """
     candidates: List[str] = []
     if project_id and str(project_id).strip():
         try:
@@ -255,20 +270,21 @@ def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
             if graph_name and graph_name not in candidates:
                 candidates.append(graph_name)
         except ProjectNotRegisteredError:
-            pass
+            # Unregistered project: treat the raw id as the graph name so
+            # callers can target a shard not yet registered (e.g. a freshly
+            # created instance whose dev.json hasn't been picked up).
+            if project_id not in candidates:
+                candidates.append(project_id)
     else:
         for registered_project in list_registered_projects():
             targets = resolve_project_targets(registered_project)
             graph_name = _normalize_db_name(targets.code_graph)
             if graph_name and graph_name not in candidates:
                 candidates.append(graph_name)
-
-    # A configured default is a compatibility fallback only. Adding it to a
-    # resolved project list would make scoped queries leak into another graph,
-    # while using only it for an unscoped query would silently skip projects.
-    default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
-    if not candidates and default_db:
-        candidates.append(default_db)
+        if not candidates:
+            default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
+            if default_db:
+                candidates.append(default_db)
     return candidates
 
 
@@ -1111,23 +1127,45 @@ def _unsupported_relationship_result(
 async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
     params = prepare_project_scope_parameters(query, params)
     last_error: Optional[Exception] = None
-    candidates = [db for db in dbs if db]
+    requested = [db for db in dbs if db]
     available = await _list_databases()
+    is_scoped = bool(str(params.get("project_id") or "").strip())
+
     if available:
-        invalid = [db for db in candidates if db not in available]
+        invalid = [db for db in requested if db not in available]
         if invalid:
             logger.warning(
                 "Ignoring unknown database(s): %s. Available: %s",
                 ", ".join(sorted(set(invalid))),
                 ", ".join(available),
             )
-        candidates = [db for db in candidates if db in available]
-        if not candidates:
-            default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
-            if default_db in available:
-                logger.warning("Falling back to default database: %s", default_db)
-                candidates = [default_db]
-    aggregate = len(candidates) > 1 and not str(params.get("project_id") or "").strip()
+
+        if is_scoped:
+            # Scoped queries must hit exactly the databases the caller named.
+            # Unknown shards are an error condition: do not silently fall back
+            # to a default that belongs to another project.
+            candidates = [db for db in requested if db in available]
+            if not candidates:
+                default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
+                raise RuntimeError(
+                    "No database candidates available for scoped query. "
+                    "Database not found. Use list_databases to inspect available DBs "
+                    f"and activate_project(database_name=...) to switch. "
+                    f"Available: {available}. Default: {default_db}."
+                )
+        else:
+            # Unscoped queries fan out across every discovered database. The
+            # caller's ``dbs`` is used as the canonical ordering of preference;
+            # any extra discovered graphs are appended so newly provisioned
+            # instances are picked up without code changes.
+            candidates = [db for db in requested if db in available]
+            for db in available:
+                if db not in candidates:
+                    candidates.append(db)
+    else:
+        candidates = list(requested)
+
+    aggregate = len(candidates) > 1 and not is_scoped
     used_db: Optional[str] = None
     merged: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -1170,96 +1208,12 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 async def _list_databases() -> List[str]:
     driver = await _get_graph_driver()
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
-        # The shared driver is bound to ONE storage instance (the one whose
-        # data.rdb it opened at startup). Other instances exist as sibling
-        # .rdb files under <data_home>/v1/instances/*/falkordb/code/data.rdb
-        # and contribute their own logical graphs. Aggregate them so callers
-        # can see every available graph, not just the ones in the current
-        # CWD-derived instance. The primary driver's graphs come first so
-        # its current graph remains the de-facto default.
-        primary_names = await driver.list_databases()
-        names: List[str] = list(primary_names)
-        seen_paths: set[str] = {str(driver.path.resolve())} if driver.path else set()
-        for path in _discover_falkordb_data_files():
-            resolved = str(Path(path).resolve())
-            if resolved in seen_paths:
-                continue
-            seen_paths.add(resolved)
-            local_names = await _list_graphs_in_file(path)
-            for name in local_names:
-                if name not in names:
-                    names.append(name)
-        if names:
-            return names
-        return primary_names
+        return await driver.list_databases()
     records, summary, keys = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
     names: List[str] = []
     for record in records:
         name = record.get("name")
         if isinstance(name, str) and name not in names:
-            names.append(name)
-    return names
-
-
-def _discover_falkordb_data_files() -> List[Path]:
-    """Return every ``data.rdb`` under ``<data_home>/v1/instances/*/falkordb/code``.
-
-    Honours ``CORTEX_DATA_HOME`` so a relocated account home is still scanned.
-    Returns the candidate list as-is; the per-file scan in
-    :func:`_list_graphs_in_file` handles missing files and stale locks so
-    callers get a uniform best-effort result.
-    """
-    data_home_raw = os.environ.get("CORTEX_DATA_HOME")
-    if data_home_raw:
-        data_root = Path(data_home_raw).expanduser()
-    else:
-        data_root = Path.home() / ".cortext-harness"
-    instances_root = data_root / "v1" / "instances"
-    if not instances_root.is_dir():
-        return []
-    files: List[Path] = []
-    for instance_dir in sorted(instances_root.iterdir()):
-        if not instance_dir.is_dir():
-            continue
-        candidate = instance_dir / "falkordb" / "code" / "data.rdb"
-        if not candidate.is_file():
-            continue
-        files.append(candidate)
-    return files
-
-
-async def _list_graphs_in_file(path: Path) -> List[str]:
-    """Open *path* as a lightweight FalkorDBLite client and return its graphs.
-
-    A short-lived redislite client avoids acquiring the embedded store's
-    lease, so this is safe to run alongside the long-lived shared driver
-    pointing at a different instance.
-    """
-    try:
-        from redislite.falkordb_client import FalkorDB
-    except ImportError:
-        return []
-    client = None
-    try:
-        client = FalkorDB(str(path))
-        raw_names = client.list_graphs()
-    except Exception as exc:  # pragma: no cover - best-effort
-        logger.debug("Skipping %s during list_databases scan: %s", path, exc)
-        return []
-    finally:
-        if client is not None:
-            try:
-                client.close()
-            except Exception:  # pragma: no cover
-                pass
-    names: List[str] = []
-    for name in raw_names:
-        if isinstance(name, bytes):
-            try:
-                name = name.decode("utf-8")
-            except UnicodeDecodeError:
-                continue
-        if isinstance(name, str) and name:
             names.append(name)
     return names
 

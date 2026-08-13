@@ -45,6 +45,7 @@ from tools.common.project_registry import (
 )
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
+from falkordb_discovery import discover_falkordb_data_files
 
 
 def _load_env_file(env_path: str) -> None:
@@ -182,6 +183,7 @@ async def _get_graph_driver() -> GraphDriver:
             "graph": DEFAULT_FALKORDB_GRAPH,
             "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
             "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+            "additional_paths": discover_falkordb_data_files(),
         }
         _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
         return _graph_driver
@@ -240,16 +242,19 @@ def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
             if graph_name and graph_name not in candidates:
                 candidates.append(graph_name)
         except ProjectNotRegisteredError:
-            pass
+            graph_name = _normalize_db_name(str(project_id).strip())
+            if graph_name:
+                candidates.append(graph_name)
     else:
         for registered_project in list_registered_projects():
             targets = resolve_project_targets(registered_project)
             graph_name = _normalize_db_name(targets.code_graph)
             if graph_name and graph_name not in candidates:
                 candidates.append(graph_name)
-    default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
-    if not candidates and default_db:
-        candidates.append(default_db)
+        if not candidates:
+            default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
+            if default_db:
+                candidates.append(default_db)
     return candidates
 
 
@@ -945,23 +950,31 @@ async def _resolve_trace_rel_types(
 async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) -> Tuple[str, List[Dict[str, Any]]]:
     params = prepare_project_scope_parameters(query, params)
     last_error: Optional[Exception] = None
-    candidates = [db for db in dbs if db]
+    requested = [db for db in dbs if db]
     available = await _list_databases()
+    is_scoped = bool(str(params.get("project_id") or "").strip())
     if available:
-        invalid = [db for db in candidates if db not in available]
+        invalid = [db for db in requested if db not in available]
         if invalid:
             logger.warning(
                 "Ignoring unknown database(s): %s. Available: %s",
                 ", ".join(sorted(set(invalid))),
                 ", ".join(available),
             )
-        candidates = [db for db in candidates if db in available]
-        if not candidates:
-            default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
-            if default_db in available:
-                logger.warning("Falling back to default database: %s", default_db)
-                candidates = [default_db]
-    aggregate = len(candidates) > 1 and not str(params.get("project_id") or "").strip()
+        if is_scoped:
+            candidates = [db for db in requested if db in available]
+            if not candidates:
+                raise RuntimeError("No database candidates available for scoped query")
+        else:
+            candidates = [db for db in requested if db in available]
+            candidates.extend(db for db in available if db not in candidates)
+    else:
+        candidates = list(requested)
+    if not candidates and not is_scoped:
+        default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
+        if default_db:
+            candidates = [default_db]
+    aggregate = len(candidates) > 1 and not is_scoped
     used_db: Optional[str] = None
     merged: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -1003,7 +1016,15 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 
 async def _list_databases() -> List[str]:
     driver = await _get_graph_driver()
-    return await driver.list_databases()
+    if DEFAULT_GRAPH_PROVIDER == "falkordb":
+        return await driver.list_databases()
+    records, _, _ = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
+    names: List[str] = []
+    for record in records:
+        name = record.get("name")
+        if isinstance(name, str) and name not in names:
+            names.append(name)
+    return names
 
 
 def _load_ipc_messages_sync() -> List[Dict[str, Any]]:

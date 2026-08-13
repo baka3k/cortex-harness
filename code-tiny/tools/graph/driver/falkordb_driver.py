@@ -31,7 +31,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from tools.graph.core.base import GraphProvider
 from tools.graph.driver.neo4j_driver import Neo4jDriver
 from tools.common.project_scope import prepare_project_scope_parameters
-from cortex_harness.storage.lease import StorageLease
+from cortex_harness.storage.lease import StorageLease, StorageLeaseConflictError
 from cortex_harness.storage.admission import BoundedLane, LaneLimits
 
 
@@ -233,6 +233,9 @@ class FalkorDBDriver(Neo4jDriver):
         self._database = graph or database or "neo4j"
         self._path: Optional[Path] = Path(path).resolve() if path is not None else None
         self._storage_lease: Optional[StorageLease] = None
+        self._additional_clients: List[Any] = []
+        self._additional_storage_leases: List[StorageLease] = []
+        self._graph_clients: Dict[str, Any] = {}
         self._query_lane = BoundedLane(
             "falkordb-query", LaneLimits(concurrency=1, max_queue_items=32)
         )
@@ -259,12 +262,21 @@ class FalkorDBDriver(Neo4jDriver):
                 stacklevel=2,
             )
 
+        storage_instance_id = str(
+            kwargs.pop("instance_id", None)
+            or os.getenv("CORTEX_STORAGE_INSTANCE", "default")
+        )
+        storage_owner_id = str(
+            kwargs.pop("owner_id", None)
+            or os.getenv("CORTEX_STORAGE_OWNER", "code")
+        )
+
         # Local mode (default): open the embedded FalkorDBLite backend.
         if self._path is not None:
             self._storage_lease = StorageLease(
                 self._path,
-                instance_id=str(kwargs.pop("instance_id", None) or os.getenv("CORTEX_STORAGE_INSTANCE", "default")),
-                owner_id=str(kwargs.pop("owner_id", None) or os.getenv("CORTEX_STORAGE_OWNER", "code")),
+                instance_id=storage_instance_id,
+                owner_id=storage_owner_id,
                 backend="falkordb",
             ).acquire()
             try:
@@ -273,6 +285,11 @@ class FalkorDBDriver(Neo4jDriver):
                 self._storage_lease.release()
                 self._storage_lease = None
                 raise
+            self._register_client_graphs(self._client)
+            self._open_additional_local_clients(
+                kwargs.pop("additional_paths", ()) or (),
+                owner_id=storage_owner_id,
+            )
         else:
             # Legacy network fallback. Kept for one release so existing tests
             # that construct a network-style driver without a path keep
@@ -328,6 +345,71 @@ class FalkorDBDriver(Neo4jDriver):
 
         self._graph = self._client.select_graph(self._database)
 
+    def _register_client_graphs(self, client: Any) -> List[str]:
+        names: List[str] = []
+        try:
+            raw_names = client.list_graphs()
+        except Exception as exc:
+            logger.warning("Failed to list FalkorDB graphs: %s", exc)
+            return names
+        for name in raw_names:
+            if isinstance(name, bytes):
+                try:
+                    name = name.decode("utf-8")
+                except UnicodeDecodeError:
+                    logger.warning("Ignoring non-UTF-8 FalkorDB graph name")
+                    continue
+            if isinstance(name, str) and name:
+                names.append(name)
+                self._graph_clients.setdefault(name, client)
+        return names
+
+    def _open_additional_local_clients(
+        self,
+        paths: Any,
+        *,
+        owner_id: str,
+    ) -> None:
+        """Own and index sibling embedded stores for cross-instance reads.
+
+        Each sibling is protected by the same application lease as the
+        primary store. If another process already owns it, this driver skips
+        that store instead of bypassing the lease with a raw short-lived
+        client. The primary file wins when duplicate graph names exist.
+        """
+        if self._path is None:
+            return
+        primary = self._path.resolve()
+        seen = {primary}
+        for raw_path in paths:
+            candidate = Path(raw_path).expanduser().resolve()
+            if candidate in seen or not candidate.is_file():
+                continue
+            seen.add(candidate)
+            try:
+                instance_id = candidate.parents[2].name
+            except IndexError:
+                instance_id = "default"
+            lease = StorageLease(
+                candidate,
+                instance_id=instance_id,
+                owner_id=owner_id,
+                backend="falkordb",
+            )
+            try:
+                lease.acquire()
+                client = _open_local_falkordb(candidate)
+            except StorageLeaseConflictError as exc:
+                logger.warning("Skipping owned FalkorDB instance %s: %s", candidate, exc)
+                continue
+            except Exception as exc:
+                lease.release()
+                logger.warning("Skipping unreadable FalkorDB instance %s: %s", candidate, exc)
+                continue
+            self._additional_storage_leases.append(lease)
+            self._additional_clients.append(client)
+            self._register_client_graphs(client)
+
     @property
     def provider(self) -> GraphProvider:
         return GraphProvider.FALKORDB
@@ -365,6 +447,15 @@ class FalkorDBDriver(Neo4jDriver):
                     logger.debug("FalkorDB close() raised: %s", exc)
                 logger.info("FalkorDB connection closed")
         finally:
+            for client in reversed(self._additional_clients):
+                try:
+                    client.close()
+                except Exception as exc:  # pragma: no cover - best-effort close
+                    logger.debug("Additional FalkorDB close() raised: %s", exc)
+            self._additional_clients.clear()
+            for lease in reversed(self._additional_storage_leases):
+                lease.release()
+            self._additional_storage_leases.clear()
             if self._storage_lease is not None:
                 self._storage_lease.release()
                 self._storage_lease = None
@@ -484,6 +575,11 @@ class FalkorDBDriver(Neo4jDriver):
 
     def _graph_for(self, database: Optional[str]) -> Any:
         graph_name = database or self._database
+        client = self._graph_clients.get(graph_name)
+        if client is not None:
+            if client is self._client and graph_name == self._database:
+                return self._graph
+            return client.select_graph(graph_name)
         if graph_name == self._database:
             return self._graph
         return self._client.select_graph(graph_name)
@@ -593,22 +689,12 @@ class FalkorDBDriver(Neo4jDriver):
         return normalized
 
     async def list_databases(self) -> List[str]:
-        try:
-            names = self._client.list_graphs()
-            normalized_names = []
-            for name in names:
-                if isinstance(name, bytes):
-                    try:
-                        name = name.decode("utf-8")
-                    except UnicodeDecodeError:
-                        logger.warning("Ignoring non-UTF-8 FalkorDB graph name")
-                        continue
-                if isinstance(name, str):
+        normalized_names: List[str] = []
+        for client in (self._client, *self._additional_clients):
+            for name in self._register_client_graphs(client):
+                if name not in normalized_names:
                     normalized_names.append(name)
-            return normalized_names or [self._database]
-        except Exception as exc:
-            logger.warning("Failed to list FalkorDB graphs: %s", exc)
-            return [self._database]
+        return normalized_names or [self._database]
 
     async def list_relationship_types(self, database: Optional[str] = None) -> List[str]:
         records, _, _ = await self.execute_query(
