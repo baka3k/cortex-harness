@@ -34,6 +34,16 @@ LOCAL_STORAGE_KEYS = frozenset({
 })
 
 
+def load_config_file(path: Path) -> Tuple[dict, Optional[Path]]:
+    """Load one explicit harness config without applying active-file selection."""
+    path = Path(os.path.abspath(path))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}, None
+    return (payload, path) if isinstance(payload, dict) else ({}, None)
+
+
 def load_active_config(root: Path) -> Tuple[dict, Optional[Path]]:
     """Return the active harness config, falling back to the first config."""
     # Keep the caller-visible lexical path. On macOS /var is a symlink to
@@ -46,11 +56,8 @@ def load_active_config(root: Path) -> Tuple[dict, Optional[Path]]:
 
     first: Optional[Tuple[dict, Path]] = None
     for path in configs:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(payload, dict):
+        payload, loaded_path = load_config_file(path)
+        if loaded_path is None:
             continue
         if first is None:
             first = payload, path
@@ -74,9 +81,14 @@ def _string_environment(value: object) -> Dict[str, str]:
     return result
 
 
-def active_local_storage_config(root: Path) -> Tuple[Dict[str, str], Optional[Path]]:
+def active_local_storage_config(
+    root: Path,
+    config_path: Optional[Path] = None,
+) -> Tuple[Dict[str, str], Optional[Path]]:
     """Return one conflict-checked local-storage config for lifecycle and MCP use."""
-    config, config_path = load_active_config(root)
+    config, config_path = (
+        load_config_file(config_path) if config_path is not None else load_active_config(root)
+    )
     if not config_path:
         return {}, None
     result: Dict[str, str] = {}
@@ -96,9 +108,14 @@ def active_local_storage_config(root: Path) -> Tuple[Dict[str, str], Optional[Pa
     return result, config_path
 
 
-def resolve_active_storage(root: Path, **logical_targets: object):
+def resolve_active_storage(
+    root: Path,
+    *,
+    config_path: Optional[Path] = None,
+    **logical_targets: object,
+):
     """Resolve the active config, with explicit process-local path overrides winning."""
-    local_config, _ = active_local_storage_config(root)
+    local_config, _ = active_local_storage_config(root, config_path)
     for key in LOCAL_STORAGE_KEYS:
         value = os.environ.get(key, "").strip()
         if value:
@@ -106,9 +123,15 @@ def resolve_active_storage(root: Path, **logical_targets: object):
     return resolve_storage(Path(root), config=local_config, **logical_targets)
 
 
-def runtime_environment(root: Path, server_name: str) -> Dict[str, str]:
+def runtime_environment(
+    root: Path,
+    server_name: str,
+    config_path: Optional[Path] = None,
+) -> Dict[str, str]:
     """Build the active project overlay for ``code-tiny`` or ``doc-tiny``."""
-    config, config_path = load_active_config(root)
+    config, config_path = (
+        load_config_file(config_path) if config_path is not None else load_active_config(root)
+    )
     if not config_path:
         return {}
 
@@ -149,7 +172,7 @@ def runtime_environment(root: Path, server_name: str) -> Dict[str, str]:
             or (f"{project_id}_doc" if project_id else "default_doc")
         ).strip()
         resolved = resolve_active_storage(
-            Path(root), code_graph=graph, doc_graph=doc_graph,
+            Path(root), config_path=config_path, code_graph=graph, doc_graph=doc_graph,
             code_collection=code_collection, doc_collection=doc_collection,
         )
         role = StorageRole.DOCUMENT if section_name == "doc" else StorageRole.CODE

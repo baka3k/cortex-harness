@@ -34,6 +34,7 @@ if str(ROOT) not in sys.path:
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
 VENV_DIR = ROOT / ".venv"
+DEV_CONFIG = Path(".cortext-harness") / "config" / "dev.json"
 
 PYTHON_DEPENDENCY_PROBE = (
     "import qdrant_client, requests; "
@@ -94,11 +95,11 @@ USAGE = """Usage (equivalent forms):
   make storage-init                 Create the canonical instance tree and manifest.
   make storage-migrate-layout       Dry-run legacy repository-local migration.
   make storage-backup               Create a verified owner backup (OWNER=code|doc).
-  make doctor      | dev doctor      Check local Python storage runtime, paths, and MCP ports.
+  make doctor      | dev doctor      Check local storage and list every running Cortex MCP.
                                       Also reports active code/doc sync workers.
   make sync code stop                Stop code sync workers and descendants.
   make sync doc stop                 Stop document sync workers and descendants.
-  make start       | dev start       Open each MCP server in a separate terminal window.
+  make start       | dev start       Load the nearest project dev.json and open both MCPs.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
 
 Parameterized MCP instances:
@@ -108,7 +109,7 @@ Parameterized MCP instances:
   make start START_ARGS="--server code --name shop --project SHOP --port 8790"
   make stop STOP_ARGS="--name shop"
 
-Default MCP servers:
+Default MCP ports (occupied ports are advanced automatically):
   code-tiny  http://127.0.0.1:8788/mcp
   doc-tiny   http://127.0.0.1:8789/mcp
 
@@ -120,9 +121,29 @@ Default local storage:
 """
 
 INSTANCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+MCP_PROCESS_MARKERS = (
+    "code-tiny/mcp.sh",
+    "doc-tiny/mcp.sh",
+    "mcp/unified_mcp.py",
+    "mcp_graph_rag.py",
+)
+RUNTIME_METADATA_KEYS = frozenset(
+    {
+        "FALKORDB_GRAPH",
+        "NEO4J_DB",
+        "FALKORDB_PATH",
+        "FALKORDB_CODE_PATH",
+        "FALKORDB_DOC_PATH",
+        "CORTEX_HARNESS_CONFIG_PATH",
+    }
+)
 
 
-def runtime_environment(root: Path, server_name: str) -> dict[str, str]:
+def runtime_environment(
+    root: Path,
+    server_name: str,
+    config_path: Path | None = None,
+) -> dict[str, str]:
     """Load runtime configuration only for start operations.
 
     Keeping this import lazy lets `make help` and other bootstrap commands run
@@ -130,7 +151,7 @@ def runtime_environment(root: Path, server_name: str) -> dict[str, str]:
     """
     from mcp_runtime_config import runtime_environment as resolve_runtime_environment
 
-    return resolve_runtime_environment(root, server_name)
+    return resolve_runtime_environment(root, server_name, config_path)
 
 
 def format_bash_exports(environment: dict[str, str]) -> str:
@@ -494,6 +515,52 @@ def doctor_process_checks(resolved: object | None) -> None:
         )
 
 
+def human_file_size(path_value: object) -> str:
+    if not path_value:
+        return "unknown"
+    try:
+        size = Path(str(path_value)).stat().st_size
+    except FileNotFoundError:
+        return "not created"
+    except OSError:
+        return "unknown"
+
+    value = float(size)
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            return f"{int(value)} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def doctor_mcp_checks(instances: list[dict[str, object]] | None = None) -> None:
+    instances = running_mcp_instances() if instances is None else instances
+    if not instances:
+        doctor_check("mcp instances", False, "none running", required=False)
+        return
+
+    doctor_check("mcp instances", True, f"{len(instances)} running", required=False)
+    for index, instance in enumerate(instances):
+        if index:
+            print("[doctor]")
+        endpoint = (
+            f"http://{instance.get('host', '127.0.0.1')}:"
+            f"{instance.get('port') or '?'}{instance.get('path', '/mcp')}"
+        )
+        print(f"[doctor]   {instance.get('name', 'mcp')} (pid={instance['pid']})")
+        print(f"[doctor]     Endpoint : {endpoint}")
+        print(f"[doctor]     Graph    : {instance.get('graph') or 'unknown'}")
+        database_path = instance.get("database_path")
+        if database_path:
+            print(f"[doctor]     DB file  : {database_path}")
+            print(f"[doctor]     DB size  : {human_file_size(database_path)}")
+        else:
+            print(f"[doctor]     Database : {instance.get('database') or 'unknown'}")
+            print("[doctor]     DB size  : unavailable")
+        print(f"[doctor]     Config   : {instance.get('config_path') or 'unknown'}")
+
+
 def invoke_doctor() -> None:
     failures = 0
     resolved = None
@@ -601,13 +668,7 @@ def invoke_doctor() -> None:
         except Exception as error:
             failures += doctor_check("falkordblite round-trip", False, str(error))
 
-    for server in SERVERS:
-        doctor_check(
-            f"{server['name']} mcp",
-            tcp_port_open("127.0.0.1", int(server["port"])),
-            f"127.0.0.1:{server['port']}",
-            required=False,
-        )
+    doctor_mcp_checks()
 
     if failures:
         raise RuntimeError(_color(f"Doctor found {failures} required check(s) failing.", "red"))
@@ -615,6 +676,19 @@ def invoke_doctor() -> None:
 
 
 def process_table() -> dict[int, tuple[int, str]]:
+    if os.name == "nt":
+        try:
+            import psutil
+
+            return {
+                int(process.info["pid"]): (
+                    int(process.info.get("ppid") or 0),
+                    subprocess.list2cmdline(process.info.get("cmdline") or []),
+                )
+                for process in psutil.process_iter(["pid", "ppid", "cmdline"])
+            }
+        except (ImportError, OSError):
+            return {}
     result = run(["ps", "-axo", "pid=,ppid=,command="], capture=True)
     processes: dict[int, tuple[int, str]] = {}
     for line in result.stdout.splitlines():
@@ -642,6 +716,162 @@ def read_pid_records() -> list[dict[str, object]]:
     except (json.JSONDecodeError, OSError):
         return []
     return [record for record in payload if isinstance(record, dict)] if isinstance(payload, list) else []
+
+
+def record_pid(record: dict[str, object]) -> int:
+    try:
+        return int(record.get("pid", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_runtime_metadata(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    try:
+        if path.suffix.casefold() == ".json":
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return {}
+            return {
+                key: str(value)
+                for key, value in payload.items()
+                if key in RUNTIME_METADATA_KEYS and value is not None
+            }
+
+        metadata: dict[str, str] = {}
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line.startswith("export "):
+                line = line[7:].strip()
+            key, separator, raw_value = line.partition("=")
+            if not separator or key not in RUNTIME_METADATA_KEYS:
+                continue
+            values = shlex.split(raw_value, posix=True)
+            if len(values) == 1:
+                metadata[key] = values[0]
+        return metadata
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+
+
+def record_runtime_metadata(record: dict[str, object]) -> dict[str, str]:
+    """Resolve graph/file metadata for both current and legacy PID records."""
+    candidates: list[Path] = []
+    for key in ("runtime_env_path", "RuntimeConfig"):
+        value = str(record.get(key) or "").strip()
+        if value:
+            candidates.append(Path(value))
+
+    name = str(record.get("name") or "").strip()
+    instance = str(record.get("instance") or "").strip()
+    if name and instance:
+        candidates.extend(
+            (
+                STATE_DIR / f"{instance}-{name}.active.env",
+                STATE_DIR / f"{instance}-{name}.active.json",
+            )
+        )
+    if name:
+        candidates.extend((STATE_DIR / f"{name}.active.env", STATE_DIR / f"{name}.active.json"))
+
+    values: dict[str, str] = {}
+    for candidate in dict.fromkeys(candidates):
+        for key, value in _read_runtime_metadata(candidate).items():
+            values.setdefault(key, value)
+    graph = values.get("FALKORDB_GRAPH") or values.get("NEO4J_DB")
+    database_path = (
+        values.get("FALKORDB_PATH")
+        or values.get("FALKORDB_CODE_PATH")
+        or values.get("FALKORDB_DOC_PATH")
+    )
+    return {
+        key: value
+        for key, value in {
+            "graph": graph,
+            "database": values.get("NEO4J_DB"),
+            "database_path": database_path,
+            "config_path": values.get("CORTEX_HARNESS_CONFIG_PATH"),
+        }.items()
+        if value
+    }
+
+
+def _process_descendants(pid: int, processes: dict[int, tuple[int, str]]) -> set[int]:
+    descendants: set[int] = set()
+    pending = [pid]
+    while pending:
+        parent = pending.pop()
+        children = [child for child, (ppid, _) in processes.items() if ppid == parent]
+        descendants.update(children)
+        pending.extend(children)
+    return descendants
+
+
+def _command_port(command: str) -> int | None:
+    match = re.search(r"(?:^|\s)--port(?:=|\s+)(\d+)(?:\s|$)", command)
+    return int(match.group(1)) if match else None
+
+
+def _mcp_name_from_command(command: str) -> str:
+    if "doc-tiny" in command or "mcp_graph_rag.py" in command:
+        return "doc-tiny"
+    if "code-tiny" in command or "mcp/unified_mcp.py" in command:
+        return "code-tiny"
+    return "mcp"
+
+
+def running_mcp_instances(
+    processes: dict[int, tuple[int, str]] | None = None,
+    records: list[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    """Return all Cortex MCP processes, merging saved metadata when available."""
+    processes = process_table() if processes is None else processes
+    records = read_pid_records() if records is None else records
+    instances: list[dict[str, object]] = []
+    covered: set[int] = set()
+
+    for record in records:
+        pid = record_pid(record)
+        command = processes.get(pid, (0, ""))[1]
+        if pid <= 1 or not command or not any(marker in command for marker in MCP_PROCESS_MARKERS):
+            continue
+        item = dict(record)
+        for key, value in record_runtime_metadata(record).items():
+            item.setdefault(key, value)
+        item["pid"] = pid
+        item.setdefault("port", _command_port(command))
+        item.setdefault("host", "127.0.0.1")
+        item.setdefault("path", "/mcp")
+        instances.append(item)
+        covered.add(pid)
+        covered.update(_process_descendants(pid, processes))
+
+    untracked = {
+        pid
+        for pid, (_, command) in processes.items()
+        if pid not in covered
+        and pid != os.getpid()
+        and any(marker in command for marker in MCP_PROCESS_MARKERS)
+    }
+    for pid in sorted(untracked):
+        command = processes[pid][1]
+        ancestor = processes.get(pid, (0, ""))[0]
+        while ancestor in processes and ancestor not in untracked:
+            ancestor = processes[ancestor][0]
+        if ancestor in untracked:
+            continue
+        instances.append(
+            {
+                "name": _mcp_name_from_command(command),
+                "pid": pid,
+                "port": _command_port(command),
+                "host": "127.0.0.1",
+                "path": "/mcp",
+            }
+        )
+
+    return sorted(instances, key=lambda item: (int(item.get("port") or 65536), int(item["pid"])))
 
 
 def write_pid_records(records: list[dict[str, object]]) -> None:
@@ -719,6 +949,39 @@ def validate_instance_name(value: str) -> str:
     return value
 
 
+def resolve_start_config(start: Path | None = None) -> tuple[Path, Path]:
+    """Find the nearest project dev.json, then fall back to the install config."""
+    current = (start or Path.cwd()).absolute()
+    if current.is_file():
+        current = current.parent
+    for candidate_root in (current, *current.parents):
+        config_path = candidate_root / DEV_CONFIG
+        if config_path.is_file():
+            return candidate_root, config_path
+    return ROOT, ROOT / DEV_CONFIG
+
+
+def config_instance(environment: dict[str, str]) -> str:
+    raw = (
+        environment.get("PROJECT_ID")
+        or environment.get("CORTEX_STORAGE_INSTANCE")
+        or environment.get("FALKORDB_GRAPH")
+        or "cortext"
+    )
+    normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip("-.")[:64]
+    return validate_instance_name(normalized or "cortext")
+
+
+def next_available_port(host: str, preferred: int, reserved: set[int]) -> int:
+    port = preferred
+    while port in reserved or tcp_port_open(host, port):
+        port += 1
+        if port > 65535:
+            raise RuntimeError(f"No available MCP port at or above {preferred}.")
+    reserved.add(port)
+    return port
+
+
 def selected_servers(options: argparse.Namespace) -> list[dict[str, object]]:
     selected = [dict(server) for server in SERVERS if options.server == "all" or server["name"].startswith(options.server)]
     if options.port is not None and options.server == "all":
@@ -771,37 +1034,76 @@ def runtime_overrides(
 
 def invoke_start(options: argparse.Namespace | None = None) -> None:
     custom = options is not None
+    options = options or start_options([])
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    config_root, config_path = resolve_start_config()
+    if not config_path.is_file():
+        raise RuntimeError(f"MCP config not found: {config_path}")
+
+    servers = selected_servers(options)
+    runtime_environments: dict[str, dict[str, str]] = {}
+    for server in servers:
+        name = str(server["name"])
+        environment = runtime_environment(config_root, name, config_path)
+        runtime_environments[name] = environment
+
     if custom:
         instance = validate_instance_name(options.name or options.project or options.database or options.server)
-        servers = selected_servers(options)
         invoke_stop(instance)
         records = read_pid_records()
         for server in servers:
             if tcp_port_open(options.host, int(server["port"])):
                 raise RuntimeError(f"Port already in use: {options.host}:{server['port']}")
     else:
-        instance = "default"
-        servers = [dict(server) for server in SERVERS]
-        invoke_stop()
-        records = []
+        instance = config_instance(runtime_environments[str(servers[0]["name"])])
+        records = read_pid_records()
+
+    processes = process_table() if records else {}
+    reserved_ports: set[int] = set()
 
     for server in servers:
         script = Path(server["script"])
         if not script.is_file():
             raise RuntimeError(f"MCP script not found: {script}")
-        state_name = f"{instance}-{server['name']}" if custom else str(server["name"])
+        runtime_env = runtime_environments[str(server["name"])]
+        if custom:
+            runtime_env.update(runtime_overrides(options, str(server["name"]), instance, len(servers) > 1))
+
+        graph = runtime_env.get("FALKORDB_GRAPH") or runtime_env.get("NEO4J_DB") or ""
+        existing = next(
+            (
+                record
+                for record in records
+                if not custom
+                and record.get("name") == server["name"]
+                and record.get("graph") == graph
+                and record_pid(record) in processes
+                and any(
+                    marker in processes[record_pid(record)][1]
+                    for marker in MCP_PROCESS_MARKERS
+                )
+            ),
+            None,
+        )
+        if existing is not None:
+            print(
+                f"[start] Reusing {instance}/{server['name']} on "
+                f"{existing.get('host', options.host)}:{existing.get('port')} (graph={graph})"
+            )
+            continue
+
+        if not custom:
+            server["port"] = next_available_port(options.host, int(server["port"]), reserved_ports)
+
+        state_name = f"{instance}-{server['name']}"
         wrapper = STATE_DIR / f"start-{state_name}.command"
         pid_path = STATE_DIR / f"{state_name}.pid"
         runtime_env_path = STATE_DIR / f"{state_name}.active.env"
-        runtime_env = runtime_environment(ROOT, str(server["name"]))
-        if custom:
-            runtime_env.update(runtime_overrides(options, str(server["name"]), instance, len(servers) > 1))
         from cortex_harness.storage import resolve_storage, storage_overlay
 
         owner = "code" if server["name"] == "code-tiny" else "doc"
         storage_config = resolve_storage(
-            ROOT,
+            config_root,
             config=runtime_env,
             instance_id=runtime_env.get("CORTEX_STORAGE_INSTANCE", "default"),
             code_graph=runtime_env.get("FALKORDB_GRAPH") if owner == "code" else None,
@@ -826,21 +1128,17 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
             f"export CORTEX_HARNESS_ENV_FILE={shlex.quote(str(runtime_env_path))}\n"
             f"cd {shlex.quote(str(server['work_dir']))}\n"
             f"exec bash {shlex.quote(str(script))}"
-            + (
-                " "
-                + " ".join(
-                    shlex.quote(value)
-                    for value in (
-                        "--host",
-                        options.host,
-                        "--port",
-                        str(server["port"]),
-                        "--path",
-                        options.path,
-                    )
+            + " "
+            + " ".join(
+                shlex.quote(value)
+                for value in (
+                    "--host",
+                    options.host,
+                    "--port",
+                    str(server["port"]),
+                    "--path",
+                    options.path,
                 )
-                if custom
-                else ""
             )
             + "\n",
             encoding="utf-8",
@@ -854,22 +1152,23 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
         if not pid_path.is_file():
             raise RuntimeError(f"Terminal opened, but {server['name']} did not report its process ID.")
         pid = int(pid_path.read_text(encoding="utf-8"))
-        record = {"name": server["name"], "pid": pid, "script": str(script), "port": server["port"]}
-        if custom:
-            record.update(
-                {
-                    "instance": instance,
-                    "host": options.host,
-                    "path": options.path,
-                    "endpoint": f"http://{options.host}:{server['port']}{options.path}",
-                }
-            )
+        record = {
+            "name": server["name"],
+            "instance": instance,
+            "pid": pid,
+            "script": str(script),
+            "port": server["port"],
+            "host": options.host,
+            "path": options.path,
+            "endpoint": f"http://{options.host}:{server['port']}{options.path}",
+            "graph": graph,
+            "config_path": str(config_path),
+            "runtime_env_path": str(runtime_env_path),
+            "project_id": runtime_env.get("PROJECT_ID", ""),
+        }
         records.append(record)
-        label = f"{instance}/{server['name']}" if custom else str(server["name"])
-        if custom:
-            print(f"[start] Started {label} in terminal PID {pid} on {server['port']}")
-        else:
-            print(f"[start] Started {label} in terminal PID {pid}")
+        label = f"{instance}/{server['name']}"
+        print(f"[start] Started {label} in terminal PID {pid} on {server['port']} (graph={graph})")
 
     write_pid_records(records)
     print("[start] MCP terminals opened. Logs are visible in their own windows.")
