@@ -19,6 +19,7 @@ relatedPlans:
   - 260807-1329-parser-quality-recovery
   - neo4j-to-falkordb-migration
   - 260806-1648-local-file-storage
+  - 260813-2152-code-sync-phase-modes
 ---
 # Graph ingestion write-path hardening
 

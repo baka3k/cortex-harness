@@ -12,6 +12,7 @@ from tools.common.aspnet.identity import stable_digest
 from tools.common.aspnet.models import AnalysisResult
 from tools.common.aspnet.safe_formats import redact_value
 from tools.graph import GraphDriverFactory, GraphProvider, add_require_neo4j_argument, resolve_require_neo4j
+from tools.graph.cli import create_graph_driver_from_args
 from tools.graph.core.provider_runtime import add_graph_provider_arguments
 from tools.graph.writer.aspnet_writer import AspNetFactWriter
 
@@ -154,16 +155,9 @@ async def apply_graph(args: argparse.Namespace, result: AnalysisResult) -> Dict[
 
 async def _create_driver(args: argparse.Namespace):
     if args.graph_provider == "falkordb":
-        driver = await GraphDriverFactory.create_driver(
-            GraphProvider.FALKORDB,
-            {
-                "host": args.falkordb_host,
-                "port": args.falkordb_port,
-                "graph": args.falkordb_graph,
-                "username": args.falkordb_user,
-                "password": args.falkordb_password,
-            },
-        )
+        driver = await create_graph_driver_from_args(args)
+        if driver is None:
+            return None, args.falkordb_graph
         verify = getattr(driver, "verify_connection", None)
         if verify is not None and not await verify():
             closed = driver.close()

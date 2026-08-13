@@ -72,6 +72,33 @@ class AspNetFixtureAnalysisTest(unittest.TestCase):
         self.assertEqual(core.modules, ())
         self.assertEqual(framework.modules, ())
 
+    def test_roslyn_worker_in_analyzer_tooling_does_not_activate_aspnet_core(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            worker = Path(temporary, "tools", "common", "aspnet", "roslyn_worker")
+            worker.mkdir(parents=True)
+            (worker / "AspNetRoslynWorker.csproj").write_text(
+                """<Project Sdk=\"Microsoft.NET.Sdk\">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include=\"Microsoft.CodeAnalysis.CSharp\" Version=\"4.11.0\" />
+    <FrameworkReference Include=\"Microsoft.AspNetCore.App\" />
+  </ItemGroup>
+</Project>""",
+                encoding="utf-8",
+            )
+            (worker / "Program.cs").write_text(
+                "using Microsoft.AspNetCore.Builder; System.Console.WriteLine(1);",
+                encoding="utf-8",
+            )
+
+            result = run_aspnet_core_analysis(
+                root=temporary,
+                project_id="python-typescript-app",
+                semantic_mode="off",
+            )
+
+        self.assertEqual(result.modules, ())
+
     def test_module_incremental_result_matches_full_module_semantics(self) -> None:
         full = run_aspnet_core_analysis(
             root=str(CORE_FIXTURE), project_id="incremental", semantic_mode="off",
