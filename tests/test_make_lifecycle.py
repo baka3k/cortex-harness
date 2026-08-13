@@ -38,6 +38,14 @@ class MakeLifecycleTests(unittest.TestCase):
             spec.loader.exec_module(module)
             self.assertIn(str(ROOT), sys.path)
 
+    def test_lifecycle_defers_psutil_dependent_process_imports(self):
+        source = LIFECYCLE_PATH.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "from cortex_harness.sync_processes import embedded_falkordb_pids, sync_processes",
+            source,
+        )
+        self.assertIn("def sync_processes(*args, **kwargs):", source)
+
     def test_doctor_probes_the_falkordblite_backend_import(self):
         self.assertIn(
             "from redislite.falkordb_client import FalkorDB",
@@ -142,6 +150,55 @@ class MakeLifecycleTests(unittest.TestCase):
                     f"{expected_python} cortex_harness/dev.py sync {owner} stop",
                     result.stdout,
                 )
+
+    def test_build_creates_and_populates_the_venv_with_uv(self):
+        with tempfile.TemporaryDirectory() as directory:
+            venv_dir = Path(directory) / ".venv"
+            python = venv_dir / "bin" / "python"
+            command_paths = {"uv": "/tools/uv", "python3": "/tools/python3"}
+
+            with mock.patch.object(LIFECYCLE, "VENV_DIR", venv_dir), mock.patch.object(
+                LIFECYCLE.shutil, "which", side_effect=command_paths.get
+            ), mock.patch.object(
+                LIFECYCLE, "venv_python", return_value=python
+            ), mock.patch.object(LIFECYCLE, "run") as run:
+                LIFECYCLE.invoke_build()
+
+        self.assertEqual(
+            run.call_args_list[0],
+            mock.call(["/tools/uv", "venv", "--python", "/tools/python3", str(venv_dir)]),
+        )
+        install_command = run.call_args_list[1].args[0]
+        self.assertEqual(
+            install_command[:5],
+            ["/tools/uv", "pip", "install", "--python", str(python)],
+        )
+        self.assertNotIn("pip", install_command[0])
+        for requirements in LIFECYCLE.requirement_files():
+            self.assertIn(str(requirements), install_command)
+        self.assertEqual(install_command[-2:], ["--editable", str(ROOT)])
+
+    def test_build_reports_a_clear_error_when_uv_is_missing(self):
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "uv was not found"):
+                LIFECYCLE.invoke_build()
+
+    def test_uv_executable_honors_the_make_override(self):
+        with mock.patch.dict(os.environ, {"UV": "/custom/uv"}), mock.patch.object(
+            LIFECYCLE.shutil, "which", return_value="/custom/uv"
+        ) as which:
+            self.assertEqual(LIFECYCLE.uv_executable(), "/custom/uv")
+        which.assert_called_once_with("/custom/uv")
+
+    def test_windows_build_backend_uses_uv_instead_of_pip(self):
+        lifecycle = (ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Get-UvLauncher", lifecycle)
+        self.assertIn(
+            'Invoke-Uv -Uv $uv -Arguments @("venv", "--python", $launcher, $venvDir)',
+            lifecycle,
+        )
+        self.assertIn('@("pip", "install", "--python", $python)', lifecycle)
+        self.assertNotIn("-m pip", lifecycle)
 
     def test_install_and_uninstall_use_user_local_bin(self):
         with tempfile.TemporaryDirectory() as home:

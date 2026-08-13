@@ -7,6 +7,8 @@ PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 LIFECYCLE := $(PYTHON) scripts/mcp-lifecycle.py
 OWNER_OPTION := --owner
 endif
+UV ?= uv
+export UV
 DEV := $(PYTHON) cortex_harness/dev.py
 
 .PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup doctor start stop sync code doc sync-code-stop sync-doc-stop
