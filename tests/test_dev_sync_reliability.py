@@ -91,6 +91,55 @@ class DevSyncReliabilityTests(unittest.TestCase):
         self.assertNotIn("--falkordb-uri", result.output)
         self.assertNotIn("--qdrant-url", result.output)
 
+    def test_code_sync_dry_run_propagates_full_scan_graph_mode(self):
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "src"
+            source.mkdir()
+            (source / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            self._write_local_config(root, source)
+
+            result = runner.invoke(
+                cli,
+                [
+                    "sync", "code",
+                    "--project-dir", str(root),
+                    "--full-scan",
+                    "--sync-mode", "graph",
+                    "--dry-run",
+                ],
+                input="\n",
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("--full-scan", result.output)
+        self.assertIn("--sync-mode graph", result.output)
+
+    def test_code_sync_all_propagates_full_scan_embedding_mode(self):
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "src"
+            source.mkdir()
+            (source / "main.py").write_text("print('ok')\n", encoding="utf-8")
+            self._write_local_config(root, source)
+
+            result = runner.invoke(
+                cli,
+                [
+                    "sync", "code",
+                    "--project-dir", str(root),
+                    "--full-scan",
+                    "--sync-mode", "embedding",
+                    "--dry-run",
+                    "all",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("--sync-mode embedding", result.output)
+
     def test_doc_sync_dry_run_uses_doc_owner_paths(self):
         runner = CliRunner()
         with tempfile.TemporaryDirectory() as temp_dir:

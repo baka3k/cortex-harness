@@ -3,7 +3,7 @@
 
 ## Objectives
 
-* Provide a CLI command to synchronize source code into the analysis system (**Neo4j + Qdrant**) following the **code-tiny** pipeline.
+* Provide a CLI command to synchronize source code into the analysis system (**FalkorDB/Neo4j + Qdrant**) following the **code-tiny** pipeline.
 * Support explicit **Full Sync** and reliable **Incremental Sync** (changed files only). The `all` subcommand selects analyzers and folders; it does not force full mode.
 
 ## Configuration
@@ -35,17 +35,30 @@
 * `dev sync code all`
 * Synchronizes all non-overlapping configured roots with every available analyzer. It remains incremental after the first baseline unless `--full-scan` is supplied.
 
+### Storage phase selection
+
+`--sync-mode` controls which persistence phases run:
+
+| Command | Behavior |
+|---|---|
+| `dev sync code --full-scan --sync-mode both` | Write primary/framework graph facts, run project topology, then write embeddings. This is the default mode. |
+| `dev sync code --full-scan --sync-mode graph` | Write graph facts and project topology only. Qdrant is not opened. |
+| `dev sync code --full-scan --sync-mode embedding` | Write embeddings only. Graph storage is not opened or mutated. |
+
+`graph` and `embedding` modes require `--full-scan`. They preserve the shared incremental baseline instead of advancing it, because completing only one store cannot prove that both stores represent the same source snapshot. Incremental sync is supported only by the default `both` mode.
+
 
 
 ## Processing Workflow
 
 1. **Init:** Read the active configuration and (optionally) update or clone the repository if a `git` URL is provided.
 2. **Execution:** For each selected folder:
-* **Full Mode:** Send the entire codebase to the `code-tiny` pipeline for ingestion into Neo4j + Qdrant.
+* **Full Mode:** Send the entire codebase to the selected `code-tiny` graph/vector phases.
 * **Incremental Mode:** Use Git as a candidate index across committed, staged, unstaged, and untracked states, then compare a versioned SHA-256 inventory before selecting files. Non-Git roots use full hash comparison.
 * **Modules/submodules:** Constrain monorepo diffs to the configured module root, recursively discover initialized submodules, and record explicit warnings for uninitialized coverage. Overlapping configured roots are deduplicated by canonical path.
 * **Primary ownership:** Perl `.pl`, `.pm`, and `.t` files are routed exclusively to the `perl` analyzer. Standalone `.pod` files and extensionless shebang scripts remain unowned until content-based classification is introduced.
 * **Framework overlays:** Preserve exclusive primary-language ownership, then route the global changed/deleted/impacted set through Spring, Servlet/JSP, MyBatis, Struts, Flutter, ASP.NET Framework, and ASP.NET Core detectors. ASP.NET overlays require the canonical `csharp` analyzer, are detected per project module, and never claim `.cs` ownership.
+* **Phase order:** Primary graph facts and framework graph overlays finish and drain their journals first. `project_topology` then creates modules/descriptors and links existing symbols/endpoints. Only after topology succeeds does the graph-disabled embedding pass write Qdrant vectors.
 
 
 3. **Persistence:** Publish an immutable inventory generation, then atomically update schema-v2 sync state. A v1 state is backed up and conservatively rebuilt by a full scan.
@@ -77,6 +90,9 @@ Framework failures mark sync state dirty but do not roll back successful canonic
 dev sync code           # Interactive folder selection; incremental by default if metadata exists
 dev sync code all       # All analyzers/folders; incremental unless --full-scan is supplied
 dev sync code --change-detection hash --reconcile
+dev sync code --full-scan --sync-mode graph
+dev sync code --full-scan --sync-mode embedding
+dev sync code --full-scan --sync-mode both
 
 ```
 

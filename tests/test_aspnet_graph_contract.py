@@ -11,7 +11,7 @@ if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
 from tools.common.aspnet.builders import fact, relationship
-from tools.common.aspnet.cli_runtime import apply_graph
+from tools.common.aspnet.cli_runtime import _create_driver, apply_graph
 from tools.common.aspnet.models import AnalysisModule, AnalysisResult, SourceSpan
 from tools.graph.writer.aspnet_writer import AspNetFactWriter
 
@@ -33,6 +33,29 @@ class _FakeDriver:
 
 
 class AspNetGraphContractTest(unittest.IsolatedAsyncioTestCase):
+    async def test_local_falkordb_driver_uses_path_based_canonical_factory(self) -> None:
+        driver = _FakeDriver()
+        args = SimpleNamespace(
+            graph_provider="falkordb",
+            falkordb_path="/stores/hyperpack/code/data.rdb",
+            falkordb_graph="hyperpack",
+            neo4j_db=None,
+            project_id="hyperpack",
+            root="/projects/hyperpack",
+            qdrant_collection=None,
+        )
+        with patch(
+            "tools.graph.cli.GraphDriverFactory.create_driver",
+            new=AsyncMock(return_value=driver),
+        ) as create:
+            resolved, database = await _create_driver(args)
+
+        self.assertIs(resolved, driver)
+        self.assertEqual(database, "hyperpack")
+        config = create.call_args.args[1]
+        self.assertEqual(config["path"], "/stores/hyperpack/code/data.rdb")
+        self.assertNotIn("host", config)
+
     async def test_nodes_are_written_before_relationships_with_allowlisted_contract(self) -> None:
         endpoint = fact(
             kind="HttpEndpoint", name="GET /", framework="aspnet_core", project_id="p",

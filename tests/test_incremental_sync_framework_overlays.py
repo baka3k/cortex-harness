@@ -173,6 +173,34 @@ class IncrementalSyncFrameworkOverlaysTest(unittest.TestCase):
         self.assertEqual(overlays["flutter"], {"pubspec.yaml"})
         self.assertIn("src/main/resources/mappers/CatalogMapper.xml:strong-candidate", evidence["mybatis"])
 
+    def test_roslyn_worker_is_not_routed_as_an_aspnet_application_overlay(self):
+        with tempfile.TemporaryDirectory() as root:
+            module = Path(root, "tools", "common", "aspnet", "roslyn_worker")
+            module.mkdir(parents=True)
+            project_path = "tools/common/aspnet/roslyn_worker/AspNetRoslynWorker.csproj"
+            program_path = "tools/common/aspnet/roslyn_worker/Program.cs"
+            (Path(root) / project_path).write_text(
+                '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup>'
+                '<PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.11.0" />'
+                '<FrameworkReference Include="Microsoft.AspNetCore.App" />'
+                '</ItemGroup></Project>',
+                encoding="utf-8",
+            )
+            (Path(root) / program_path).write_text(
+                "using Microsoft.AspNetCore.Builder;",
+                encoding="utf-8",
+            )
+
+            with patch("tools.spring.detector.SpringProjectDetector", EmptyDetector), patch(
+                "tools.servlet_jsp.detector.ServletJspProjectDetector", EmptyDetector
+            ), patch("tools.mybatis.detector.MyBatisProjectDetector", EmptyDetector):
+                overlays, evidence = incremental_sync._group_paths_by_framework(
+                    [project_path, program_path], root=root,
+                )
+
+        self.assertEqual(overlays["aspnet_core"], set())
+        self.assertEqual(evidence["aspnet_core"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

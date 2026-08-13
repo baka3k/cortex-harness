@@ -13,7 +13,9 @@ from .safe_formats import local_name, parse_xml_file, read_bounded_text
 IGNORED_DIRS = {
     ".git", ".hg", ".svn", ".idea", ".vscode", ".settings", ".cache", ".venv",
     "venv", "__pycache__", "bin", "obj", "build", "dist", "out", "target",
-    "node_modules", "packages",
+    # Roslyn analyzer workers reference ASP.NET assemblies to inspect them,
+    # but they are compiler tooling rather than application modules.
+    "node_modules", "packages", "roslyn_worker",
 }
 
 

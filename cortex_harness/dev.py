@@ -2436,6 +2436,13 @@ def sync():
 @click.option("--dry-run", is_flag=True)
 @click.option("--full-scan", is_flag=True, help="Force full rescan (ignore git state / baseline).")
 @click.option(
+    "--sync-mode",
+    type=click.Choice(["both", "graph", "embedding"]),
+    default="both",
+    show_default=True,
+    help="Run graph+topology then embeddings, graph only, or embeddings only.",
+)
+@click.option(
     "--change-detection",
     type=click.Choice(["hybrid", "committed", "hash"]),
     default="hybrid",
@@ -2473,6 +2480,7 @@ def sync_code(
     verbose,
     dry_run,
     full_scan,
+    sync_mode,
     change_detection,
     lock_timeout_seconds,
     reconcile,
@@ -2488,16 +2496,20 @@ def sync_code(
     First run   -> full sync (no baseline)
     Next runs   -> incremental via analyzer --changed-files-manifest (built-in)
     --full-scan -> force full rescan from scratch on every folder.
+    --sync-mode -> both (default), graph, or embedding; specialized modes require --full-scan.
     Sub-command:
       all       Run ALL analyzers on all folders (incremental if baseline exists).
     """
     ctx.ensure_object(dict)
+    if sync_mode != "both" and not full_scan:
+        raise click.UsageError("--sync-mode graph/embedding requires --full-scan")
     ctx.obj.update(
         project_dir=project_dir,
         preview=preview,
         verbose=verbose,
         dry_run=dry_run,
         full_scan=full_scan,
+        sync_mode=sync_mode,
         change_detection=change_detection,
         lock_timeout_seconds=lock_timeout_seconds,
         reconcile=reconcile,
@@ -2553,6 +2565,7 @@ def sync_code(
                 "--project-name", project.get("name", "project"),
                 "--python-bin", python,
                 "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+                "--sync-mode", sync_mode,
                 "--change-detection", change_detection,
                 "--lock-timeout-seconds", str(lock_timeout_seconds),
                 "--submodules", submodules,
@@ -2653,6 +2666,7 @@ def sync_code_all(ctx):
                 "--project-name", project.get("name", "project"),
                 "--python-bin", python,
                 "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+                "--sync-mode", o["sync_mode"],
                 "--change-detection", o["change_detection"],
                 "--lock-timeout-seconds", str(o["lock_timeout_seconds"]),
                 "--submodules", o["submodules"],
