@@ -50,7 +50,8 @@ The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windo
 git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
-make build       # create/reuse .venv and install pinned local-storage dependencies
+uv --version      # uv is required; install it first if this command is unavailable
+make build       # create/reuse .venv and install dependencies with uv
 make storage-init # create ~/.cortext-harness/v1/instances/default and its manifest
 make storage-layout # show resolved owner paths, manifest, and leases
 make install     # create/reuse .venv, install dependencies, and install global dev command
@@ -59,6 +60,8 @@ make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate termi
 make stop        # stop MCP terminal/processes started by make start
 make uninstall   # remove the global dev command installed by make install
 ```
+
+Set `UV` when the executable is not on the default `PATH`, for example `make build UV=/opt/homebrew/bin/uv`.
 
 The default persistent-data tree is independent of every indexed source checkout:
 
@@ -226,13 +229,13 @@ Install? (Y/n)
 ### Common Windows Issues
 
 **Issue**: `ModuleNotFoundError: No module named 'requests'`
-**Fix**: Install code-tiny dependencies: `pip install -r C:\ai\cortex-harness\code-tiny\requirements.txt`
+**Fix**: Install code-tiny dependencies: `uv pip install --python C:\ai\cortex-harness\.venv\Scripts\python.exe --requirements C:\ai\cortex-harness\code-tiny\requirements.txt`
 
 **Issue**: `TypeError: got multiple values for keyword argument 'fix_mistral_regex'`
-**Fix**: Downgrade transformers: `pip install "transformers<5.0"`
+**Fix**: Downgrade transformers: `uv pip install --python C:\ai\cortex-harness\.venv\Scripts\python.exe "transformers<5.0"`
 
 **Issue**: `AssertionError: Torch not compiled with CUDA enabled`
-**Fix**: Install CUDA PyTorch: `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124`
+**Fix**: Install CUDA PyTorch: `uv pip install --python C:\ai\cortex-harness\.venv\Scripts\python.exe torch torchvision torchaudio --default-index https://download.pytorch.org/whl/cu124`
 
 **Issue**: `'dev' is not recognized as a command`
 **Fix**: Use one of the CLI setup methods above or run: `C:\ai\cortex-harness\.venv\Scripts\dev.exe <command>`
@@ -242,7 +245,7 @@ Clean install
 ```
 uv pip uninstall torch torchvision torchaudio
 uv cache clean
-uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+uv pip install torch torchvision torchaudio --default-index https://download.pytorch.org/whl/cu128
 ```
 check cuda
 ```

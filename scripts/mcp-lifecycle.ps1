@@ -153,39 +153,54 @@ function Get-RootVenvPython {
     throw "Virtualenv Python not found under $venvDir."
 }
 
-function Install-Requirements {
+function Get-UvLauncher {
+    $configuredUv = if ($env:UV) { $env:UV } else { "uv" }
+    $uv = Get-CommandPath @($configuredUv)
+    if (-not $uv) {
+        throw "uv was not found on PATH (configured as '$configuredUv'). Install uv before running make build."
+    }
+    return $uv
+}
+
+function Invoke-Uv {
     param(
-        [string]$Python,
-        [string]$RequirementsPath
+        [string]$Uv,
+        [string[]]$Arguments
     )
 
-    if (Test-Path -LiteralPath $RequirementsPath) {
-        Write-Host "[build] Installing requirements: $RequirementsPath"
-        & $Python -m pip install -r $RequirementsPath
+    & $Uv @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "uv command failed with exit code $LASTEXITCODE."
     }
 }
 
 function Invoke-Build {
+    $uv = Get-UvLauncher
     $venvDir = Get-RootVenvDir
     if (-not (Test-Path -LiteralPath $venvDir)) {
         $launcher = Get-PythonLauncher
         Write-Host "[build] Creating venv: $venvDir"
-        & $launcher -m venv $venvDir
+        Invoke-Uv -Uv $uv -Arguments @("venv", "--python", $launcher, $venvDir)
     }
 
     $python = Get-RootVenvPython
+    $requirements = @(
+        (Join-Path $Root "requirements.txt"),
+        (Join-Path (Join-Path $Root "code-tiny") "requirements.txt"),
+        (Join-Path (Join-Path $Root "doc-tiny") "requirements.txt")
+    ) | Where-Object { Test-Path -LiteralPath $_ }
 
-    Write-Host "[build] Upgrading pip in $venvDir"
-    & $python -m pip install --upgrade pip
+    $installArguments = @("pip", "install", "--python", $python)
+    foreach ($requirementsPath in $requirements) {
+        Write-Host "[build] Including requirements: $requirementsPath"
+        $installArguments += @("--requirements", $requirementsPath)
+    }
+    $installArguments += @("--editable", $Root)
 
-    Install-Requirements -Python $python -RequirementsPath (Join-Path $Root "requirements.txt")
-    Install-Requirements -Python $python -RequirementsPath (Join-Path (Join-Path $Root "code-tiny") "requirements.txt")
-    Install-Requirements -Python $python -RequirementsPath (Join-Path (Join-Path $Root "doc-tiny") "requirements.txt")
+    Write-Host "[build] Syncing dependencies and editable root package with uv"
+    Invoke-Uv -Uv $uv -Arguments $installArguments
 
-    Write-Host "[build] Installing editable root package"
-    & $python -m pip install -e $Root
-
-    Write-Host "[build] Dependency sync complete."
+    Write-Host "[build] Dependency sync complete (uv)."
 }
 
 function Get-UserBinDir {

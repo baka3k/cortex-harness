@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [UV Make lifecycle migration](2026-08-13-uv-make-lifecycle-migration.md)
 - [C/C++ parser-quality recovery phases 01-04](2026-08-07-cplus-parser-quality-recovery.md)
 - [Graph ingestion write-path hardening](2026-08-07-graph-ingestion-write-path-hardening.md)
 - [Bounded embedded storage owner gateway](2026-08-07-bounded-embedded-storage-owner-gateway.md)
