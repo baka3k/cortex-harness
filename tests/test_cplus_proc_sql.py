@@ -1,3 +1,6 @@
+import asyncio
+import contextlib
+import io
 from pathlib import Path
 import sys
 
@@ -11,7 +14,38 @@ from tools.cplus.proc_analyzer import (
     prepare_proc_bytes,
     summarize_proc_root,
 )
-from tools.cplus.cplus_analyzer import _load_or_parse_payload, _scan_c_family_files
+from tools.cplus.cplus_analyzer import (
+    _load_or_parse_payload,
+    _scan_c_family_files,
+    build_call_graph,
+)
+
+
+class _FakeEmbedder:
+    model = None
+    model_name = "test-model"
+    model_source = "test-model"
+    model_content_fingerprint = "test-fingerprint"
+    vector_size = 1
+    max_embed_chars = None
+    chunk_embed = False
+    tokenizer = None
+
+    def embed(self, texts, batch_size=8, verbose=False):
+        return [[0.0] for _ in texts]
+
+
+class _FakeQdrantWriter:
+    collection = "test_cplus_vectors"
+
+    def __init__(self) -> None:
+        self.points = []
+
+    def ensure_collection(self) -> None:
+        return None
+
+    def upsert(self, points) -> None:
+        self.points.extend(points)
 
 
 def test_extracts_proc_sql_facts() -> None:
@@ -51,6 +85,46 @@ def test_proc_file_is_scanned_and_emits_graph_facts(tmp_path: Path) -> None:
         relation["source_label"] == "Function" and relation["target_label"] == "SqlStatement"
         for relation in payload["relations"]
     )
+
+
+def test_embedding_progress_total_includes_proc_nodes(tmp_path: Path) -> None:
+    fixture_root = ROOT / "tests" / "fixtures" / "procc-application"
+    writer = _FakeQdrantWriter()
+    stdout = io.StringIO()
+
+    with contextlib.redirect_stdout(stdout):
+        asyncio.run(
+            build_call_graph(
+                root=str(fixture_root),
+                code_writer=None,
+                qdrant_writer=writer,
+                embedder=_FakeEmbedder(),
+                batch_size=1,
+                qdrant_batch_size=16,
+                cache_dir=str(tmp_path),
+                keep_cache=False,
+                parse_cache=True,
+                neo4j_batch_size=16,
+                neo4j_calls_batch_size=16,
+                neo4j_state_path=None,
+                project_id="test-proc",
+                project_name="Test Pro*C",
+                language="cplus",
+                repo=str(fixture_root),
+                build_system="",
+                event_map_path=None,
+                call_stats_path=None,
+                possible_calls_path=None,
+                unresolved_calls_path=None,
+                parse_errors_path=None,
+                parse_run_id="test-run",
+                commit_sha="abc123",
+                verbose=True,
+            )
+        )
+
+    assert len(writer.points) == 6
+    assert "[embed] batch 6 / 6" in stdout.getvalue()
 
 
 def test_prepare_proc_bytes_handles_utf8_and_cp932() -> None:
