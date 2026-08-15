@@ -2758,6 +2758,18 @@ def _stable_point_id(symbol_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, symbol_id))
 
 
+def _iter_vector_items(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+    yield from payload.get("functions", [])
+    for resource in payload.get("resources", []):
+        item = dict(resource)
+        item["node_type"] = "resource"
+        yield item
+    for proc_node in payload.get("proc_nodes", []):
+        item = dict(proc_node)
+        item.setdefault("node_type", "proc")
+        yield item
+
+
 def _event_id(event: Dict[str, Any]) -> str:
     event_id = str(event.get("id") or "").strip()
     if event_id:
@@ -3836,6 +3848,7 @@ async def build_call_graph(
         file_lookup_by_basename.setdefault(os.path.basename(path), []).append(path)
 
     for payload in iter_payloads(log_parse=True):
+        expected_points += sum(1 for _ in _iter_vector_items(payload))
         file_def = payload.get("file_def") or {}
         file_path = file_def.get("file_path")
         parse_meta = payload.get("parse_meta") or {}
@@ -3885,7 +3898,6 @@ async def build_call_graph(
             if name and target:
                 alias_targets_by_name[name] = target
         for resource in payload.get("resources", []):
-            expected_points += 1
             resource_count += 1
             symbol = str(resource.get("resource_symbol") or "")
             if symbol:
@@ -3895,7 +3907,6 @@ async def build_call_graph(
             if symbol and symbol != "IDC_STATIC":
                 resource_index_by_symbol.setdefault(symbol, []).append(element)
         for func in payload["functions"]:
-            expected_points += 1
             function_count += 1
             entry = {
                 "symbol_id": func["symbol_id"],
@@ -5687,17 +5698,6 @@ SET s.node_type = 'code',
         state = read_qdrant_state()
         cached_points = state.get("total_points")
 
-        def iter_vector_items(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-            yield from payload.get("functions", [])
-            for resource in payload.get("resources", []):
-                item = dict(resource)
-                item["node_type"] = "resource"
-                yield item
-            for proc_node in payload.get("proc_nodes", []):
-                item = dict(proc_node)
-                item.setdefault("node_type", "proc")
-                yield item
-
         if (
             not os.path.exists(points_path)
             or cached_points != expected_points
@@ -5709,7 +5709,7 @@ SET s.node_type = 'code',
                 batch_index = 0
                 total_batches = max(1, (expected_points + batch_size - 1) // batch_size)
                 for payload in iter_payloads(log_parse=False):
-                    for func in iter_vector_items(payload):
+                    for func in _iter_vector_items(payload):
                         batch_funcs.append(func)
                         if len(batch_funcs) < batch_size:
                             continue
