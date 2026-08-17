@@ -121,3 +121,4 @@ code-tiny/tools/common/aspnet/roslyn_worker/obj/
 compile_commands.json
 .cortex/flutter/dart-facts.json
 .cortext-harness/config/dev.json
+.qwen/tmp/**
