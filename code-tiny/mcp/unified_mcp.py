@@ -743,6 +743,32 @@ def _register_proxy_tools() -> None:
         )
 
 
+async def _dispatch_planner_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
+    """Dispatch a planner tool call to ``fast_backend``.
+
+    Planner tools (``compute_scc``, ``topological_sort``,
+    ``plan_dependency_order``, ``plan_file_dependency_order``,
+    ``plan_function_dependency_order``) are defined as plain async functions on
+    ``fast_backend`` and accept individual kwargs — they do NOT take a single
+    ``payload`` dict the way parser-routed tools do.  FastMCP's validation
+    pipeline has already coerced ``arguments`` against the registered tool's
+    JSON schema (derived from the backend signature) before the proxy
+    middleware runs, so we just forward them as ``**arguments``.
+    """
+    raw = getattr(fast_backend, f"tool_{tool_name}", None)
+    fn = _unwrap_tool_callable(raw)
+    if fn is None:
+        return _build_tool_error(
+            tool_name,
+            arguments,
+            ValueError(f"Planner tool '{tool_name}' is not registered on fast_backend."),
+        )
+    try:
+        return await fn(**arguments)
+    except Exception as exc:
+        return _build_tool_error(tool_name, arguments, exc)
+
+
 # Attach the proxy middleware and register proxied tools now that
 # ``_dispatch_tool`` / ``_dispatch_planner_tool`` / ``_CATALOG_BY_NAME`` are
 # all defined.
