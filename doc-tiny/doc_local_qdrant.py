@@ -15,21 +15,47 @@ if str(_REPOSITORY_ROOT) not in sys.path:
 
 from cortex_harness.storage import (  # noqa: E402
     LocalQdrantStore,
+    QdrantStore,
     QdrantStorageRole,
+    create_storage,
     resolve_storage,
 )
 
 
 class RemoteQdrantUnsupportedError(ValueError):
-    """Raised when a remote locator reaches the local-only document runtime."""
+    """Raised when a remote locator reaches the local-only document runtime.
+
+    Kept for backward compatibility for callers that explicitly opt into
+    the legacy ``locator=...`` shape. New code should pass
+    ``project_id=...`` and let :func:`get_document_qdrant_store` route
+    through :class:`StorageFactory`.
+    """
 
 
 def get_document_qdrant_store(
     locator: Optional[str] = None,
     *,
     project_root: Optional[Path] = None,
-) -> LocalQdrantStore:
-    """Open the cached document-owner store selected by local path config."""
+    project_id: Optional[str] = None,
+) -> QdrantStore:
+    """Open the cached document-owner store.
+
+    Resolution order:
+
+    1. ``project_id`` supplied → :class:`StorageFactory` chooses
+       :class:`LocalQdrantStore` or :class:`RemoteQdrantStore` based on the
+       project's ``storage_backend``.
+    2. ``locator`` URL-shaped → raises :class:`RemoteQdrantUnsupportedError`
+       to preserve legacy failure semantics.
+    3. Falls back to local ``QDRANT_DOC_PATH`` resolution.
+    """
+
+    if project_id:
+        from tools.common.project_registry import resolve_project_targets
+
+        targets = resolve_project_targets(project_id)
+        factory = create_storage(targets, project_root=project_root)
+        return factory.get_qdrant_store(QdrantStorageRole.DOCUMENT)
 
     value = str(locator or "").strip()
     if value:

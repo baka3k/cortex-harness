@@ -243,6 +243,11 @@ class FalkorDBDriver(Neo4jDriver):
         self._native_future_lock = threading.Lock()
         self._deferred_close = False
         self._resources_closed = False
+        # `_suppress_deprecation` lets the storage factory construct drivers
+        # without emitting the per-call deprecation warnings (the factory is
+        # the documented entry point for remote mode, so the warning would be
+        # noise).
+        self._suppress_deprecation = bool(kwargs.pop("_suppress_deprecation", False))
         timeout_value = kwargs.pop("query_timeout_ms", None)
         if timeout_value in {None, ""}:
             timeout_value = os.getenv("FALKORDB_QUERY_TIMEOUT_MS", "120000")
@@ -253,7 +258,11 @@ class FalkorDBDriver(Neo4jDriver):
         # Network-style fields are deprecated. We still accept them so call
         # sites keep compiling for one release, but log + warn, and ignore
         # them when an explicit ``path`` was provided.
-        if self._path is not None and (any(v is not None for v in (uri, host, port, user, password)) or ssl):
+        if (
+            self._path is not None
+            and not self._suppress_deprecation
+            and (any(v is not None for v in (uri, host, port, user, password)) or ssl)
+        ):
             warnings.warn(
                 "FalkorDBDriver: network-style arguments (uri/host/port/user/password/ssl) "
                 "are deprecated and ignored when 'path' is supplied. Open a network client "
@@ -294,12 +303,13 @@ class FalkorDBDriver(Neo4jDriver):
             # Legacy network fallback. Kept for one release so existing tests
             # that construct a network-style driver without a path keep
             # working, but new code paths must supply ``path``.
-            warnings.warn(
-                "FalkorDBDriver opened without 'path'. Network-style usage is deprecated; "
-                "supply FALKORDB_PATH instead and re-run.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
+            if not self._suppress_deprecation:
+                warnings.warn(
+                    "FalkorDBDriver opened without 'path'. Network-style usage is deprecated; "
+                    "supply FALKORDB_PATH instead and re-run.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             try:
                 from falkordb import FalkorDB
                 import redis  # noqa: F401  # Verify the FalkorDB client dependency is installed.
@@ -413,6 +423,19 @@ class FalkorDBDriver(Neo4jDriver):
     @property
     def provider(self) -> GraphProvider:
         return GraphProvider.FALKORDB
+
+    @classmethod
+    def from_storage_factory(
+        cls, factory: Any, graph_name: str
+    ) -> "FalkorDBDriver":
+        """Create a driver from a :class:`cortex_harness.storage.factory.StorageFactory`.
+
+        Thin wrapper around ``factory.get_falkordb_driver(graph_name)`` so call
+        sites that already hold a factory don't need to know whether the
+        driver is local or remote. Imported lazily to avoid a hard
+        ``cortex_harness`` → ``code-tiny`` cycle.
+        """
+        return factory.get_falkordb_driver(graph_name)
 
     @property
     def driver(self) -> Any:

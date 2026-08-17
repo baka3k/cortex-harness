@@ -128,6 +128,12 @@ class ProjectTargets:
     doc_qdrant_collection: str
     parser_type: Optional[str] = None
     provider: str = "falkordb"
+    # Per-project backend selection. ``storage_backend`` defaults to ``"local"``
+    # for backward compatibility with projects registered before this field
+    # existed; ``remote_config`` is populated only when the project chooses
+    # the remote backend. See plans/260817-storage-backend-adapter.
+    storage_backend: str = "local"
+    remote_config: Optional[Dict[str, Any]] = None
     # Source of the resolution — useful for diagnostics and tests. Not part of
     # the public contract; callers should not branch on it.
     source: str = field(default="registry", compare=False)
@@ -197,6 +203,10 @@ def _project_entries(documents: Iterable[Mapping[str, Any]]) -> List[Dict[str, A
             "code_env": dict(document.get("code", {}).get("env") or {}),
             "doc_env": dict(document.get("doc", {}).get("env") or {}),
             "active": bool(document.get("active", False)),
+            "storage_backend": str(document.get("storage_backend") or "local"),
+            "remote_config": (
+                dict(document["remote"]) if isinstance(document.get("remote"), Mapping) else None
+            ),
         }
         entries.append(entry)
     variants: Dict[str, List[str]] = {}
@@ -341,6 +351,9 @@ def _resolve_targets(
         or "falkordb"
     )
 
+    storage_backend = (match or {}).get("storage_backend") or "local"
+    remote_config = (match or {}).get("remote_config")
+
     return ProjectTargets(
         project_id=canonical_project_id,
         project_id_normalized=lookup,
@@ -350,6 +363,8 @@ def _resolve_targets(
         doc_qdrant_collection=_doc_qdrant(),
         parser_type=parser_type,
         provider=str(provider),
+        storage_backend=storage_backend,
+        remote_config=remote_config,
         source="registry" if match is not None else "env+defaults",
     )
 
