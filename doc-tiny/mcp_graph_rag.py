@@ -72,17 +72,26 @@ ENTITY_TYPES_DEFAULT = _parse_entity_types(
 ) or DEFAULT_ENTITY_TYPES
 
 
-_qdrant_client = None
-_neo4j_driver = None
+_qdrant_stores: dict[str, Any] = {}
+_graph_drivers: dict[str, Any] = {}
 _embedder: Optional[SentenceTransformer] = None
 logger = logging.getLogger("graph_rag.mcp")
 
 
-def get_qdrant():
-    global _qdrant_client
-    if _qdrant_client is None:
-        _qdrant_client = get_document_qdrant_store()
-    return _qdrant_client
+def get_qdrant(project_id: Optional[str] = None) -> Any:
+    """Return the Qdrant store for ``project_id``.
+
+    Per-project cache replaces the previous module-level singleton
+    (``_qdrant_client``). Passing ``project_id`` routes through
+    :class:`StorageFactory` so a remote project's Qdrant server is honored
+    without restarting the MCP server.
+    """
+    if project_id:
+        if project_id not in _qdrant_stores:
+            _qdrant_stores[project_id] = get_document_qdrant_store(project_id=project_id)
+        return _qdrant_stores[project_id]
+    # Legacy / global access for scripts that don't carry a project_id.
+    return get_document_qdrant_store()
 
 
 def get_embedder() -> SentenceTransformer:
@@ -96,11 +105,27 @@ def get_embedder() -> SentenceTransformer:
     return _embedder
 
 
-def get_neo4j():
-    global _neo4j_driver
-    if _neo4j_driver is None:
-        _neo4j_driver = create_graph_store_from_env()
-    return _neo4j_driver
+def get_neo4j(project_id: Optional[str] = None) -> Any:
+    """Return the graph driver for ``project_id``.
+
+    Per-project cache replaces the previous module-level
+    ``_neo4j_driver`` singleton. With a ``project_id``, callers route
+    through :class:`StorageFactory` so remote FalkorDB URIs are honored.
+    Without a project, the legacy env-seeded driver is returned for
+    scripts that don't have a registry binding (e.g. ``make doctor``).
+    """
+    if project_id:
+        if project_id not in _graph_drivers:
+            from cortex_harness.storage import create_storage
+            from tools.common.project_registry import resolve_project_targets
+
+            targets = resolve_project_targets(project_id)
+            factory = create_storage(targets)
+            _graph_drivers[project_id] = factory.get_falkordb_driver(
+                targets.doc_graph
+            )
+        return _graph_drivers[project_id]
+    return create_graph_store_from_env()
 
 
 def _acquire_graph_store(project_id: Optional[str]):
