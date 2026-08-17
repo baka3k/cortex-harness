@@ -22,14 +22,22 @@ if str(_REPOSITORY_ROOT) not in sys.path:
 
 from cortex_harness.storage import (  # noqa: E402
     LocalQdrantStore,
+    QdrantStore,
     QdrantStorageRole,
+    create_storage,
     resolve_storage,
 )
 from qdrant_client.http import models as qmodels  # noqa: E402
 
 
 class RemoteQdrantUnsupportedError(ValueError):
-    """Raised when a legacy network locator reaches the local-only runtime."""
+    """Raised when a legacy network locator reaches the local-only runtime.
+
+    Kept as a compatibility error for code paths that explicitly opt into
+    the legacy ``locator=...`` shape and want the legacy rejection
+    semantics. New code should pass ``project_id=...`` and let
+    :func:`get_code_qdrant_store` route through :class:`StorageFactory`.
+    """
 
 
 def _local_path(locator: Optional[str] = None, *, project_root: Optional[Path] = None) -> Path:
@@ -57,8 +65,29 @@ def get_code_qdrant_store(
     locator: Optional[str] = None,
     *,
     project_root: Optional[Path] = None,
-) -> LocalQdrantStore:
-    """Open the cached code-owner store selected by local path configuration."""
+    project_id: Optional[str] = None,
+) -> QdrantStore:
+    """Open the cached code-owner store.
+
+    Resolution order:
+
+    1. ``project_id`` supplied → :class:`StorageFactory` chooses
+       :class:`LocalQdrantStore` or :class:`RemoteQdrantStore` based on the
+       project's ``storage_backend``.
+    2. ``locator`` URL-shaped → kept for backward compatibility: raises
+       :class:`RemoteQdrantUnsupportedError` so legacy callers fail loudly
+       instead of silently switching modes.
+    3. Falls back to the local path resolution.
+    """
+
+    if project_id:
+        # Lazy import to avoid a static code-tiny → tools.common.project_registry
+        # import cycle when callers don't supply project_id.
+        from tools.common.project_registry import resolve_project_targets
+
+        targets = resolve_project_targets(project_id)
+        factory = create_storage(targets, project_root=project_root)
+        return factory.get_qdrant_store(QdrantStorageRole.CODE)
 
     root = Path(project_root or os.getcwd()).resolve()
     path = _local_path(locator, project_root=root)

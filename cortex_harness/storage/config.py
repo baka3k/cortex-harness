@@ -77,6 +77,89 @@ class QdrantStorageRole(str, Enum):
     DOCUMENT = "doc"
 
 
+class BackendMode(str, Enum):
+    """Storage backend selection per project.
+
+    ``LOCAL`` (default) keeps all state on the local filesystem using the
+    existing Qdrant local mode + FalkorDBLite ``.rdb``. ``REMOTE`` connects to
+    user-supplied Qdrant and/or FalkorDB server endpoints. The factory in
+    :mod:`cortex_harness.storage.factory` resolves these into concrete
+    backend instances.
+    """
+
+    LOCAL = "local"
+    REMOTE = "remote"
+
+
+@dataclass(frozen=True)
+class RemoteStorageConfig:
+    """Connection details for the remote backend.
+
+    ``__repr__`` deliberately redacts credentials; any log line that prints
+    a ``RemoteStorageConfig`` must never leak API keys or passwords.
+    """
+
+    qdrant_url: Optional[str] = None
+    qdrant_api_key: Optional[str] = None
+    falkordb_uri: Optional[str] = None
+    falkordb_password: Optional[str] = None
+    falkordb_ssl: bool = False
+
+    def __repr__(self) -> str:
+        return (
+            f"RemoteStorageConfig(qdrant_url={self.qdrant_url!r}, "
+            f"qdrant_api_key=***, falkordb_uri={self.falkordb_uri!r}, "
+            f"falkordb_password=***, falkordb_ssl={self.falkordb_ssl})"
+        )
+
+
+def validate_backend_config(
+    backend: str,
+    remote: Optional[Mapping[str, Any]],
+) -> tuple[BackendMode, Optional[RemoteStorageConfig]]:
+    """Validate ``storage_backend`` and remote config completeness.
+
+    Returns the resolved :class:`BackendMode` and a
+    :class:`RemoteStorageConfig` when the mode is ``REMOTE``. ``remote`` may
+    be ``None`` when the mode is ``LOCAL``. When the mode is ``REMOTE`` the
+    caller must supply at least one of ``qdrant_url`` or ``falkordb_uri``;
+    an empty remote section raises ``ValueError``.
+    """
+    try:
+        mode = BackendMode(backend)
+    except ValueError as exc:
+        raise InvalidStorageIdentityError(
+            f"storage_backend must be 'local' or 'remote'; got {backend!r}"
+        ) from exc
+    if mode == BackendMode.LOCAL:
+        return mode, None
+    if remote is None:
+        raise ValueError(
+            "storage_backend='remote' requires a 'remote' section "
+            "with at least qdrant_url or falkordb_uri"
+        )
+    config = RemoteStorageConfig(
+        qdrant_url=_nonempty_or(remote.get("qdrant_url")),
+        qdrant_api_key=_nonempty_or(remote.get("qdrant_api_key")),
+        falkordb_uri=_nonempty_or(remote.get("falkordb_uri")),
+        falkordb_password=_nonempty_or(remote.get("falkordb_password")),
+        falkordb_ssl=bool(remote.get("falkordb_ssl", False)),
+    )
+    if not config.qdrant_url and not config.falkordb_uri:
+        raise ValueError(
+            "remote config must specify at least qdrant_url or falkordb_uri"
+        )
+    return mode, config
+
+
+def _nonempty_or(value: object) -> Optional[str]:
+    """Return ``None`` for empty/whitespace strings, otherwise the trimmed str."""
+    if value is None:
+        return None
+    rendered = str(value).strip()
+    return rendered or None
+
+
 def validate_storage_identity(value: object, *, field_name: str) -> str:
     candidate = str(value or "").strip().casefold()
     if not _IDENTITY_RE.fullmatch(candidate):
@@ -155,6 +238,8 @@ class ResolvedStorage:
     manifest_path: Optional[Path] = None
     backups_path: Optional[Path] = None
     path_provenance: str = "derived-default"
+    backend_mode: BackendMode = BackendMode.LOCAL
+    remote: Optional[RemoteStorageConfig] = None
     _legacy_keys: tuple[str, ...] = field(default_factory=tuple, repr=False)
 
     def __post_init__(self) -> None:
@@ -257,6 +342,19 @@ def resolve_storage(
     legacy = _legacy_keys(cfg)
     local_keys = (CFG_DATA_HOME, CFG_QDRANT_BASE, CFG_QDRANT_CODE, CFG_QDRANT_DOC,
                   CFG_FALKORDB_PATH, CFG_FALKORDB_CODE, CFG_FALKORDB_DOC)
+    backend_raw = _nonempty(cfg, "storage_backend") or "local"
+    remote_section = cfg.get("remote")
+    backend_mode, remote_config = validate_backend_config(backend_raw, remote_section)
+    if backend_mode == BackendMode.REMOTE and legacy:
+        # User supplied both legacy and the new remote section. Legacy keys remain
+        # rejected to avoid mixing two endpoint sources; surface them clearly.
+        mode = "mixed local/remote" if any(_nonempty(cfg, key) for key in local_keys) else "remote-only"
+        raise LegacyRemoteConfigurationError(
+            f"{mode} database configuration is unsupported for the local runtime: "
+            + ", ".join(legacy)
+            + ". Remove endpoint/credential fields or move them to the 'remote' "
+              "section of your project config."
+        )
     if legacy:
         mode = "mixed local/remote" if any(_nonempty(cfg, key) for key in local_keys) else "remote-only"
         raise LegacyRemoteConfigurationError(
@@ -312,6 +410,7 @@ def resolve_storage(
         backups_path=instance_root / "backups", path_provenance=provenance,
         code_graph=code_graph, doc_graph=doc_graph,
         code_collection=code_collection, doc_collection=doc_collection,
+        backend_mode=backend_mode, remote=remote_config,
         _legacy_keys=legacy,
     )
 
