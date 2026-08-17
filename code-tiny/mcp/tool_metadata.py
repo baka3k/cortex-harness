@@ -177,7 +177,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
         ],
         "output": "Dict with paths between modules, graph visualization data",
-        "example": "find_path_between_module(source_modules=['sample_module'], target_modules=['SampleTarget'], direction='both')",
+        "example": "find_path_between_module(source_modules=['sample_module'], target_modules=['sample_target'], direction='both')",
     },
     {
         "name": "listup_symbols_matching_file_path",
@@ -205,7 +205,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
         ],
         "output": "Dict with classes and their functions",
-        "example": "listup_class_matching_path(class_names=['MyClass', 'Handler'])",
+        "example": "listup_class_matching_path(class_names=['SampleClass', 'SampleHandler'])",
     },
     {
         "name": "list_up_entrypoint",
@@ -237,7 +237,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
         ],
         "output": "Dict with traced paths using specified relationships",
-        "example": "trace_flow(start_id='func1', end_id='func2', rel_types=['CALLS', 'POSSIBLE_CALLS'])",
+        "example": "trace_flow(start_id='sample_function', end_id='target_function', rel_types=['CALLS', 'POSSIBLE_CALLS'])",
     },
     {
         "name": "trace_flow_between_module",
