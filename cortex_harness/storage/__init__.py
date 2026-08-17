@@ -17,13 +17,16 @@ from .config import (
     DEFAULT_QDRANT_PATH,
     DEFAULT_INSTANCE_ID,
     STORAGE_SCHEMA_VERSION,
+    BackendMode,
     InvalidStorageIdentityError,
     QdrantStorageRole,
+    RemoteStorageConfig,
     ResolvedStorage,
     StorageRole,
     resolve_performance_profile,
     resolve_storage,
     storage_overlay,
+    validate_backend_config,
     validate_storage_identity,
 )
 from .contracts import (
@@ -45,12 +48,21 @@ from .layout import ensure_layout, load_manifest, manifest_payload
 from .lease import StorageLease, StorageLeaseConflictError, assert_owner_stopped
 from .migration import MigrationItem, migrate_legacy_layout
 from .qdrant import LocalQdrantStore, build_filter, get_client, reset_clients
+from .qdrant_remote import (
+    RemoteQdrantStore,
+    get_remote_client,
+    reset_remote_clients,
+)
+from .errors import BackendConnectionError
+from .factory import QdrantStore, StorageFactory, create_storage
 
 __all__ = [
     "DEFAULT_FALKORDB_PATH",
     "DEFAULT_INSTANCE_ID",
     "DEFAULT_QDRANT_PATH",
     "STORAGE_SCHEMA_VERSION",
+    "BackendConnectionError",
+    "BackendMode",
     "InvalidStorageIdentityError",
     "FreshnessMetadata",
     "GatewayErrorCode",
@@ -65,6 +77,8 @@ __all__ = [
     "OwnerLifecycleState",
     "PerformanceProfile",
     "PhysicalTargetKey",
+    "RemoteQdrantStore",
+    "RemoteStorageConfig",
     "ResolvedStorage",
     "StorageRole",
     "StorageLease",
@@ -73,10 +87,15 @@ __all__ = [
     "StoreGatewayError",
     "StoreHealth",
     "MigrationItem",
+    "QdrantStore",
+    "StorageFactory",
     "assert_owner_stopped",
     "build_filter",
+    "create_storage",
     "get_client",
+    "get_remote_client",
     "reset_clients",
+    "reset_remote_clients",
     "resolve_storage",
     "resolve_performance_profile",
     "ensure_layout",
@@ -84,5 +103,6 @@ __all__ = [
     "manifest_payload",
     "migrate_legacy_layout",
     "storage_overlay",
+    "validate_backend_config",
     "validate_storage_identity",
 ]
