@@ -17,6 +17,7 @@ from graph_store import (
 )
 from doc_local_qdrant import get_document_qdrant_store
 from project_contract import (
+    ProjectNotRegisteredError,
     list_registered_projects,
     qdrant_project_filter as _pc_qdrant_project_filter,
     resolve_project_targets,
@@ -110,8 +111,13 @@ def _acquire_graph_store(project_id: Optional[str]):
     if not project_id:
         return base, False
     if getattr(base, "provider", None) == "falkordb":
-        targets = resolve_project_targets(project_id)
-        return base.for_graph(targets.doc_graph), False
+        try:
+            targets = resolve_project_targets(project_id)
+            return base.for_graph(targets.doc_graph), False
+        except ProjectNotRegisteredError:
+            # Unregistered project_id — fall back to treating it as the
+            # graph name (matches graph_mcp's per-project naming convention).
+            return base.for_graph(str(project_id).strip()), False
     return base, False
 
 
@@ -139,7 +145,12 @@ def _resolve_doc_collection(
     if collection:
         return collection
     if project_id:
-        return resolve_project_targets(project_id).doc_qdrant_collection
+        try:
+            return resolve_project_targets(project_id).doc_qdrant_collection
+        except ProjectNotRegisteredError:
+            # Unregistered project_id — fall back to treating it as the
+            # collection name (matches graph_mcp's per-project naming convention).
+            return str(project_id).strip()
     return QDRANT_COLLECTION
 
 
@@ -149,7 +160,12 @@ def _resolve_doc_collections(
     if collection:
         return [collection]
     if project_id:
-        return [resolve_project_targets(project_id).doc_qdrant_collection]
+        try:
+            return [resolve_project_targets(project_id).doc_qdrant_collection]
+        except ProjectNotRegisteredError:
+            # Unregistered project_id — fall back to treating it as the
+            # collection name (matches graph_mcp's per-project naming convention).
+            return [str(project_id).strip()]
 
     collections: List[str] = []
     for registered_project in list_registered_projects():
@@ -536,12 +552,27 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def list_qdrant_collections(project_id=None) -> List[str]:
-        """List Qdrant collections."""
+        """List Qdrant collections.
+
+        Per the unified ingest/query contract:
+        - ``project_id`` is optional. When omitted (or empty), returns every
+          collection (``None`` semantics = full-search across all projects).
+        - When supplied AND registered, filters to that project's collection.
+        - When supplied but NOT registered in
+          ``.cortext-harness/config/*.json``, falls back to listing every
+          collection (matches ``graph_mcp`` behavior). The caller wanted to
+          scope the query, but the project is unknown — surfacing all
+          collections lets the agent pick a matching one rather than failing
+          closed.
+        """
         qdrant = get_qdrant()
         names = qdrant.list_collection_names()
         if not project_id:
             return names
-        expected = _resolve_doc_collection(project_id)
+        try:
+            expected = _resolve_doc_collection(project_id)
+        except ProjectNotRegisteredError:
+            return names
         return [name for name in names if name == expected]
 
     @mcp.tool()
