@@ -2,6 +2,7 @@ import os
 import json
 import inspect
 import sys
+import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -245,6 +246,230 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("No parser selected", result["error"]["message"])
         self.assertIsNone(result["capability"]["canonical_parser"])
         bridge.assert_not_called()
+
+    def test_capability_summary_no_warning_when_parser_omitted(self):
+        # Mirrors the project_id contract: omitting parser_type means "search
+        # every parser". No warning should be emitted — the absence of
+        # parser_type is an intentional, supported mode.
+        summary = unified_mcp._capability_summary(None, "cplus")
+        self.assertIsNone(summary["canonical_parser"])
+        self.assertNotIn("warning", summary)
+
+        # Empty string and whitespace also mean "not provided".
+        for empty in ("", "   "):
+            summary = unified_mcp._capability_summary(empty, "cplus")
+            self.assertNotIn("warning", summary)
+
+    def test_capability_summary_warns_only_for_unknown_explicit_parser(self):
+        # An explicit but unknown parser is still a typo / unregistered
+        # profile — surface the warning so the caller can fix it.
+        summary = unified_mcp._capability_summary("pyhton", "cplus")
+        self.assertIsNone(summary["canonical_parser"])
+        self.assertIn("warning", summary)
+        self.assertIn("pyhton", summary["warning"])
+        self.assertIn("not registered", summary["warning"])
+
+    async def test_fanout_dispatch_runs_each_parser_and_merges_results(self):
+        # When parser_type is omitted and the tool is in the search-tool
+        # set, ``_dispatch_tool`` must fan-out across every registered
+        # parser, tag each hit with its source parser, and surface the
+        # raw per-parser results.
+        tools = [
+            "search_functions",
+            "search_by_code",
+            "get_symbol",
+            "get_node_details",
+            "query_subgraph",
+            "find_paths",
+            "find_path_between_module",
+            "listup_symbols_matching_file_path",
+            "listup_class_matching_path",
+            "list_up_entrypoint",
+            "trace_flow",
+            "trace_flow_between_module",
+            "list_possible_calls",
+        ]
+        for tool_name in tools:
+            self.assertIn(tool_name, unified_mcp._FANOUT_SEARCH_TOOLS)
+
+        async def fake_search_functions(payload=None):
+            parser = (payload or {}).get("parser_type")
+            if parser == "android":
+                return {"db": "android_g", "results": [{"id": "a1", "name": "alpha"}]}
+            return {"db": "cplus_g", "results": [{"id": "c1", "name": "beta"}]}
+
+        async def fake_search_by_code(payload=None):
+            return {"db": "code_g", "results": [{"id": "x1"}]}
+
+        fake_module = types.SimpleNamespace(
+            tool_search_functions=fake_search_functions,
+            tool_search_by_code=fake_search_by_code,
+        )
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=fake_module),
+                "android": unified_mcp.BackendInfo(name="android", module=fake_module),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(set(result["parsers_searched"]), {"android", "cplus"})
+        self.assertIn("results", result)
+        # Each hit is tagged with its source parser.
+        parsers_seen = {hit["parser_type"] for hit in result["results"]}
+        self.assertEqual(parsers_seen, {"android", "cplus"})
+        # Per-parser raw results are kept.
+        self.assertIn("parser_results", result)
+        self.assertIn("android", result["parser_results"])
+        self.assertIn("cplus", result["parser_results"])
+        self.assertEqual(result["query_engine"], "graph_fanout")
+
+    async def test_fanout_dispatch_does_not_trigger_when_parser_explicit(self):
+        # When parser_type is explicitly passed, fan-out must NOT trigger.
+        # The call should drop through to the single-parser path.
+        async def fake_search_functions(payload=None):
+            return {"db": "solo_g", "results": [{"id": "s1"}]}
+
+        fake_module = types.SimpleNamespace(tool_search_functions=fake_search_functions)
+
+        with patch.object(
+            unified_mcp,
+            "BACKENDS",
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=fake_module),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                with patch.object(
+                    unified_mcp,
+                    "_resolve_backend_name",
+                    return_value="cplus",
+                ):
+                    result = await unified_mcp._dispatch_tool(
+                        "search_functions",
+                        {"query": "foo", "parser_type": "cplus"},
+                    )
+
+        # Single-parser result, not the fan-out wrapper.
+        self.assertNotIn("parsers_searched", result)
+        self.assertEqual(result["db"], "solo_g")
+        self.assertEqual(result["results"], [{"id": "s1"}])
+
+    async def test_fanout_dispatch_records_per_parser_errors(self):
+        # One parser fails, the other succeeds. The merged result stays
+        # ok=True and the failure is recorded under parser_errors.
+        async def good_parser(payload=None):
+            return {"db": "good_g", "results": [{"id": "g1"}]}
+
+        async def bad_parser(payload=None):
+            raise ValueError("mocked backend failure")
+
+        fake_module = types.SimpleNamespace(tool_search_functions=good_parser)
+        bad_module = types.SimpleNamespace(tool_search_functions=bad_parser)
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=fake_module),
+                "android": unified_mcp.BackendInfo(name="android", module=bad_module),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["parsers_searched"], ["cplus"])
+        self.assertIn("android", result["parsers_failed"])
+        self.assertIn("android", result["parser_errors"])
+        self.assertEqual(result["parser_errors"]["android"]["message"], "mocked backend failure")
+
+    async def test_fanout_dispatch_returns_top_level_error_when_all_parsers_fail(self):
+        async def bad_parser(payload=None):
+            raise ValueError("nope")
+
+        fake_module = types.SimpleNamespace(tool_search_functions=bad_parser)
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=fake_module),
+                "android": unified_mcp.BackendInfo(name="android", module=fake_module),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "fanout_failed")
+        self.assertIn("android", result["parsers_failed"])
+        self.assertIn("cplus", result["parsers_failed"])
+
+    async def test_resolve_fanout_parsers_uses_project_parser_when_registered(self):
+        # When project_id is registered, fan-out collapses to the project's
+        # single parser_type — no fan-out needed.
+        with patch.object(
+            unified_mcp,
+            "resolve_project_targets",
+            return_value=type(
+                "T", (), {"parser_type": "spring"}
+            )(),
+        ):
+            parsers, error = unified_mcp._resolve_fanout_parsers("project-x")
+        self.assertIsNone(error)
+        self.assertEqual(parsers, ["spring"])
+
+    async def test_resolve_fanout_parsers_falls_back_to_all_when_project_unregistered(self):
+        # Unregistered project_id → fan-out across every registered parser.
+        with patch.object(
+            unified_mcp,
+            "resolve_project_targets",
+            side_effect=unified_mcp.ProjectNotRegisteredError("missing", []),
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus", "spring"}),
+            ):
+                parsers, error = unified_mcp._resolve_fanout_parsers("missing")
+        self.assertIsNone(error)
+        self.assertEqual(parsers, ["android", "cplus", "spring"])
+
+    async def test_resolve_fanout_parsers_emits_error_when_no_parsers_registered(self):
+        with patch.object(
+            unified_mcp,
+            "parser_aliases",
+            return_value=frozenset(),
+        ):
+            parsers, error = unified_mcp._resolve_fanout_parsers(None)
+        self.assertEqual(parsers, [])
+        self.assertIsNotNone(error)
+        self.assertEqual(error["error"]["type"], "no_parsers_registered")
 
     async def test_project_context_tool_scopes_database_to_project_id(self):
         # Each project's topology lives in its own graph (named after the
@@ -569,6 +794,81 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("project_id", accepted)
         self.assertNotIn("db", accepted)
         self.assertNotIn("search_full", accepted)
+
+    async def test_build_tool_error_received_params_exclude_missing_values(self):
+        # A param that is empty must not be reported as both "received" and
+        # "missing". Regression for the contradiction in the user-facing
+        # error payload (project_id appeared in both lists).
+        error = unified_mcp._build_tool_error(
+            "get_public_apis",
+            {"project_id": "", "parser_type": "c++"},
+            ValueError("boom"),
+        )
+
+        self.assertIn("project_id", error["error"]["missing_required_params"])
+        self.assertNotIn("project_id", error["error"]["received_params"])
+        self.assertIn("parser_type", error["error"]["received_params"])
+        self.assertNotIn("parser_type", error["error"]["missing_required_params"])
+
+    async def test_build_tool_error_example_follows_caller_parser(self):
+        # A c++ caller must not be shown a kotlin-flavored retry example.
+        error = unified_mcp._build_tool_error(
+            "get_public_apis",
+            {"project_id": "cortext", "parser_type": "c++"},
+            ValueError("boom"),
+        )
+
+        example = error["error"]["example"]
+        self.assertIn("parser_type='c++'", example)
+        self.assertNotIn("kotlin", example)
+
+        # Caller already on the catalog's parser keeps the catalog example.
+        same = unified_mcp._build_tool_error(
+            "get_public_apis",
+            {"project_id": "shop", "parser_type": "kotlin", "language": "kotlin"},
+            ValueError("boom"),
+        )
+        self.assertEqual(
+            same["error"]["example"],
+            unified_mcp._CATALOG_BY_NAME["get_public_apis"]["example"],
+        )
+
+    async def test_project_context_tool_reports_service_error_with_resolved_db(self):
+        # When the underlying service raises, the error handler must build a
+        # structured error (previously it referenced an undefined ``_db``
+        # local and crashed with NameError, masking the real failure).
+        context = (
+            "c++", ["EXPOSES_API"],
+            {"canonical_parser": "cplus"}, None, None,
+        )
+
+        class FailingService:
+            def __init__(self, _runner):
+                pass
+
+            async def get_public_apis(self, **_kwargs):
+                raise RuntimeError("mock service failure")
+
+        tool = getattr(
+            unified_mcp.tool_get_public_apis,
+            "fn",
+            unified_mcp.tool_get_public_apis,
+        )
+        with patch.object(
+            unified_mcp,
+            "_resolve_direct_capability_context",
+            AsyncMock(return_value=context),
+        ):
+            with patch(
+                "services.project_context_service.ProjectContextService",
+                FailingService,
+            ):
+                result = await tool(project_id="cortext", parser_type="c++")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "tool_execution_error")
+        self.assertIn("mock service failure", result["error"]["message"])
+        self.assertIn("db", result["error"]["received_params"])
 
     async def test_explore_graph_returns_tool_error_for_bad_numeric_input(self):
         tool = getattr(

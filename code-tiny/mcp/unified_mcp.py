@@ -6,6 +6,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import signal
 import sys
 
@@ -104,6 +105,80 @@ _UNIFIED_TOOL_NAMES: frozenset = frozenset(
         "get_module_architecture_summary",
         "get_project_special_files",
         "get_framework_context",
+    }
+)
+
+# Tools that fan-out across every registered parser when ``parser_type`` is
+# omitted. Mirrors the project_id contract: omit parser_type to search every
+# parser; pass parser_type to scope to one. Project-context tools (which
+# require a parser) are intentionally excluded — they keep their
+# fail-closed "parser required" error.
+_FANOUT_SEARCH_TOOLS: frozenset = frozenset(
+    {
+        "search_functions",
+        "search_by_code",
+        "get_symbol",
+        "get_node_details",
+        "query_subgraph",
+        "find_paths",
+        "find_path_between_module",
+        "listup_symbols_matching_file_path",
+        "listup_class_matching_path",
+        "list_up_entrypoint",
+        "trace_flow",
+        "trace_flow_between_module",
+        "list_possible_calls",
+    }
+)
+
+# Result keys whose values are lists of hits we want to merge across parsers.
+# Per-parser raw results stay in ``parser_results`` even if a key is here.
+_FANOUT_LIST_RESULT_KEYS: frozenset = frozenset(
+    {
+        "results",
+        "ids",
+        "nodes",
+        "edges",
+        "paths",
+        "symbols",
+        "classes",
+        "functions",
+        "endpoint_paths",
+        "workflows",
+        "matches",
+    }
+)
+# Result keys whose values are single objects (not lists) per parser. We
+# surface them inside ``parser_results`` only — merging into a single value
+# would lose information.
+_FANOUT_SINGLE_RESULT_KEYS: frozenset = frozenset(
+    {
+        "node",
+        "path",
+        "endpoint",
+    }
+)
+
+# Keys that are diagnostic metadata for a single parser run; we keep one
+# copy per parser under ``parser_results`` but do NOT promote them to the
+# merged top level.
+_FANOUT_DIAGNOSTIC_KEYS: frozenset = frozenset(
+    {
+        "db",
+        "ok",
+        "error",
+        "query_engine",
+        "capability",
+        "capability_diagnostics",
+        "reason",
+        "rel_types",
+        "direction",
+        "max_depth",
+        "default_relationships_applied",
+        "support_status",
+        "support_statuses",
+        "matched_node_count",
+        "matched_path_count",
     }
 )
 _unified_catalog = build_catalog(_UNIFIED_TOOL_NAMES)
@@ -272,6 +347,17 @@ def _resolve_backend_name(parser_type: Optional[str]) -> str:
 
 
 def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[str, Any]:
+    """Build a capability routing summary for ``parser_type``.
+
+    Mirrors the ``project_id`` resolution contract: when the caller omits
+    ``parser_type`` (None / empty / whitespace), the summary describes the
+    implicit full-search path across every registered parser — no warning,
+    because searching all parsers is an intentional, supported mode.
+
+    A caller-supplied but unknown parser still emits a warning so the error
+    surfaces in tools that explicitly named a parser (typo / unregistered
+    profile). Pass ``parser_type`` to scope the search to one parser.
+    """
     parser = _normalize_parser_type(parser_type)
     capability = capability_for_parser(parser)
     if capability:
@@ -285,7 +371,7 @@ def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[s
             "labels": sorted(capability.labels),
             "searchable_properties": list(capability.searchable_properties),
         }
-    return {
+    summary: Dict[str, Any] = {
         "requested_parser": parser,
         "canonical_parser": None,
         "query_engine": query_engine_for_backend(backend_name),
@@ -299,11 +385,16 @@ def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[s
         "features": [],
         "labels": [],
         "searchable_properties": [],
-        "warning": (
-            f"Parser '{parser}' is not registered; generic query behavior is being used."
-            if parser else "No parser selected; generic query behavior is being used."
-        ),
     }
+    if parser:
+        # Caller passed an explicit parser that we don't recognize. Warn so
+        # typos / unregistered profiles are surfaced. When parser is None,
+        # the caller opted into the "search every parser" path — no warning
+        # mirrors the project_id == "all projects" contract.
+        summary["warning"] = (
+            f"Parser '{parser}' is not registered; generic query behavior is being used."
+        )
+    return summary
 
 
 async def _resolve_direct_capability_context(
@@ -497,6 +588,31 @@ def _missing_required_params(tool_name: str, payload: Dict[str, Any]) -> List[st
     return missing
 
 
+def _parser_aware_example(tool_name: str, payload: Dict[str, Any]) -> Any:
+    """Re-target the catalog example at the caller's registered parser.
+
+    Catalog examples hardcode one parser (e.g. ``parser_type='kotlin'``);
+    showing that to a ``c++`` caller misdirects the retry hint. Absent or
+    unregistered parsers keep the catalog example untouched.
+    """
+    example = _CATALOG_BY_NAME.get(tool_name, {}).get("example")
+    if not isinstance(example, str) or "parser_type='" not in example:
+        return example
+    parser = _normalize_parser_type(payload.get("parser_type"))
+    if not parser or capability_for_parser(parser) is None:
+        return example
+    current = re.search(r"parser_type='([^']*)'", example)
+    if not current or current.group(1) == parser:
+        return example
+    updated = re.sub(r"parser_type='[^']*'", f"parser_type='{parser}'", example)
+    language = payload.get("language")
+    if isinstance(language, str) and language.strip():
+        updated = re.sub(r"language='[^']*'", f"language='{language.strip()}'", updated)
+    else:
+        updated = re.sub(r", language='[^']*'", "", updated)
+    return updated
+
+
 def _error_type_from_exception(exc: Exception, missing_required: List[str]) -> str:
     if missing_required:
         return "missing_required_parameters"
@@ -514,8 +630,9 @@ def _build_tool_error(
     backend_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     missing_required = _missing_required_params(tool_name, payload)
-    entry = _CATALOG_BY_NAME.get(tool_name, {})
-    received = sorted([key for key in payload.keys() if payload.get(key) is not None])
+    received = sorted(
+        key for key in payload.keys() if not _is_missing_value(payload.get(key))
+    )
     return {
         "ok": False,
         "query_engine": query_engine_for_backend(backend_name),
@@ -528,7 +645,7 @@ def _build_tool_error(
             "required_params": _required_params(tool_name),
             "accepted_params": _accepted_params(tool_name),
             "received_params": received,
-            "example": entry.get("example"),
+            "example": _parser_aware_example(tool_name, payload),
             "next_step": "Call list_mcp_functions and retry with exact parameter names.",
         },
     }
@@ -776,6 +893,234 @@ mcp_server.middleware.append(_proxy_middleware)
 _register_proxy_tools()
 
 
+def _resolve_fanout_parsers(project_id: Optional[str]) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+    """Return the list of parsers to fan out to for ``project_id``.
+
+    Contract (parallels ``_resolve_graph_database``):
+    * ``project_id`` registered → use that project's ``parser_type`` only;
+      no fan-out (the project already picked a single parser).
+    * ``project_id`` present but not registered → fall back to fan-out
+      across every registered parser (the caller's intent is "search all").
+    * ``project_id`` omitted → fan-out across every registered parser.
+
+    Returns ``(parsers, error)``: ``parsers`` is the sorted list of parser
+    aliases to query, ``error`` is a non-``None`` dict when fan-out cannot
+    proceed (e.g. no parsers registered).
+    """
+    raw = str(project_id or "").strip()
+    if raw:
+        try:
+            targets = resolve_project_targets(raw)
+            if targets.parser_type:
+                return [targets.parser_type], None
+        except ProjectNotRegisteredError:
+            # Unregistered project — fall back to fan-out across every parser.
+            pass
+    aliases = sorted(parser_aliases())
+    if not aliases:
+        return [], {
+            "ok": False,
+            "error": {
+                "type": "no_parsers_registered",
+                "tool": "_fanout_dispatch",
+                "message": (
+                    "No parser profiles are registered, so a parser-less "
+                    "fan-out search has nothing to query. Register a parser "
+                    "or pass parser_type explicitly."
+                ),
+                "next_step": "Call list_parsers to see registered parsers.",
+            },
+        }
+    return aliases, None
+
+
+def _tag_fanout_items(
+    parser_type: str,
+    items: List[Any],
+) -> List[Dict[str, Any]]:
+    """Return ``items`` with each entry tagged with ``parser_type``.
+
+    Items that are already dicts get ``parser_type`` merged in. Any other
+    type is wrapped as ``{"parser_type": <parser>, "value": <item>}`` so the
+    caller can still see which parser produced it.
+    """
+    tagged: List[Dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            merged = {"parser_type": parser_type}
+            merged.update(item)
+            tagged.append(merged)
+        else:
+            tagged.append({"parser_type": parser_type, "value": item})
+    return tagged
+
+
+def _merge_fanout_results(
+    parser_results: Dict[str, Dict[str, Any]],
+    parser_errors: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Merge per-parser raw dicts into a single fan-out payload.
+
+    Top-level list keys (see ``_FANOUT_LIST_RESULT_KEYS``) are concatenated
+    across parsers, with each item tagged with its source parser. Diagnostic
+    metadata stays inside ``parser_results`` so the caller can introspect
+    per-paragraph state. Non-list, non-diagnostic keys are preserved at the
+    top level only if they appear identically across every parser run — if
+    they diverge, the per-parser values are kept under ``parser_results``.
+    """
+    successful_parsers = sorted(
+        parser for parser, result in parser_results.items()
+        if not (isinstance(result, dict) and result.get("ok") is False)
+    )
+    merged: Dict[str, Any] = {
+        "ok": True,
+        "parsers_searched": successful_parsers,
+        "parsers_failed": sorted(parser_errors.keys()),
+        "parser_results": dict(parser_results),
+        "parser_errors": dict(parser_errors),
+        "query_engine": "graph_fanout",
+    }
+
+    # Discover the union of list keys across all successful parser results.
+    list_keys: List[str] = []
+    seen_list_keys: set = set()
+    for parser in successful_parsers:
+        payload = parser_results[parser] or {}
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if key in _FANOUT_DIAGNOSTIC_KEYS or key in _FANOUT_SINGLE_RESULT_KEYS:
+                continue
+            if isinstance(value, list) and key not in seen_list_keys:
+                seen_list_keys.add(key)
+                list_keys.append(key)
+
+    for key in list_keys:
+        merged[key] = []
+        for parser in successful_parsers:
+            payload = parser_results[parser] or {}
+            if not isinstance(payload, dict):
+                continue
+            value = payload.get(key)
+            if isinstance(value, list) and value:
+                merged[key].extend(_tag_fanout_items(parser, value))
+
+    # Promote the stable scalar fields (e.g. ``matched_node_count``) only if
+    # they are identical across every successful parser run.
+    scalar_candidates: Dict[str, Any] = {}
+    for parser in successful_parsers:
+        payload = parser_results[parser] or {}
+        if not isinstance(payload, dict):
+            continue
+        for key, value in payload.items():
+            if key in _FANOUT_DIAGNOSTIC_KEYS:
+                continue
+            if key in _FANOUT_LIST_RESULT_KEYS:
+                continue
+            if key in _FANOUT_SINGLE_RESULT_KEYS:
+                continue
+            if isinstance(value, (list, dict)):
+                continue
+            if key in scalar_candidates and scalar_candidates[key] != value:
+                scalar_candidates[key] = "__diverged__"
+            else:
+                scalar_candidates[key] = value
+    for key, value in scalar_candidates.items():
+        if value != "__diverged__":
+            merged[key] = value
+
+    return merged
+
+
+async def _fanout_dispatch(
+    tool_name: str,
+    payload: Dict[str, Any],
+    parsers: List[str],
+) -> Dict[str, Any]:
+    """Dispatch ``tool_name`` once per parser and merge the results.
+
+    Runs the per-parser calls concurrently via ``asyncio.gather`` so the
+    total latency is roughly the slowest parser rather than the sum.
+    Per-parser errors are captured into ``parser_errors`` and the merged
+    result stays ``ok=True`` as long as at least one parser produced a
+    result. If every parser fails, the merged result is ``ok=False`` and
+    the first error is surfaced as the top-level ``error``.
+    """
+    base_payload = dict(payload)
+    base_payload.pop("parser_type", None)
+    base_payload["_fanout"] = True
+
+    async def _run_one(parser: str) -> Tuple[str, Dict[str, Any], Optional[Dict[str, Any]]]:
+        per_parser_payload = dict(base_payload)
+        per_parser_payload["parser_type"] = parser
+        backend_name = _resolve_backend_name(parser)
+        backend = BACKENDS[backend_name]
+        fn = _unwrap_tool_callable(
+            getattr(backend.module, f"tool_{tool_name}", None)
+        )
+        if fn is None:
+            return (
+                parser,
+                {},
+                {
+                    "type": "tool_not_in_backend",
+                    "message": (
+                        f"Tool '{tool_name}' is not available in query "
+                        f"engine '{query_engine_for_backend(backend_name)}'."
+                    ),
+                },
+            )
+        try:
+            result = await fn(payload=per_parser_payload)
+        except Exception as exc:  # noqa: BLE001
+            return (
+                parser,
+                {},
+                {
+                    "type": _error_type_from_exception(exc, _missing_required_params(tool_name, per_parser_payload)),
+                    "message": str(exc),
+                },
+            )
+        if not isinstance(result, dict):
+            return parser, {"_raw": result}, None
+        return parser, result, None
+
+    runs = await asyncio.gather(
+        *(_run_one(parser) for parser in parsers),
+        return_exceptions=False,
+    )
+
+    parser_results: Dict[str, Dict[str, Any]] = {}
+    parser_errors: Dict[str, Dict[str, Any]] = {}
+    for parser, result, error in runs:
+        if error is not None:
+            parser_errors[parser] = error
+            parser_results[parser] = {"ok": False, "error": error}
+        else:
+            parser_results[parser] = result
+
+    merged = _merge_fanout_results(parser_results, parser_errors)
+    if not parser_errors:
+        return merged
+    if not merged["parsers_searched"]:
+        # Every parser failed — surface the first error as the top-level
+        # error so callers can recover via the standard error envelope.
+        first_parser = next(iter(parser_errors))
+        merged["ok"] = False
+        merged["error"] = {
+            "type": "fanout_failed",
+            "tool": tool_name,
+            "message": (
+                f"All {len(parser_errors)} parser(s) failed to dispatch "
+                f"'{tool_name}'. First error from parser "
+                f"'{first_parser}': {parser_errors[first_parser].get('message', '')}"
+            ),
+            "first_parser": first_parser,
+            "all_errors": parser_errors,
+        }
+    return merged
+
+
 async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     merged = _apply_unified_defaults(payload)
     merged = _coerce_list_fields(merged)
@@ -783,6 +1128,26 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     capability = capability_for_parser(selected_parser)
     if selected_parser and capability is None:
         return _unsupported_parser_result(tool_name, merged, selected_parser)
+    # Fan-out: if the caller omitted parser_type and the tool is in the
+    # search-tool set, dispatch across every parser (or the project's
+    # parser if project_id is registered) and merge the results. This
+    # mirrors the project_id contract: omit to search all.
+    if (
+        not selected_parser
+        and tool_name in _FANOUT_SEARCH_TOOLS
+        and not merged.get("_fanout")
+    ):
+        parsers, error = _resolve_fanout_parsers(merged.get("project_id"))
+        if error is not None:
+            error.setdefault("tool", tool_name)
+            return error
+        merged["_fanout"] = True
+        result = await _fanout_dispatch(tool_name, merged, parsers)
+        # Fan-out routes through every parser's backend, so the routing
+        # summary is the union of per-parser summaries — keep it light.
+        if isinstance(result, dict):
+            result.setdefault("capability", _capability_summary(None, None))
+        return result
     backend_name = _resolve_backend_name(selected_parser)
     framework = framework_for_parser(merged.get("parser_type"))
     relationships_applied: List[str] = []
@@ -1254,7 +1619,7 @@ async def _run_project_context_tool(
             {
                 "project_id": project_id,
                 "parser_type": parser_type,
-                "db": _db,
+                "db": database,
                 **method_args,
             },
             exc,
