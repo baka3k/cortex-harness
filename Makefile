@@ -26,7 +26,7 @@ uninstall:
 	$(LIFECYCLE) uninstall
 
 infra-up:
-	$(LIFECYCLE) infra-up
+	$(LIFECYCLE) infra-up $(INFRA_ARGS)
 
 infra-down:
 	$(LIFECYCLE) infra-down

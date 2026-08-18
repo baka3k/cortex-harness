@@ -155,19 +155,32 @@ def test_storage_backup_copies_and_verifies_owner_data(tmp_path: Path) -> None:
     assert {item["backend"] for item in manifest["items"]} == {"qdrant", "falkordb"}
 
 
-def test_infra_up_is_a_no_docker_deprecation_alias(tmp_path: Path) -> None:
-    """``infra-up`` must NOT touch Docker; it warns and calls storage-init."""
-    result = _run_lifecycle("infra-up", cwd=tmp_path, data_home=tmp_path / "account-data")
-    assert result.returncode == 0
-    assert "deprecated" in result.stdout.lower()
-    assert "storage-init" in result.stdout
-    assert "manifest" in result.stdout
+def test_infra_up_no_longer_emits_deprecation(tmp_path: Path) -> None:
+    """``infra-up`` is a first-class command — no deprecation warning."""
+    data_home = tmp_path / "account-data"
+    result = _run_lifecycle("infra-up", cwd=tmp_path, data_home=data_home)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "deprecated" not in result.stdout.lower()
+    assert "storage-init" not in result.stdout.lower()
+    assert "data root" in result.stdout
+    # local layout was still created.
+    instance = data_home / "v1" / "instances" / "test"
+    assert (instance / "manifest.json").is_file()
 
 
-def test_infra_down_is_a_no_docker_noop(tmp_path: Path) -> None:
+def test_infra_up_provision_flag_is_accepted(tmp_path: Path) -> None:
+    """``--provision`` is a no-op when no remote project is configured."""
+    result = _run_lifecycle("infra-up", "--provision", cwd=tmp_path, data_home=tmp_path / "account-data")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "deprecated" not in result.stdout.lower()
+
+
+def test_infra_down_closes_remote_clients(tmp_path: Path) -> None:
     result = _run_lifecycle("infra-down", cwd=tmp_path)
     assert result.returncode == 0
-    assert "deprecated" in result.stdout.lower()
+    assert "remote" in result.stdout.lower()
+    assert "closed" in result.stdout.lower()
+    assert "deprecated" not in result.stdout.lower()
 
 
 def test_storage_stop_is_a_noop(tmp_path: Path) -> None:

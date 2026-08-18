@@ -89,14 +89,16 @@ USAGE = """Usage (equivalent forms):
   make build       | dev build       Create/sync virtualenvs and Python dependencies.
   make install     | dev install     Run build and install the global dev command.
   make uninstall   | dev uninstall   Remove the global dev command.
-  make infra-up    | dev infra-up    Deprecated alias for local storage initialization.
-  make infra-down  | dev infra-down  Deprecated no-op; local storage has no service lifecycle.
+  make infra-up    | dev infra-up    Initialize local storage; probe remote projects
+                                      (pass INFRA_ARGS="--provision" to provision).
+  make infra-down  | dev infra-down  Close cached remote clients (local: no-op).
   make storage-layout               Show instance paths, manifest, and current leases.
   make storage-init                 Create the canonical instance tree and manifest.
   make storage-migrate-layout       Dry-run legacy repository-local migration.
   make storage-backup               Create a verified owner backup (OWNER=code|doc).
   make doctor      | dev doctor      Check local storage and list every running Cortex MCP.
-                                      Also reports active code/doc sync workers.
+                                      Also reports active code/doc sync workers and
+                                      remote-backend reachability.
   make sync code stop                Stop code sync workers and descendants.
   make sync doc stop                 Stop document sync workers and descendants.
   make start       | dev start       Load the nearest project dev.json and open both MCPs.
@@ -269,30 +271,197 @@ def tcp_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def invoke_infra_up() -> None:
-    """Deprecated alias for ``storage-init``.
+def _scan_project_backends(config_dir: Path | None = None) -> list[dict[str, object]]:
+    """Scan ``.cortext-harness/config/*.json`` and classify by backend mode.
 
-    Kept for one release so existing scripts that still call
-    ``infra-up`` keep working. No Docker interaction occurs; the local
-    on-disk storage is created in the project's root.
+    Returns a list of dicts with keys ``project_id``, ``backend_mode``,
+    ``remote_config`` and ``config_path``. Malformed JSON files are silently
+    skipped so a single broken config never blocks ``infra-up``.
     """
-    print(
-        "[warn] 'infra-up' is deprecated. Use 'storage-init' instead. "
-        "Docker is no longer required."
+    base = config_dir if config_dir is not None else ROOT / ".cortext-harness" / "config"
+    if not base.is_dir():
+        return []
+    projects: list[dict[str, object]] = []
+    for config_path in sorted(base.glob("*.json")):
+        try:
+            document = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(document, dict):
+            continue
+        project_section = document.get("project", {})
+        project_id = (
+            str(project_section.get("code") or "").strip()
+            or config_path.stem
+        )
+        backend = str(document.get("storage_backend") or "local")
+        remote_section = document.get("remote")
+        projects.append({
+            "project_id": project_id,
+            "backend_mode": backend,
+            "remote_config": remote_section,
+            "config_path": str(config_path),
+        })
+    return projects
+
+
+def _resolve_collection_names(
+    project_id: str,
+    config_path: str,
+) -> dict[str, str]:
+    """Read collection/graph names from project config env sections.
+
+    Falls back to conventional ``{project_id}_code`` / ``{project_id}_doc``
+    names when the project config does not override them. The lookup is
+    forgiving: missing files, malformed JSON, or missing sections yield the
+    default convention rather than an error.
+    """
+    defaults = {
+        "code_collection": f"{project_id}_code",
+        "doc_collection": f"{project_id}_doc",
+        "code_graph": "hyper_graph",
+        "doc_graph": f"{project_id}_doc",
+    }
+    try:
+        document = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return defaults
+    if not isinstance(document, dict):
+        return defaults
+    code_env = document.get("code", {}).get("env", {}) or {}
+    doc_env = document.get("doc", {}).get("env", {}) or {}
+    code_collection = (
+        str(code_env.get("QDRANT_COLLECTION") or "").strip()
+        or str(code_env.get("QDRANT_COLLECTION_CODE") or "").strip()
+        or defaults["code_collection"]
     )
-    invoke_storage_init()
+    doc_collection = (
+        str(doc_env.get("QDRANT_COLLECTION_DOC") or "").strip()
+        or str(doc_env.get("QDRANT_COLLECTION") or "").strip()
+        or defaults["doc_collection"]
+    )
+    code_graph = (
+        str(code_env.get("FALKORDB_GRAPH") or "").strip()
+        or defaults["code_graph"]
+    )
+    doc_graph = (
+        str(doc_env.get("DOC_FALKORDB_GRAPH") or "").strip()
+        or str(doc_env.get("FALKORDB_GRAPH") or "").strip()
+        or defaults["doc_graph"]
+    )
+    return {
+        "code_collection": code_collection,
+        "doc_collection": doc_collection,
+        "code_graph": code_graph,
+        "doc_graph": doc_graph,
+    }
+
+
+def _provision_remote_project(
+    project_id: str,
+    remote_config,
+    *,
+    config_path: str = "",
+) -> None:
+    """Provision remote resources for one project."""
+    from cortex_harness.storage.remote_probe import (
+        provision_falkordb_graph,
+        provision_qdrant_collection,
+        render_provision_line,
+        setup_remote_falkordb_schema,
+    )
+
+    if config_path:
+        names = _resolve_collection_names(project_id, config_path)
+    else:
+        names = {
+            "code_collection": f"{project_id}_code",
+            "doc_collection": f"{project_id}_doc",
+            "code_graph": "hyper_graph",
+            "doc_graph": f"{project_id}_doc",
+        }
+    results = []
+    if remote_config.qdrant_url:
+        results.append(provision_qdrant_collection(remote_config, names["code_collection"]))
+        results.append(provision_qdrant_collection(remote_config, names["doc_collection"]))
+    if remote_config.falkordb_uri:
+        results.append(provision_falkordb_graph(remote_config, names["code_graph"]))
+        results.append(provision_falkordb_graph(remote_config, names["doc_graph"]))
+        results.append(setup_remote_falkordb_schema(remote_config, names["code_graph"]))
+        results.append(setup_remote_falkordb_schema(remote_config, names["doc_graph"]))
+    for result in results:
+        print(f"[infra-up]     {render_provision_line(result)}")
+
+
+def invoke_infra_up(*, provision: bool = False) -> None:
+    """Initialize storage for all registered projects.
+
+    Local projects get their instance tree created (same as ``storage-init``).
+    Remote projects get connectivity validated; with ``provision=True`` the
+    required collections and graphs are created on the remote servers.
+    """
+    from cortex_harness.storage.config import validate_backend_config
+    from cortex_harness.storage.remote_probe import probe_all
+
+    # Always ensure local layout exists (backward compatible).
+    resolved = _resolved_storage()
+    from cortex_harness.storage.layout import ensure_layout
+    ensure_layout(resolved)
+
+    projects = _scan_project_backends()
+    remote_projects = [project for project in projects if project["backend_mode"] == "remote"]
+    local_count = len(projects) - len(remote_projects)
+
+    if local_count:
+        print(f"[infra-up] {local_count} local project(s) — storage initialized")
+    print(f"[infra-up] data root: {resolved.data_root}")
+    print(f"[infra-up] manifest : {resolved.manifest_path}")
+
+    if not remote_projects:
+        return
+
+    failures = 0
+    for project in remote_projects:
+        project_id = str(project["project_id"])
+        remote_section = project["remote_config"]
+        try:
+            _, remote_config = validate_backend_config("remote", remote_section)
+        except ValueError as exc:
+            print(f"[infra-up] [fail] {project_id}: {exc}")
+            failures += 1
+            continue
+
+        print(f"[infra-up] {project_id} (remote):")
+        results = probe_all(remote_config)
+        for result in results:
+            tag = "[ok]" if result.reachable else "[fail]"
+            print(f"[infra-up]   {tag} {result.backend}: {result.message}")
+            if not result.reachable:
+                failures += 1
+
+        if provision and all(result.reachable for result in results):
+            _provision_remote_project(
+                project_id,
+                remote_config,
+                config_path=str(project.get("config_path", "")),
+            )
+
+    if failures:
+        print(f"[infra-up] {failures} check(s) failed")
+        raise SystemExit(1)
+    print("[infra-up] all remote projects reachable")
 
 
 def invoke_infra_down() -> None:
-    """Deprecated alias for ``storage-stop``.
+    """Tear down storage lifecycle.
 
-    No-op: local storage has no lifecycle to stop. Kept so existing
-    scripts keep returning exit code 0.
+    Local projects: no-op (files persist on disk). Remote projects: close
+    cached remote clients so subsequent processes reconnect cleanly.
     """
-    print(
-        "[warn] 'infra-down' is deprecated. Use 'storage-stop' instead. "
-        "Docker is no longer required."
-    )
+    from cortex_harness.storage.qdrant_remote import reset_remote_clients
+
+    reset_remote_clients()
+    print("[infra-down] remote client connections closed")
 
 
 def _resolved_storage(root: Path | None = None):
@@ -515,6 +684,65 @@ def doctor_process_checks(resolved: object | None) -> None:
         )
 
 
+def doctor_remote_checks() -> int:
+    """Check remote backend connectivity for all remote-mode projects.
+
+    Returns the number of failed checks. Honors
+    ``CORTEX_STORAGE_BACKEND_FORCE_LOCAL`` by reporting a passing
+    bypass message instead of touching the network — this keeps the
+    rollback path observable in ``make doctor`` output.
+    """
+    from cortex_harness.storage.remote_probe import force_local_active
+
+    if force_local_active():
+        return doctor_check(
+            "remote backends",
+            True,
+            "bypassed (CORTEX_STORAGE_BACKEND_FORCE_LOCAL=1)",
+            required=False,
+        )
+
+    from cortex_harness.storage.config import validate_backend_config
+    from cortex_harness.storage.remote_probe import probe_all
+
+    projects = _scan_project_backends()
+    remote_projects = [
+        project for project in projects if project["backend_mode"] == "remote"
+    ]
+    if not remote_projects:
+        return doctor_check(
+            "remote projects",
+            True,
+            "none configured",
+            required=False,
+        )
+
+    failures = 0
+    for project in remote_projects:
+        project_id = str(project["project_id"])
+        remote_section = project["remote_config"]
+        try:
+            _, remote_config = validate_backend_config("remote", remote_section)
+        except ValueError as exc:
+            failures += doctor_check(
+                f"remote:{project_id}:config",
+                False,
+                str(exc),
+            )
+            continue
+
+        for result in probe_all(remote_config):
+            # ``probe_*`` returns a "skipped" message when no URL is set.
+            if result.message.startswith("skipped"):
+                continue
+            failures += doctor_check(
+                f"remote:{project_id}:{result.backend}",
+                result.reachable,
+                f"{result.url} — {result.message}",
+            )
+    return failures
+
+
 def human_file_size(path_value: object) -> str:
     if not path_value:
         return "unknown"
@@ -615,6 +843,12 @@ def invoke_doctor() -> None:
         failures += doctor_check("local storage", False, str(error))
 
     doctor_process_checks(resolved)
+
+    # ── Remote backend checks ─────────────────────────────────────────
+    try:
+        failures += doctor_remote_checks()
+    except Exception as error:
+        failures += doctor_check("remote backends", False, str(error))
 
     with tempfile.TemporaryDirectory(prefix="cortex-doctor-") as temporary:
         try:
@@ -1248,6 +1482,15 @@ def storage_backup_options(arguments: list[str]) -> argparse.Namespace:
     return parser.parse_args(arguments)
 
 
+def infra_up_options(arguments: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="mcp-lifecycle.py infra-up")
+    parser.add_argument(
+        "--provision", action="store_true",
+        help="Create collections/graphs on remote servers.",
+    )
+    return parser.parse_args(arguments)
+
+
 def main(arguments: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if arguments is None else arguments
     action = arguments[0] if arguments else "help"
@@ -1266,6 +1509,9 @@ def main(arguments: list[str] | None = None) -> int:
         elif action == "storage-backup":
             options = storage_backup_options(arguments[1:])
             invoke_storage_backup(options.owner)
+        elif action == "infra-up":
+            options = infra_up_options(arguments[1:])
+            invoke_infra_up(provision=options.provision)
         elif len(arguments) > 1:
             print(USAGE, end="")
             return 2
