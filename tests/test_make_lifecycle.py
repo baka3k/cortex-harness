@@ -17,6 +17,13 @@ assert SPEC and SPEC.loader
 LIFECYCLE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(LIFECYCLE)
 
+# Ensure ``cortex_harness.storage.remote_probe`` is importable so test
+# fixtures can compare against the production ``ProbeResult`` dataclass.
+sys_path_entry = str(ROOT / "cortex_harness")
+if sys_path_entry not in sys.path:
+    sys.path.insert(0, sys_path_entry)
+from cortex_harness.storage.remote_probe import ProbeResult  # noqa: E402
+
 
 @unittest.skipIf(os.name == "nt", "POSIX lifecycle dispatch test")
 class MakeLifecycleTests(unittest.TestCase):
@@ -554,16 +561,128 @@ class MakeLifecycleTests(unittest.TestCase):
         self.assertIn("Terminal", command[2])
         self.assertIn(str(wrapper), command[2])
 
-    def test_infra_up_delegates_to_storage_init(self):
-        with mock.patch.object(LIFECYCLE, "invoke_storage_init") as storage_init:
+    def test_infra_up_no_longer_emits_deprecation_warning(self):
+        """infra-up is a first-class command now, not a deprecated alias."""
+        from cortex_harness.storage import layout as layout_mod
+
+        with mock.patch.object(
+            LIFECYCLE, "_scan_project_backends", return_value=[]
+        ), mock.patch.object(
+            LIFECYCLE, "_resolved_storage"
+        ), mock.patch.object(
+            layout_mod, "ensure_layout"
+        ) as ensure_layout, mock.patch(
+            "builtins.print"
+        ) as output:
             LIFECYCLE.invoke_infra_up()
+        rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
+        self.assertNotIn("deprecated", rendered.lower())
+        self.assertNotIn("storage-init", rendered.lower())
+        ensure_layout.assert_called_once()
 
-        storage_init.assert_called_once_with()
+    def test_infra_up_routes_local_projects_to_storage_init(self):
+        projects = [
+            {
+                "project_id": "local_a",
+                "backend_mode": "local",
+                "remote_config": None,
+                "config_path": "/tmp/local_a.json",
+            }
+        ]
+        from cortex_harness.storage import layout as layout_mod
 
-    def test_infra_down_is_embedded_storage_noop(self):
-        with mock.patch.object(LIFECYCLE, "run") as run_command:
+        with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
+            LIFECYCLE, "_resolved_storage"
+        ) as resolved, mock.patch.object(layout_mod, "ensure_layout") as ensure_layout:
+            LIFECYCLE.invoke_infra_up()
+        ensure_layout.assert_called_once_with(resolved())
+
+    def test_infra_up_probes_remote_projects(self):
+        projects = [
+            {
+                "project_id": "remote_a",
+                "backend_mode": "remote",
+                "remote_config": {
+                    "qdrant_url": "http://qdrant.example:6333",
+                    "falkordb_uri": "redis://falkor.example:6379",
+                },
+                "config_path": "/tmp/remote_a.json",
+            }
+        ]
+        probe_results = [
+            ProbeResult("qdrant", "http://qdrant.example:6333", True, "reachable"),
+            ProbeResult("falkordb", "redis://falkor.example:6379", True, "reachable"),
+        ]
+        from cortex_harness.storage import layout as layout_mod, remote_probe as rp
+
+        with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
+            LIFECYCLE, "_resolved_storage"
+        ), mock.patch.object(layout_mod, "ensure_layout"), mock.patch.object(
+            rp, "probe_all", return_value=probe_results
+        ), mock.patch("builtins.print") as output:
+            LIFECYCLE.invoke_infra_up()
+        rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
+        self.assertIn("remote_a (remote)", rendered)
+        self.assertIn("[ok] qdrant", rendered)
+        self.assertIn("[ok] falkordb", rendered)
+
+    def test_infra_up_exits_nonzero_on_remote_probe_failure(self):
+        projects = [
+            {
+                "project_id": "remote_a",
+                "backend_mode": "remote",
+                "remote_config": {"qdrant_url": "http://qdrant.example:6333"},
+                "config_path": "/tmp/remote_a.json",
+            }
+        ]
+        probe_results = [
+            ProbeResult("qdrant", "http://qdrant.example:6333", False, "Connection refused"),
+        ]
+        from cortex_harness.storage import layout as layout_mod, remote_probe as rp
+
+        with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
+            LIFECYCLE, "_resolved_storage"
+        ), mock.patch.object(layout_mod, "ensure_layout"), mock.patch.object(
+            rp, "probe_all", return_value=probe_results
+        ), self.assertRaises(SystemExit) as exit_ctx:
+            LIFECYCLE.invoke_infra_up()
+        self.assertEqual(exit_ctx.exception.code, 1)
+
+    def test_infra_up_provision_flag_invokes_provision_helper(self):
+        projects = [
+            {
+                "project_id": "remote_a",
+                "backend_mode": "remote",
+                "remote_config": {"qdrant_url": "http://qdrant.example:6333"},
+                "config_path": "/tmp/remote_a.json",
+            }
+        ]
+        probe_results = [
+            ProbeResult("qdrant", "http://qdrant.example:6333", True, "reachable"),
+            ProbeResult("falkordb", "(not configured)", True, "skipped — no falkordb_uri"),
+        ]
+        from cortex_harness.storage import layout as layout_mod, remote_probe as rp
+
+        with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
+            LIFECYCLE, "_resolved_storage"
+        ), mock.patch.object(layout_mod, "ensure_layout"), mock.patch.object(
+            rp, "probe_all", return_value=probe_results
+        ), mock.patch.object(
+            LIFECYCLE, "_provision_remote_project"
+        ) as provision:
+            LIFECYCLE.invoke_infra_up(provision=True)
+        provision.assert_called_once()
+
+    def test_infra_up_options_parses_provision_flag(self):
+        options = LIFECYCLE.infra_up_options(["--provision"])
+        self.assertTrue(options.provision)
+        options = LIFECYCLE.infra_up_options([])
+        self.assertFalse(options.provision)
+
+    def test_infra_down_closes_remote_clients(self):
+        with mock.patch("cortex_harness.storage.qdrant_remote.reset_remote_clients") as reset:
             LIFECYCLE.invoke_infra_down()
-        run_command.assert_not_called()
+        reset.assert_called_once_with()
 
     def test_active_infra_aliases_do_not_execute_container_commands(self):
         import inspect

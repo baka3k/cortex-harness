@@ -55,6 +55,18 @@ from .qdrant_remote import (
 )
 from .errors import BackendConnectionError
 from .factory import QdrantStore, StorageFactory, create_storage
+from .remote_probe import (
+    ProbeResult,
+    ProvisionResult,
+    force_local_active,
+    probe_all,
+    probe_falkordb,
+    probe_qdrant,
+    provision_falkordb_graph,
+    provision_qdrant_collection,
+    render_provision_line,
+    setup_remote_falkordb_schema,
+)
 
 __all__ = [
     "DEFAULT_FALKORDB_PATH",
@@ -105,4 +117,14 @@ __all__ = [
     "storage_overlay",
     "validate_backend_config",
     "validate_storage_identity",
+    "ProbeResult",
+    "ProvisionResult",
+    "force_local_active",
+    "probe_all",
+    "probe_falkordb",
+    "probe_qdrant",
+    "provision_falkordb_graph",
+    "provision_qdrant_collection",
+    "render_provision_line",
+    "setup_remote_falkordb_schema",
 ]
