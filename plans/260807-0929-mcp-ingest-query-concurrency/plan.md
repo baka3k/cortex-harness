@@ -342,6 +342,18 @@ internally inconsistent.
 
 ## Cross-plan dependencies
 
+### Query-side admission pressure reduction (2026-08-18)
+
+> `260818-1458-fanout-contract-hardening` collapses unified-MCP parser
+> fan-out from 88 aliases to one dispatch per query engine (<=2) and
+> dedups merged results by node id. This directly reduces per-call query
+> lane pressure (today one parser-less search can enqueue 88 operations
+> against `max_queue_items=32`, guaranteeing OVERLOADED rejections). That
+> plan does not change lane limits, gateway, or admission policy — this
+> plan remains the sole admission/store-owner authority. No phase conflicts:
+> its changes are confined to `unified_mcp.py` dispatch/merge, backend tool
+> signatures, and the tool catalog.
+
 ### Reliability umbrella coordination
 
 - `260807-2103-toolchain-reliability-hardening` consumes this plan's admission,
