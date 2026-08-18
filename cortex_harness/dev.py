@@ -2018,19 +2018,25 @@ def uninstall():
 
 
 @cli.command("infra-up")
-def infra_up():
-    """Deprecated: local storage no longer needs containers.
+@click.option(
+    "--provision", is_flag=True, default=False,
+    help="Create collections and graphs on remote Qdrant/FalkorDB servers.",
+)
+def infra_up(provision: bool):
+    """Initialize local storage and probe remote projects.
 
-    Kept for one release so existing scripts that still call ``dev
-    infra-up`` keep working. No Docker interaction occurs; the local
-    on-disk storage is created in the project's root.
+    Local projects get their instance tree created (same as ``storage-init``).
+    Remote projects (configured via ``storage_backend: remote``) are probed
+    for connectivity; pass ``--provision`` to additionally create the
+    required Qdrant collections and FalkorDB graphs.
     """
-    _run_lifecycle("infra-up")
+    arguments = ["--provision"] if provision else []
+    _run_lifecycle("infra-up", arguments)
 
 
 @cli.command("infra-down")
 def infra_down():
-    """Deprecated: local storage has no containers to stop."""
+    """Close cached remote clients; local storage is left untouched."""
     _run_lifecycle("infra-down")
 
 
