@@ -787,6 +787,34 @@ def searchable_properties(parser_type: Optional[str] = None) -> Tuple[str, ...]:
     ))
 
 
+def backend_label_union(backend: Optional[str] = None) -> Tuple[str, ...]:
+    """Return every searchable label mapped to ``backend``.
+
+    Used by parser-less fan-out queries: a single dispatch per query engine
+    must match the labels of *all* profiles that engine serves, otherwise the
+    query silently drops nodes from every profile except the hardcoded
+    legacy defaults.
+    """
+    backend_name = str(backend or "").strip().lower()
+    return tuple(sorted({
+        label
+        for config in CAPABILITIES.values()
+        if not backend_name or config.backend == backend_name
+        for label in config.labels
+    }))
+
+
+def backend_property_union(backend: Optional[str] = None) -> Tuple[str, ...]:
+    """Return every searchable property mapped to ``backend`` (order-stable)."""
+    backend_name = str(backend or "").strip().lower()
+    return tuple(dict.fromkeys(
+        prop
+        for config in CAPABILITIES.values()
+        if not backend_name or config.backend == backend_name
+        for prop in config.searchable_properties
+    ))
+
+
 def default_relationships(
     parser_type: Optional[str] = None,
     tool_name: Optional[str] = None,
