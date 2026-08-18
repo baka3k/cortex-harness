@@ -271,9 +271,10 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fanout_dispatch_runs_each_parser_and_merges_results(self):
         # When parser_type is omitted and the tool is in the search-tool
-        # set, ``_dispatch_tool`` must fan-out across every registered
-        # parser, tag each hit with its source parser, and surface the
-        # raw per-parser results.
+        # set, ``_dispatch_tool`` must fan-out once per physical query
+        # engine (BACKENDS), tag each hit with its source engine, and
+        # surface the raw per-engine results. Per-engine payloads must NOT
+        # carry a parser_type key (it is the engine-level fan-out mode).
         tools = [
             "search_functions",
             "search_by_code",
@@ -292,43 +293,69 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         for tool_name in tools:
             self.assertIn(tool_name, unified_mcp._FANOUT_SEARCH_TOOLS)
 
+        seen_payloads: list[dict] = []
+        call_count = {"cplus": 0, "android": 0}
+
         async def fake_search_functions(payload=None):
-            parser = (payload or {}).get("parser_type")
-            if parser == "android":
+            seen_payloads.append(dict(payload or {}))
+            backend = (payload or {}).get("_backend_tag")
+            call_count[backend] = call_count.get(backend, 0) + 1
+            if backend == "android":
                 return {"db": "android_g", "results": [{"id": "a1", "name": "alpha"}]}
             return {"db": "cplus_g", "results": [{"id": "c1", "name": "beta"}]}
 
-        async def fake_search_by_code(payload=None):
-            return {"db": "code_g", "results": [{"id": "x1"}]}
+        async def fake_cplus(*args, **kwargs):
+            payload = kwargs.get("payload")
+            if not payload and args:
+                payload = args[-1]
+            p = dict(payload or {})
+            p["_backend_tag"] = "cplus"
+            return await fake_search_functions(p)
 
-        fake_module = types.SimpleNamespace(
-            tool_search_functions=fake_search_functions,
-            tool_search_by_code=fake_search_by_code,
-        )
+        async def fake_android(*args, **kwargs):
+            payload = kwargs.get("payload")
+            if not payload and args:
+                payload = args[-1]
+            p = dict(payload or {})
+            p["_backend_tag"] = "android"
+            return await fake_search_functions(p)
+
+        async def run_dispatch() -> dict:
+            return await unified_mcp._dispatch_tool(
+                "search_functions", {"query": "foo"}
+            )
+
+        fake_cplus_module = types.SimpleNamespace(tool_search_functions=fake_cplus)
+        fake_android_module = types.SimpleNamespace(tool_search_functions=fake_android)
 
         with patch.dict(
             unified_mcp.BACKENDS,
             {
-                "cplus": unified_mcp.BackendInfo(name="cplus", module=fake_module),
-                "android": unified_mcp.BackendInfo(name="android", module=fake_module),
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=fake_cplus_module),
+                "android": unified_mcp.BackendInfo(name="android", module=fake_android_module),
             },
         ):
             with patch.object(
                 unified_mcp,
                 "parser_aliases",
-                return_value=frozenset({"android", "cplus"}),
+                return_value=frozenset({"android", "cplus", "spring"}),
             ):
-                result = await unified_mcp._dispatch_tool(
-                    "search_functions", {"query": "foo"}
-                )
+                result = await run_dispatch()
 
         self.assertTrue(result["ok"])
-        self.assertEqual(set(result["parsers_searched"]), {"android", "cplus"})
+        # Fan-out is per engine, not per parser alias.
+        self.assertEqual(result["parsers_searched"], ["android", "cplus"])
+        # Each engine dispatched exactly once (breadth = 2, not 3).
+        self.assertEqual(call_count, {"cplus": 1, "android": 1})
+        # Per-engine payloads must NOT leak parser_type (R1 regression guard).
+        for payload in seen_payloads:
+            self.assertNotIn("parser_type", payload)
+            self.assertTrue(payload.get("_fanout"))
         self.assertIn("results", result)
-        # Each hit is tagged with its source parser.
+        # Each hit is tagged with its source engine.
         parsers_seen = {hit["parser_type"] for hit in result["results"]}
         self.assertEqual(parsers_seen, {"android", "cplus"})
-        # Per-parser raw results are kept.
+        # Per-engine raw results are kept.
         self.assertIn("parser_results", result)
         self.assertIn("android", result["parser_results"])
         self.assertIn("cplus", result["parser_results"])
@@ -445,7 +472,8 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsers, ["spring"])
 
     async def test_resolve_fanout_parsers_falls_back_to_all_when_project_unregistered(self):
-        # Unregistered project_id → fan-out across every registered parser.
+        # Unregistered project_id → fan-out across every registered query
+        # engine (backend representatives), NOT every parser alias.
         with patch.object(
             unified_mcp,
             "resolve_project_targets",
@@ -458,18 +486,14 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             ):
                 parsers, error = unified_mcp._resolve_fanout_parsers("missing")
         self.assertIsNone(error)
-        self.assertEqual(parsers, ["android", "cplus", "spring"])
+        self.assertEqual(parsers, sorted(unified_mcp.BACKENDS.keys()))
 
-    async def test_resolve_fanout_parsers_emits_error_when_no_parsers_registered(self):
-        with patch.object(
-            unified_mcp,
-            "parser_aliases",
-            return_value=frozenset(),
-        ):
+    async def test_resolve_fanout_parsers_emits_error_when_no_engines_registered(self):
+        with patch.dict(unified_mcp.BACKENDS, {}, clear=True):
             parsers, error = unified_mcp._resolve_fanout_parsers(None)
         self.assertEqual(parsers, [])
         self.assertIsNotNone(error)
-        self.assertEqual(error["error"]["type"], "no_parsers_registered")
+        self.assertEqual(error["error"]["type"], "no_query_engines_registered")
 
     async def test_project_context_tool_scopes_database_to_project_id(self):
         # Each project's topology lives in its own graph (named after the
@@ -881,6 +905,221 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["error"]["type"], "invalid_parameters")
         self.assertIn("top_k must be a positive integer", result["error"]["message"])
+
+    # ------------------------------------------------------------------
+    # Fan-out contract hardening (plans/260818-1458-fanout-contract-hardening)
+    # ------------------------------------------------------------------
+
+    async def test_fanout_breadth_is_per_backend_not_per_alias(self):
+        """A parser-less fan-out call dispatches once per physical backend.
+
+        Regression for the 88-alias fan-out that overflowed the admission
+        lane: backend representatives must collapse alias sets to the count
+        of query engines.
+        """
+        seen = []
+
+        async def fake_cplus(*args, **kwargs):
+            seen.append("cplus")
+            return {"db": "cplus_g", "results": [{"id": "c1"}]}
+
+        async def fake_android(*args, **kwargs):
+            seen.append("android")
+            return {"db": "android_g", "results": [{"id": "a1"}]}
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=types.SimpleNamespace(tool_search_functions=fake_cplus)),
+                "android": unified_mcp.BackendInfo(name="android", module=types.SimpleNamespace(tool_search_functions=fake_android)),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"a", "b", "c", "d", "e", "f", "g"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        self.assertEqual(sorted(seen), ["android", "cplus"])
+        self.assertEqual(len(seen), len(unified_mcp.BACKENDS))
+        self.assertEqual(result["parsers_searched"], ["android", "cplus"])
+
+    async def test_fanout_dedup_collapses_repeated_node_ids(self):
+        duplicate = {"id": "shared", "labels": ["Function"], "properties": {"name": "shared"}}
+        only_first = {"id": "first-only", "labels": ["Function"], "properties": {"name": "first"}}
+
+        async def fake_cplus(*args, **kwargs):
+            return {"db": "cplus_g", "results": [duplicate, only_first]}
+
+        async def fake_android(*args, **kwargs):
+            return {"db": "android_g", "results": [duplicate, {"id": "android-only", "labels": ["Function"]}]}
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=types.SimpleNamespace(tool_search_functions=fake_cplus)),
+                "android": unified_mcp.BackendInfo(name="android", module=types.SimpleNamespace(tool_search_functions=fake_android)),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        ids = [r["id"] for r in result["results"]]
+        self.assertEqual(sorted(ids), ["android-only", "first-only", "shared"])
+        self.assertEqual(result["dedup_removed"], 1)
+        # First-seen wins for the kept item. Fan-out dispatches in sorted
+        # backend order (``["android", "cplus"]``), so android gets there
+        # first for this fixture.
+        shared = next(r for r in result["results"] if r["id"] == "shared")
+        self.assertEqual(shared["parser_type"], "android")
+
+    async def test_fanout_dedup_edges_on_composite_key(self):
+        # Android is the first engine in sorted dispatch order, so its
+        # a→CALLS→b edge wins first-seen. The duplicate from cplus (with
+        # a different ``properties`` payload) is dropped.
+        async def fake_android(*args, **kwargs):
+            return {
+                "db": "android_g",
+                "edges": [
+                    {"start_id": "a", "type": "CALLS", "end_id": "b", "properties": {"weight": 99}},
+                ],
+            }
+
+        async def fake_cplus(*args, **kwargs):
+            return {
+                "db": "cplus_g",
+                "edges": [
+                    {"start_id": "a", "type": "CALLS", "end_id": "b", "properties": {"weight": 1}},
+                    {"start_id": "a", "type": "CALLS", "end_id": "c"},
+                ],
+            }
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=types.SimpleNamespace(tool_search_functions=fake_cplus)),
+                "android": unified_mcp.BackendInfo(name="android", module=types.SimpleNamespace(tool_search_functions=fake_android)),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        edges = result["edges"]
+        keys = {(e["start_id"], e["type"], e["end_id"]) for e in edges}
+        self.assertEqual(keys, {("a", "CALLS", "b"), ("a", "CALLS", "c")})
+        # First-seen wins; the duplicate cplus edge weight=1 is dropped.
+        ab = next(e for e in edges if e["end_id"] == "b")
+        self.assertEqual(ab["parser_type"], "android")
+        self.assertEqual(ab["properties"]["weight"], 99)
+        self.assertEqual(result["dedup_removed"], 1)
+
+    async def test_fanout_dedup_ids_key_by_string(self):
+        async def fake_cplus(*args, **kwargs):
+            return {"db": "cplus_g", "ids": ["n1", "n2", "n3"]}
+
+        async def fake_android(*args, **kwargs):
+            return {"db": "android_g", "ids": ["n1", "n3", "n4"]}
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=types.SimpleNamespace(tool_search_functions=fake_cplus)),
+                "android": unified_mcp.BackendInfo(name="android", module=types.SimpleNamespace(tool_search_functions=fake_android)),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        self.assertEqual(sorted(result["ids"]), ["n1", "n2", "n3", "n4"])
+        self.assertEqual(result["dedup_removed"], 2)
+
+    async def test_fanout_recall_uses_backend_label_union(self):
+        """Fan-out predicate must include labels outside the legacy hardcoded set.
+
+        Regression for the recall hole (plan D3): a parser-less backend
+        query that fell back to the legacy hardcoded label list would
+        silently drop nodes with labels like ``Class`` or ``Service``.
+        """
+        from cplus.cplus_mcp import (
+            _LEGACY_SEARCH_LABELS,
+            _search_label_predicate,
+        )
+        union_labels = {"Class", "Service", "Route", "Controller"}
+        fanout_predicate = _search_label_predicate(
+            "n", profile_labels=(), fanout=True
+        )
+        for label in union_labels:
+            self.assertIn(f"n:{label}", fanout_predicate, label)
+        # Legacy labels remain covered.
+        for label in _LEGACY_SEARCH_LABELS:
+            self.assertIn(f"n:{label}", fanout_predicate, label)
+        # Non-fanout mode also still uses the legacy set (zero behavior
+        # change for direct parser-less calls outside fan-out).
+        direct_predicate = _search_label_predicate(
+            "n", profile_labels=(), fanout=False
+        )
+        for label in _LEGACY_SEARCH_LABELS:
+            self.assertIn(f"n:{label}", direct_predicate, label)
+        self.assertNotIn("n:Class", direct_predicate)
+
+    async def test_fanout_strips_parser_type_from_per_engine_payload(self):
+        captured: list[dict] = []
+
+        async def fake_cplus(*args, **kwargs):
+            payload = kwargs.get("payload") or {}
+            captured.append(dict(payload))
+            return {"db": "cplus_g", "results": []}
+
+        async def fake_android(*args, **kwargs):
+            payload = kwargs.get("payload") or {}
+            captured.append(dict(payload))
+            return {"db": "android_g", "results": []}
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(name="cplus", module=types.SimpleNamespace(tool_search_functions=fake_cplus)),
+                "android": unified_mcp.BackendInfo(name="android", module=types.SimpleNamespace(tool_search_functions=fake_android)),
+            },
+        ):
+            with patch.object(
+                unified_mcp,
+                "parser_aliases",
+                return_value=frozenset({"android", "cplus"}),
+            ):
+                result = await unified_mcp._dispatch_tool(
+                    "search_functions", {"query": "foo"}
+                )
+
+        # No engine receives parser_type; _fanout flag is set.
+        self.assertEqual(len(captured), 2)
+        for payload in captured:
+            self.assertNotIn("parser_type", payload)
+            self.assertTrue(payload.get("_fanout"))
+        # Dispatch succeeded (no engine errors).
+        self.assertEqual(sorted(result["parsers_searched"]), ["android", "cplus"])
+        self.assertEqual(result["parsers_failed"], [])
 
 
 if __name__ == "__main__":

@@ -47,6 +47,8 @@ from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
 from falkordb_discovery import discover_falkordb_data_files
 from framework_registry import (
+    backend_label_union,
+    backend_property_union,
     capability_for_parser,
     default_relationships,
     parser_aliases,
@@ -311,6 +313,43 @@ def _merge_payload(
     if payload:
         merged.update(payload)
     return merged
+
+
+# Legacy hardcoded label set used before parser profiles existed. Kept for
+# unscoped direct calls; fan-out calls OR it with the per-backend label union
+# so a single parser-less dispatch does not silently drop profile labels.
+_LEGACY_SEARCH_LABELS: Tuple[str, ...] = (
+    "Function", "Type", "Namespace", "File", "Field", "Alias", "Template",
+    "FunctionType", "Event", "Project", "Resource", "UIControl",
+)
+_LEGACY_SEARCH_FRAMEWORKS: Tuple[str, ...] = ("spring", "servlet_jsp", "mybatis")
+
+
+def _search_label_predicate(
+    variable: str,
+    profile_labels: Tuple[str, ...],
+    fanout: bool = False,
+) -> str:
+    """Return the label/framework predicate for a symbol search query.
+
+    * ``profile_labels`` present (parser/framework scoped) → use them; the
+      legacy framework IN clause is still appended so framework-scoped
+      searches keep matching cross-framework symbol types (``Service``,
+      ``Controller`` …).
+    * fan-out with no profile → union of every label mapped to this query
+      engine, OR'd with the legacy set (recall guard, plan D3).
+    * otherwise → legacy set only (unchanged behavior).
+    """
+    if profile_labels:
+        labels: Tuple[str, ...] = profile_labels
+    elif fanout:
+        labels = tuple(sorted(set(backend_label_union("cplus")) | set(_LEGACY_SEARCH_LABELS)))
+    else:
+        labels = _LEGACY_SEARCH_LABELS
+    clauses = [f"{variable}:{label}" for label in labels]
+    frameworks = ", ".join(f"'{name}'" for name in _LEGACY_SEARCH_FRAMEWORKS)
+    clauses.append(f"{variable}.framework IN [{frameworks}]")
+    return "(" + " OR ".join(clauses) + ")"
 
 
 def _normalize_depth(value: Any, default: int = 2, max_limit: int = 10) -> int:
@@ -1698,11 +1737,13 @@ async def tool_get_symbol(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "node_id": node_id,
             "db": project_id,
             "project_id": project_id,
@@ -1746,11 +1787,13 @@ async def tool_list_possible_calls(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "db": project_id,
             "limit": limit,
             "top_k": top_k,
@@ -1805,11 +1848,13 @@ async def tool_get_node_details(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "node_ids": node_ids,
             "db": project_id,
             "project_id": project_id,
@@ -2174,11 +2219,13 @@ async def tool_listup_symbols_matching_file_path(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "modules": modules,
             "module": module,
             "db": project_id,
@@ -2208,7 +2255,11 @@ async def tool_listup_symbols_matching_file_path(
         types = _normalize_string_list(node_types_filter)
         type_conditions = " OR ".join([f"n:{t}" for t in types])
     else:
-        type_conditions = "n:Function OR n:Type OR n:Namespace OR n:File OR n:Field OR n:Alias OR n:Template OR n:FunctionType OR n:Event OR n:Project OR n:Resource OR n:UIControl"
+        type_conditions = _search_label_predicate(
+            "n",
+            (),
+            fanout=bool(payload.get("_fanout")),
+        ).lstrip("(").rstrip(")")
     
     cypher = (
         f"MATCH (n) WHERE ({type_conditions}) "
@@ -2235,11 +2286,13 @@ async def tool_listup_class_matching_path(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "class_names": class_names,
             "class_name": class_name,
             "db": project_id,
@@ -2299,11 +2352,13 @@ async def tool_list_up_entrypoint(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "modules": modules,
             "module": module,
             "db": project_id,
@@ -2654,11 +2709,13 @@ async def tool_search_functions(
     include_raw_fields: bool = False,
     framework: Optional[str] = None,
     kinds: Optional[List[str]] = None,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "query": query,
             "limit": limit,
             "top_k": top_k,
@@ -2694,17 +2751,14 @@ async def tool_search_functions(
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
+    fanout = bool(payload.get("_fanout"))
     profile_labels = searchable_labels(capability.name) if capability else ()
-    profile_properties = searchable_properties(capability.name) if capability else ()
-    label_predicate = (
-        "(" + " OR ".join(f"n:{label}" for label in profile_labels) + ")"
-        if profile_labels
-        else (
-            "(n:Function OR n:Type OR n:Namespace OR n:File OR n:Field "
-            "OR n:Alias OR n:Template OR n:FunctionType OR n:Event OR n:Project OR n:Resource OR n:UIControl "
-            "OR n.framework IN ['spring', 'servlet_jsp', 'mybatis'])"
-        )
+    profile_properties = (
+        backend_property_union("cplus")
+        if fanout and not profile_labels
+        else (searchable_properties(capability.name) if capability else ())
     )
+    label_predicate = _search_label_predicate("n", profile_labels, fanout=fanout)
     property_names = profile_properties or (
         "name", "qualified_name", "file_path", "path", "raw_value", "resolved_value",
         "caption", "text", "summary",
@@ -2723,19 +2777,8 @@ async def tool_search_functions(
         "RETURN n LIMIT $limit"
     )
     fulltext_query = " OR ".join(qs)
-    node_profile_predicate = (
-        "(" + " OR ".join(f"node:{label}" for label in profile_labels) + ")"
-        if profile_labels else "false"
-    )
-    legacy_node_predicate = (
-        "(node:Function OR node:Type OR node:Namespace OR node:File OR node:Field "
-        "OR node:Alias OR node:Template OR node:FunctionType OR node:Event OR node:Project OR node:Resource OR node:UIControl "
-        "OR node.framework IN ['spring', 'servlet_jsp', 'mybatis'])"
-    )
-    fulltext_node_predicate = (
-        f"({legacy_node_predicate} OR {node_profile_predicate})"
-        if profile_labels else legacy_node_predicate
-    )
+    node_label_predicate = _search_label_predicate("node", profile_labels, fanout=fanout)
+    fulltext_node_predicate = node_label_predicate
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
         f"WHERE {fulltext_node_predicate} "
@@ -2790,11 +2833,13 @@ async def tool_search_by_code(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "query": query,
             "limit": limit,
             "top_k": top_k,
