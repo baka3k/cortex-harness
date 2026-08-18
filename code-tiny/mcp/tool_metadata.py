@@ -919,6 +919,46 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
     },
 ]
 
+# Tools that fan out across query engines when ``parser_type`` is omitted.
+# Must stay in sync with ``unified_mcp._FANOUT_SEARCH_TOOLS``. Each entry gets
+# the optional ``parser_type`` input injected below so the served catalog
+# advertises the scoping parameter (schema truth, D1).
+FANOUT_SEARCH_TOOL_NAMES: frozenset = frozenset(
+    {
+        "search_functions",
+        "search_by_code",
+        "get_symbol",
+        "get_node_details",
+        "query_subgraph",
+        "find_paths",
+        "find_path_between_module",
+        "listup_symbols_matching_file_path",
+        "listup_class_matching_path",
+        "list_up_entrypoint",
+        "trace_flow",
+        "trace_flow_between_module",
+        "list_possible_calls",
+    }
+)
+
+_FANOUT_PARSER_TYPE_INPUT: Dict[str, Any] = {
+    "name": "parser_type",
+    "type": "str",
+    "required": False,
+    "description": (
+        "Parser alias to scope this call (e.g. 'python', 'spring', 'android'). "
+        "Omit to fan out across query engines (results deduplicated by node "
+        "id). See list_parsers."
+    ),
+}
+
+for _entry in _FULL_CATALOG:
+    if _entry["name"] not in FANOUT_SEARCH_TOOL_NAMES:
+        continue
+    _inputs = _entry.setdefault("inputs", [])
+    if not any(i.get("name") == "parser_type" for i in _inputs):
+        _inputs.append(deepcopy(_FANOUT_PARSER_TYPE_INPUT))
+
 _CATALOG_BY_NAME: Dict[str, Dict[str, Any]] = {t["name"]: t for t in _FULL_CATALOG}
 
 # Android: trace_flow uses Android-specific edge types

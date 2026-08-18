@@ -84,6 +84,58 @@ def test_proxied_tools_accept_result_formatting_options():
         assert not missing, f"{tool_name} missing fields {missing}"
 
 
+def test_fanout_tools_expose_parser_type_in_live_schema():
+    """Every fan-out tool must let callers scope with ``parser_type``.
+
+    Without it a schema-validated client can never avoid the cross-engine
+    fan-out. Asserted against the live registry so backend signature drift
+    is caught.
+    """
+    import asyncio
+    import sys
+
+    sys.path.insert(0, str(ROOT / "code-tiny" / "mcp"))
+    import unified_mcp  # noqa: E402
+
+    async def _props() -> dict[str, set[str]]:
+        live = await unified_mcp.mcp_server.list_tools()
+        return {
+            tool.name: set(tool.parameters.get("properties", {}).keys())
+            for tool in live
+        }
+
+    properties_by_name = asyncio.run(_props())
+    missing = {}
+    for tool_name in sorted(unified_mcp._FANOUT_SEARCH_TOOLS):
+        props = properties_by_name.get(tool_name)
+        assert props is not None, f"{tool_name} not registered"
+        if "parser_type" not in props:
+            missing[tool_name] = sorted(props)
+    assert not missing, f"fan-out tools without parser_type: {sorted(missing)}"
+
+
+def test_fanout_tools_advertise_parser_type_in_catalog():
+    spec = importlib.util.spec_from_file_location("test_tool_metadata", TOOL_METADATA)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    import sys
+
+    sys.path.insert(0, str(ROOT / "code-tiny" / "mcp"))
+    import unified_mcp  # noqa: E402
+
+    assert set(module.FANOUT_SEARCH_TOOL_NAMES) == set(unified_mcp._FANOUT_SEARCH_TOOLS)
+
+    catalog = module.build_catalog(set(module.FANOUT_SEARCH_TOOL_NAMES))
+    seen = set()
+    for entry in catalog:
+        inputs = {item["name"] for item in entry.get("inputs", [])}
+        assert "parser_type" in inputs, entry["name"]
+        seen.add(entry["name"])
+    assert seen == set(module.FANOUT_SEARCH_TOOL_NAMES)
+
+
 def test_catalog_inputs_are_accepted_by_handwritten_wrappers():
     wrappers = _function_nodes()
     mismatches = {}

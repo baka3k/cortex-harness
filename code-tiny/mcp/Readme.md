@@ -765,7 +765,7 @@ Input:
 
 | Field         | Required | Type  | Meaning                                                    |
 | ------------- | -------- | ----- | ---------------------------------------------------------- |
-| `parser_type` | No       | `str` | Parser profile; uses the active profile when omitted.      |
+| `parser_type` | No       | `str` | Parser profile; omit on fan-out tools to dispatch across query engines (results deduplicated by node id). |
 | `project_id`          | No       | `str` | FalkorDB graph name or Neo4j database name.                |
 
 Output: Advertised/effective support for `symbols`, `calls`, `endpoints`, and

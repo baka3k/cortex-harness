@@ -90,3 +90,24 @@ the active FalkorDB graph `cortext`:
 
 These are read-only schema observations, not proof of source-index freshness.
 No ingestion or embedding sync was run during verification.
+
+## Fan-out engine dispatch
+
+A parser-less call to any of the 13 fan-out search tools
+(`search_functions`, `search_by_code`, `get_symbol`, `get_node_details`,
+`query_subgraph`, `find_paths`, `find_path_between_module`,
+`listup_symbols_matching_file_path`, `listup_class_matching_path`,
+`list_up_entrypoint`, `trace_flow`, `trace_flow_between_module`,
+`list_possible_calls`) now dispatches once per **physical query engine**
+(`BACKENDS` keys: `cplus`, `android`) instead of once per parser alias.
+
+- `query_engine = "graph_fanout"` on merged results.
+- `parsers_searched` lists engine representatives (`["android", "cplus"]`).
+- Per-engine `limit` is preserved (no re-slicing after merge).
+- Merged node/edge/id lists are deduplicated by identity (first-seen wins);
+  `dedup_removed` reports the number collapsed.
+- Per-engine payloads carry no `parser_type` key; the backend selects the
+  union of every profile label mapped to that engine so a single dispatch
+  does not silently drop profile labels outside the legacy hardcoded set.
+- `parsers_failed` is advisory, not fatal: presence means at least one
+  engine errored (e.g. `OVERLOADED` on the admission lane).

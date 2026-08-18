@@ -105,6 +105,27 @@ Every project-scoped tool follows this amended precedence:
 2. **`project_id` absent** → query the env-default graph/collection with no
    `project_id_normalized` filter (implicit full search).
 
+## `parser_type` Precedence (unified MCP, fan-out tools)
+
+Fan-out search tools (`search_functions`, `search_by_code`, `get_symbol`,
+`get_node_details`, `query_subgraph`, `find_paths`,
+`find_path_between_module`, `listup_symbols_matching_file_path`,
+`listup_class_matching_path`, `list_up_entrypoint`, `trace_flow`,
+`trace_flow_between_module`, `list_possible_calls`) follow this
+precedence:
+
+1. **`parser_type` present** → dispatch to the single matching query
+   engine / profile (no fan-out merge).
+2. **`parser_type` absent** → engine-level fan-out (one dispatch per
+   physical backend, capped at `len(BACKENDS)`); per-engine payloads
+   carry no `parser_type` key and the backend selects the union of
+   every profile label mapped to that engine. Merged results
+   deduplicate by node id, edge composite key, and raw id list
+   membership; `parsers_searched` lists the engine representatives.
+3. **Per-engine `limit` is preserved** — the merge does not re-slice
+   merged lists, so a parser-less `search_functions(limit=50)` may
+   return up to 100 pre-dedup items.
+
 Code-side query builders include the normalized predicate only for scoped
 calls:
 

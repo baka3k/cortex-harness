@@ -46,6 +46,7 @@ from tools.common.project_registry import (
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog, ANDROID_OVERRIDES
 from falkordb_discovery import discover_falkordb_data_files
+from framework_registry import backend_label_union
 
 
 def _load_env_file(env_path: str) -> None:
@@ -455,13 +456,24 @@ def _fallback_node_name(properties: Dict[str, Any], node_id: Optional[str]) -> s
     return ""
 
 
-def _android_symbol_labels() -> str:
-    return (
-        "(n:Function OR n:Class OR n:Type OR n:Namespace OR n:Package OR n:File "
-        "OR n:AndroidManifest OR n:AndroidComponent OR n:AndroidResource "
-        "OR n:GradleModule OR n:GradleDependency OR n:AndroidAnnotation "
-        "OR n:AndroidNavRoute OR n:AndroidIntentAction OR n:AndroidHandlerMessage)"
+def _android_symbol_labels(fanout: bool = False) -> str:
+    """Label predicate for android symbol search.
+
+    When ``fanout`` is True the predicate OR's in the union of every label
+    mapped to the android query engine so a single parser-less dispatch
+    matches profile labels outside the historical Android list.
+    """
+    base = (
+        "Function", "Class", "Type", "Namespace", "Package", "File",
+        "AndroidManifest", "AndroidComponent", "AndroidResource",
+        "GradleModule", "GradleDependency", "AndroidAnnotation",
+        "AndroidNavRoute", "AndroidIntentAction", "AndroidHandlerMessage",
     )
+    if fanout:
+        labels = sorted(set(base) | set(backend_label_union("android")))
+    else:
+        labels = list(base)
+    return "(" + " OR ".join(f"n:{label}" for label in labels) + ")"
 
 
 def _android_search_predicate() -> str:
@@ -1620,11 +1632,13 @@ async def tool_get_symbol(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "node_id": node_id,
             "db": project_id,
             "project_id": project_id,
@@ -1668,11 +1682,13 @@ async def tool_list_possible_calls(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "db": project_id,
             "limit": limit,
             "top_k": top_k,
@@ -1726,11 +1742,13 @@ async def tool_get_node_details(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "node_ids": node_ids,
             "db": project_id,
             "project_id": project_id,
@@ -2215,11 +2233,13 @@ async def tool_listup_symbols_matching_file_path(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "modules": modules,
             "module": module,
             "db": project_id,
@@ -2243,13 +2263,13 @@ async def tool_listup_symbols_matching_file_path(
         raise ValueError("modules must be a non-empty list.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
-    
+
     # Build node type filter
     if node_types_filter:
         types = _normalize_string_list(node_types_filter)
         type_conditions = "(" + " OR ".join([f"n:{t}" for t in types]) + ")"
     else:
-        type_conditions = _android_symbol_labels()
+        type_conditions = _android_symbol_labels(fanout=bool(payload.get("_fanout")))
     
     cypher = (
         f"MATCH (n) WHERE {type_conditions} "
@@ -2274,11 +2294,13 @@ async def tool_listup_class_matching_path(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "class_names": class_names,
             "class_name": class_name,
             "db": project_id,
@@ -2338,11 +2360,13 @@ async def tool_list_up_entrypoint(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "modules": modules,
             "module": module,
             "db": project_id,
@@ -2667,11 +2691,13 @@ async def tool_search_functions(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "query": query,
             "limit": limit,
             "top_k": top_k,
@@ -2693,12 +2719,13 @@ async def tool_search_functions(
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
+    fanout = bool(payload.get("_fanout"))
     fallback_cypher = (
-        f"MATCH (n) WHERE {_android_symbol_labels()} "
+        f"MATCH (n) WHERE {_android_symbol_labels(fanout=fanout)} "
         f"AND ({_android_search_predicate()}) "
         "RETURN n LIMIT $limit"
     )
-    node_labels_predicate = _android_symbol_labels().replace("n:", "node:")
+    node_labels_predicate = _android_symbol_labels(fanout=fanout).replace("n:", "node:")
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
@@ -2741,11 +2768,13 @@ async def tool_search_by_code(
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
+    parser_type: Optional[str] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = _merge_payload(
         payload,
         {
+            "parser_type": parser_type,
             "query": query,
             "limit": limit,
             "top_k": top_k,

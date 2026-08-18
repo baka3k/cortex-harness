@@ -108,11 +108,13 @@ _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     }
 )
 
-# Tools that fan-out across every registered parser when ``parser_type`` is
-# omitted. Mirrors the project_id contract: omit parser_type to search every
-# parser; pass parser_type to scope to one. Project-context tools (which
-# require a parser) are intentionally excluded — they keep their
-# fail-closed "parser required" error.
+# Tools that fan-out across query engines when ``parser_type`` is omitted.
+# Mirrors the project_id contract: omit parser_type to search every engine;
+# pass parser_type to scope to one. Fan-out breadth is per query engine
+# (BACKENDS), not per parser alias — results are deduplicated by node id in
+# the merge step. Project-context tools (which require a parser) are
+# intentionally excluded — they keep their fail-closed "parser required"
+# error.
 _FANOUT_SEARCH_TOOLS: frozenset = frozenset(
     {
         "search_functions",
@@ -214,7 +216,7 @@ Discovery first:
 - Call `list_parsers` to inspect canonical profiles, aliases, query engines, dimensional support, and feature gates.
 
 Routing:
-- Pass `parser_type` on every call to select a query profile (stateless — no session defaults).
+- Pass `parser_type` on every call to select a query profile (stateless — no session defaults). Omit to fan out across query engines (results deduplicated by node id; `parsers_searched` lists engine representatives).
 - Project-context tools (get_project_modules, get_public_apis, get_endpoints, get_module_architecture_summary, get_project_special_files, get_framework_context) require `parser_type`.
 - Parser mapping:
   - android/android-kotlin/kotlin-android -> android_graph query engine
@@ -893,19 +895,22 @@ mcp_server.middleware.append(_proxy_middleware)
 _register_proxy_tools()
 
 
-def _resolve_fanout_parsers(project_id: Optional[str]) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+def _resolve_fanout_parsers(
+    project_id: Optional[str],
+) -> Tuple[List[str], Optional[Dict[str, Any]]]:
     """Return the list of parsers to fan out to for ``project_id``.
 
-    Contract (parallels ``_resolve_graph_database``):
-    * ``project_id`` registered → use that project's ``parser_type`` only;
-      no fan-out (the project already picked a single parser).
-    * ``project_id`` present but not registered → fall back to fan-out
-      across every registered parser (the caller's intent is "search all").
-    * ``project_id`` omitted → fan-out across every registered parser.
+    A registered ``project_id`` pins a single parser (no fan-out). When no
+    project is registered, the unified dispatch iterates one representative
+    parser per physical backend (``BACKENDS``); the returned list of
+    representative names is consumed by ``_fanout_dispatch`` to dispatch
+    once per query engine, not once per parser alias. This caps fan-out
+    breadth at the number of physical backends (2 today: ``cplus``,
+    ``android``) instead of fanning out across every registered alias.
 
-    Returns ``(parsers, error)``: ``parsers`` is the sorted list of parser
-    aliases to query, ``error`` is a non-``None`` dict when fan-out cannot
-    proceed (e.g. no parsers registered).
+    Returns ``(parsers, error)``: ``parsers`` is the list of parser aliases
+    or backend representatives to dispatch, ``error`` is a non-``None`` dict
+    when fan-out cannot proceed (no query engines registered).
     """
     raw = str(project_id or "").strip()
     if raw:
@@ -914,37 +919,37 @@ def _resolve_fanout_parsers(project_id: Optional[str]) -> Tuple[List[str], Optio
             if targets.parser_type:
                 return [targets.parser_type], None
         except ProjectNotRegisteredError:
-            # Unregistered project — fall back to fan-out across every parser.
+            # Unregistered project — fall back to engine-level fan-out.
             pass
-    aliases = sorted(parser_aliases())
-    if not aliases:
+    if not BACKENDS:
         return [], {
             "ok": False,
             "error": {
-                "type": "no_parsers_registered",
+                "type": "no_query_engines_registered",
                 "tool": "_fanout_dispatch",
                 "message": (
-                    "No parser profiles are registered, so a parser-less "
-                    "fan-out search has nothing to query. Register a parser "
-                    "or pass parser_type explicitly."
+                    "No query engines are registered, so a parser-less "
+                    "fan-out search has nothing to dispatch. Register a "
+                    "backend or pass parser_type explicitly."
                 ),
                 "next_step": "Call list_parsers to see registered parsers.",
             },
         }
-    return aliases, None
+    return sorted(BACKENDS.keys()), None
 
 
 def _tag_fanout_items(
     parser_type: str,
     items: List[Any],
-) -> List[Dict[str, Any]]:
+) -> List[Any]:
     """Return ``items`` with each entry tagged with ``parser_type``.
 
-    Items that are already dicts get ``parser_type`` merged in. Any other
-    type is wrapped as ``{"parser_type": <parser>, "value": <item>}`` so the
-    caller can still see which parser produced it.
+    Items that are already dicts get ``parser_type`` merged in. Scalar
+    entries that participate in dedup (e.g. raw id lists) are wrapped as
+    ``{"parser_type": <parser>, "value": <item>}`` so the caller can
+    still see which parser produced it while dedup keys on the value.
     """
-    tagged: List[Dict[str, Any]] = []
+    tagged: List[Any] = []
     for item in items:
         if isinstance(item, dict):
             merged = {"parser_type": parser_type}
@@ -955,6 +960,50 @@ def _tag_fanout_items(
     return tagged
 
 
+# Keys that identify a node-shaped entry in fan-out results. Deduplication
+# keys on ``item["id"]``; entries without an ``id`` are kept verbatim.
+_NODE_RESULT_KEYS: frozenset = frozenset(
+    {"results", "nodes", "symbols", "classes", "functions"}
+)
+# Composite dedup key for edge-shaped entries.
+_EDGE_RESULT_KEYS: frozenset = frozenset({"edges"})
+# Keys whose entries dedup by their string value (raw id list).
+_ID_LIST_KEYS: frozenset = frozenset({"ids"})
+
+
+def _dedup_key(key: str, item: Any) -> Optional[Tuple[Any, ...]]:
+    """Return a stable identity for an item, or None to keep verbatim.
+
+    Behavior matches plan D4: node-shaped keys dedup on ``id``, edge-shaped
+    keys on ``(start_id, type, end_id)``, raw id lists on the string
+    itself, and everything else is left untouched. Items are passed after
+    ``_tag_fanout_items`` so wrappers like ``{"parser_type", "value"}``
+    are unwrapped to the underlying value before keying.
+    """
+    if key in _ID_LIST_KEYS:
+        if isinstance(item, dict):
+            value = item.get("value", item)
+        else:
+            value = item
+        if value is None:
+            return None
+        return ("id", value)
+    if key in _NODE_RESULT_KEYS:
+        if isinstance(item, dict) and "id" in item:
+            return ("id", item["id"])
+        return None
+    if key in _EDGE_RESULT_KEYS:
+        if isinstance(item, dict):
+            return (
+                "edge",
+                item.get("start_id"),
+                item.get("type"),
+                item.get("end_id"),
+            )
+        return None
+    return None
+
+
 def _merge_fanout_results(
     parser_results: Dict[str, Dict[str, Any]],
     parser_errors: Dict[str, Dict[str, Any]],
@@ -962,11 +1011,14 @@ def _merge_fanout_results(
     """Merge per-parser raw dicts into a single fan-out payload.
 
     Top-level list keys (see ``_FANOUT_LIST_RESULT_KEYS``) are concatenated
-    across parsers, with each item tagged with its source parser. Diagnostic
-    metadata stays inside ``parser_results`` so the caller can introspect
-    per-paragraph state. Non-list, non-diagnostic keys are preserved at the
-    top level only if they appear identically across every parser run — if
-    they diverge, the per-parser values are kept under ``parser_results``.
+    across parsers, with each item tagged with its source parser. Node,
+    edge, and id-list keys are deduplicated by identity (first-seen wins);
+    the ``parser_type`` tag on the kept item is the parser that produced
+    it first. Diagnostic metadata stays inside ``parser_results`` so the
+    caller can introspect per-parser state. Non-list, non-diagnostic keys
+    are preserved at the top level only if they appear identically across
+    every successful parser run — if they diverge, the per-parser values
+    are kept under ``parser_results``.
     """
     successful_parsers = sorted(
         parser for parser, result in parser_results.items()
@@ -995,15 +1047,38 @@ def _merge_fanout_results(
                 seen_list_keys.add(key)
                 list_keys.append(key)
 
+    dedup_removed = 0
     for key in list_keys:
         merged[key] = []
+        seen_keys: set = set()
         for parser in successful_parsers:
             payload = parser_results[parser] or {}
             if not isinstance(payload, dict):
                 continue
             value = payload.get(key)
-            if isinstance(value, list) and value:
-                merged[key].extend(_tag_fanout_items(parser, value))
+            if not isinstance(value, list) or not value:
+                continue
+            tagged_items = _tag_fanout_items(parser, value)
+            for tagged in tagged_items:
+                dedup = _dedup_key(key, tagged)
+                if dedup is None:
+                    merged[key].append(tagged)
+                    continue
+                if dedup in seen_keys:
+                    dedup_removed += 1
+                    continue
+                seen_keys.add(dedup)
+                # For raw id lists, keep the bare string after dedup so
+                # downstream consumers see the same shape as a single-engine
+                # response. The first-seen ``parser_type`` is still recorded
+                # in the wrapper above; we read it back from ``tagged``.
+                if key in _ID_LIST_KEYS:
+                    merged[key].append(tagged["value"])
+                else:
+                    merged[key].append(tagged)
+
+    if dedup_removed:
+        merged["dedup_removed"] = dedup_removed
 
     # Promote the stable scalar fields (e.g. ``matched_node_count``) only if
     # they are identical across every successful parser run.
@@ -1037,30 +1112,48 @@ async def _fanout_dispatch(
     payload: Dict[str, Any],
     parsers: List[str],
 ) -> Dict[str, Any]:
-    """Dispatch ``tool_name`` once per parser and merge the results.
+    """Dispatch ``tool_name`` once per query engine and merge the results.
 
-    Runs the per-parser calls concurrently via ``asyncio.gather`` so the
-    total latency is roughly the slowest parser rather than the sum.
-    Per-parser errors are captured into ``parser_errors`` and the merged
-    result stays ``ok=True`` as long as at least one parser produced a
-    result. If every parser fails, the merged result is ``ok=False`` and
-    the first error is surfaced as the top-level ``error``.
+    When ``parsers`` contains backend names (the engine-level fan-out
+    contract), dispatch iterates ``BACKENDS`` directly with the per-engine
+    payload having no ``parser_type`` key, and the backend's
+    ``_search_label_predicate`` / ``_android_symbol_labels(fanout=...)``
+    uses the union of every profile label mapped to that engine. The
+    ``parser_type`` tag on merged items is the backend's canonical name
+    (e.g. ``"cplus"``, ``"android"``) — the same as what
+    ``_resolve_backend_name`` would resolve a representative parser to.
+
+    When ``parsers`` contains an explicit parser alias (the
+    project-registered single-parser case), that alias is forwarded to the
+    backend so the parser-specific profile labels apply (no fan-out merge
+    happens — the caller routes to a single backend via the normal path).
+
+    Per-engine calls run concurrently via ``asyncio.gather`` so total
+    latency is roughly the slowest engine rather than the sum. Per-engine
+    errors are captured into ``parser_errors`` and the merged result stays
+    ``ok=True`` as long as at least one engine produced a result. If every
+    engine fails, the merged result is ``ok=False`` and the first error is
+    surfaced as the top-level ``error``.
     """
     base_payload = dict(payload)
     base_payload.pop("parser_type", None)
     base_payload["_fanout"] = True
 
-    async def _run_one(parser: str) -> Tuple[str, Dict[str, Any], Optional[Dict[str, Any]]]:
-        per_parser_payload = dict(base_payload)
-        per_parser_payload["parser_type"] = parser
-        backend_name = _resolve_backend_name(parser)
+    backend_names: List[str] = []
+    for parser in sorted(parsers):
+        backend = _resolve_backend_name(parser)
+        if backend not in backend_names:
+            backend_names.append(backend)
+
+    async def _run_one(backend_name: str) -> Tuple[str, Dict[str, Any], Optional[Dict[str, Any]]]:
+        per_engine_payload = dict(base_payload)
         backend = BACKENDS[backend_name]
         fn = _unwrap_tool_callable(
             getattr(backend.module, f"tool_{tool_name}", None)
         )
         if fn is None:
             return (
-                parser,
+                backend_name,
                 {},
                 {
                     "type": "tool_not_in_backend",
@@ -1071,51 +1164,51 @@ async def _fanout_dispatch(
                 },
             )
         try:
-            result = await fn(payload=per_parser_payload)
+            result = await fn(payload=per_engine_payload)
         except Exception as exc:  # noqa: BLE001
             return (
-                parser,
+                backend_name,
                 {},
                 {
-                    "type": _error_type_from_exception(exc, _missing_required_params(tool_name, per_parser_payload)),
+                    "type": _error_type_from_exception(exc, _missing_required_params(tool_name, per_engine_payload)),
                     "message": str(exc),
                 },
             )
         if not isinstance(result, dict):
-            return parser, {"_raw": result}, None
-        return parser, result, None
+            return backend_name, {"_raw": result}, None
+        return backend_name, result, None
 
     runs = await asyncio.gather(
-        *(_run_one(parser) for parser in parsers),
+        *(_run_one(name) for name in backend_names),
         return_exceptions=False,
     )
 
     parser_results: Dict[str, Dict[str, Any]] = {}
     parser_errors: Dict[str, Dict[str, Any]] = {}
-    for parser, result, error in runs:
+    for backend_name, result, error in runs:
         if error is not None:
-            parser_errors[parser] = error
-            parser_results[parser] = {"ok": False, "error": error}
+            parser_errors[backend_name] = error
+            parser_results[backend_name] = {"ok": False, "error": error}
         else:
-            parser_results[parser] = result
+            parser_results[backend_name] = result
 
     merged = _merge_fanout_results(parser_results, parser_errors)
     if not parser_errors:
         return merged
     if not merged["parsers_searched"]:
-        # Every parser failed — surface the first error as the top-level
+        # Every engine failed — surface the first error as the top-level
         # error so callers can recover via the standard error envelope.
-        first_parser = next(iter(parser_errors))
+        first_engine = next(iter(parser_errors))
         merged["ok"] = False
         merged["error"] = {
             "type": "fanout_failed",
             "tool": tool_name,
             "message": (
-                f"All {len(parser_errors)} parser(s) failed to dispatch "
-                f"'{tool_name}'. First error from parser "
-                f"'{first_parser}': {parser_errors[first_parser].get('message', '')}"
+                f"All {len(parser_errors)} query engine(s) failed to "
+                f"dispatch '{tool_name}'. First error from engine "
+                f"'{first_engine}': {parser_errors[first_engine].get('message', '')}"
             ),
-            "first_parser": first_parser,
+            "first_engine": first_engine,
             "all_errors": parser_errors,
         }
     return merged
