@@ -58,7 +58,9 @@ async def _write_graph(args: argparse.Namespace, result: Jp1AnalysisResult) -> d
         unresolved_count = len(rows["relations"]) - len(required_relations)
         counts = {
             "Jp1Unit": await writer.write_nodes_batch("jp1:units", query, rows["units"]),
-            "relations": await writer.write_relations_typed(required_relations),
+            "relations": await writer.write_relations_typed(
+                required_relations, project_id=result.project_id
+            ),
             "unresolved_relations": unresolved_count,
         }
         if args.verbose and unresolved_count:

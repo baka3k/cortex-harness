@@ -130,7 +130,7 @@ class TestProjectIdOptional(unittest.TestCase):
         self.assertEqual(result, self.mcp.QDRANT_COLLECTION)
 
     def test_resolve_doc_collection_explicit_collection_wins(self):
-        result = self.mcp._resolve_doc_collection("REDACTED", collection="explicit_coll")
+        result = self.mcp._resolve_doc_collection("client-alpha", collection="explicit_coll")
         self.assertEqual(result, "explicit_coll")
 
     def test_resolve_doc_collection_registered_project_uses_registry(self):
@@ -161,9 +161,9 @@ class TestProjectIdOptional(unittest.TestCase):
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
         ):
-            # 'REDACTED' is not registered (only 'cortext' is) — must fall back
-            result = self.mcp._resolve_doc_collection("REDACTED")
-            self.assertEqual(result, "REDACTED")
+            # The requested scope is not registered (only 'cortext' is) — fall back.
+            result = self.mcp._resolve_doc_collection("client-alpha")
+            self.assertEqual(result, "client-alpha")
 
     def test_resolve_doc_collection_empty_known_list_still_falls_back(self):
         """No registered projects at all — still fall back to project_id."""
@@ -194,8 +194,8 @@ class TestProjectIdOptional(unittest.TestCase):
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
         ):
-            result = self.mcp._resolve_doc_collections("REDACTED")
-        self.assertEqual(result, ["REDACTED"])
+            result = self.mcp._resolve_doc_collections("client-alpha")
+        self.assertEqual(result, ["client-alpha"])
 
     def test_resolve_doc_collections_explicit_collection_wins(self):
         result = self.mcp._resolve_doc_collections(None, collection="explicit")
@@ -218,7 +218,7 @@ class TestProjectIdOptional(unittest.TestCase):
         self.assertEqual(result, ["aa", "bb", "cc"])
 
     def test_list_qdrant_collections_unregistered_returns_all(self):
-        """The exact error reported: list_qdrant_collections('REDACTED') used to
+        """A project-scoped lookup used to
         raise; now it should behave like 'no project_id' and return all."""
         qdrant = _StubQdrant(["alpha", "beta", "gamma"])
         # Replicate the tool's body but call the helper directly.
@@ -232,7 +232,7 @@ class TestProjectIdOptional(unittest.TestCase):
             # If that helper raises ProjectNotRegisteredError, the new list_qdrant_collections
             # body catches it and returns the full list. Verify that contract.
             try:
-                expected = self.mcp._resolve_doc_collection("REDACTED")
+                expected = self.mcp._resolve_doc_collection("client-alpha")
                 # If registration succeeded, the filter applies:
                 result = [n for n in qdrant.list_collection_names() if n == expected]
                 self.assertEqual(result, [])
@@ -260,9 +260,9 @@ class TestProjectIdOptional(unittest.TestCase):
                 "_read_project_entries",
                 return_value=[{"project_id": "cortext", "doc_env": {}}],
              ):
-            store, owned = self.mcp._acquire_graph_store("REDACTED")
-        self.assertEqual(captured.get("graph_name"), "REDACTED")
-        self.assertEqual(store, "store(REDACTED)")
+            store, owned = self.mcp._acquire_graph_store("client-alpha")
+        self.assertEqual(captured.get("graph_name"), "client-alpha")
+        self.assertEqual(store, "store(client-alpha)")
         self.assertFalse(owned)
 
 

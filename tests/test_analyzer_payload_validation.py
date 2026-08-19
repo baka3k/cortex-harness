@@ -80,6 +80,34 @@ def test_malformed_symbol_and_dependent_effects_are_quarantined_before_writes():
     assert accounting.discovered == accounting.accepted + accounting.quarantined
 
 
+def test_whitespace_padded_symbol_identity_is_quarantined_before_indexed_writes():
+    padded = _function("  false-capture/1@src/main.cpp", "  false-capture  ")
+    payload = {
+        "file_def": {"file_path": "src/main.cpp"},
+        "functions": [padded],
+        "relations": [
+            {
+                "source_label": "File",
+                "target_label": "Function",
+                "rel_type": "CONTAINS",
+                "source_id": "src/main.cpp",
+                "target_id": padded["symbol_id"],
+            }
+        ],
+        "calls": [{"caller_id": padded["symbol_id"], "callee_name": "target"}],
+    }
+
+    validated, quarantine = validate_cplus_payload(payload, project_id="demo")
+
+    assert validated["functions"] == []
+    assert validated["relations"] == []
+    assert validated["calls"] == []
+    assert {record.reason for record in quarantine} >= {
+        QuarantineReason.MALFORMED_DECLARATOR,
+        QuarantineReason.UNRESOLVED_REFERENCE,
+    }
+
+
 def test_quarantined_file_quality_suppresses_nodes_relations_calls_and_vectors():
     payload = {
         "file_def": {

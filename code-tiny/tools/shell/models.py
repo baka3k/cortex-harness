@@ -24,6 +24,26 @@ class ShellFunction:
 
 
 @dataclass(frozen=True)
+class ShellInvocation:
+    symbol_id: str
+    source_id: str
+    source_label: str
+    file_path: str
+    line: int
+    ordinal: int
+    raw_command: str
+    command_name: str
+    dynamic: bool
+
+
+@dataclass(frozen=True)
+class ProgramMapping:
+    program_id: str
+    source_path: str
+    evidence_hash: str
+
+
+@dataclass(frozen=True)
 class ShellRelation:
     source_id: str
     source_label: str
@@ -41,6 +61,7 @@ class ShellFile:
     line_count: int
     encoding: str
     functions: tuple[ShellFunction, ...]
+    invocations: tuple[ShellInvocation, ...]
     relations: tuple[ShellRelation, ...]
     diagnostics: tuple[ShellDiagnostic, ...]
 
