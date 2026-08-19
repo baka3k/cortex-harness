@@ -97,7 +97,9 @@ async def write_graph(args: argparse.Namespace, result) -> Dict[str, int]:
                     "properties": properties,
                 }
             )
-        counts["relationships"] = await writer.write_relations_typed(relations)
+        counts["relationships"] = await writer.write_relations_typed(
+            relations, project_id=result.project_id
+        )
         return counts
     finally:
         await _close_driver(driver)

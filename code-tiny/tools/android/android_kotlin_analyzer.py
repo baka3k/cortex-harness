@@ -4165,7 +4165,9 @@ async def build_call_graph(
                     await code_writer.write_nodes_batch(label, node_queries[label], rows)
 
             # --- Write all collected relations ---
-            await code_writer.write_relations_typed(all_relations)
+            await code_writer.write_relations_typed(
+                all_relations, project_id=project_id
+            )
 
             # --- Write all collected calls ---
             await code_writer.write_calls_with_site(all_calls)

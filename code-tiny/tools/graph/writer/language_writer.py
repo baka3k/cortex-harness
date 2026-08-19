@@ -17,6 +17,7 @@ from tools.graph.operations.namespace_ops import NamespaceNodeOperations
 from tools.graph.operations.type_ops import TypeNodeOperations
 from tools.graph.operations.function_ops import FunctionNodeOperations
 from tools.graph.writer.query_contract import (
+    compile_relationship_endpoint_audit,
     compile_relationship_upsert,
     group_typed_relations,
 )
@@ -1445,6 +1446,8 @@ class LanguageCodeWriter:
         relations: List[Dict[str, Any]],
         state: Optional[Dict[str, int]] = None,
         state_writer: Optional[Callable] = None,
+        *,
+        project_id: Optional[str] = None,
     ) -> int:
         """Write typed relationships using per-type batching.
 
@@ -1466,7 +1469,9 @@ class LanguageCodeWriter:
         if not relations:
             return 0
 
-        groups = group_typed_relations(relations)
+        groups = group_typed_relations(
+            relations, default_project_id=project_id
+        )
 
         total_written = 0
         for relationship_group, rows in groups.items():
@@ -1478,6 +1483,66 @@ class LanguageCodeWriter:
             async def write_batch(
                 batch: List[Dict[str, Any]], _group=relationship_group
             ) -> int:
+                async def audit_endpoints() -> List[Dict[str, Any]]:
+                    audit_records, _, _ = await self.driver.execute_query(
+                        compile_relationship_endpoint_audit(_group),
+                        {"rows": batch},
+                        self.database,
+                    )
+                    return [
+                        {
+                            "source_id": record.get("source_id"),
+                            "target_id": record.get("target_id"),
+                            "project_id_normalized": record.get(
+                                "project_id_normalized"
+                            ),
+                            "source_matches": record.get("source_matches"),
+                            "target_matches": record.get("target_matches"),
+                        }
+                        for record in audit_records
+                        if isinstance(record, dict)
+                        and (
+                            "source_matches" in record
+                            or "target_matches" in record
+                        )
+                    ]
+
+                # Check cardinality before MERGE so a batch with one bad row
+                # cannot partially materialize its otherwise valid edges.
+                endpoint_diagnostics = await audit_endpoints()
+                if endpoint_diagnostics:
+                    if os.getenv("CORTEX_DIAGNOSTIC_SKIP_UNRESOLVED_RELATIONS") == "1":
+                        bad_pairs = {
+                            (item.get("source_id"), item.get("target_id"))
+                            for item in endpoint_diagnostics
+                        }
+                        filtered_batch = [
+                            row
+                            for row in batch
+                            if (row.get("source_id"), row.get("target_id")) not in bad_pairs
+                        ]
+                        self._emit_progress(
+                            "diagnostic_skipped_unresolved",
+                            _group.state_key,
+                            skipped=len(batch) - len(filtered_batch),
+                            endpoint_diagnostics=endpoint_diagnostics,
+                        )
+                        if not filtered_batch:
+                            return 0
+                        batch = filtered_batch
+                    else:
+                        self._emit_progress(
+                            "batch_endpoint_preflight_failed",
+                            _group.state_key,
+                            expected=len(batch),
+                            endpoint_diagnostics=endpoint_diagnostics,
+                        )
+                        raise RuntimeError(
+                            "relationship endpoint preflight failure for "
+                            f"{_group.state_key}: expected={len(batch)} "
+                            f"endpoint_diagnostics={endpoint_diagnostics!r}"
+                        )
+
                 query = compile_relationship_upsert(_group)
                 records, _, _ = await self.driver.execute_query(
                     query, {"rows": batch}, self.database
@@ -1485,18 +1550,45 @@ class LanguageCodeWriter:
                 count = int(records[0]["count"]) if records else 0
                 if count != len(batch):
                     unresolved = abs(len(batch) - count)
-                    print(
-                        f"[graph][warn] relationship integrity mismatch for "
-                        f"{_group.state_key}: expected={len(batch)} matched={count} "
-                        f"unresolved_or_ambiguous={unresolved} — continuing",
-                        flush=True,
-                    )
+                    endpoint_diagnostics: List[Dict[str, Any]] = []
+                    audit_error = ""
+                    try:
+                        endpoint_diagnostics = await audit_endpoints()
+                    except Exception as exc:  # best-effort evidence only
+                        audit_error = type(exc).__name__
                     self._emit_progress(
                         "batch_unresolved",
                         _group.state_key,
                         expected=len(batch),
                         matched=count,
                         unresolved=unresolved,
+                        endpoint_diagnostics=endpoint_diagnostics,
+                        audit_error=audit_error,
+                    )
+                    if os.getenv("CORTEX_DIAGNOSTIC_SKIP_UNRESOLVED_RELATIONS") == "1":
+                        self._emit_progress(
+                            "diagnostic_quarantined_cardinality_mismatch",
+                            _group.state_key,
+                            expected=len(batch),
+                            matched=count,
+                            unresolved=unresolved,
+                            endpoint_diagnostics=endpoint_diagnostics,
+                            audit_error=audit_error,
+                        )
+                        return count
+                    evidence = (
+                        f" endpoint_diagnostics={endpoint_diagnostics!r}"
+                        if endpoint_diagnostics
+                        else (
+                            f" endpoint_audit_error={audit_error}"
+                            if audit_error
+                            else " endpoint_diagnostics=[]"
+                        )
+                    )
+                    raise RuntimeError(
+                        "relationship integrity failure for "
+                        f"{_group.state_key}: expected={len(batch)} matched={count} "
+                        f"unresolved_or_ambiguous={unresolved}{evidence}"
                     )
                 return count
 
@@ -1541,7 +1633,11 @@ class LanguageCodeWriter:
         )
 
     async def enqueue_deferred_relations(
-        self, relations: List[Dict[str, Any]], *, barrier: str
+        self,
+        relations: List[Dict[str, Any]],
+        *,
+        barrier: str,
+        project_id: Optional[str] = None,
     ) -> int:
         """Durably enqueue typed edges before their endpoint production closes."""
 
@@ -1551,7 +1647,9 @@ class LanguageCodeWriter:
             raise RuntimeError("deferred durable relations require journal mode")
         self._journal_runtime.open_barrier(barrier)
         enqueued = 0
-        for relationship_group, rows in group_typed_relations(relations).items():
+        for relationship_group, rows in group_typed_relations(
+            relations, default_project_id=project_id
+        ).items():
             operation = GraphWriteOperation.for_label(relationship_group.state_key)
 
             async def write_batch(
@@ -1872,6 +1970,15 @@ class LanguageCodeWriter:
                 for file_row in files or []
                 if file_row.get("project_id")
             )
+            if len(project_ids) == 1:
+                default_project_id = next(iter(project_ids))
+                relations = [
+                    {
+                        **relation,
+                        "project_id": relation.get("project_id") or default_project_id,
+                    }
+                    for relation in relations
+                ]
             candidate_relations = [
                 dict(relation)
                 for relation in relations

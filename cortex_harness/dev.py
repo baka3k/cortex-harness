@@ -341,6 +341,38 @@ def _dedupe_scan_roots(folders: list, project_path: Path) -> list:
     return [raw for raw, _ in selected]
 
 
+def _validate_selected_scan_roots(
+    selected_folders: list,
+    configured_folders: list,
+    project_path: Path,
+) -> None:
+    """Reject a nested root that would create a second path-ID namespace.
+
+    A source file's graph identity is relative to the analyzer root. Selecting
+    only a configured child of another configured root would therefore produce
+    IDs that cannot join facts emitted from the parent root.
+    """
+
+    configured = []
+    for folder in configured_folders:
+        candidate = Path(folder) if Path(folder).is_absolute() else project_path / folder
+        configured.append((folder, Path(os.path.normcase(os.path.realpath(candidate)))))
+    for folder in selected_folders:
+        candidate = Path(folder) if Path(folder).is_absolute() else project_path / folder
+        canonical = Path(os.path.normcase(os.path.realpath(candidate)))
+        ancestors = [
+            raw
+            for raw, configured_root in configured
+            if configured_root != canonical and canonical.is_relative_to(configured_root)
+        ]
+        if ancestors:
+            raise click.UsageError(
+                "nested_scan_root_changes_identity_namespace: "
+                f"selected={folder!r} configured_ancestor={ancestors[0]!r}; "
+                "select the configured ancestor root instead"
+            )
+
+
 def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
     cfg_dir = _config_dir(project_dir)
     if not cfg_dir.exists():
@@ -2455,6 +2487,12 @@ def sync():
     show_default=True,
     help="Git+SHA hybrid, committed-only, or full SHA comparison.",
 )
+@click.option(
+    "--parsers",
+    default="auto",
+    show_default=True,
+    help="auto or a comma-separated list of parser names to run.",
+)
 @click.option("--lock-timeout-seconds", type=float, default=10.0, show_default=True)
 @click.option("--reconcile", is_flag=True, help="Force full SHA-256 reconciliation.")
 @click.option(
@@ -2488,6 +2526,7 @@ def sync_code(
     full_scan,
     sync_mode,
     change_detection,
+    parsers,
     lock_timeout_seconds,
     reconcile,
     submodules,
@@ -2517,6 +2556,7 @@ def sync_code(
         full_scan=full_scan,
         sync_mode=sync_mode,
         change_detection=change_detection,
+        parsers=parsers,
         lock_timeout_seconds=lock_timeout_seconds,
         reconcile=reconcile,
         submodules=submodules,
@@ -2542,6 +2582,7 @@ def sync_code(
         return
 
     selected = _dedupe_scan_roots(_select_folders_interactive(folders), project_path)
+    _validate_selected_scan_roots(selected, folders, project_path)
     if not selected:
         click.echo("[info] No folders selected.")
         return
@@ -2573,6 +2614,7 @@ def sync_code(
                 "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
                 "--sync-mode", sync_mode,
                 "--change-detection", change_detection,
+                "--parsers", parsers,
                 "--lock-timeout-seconds", str(lock_timeout_seconds),
                 "--submodules", submodules,
                 "--summary-path", str(child_summary_path),
@@ -2674,6 +2716,7 @@ def sync_code_all(ctx):
                 "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
                 "--sync-mode", o["sync_mode"],
                 "--change-detection", o["change_detection"],
+                "--parsers", "auto",
                 "--lock-timeout-seconds", str(o["lock_timeout_seconds"]),
                 "--submodules", o["submodules"],
                 "--summary-path", str(child_summary_path),

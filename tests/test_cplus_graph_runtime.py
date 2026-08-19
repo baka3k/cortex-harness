@@ -78,11 +78,13 @@ class _FakeCodeWriter:
         self.database = "code"
         self.batch_size = 100
         self.calls = []
+        self.node_writes = []
         self.file_ids = set()
         self.include_write_file_counts = []
         self.fail_deferred_includes = fail_deferred_includes
 
     async def write_nodes_batch(self, key, cypher, rows, state=None, state_writer=None):
+        self.node_writes.append((key, cypher, list(rows)))
         return len(rows)
 
     async def write_all(self, **kwargs):
@@ -91,7 +93,9 @@ class _FakeCodeWriter:
         self.record_include_relations(kwargs.get("relations") or [])
         return {}
 
-    async def write_relations_typed(self, relations, state=None, state_writer=None):
+    async def write_relations_typed(
+        self, relations, state=None, state_writer=None, **kwargs
+    ):
         if self.fail_deferred_includes:
             raise RuntimeError("deferred include failure")
         self.record_include_relations(relations)
@@ -156,6 +160,28 @@ def _run_build(
 
 
 class CPlusGraphRuntimeTests(unittest.TestCase):
+    def test_proc_sql_custom_nodes_persist_normalized_project_scope(self) -> None:
+        source = """\
+int main(void) {
+    EXEC SQL SELECT NAME INTO :customer_name FROM CUSTOMER;
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as cache:
+            Path(root, "sample.pc").write_text(source, encoding="utf-8")
+            writer = _FakeCodeWriter()
+            _run_build(root, cache, writer, parse_run_id="scope-run")
+
+        sql_writes = [
+            (key, cypher, rows)
+            for key, cypher, rows in writer.node_writes
+            if key in {"SqlStatement", "SqlDirective", "SqlCursor", "SqlHostVariable", "DatabaseTable"}
+        ]
+        self.assertTrue(sql_writes)
+        self.assertTrue(
+            all("project_id_normalized = row.project_id_normalized" in cypher for _, cypher, _ in sql_writes)
+        )
+
     def test_parse_metadata_separates_error_missing_and_decode_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             malformed = Path(root, "malformed.c")
