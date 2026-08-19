@@ -2,7 +2,7 @@
 
 ## Context
 
-`.sh` files are entirely unhandled today (no `shell` key in `ANALYZERS`, no `tools/shell` package). Sample scripts (e.g. `BBSEAB01.sh`) define shell functions, source/invoke other `.sh` scripts, and read parameters out of `.ini` files via `grep 'KEY' path.ini | awk -F: '{print $2}'`. These are the two dependency edges migration engineers actually need (script→script call graph, script→config reference), not full POSIX semantics.
+`.sh` files are entirely unhandled today (no `shell` key in `ANALYZERS`, no `tools/shell` package). Synthetic sample scripts (e.g. `batch_entry.sh`) define shell functions, source/invoke other `.sh` scripts, and read parameters out of `.ini` files via `grep 'KEY' path.ini | awk -F: '{print $2}'`. These are the two dependency edges migration engineers actually need (script→script call graph, script→config reference), not full POSIX semantics.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ Create:
 - `code-tiny/tools/shell/parser.py`
 - `code-tiny/tools/shell/pipeline.py`
 - `code-tiny/tools/shell/README.md`
-- `tests/fixtures/shell-application/BBSEAB01.sh` (synthetic, mirrors function calls + grep-ini pattern)
+- `tests/fixtures/shell-application/batch_entry.sh` (synthetic, mirrors function calls + grep-ini pattern)
 - `tests/fixtures/shell-application/other_target.sh`
 - `tests/test_shell_parser.py`
 - `tests/test_shell_analyzer_pipeline.py`

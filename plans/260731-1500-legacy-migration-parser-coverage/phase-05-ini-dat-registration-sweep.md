@@ -2,7 +2,7 @@
 
 ## Context
 
-Remaining gaps: the flat `KEY:VALUE` `.ini` files (e.g. `BBSEAB01_06_01.ini`) referenced by shell scripts have no descriptor at all, `.DAT` data directories have no topology entry, and the earlier phases leave several 7-file-checklist rows to double-check end-to-end. This phase closes both content gaps with the lightweight `project_topology` descriptor pattern (no graph writer, no vector embedding — these are configuration/resource metadata, not code) and does a final sweep/test pass across all four new/extended parsers.
+Remaining gaps: the flat `KEY:VALUE` `.ini` files (e.g. `batch_entry_settings.ini`) referenced by shell scripts have no descriptor at all, `.DAT` data directories have no topology entry, and the earlier phases leave several 7-file-checklist rows to double-check end-to-end. This phase closes both content gaps with the lightweight `project_topology` descriptor pattern (no graph writer, no vector embedding — these are configuration/resource metadata, not code) and does a final sweep/test pass across all four new/extended parsers.
 
 ## Requirements
 

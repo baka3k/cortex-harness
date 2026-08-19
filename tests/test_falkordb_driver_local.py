@@ -26,6 +26,7 @@ from tools.graph.writer.query_contract import (  # noqa: E402
     RelationshipGroup,
     compile_relationship_upsert,
 )
+from tools.graph.writer.language_writer import LanguageCodeWriter  # noqa: E402
 
 
 def test_driver_accepts_path_only(tmp_path: Path) -> None:
@@ -259,8 +260,14 @@ def test_real_falkordblite_relationship_plan_uses_both_indexes(tmp_path: Path) -
         )
         assert result.verified_count == 2
         driver.execute_query_sync(
-            "CREATE (:File {id: $file_id}), (:Function {id: $function_id})",
-            {"file_id": "src/main.c", "function_id": "fn:main"},
+            "CREATE (:File {id: $file_id, project_id_normalized: $scope}), "
+            "(:Function {id: $function_id, project_id_normalized: $scope})",
+            {"file_id": "src/main.c", "function_id": "fn:main", "scope": "demo"},
+        )
+        driver.execute_query_sync(
+            "CREATE (:File {id: $file_id, project_id_normalized: $scope}), "
+            "(:Function {id: $function_id, project_id_normalized: $scope})",
+            {"file_id": "src/main.c", "function_id": "fn:main", "scope": "other"},
         )
         query = compile_relationship_upsert(
             RelationshipGroup("File", "Function", "CONTAINS")
@@ -269,6 +276,8 @@ def test_real_falkordblite_relationship_plan_uses_both_indexes(tmp_path: Path) -
             {
                 "source_id": "src/main.c",
                 "target_id": "fn:main",
+                "project_id": "demo",
+                "project_id_normalized": "demo",
                 "properties": {},
             }
         ]
@@ -278,14 +287,34 @@ def test_real_falkordblite_relationship_plan_uses_both_indexes(tmp_path: Path) -
         assert "All Node Scan" not in plan
         assert "Cartesian Product" not in plan
 
+        writer = LanguageCodeWriter(driver, database="code", batch_size=10)
+        scoped_relation = {
+            **rows[0],
+            "source_label": "File",
+            "target_label": "Function",
+            "rel_type": "CONTAINS",
+        }
+        assert asyncio.run(
+            writer.write_relations_typed([scoped_relation, dict(scoped_relation)])
+        ) == 2
         driver.execute_query_sync(query, {"rows": rows})
         driver.execute_query_sync(query, {"rows": rows})
         records, _, _ = driver.execute_query_sync(
-            "MATCH (:File {id: $file_id})-[r:CONTAINS]->"
-            "(:Function {id: $function_id}) RETURN count(r) AS count",
-            {"file_id": "src/main.c", "function_id": "fn:main"},
+            "MATCH (:File {id: $file_id, project_id_normalized: $scope})"
+            "-[r:CONTAINS]->"
+            "(:Function {id: $function_id, project_id_normalized: $scope}) "
+            "RETURN count(r) AS count",
+            {"file_id": "src/main.c", "function_id": "fn:main", "scope": "demo"},
         )
         assert records == [{"count": 1}]
+        records, _, _ = driver.execute_query_sync(
+            "MATCH (:File {id: $file_id, project_id_normalized: $scope})"
+            "-[r:CONTAINS]->"
+            "(:Function {id: $function_id, project_id_normalized: $scope}) "
+            "RETURN count(r) AS count",
+            {"file_id": "src/main.c", "function_id": "fn:main", "scope": "other"},
+        )
+        assert records == [{"count": 0}]
     finally:
         driver.close()
 

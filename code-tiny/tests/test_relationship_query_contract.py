@@ -9,6 +9,7 @@ from tools.graph.operations.namespace_ops import NamespaceNodeOperations
 from tools.graph.operations.type_ops import TypeNodeOperations
 from tools.graph.writer.query_contract import (
     RelationshipGroup,
+    compile_relationship_endpoint_audit,
     compile_relationship_upsert,
     group_typed_relations,
 )
@@ -71,10 +72,36 @@ class RelationshipQueryContractTests(unittest.IsolatedAsyncioTestCase):
 
     def test_compiler_qualifies_both_endpoint_labels(self) -> None:
         query = compile_relationship_upsert(RelationshipGroup("File", "Function", "CONTAINS"))
-        self.assertIn("MATCH (a:File {id: row.source_id})", query)
-        self.assertIn("MATCH (b:Function {id: row.target_id})", query)
+        self.assertIn("MATCH (a:File {id: row.source_id, project_id_normalized:", query)
+        self.assertIn("MATCH (b:Function {id: row.target_id, project_id_normalized:", query)
         self.assertNotIn("MATCH (a {id:", query)
         self.assertNotIn("MATCH (b {id:", query)
+
+    def test_endpoint_audit_is_scoped_read_only_and_reports_match_counts(self) -> None:
+        query = compile_relationship_endpoint_audit(
+            RelationshipGroup("File", "Function", "CONTAINS")
+        )
+        self.assertIn("OPTIONAL MATCH (a:File", query)
+        self.assertIn("OPTIONAL MATCH (b:Function", query)
+        self.assertIn("project_id_normalized: row.project_id_normalized", query)
+        self.assertIn("source_matches", query)
+        self.assertIn("target_matches", query)
+        self.assertNotIn("MERGE", query)
+        self.assertNotIn("SET ", query)
+
+    def test_grouping_lifts_and_normalizes_project_scope(self) -> None:
+        groups = group_typed_relations([_relation()])
+        row = next(iter(groups.values()))[0]
+        self.assertEqual(row["project_id"], "cortext")
+        self.assertEqual(row["project_id_normalized"], "cortext")
+        self.assertEqual(row["_contract_row_position"], 0)
+
+    def test_duplicate_relation_rows_keep_distinct_audit_ordinals(self) -> None:
+        rows = next(iter(group_typed_relations([_relation(), _relation()]).values()))
+        self.assertEqual(
+            [row["_contract_row_position"] for row in rows],
+            [0, 1],
+        )
 
     def test_grouping_includes_both_labels_and_relationship_type(self) -> None:
         groups = group_typed_relations(
@@ -101,6 +128,10 @@ class RelationshipQueryContractTests(unittest.IsolatedAsyncioTestCase):
             group_typed_relations([_relation(rel_type="CALLS] DELETE r")])
         with self.assertRaisesRegex(ValueError, "has no required id index"):
             group_typed_relations([_relation(source_label="SyntacticallyValidButUnknown")])
+        unscoped = _relation()
+        unscoped["properties"] = {}
+        with self.assertRaisesRegex(ValueError, "requires project_id"):
+            group_typed_relations([unscoped])
 
     def test_shell_and_cplus_fallback_endpoint_labels_are_registered(self) -> None:
         groups = group_typed_relations(
@@ -128,7 +159,10 @@ class RelationshipQueryContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(written, 2)
-        self.assertEqual(len(driver.calls), 2)
+        audit_queries = [query for query, _, _ in driver.calls if "OPTIONAL MATCH" in query]
+        mutation_queries = [query for query, _, _ in driver.calls if "MERGE (a)-[r:" in query]
+        self.assertEqual(len(audit_queries), 2)
+        self.assertEqual(len(mutation_queries), 2)
         queries = "\n".join(query for query, _, _ in driver.calls)
         self.assertIn("MATCH (a:File", queries)
         self.assertIn("MATCH (a:Type", queries)
@@ -137,11 +171,25 @@ class RelationshipQueryContractTests(unittest.IsolatedAsyncioTestCase):
         driver = _RecordingDriver()
 
         async def unresolved(query, parameters=None, database=None):
+            if "OPTIONAL MATCH" in query:
+                return (
+                    [
+                        {
+                            "source_id": "same-id",
+                            "target_id": "same-id",
+                            "project_id_normalized": "cortext",
+                            "source_matches": 1,
+                            "target_matches": 0,
+                        }
+                    ],
+                    [],
+                    None,
+                )
             return ([{"count": 0}], [], None)
 
         driver.execute_query = unresolved
         writer = LanguageCodeWriter(driver, database="code")
-        with self.assertRaisesRegex(RuntimeError, "integrity failure"):
+        with self.assertRaisesRegex(RuntimeError, "target_matches.*0"):
             await writer.write_relations_typed([_relation()])
 
     async def test_write_all_infers_legacy_producer_labels_before_streaming(self) -> None:
@@ -161,8 +209,8 @@ class RelationshipQueryContractTests(unittest.IsolatedAsyncioTestCase):
         )
 
         queries = "\n".join(query for query, _, _ in driver.calls)
-        self.assertIn("MATCH (a:File {id: row.source_id})", queries)
-        self.assertIn("MATCH (b:Function {id: row.target_id})", queries)
+        self.assertIn("MATCH (a:File {id: row.source_id, project_id_normalized:", queries)
+        self.assertIn("MATCH (b:Function {id: row.target_id, project_id_normalized:", queries)
 
     async def test_write_all_rejects_unresolvable_labels_before_any_mutation(self) -> None:
         driver = _RecordingDriver()

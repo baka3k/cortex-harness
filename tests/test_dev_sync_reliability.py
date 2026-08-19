@@ -7,7 +7,13 @@ from unittest.mock import patch
 
 from click.testing import CliRunner
 
-from cortex_harness.dev import _code_sync_summary_path, _dedupe_scan_roots, _run_with_retry, cli
+from cortex_harness.dev import (
+    _code_sync_summary_path,
+    _dedupe_scan_roots,
+    _run_with_retry,
+    _validate_selected_scan_roots,
+    cli,
+)
 
 
 class DevSyncReliabilityTests(unittest.TestCase):
@@ -57,6 +63,19 @@ class DevSyncReliabilityTests(unittest.TestCase):
                 _dedupe_scan_roots(["module", "."], root),
                 ["."],
             )
+
+    def test_selecting_only_configured_child_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            parent = root / "repo"
+            child = parent / "native-src"
+            child.mkdir(parents=True)
+            with self.assertRaisesRegex(
+                Exception, "nested_scan_root_changes_identity_namespace"
+            ):
+                _validate_selected_scan_roots(
+                    [str(child)], [str(parent), str(child)], root
+                )
 
     def test_lock_busy_exit_is_not_retried(self):
         completed = subprocess.CompletedProcess(["worker"], 2)
@@ -115,6 +134,29 @@ class DevSyncReliabilityTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("--full-scan", result.output)
         self.assertIn("--sync-mode graph", result.output)
+
+    def test_code_sync_dry_run_propagates_parser_selection(self):
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "src"
+            source.mkdir()
+            (source / "main.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            self._write_local_config(root, source)
+
+            result = runner.invoke(
+                cli,
+                [
+                    "sync", "code",
+                    "--project-dir", str(root),
+                    "--parsers", "cplus",
+                    "--dry-run",
+                ],
+                input="\n",
+            )
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("--parsers cplus", result.output)
 
     def test_code_sync_all_propagates_full_scan_embedding_mode(self):
         runner = CliRunner()

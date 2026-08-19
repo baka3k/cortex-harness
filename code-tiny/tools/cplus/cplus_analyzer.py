@@ -3450,7 +3450,10 @@ def _load_or_parse_payload(
         "parse_meta": parse_meta,
     }
     payload["calls"] = sorted(payload["calls"], key=_call_payload_sort_key)
-    payload = attach_compact_quality_provenance(payload)
+    # Apply the same defaults on a first parse that cache hits receive. This
+    # keeps Pro*C SQL node validation and graph output independent of whether
+    # a parse-cache entry happened to exist before the run.
+    payload = normalize_cached_payload(payload)
     if parse_cache and signature is not None:
         write_parse_cache(parse_cache_root, rel_path, signature, payload)
     return payload
@@ -4110,6 +4113,7 @@ async def build_call_graph(
         await code_writer.enqueue_deferred_relations(
             deferred_include_relations,
             barrier="cplus:file-production",
+            project_id=project_id,
         )
 
     include_closure_cache: Dict[str, set[str]] = {}
@@ -4410,6 +4414,7 @@ SET r.node_type = 'code',
     r.summary = row.summary,
     r.note = row.note,
     r.project_id = row.project_id,
+    r.project_id_normalized = row.project_id_normalized,
     r.project_name = row.project_name,
     r.repo = row.repo,
     r.build_system = row.build_system,
@@ -4442,6 +4447,7 @@ SET c.node_type = 'code',
     c.summary = row.summary,
     c.note = row.note,
     c.project_id = row.project_id,
+    c.project_id_normalized = row.project_id_normalized,
     c.project_name = row.project_name,
     c.language = row.language,
     c.repo = row.repo,
@@ -4467,6 +4473,7 @@ SET s.node_type = 'code',
     s.is_dynamic = coalesce(row.is_dynamic, false),
     s.raw_text = row.raw_text,
     s.project_id = row.project_id,
+    s.project_id_normalized = row.project_id_normalized,
     s.project_name = row.project_name,
     s.language = row.language,
     s.repo = row.repo,
@@ -4483,6 +4490,7 @@ SET s.node_type = 'code',
     s.end_line = row.end_line,
     s.raw_text = row.raw_text,
     s.project_id = row.project_id,
+    s.project_id_normalized = row.project_id_normalized,
     s.project_name = row.project_name,
     s.language = row.language,
     s.repo = row.repo,
@@ -4499,6 +4507,7 @@ SET s.node_type = 'code',
     s.operation = row.operation,
     s.raw_text = row.raw_text,
     s.project_id = row.project_id,
+    s.project_id_normalized = row.project_id_normalized,
     s.project_name = row.project_name,
     s.language = row.language,
     s.repo = row.repo,
@@ -4514,6 +4523,7 @@ SET s.node_type = 'code',
     s.operation = row.operation,
     s.raw_text = row.raw_text,
     s.project_id = row.project_id,
+    s.project_id_normalized = row.project_id_normalized,
     s.project_name = row.project_name,
     s.language = row.language,
     s.repo = row.repo,
@@ -4527,6 +4537,7 @@ SET s.node_type = 'code',
     s.file_path = row.file_path,
     s.start_line = row.start_line,
     s.project_id = row.project_id,
+    s.project_id_normalized = row.project_id_normalized,
     s.project_name = row.project_name,
     s.language = row.language,
     s.repo = row.repo,
@@ -5397,7 +5408,8 @@ SET s.node_type = 'code',
                     )
                 elif hasattr(code_writer, "write_relations_typed"):
                     await code_writer.write_relations_typed(
-                        deferred_include_relations
+                        deferred_include_relations,
+                        project_id=project_id,
                     )
                 else:
                     await code_writer.write_all(
@@ -5563,6 +5575,7 @@ SET s.node_type = 'code',
             UNWIND $rows AS row
             MERGE (r:ParseRun {id: row.parse_run_id})
             SET r.project_id = row.project_id,
+                r.project_id_normalized = row.project_id_normalized,
                 r.project_name = row.project_name,
                 r.language = row.language,
                 r.repo = row.repo,

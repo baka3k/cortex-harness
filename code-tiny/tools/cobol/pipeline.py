@@ -176,5 +176,7 @@ async def write_graph_facts(
             raise ValueError(f"unsafe graph label: {label}")
         query = f"UNWIND $rows AS row MERGE (n:{label} {{id: row.id}}) SET n += row.properties"
         counts[label] = await writer.write_nodes_batch(f"cobol:{label}", query, rows)
-    counts["relations"] = await writer.write_relations_typed(relations)
+    counts["relations"] = await writer.write_relations_typed(
+        relations, project_id=result.project_id
+    )
     return counts

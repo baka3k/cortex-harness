@@ -2,6 +2,11 @@
 
 Implementation and maintenance records, newest first:
 
+- [External project-keyword isolation](2026-08-19-external-project-keyword-isolation.md)
+- [Scoped graph materialization safety](2026-08-19-scoped-graph-materialization-safety.md)
+- [Shell-to-source lineage through an external ledger](2026-08-19-shell-to-source-lineage.md)
+- [infra-up remote support](2026-08-18-infra-up-remote-support.md)
+- [Code sync graph and embedding phases](2026-08-13-code-sync-graph-embedding-phases.md)
 - [UV Make lifecycle migration](2026-08-13-uv-make-lifecycle-migration.md)
 - [C/C++ parser-quality recovery phases 01-04](2026-08-07-cplus-parser-quality-recovery.md)
 - [Graph ingestion write-path hardening](2026-08-07-graph-ingestion-write-path-hardening.md)
@@ -10,12 +15,15 @@ Implementation and maintenance records, newest first:
 - [FalkorDBLite runtime cutover](2026-08-06-falkordblite-runtime-cutover.md)
 - [Owner-scoped local storage](2026-08-06-owner-scoped-local-storage.md)
 - [Legacy migration parser coverage](2026-07-31-legacy-migration-parser-coverage.md)
+- [Remove search_full](2026-07-28-simplify-search-full-removal.md)
+- [Testtool run-all error tracing](2026-07-28-testtool-runall-error-tracing.md)
 - [Project topology and context tools](2026-07-25-project-topology-context-tools.md)
 - [Case-insensitive project scope](2026-07-23-case-insensitive-project-scope.md)
 - [Project-scoped MCP instances](2026-07-20-project-scoped-mcp-instances.md)
 - [Project-scoped semantic retrieval](2026-07-19-project-scoped-semantic-retrieval.md)
 - [Parser-MCP runtime alignment](2026-07-19-parser-mcp-runtime-alignment.md)
 - [Windows MCP force-restart reliability](2026-07-19-windows-mcp-force-restart.md)
+- [MCP FalkorDB search and expansion hardening](2026-07-19-mcp-falkordb-search-expansion-hardening.md)
 - [MCP query capability hardening](2026-07-19-mcp-query-capability-hardening.md)
 - [Incremental scan reliability upgrade](2026-07-18-incremental-scan-reliability.md)
 - [Code-Tiny README refresh](2026-07-17-code-tiny-readme-refresh.md)

@@ -1187,6 +1187,10 @@ def _build_analyzer_cmd(
         after_sha,
     ]
     cmd.extend(analyzer.extra_args)
+    if analyzer.parser == "shell":
+        mapping_ledger = os.environ.get("SHELL_PROGRAM_MAPPING_LEDGER", "").strip()
+        if mapping_ledger:
+            cmd.extend(["--program-mapping-ledger", mapping_ledger])
     if analyzer.parser == "cplus":
         cmd.extend(["--parse-quality", parse_quality])
         if parse_quality in {"report", "repair"}:

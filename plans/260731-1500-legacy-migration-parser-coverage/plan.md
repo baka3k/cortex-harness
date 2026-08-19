@@ -3,7 +3,7 @@ title: "Legacy Migration Parser Coverage: Pro*C, Shell, JP1 Jobnet, INI"
 status: completed
 created: 2026-07-31
 mode: hi-plan --full
-source: REDACTED JavaMigration sample tree (/Users/baka3k/JavaMigration/REDACTED/00.CustomerSupply)
+source: external legacy-migration sample tree
 target: code-tiny/tools/cplus, code-tiny/tools/shell (new), code-tiny/tools/jp1 (new), code-tiny/tools/project_topology, code-tiny/tools/sync, code-tiny/mcp
 scope: Oracle Pro*C (.pc) coverage in cplus_analyzer, new shell-script analyzer, new JP1 jobnet analyzer, INI special-file descriptor, shared legacy encoding utility, full registration/test-matrix sweep
 blockedBy: []
@@ -20,7 +20,7 @@ relatedPlans:
 
 ## Overview
 
-A Java-migration project (REDACTED) supplies a legacy batch-system tree: Oracle Pro*C sources (`.c`/`.pc` with embedded `EXEC SQL`), JP1 job-network definitions (`.txt`, Hitachi JP1 DSL) that invoke shell scripts, shell scripts (`.sh`) that `grep` key:value `.ini` files for parameters, and raw `.DAT` data files. All of it is Shift-JIS (CP932) encoded. This plan closes the ingestion gap so `dev sync code` and unified MCP tools can see this material instead of silently skipping it.
+An external Java-migration project supplies a legacy batch-system tree: Oracle Pro*C sources (`.c`/`.pc` with embedded `EXEC SQL`), JP1 job-network definitions (`.txt`, Hitachi JP1 DSL) that invoke shell scripts, shell scripts (`.sh`) that `grep` key:value `.ini` files for parameters, and raw `.DAT` data files. All of it is Shift-JIS (CP932) encoded. This plan closes the ingestion gap so `dev sync code` and unified MCP tools can see this material instead of silently skipping it.
 
 ```text
 JP1 jobnet (.txt, unit=/ty=/te=)
@@ -115,7 +115,7 @@ Mirrors the BOM-sniff + fallback-chain shape already in `cplus/rc_parser.py`, ge
 - **Dynamic `.ini` path resolution is inherently incomplete** (shell variables built from other files' contents). Do not attempt full shell variable interpolation — cap effort at simple `${VAR}`/`` `cmd` `` substitution from variables assigned earlier in the *same* file; anything else becomes an `unresolved` diagnostic. Over-engineering a shell interpreter here is explicitly out of scope.
 - **Encoding heuristic ambiguity**: CP932 and UTF-8 can both decode certain byte sequences without error but produce wrong text. Mitigation: prefer UTF-8 only if it decodes *and* round-trips cleanly; otherwise fall back to CP932; log which encoding was chosen per file as a diagnostic so downstream users can spot misdetections instead of silently trusting mojibake.
 - **Registration-file merge conflicts** with `260715-1629-perl-analyzer-parser` and `260728-0000-unified-ingest-query-contract` (both pending, touch the same dict-based registries). Mitigation: keep each new dict entry as a minimal, independently-mergeable line; do not reformat surrounding entries.
-- **Fixture provenance**: real REDACTED files are external and Shift-JIS; committing them verbatim risks license/confidentiality issues and non-portable encoding in the repo. Mitigation: hand-author small synthetic fixtures (Phase 01/03/04/05) that reproduce the structural shapes only (EXEC SQL block, JP1 `unit=`/`ar=` DAG, shell `grep` pattern, flat ini), including at least one CP932-encoded fixture to exercise the encoding utility.
+- **Fixture provenance**: real project files are external and Shift-JIS; committing them verbatim risks license/confidentiality issues and non-portable encoding in the repo. Mitigation: hand-author small synthetic fixtures (Phase 01/03/04/05) that reproduce the structural shapes only (EXEC SQL block, JP1 `unit=`/`ar=` DAG, shell `grep` pattern, flat ini), including at least one CP932-encoded fixture to exercise the encoding utility.
 - **Scope creep into full shell/JP1 semantics** (e.g. full POSIX grammar, JP1 scheduling semantics like `sd=`/`wth=` wait conditions): explicitly excluded above; only structural nodes/edges needed for dependency/impact tracing are in scope.
 
 ## Validation Summary (from scope-challenge interview)

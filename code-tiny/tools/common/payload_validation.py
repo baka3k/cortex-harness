@@ -204,6 +204,12 @@ def _identity_reason(value: Any, *, name: bool = False) -> QuarantineReason | No
     if _has_forbidden_control(value):
         return QuarantineReason.MALFORMED_DECLARATOR
     stripped = value.strip()
+    # C-family symbol identities and declarator names are canonical tokens,
+    # never whitespace-padded display text. Besides indicating parser leakage,
+    # padded identities are not reliably retrievable through FalkorDB range
+    # indexes and therefore cannot safely participate in graph relations.
+    if value != stripped:
+        return QuarantineReason.MALFORMED_DECLARATOR
     if name and (stripped.startswith("#") or "#define" in stripped or "#if" in stripped):
         return QuarantineReason.PREPROCESSOR_LEAKAGE
     if name and any(marker in stripped for marker in ("/*", "*/", "//")):

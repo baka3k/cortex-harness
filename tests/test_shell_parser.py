@@ -42,3 +42,49 @@ def test_script_target_cannot_escape_project_root(tmp_path: Path) -> None:
     )
 
     assert parsed.relations[0].resolved is False
+
+
+def test_extracts_internal_calls_and_generic_external_invocations(tmp_path: Path) -> None:
+    source = """BIN_DIR=/opt/batch
+first_step() {
+  second_step
+  ${BIN_DIR}/xy --mode fast
+  long-program_2026 --input sample
+}
+second_step() {
+  return 0
+}
+CAPTURE=`grep VALUE settings.ini`
+"""
+
+    parsed = parse_shell_text(
+        source,
+        file_path="batch_entry.sh",
+        project_root=str(tmp_path),
+    )
+
+    internal = [
+        relation
+        for relation in parsed.relations
+        if relation.target_label == "ShellFunction"
+    ]
+    assert len(internal) == 1
+    assert internal[0].resolved is True
+    assert {item.command_name for item in parsed.invocations} == {
+        "xy",
+        "long-program_2026",
+    }
+    assert all("grep" not in item.raw_command for item in parsed.invocations)
+
+
+def test_dynamic_command_is_preserved_as_unresolved_occurrence(tmp_path: Path) -> None:
+    parsed = parse_shell_text(
+        "${COMMAND_NAME} --input sample\n",
+        file_path="batch_entry.sh",
+        project_root=str(tmp_path),
+    )
+
+    assert len(parsed.invocations) == 1
+    assert parsed.invocations[0].dynamic is True
+    assert parsed.invocations[0].command_name == ""
+    assert parsed.relations == ()
