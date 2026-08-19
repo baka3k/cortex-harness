@@ -476,7 +476,8 @@ async def test_relationship_waits_on_both_501_file_endpoint_barriers(
                 "rel_type": "INCLUDES",
                 "properties": {},
             }
-        ]
+        ],
+        project_id="fixture-project",
     ) == 1
 
     connection = writer._journal_runtime.journal._connection  # type: ignore[union-attr]

@@ -840,7 +840,7 @@ async def _resolve_base_collections(
     if resolved:
         return resolved, explicit
     # No collection matched the requested scope(s). If the caller passed an
-    # explicit scope (e.g. project_id="REDACTED") but no Qdrant collection matches
+    # explicit scope (e.g. project_id="client-alpha") but no Qdrant collection matches
     # it, raise loudly so the surface mismatch is visible — otherwise we
     # silently query a non-existent collection literal and return empty,
     # which hides the real problem (incomplete sync / un-registered project).

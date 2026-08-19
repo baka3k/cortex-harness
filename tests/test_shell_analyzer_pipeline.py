@@ -17,7 +17,7 @@ def test_shell_pipeline_builds_resolved_and_unresolved_rows() -> None:
     result = run_shell_analysis(str(fixture_root), project_id="shell-fixture")
     rows = build_graph_rows(result, project_name="Shell fixture", repo="fixtures/shell")
 
-    assert {row["id"] for row in rows["scripts"]} == {"BBSEAB01.sh", "other_target.sh"}
+    assert {row["id"] for row in rows["scripts"]} == {"batch_entry.sh", "other_target.sh"}
     assert [row["name"] for row in rows["functions"]] == ["run_batch"]
     calls = [row for row in rows["relations"] if row["rel_type"] == "CALLS"]
     assert {row["properties"]["resolved"] for row in calls} == {True, False}
