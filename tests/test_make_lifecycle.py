@@ -749,6 +749,48 @@ class MakeLifecycleTests(unittest.TestCase):
         for command in ("docker_command", "start_infra_service", "container_exists", "container_running"):
             self.assertNotIn(command, source)
 
+    def test_scan_merges_root_and_caller_configs(self):
+        """_scan_project_backends merges ROOT + caller configs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root_config = tmp_path / "repo" / ".cortext-harness" / "config"
+            root_config.mkdir(parents=True)
+            _write_config(
+                root_config,
+                "repo_proj",
+                {
+                    "project": {"code": "repo_proj"},
+                },
+            )
+
+            caller_config = tmp_path / "caller" / ".cortext-harness" / "config"
+            caller_config.mkdir(parents=True)
+            _write_config(
+                caller_config,
+                "caller_proj",
+                {
+                    "project": {"code": "caller_proj"},
+                    "storage_backend": "remote",
+                    "remote": {"qdrant_url": "http://localhost:6333"},
+                },
+            )
+
+            with mock.patch.object(LIFECYCLE, "ROOT", tmp_path / "repo"), mock.patch(
+                "pathlib.Path.cwd", return_value=tmp_path / "caller"
+            ):
+                projects = LIFECYCLE._scan_project_backends()
+
+            ids = [p["project_id"] for p in projects]
+            self.assertIn("repo_proj", ids)
+            self.assertIn("caller_proj", ids)
+            self.assertEqual(len(projects), 2)
+
+
+def _write_config(config_dir: Path, name: str, payload: dict) -> Path:
+    path = config_dir / f"{name}.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
 
 if __name__ == "__main__":
     unittest.main()
