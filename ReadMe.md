@@ -83,7 +83,15 @@ make storage-migrate-layout MIGRATE_ARGS="--apply" # copy and verify
 make storage-backup OWNER=code
 ```
 
-`infra-up` and `infra-down` remain one-release compatibility aliases for storage initialization/no-op. They do not start or stop external services.
+`infra-up` and `infra-down` now also manage the local Docker containers for projects that point at remote Qdrant + FalkorDB endpoints over `127.0.0.1`:
+
+- `make infra-up` is idempotent: it inspects `cortex-qdrant` and `cortex-falkordb` first. Running containers are left alone; stopped containers are restarted; missing containers are pulled (only when the image is not cached) and started with ports pinned to `127.0.0.1`. Re-running the command never re-pulls or re-creates an already-running container.
+- `make infra-down` stops both managed containers (idempotent — no-op when they are missing or the docker daemon is unreachable) and closes cached remote clients. Local file-backed storage is left on disk by design.
+- The FalkorDB image (`falkordb/falkordb`) ships with a Browser UI on `http://127.0.0.1:3000`; the Qdrant Dashboard is reachable at `http://127.0.0.1:6333/dashboard`. Port pinning to `127.0.0.1` means the services are never exposed beyond the local machine.
+- Override the image tag with `QDRANT_IMAGE` / `FALKORDB_IMAGE`; override the host ports with `QDRANT_HTTP_PORT`, `QDRANT_GRPC_PORT`, `FALKORDB_PORT`, `FALKORDB_UI_PORT`. Invalid port values fall back to the defaults rather than crashing `infra-up`.
+- When the docker daemon is unreachable, `make infra-up` logs `[warn] docker not available — skipping container ensure` and continues — purely local projects are unaffected, and remote projects that point at `127.0.0.1` will simply fail the subsequent reachability probe.
+
+If a host port is already bound (for example, by a natively running Qdrant/FalkorDB), `infra-up` reports `[fail] host port already in use — service may already be running natively; remote probe will report reachability` and lets the probe decide.
 
 `make install` installs `dev.cmd` to `%USERPROFILE%\.local\bin` on Windows and `dev` to `~/.local/bin` on macOS/Linux. Make sure that directory is on your shell `PATH`.
 
