@@ -164,6 +164,13 @@ The CLI has **two independent command groups** serving different roles:
 | `dev init --project-dir /path` | Target a specific project directory |
 | `dev status` | Show active config (Neo4j, Qdrant, folders, environments) |
 
+> **Remote storage:** `dev init` prompts for `local` or `remote` backend. Press Enter
+> to accept local Docker defaults (`http://localhost:6333` / `localhost:6379`), then
+> run `dev infra-up --provision` to start containers. For remote servers, enter
+> non-localhost URLs and the wizard will prompt for credentials. Secrets are stored
+> in plaintext in `.cortext-harness/config/{env}.json` — do not commit populated
+> configs to shared repos.
+
 ### Sync — Source Code
 
 | Command | Description |
