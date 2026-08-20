@@ -2,6 +2,9 @@
 
 Implementation and maintenance records, newest first:
 
+- [FalkorDB Browser UI URL in infra-up and doctor](2026-08-20-falkordb-browser-ui-url.md)
+- [dev doctor caller-aware config resolution](2026-08-20-doctor-caller-aware-scan.md)
+- [dev init backend selection](2026-08-20-dev-init-backend-selection.md)
 - [infra-up Docker idempotent lifecycle](2026-08-20-infra-up-docker-idempotent.md)
 - [External project-keyword isolation](2026-08-19-external-project-keyword-isolation.md)
 - [Scoped graph materialization safety](2026-08-19-scoped-graph-materialization-safety.md)
