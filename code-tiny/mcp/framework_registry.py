@@ -27,6 +27,10 @@ GENERIC_SEARCHABLE_PROPERTIES = (
     "module_id", "module_path", "visibility", "is_public_api",
     "descriptor_type", "role", "parse_depth", "protocol", "framework",
 )
+NON_TEXT_SEARCH_PROPERTIES = frozenset({
+    "is_public_api", "parse_depth", "declared", "start_line", "end_line",
+    "position", "line", "column", "ordinal", "count", "size", "index",
+})
 GENERIC_RELATIONSHIPS = (
     "CALLS", "DECLARES", "CONTAINS", "DEPENDS_ON", "IMPORTS", "EXPORTS",
     "IMPLEMENTS", "EXTENDS", "ALIASES", "ALIAS_OF",
@@ -787,6 +791,29 @@ def searchable_properties(parser_type: Optional[str] = None) -> Tuple[str, ...]:
     ))
 
 
+def text_search_properties(parser_type: Optional[str] = None) -> Tuple[str, ...]:
+    """Searchable properties that are safe inside ``toLower(coalesce(...))`` predicates.
+
+    Non-string properties (booleans such as ``is_public_api``, integers such as
+    ``parse_depth``) make Kuzu-backed FalkorDB raise
+    ``Type mismatch: expected String or Null`` when wrapped in ``toLower``.
+    """
+    return tuple(
+        prop
+        for prop in searchable_properties(parser_type)
+        if prop not in NON_TEXT_SEARCH_PROPERTIES
+    )
+
+
+def backend_text_property_union(backend: Optional[str] = None) -> Tuple[str, ...]:
+    """Backend property union filtered to text-safe properties."""
+    return tuple(
+        prop
+        for prop in backend_property_union(backend)
+        if prop not in NON_TEXT_SEARCH_PROPERTIES
+    )
+
+
 def backend_label_union(backend: Optional[str] = None) -> Tuple[str, ...]:
     """Return every searchable label mapped to ``backend``.
 
@@ -851,4 +878,5 @@ __all__ = [
     "evaluate_capability_schema", "query_engine_for_backend", "schema_fingerprint",
     "default_relationships", "framework_for_parser", "parser_aliases", "searchable_labels",
     "searchable_properties", "servlet_active_generation_predicate", "validate_capability_registry",
+    "NON_TEXT_SEARCH_PROPERTIES", "text_search_properties", "backend_text_property_union",
 ]
