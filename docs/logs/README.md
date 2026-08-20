@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [graph_mcp non-text property search fix](2026-08-20-graph-mcp-non-text-property-search-fix.md)
 - [FalkorDB Browser UI URL in infra-up and doctor](2026-08-20-falkordb-browser-ui-url.md)
 - [dev doctor caller-aware config resolution](2026-08-20-doctor-caller-aware-scan.md)
 - [dev init backend selection](2026-08-20-dev-init-backend-selection.md)
