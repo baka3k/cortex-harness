@@ -12,7 +12,7 @@ import sys
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union, get_args, get_origin
 
 from dotenv import load_dotenv
 
@@ -206,6 +206,115 @@ _MCP_FUNCTIONS_JSON: str = json.dumps(
     },
     ensure_ascii=False,
 )
+
+# Descriptions for parameters that appear in registered tool signatures but
+# have no hand-written entry in the metadata catalog.
+_CATALOG_PARAM_DESCRIPTIONS: Dict[str, str] = {
+    "parser_type": "Parser profile to route the query (see list_parsers).",
+    "payload": "Optional dict merged over the typed parameters (escape hatch).",
+    "rel_types": "Relationship types to traverse (default: CALLS).",
+    "relationship_types": "Relationship types to traverse (alias of rel_types).",
+    "top_k": "Alias of limit (max results).",
+    "limit": "Max results.",
+    "debug": "Include debugging details in the response.",
+    "include_possible": "Include POSSIBLE_CALLS edges.",
+    "include_fp": "Include CALLS_FUNCTION_POINTER edges.",
+}
+
+
+def _annotation_to_type_str(annotation: Any) -> str:
+    """Render a signature annotation as the catalog's simple type strings."""
+    origin = get_origin(annotation)
+    if origin is Union:
+        inner = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if len(inner) == 1:
+            return _annotation_to_type_str(inner[0])
+        return "Any"
+    if origin in (list, List):
+        args = get_args(annotation)
+        if args and args[0] is str:
+            return "List[str]"
+        return "List[Any]"
+    if origin in (dict, Dict):
+        return "Dict[str, Any]"
+    if annotation is str:
+        return "str"
+    if annotation is bool:
+        return "bool"
+    if annotation is int:
+        return "int"
+    if annotation is float:
+        return "float"
+    return "Any"
+
+
+def _inputs_from_signature(fn: Any, existing_inputs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Derive catalog ``inputs`` from the callable a tool is actually backed by.
+
+    The registered tool schema (what clients may send) is generated from this
+    signature, so deriving discovery inputs from the same source keeps
+    ``list_mcp_functions`` and ``tools/list`` from drifting apart on
+    parameter names (e.g. ``relationship_types`` vs ``rel_types``).
+    """
+    previous = {
+        str(entry.get("name")): entry
+        for entry in existing_inputs
+        if isinstance(entry, dict) and entry.get("name")
+    }
+    inputs: List[Dict[str, Any]] = []
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return existing_inputs
+    for param_name, param in signature.parameters.items():
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        description = (
+            previous.get(param_name, {}).get("description")
+            or _CATALOG_PARAM_DESCRIPTIONS.get(param_name)
+            or "Typed parameter accepted by the registered tool schema."
+        )
+        inputs.append(
+            {
+                "name": param_name,
+                "type": _annotation_to_type_str(param.annotation),
+                "required": param.default is param.empty,
+                "description": description,
+            }
+        )
+    return inputs
+
+
+def _sync_catalog_inputs_with_registered_tools() -> None:
+    """Align every catalog entry's ``inputs`` with the registered callable.
+
+    Falls back to the hand-written catalog inputs when the backing callable
+    cannot be resolved, so a missing function never blanks the docs.
+    """
+    global _MCP_FUNCTIONS_JSON
+    for name, entry in _CATALOG_BY_NAME.items():
+        fn = None
+        candidate = globals().get(f"tool_{name}")
+        if callable(candidate) or getattr(candidate, "fn", None) is not None:
+            fn = _unwrap_tool_callable(candidate)
+        if fn is None and name in _PROXIED_TOOL_NAMES:
+            try:
+                backend_module = _resolve_proxy_backend_module(name)
+            except Exception:
+                backend_module = None
+            if backend_module is not None:
+                fn = _unwrap_tool_callable(getattr(backend_module, f"tool_{name}", None))
+        if fn is None:
+            continue
+        entry["inputs"] = _inputs_from_signature(fn, entry.get("inputs") or [])
+    _MCP_FUNCTIONS_JSON = json.dumps(
+        {
+            "total_count": len(_unified_catalog),
+            "parameter_guidelines": _PARAMETER_GUIDELINES,
+            "functions": _unified_catalog,
+        },
+        ensure_ascii=False,
+    )
 
 
 MCP_NAME = os.getenv("MCP_SERVER_NAME", "graph_mcp")
@@ -532,6 +641,15 @@ def _apply_unified_defaults(payload: Dict[str, Any]) -> Dict[str, Any]:
     # callers must pass ``parser_type`` and ``db`` (or ``project_id``)
     # explicitly. We leave the merged dict untouched so missing values
     # surface as the env-default full-search path downstream.
+    # ``db`` is a documented alias of ``project_id`` (every backend merges
+    # ``"db": project_id`` into its payload) — mirror it here so callers
+    # that only pass ``db`` (e.g. analyze_workflow_impact's internal
+    # query_subgraph dispatch) resolve scoped graph candidates instead of
+    # silently fanning out across every registered project.
+    if not str(merged.get("project_id") or "").strip():
+        db_value = merged.get("db")
+        if isinstance(db_value, str) and db_value.strip():
+            merged["project_id"] = db_value.strip()
     return merged
 
 
@@ -2391,7 +2509,22 @@ async def tool_analyze_workflow_impact(
         )
     )
     if capability_error:
-        return capability_error
+        # The workflow layer needs workflow-shaped relationships (HAS_STEP)
+        # that code-only shards (e.g. a plain C codebase) legitimately lack.
+        # Degrade to the function-level analysis instead of failing the whole
+        # tool — the caller still gets risk/impact data plus the reason.
+        error_message = (
+            (capability_error.get("error") or {}).get("message")
+            if isinstance(capability_error.get("error"), dict)
+            else None
+        )
+        base_result["workflow_impact"] = {
+            "available": False,
+            "reason": error_message
+            or "Workflow relationships (HAS_STEP) are not available in the "
+            "active provider; function-level impact only.",
+        }
+        return base_result
     selected_capability = capability_for_parser(selected_parser)
     flow_defaults = set(
         default_relationships(selected_capability.name)
@@ -2600,6 +2733,12 @@ def parse_args() -> argparse.Namespace:
         help="Streamable HTTP path (deprecated, use --path)",
     )
     return parser.parse_args()
+
+
+# Sync discovery inputs with the registered tool callables once every tool
+# in this module (and every backend) has been defined — running it earlier
+# would miss tools defined further down.
+_sync_catalog_inputs_with_registered_tools()
 
 
 def main() -> None:

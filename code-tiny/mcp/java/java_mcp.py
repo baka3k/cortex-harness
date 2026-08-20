@@ -479,7 +479,8 @@ def _paths_to_graph(
             # fallback: look for a path object with .nodes inside the list
             for item in path:
                 if hasattr(item, "nodes") or (
-                    isinstance(item, dict) and "nodes" in item and "relationships" in item
+                    isinstance(item, dict) and "nodes" in item
+                    and ("relationships" in item or "edges" in item)
                 ):
                     path = item
                     break
@@ -488,9 +489,11 @@ def _paths_to_graph(
         if hasattr(path, "nodes"):
             path_nodes = path.nodes
             path_rels = path.relationships
-        elif isinstance(path, dict) and "nodes" in path and "relationships" in path:
+        elif isinstance(path, dict) and "nodes" in path:
+            # The FalkorDB driver normalizes Path objects to
+            # ``{"nodes": [...], "edges": [...]}`` — accept both key spellings.
             path_nodes = path.get("nodes", [])
-            path_rels = path.get("relationships", [])
+            path_rels = path.get("relationships") or path.get("edges") or []
         else:
             continue
         for node in path_nodes:

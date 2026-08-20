@@ -30,6 +30,7 @@ if _MCP_DIR not in sys.path:
 from tools.graph import GraphProvider
 from tools.graph.core.base import GraphDriver
 from tools.graph.core.shared_runtime import get_shared_graph_driver
+from tools.graph.driver.neo4j_driver import normalize_graph_direction
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
 from tools.common.local_qdrant import (
     collection_info_payload,
@@ -259,12 +260,13 @@ def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
     a list anchored on that project — the registered graph when the project
     is in the registry, or the literal ``project_id`` itself when it is not
     so out-of-band shards stay reachable. Unscoped callers get the union of
-    every registered project's graph, so an unscoped query fans out across
-    the whole account.
-
-    ``DEFAULT_GRAPH_DB`` is used only when an unscoped registry lookup is
-    empty, allowing the query runner to start and replace that seed with all
-    graphs discovered from storage. It is never a scoped fallback.
+    every registered project's graph plus the env-configured default graph
+    (``DEFAULT_GRAPH_DB``), so an unscoped query fans out across the whole
+    account *including* the active instance's primary graph — that graph
+    may belong to a project that is not registered (e.g. started via
+    ``CORTEX_STORAGE_INSTANCE``/``FALKORDB_GRAPH`` without a dev.json), and
+    omitting it made schema introspection see only empty graphs.
+    ``DEFAULT_GRAPH_DB`` is never a scoped fallback.
     """
     candidates: List[str] = []
     if project_id and str(project_id).strip():
@@ -285,10 +287,9 @@ def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
             graph_name = _normalize_db_name(targets.code_graph)
             if graph_name and graph_name not in candidates:
                 candidates.append(graph_name)
-        if not candidates:
-            default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
-            if default_db:
-                candidates.append(default_db)
+        default_db = _normalize_db_name(DEFAULT_GRAPH_DB)
+        if default_db and default_db not in candidates:
+            candidates.append(default_db)
     return candidates
 
 
@@ -585,7 +586,8 @@ def _paths_to_graph(
             # fallback: look for a path object with .nodes inside the list
             for item in path:
                 if hasattr(item, "nodes") or (
-                    isinstance(item, dict) and "nodes" in item and "relationships" in item
+                    isinstance(item, dict) and "nodes" in item
+                    and ("relationships" in item or "edges" in item)
                 ):
                     path = item
                     break
@@ -594,9 +596,11 @@ def _paths_to_graph(
         if hasattr(path, "nodes"):
             path_nodes = path.nodes
             path_rels = path.relationships
-        elif isinstance(path, dict) and "nodes" in path and "relationships" in path:
+        elif isinstance(path, dict) and "nodes" in path:
+            # The FalkorDB driver normalizes Path objects to
+            # ``{"nodes": [...], "edges": [...]}`` — accept both key spellings.
             path_nodes = path.get("nodes", [])
-            path_rels = path.get("relationships", [])
+            path_rels = path.get("relationships") or path.get("edges") or []
         else:
             continue
         for node in path_nodes:
@@ -1016,56 +1020,69 @@ async def _run_cypher(query: str, params: Dict[str, Any], db: str) -> List[Dict[
 
 
 async def _list_relationship_types(dbs: List[str]) -> Optional[List[str]]:
-    """Return relationship types, or ``None`` when schema inspection fails."""
+    """Return relationship types, or ``None`` when schema inspection fails.
+
+    Unscoped queries fan out across every discovered graph, so the union of
+    all candidates is the authoritative schema: returning the first
+    candidate's (possibly empty) schema made an empty graph — e.g. a freshly
+    provisioned default shard — veto relationships that exist in the other
+    graphs, surfacing as bogus ``unsupported_capability`` errors.
+    """
     query_call = (
         "CALL db.relationshipTypes() YIELD relationshipType "
         "RETURN relationshipType AS rel_type"
     )
     query_show = "SHOW RELATIONSHIP TYPES YIELD relationshipType RETURN relationshipType AS rel_type"
+    collected: Optional[List[str]] = None
     for db in [item for item in dbs if item]:
         try:
             try:
                 rows = await _run_cypher(query_call, {}, db)
             except Exception:
                 rows = await _run_cypher(query_show, {}, db)
-            rel_types: List[str] = []
+            if collected is None:
+                collected = []
             for row in rows:
                 rel_type = row.get("rel_type")
                 if isinstance(rel_type, str):
                     rel_upper = rel_type.upper()
-                    if rel_upper not in rel_types:
-                        rel_types.append(rel_upper)
-            return rel_types
+                    if rel_upper not in collected:
+                        collected.append(rel_upper)
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
             logger.warning("Unable to list relationship types from %s: %s", db, exc)
             break
-    return None
+    return collected
 
 
 async def _list_node_labels(dbs: List[str]) -> Optional[List[str]]:
-    """Return provider node labels, or ``None`` when schema inspection fails."""
+    """Return provider node labels, or ``None`` when schema inspection fails.
+
+    Mirrors ``_list_relationship_types``: union across all candidate graphs
+    rather than trusting the first (possibly empty) one.
+    """
     query_call = "CALL db.labels() YIELD label RETURN label"
     query_show = "SHOW NODE LABELS YIELD label RETURN label"
+    collected: Optional[List[str]] = None
     for db in [item for item in dbs if item]:
         try:
             try:
                 rows = await _run_cypher(query_call, {}, db)
             except Exception:
                 rows = await _run_cypher(query_show, {}, db)
-            labels: List[str] = []
+            if collected is None:
+                collected = []
             for row in rows:
                 label = row.get("label")
-                if isinstance(label, str) and label not in labels:
-                    labels.append(label)
-            return labels
+                if isinstance(label, str) and label not in collected:
+                    collected.append(label)
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
             logger.warning("Unable to list node labels from %s: %s", db, exc)
             break
-    return None
+    return collected
 
 
 async def _resolve_call_rel_types(
@@ -1902,6 +1919,8 @@ async def tool_query_subgraph(
     max_depth: int = 2,
     include_possible: bool = False,
     include_fp: bool = False,
+    rel_types: Optional[List[str]] = None,
+    relationship_types: Optional[Any] = None,
     parser_type: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
@@ -1917,6 +1936,8 @@ async def tool_query_subgraph(
             "max_depth": max_depth,
             "include_possible": include_possible,
             "include_fp": include_fp,
+            "rel_types": rel_types,
+            "relationship_types": relationship_types,
             "parser_type": parser_type,
             "project_id": project_id,
             "content_mode": content_mode,
@@ -2010,6 +2031,8 @@ async def tool_find_paths(
     include_fp: bool = False,
     parser_type: Optional[str] = None,
     project_id: Optional[str] = None,
+    rel_types: Optional[List[str]] = None,
+    relationship_types: Optional[Any] = None,
     content_mode: Optional[str] = None,
     include_raw_fields: bool = False,
     payload: Optional[Dict[str, Any]] = None,
@@ -2023,6 +2046,8 @@ async def tool_find_paths(
             "max_depth": max_depth,
             "include_possible": include_possible,
             "include_fp": include_fp,
+            "rel_types": rel_types,
+            "relationship_types": relationship_types,
             "parser_type": parser_type,
             "project_id": project_id,
             "content_mode": content_mode,
@@ -2453,7 +2478,7 @@ async def tool_trace_flow(
     db = payload.get("db")
     parser_type = payload.get("parser_type")
     max_depth = payload.get("max_depth", 6)
-    direction = (payload.get("direction") or "out").lower()
+    direction = normalize_graph_direction(payload.get("direction") or "out")
     limit_value = payload.get("limit")
     if limit_value is None:
         limit_value = payload.get("top_k")
@@ -2486,17 +2511,20 @@ async def tool_trace_flow(
     end_id = str(end_id) if end_id is not None else None
 
     if end_id is not None:
+        # FalkorDB rejects Neo4j-style ``MATCH p=shortestPath(...)`` (it only
+        # allows shortestPaths in WITH/RETURN), so use a variable-length match
+        # ordered by path length.
         query = (
             "MATCH (a {id: $start}) "
             "WHERE ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized) "
             "MATCH (b {id: $end}) "
             "WHERE ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized) "
-            f"MATCH p=shortestPath((a){rel_match}(b)) "
-            "RETURN p"
+            f"MATCH p=(a){rel_match}(b) "
+            "RETURN p ORDER BY length(p) LIMIT $limit"
         )
         used_db, result = await _run_cypher_first(
             query,
-            {"start": start_id, "end": end_id, "project_id": project_id},
+            {"start": start_id, "end": end_id, "project_id": project_id, "limit": int(limit)},
             candidates,
         )
         if not result:

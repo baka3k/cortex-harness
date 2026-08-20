@@ -129,6 +129,29 @@ _FALLBACK_FIND_NODES_BY_IDS_QUERY = _build_id_lookup_query(for_multiple=True, la
 _FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 _FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 
+_DIRECTION_ALIASES = {
+    "in": "in", "incoming": "in", "callers": "in", "upstream": "in",
+    "out": "out", "outgoing": "out", "callees": "out", "downstream": "out",
+    "both": "both", "all": "both", "any": "both", "undirected": "both",
+}
+
+
+def normalize_graph_direction(direction: Any) -> str:
+    """Normalize a traversal direction alias to ``in``/``out``/``both``.
+
+    Raises ValueError on unknown values instead of silently falling back to
+    ``both`` — a typo like ``"sideways"`` used to be swallowed and returned
+    an undirected subgraph the caller never asked for.
+    """
+    normalized = str(direction or "both").strip().lower()
+    mapped = _DIRECTION_ALIASES.get(normalized)
+    if mapped is None:
+        valid = ", ".join(sorted(_DIRECTION_ALIASES))
+        raise ValueError(
+            f"Invalid direction {direction!r}. Valid values (or aliases): {valid}."
+        )
+    return mapped
+
 
 class Neo4jDriver(GraphDriver):
     """
@@ -643,8 +666,16 @@ class Neo4jDriver(GraphDriver):
         max_depth: int = 8,
         project_id: Optional[str] = None,
         database: Optional[str] = None,
+        limit: int = 10,
     ) -> List[Any]:
-        """Find shortest paths between two functions"""
+        """Find shortest paths between two functions.
+
+        FalkorDB (and its embedded lite build) only allows ``shortestPaths``
+        inside WITH/RETURN clauses, so the Neo4j-style ``MATCH
+        p=shortestPath(...)`` form is rejected at runtime. Use a plain
+        variable-length match ordered by path length instead — portable
+        across FalkorDB and Neo4j.
+        """
         rel_pattern = f"[:{'|'.join(relationship_types)}*..{max_depth}]"
         cypher = f"""
         MATCH (a:Function) WHERE a.id = $start
@@ -652,12 +683,12 @@ class Neo4jDriver(GraphDriver):
         MATCH (b:Function) WHERE b.id = $end
           AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized)
         AND a.id <> b.id
-        MATCH p=shortestPath((a)-{rel_pattern}->(b))
-        RETURN p
+        MATCH p=(a)-{rel_pattern}->(b)
+        RETURN p ORDER BY length(p) LIMIT $limit
         """
         records, _, _ = await self.execute_query(
             cypher,
-            {"start": start_id, "end": end_id, "project_id": project_id},
+            {"start": start_id, "end": end_id, "project_id": project_id, "limit": int(limit)},
             database
         )
         return [record.get("p") for record in records if record.get("p")]
@@ -672,11 +703,12 @@ class Neo4jDriver(GraphDriver):
         database: Optional[str] = None,
     ) -> List[Any]:
         """Query subgraph around a function"""
+        direction = normalize_graph_direction(direction)
         rel_pattern = f"[:{'|'.join(relationship_types)}*1..{max_depth}]"
-        
-        if direction.lower() in {"incoming", "in"}:
+
+        if direction == "in":
             pattern = f"<-{rel_pattern}-"
-        elif direction.lower() in {"outgoing", "out"}:
+        elif direction == "out":
             pattern = f"-{rel_pattern}->"
         else:  # both
             pattern = f"-{rel_pattern}-"
