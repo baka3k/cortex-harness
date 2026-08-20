@@ -45,7 +45,7 @@ class FindFunctionPathsCypherTest(unittest.IsolatedAsyncioTestCase):
         await driver.find_function_paths(
             start_id="a", end_id="b",
             relationship_types=["CALLS", "CONTAINS"],
-            max_depth=6, project_id=None, database="sampledb",
+            max_depth=6, project_id=None, database="testdatabase", limit=10
         )
         cypher = driver.execute_query.call_args.args[0]
         self.assertNotIn("shortestPath", cypher)
@@ -81,13 +81,13 @@ def _load_unified():
 class UnifiedDefaultsDbMirrorTest(unittest.TestCase):
     def test_db_mirrors_into_missing_project_id(self):
         unified = _load_unified()
-        merged = unified._apply_unified_defaults({"query": "x", "db": "sampledb"})
-        self.assertEqual(merged["project_id"], "sampledb")
-        self.assertEqual(merged["db"], "sampledb")
+        merged = unified._apply_unified_defaults({"query": "x", "db": "testdatabase"})
+        self.assertEqual(merged["project_id"], "testdatabase")
+        self.assertEqual(merged["db"], "testdatabase")
 
     def test_explicit_project_id_wins(self):
         unified = _load_unified()
-        merged = unified._apply_unified_defaults({"db": "sampledb", "project_id": "hyperpack"})
+        merged = unified._apply_unified_defaults({"db": "testdatabase", "project_id": "hyperpack"})
         self.assertEqual(merged["project_id"], "hyperpack")
 
     def test_blank_db_is_ignored(self):
