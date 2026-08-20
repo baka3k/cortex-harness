@@ -7,6 +7,7 @@ mode: hi-plan (fast)
 scope: scripts/mcp-lifecycle.py, cortex_harness/storage, cortex_harness/dev.py, tests
 relatedPlans:
   - 260817-storage-backend-adapter
+  - 260820-infra-up-docker-idempotent
   - 260806-1648-local-file-storage
   - 260820-dev-init-backend-selection
 blockedBy: []

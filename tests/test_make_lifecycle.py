@@ -571,7 +571,9 @@ class MakeLifecycleTests(unittest.TestCase):
             LIFECYCLE, "_resolved_storage"
         ), mock.patch.object(
             layout_mod, "ensure_layout"
-        ) as ensure_layout, mock.patch(
+        ) as ensure_layout, mock.patch.object(
+            LIFECYCLE, "_ensure_docker_services"
+        ) as ensure_docker, mock.patch(
             "builtins.print"
         ) as output:
             LIFECYCLE.invoke_infra_up()
@@ -579,6 +581,7 @@ class MakeLifecycleTests(unittest.TestCase):
         self.assertNotIn("deprecated", rendered.lower())
         self.assertNotIn("storage-init", rendered.lower())
         ensure_layout.assert_called_once()
+        ensure_docker.assert_called_once_with()
 
     def test_infra_up_routes_local_projects_to_storage_init(self):
         projects = [
@@ -593,9 +596,22 @@ class MakeLifecycleTests(unittest.TestCase):
 
         with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
             LIFECYCLE, "_resolved_storage"
-        ) as resolved, mock.patch.object(layout_mod, "ensure_layout") as ensure_layout:
+        ) as resolved, mock.patch.object(layout_mod, "ensure_layout") as ensure_layout, mock.patch.object(
+            LIFECYCLE, "_ensure_docker_services"
+        ):
             LIFECYCLE.invoke_infra_up()
         ensure_layout.assert_called_once_with(resolved())
+
+    def test_infra_up_invokes_docker_ensure_after_layout(self):
+        from cortex_harness.storage import layout as layout_mod
+
+        with mock.patch.object(
+            LIFECYCLE, "_scan_project_backends", return_value=[]
+        ), mock.patch.object(LIFECYCLE, "_resolved_storage"), mock.patch.object(
+            layout_mod, "ensure_layout"
+        ), mock.patch.object(LIFECYCLE, "_ensure_docker_services") as ensure_docker:
+            LIFECYCLE.invoke_infra_up()
+        ensure_docker.assert_called_once_with()
 
     def test_infra_up_probes_remote_projects(self):
         projects = [
@@ -618,6 +634,8 @@ class MakeLifecycleTests(unittest.TestCase):
         with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
             LIFECYCLE, "_resolved_storage"
         ), mock.patch.object(layout_mod, "ensure_layout"), mock.patch.object(
+            LIFECYCLE, "_ensure_docker_services"
+        ), mock.patch.object(
             rp, "probe_all", return_value=probe_results
         ), mock.patch("builtins.print") as output:
             LIFECYCLE.invoke_infra_up()
@@ -643,6 +661,8 @@ class MakeLifecycleTests(unittest.TestCase):
         with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
             LIFECYCLE, "_resolved_storage"
         ), mock.patch.object(layout_mod, "ensure_layout"), mock.patch.object(
+            LIFECYCLE, "_ensure_docker_services"
+        ), mock.patch.object(
             rp, "probe_all", return_value=probe_results
         ), self.assertRaises(SystemExit) as exit_ctx:
             LIFECYCLE.invoke_infra_up()
@@ -666,6 +686,8 @@ class MakeLifecycleTests(unittest.TestCase):
         with mock.patch.object(LIFECYCLE, "_scan_project_backends", return_value=projects), mock.patch.object(
             LIFECYCLE, "_resolved_storage"
         ), mock.patch.object(layout_mod, "ensure_layout"), mock.patch.object(
+            LIFECYCLE, "_ensure_docker_services"
+        ), mock.patch.object(
             rp, "probe_all", return_value=probe_results
         ), mock.patch.object(
             LIFECYCLE, "_provision_remote_project"
@@ -680,9 +702,45 @@ class MakeLifecycleTests(unittest.TestCase):
         self.assertFalse(options.provision)
 
     def test_infra_down_closes_remote_clients(self):
-        with mock.patch("cortex_harness.storage.qdrant_remote.reset_remote_clients") as reset:
+        with mock.patch(
+            "cortex_harness.storage.qdrant_remote.reset_remote_clients"
+        ) as reset, mock.patch.object(LIFECYCLE, "_docker_available", return_value=False):
             LIFECYCLE.invoke_infra_down()
         reset.assert_called_once_with()
+
+    def test_infra_down_stops_managed_containers_when_docker_is_available(self):
+        with mock.patch.object(LIFECYCLE, "_docker_available", return_value=True), mock.patch.object(
+            LIFECYCLE, "run", return_value=mock.Mock(returncode=0, stdout="", stderr="")
+        ) as run_mock, mock.patch(
+            "cortex_harness.storage.qdrant_remote.reset_remote_clients"
+        ) as reset:
+            LIFECYCLE.invoke_infra_down()
+        stop_calls = [
+            call for call in run_mock.call_args_list
+            if call.args and len(call.args[0]) >= 2 and call.args[0][1] == "stop"
+        ]
+        self.assertEqual(
+            [call.args[0][2] for call in stop_calls],
+            ["cortex-qdrant", "cortex-falkordb"],
+        )
+        reset.assert_called_once_with()
+
+    def test_infra_down_silently_skips_missing_containers(self):
+        # ``docker stop`` returns nonzero when the container is missing — that
+        # path must be swallowed so ``infra-down`` stays idempotent.
+        with mock.patch.object(LIFECYCLE, "_docker_available", return_value=True), mock.patch.object(
+            LIFECYCLE,
+            "run",
+            return_value=mock.Mock(returncode=1, stdout="", stderr="No such container"),
+        ) as run_mock, mock.patch(
+            "cortex_harness.storage.qdrant_remote.reset_remote_clients"
+        ):
+            LIFECYCLE.invoke_infra_down()
+        stop_calls = [
+            call for call in run_mock.call_args_list
+            if call.args and len(call.args[0]) >= 2 and call.args[0][1] == "stop"
+        ]
+        self.assertGreaterEqual(len(stop_calls), 2)
 
     def test_active_infra_aliases_do_not_execute_container_commands(self):
         import inspect
