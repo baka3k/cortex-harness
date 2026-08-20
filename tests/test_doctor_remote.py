@@ -176,3 +176,66 @@ class TestDoctorRemoteChecks:
         with mock.patch.object(LIFECYCLE, "doctor_check", return_value=1):
             failures = LIFECYCLE.doctor_remote_checks()
         assert failures == 1
+
+
+class TestDoctorCallerConfig:
+    """Caller-aware scan: ``dev doctor`` must read the caller's project config."""
+
+    def test_caller_remote_config_is_picked_up(self, tmp_path, monkeypatch):
+        """Doctor finds remote project config from cwd even when ROOT has none."""
+        caller_project = tmp_path / "my-project"
+        caller_config = caller_project / ".cortext-harness" / "config"
+        caller_config.mkdir(parents=True)
+        _write_config(
+            caller_config,
+            "my_app",
+            {
+                "project": {"code": "my_app"},
+                "storage_backend": "remote",
+                "remote": {
+                    "qdrant_url": "http://localhost:6333",
+                    "falkordb_uri": "redis://localhost:6379",
+                },
+            },
+        )
+
+        # ROOT is a fresh directory with no configs; cwd points at the caller.
+        fake_root = tmp_path / "cortex-harness"
+        fake_root.mkdir()
+        monkeypatch.setattr(LIFECYCLE, "ROOT", fake_root)
+        monkeypatch.chdir(caller_project)
+
+        probe_results = [
+            ProbeResult("qdrant", "http://localhost:6333", True, "reachable"),
+            ProbeResult("falkordb", "redis://localhost:6379", True, "reachable"),
+        ]
+        from cortex_harness.storage import remote_probe as rp
+
+        with mock.patch.object(rp, "probe_all", return_value=probe_results), mock.patch.object(
+            LIFECYCLE, "doctor_check", return_value=0
+        ) as check:
+            failures = LIFECYCLE.doctor_remote_checks()
+
+        assert failures == 0
+        names = [c.args[0] for c in check.call_args_list]
+        assert "remote:my_app:qdrant" in names
+        assert "remote:my_app:falkordb" in names
+
+    def test_same_dir_no_double_scan(self, tmp_path, monkeypatch):
+        """When cwd == ROOT, configs are scanned only once."""
+        config_dir = tmp_path / ".cortext-harness" / "config"
+        config_dir.mkdir(parents=True)
+        _write_config(
+            config_dir,
+            "proj",
+            {
+                "project": {"code": "proj"},
+                "storage_backend": "local",
+            },
+        )
+        monkeypatch.setattr(LIFECYCLE, "ROOT", tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        projects = LIFECYCLE._scan_project_backends()
+        assert len(projects) == 1
+        assert projects[0]["project_id"] == "proj"

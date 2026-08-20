@@ -306,18 +306,18 @@ def tcp_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
-def _scan_project_backends(config_dir: Path | None = None) -> list[dict[str, object]]:
-    """Scan ``.cortext-harness/config/*.json`` and classify by backend mode.
+def _collect_from_dir(
+    config_dir: Path,
+    out: list[dict[str, object]],
+) -> None:
+    """Parse every ``*.json`` in *config_dir* and append to *out*.
 
-    Returns a list of dicts with keys ``project_id``, ``backend_mode``,
-    ``remote_config`` and ``config_path``. Malformed JSON files are silently
-    skipped so a single broken config never blocks ``infra-up``.
+    Malformed JSON and non-dict payloads are silently skipped so a single
+    broken config never blocks ``infra-up``.
     """
-    base = config_dir if config_dir is not None else ROOT / ".cortext-harness" / "config"
-    if not base.is_dir():
-        return []
-    projects: list[dict[str, object]] = []
-    for config_path in sorted(base.glob("*.json")):
+    if not config_dir.is_dir():
+        return
+    for config_path in sorted(config_dir.glob("*.json")):
         try:
             document = json.loads(config_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
@@ -331,12 +331,48 @@ def _scan_project_backends(config_dir: Path | None = None) -> list[dict[str, obj
         )
         backend = str(document.get("storage_backend") or "local")
         remote_section = document.get("remote")
-        projects.append({
+        out.append({
             "project_id": project_id,
             "backend_mode": backend,
             "remote_config": remote_section,
             "config_path": str(config_path),
         })
+
+
+def _scan_project_backends(config_dir: Path | None = None) -> list[dict[str, object]]:
+    """Scan ``.cortext-harness/config/*.json`` and classify by backend mode.
+
+    Returns a list of dicts with keys ``project_id``, ``backend_mode``,
+    ``remote_config`` and ``config_path``. Malformed JSON files are silently
+    skipped so a single broken config never blocks ``infra-up``.
+
+    When ``config_dir`` is ``None`` (the default), the caller's project
+    directory (``Path.cwd()``) is also scanned alongside the ``ROOT``
+    configuration so ``dev doctor`` and ``make infra-up`` pick up the
+    project the user is currently working in.  Callers that pass an
+    explicit directory get deterministic single-directory behaviour.
+    """
+    base = config_dir if config_dir is not None else ROOT / ".cortext-harness" / "config"
+    projects: list[dict[str, object]] = []
+    _collect_from_dir(base, projects)
+
+    if config_dir is None:
+        # ``dev doctor`` and ``make infra-up`` set ``cwd`` to the caller's
+        # project root, so Path.cwd() resolves to the user's working tree
+        # rather than the cortex-harness repo.  Skip when the caller is
+        # already inside the cortex-harness repo to avoid double counting.
+        try:
+            caller_config = Path.cwd() / ".cortext-harness" / "config"
+            caller_resolved = caller_config.resolve()
+            base_resolved = base.resolve()
+            if caller_resolved != base_resolved:
+                _collect_from_dir(caller_config, projects)
+        except (OSError, RuntimeError):
+            # Path.cwd() raises FileNotFoundError when the working
+            # directory was deleted; resolve() can raise OSError on
+            # broken symlinks.  Neither should block the primary scan.
+            pass
+
     return projects
 
 
