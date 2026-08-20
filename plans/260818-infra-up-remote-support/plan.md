@@ -8,6 +8,7 @@ scope: scripts/mcp-lifecycle.py, cortex_harness/storage, cortex_harness/dev.py, 
 relatedPlans:
   - 260817-storage-backend-adapter
   - 260806-1648-local-file-storage
+  - 260820-dev-init-backend-selection
 blockedBy: []
 blocks: []
 ---
@@ -128,6 +129,15 @@ Bidirectional update: `260817-storage-backend-adapter` cần note rằng
 ### `260806-1648-local-file-storage` (completed)
 
 Không conflict. Local behavior giữ nguyên.
+
+### `260820-dev-init-backend-selection` (active)
+
+Plan này **writes the config** mà `infra-up` đọc: `dev init` wizard đã
+bổ sung prompt `storage_backend: local|remote` và `remote` section
+(Qdrant URL / FalkorDB URI + credentials). Sau init, operator chạy
+`make infra-up` (đã hỗ trợ remote từ plan này) để verify + provision.
+Không thay đổi behavior của `infra-up` / `doctor`; chỉ đảm bảo config
+đầu vào tồn tại và hợp lệ (`validate_backend_config()`).
 
 ## Phases
 

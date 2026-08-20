@@ -9,6 +9,7 @@ relatedPlans:
   - 260806-1648-local-file-storage
   - neo4j-to-falkordb-migration
   - 260728-0000-unified-ingest-query-contract
+  - 260820-dev-init-backend-selection
 blockedBy: []
 blocks: []
 ---
@@ -196,6 +197,15 @@ Plan này **reuses** FalkorDBDriver's existing remote mode support.
 Plan này **extends** unified contract bằng cách:
 - Thêm `storage_backend` và `remote` fields vào `ProjectTargets`.
 - MCP tools tiếp tục dùng `project_id` làm key, factory resolve backend.
+
+### `260820-dev-init-backend-selection` (active)
+
+Plan này **enables** init UX cho backend adapter. Storage-backend-adapter
+thêm `storage_backend` / `remote` schema + adapter layer, nhưng không
+prompt hoặc ghi các field này — operator phải sửa tay `dev.json`. Plan
+260820 đã bổ sung bước chọn backend trong `dev init` wizard (local/remote
++ Qdrant/FalkorDB endpoints) và validation init-level để chống ghi
+config invalid. Plan này không cần update thêm; adapter API giữ nguyên.
 
 ## Red Team Review
 
