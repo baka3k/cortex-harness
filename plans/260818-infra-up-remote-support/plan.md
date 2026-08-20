@@ -6,6 +6,7 @@ updated: 2026-08-18
 mode: hi-plan (fast)
 scope: scripts/mcp-lifecycle.py, cortex_harness/storage, cortex_harness/dev.py, tests
 relatedPlans:
+  - 260820-falkordb-ui-url-doctor
   - 260817-storage-backend-adapter
   - 260820-infra-up-docker-idempotent
   - 260806-1648-local-file-storage
