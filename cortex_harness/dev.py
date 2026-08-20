@@ -30,7 +30,7 @@ if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
 from cortex_harness.storage import StorageRole, resolve_storage, storage_overlay
-from cortex_harness.storage.config import LEGACY_REMOTE_KEYS
+from cortex_harness.storage.config import LEGACY_REMOTE_KEYS, validate_backend_config
 from cortex_harness.sync_processes import (
     embedded_falkordb_pids as _embedded_falkordb_pids,
     stop_embedded_falkordb as _stop_embedded_falkordb,
@@ -2253,30 +2253,100 @@ def init(env, project_dir, path):
     project_code = _p("Project code (short ID)", ["project", "code"], "my_project")
     project_name = _p("Project name",            ["project", "name"], project_code)
 
+    # ── Storage backend selection (local | remote) ───────────────────────────
+    # Default to "local" for fresh projects; reuse the existing value on re-init
+    # so an operator never silently downgrades a remote project back to local.
+    click.echo("\n─── Storage backend ────────────────────────")
+    existing_backend = existing.get("storage_backend") or "local"
+    storage_backend = click.prompt(
+        "Storage backend",
+        default=existing_backend,
+        type=click.Choice(["local", "remote"], case_sensitive=False),
+    ).lower()
+    remote_section: dict = {}
+    if storage_backend == "remote":
+        existing_remote = existing.get("remote") or {}
+        while True:
+            click.echo("\n─── Remote backend ─────────────────────────")
+            click.echo(
+                "  Enter at least one endpoint "
+                "(Qdrant URL and/or FalkorDB URI). "
+                "Secrets are stored in plaintext in config — "
+                "do NOT commit a populated config to a shared repo."
+            )
+            qdrant_url = click.prompt(
+                "  Qdrant URL (blank = skip)",
+                default=str(existing_remote.get("qdrant_url") or ""),
+            ).strip()
+            qdrant_api_key = click.prompt(
+                "  Qdrant API key (blank = none)",
+                default=str(existing_remote.get("qdrant_api_key") or ""),
+                hide_input=True,
+                show_default=False,
+            ).strip()
+            falkordb_uri = click.prompt(
+                "  FalkorDB URI (blank = skip)",
+                default=str(existing_remote.get("falkordb_uri") or ""),
+            ).strip()
+            falkordb_password = click.prompt(
+                "  FalkorDB password (blank = none)",
+                default=str(existing_remote.get("falkordb_password") or ""),
+                hide_input=True,
+                show_default=False,
+            ).strip()
+            default_ssl = bool(existing_remote.get("falkordb_ssl", False))
+            falkordb_ssl = click.confirm("  FalkorDB TLS?", default=default_ssl)
+            candidate = {
+                "qdrant_url": qdrant_url or None,
+                "qdrant_api_key": qdrant_api_key or None,
+                "falkordb_uri": falkordb_uri or None,
+                "falkordb_password": falkordb_password or None,
+                "falkordb_ssl": falkordb_ssl,
+            }
+            try:
+                validate_backend_config("remote", candidate)
+            except ValueError as exc:
+                click.echo(f"[error] {exc}")
+                if not click.confirm("  Retry remote fields?", default=True):
+                    raise SystemExit(1)
+                continue
+            remote_section = {
+                k: v for k, v in candidate.items()
+                if v not in (None, "") or k == "falkordb_ssl"
+            }
+            break
+
     existing_code_env = existing.get("code", {}).get("env", {})
     existing_doc_env = existing.get("doc", {}).get("env", {})
-    storage_instance_default = (
-        existing_code_env.get("CORTEX_STORAGE_INSTANCE")
-        or existing_doc_env.get("CORTEX_STORAGE_INSTANCE")
-        or "default"
-    )
-    data_home_default = (
-        existing_code_env.get("CORTEX_DATA_HOME")
-        or existing_doc_env.get("CORTEX_DATA_HOME")
-        or ""
-    )
-    click.echo("\n─── Local storage ──────────────────────────")
-    storage_instance = click.prompt(
-        "CORTEX_STORAGE_INSTANCE",
-        default=storage_instance_default,
-    )
-    data_home = click.prompt(
-        "CORTEX_DATA_HOME (blank = account default)",
-        default=data_home_default,
-    ).strip()
-    storage_env = {"CORTEX_STORAGE_INSTANCE": storage_instance}
-    if data_home:
-        storage_env["CORTEX_DATA_HOME"] = data_home
+    if storage_backend == "local":
+        storage_instance_default = (
+            existing_code_env.get("CORTEX_STORAGE_INSTANCE")
+            or existing_doc_env.get("CORTEX_STORAGE_INSTANCE")
+            or "default"
+        )
+        data_home_default = (
+            existing_code_env.get("CORTEX_DATA_HOME")
+            or existing_doc_env.get("CORTEX_DATA_HOME")
+            or ""
+        )
+        click.echo("\n─── Local storage ──────────────────────────")
+        storage_instance = click.prompt(
+            "CORTEX_STORAGE_INSTANCE",
+            default=storage_instance_default,
+        )
+        data_home = click.prompt(
+            "CORTEX_DATA_HOME (blank = account default)",
+            default=data_home_default,
+        ).strip()
+        storage_env = {"CORTEX_STORAGE_INSTANCE": storage_instance}
+        if data_home:
+            storage_env["CORTEX_DATA_HOME"] = data_home
+    else:
+        # Remote projects carry no local instance/data_home; the MCP layer
+        # reads `cfg["storage_backend"]` / `cfg["remote"]` and skips the local
+        # overlay entirely. Leaving CORTEX_STORAGE_INSTANCE unset also keeps
+        # legacy `resolve_storage()` callers from picking up a stale default.
+        storage_env = {}
 
     click.echo("\n─── Code — Graph + Qdrant + Embedding ──────")
     code_provider, code_graph_env = _prompt_graph_env("code", "CODE_GRAPH_PROVIDER", project_code)
@@ -2360,6 +2430,7 @@ def init(env, project_dir, path):
     cfg = {
         "active": True,
         "project": {"code": project_code, "name": project_name},
+        "storage_backend": storage_backend,
         "code": {
             "env": {
                 **storage_env,
@@ -2380,9 +2451,16 @@ def init(env, project_dir, path):
             "source": {"projects": doc_projects},
         },
     }
+    if remote_section:
+        cfg["remote"] = remote_section
 
     _deactivate_other_envs(project_path, env)
     _save_config(cfg, config_path)
+    if storage_backend == "remote":
+        click.echo(
+            "     [info] storage_backend=remote — run 'make infra-up' or 'dev doctor' "
+            "to verify connectivity."
+        )
     click.echo(f"\n[ok] Environment '{env}' is now active.")
     click.echo(f"     Code projects : {len(code_projects)}  "
                f"(total {len(_source_folders({'projects': code_projects}))} folders)")

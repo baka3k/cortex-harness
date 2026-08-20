@@ -185,6 +185,8 @@ class DevInitGraphProviderTests(unittest.TestCase):
 
             code_env = config["code"]["env"]
             doc_env = config["doc"]["env"]
+            self.assertEqual(config["storage_backend"], "local")
+            self.assertNotIn("remote", config)
             self.assertEqual(code_env["GRAPH_PROVIDER"], "falkordb")
             self.assertEqual(code_env["CODE_GRAPH_PROVIDER"], "falkordb")
             self.assertEqual(code_env["FALKORDB_GRAPH"], "my_project")
@@ -211,7 +213,10 @@ class DevInitGraphProviderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project_path = Path(temp_dir)
-            input_lines = ["SHOP", "", "", "", "", "", "shop_vectors"] + [""] * 60
+            # prompt order: project code, project name, storage backend,
+            # CORTEX_STORAGE_INSTANCE, CORTEX_DATA_HOME, code GRAPH_PROVIDER,
+            # code FALKORDB_GRAPH, code QDRANT_COLLECTION, …
+            input_lines = ["SHOP", "", "", "", "", "", "", "shop_vectors"] + [""] * 60
             result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(input_lines))
 
             self.assertEqual(result.exit_code, 0, result.output)
@@ -221,6 +226,8 @@ class DevInitGraphProviderTests(unittest.TestCase):
             code_env = config["code"]["env"]
 
             self.assertEqual(config["project"]["code"], "SHOP")
+            self.assertEqual(config["storage_backend"], "local")
+            self.assertNotIn("remote", config)
             self.assertEqual(code_env["QDRANT_COLLECTION"], "shop_vectors")
             self.assertEqual(_mcp_env_from_config(project_path, "code-tiny")["QDRANT_COLLECTION"], "shop_vectors")
 
@@ -230,13 +237,16 @@ class DevInitGraphProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             project_path = Path(temp_dir)
             data_home = project_path / "storage"
-            input_lines = ["", "", "team-a", str(data_home)] + [""] * 60
+            # prompt order: project code, project name, storage backend,
+            # CORTEX_STORAGE_INSTANCE, CORTEX_DATA_HOME, …
+            input_lines = ["", "", "", "team-a", str(data_home)] + [""] * 60
             result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(input_lines))
 
             self.assertEqual(result.exit_code, 0, result.output)
             config_path = project_path / ".cortext-harness" / "config" / "dev.json"
             config = json.loads(config_path.read_text(encoding="utf-8"))
 
+        self.assertEqual(config["storage_backend"], "local")
         for section in ("code", "doc"):
             env = config[section]["env"]
             self.assertEqual(env["CORTEX_STORAGE_INSTANCE"], "team-a")
@@ -249,10 +259,14 @@ class DevInitGraphProviderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project_path = Path(temp_dir)
+            # prompt order: project code, project name, storage backend,
+            # CORTEX_STORAGE_INSTANCE, CORTEX_DATA_HOME, code GRAPH_PROVIDER,
+            # code NEO4J_URI/DB/USER/PASS (4), code QDRANT_COLLECTION, …
+            input_lines = ["SHOP", "Shop Project", "", "", "", "neo4j"] + [""] * 60
             result = runner.invoke(
                 cli,
                 ["init", str(project_path)],
-                input="\n".join(["SHOP", "Shop Project", "", "", "neo4j"] + [""] * 60),
+                input="\n".join(input_lines),
             )
 
             self.assertEqual(result.exit_code, 0, result.output)
@@ -263,6 +277,7 @@ class DevInitGraphProviderTests(unittest.TestCase):
 
             self.assertEqual(config["project"]["code"], "SHOP")
             self.assertEqual(config["project"]["name"], "Shop Project")
+            self.assertEqual(config["storage_backend"], "local")
             self.assertEqual(code_env["QDRANT_COLLECTION"], "SHOP")
             self.assertEqual(code_env["NEO4J_DB"], "SHOP")
             self.assertEqual(_mcp_env_from_config(project_path, "code-tiny")["QDRANT_COLLECTION"], "SHOP")
