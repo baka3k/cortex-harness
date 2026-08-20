@@ -49,12 +49,14 @@ from falkordb_discovery import discover_falkordb_data_files
 from framework_registry import (
     backend_label_union,
     backend_property_union,
+    backend_text_property_union,
     capability_for_parser,
     default_relationships,
     parser_aliases,
     searchable_labels,
     searchable_properties,
     servlet_active_generation_predicate,
+    text_search_properties,
 )
 
 
@@ -2754,9 +2756,9 @@ async def tool_search_functions(
     fanout = bool(payload.get("_fanout"))
     profile_labels = searchable_labels(capability.name) if capability else ()
     profile_properties = (
-        backend_property_union("cplus")
+        backend_text_property_union("cplus")
         if fanout and not profile_labels
-        else (searchable_properties(capability.name) if capability else ())
+        else (text_search_properties(capability.name) if capability else ())
     )
     label_predicate = _search_label_predicate("n", profile_labels, fanout=fanout)
     property_names = profile_properties or (

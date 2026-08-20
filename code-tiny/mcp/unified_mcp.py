@@ -56,6 +56,7 @@ from framework_registry import (  # noqa: E402
     parser_aliases,
     query_engine_for_backend,
     servlet_active_generation_predicate,
+    text_search_properties,
 )
 from tools.common.project_scope import project_id_lookup_key  # noqa: E402
 from tools.common.project_registry import (  # noqa: E402
@@ -1531,7 +1532,7 @@ async def tool_explore_graph(
         debug      = debug,
         graph_rel_types= relationship_types,
         searchable_labels= sorted(capability.labels) if capability else None,
-        searchable_properties= list(capability.searchable_properties) if capability else None,
+        searchable_properties= list(text_search_properties(capability.name)) if capability else None,
         project_id = project_id or None,
     )
     result.pop("backend", None)
