@@ -55,6 +55,9 @@ def local_config_dir(tmp_path, monkeypatch):
     config_dir = tmp_path / ".cortext-harness" / "config"
     config_dir.mkdir(parents=True)
     monkeypatch.setattr(LIFECYCLE, "ROOT", tmp_path)
+    # Pin cwd to a fresh directory so the caller-aware scan does not pick
+    # up unrelated project configs living under the test runner's cwd.
+    monkeypatch.chdir(tmp_path)
     return config_dir
 
 
@@ -254,6 +257,7 @@ class TestSetupRemoteSchema:
 class TestScanProjectBackends:
     def test_empty_when_no_config_dir(self, tmp_path, monkeypatch):
         monkeypatch.setattr(LIFECYCLE, "ROOT", tmp_path)
+        monkeypatch.chdir(tmp_path)
         assert LIFECYCLE._scan_project_backends() == []
 
     def test_local_project_classification(self, local_config_dir):

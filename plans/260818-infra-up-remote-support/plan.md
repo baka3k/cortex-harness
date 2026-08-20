@@ -10,6 +10,7 @@ relatedPlans:
   - 260820-infra-up-docker-idempotent
   - 260806-1648-local-file-storage
   - 260820-dev-init-backend-selection
+  - 260820-doctor-caller-config
 blockedBy: []
 blocks: []
 ---
