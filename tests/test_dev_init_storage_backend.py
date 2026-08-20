@@ -5,12 +5,17 @@ a fresh project prompts for ``storage_backend`` (``local`` | ``remote``),
 and only prompts for the remote endpoint fields when ``remote`` is chosen.
 Re-init must default the prompt to the previously stored value so an
 operator never silently downgrades a remote project back to local.
+
+Phase-04 tests verify the local-Docker defaults UX: pressing Enter on a
+fresh remote wizard fills ``http://localhost:6333`` / ``localhost:6379``
+and skips the credential prompts (localhost Docker has no auth).
 """
 
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from click.testing import CliRunner
 
@@ -19,22 +24,14 @@ from cortex_harness.storage.config import validate_backend_config
 
 
 class DevInitStorageBackendTests(unittest.TestCase):
-    # Common prompt offsets (see also ``test_dev_init_graph_provider.py``):
-    #   0  project code          1  project name
-    #   2  storage backend       3  CORTEX_STORAGE_INSTANCE
-    #   4  CORTEX_DATA_HOME      5  code GRAPH_PROVIDER
-    #   6  code FALKORDB_GRAPH   7  code QDRANT_COLLECTION
-    #   8  code EMBEDDING_MODEL  9  code BATCH_SIZE
-    #  10  code MAX_EMBED_CHARS 11  code device
-    #  12  doc  GRAPH_PROVIDER  13  doc  FALKORDB_GRAPH
-    #  14  doc  EMBEDDING_MODEL 15  doc  BATCH_SIZE
-    #  16  doc  MAX_EMBED_CHARS 17  doc  device
-    #  18  code git              19  code folders
-    #  20  doc  git              21  doc  folders
-    # Remote inserts a sub-flow after the backend prompt:
-    #   3  qdrant_url            4  qdrant_api_key
-    #   5  falkordb_uri          6  falkordb_password
-    #   7  falkordb_ssl
+    # Prompt flow (Phase-04):
+    #   Local:  code, name, backend, CORTEX_STORAGE_INSTANCE, CORTEX_DATA_HOME,
+    #           code GRAPH_PROVIDER, code FALKORDB_GRAPH, ...
+    #   Remote (localhost): code, name, backend, qdrant_url, falkordb_uri,
+    #           code GRAPH_PROVIDER, ...  (NO credential prompts)
+    #   Remote (non-localhost): code, name, backend, qdrant_url, falkordb_uri,
+    #           qdrant_api_key, falkordb_password, falkordb_ssl,
+    #           code GRAPH_PROVIDER, ...
     _LOCAL_TAIL = [""] * 60
 
     def _write_existing_config(self, project_path: Path, env: str, cfg: dict) -> Path:
@@ -82,9 +79,9 @@ class DevInitStorageBackendTests(unittest.TestCase):
                 "SHOP",            # project code
                 "",                # project name -> defaults to SHOP
                 "remote",          # storage backend
-                "http://qdrant.local:6333",  # qdrant_url
-                "qkey-secret",     # qdrant_api_key
-                "redis://falkor.local:6379", # falkordb_uri
+                "http://qdrant.local:6333",  # qdrant_url (non-localhost)
+                "redis://falkor.local:6379", # falkordb_uri (non-localhost)
+                "qkey-secret",     # qdrant_api_key (prompted for non-local)
                 "fpass-secret",    # falkordb_password
                 "y",               # falkordb_ssl
             ] + self._LOCAL_TAIL
@@ -113,6 +110,7 @@ class DevInitStorageBackendTests(unittest.TestCase):
     # Remote only Qdrant / only FalkorDB
     # ---------------------------------------------------------------------
     def test_remote_only_qdrant_is_accepted(self):
+        """Explicit Qdrant URL + blank FalkorDB → falkordb gets localhost default."""
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -121,9 +119,9 @@ class DevInitStorageBackendTests(unittest.TestCase):
                 "QDRANT_ONLY",      # project code
                 "",                 # project name
                 "remote",           # storage backend
-                "http://qdrant.local:6333",  # qdrant_url
-                "",                 # qdrant_api_key
-                "",                 # falkordb_uri  (skip)
+                "http://qdrant.remote:6333",  # qdrant_url (non-localhost)
+                "",                 # falkordb_uri → default localhost:6379
+                "",                 # qdrant_api_key (prompted: qdrant is non-local)
                 "",                 # falkordb_password
                 "n",                # falkordb_ssl
             ] + self._LOCAL_TAIL
@@ -133,15 +131,15 @@ class DevInitStorageBackendTests(unittest.TestCase):
             cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
             self.assertEqual(cfg["storage_backend"], "remote")
             remote = cfg["remote"]
-            self.assertEqual(remote["qdrant_url"], "http://qdrant.local:6333")
-            self.assertNotIn("qdrant_api_key", remote)
-            self.assertNotIn("falkordb_uri", remote)
-            self.assertNotIn("falkordb_password", remote)
+            self.assertEqual(remote["qdrant_url"], "http://qdrant.remote:6333")
+            # FalkorDB falls through to localhost default (Phase 04)
+            self.assertEqual(remote["falkordb_uri"], "localhost:6379")
             self.assertFalse(remote["falkordb_ssl"])
             mode, parsed = validate_backend_config("remote", remote)
             self.assertEqual(mode.value, "remote")
 
     def test_remote_only_falkordb_is_accepted(self):
+        """Explicit FalkorDB URI + blank Qdrant → qdrant gets localhost default."""
         runner = CliRunner()
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -150,9 +148,9 @@ class DevInitStorageBackendTests(unittest.TestCase):
                 "FALKOR_ONLY",      # project code
                 "",                 # project name
                 "remote",           # storage backend
-                "",                 # qdrant_url  (skip)
-                "",                 # qdrant_api_key
-                "redis://falkor.local:6379",  # falkordb_uri
+                "",                 # qdrant_url → default http://localhost:6333
+                "redis://falkor.remote:6379",  # falkordb_uri (non-localhost)
+                "",                 # qdrant_api_key (prompted: falkordb is non-local)
                 "secret",           # falkordb_password
                 "y",                # falkordb_ssl
             ] + self._LOCAL_TAIL
@@ -162,36 +160,33 @@ class DevInitStorageBackendTests(unittest.TestCase):
             cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
             self.assertEqual(cfg["storage_backend"], "remote")
             remote = cfg["remote"]
-            self.assertNotIn("qdrant_url", remote)
-            self.assertEqual(remote["falkordb_uri"], "redis://falkor.local:6379")
+            # Qdrant falls through to localhost default (Phase 04)
+            self.assertEqual(remote["qdrant_url"], "http://localhost:6333")
+            self.assertEqual(remote["falkordb_uri"], "redis://falkor.remote:6379")
             self.assertEqual(remote["falkordb_password"], "secret")
             self.assertTrue(remote["falkordb_ssl"])
 
     # ---------------------------------------------------------------------
     # Remote with both URLs empty must be rejected
     # ---------------------------------------------------------------------
-    def test_remote_without_any_url_is_rejected(self):
-        runner = CliRunner()
+    def test_remote_without_any_url_is_rejected_at_validation_layer(self):
+        """Phase-04 wizard always fills defaults, so both-empty can't happen via
+        the prompt. But validate_backend_config must still reject hand-edited
+        configs with neither URL — this guards the runtime contract."""
+        with self.assertRaises(ValueError) as ctx:
+            validate_backend_config("remote", {"qdrant_url": "", "falkordb_uri": ""})
+        self.assertIn("at least", str(ctx.exception))
 
+        # And via the wizard: blank Enter fills localhost defaults (no error).
+        runner = CliRunner()
         with tempfile.TemporaryDirectory() as temp_dir:
             project_path = Path(temp_dir)
-            inputs = [
-                "BAD",      # project code
-                "",         # project name
-                "remote",   # storage backend
-                "",         # qdrant_url
-                "",         # qdrant_api_key
-                "",         # falkordb_uri
-                "",         # falkordb_password
-                "n",        # falkordb_ssl
-                "n",        # "Retry remote fields?" -> no
-            ]
+            inputs = ["BAD", "", "remote", "", ""] + self._LOCAL_TAIL
             result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(inputs))
-
-            self.assertNotEqual(result.exit_code, 0, result.output)
-            self.assertIn("remote config must specify", result.output)
-            # Config file must NOT exist when validation rejects the section.
-            self.assertFalse(self._config_path(project_path).exists())
+            self.assertEqual(result.exit_code, 0, result.output)
+            cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
+            self.assertEqual(cfg["remote"]["qdrant_url"], "http://localhost:6333")
+            self.assertEqual(cfg["remote"]["falkordb_uri"], "localhost:6379")
 
     # ---------------------------------------------------------------------
     # Re-init must reuse the prior storage_backend + remote section
@@ -274,11 +269,11 @@ class DevInitStorageBackendTests(unittest.TestCase):
                 "SHOP",
                 "",
                 "remote",
-                "http://qdrant.local:6333",
-                qkey,
-                "redis://falkor.local:6379",
-                fpass,
-                "n",
+                "http://qdrant.local:6333",   # qdrant_url (non-localhost)
+                "redis://falkor.local:6379",   # falkordb_uri (non-localhost)
+                qkey,                          # qdrant_api_key
+                fpass,                         # falkordb_password
+                "n",                           # falkordb_ssl
             ] + self._LOCAL_TAIL
             result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(inputs))
 
@@ -300,11 +295,11 @@ class DevInitStorageBackendTests(unittest.TestCase):
                 "REMOTE_PROJECT",
                 "",
                 "remote",
-                "http://qdrant.local:6333",
-                "",
-                "redis://falkor.local:6379",
-                "",
-                "n",
+                "http://qdrant.local:6333",   # qdrant_url (non-localhost)
+                "redis://falkor.local:6379",   # falkordb_uri (non-localhost)
+                "",                            # qdrant_api_key
+                "",                            # falkordb_password
+                "n",                           # falkordb_ssl
             ] + self._LOCAL_TAIL
             result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(inputs))
 
@@ -318,6 +313,148 @@ class DevInitStorageBackendTests(unittest.TestCase):
                 env = cfg[section]["env"]
                 self.assertNotIn("CORTEX_STORAGE_INSTANCE", env)
                 self.assertNotIn("CORTEX_DATA_HOME", env)
+
+
+    # =================================================================
+    # Phase-04: Remote defaults UX — local Docker endpoints
+    # =================================================================
+
+    def test_blank_input_gets_local_docker_defaults(self):
+        """Fresh remote with all-Enter → localhost Docker endpoints, no creds."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            inputs = [
+                "DOCKER_PROJ",  # project code
+                "",              # project name
+                "remote",        # storage backend
+                "",              # qdrant_url → default http://localhost:6333
+                "",              # falkordb_uri → default localhost:6379
+                # credential prompts should be SKIPPED for localhost
+            ] + self._LOCAL_TAIL
+            result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(inputs))
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            # Must not prompt for credentials when endpoints are localhost
+            self.assertNotIn("API key", result.output)
+            self.assertNotIn("password", result.output)
+            self.assertNotIn("TLS", result.output)
+            # Must show local Docker hint
+            self.assertIn("local Docker", result.output)
+            self.assertIn("infra-up", result.output)
+
+            cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
+            self.assertEqual(cfg["storage_backend"], "remote")
+            remote = cfg["remote"]
+            self.assertEqual(remote["qdrant_url"], "http://localhost:6333")
+            self.assertEqual(remote["falkordb_uri"], "localhost:6379")
+            self.assertNotIn("qdrant_api_key", remote)
+            self.assertNotIn("falkordb_password", remote)
+            self.assertFalse(remote["falkordb_ssl"])
+
+    def test_blank_input_with_env_port_override(self):
+        """Env QDRANT_HTTP_PORT / FALKORDB_PORT override the default ports."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            inputs = [
+                "ENV_PORT",  # project code
+                "",          # project name
+                "remote",    # storage backend
+                "",          # qdrant_url → default http://localhost:16333
+                "",          # falkordb_uri → default localhost:16379
+            ] + self._LOCAL_TAIL
+            with patch.dict("os.environ", {"QDRANT_HTTP_PORT": "16333", "FALKORDB_PORT": "16379"}):
+                result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(inputs))
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
+            remote = cfg["remote"]
+            self.assertEqual(remote["qdrant_url"], "http://localhost:16333")
+            self.assertEqual(remote["falkordb_uri"], "localhost:16379")
+
+    def test_reinit_remote_preserves_existing_urls_not_defaults(self):
+        """Re-init of existing remote project keeps prior URLs, not 6333/6379."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            existing = {
+                "active": True,
+                "project": {"code": "SHOP", "name": "Shop"},
+                "storage_backend": "remote",
+                "remote": {
+                    "qdrant_url": "http://qdrant.prev:6333",
+                    "falkordb_uri": "redis://falkor.prev:6379",
+                    "falkordb_ssl": True,
+                },
+                "code": {"env": {}, "source": {"projects": []}},
+                "doc":  {"env": {}, "source": {"projects": []}},
+            }
+            self._write_existing_config(project_path, "dev", existing)
+
+            # All-Enter: every prompt accepts its prior default
+            result = runner.invoke(cli, ["init", str(project_path)], input="\n" * 60)
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
+            # Must keep the EXISTING URLs, not override to localhost defaults
+            self.assertEqual(cfg["remote"]["qdrant_url"], "http://qdrant.prev:6333")
+            self.assertEqual(cfg["remote"]["falkordb_uri"], "redis://falkor.prev:6379")
+            self.assertTrue(cfg["remote"]["falkordb_ssl"])
+
+    def test_non_localhost_url_still_prompts_credentials(self):
+        """Entering a non-localhost URL triggers credential prompts as before."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            inputs = [
+                "REMOTE_REAL",  # project code
+                "",             # project name
+                "remote",       # storage backend
+                "https://q.example.io:6333",  # non-localhost qdrant
+                "localhost:6379",              # localhost falkordb
+                "my-api-key",   # qdrant_api_key (prompted because qdrant is non-local)
+                "my-fpass",     # falkordb_password (prompted)
+                "y",            # falkordb_ssl
+            ] + self._LOCAL_TAIL
+            result = runner.invoke(cli, ["init", str(project_path)], input="\n".join(inputs))
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            # Credentials must be prompted
+            self.assertIn("API key", result.output)
+            self.assertIn("password", result.output)
+            self.assertIn("TLS", result.output)
+            # Post-save hint must NOT say "local Docker defaults" (mixed endpoints)
+            self.assertNotIn("local Docker defaults", result.output)
+            # Instead shows the generic remote connectivity hint
+            self.assertIn("dev doctor", result.output)
+
+            cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
+            self.assertEqual(cfg["remote"]["qdrant_url"], "https://q.example.io:6333")
+            self.assertEqual(cfg["remote"]["qdrant_api_key"], "my-api-key")
+            self.assertEqual(cfg["remote"]["falkordb_uri"], "localhost:6379")
+            self.assertEqual(cfg["remote"]["falkordb_password"], "my-fpass")
+            self.assertTrue(cfg["remote"]["falkordb_ssl"])
+
+    def test_validate_backend_config_unchanged(self):
+        """Phase-04 does not alter validate_backend_config behaviour."""
+        # Local mode: no remote section needed
+        mode, parsed = validate_backend_config("local", None)
+        self.assertEqual(mode.value, "local")
+        self.assertIsNone(parsed)
+
+        # Remote with both URLs empty: must reject
+        with self.assertRaises(ValueError):
+            validate_backend_config("remote", {"qdrant_url": "", "falkordb_uri": ""})
+
+        # Remote with one URL: accepted
+        mode, parsed = validate_backend_config("remote", {"qdrant_url": "http://localhost:6333"})
+        self.assertEqual(mode.value, "remote")
+        self.assertEqual(parsed.qdrant_url, "http://localhost:6333")
 
 
 if __name__ == "__main__":

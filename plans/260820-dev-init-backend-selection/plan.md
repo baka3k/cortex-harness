@@ -1,8 +1,8 @@
 ---
 title: "dev init — Local DB / Remote Server Selection"
-status: active
+status: done
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-20 (all phases implemented + tests passing)
 mode: hi-plan --full
 scope: cortex_harness/dev.py, tests/test_dev_init_*
 relatedPlans:
@@ -58,9 +58,10 @@ Backend adapter (plan 260817) và remote-aware infra-up/doctor (plan 260818) đ�
 
 ## Implementation Phases
 
-- [phase-01-storage-backend-prompt.md](phase-01-storage-backend-prompt.md) — prompt + ghi config
-- [phase-02-tests.md](phase-02-tests.md) — unit tests cho init flow mới
-- [phase-03-docs.md](phase-03-docs.md) — cập nhật README/docs + cross-plan log
+- [x] [phase-01-storage-backend-prompt.md](phase-01-storage-backend-prompt.md) — prompt + ghi config
+- [x] [phase-02-tests.md](phase-02-tests.md) — unit tests cho init flow mới
+- [x] [phase-04-remote-defaults-ux.md](phase-04-remote-defaults-ux.md) — remote wizard: mặc định local Docker endpoints (6333/6379) khi Enter trắng, bỏ prompt credentials cho localhost
+- [x] [phase-03-docs.md](phase-03-docs.md) — cập nhật README/docs + cross-plan log
 
 ## Out of Scope
 
