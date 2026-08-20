@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import click
 
@@ -24,6 +25,11 @@ CLI_DIR = Path(__file__).parent.resolve()
 REPO_ROOT = CLI_DIR.parent
 CODE_TINY = REPO_ROOT / "code-tiny"
 DOC_TINY = REPO_ROOT / "doc-tiny"
+
+# Hostnames treated as "local" — credential prompts are skipped for these
+# endpoints because localhost Docker containers don't use auth.
+_LOCALHOST = frozenset({"localhost", "127.0.0.1", "::1", ""})
+
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 if str(CODE_TINY) not in sys.path:
@@ -2266,36 +2272,71 @@ def init(env, project_dir, path):
     remote_section: dict = {}
     if storage_backend == "remote":
         existing_remote = existing.get("remote") or {}
+        # Defaults priority: existing config > env-var ports > hardcoded
+        qdrant_port = os.environ.get("QDRANT_HTTP_PORT", "6333")
+        falkordb_port = os.environ.get("FALKORDB_PORT", "6379")
+        qdrant_default = str(
+            existing_remote.get("qdrant_url") or f"http://localhost:{qdrant_port}"
+        )
+        falkordb_default = str(
+            existing_remote.get("falkordb_uri") or f"localhost:{falkordb_port}"
+        )
+
+        def _is_local(url_or_uri: str) -> bool:
+            if not url_or_uri:
+                return False
+            try:
+                parsed = urlparse(url_or_uri if "://" in url_or_uri else f"//{url_or_uri}")
+                host = (parsed.hostname or "").lower()
+            except Exception:
+                host = url_or_uri.split(":")[0].lower().lstrip("/")
+            return host in _LOCALHOST
+
         while True:
             click.echo("\n─── Remote backend ─────────────────────────")
             click.echo(
-                "  Enter at least one endpoint "
-                "(Qdrant URL and/or FalkorDB URI). "
+                "  Defaults match local Docker containers "
+                "(managed by 'dev infra-up'). "
+                "Press Enter to accept. "
                 "Secrets are stored in plaintext in config — "
                 "do NOT commit a populated config to a shared repo."
             )
             qdrant_url = click.prompt(
-                "  Qdrant URL (blank = skip)",
-                default=str(existing_remote.get("qdrant_url") or ""),
-            ).strip()
-            qdrant_api_key = click.prompt(
-                "  Qdrant API key (blank = none)",
-                default=str(existing_remote.get("qdrant_api_key") or ""),
-                hide_input=True,
-                show_default=False,
+                "  Qdrant URL",
+                default=qdrant_default,
+                show_default=True,
             ).strip()
             falkordb_uri = click.prompt(
-                "  FalkorDB URI (blank = skip)",
-                default=str(existing_remote.get("falkordb_uri") or ""),
+                "  FalkorDB URI",
+                default=falkordb_default,
+                show_default=True,
             ).strip()
-            falkordb_password = click.prompt(
-                "  FalkorDB password (blank = none)",
-                default=str(existing_remote.get("falkordb_password") or ""),
-                hide_input=True,
-                show_default=False,
-            ).strip()
-            default_ssl = bool(existing_remote.get("falkordb_ssl", False))
-            falkordb_ssl = click.confirm("  FalkorDB TLS?", default=default_ssl)
+
+            # Skip credential prompts when both endpoints target localhost —
+            # local Docker containers don't use auth.
+            q_local = _is_local(qdrant_url)
+            f_local = _is_local(falkordb_uri)
+            skip_creds = (not qdrant_url or q_local) and (not falkordb_uri or f_local)
+
+            qdrant_api_key = ""
+            falkordb_password = ""
+            falkordb_ssl = False
+            if not skip_creds:
+                qdrant_api_key = click.prompt(
+                    "  Qdrant API key (blank = none)",
+                    default=str(existing_remote.get("qdrant_api_key") or ""),
+                    hide_input=True,
+                    show_default=False,
+                ).strip()
+                falkordb_password = click.prompt(
+                    "  FalkorDB password (blank = none)",
+                    default=str(existing_remote.get("falkordb_password") or ""),
+                    hide_input=True,
+                    show_default=False,
+                ).strip()
+                default_ssl = bool(existing_remote.get("falkordb_ssl", False))
+                falkordb_ssl = click.confirm("  FalkorDB TLS?", default=default_ssl)
+
             candidate = {
                 "qdrant_url": qdrant_url or None,
                 "qdrant_api_key": qdrant_api_key or None,
@@ -2314,6 +2355,7 @@ def init(env, project_dir, path):
                 k: v for k, v in candidate.items()
                 if v not in (None, "") or k == "falkordb_ssl"
             }
+            _remote_is_local_docker = skip_creds
             break
 
     existing_code_env = existing.get("code", {}).get("env", {})
@@ -2457,10 +2499,16 @@ def init(env, project_dir, path):
     _deactivate_other_envs(project_path, env)
     _save_config(cfg, config_path)
     if storage_backend == "remote":
-        click.echo(
-            "     [info] storage_backend=remote — run 'make infra-up' or 'dev doctor' "
-            "to verify connectivity."
-        )
+        if _remote_is_local_docker:
+            click.echo(
+                "     [info] storage_backend=remote (local Docker defaults) — "
+                "run 'dev infra-up --provision' to start local Qdrant/FalkorDB containers."
+            )
+        else:
+            click.echo(
+                "     [info] storage_backend=remote — run 'make infra-up' or 'dev doctor' "
+                "to verify connectivity."
+            )
     click.echo(f"\n[ok] Environment '{env}' is now active.")
     click.echo(f"     Code projects : {len(code_projects)}  "
                f"(total {len(_source_folders({'projects': code_projects}))} folders)")
