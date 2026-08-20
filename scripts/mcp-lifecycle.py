@@ -31,6 +31,16 @@ if str(ROOT) not in sys.path:
     # before (and independently of) an editable ``uv pip install -e .``.
     sys.path.insert(0, str(ROOT))
 
+# ``cortex_harness.storage.remote_probe`` does a lazy
+# ``from tools.graph.driver.falkordb_driver import FalkorDBDriver`` when the
+# falkordb probe runs.  The ``tools`` package lives under ``code-tiny/`` so
+# the lifecycle subprocess must expose that directory on ``sys.path`` —
+# otherwise ``dev doctor`` and ``make infra-up`` report
+# ``No module named 'tools'`` instead of a real connectivity check.
+CODE_TINY = ROOT / "code-tiny"
+if str(CODE_TINY) not in sys.path:
+    sys.path.insert(0, str(CODE_TINY))
+
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
 VENV_DIR = ROOT / ".venv"
