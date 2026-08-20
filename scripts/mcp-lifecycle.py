@@ -98,6 +98,14 @@ DOCKER_SERVICES = (
         ),
         "primary_port_index": 1,
         "primary_protocol": "http",
+        # ``(label, scheme)`` per port, aligned with ``ports``. Present only for
+        # services whose ports serve distinct protocols, so ``infra-up`` can
+        # spell out which URL is the database and which is the Browser UI —
+        # the primary URL alone is ambiguous here.
+        "endpoints": (
+            ("redis", "redis"),
+            ("Browser UI", "http"),
+        ),
         "volume": "cortex-falkordb-data:/data",
     },
 )
@@ -517,17 +525,60 @@ def _image_present(image: str) -> bool:
     return result.returncode == 0
 
 
+def _env_port(env_name: str, default: int) -> int:
+    """Read a host port from ``env_name``, falling back to ``default``.
+
+    Invalid values fall back rather than crashing the caller.
+    """
+    raw = os.environ.get(env_name)
+    try:
+        return int(raw) if raw else default
+    except ValueError:
+        return default
+
+
 def _resolved_ports(spec: dict) -> list[tuple[int, int]]:
     """Resolve host ports from env, returning ``[(host, container), ...]``."""
-    resolved: list[tuple[int, int]] = []
-    for env_name, default_host, container_port in spec["ports"]:
-        raw = os.environ.get(env_name)
-        try:
-            host_port = int(raw) if raw else default_host
-        except ValueError:
-            host_port = default_host
-        resolved.append((host_port, container_port))
-    return resolved
+    return [
+        (_env_port(env_name, default_host), container_port)
+        for env_name, default_host, container_port in spec["ports"]
+    ]
+
+
+def falkordb_ui_port() -> int:
+    """Host-side FalkorDB Browser UI port (env ``FALKORDB_UI_PORT``, default 3000).
+
+    Shared by ``infra-up`` output and the doctor remote checks so the
+    advertised UI URL cannot drift from the port the container binds.
+    """
+    return _env_port("FALKORDB_UI_PORT", 3000)
+
+
+def _endpoint_lines(spec: dict) -> list[str]:
+    """Render one indented ``label : url`` line per declared endpoint.
+
+    Empty for specs without an ``endpoints`` key (Qdrant), whose primary
+    URL already describes the service unambiguously.
+    """
+    labels = spec.get("endpoints")
+    if not labels:
+        return []
+    width = max(len(label) for label, _scheme in labels)
+    # strict=True: a spec that grows a port without a matching label is a bug
+    # worth surfacing, not an endpoint silently missing from the output.
+    return [
+        f"       {label.ljust(width)} : {scheme}://127.0.0.1:{host_port}"
+        for (label, scheme), (host_port, _container_port) in zip(
+            labels, _resolved_ports(spec), strict=True
+        )
+    ]
+
+
+def _report_ready(spec: dict, message: str) -> None:
+    """Print a service-reached-running message plus its endpoint breakdown."""
+    print(message)
+    for line in _endpoint_lines(spec):
+        print(line)
 
 
 def _ensure_service(spec: dict) -> None:
@@ -550,12 +601,12 @@ def _ensure_service(spec: dict) -> None:
     primary_url = f"{spec['primary_protocol']}://127.0.0.1:{host_port}"
 
     if state == "running":
-        print(f"[ok] {name} running ({primary_url})")
+        _report_ready(spec, f"[ok] {name} running ({primary_url})")
         return
     if state is not None:
         result = run([docker, "start", name], capture=True, check=False)
         if result.returncode == 0:
-            print(f"[ok] started existing container {name} ({primary_url})")
+            _report_ready(spec, f"[ok] started existing container {name} ({primary_url})")
         else:
             print(f"[fail] {name}: docker start failed: {(result.stderr or '').strip()}")
         return
@@ -576,7 +627,7 @@ def _ensure_service(spec: dict) -> None:
 
     result = run(cmd, capture=True, check=False)
     if result.returncode == 0:
-        print(f"[ok] created + started {name} ({primary_url})")
+        _report_ready(spec, f"[ok] created + started {name} ({primary_url})")
         return
 
     stderr = (result.stderr or "").strip()
@@ -912,6 +963,39 @@ def doctor_process_checks(resolved: object | None) -> None:
         )
 
 
+def _falkordb_ui_url(uri: str) -> str | None:
+    """Derive the FalkorDB Browser UI URL from a falkordb URI.
+
+    Mirrors the URI parsing in ``falkordb_driver.py`` (scheme form or bare
+    ``host:port``). Returns ``None`` when no host can be derived — ``unix://``
+    sockets, unknown schemes, empty URI — so callers simply omit the hint.
+    The UI is always plain ``http``: the image serves it without TLS.
+    """
+    candidate = (uri or "").strip()
+    if not candidate:
+        return None
+    if "://" in candidate:
+        scheme, _, rest = candidate.partition("://")
+        if scheme.lower() not in {"falkor", "falkors", "redis", "rediss"}:
+            return None
+        candidate = rest
+    # Drop credentials and any database path suffix before reading the host.
+    candidate = candidate.rpartition("@")[2].split("/", 1)[0]
+    if candidate.startswith("["):
+        # Bracketed IPv6 literal — the host ends at the closing bracket, so the
+        # colons inside it must not be mistaken for a port separator.
+        head, bracket, _rest = candidate.partition("]")
+        if not bracket or head == "[":
+            return None
+        return f"http://{head}]:{falkordb_ui_port()}"
+    host = candidate.rpartition(":")[0] or candidate
+    if not host or ":" in host:
+        # Empty host (":6379"), or a bare unbracketed IPv6 literal ("::1")
+        # that cannot be embedded in an http URL unambiguously.
+        return None
+    return f"http://{host}:{falkordb_ui_port()}"
+
+
 def doctor_remote_checks() -> int:
     """Check remote backend connectivity for all remote-mode projects.
 
@@ -963,10 +1047,17 @@ def doctor_remote_checks() -> int:
             # ``probe_*`` returns a "skipped" message when no URL is set.
             if result.message.startswith("skipped"):
                 continue
+            message = f"{result.url} — {result.message}"
+            if result.backend == "falkordb" and result.reachable:
+                # Informational hint only — a remote host need not expose the
+                # UI port, so this never becomes a check that can fail.
+                ui_url = _falkordb_ui_url(result.url)
+                if ui_url:
+                    message += f" — Browser UI: {ui_url}"
             failures += doctor_check(
                 f"remote:{project_id}:{result.backend}",
                 result.reachable,
-                f"{result.url} — {result.message}",
+                message,
             )
     return failures
 

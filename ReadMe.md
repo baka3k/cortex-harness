@@ -88,7 +88,16 @@ make storage-backup OWNER=code
 - `make infra-up` is idempotent: it inspects `cortex-qdrant` and `cortex-falkordb` first. Running containers are left alone; stopped containers are restarted; missing containers are pulled (only when the image is not cached) and started with ports pinned to `127.0.0.1`. Re-running the command never re-pulls or re-creates an already-running container.
 - `make infra-down` stops both managed containers (idempotent — no-op when they are missing or the docker daemon is unreachable) and closes cached remote clients. Local file-backed storage is left on disk by design.
 - The FalkorDB image (`falkordb/falkordb`) ships with a Browser UI on `http://127.0.0.1:3000`; the Qdrant Dashboard is reachable at `http://127.0.0.1:6333/dashboard`. Port pinning to `127.0.0.1` means the services are never exposed beyond the local machine.
-- Override the image tag with `QDRANT_IMAGE` / `FALKORDB_IMAGE`; override the host ports with `QDRANT_HTTP_PORT`, `QDRANT_GRPC_PORT`, `FALKORDB_PORT`, `FALKORDB_UI_PORT`. Invalid port values fall back to the defaults rather than crashing `infra-up`.
+- Because FalkorDB serves the database and the Browser UI on separate ports, `infra-up` lists both under the container line so it is clear which is which:
+
+  ```
+  [ok] cortex-falkordb running (http://127.0.0.1:3000)
+         redis      : redis://127.0.0.1:6379
+         Browser UI : http://127.0.0.1:3000
+  ```
+
+- For a project on `storage_backend: remote`, `make doctor` appends the Browser UI URL to the FalkorDB check once it is reachable — for example `remote:my_app:falkordb - redis://db.internal:6379 — reachable — Browser UI: http://db.internal:3000`. The host is derived from the configured `falkordb_uri`; the URL is an informational hint and is never probed, so a remote host that does not publish port 3000 still passes. A `unix://` socket URI has no host and therefore shows no UI URL.
+- Override the image tag with `QDRANT_IMAGE` / `FALKORDB_IMAGE`; override the host ports with `QDRANT_HTTP_PORT`, `QDRANT_GRPC_PORT`, `FALKORDB_PORT`, `FALKORDB_UI_PORT`. Invalid port values fall back to the defaults rather than crashing `infra-up`. `FALKORDB_UI_PORT` drives the advertised UI URL in both `infra-up` and `doctor`.
 - When the docker daemon is unreachable, `make infra-up` logs `[warn] docker not available — skipping container ensure` and continues — purely local projects are unaffected, and remote projects that point at `127.0.0.1` will simply fail the subsequent reachability probe.
 
 If a host port is already bound (for example, by a natively running Qdrant/FalkorDB), `infra-up` reports `[fail] host port already in use — service may already be running natively; remote probe will report reachability` and lets the probe decide.

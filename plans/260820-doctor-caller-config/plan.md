@@ -6,6 +6,7 @@ updated: 2026-08-20
 mode: hi-plan --full
 scope: scripts/mcp-lifecycle.py, tests/test_doctor_remote.py, tests/test_make_lifecycle.py
 relatedPlans:
+  - 260820-falkordb-ui-url-doctor
   - 260818-infra-up-remote-support
   - 260820-dev-init-backend-selection
   - 260817-storage-backend-adapter

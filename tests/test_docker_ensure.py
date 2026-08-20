@@ -347,6 +347,111 @@ class TestEnsureServiceErrors:
         assert "docker start failed" in rendered
 
 
+# ── endpoint output ───────────────────────────────────────────────────────
+
+
+class TestEndpointOutput:
+    """FalkorDB's primary URL is the Browser UI, which reads as ambiguous on
+    its own — ``infra-up`` must spell out both endpoints."""
+
+    def test_falkordb_output_includes_browser_ui_and_redis_urls(self, fake_run):
+        handlers = {
+            "inspect": mock.Mock(returncode=0, stdout="running\n", stderr=""),
+        }
+        run_fn, _router = fake_run(handlers)
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            LIFECYCLE, "run", side_effect=run_fn
+        ), mock.patch.dict("os.environ", {}, clear=True), mock.patch("builtins.print") as output:
+            LIFECYCLE._ensure_service(_falkordb_spec())
+        rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
+        # Pin label→scheme alignment, not just substring presence: a swap that
+        # rendered "Browser UI : redis://…" would satisfy looser assertions.
+        assert "redis      : redis://127.0.0.1:6379" in rendered
+        assert "Browser UI : http://127.0.0.1:3000" in rendered
+
+    def test_endpoints_printed_on_created_branch(self, fake_run):
+        handlers = {
+            "inspect": mock.Mock(returncode=1, stderr="No such container", stdout=""),
+            "image": mock.Mock(returncode=0, stdout="[]", stderr=""),
+            "run": mock.Mock(returncode=0, stdout="abc\n", stderr=""),
+        }
+        run_fn, _router = fake_run(handlers)
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            LIFECYCLE, "run", side_effect=run_fn
+        ), mock.patch.dict("os.environ", {}, clear=True), mock.patch("builtins.print") as output:
+            LIFECYCLE._ensure_service(_falkordb_spec())
+        rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
+        assert "created + started cortex-falkordb" in rendered
+        assert "redis://127.0.0.1:6379" in rendered
+        assert "Browser UI" in rendered
+
+    def test_endpoints_printed_on_started_branch(self, fake_run):
+        handlers = {
+            "inspect": mock.Mock(returncode=0, stdout="exited\n", stderr=""),
+            "start": mock.Mock(returncode=0, stdout="cortex-falkordb\n", stderr=""),
+        }
+        run_fn, _router = fake_run(handlers)
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            LIFECYCLE, "run", side_effect=run_fn
+        ), mock.patch.dict("os.environ", {}, clear=True), mock.patch("builtins.print") as output:
+            LIFECYCLE._ensure_service(_falkordb_spec())
+        rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
+        assert "started existing container" in rendered
+        assert "Browser UI" in rendered
+
+    def test_endpoint_lines_honor_port_overrides(self, fake_run):
+        handlers = {
+            "inspect": mock.Mock(returncode=0, stdout="running\n", stderr=""),
+        }
+        run_fn, _router = fake_run(handlers)
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            LIFECYCLE, "run", side_effect=run_fn
+        ), mock.patch.dict(
+            "os.environ", {"FALKORDB_PORT": "16379", "FALKORDB_UI_PORT": "3001"}, clear=True
+        ), mock.patch("builtins.print") as output:
+            LIFECYCLE._ensure_service(_falkordb_spec())
+        rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
+        assert "redis://127.0.0.1:16379" in rendered
+        assert "http://127.0.0.1:3001" in rendered
+
+    def test_qdrant_output_has_no_endpoint_lines(self, fake_run):
+        handlers = {
+            "inspect": mock.Mock(returncode=0, stdout="running\n", stderr=""),
+        }
+        run_fn, _router = fake_run(handlers)
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            LIFECYCLE, "run", side_effect=run_fn
+        ), mock.patch("builtins.print") as output:
+            LIFECYCLE._ensure_service(_qdrant_spec())
+        rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
+        assert "Browser UI" not in rendered
+        assert LIFECYCLE._endpoint_lines(_qdrant_spec()) == []
+
+    def test_label_port_mismatch_is_not_silently_truncated(self):
+        """A spec port without a matching label must fail loudly, not vanish."""
+        broken = dict(_falkordb_spec())
+        broken["ports"] = broken["ports"] + (("FALKORDB_METRICS_PORT", 9121, 9121),)
+        with pytest.raises(ValueError):
+            LIFECYCLE._endpoint_lines(broken)
+
+
+# ── falkordb_ui_port ──────────────────────────────────────────────────────
+
+
+class TestFalkordbUiPort:
+    def test_defaults_to_3000(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            assert LIFECYCLE.falkordb_ui_port() == 3000
+
+    def test_env_override_honored(self):
+        with mock.patch.dict("os.environ", {"FALKORDB_UI_PORT": "3001"}, clear=False):
+            assert LIFECYCLE.falkordb_ui_port() == 3001
+
+    def test_invalid_value_falls_back(self):
+        with mock.patch.dict("os.environ", {"FALKORDB_UI_PORT": "nope"}, clear=False):
+            assert LIFECYCLE.falkordb_ui_port() == 3000
+
+
 # ── _ensure_docker_services ───────────────────────────────────────────────
 
 
