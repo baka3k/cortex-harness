@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [infra-up Docker idempotent lifecycle](2026-08-20-infra-up-docker-idempotent.md)
 - [External project-keyword isolation](2026-08-19-external-project-keyword-isolation.md)
 - [Scoped graph materialization safety](2026-08-19-scoped-graph-materialization-safety.md)
 - [Shell-to-source lineage through an external ledger](2026-08-19-shell-to-source-lineage.md)

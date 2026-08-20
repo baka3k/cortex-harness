@@ -60,6 +60,38 @@ SERVERS = (
     },
 )
 
+# Idempotent container specs consumed by ``_ensure_docker_services``. Each entry
+# declares the container name, image (env-overridable for pinning), ports
+# pinned to 127.0.0.1, and a named volume so data survives container restart.
+# Port overrides follow the same env-var contract (host-side only; the
+# container-side port is fixed by the image).
+DOCKER_SERVICES = (
+    {
+        "name": "cortex-qdrant",
+        "image_env": "QDRANT_IMAGE",
+        "default_image": "qdrant/qdrant:latest",
+        "ports": (
+            ("QDRANT_HTTP_PORT", 6333, 6333),
+            ("QDRANT_GRPC_PORT", 6334, 6334),
+        ),
+        "primary_port_index": 0,
+        "primary_protocol": "http",
+        "volume": "cortex-qdrant-storage:/qdrant/storage",
+    },
+    {
+        "name": "cortex-falkordb",
+        "image_env": "FALKORDB_IMAGE",
+        "default_image": "falkordb/falkordb:latest",
+        "ports": (
+            ("FALKORDB_PORT", 6379, 6379),
+            ("FALKORDB_UI_PORT", 3000, 3000),
+        ),
+        "primary_port_index": 1,
+        "primary_protocol": "http",
+        "volume": "cortex-falkordb-data:/data",
+    },
+)
+
 
 def sync_processes(*args, **kwargs):
     """Load the optional process runtime only for commands that need it."""
@@ -89,9 +121,12 @@ USAGE = """Usage (equivalent forms):
   make build       | dev build       Create/sync virtualenvs and Python dependencies.
   make install     | dev install     Run build and install the global dev command.
   make uninstall   | dev uninstall   Remove the global dev command.
-  make infra-up    | dev infra-up    Initialize local storage; probe remote projects
-                                      (pass INFRA_ARGS="--provision" to provision).
-  make infra-down  | dev infra-down  Close cached remote clients (local: no-op).
+  make infra-up    | dev infra-up    Ensure local Docker Qdrant + FalkorDB (Browser UI)
+                                      containers are running, initialize local storage,
+                                      and probe remote projects (pass INFRA_ARGS=
+                                      "--provision" to provision).
+  make infra-down  | dev infra-down  Stop the managed Docker containers and close
+                                      cached remote clients (local files persist).
   make storage-layout               Show instance paths, manifest, and current leases.
   make storage-init                 Create the canonical instance tree and manifest.
   make storage-migrate-layout       Dry-run legacy repository-local migration.
@@ -393,6 +428,139 @@ def _provision_remote_project(
         print(f"[infra-up]     {render_provision_line(result)}")
 
 
+def _docker_available() -> bool:
+    """Return ``True`` if the local docker daemon responds to ``docker info``.
+
+    Never raises — a missing CLI or a stopped daemon simply returns ``False``
+    so ``_ensure_docker_services`` can degrade gracefully on local-only hosts.
+    """
+    docker = shutil.which("docker")
+    if not docker:
+        return False
+    result = run([docker, "info"], capture=True, check=False)
+    return result.returncode == 0
+
+
+def _container_state(name: str) -> str | None:
+    """Return the ``State.Status`` field of ``docker inspect <name>``.
+
+    Returns one of ``"running"`` / ``"exited"`` / ``"stopped"`` / etc. when the
+    container exists, or ``None`` when the container is missing or the daemon
+    is unreachable. Never raises.
+    """
+    docker = shutil.which("docker")
+    if not docker:
+        return None
+    result = run(
+        [docker, "inspect", name, "--format", "{{.State.Status}}"],
+        capture=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    status = (result.stdout or "").strip()
+    return status or None
+
+
+def _image_present(image: str) -> bool:
+    """Return ``True`` if ``image`` is already cached locally."""
+    docker = shutil.which("docker")
+    if not docker:
+        return False
+    result = run([docker, "image", "inspect", image], capture=True, check=False)
+    return result.returncode == 0
+
+
+def _resolved_ports(spec: dict) -> list[tuple[int, int]]:
+    """Resolve host ports from env, returning ``[(host, container), ...]``."""
+    resolved: list[tuple[int, int]] = []
+    for env_name, default_host, container_port in spec["ports"]:
+        raw = os.environ.get(env_name)
+        try:
+            host_port = int(raw) if raw else default_host
+        except ValueError:
+            host_port = default_host
+        resolved.append((host_port, container_port))
+    return resolved
+
+
+def _ensure_service(spec: dict) -> None:
+    """Idempotently bring ``spec``'s container to the ``running`` state.
+
+    State machine (per plan): running → no-op; stopped/exited → ``docker
+    start``; missing → optionally ``docker pull`` then ``docker run -d``;
+    bind failure on run is reported but not fatal so a native Qdrant/Falkor
+    already on the host port is left alone for the remote probe to discover.
+    """
+    name = spec["name"]
+    image = os.environ.get(spec["image_env"]) or spec["default_image"]
+    docker = shutil.which("docker")
+    if not docker:
+        print(f"[fail] {name}: docker CLI not found on PATH")
+        return
+
+    state = _container_state(name)
+    host_port, _container_port = _resolved_ports(spec)[spec["primary_port_index"]]
+    primary_url = f"{spec['primary_protocol']}://127.0.0.1:{host_port}"
+
+    if state == "running":
+        print(f"[ok] {name} running ({primary_url})")
+        return
+    if state is not None:
+        result = run([docker, "start", name], capture=True, check=False)
+        if result.returncode == 0:
+            print(f"[ok] started existing container {name} ({primary_url})")
+        else:
+            print(f"[fail] {name}: docker start failed: {(result.stderr or '').strip()}")
+        return
+
+    if not _image_present(image):
+        print(f"[infra-up] pulling {image}")
+        result = run([docker, "pull", image], capture=True, check=False)
+        if result.returncode != 0:
+            print(f"[fail] {name}: docker pull failed: {(result.stderr or '').strip()}")
+            return
+
+    cmd: list[str] = [docker, "run", "-d", "--name", name, "--restart", "unless-stopped"]
+    for host_port_resolved, container_port in _resolved_ports(spec):
+        cmd += ["-p", f"127.0.0.1:{host_port_resolved}:{container_port}"]
+    if spec.get("volume"):
+        cmd += ["-v", spec["volume"]]
+    cmd.append(image)
+
+    result = run(cmd, capture=True, check=False)
+    if result.returncode == 0:
+        print(f"[ok] created + started {name} ({primary_url})")
+        return
+
+    stderr = (result.stderr or "").strip()
+    lowered = stderr.lower()
+    if "address already in use" in lowered or "bind: address" in lowered:
+        print(
+            f"[fail] {name}: host port already in use — service may already be "
+            f"running natively; remote probe will report reachability"
+        )
+    else:
+        print(f"[fail] {name}: docker run failed: {stderr}")
+
+
+def _ensure_docker_services() -> None:
+    """Idempotently ensure every entry in ``DOCKER_SERVICES`` is running.
+
+    Logs a warning and returns when the docker daemon is unreachable, so a
+    local-only ``infra-up`` invocation does not crash on hosts without
+    docker. Per-service failures are reported but never raised.
+    """
+    if not _docker_available():
+        print("[warn] docker not available — skipping container ensure")
+        return
+    for spec in DOCKER_SERVICES:
+        try:
+            _ensure_service(spec)
+        except Exception as exc:  # noqa: BLE001 - defensive: state machine must never crash infra-up
+            print(f"[fail] {spec['name']}: {exc}")
+
+
 def invoke_infra_up(*, provision: bool = False) -> None:
     """Initialize storage for all registered projects.
 
@@ -407,6 +575,11 @@ def invoke_infra_up(*, provision: bool = False) -> None:
     resolved = _resolved_storage()
     from cortex_harness.storage.layout import ensure_layout
     ensure_layout(resolved)
+
+    # Idempotently bring Qdrant + FalkorDB containers up before the remote
+    # probe so projects pointing at 127.0.0.1 see their servers. Daemon
+    # unreachable is non-fatal — handled inside the helper.
+    _ensure_docker_services()
 
     projects = _scan_project_backends()
     remote_projects = [project for project in projects if project["backend_mode"] == "remote"]
@@ -455,10 +628,19 @@ def invoke_infra_up(*, provision: bool = False) -> None:
 def invoke_infra_down() -> None:
     """Tear down storage lifecycle.
 
-    Local projects: no-op (files persist on disk). Remote projects: close
-    cached remote clients so subsequent processes reconnect cleanly.
+    Stops the managed Docker containers (idempotent — no-op when missing or
+    when the docker daemon is unreachable), then closes cached remote clients
+    so subsequent processes reconnect cleanly. Local file-backed storage is
+    left on disk by design.
     """
     from cortex_harness.storage.qdrant_remote import reset_remote_clients
+
+    docker = shutil.which("docker")
+    if docker and _docker_available():
+        for spec in DOCKER_SERVICES:
+            result = run([docker, "stop", spec["name"]], capture=True, check=False)
+            if result.returncode == 0:
+                print(f"[infra-down] stopped {spec['name']}")
 
     reset_remote_clients()
     print("[infra-down] remote client connections closed")
