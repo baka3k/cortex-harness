@@ -20,6 +20,8 @@ psutil>=5.9,<8
 # FastMCP dependencies
 # New C/C++ analysis tools
 networkx
+# Pinned Clang backend for the isolated semantic callsite worker (Phase 02).
+libclang==18.1.1
 # Additional dependencies for C++ analysis and web services
 fastapi
 uvicorn[standard]
