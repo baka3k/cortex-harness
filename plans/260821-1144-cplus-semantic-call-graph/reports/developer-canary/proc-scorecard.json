@@ -1,0 +1,57 @@
+{
+  "checks": {
+    "all_incomplete_have_reason": true,
+    "artifact_and_map_coverage": true,
+    "cache_and_incremental": true,
+    "compiler_context_redacted": true,
+    "complete_stratified_cohort": false,
+    "cross_domain_impact": true,
+    "decode_and_mask_alignment": true,
+    "discovery_and_routing": true,
+    "dynamic_sql_completeness": true,
+    "failure_isolation": true,
+    "five_labels": true,
+    "generated_filtering": true,
+    "graph_vector_parity": true,
+    "host_cursor_function_joins": true,
+    "nine_relations": true,
+    "publication": true,
+    "resource_budget": false,
+    "rollback": true,
+    "security": true,
+    "semantic_accuracy": true,
+    "sql_regression_zero": true
+  },
+  "incomplete_without_reason": [],
+  "labels": {
+    "missing": [],
+    "passed": [
+      "DatabaseTable",
+      "SqlCursor",
+      "SqlDirective",
+      "SqlHostVariable",
+      "SqlStatement"
+    ]
+  },
+  "metrics": {
+    "generated_mispublished_count": 0,
+    "mask_alignment_ratio": 1.0,
+    "source_map_pass_ratio": 1.0,
+    "sql_regression_count": 0
+  },
+  "passed": false,
+  "relations": {
+    "missing": [],
+    "passed": [
+      "BINDS_PARAMETER",
+      "DECLARES_CURSOR",
+      "DECLARES_DIRECTIVE",
+      "DECLARES_STATEMENT",
+      "READS_FROM",
+      "REFERENCES_CURSOR",
+      "REFERENCES_STATEMENT",
+      "REFERENCES_TABLE",
+      "WRITES_TO"
+    ]
+  }
+}

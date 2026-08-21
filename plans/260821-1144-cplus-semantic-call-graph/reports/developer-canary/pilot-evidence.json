@@ -1,0 +1,855 @@
+{
+  "compile_contexts": [
+    {
+      "cohort": "c",
+      "configuration_id": "c11-default",
+      "coverage_state": "faithful",
+      "priority": true,
+      "reason": "",
+      "tu_id": "direct-c"
+    },
+    {
+      "cohort": "c",
+      "configuration_id": "c11-default",
+      "coverage_state": "faithful",
+      "priority": false,
+      "reason": "",
+      "tu_id": "function-pointer-c"
+    },
+    {
+      "cohort": "cpp",
+      "configuration_id": "cpp17-default",
+      "coverage_state": "faithful",
+      "priority": true,
+      "reason": "",
+      "tu_id": "virtual-cpp"
+    },
+    {
+      "cohort": "headers",
+      "configuration_id": "cpp17-header",
+      "coverage_state": "inherited",
+      "priority": false,
+      "reason": "header context inherited from the representative including TU",
+      "tu_id": "header-cpp"
+    },
+    {
+      "cohort": "macro_template",
+      "configuration_id": "c11-default",
+      "coverage_state": "faithful",
+      "priority": true,
+      "reason": "",
+      "tu_id": "macro-template-c"
+    },
+    {
+      "cohort": "multi_configuration",
+      "configuration_id": "cpp17-feature-off",
+      "coverage_state": "faithful",
+      "priority": true,
+      "reason": "",
+      "tu_id": "overload-multi-config"
+    },
+    {
+      "cohort": "multi_configuration",
+      "configuration_id": "cpp17-feature-on",
+      "coverage_state": "faithful",
+      "priority": true,
+      "reason": "",
+      "tu_id": "overload-multi-config"
+    },
+    {
+      "cohort": "macro_template",
+      "configuration_id": "cpp17-template",
+      "coverage_state": "faithful",
+      "priority": true,
+      "reason": "",
+      "tu_id": "dependent-template-cpp"
+    },
+    {
+      "cohort": "generated",
+      "configuration_id": "proc-generated-c",
+      "coverage_state": "rejected",
+      "priority": false,
+      "reason": "generated fixture lacks a provisioned Oracle include context",
+      "tu_id": "generated-proc-c"
+    },
+    {
+      "cohort": "proc",
+      "configuration_id": "proc-original-c",
+      "coverage_state": "missing",
+      "priority": true,
+      "reason": "raw Pro*C requires a reviewed generated artifact and exact source map",
+      "tu_id": "proc-original"
+    }
+  ],
+  "consumer_contract_passed": true,
+  "critical_findings": [],
+  "expected_facts": [
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "direct-c:c11-default:target:0"
+    },
+    {
+      "expected_class": "unresolved",
+      "fact_id": "direct-c:c11-default:missing:0"
+    },
+    {
+      "expected_class": "indirect_callsite",
+      "fact_id": "function-pointer-c:c11-default:op:0"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "function-pointer-c:c11-default:apply:0"
+    },
+    {
+      "expected_class": "declared_virtual_target",
+      "fact_id": "virtual-cpp:cpp17-default:step:0"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "macro-template-c:c11-default:helper:0"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "macro-template-c:c11-default:internal:0"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "macro-template-c:c11-default:other_file_helper:0"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "overload-multi-config:cpp17-feature-off:pick:0"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "overload-multi-config:cpp17-feature-off:pick:1"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "overload-multi-config:cpp17-feature-on:pick:0"
+    },
+    {
+      "expected_class": "direct_resolved",
+      "fact_id": "overload-multi-config:cpp17-feature-on:pick:1"
+    },
+    {
+      "expected_class": "dependent_template_call",
+      "fact_id": "dependent-template-cpp:cpp17-template:combine:0"
+    }
+  ],
+  "failure_isolation_passed": true,
+  "impact_outcomes": [
+    {
+      "coverage_status": "complete",
+      "evidence_fingerprint": "a11a68067da554a6e1fb1da118cb8d08ca66fd42f4eeee9ecc792742c1216175",
+      "evidence_ref": "benchmark-replay:direct-caller-impact",
+      "id": "direct-caller-impact",
+      "outcome": "affected",
+      "reviewed": true
+    },
+    {
+      "coverage_status": "partial",
+      "evidence_fingerprint": "c92c0f2d9b5155e36da363cf968de50e7b77091d098b348205c6e2af1b230851",
+      "evidence_ref": "benchmark-replay:missing-call-incomplete",
+      "id": "missing-call-incomplete",
+      "outcome": "incomplete",
+      "reviewed": true
+    },
+    {
+      "coverage_status": "partial",
+      "evidence_fingerprint": "0e1fe05dd5ec56c20580d77e10017a184b78ed3dab0fb3342b972eac079c2dd5",
+      "evidence_ref": "benchmark-replay:proc-dynamic-data-impact",
+      "id": "proc-dynamic-data-impact",
+      "outcome": "incomplete",
+      "reviewed": true
+    }
+  ],
+  "incremental_invalidation_passed": true,
+  "mode_results": [
+    {
+      "conditions": {
+        "changed_tu": {
+          "cpu_seconds": {
+            "max": 0.000494,
+            "total": 0.004283
+          },
+          "elapsed_ms": {
+            "max": 0.492,
+            "p50": 0.418,
+            "p95": 0.492,
+            "total": 4.267
+          },
+          "failures": 0,
+          "peak_rss_bytes": 517341184,
+          "successes": 10,
+          "tu_runs": 10
+        },
+        "cold": {
+          "cpu_seconds": {
+            "max": 0.005365,
+            "total": 0.01466
+          },
+          "elapsed_ms": {
+            "max": 5.371,
+            "p50": 0.522,
+            "p95": 5.371,
+            "total": 14.653
+          },
+          "failures": 0,
+          "peak_rss_bytes": 517341184,
+          "successes": 10,
+          "tu_runs": 10
+        },
+        "warm": {
+          "cpu_seconds": {
+            "max": 0.000611,
+            "total": 0.004522
+          },
+          "elapsed_ms": {
+            "max": 0.615,
+            "p50": 0.437,
+            "p95": 0.615,
+            "total": 4.515
+          },
+          "failures": 0,
+          "peak_rss_bytes": 517341184,
+          "successes": 10,
+          "tu_runs": 10
+        }
+      },
+      "configuration_ids": [
+        "c11-default",
+        "cpp17-default",
+        "cpp17-feature-off",
+        "cpp17-feature-on",
+        "cpp17-header",
+        "cpp17-template",
+        "proc-generated-c",
+        "proc-original-c"
+      ],
+      "edge_class_counts": {
+        "lexical_candidate": 21
+      },
+      "mode": "containment",
+      "query_scenarios": [
+        "direct-caller-impact",
+        "missing-call-incomplete",
+        "proc-dynamic-data-impact"
+      ],
+      "revision": "0eede02fe2576affb67a16a244e744572da532a7",
+      "storage_bytes": 0,
+      "strong_call_count": 0
+    },
+    {
+      "cache": {
+        "hits": 6,
+        "misses": 12
+      },
+      "conditions": {
+        "changed_tu": {
+          "cpu_seconds": {
+            "max": 0.053309,
+            "total": 0.316251
+          },
+          "elapsed_ms": {
+            "max": 69.628,
+            "p50": 69.113,
+            "p95": 69.628,
+            "total": 413.864
+          },
+          "failures": 0,
+          "peak_rss_bytes": 56082432,
+          "successes": 6,
+          "tu_runs": 6
+        },
+        "cold": {
+          "cpu_seconds": {
+            "max": 0.05316,
+            "total": 0.316001
+          },
+          "elapsed_ms": {
+            "max": 69.511,
+            "p50": 68.755,
+            "p95": 69.511,
+            "total": 411.954
+          },
+          "failures": 0,
+          "peak_rss_bytes": 55967744,
+          "successes": 6,
+          "tu_runs": 6
+        },
+        "warm": {
+          "cpu_seconds": {
+            "max": 5.4e-05,
+            "total": 0.000307
+          },
+          "elapsed_ms": {
+            "max": 0.05,
+            "p50": 0.046,
+            "p95": 0.05,
+            "total": 0.278
+          },
+          "failures": 0,
+          "peak_rss_bytes": 517341184,
+          "successes": 6,
+          "tu_runs": 6
+        }
+      },
+      "configuration_ids": [
+        "c11-default",
+        "cpp17-default",
+        "cpp17-feature-off",
+        "cpp17-feature-on",
+        "cpp17-header",
+        "cpp17-template",
+        "proc-generated-c",
+        "proc-original-c"
+      ],
+      "edge_class_counts": {
+        "declared_virtual_target": 1,
+        "dependent_template_call": 1,
+        "direct_resolved": 8,
+        "unresolved": 1
+      },
+      "header_fanout": {
+        "status": "unmeasured"
+      },
+      "mode": "sparse",
+      "query_scenarios": [
+        "direct-caller-impact",
+        "missing-call-incomplete",
+        "proc-dynamic-data-impact"
+      ],
+      "queue": {
+        "status": "not_exercised_by_sequential_developer_canary"
+      },
+      "revision": "0eede02fe2576affb67a16a244e744572da532a7",
+      "selected_tu_count": 6,
+      "storage_bytes": 12543
+    },
+    {
+      "cache": {
+        "hits": 7,
+        "misses": 14
+      },
+      "conditions": {
+        "changed_tu": {
+          "cpu_seconds": {
+            "max": 0.053689,
+            "total": 0.369294
+          },
+          "elapsed_ms": {
+            "max": 69.726,
+            "p50": 68.991,
+            "p95": 69.726,
+            "total": 480.839
+          },
+          "failures": 0,
+          "peak_rss_bytes": 56197120,
+          "successes": 7,
+          "tu_runs": 7
+        },
+        "cold": {
+          "cpu_seconds": {
+            "max": 0.053261,
+            "total": 0.367515
+          },
+          "elapsed_ms": {
+            "max": 69.333,
+            "p50": 68.549,
+            "p95": 69.333,
+            "total": 476.922
+          },
+          "failures": 0,
+          "peak_rss_bytes": 56197120,
+          "successes": 7,
+          "tu_runs": 7
+        },
+        "warm": {
+          "cpu_seconds": {
+            "max": 6e-05,
+            "total": 0.000382
+          },
+          "elapsed_ms": {
+            "max": 0.054,
+            "p50": 0.05,
+            "p95": 0.054,
+            "total": 0.344
+          },
+          "failures": 0,
+          "peak_rss_bytes": 517341184,
+          "successes": 7,
+          "tu_runs": 7
+        }
+      },
+      "configuration_ids": [
+        "c11-default",
+        "cpp17-default",
+        "cpp17-feature-off",
+        "cpp17-feature-on",
+        "cpp17-header",
+        "cpp17-template",
+        "proc-generated-c",
+        "proc-original-c"
+      ],
+      "edge_class_counts": {
+        "declared_virtual_target": 1,
+        "dependent_template_call": 1,
+        "direct_resolved": 9,
+        "indirect_callsite": 1,
+        "unresolved": 1
+      },
+      "header_fanout": {
+        "status": "unmeasured"
+      },
+      "mode": "comprehensive",
+      "query_scenarios": [
+        "direct-caller-impact",
+        "missing-call-incomplete",
+        "proc-dynamic-data-impact"
+      ],
+      "queue": {
+        "status": "not_exercised_by_sequential_developer_canary"
+      },
+      "revision": "0eede02fe2576affb67a16a244e744572da532a7",
+      "selected_tu_count": 9,
+      "storage_bytes": 14622
+    }
+  ],
+  "observations": [
+    {
+      "configuration_id": "c11-default",
+      "fact_id": "direct-c:c11-default:target:0",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "direct-c"
+    },
+    {
+      "configuration_id": "c11-default",
+      "fact_id": "direct-c:c11-default:missing:0",
+      "resolution_class": "unresolved",
+      "resolution_reason": "implicit_declaration",
+      "tu_id": "direct-c"
+    },
+    {
+      "configuration_id": "c11-default",
+      "fact_id": "function-pointer-c:c11-default:op:0",
+      "resolution_class": "indirect_callsite",
+      "resolution_reason": "callee_is_parm_decl",
+      "tu_id": "function-pointer-c"
+    },
+    {
+      "configuration_id": "c11-default",
+      "fact_id": "function-pointer-c:c11-default:apply:0",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "function-pointer-c"
+    },
+    {
+      "configuration_id": "cpp17-default",
+      "fact_id": "virtual-cpp:cpp17-default:step:0",
+      "resolution_class": "declared_virtual_target",
+      "resolution_reason": "pure_virtual_dispatch",
+      "tu_id": "virtual-cpp"
+    },
+    {
+      "configuration_id": "c11-default",
+      "fact_id": "macro-template-c:c11-default:helper:0",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "macro_expansion",
+      "tu_id": "macro-template-c"
+    },
+    {
+      "configuration_id": "c11-default",
+      "fact_id": "macro-template-c:c11-default:internal:0",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "macro-template-c"
+    },
+    {
+      "configuration_id": "c11-default",
+      "fact_id": "macro-template-c:c11-default:other_file_helper:0",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "macro-template-c"
+    },
+    {
+      "configuration_id": "cpp17-feature-off",
+      "fact_id": "overload-multi-config:cpp17-feature-off:pick:0",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "overload-multi-config"
+    },
+    {
+      "configuration_id": "cpp17-feature-off",
+      "fact_id": "overload-multi-config:cpp17-feature-off:pick:1",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "overload-multi-config"
+    },
+    {
+      "configuration_id": "cpp17-feature-on",
+      "fact_id": "overload-multi-config:cpp17-feature-on:pick:0",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "overload-multi-config"
+    },
+    {
+      "configuration_id": "cpp17-feature-on",
+      "fact_id": "overload-multi-config:cpp17-feature-on:pick:1",
+      "resolution_class": "direct_resolved",
+      "resolution_reason": "",
+      "tu_id": "overload-multi-config"
+    },
+    {
+      "configuration_id": "cpp17-template",
+      "fact_id": "dependent-template-cpp:cpp17-template:combine:0",
+      "resolution_class": "dependent_template_call",
+      "resolution_reason": "unresolved_template_parameter",
+      "tu_id": "dependent-template-cpp"
+    }
+  ],
+  "operational_measurements": {
+    "cache_measured": true,
+    "header_fanout_measured": false,
+    "queue_measured": false,
+    "status": "not_run",
+    "storage_measured": true
+  },
+  "proc": {
+    "cache_invalidation_passed": true,
+    "compiler_context_redacted": true,
+    "complete_stratified_cohort": false,
+    "cross_domain_impact_passed": true,
+    "discovery_and_routing": true,
+    "dynamic_sql_incomplete_visible": true,
+    "failure_isolation_passed": true,
+    "generated_mispublished_count": 0,
+    "graph_vector_parity_passed": true,
+    "incomplete_without_reason": [],
+    "join_incomplete_visible": true,
+    "labels_passed": [
+      "DatabaseTable",
+      "SqlCursor",
+      "SqlDirective",
+      "SqlHostVariable",
+      "SqlStatement"
+    ],
+    "mask_alignment_ratio": 1.0,
+    "publication_passed": true,
+    "relations_passed": [
+      "BINDS_PARAMETER",
+      "DECLARES_CURSOR",
+      "DECLARES_DIRECTIVE",
+      "DECLARES_STATEMENT",
+      "READS_FROM",
+      "REFERENCES_CURSOR",
+      "REFERENCES_STATEMENT",
+      "REFERENCES_TABLE",
+      "WRITES_TO"
+    ],
+    "resource_budget_passed": false,
+    "rollback_passed": true,
+    "security_passed": true,
+    "semantic_accuracy_passed": true,
+    "source_map_pass_ratio": 1.0,
+    "sql_regression_count": 0
+  },
+  "providers": {
+    "falkordb": {
+      "crash_resume_passed": false,
+      "deterministic_rerun": false,
+      "fingerprint": "",
+      "integrity_passed": false,
+      "publication_passed": false,
+      "reason": "staging evidence not supplied",
+      "rollback_passed": false,
+      "status": "not_run"
+    },
+    "neo4j": {
+      "crash_resume_passed": false,
+      "deterministic_rerun": false,
+      "fingerprint": "",
+      "integrity_passed": false,
+      "publication_passed": false,
+      "reason": "staging evidence not supplied",
+      "rollback_passed": false,
+      "status": "not_run"
+    }
+  },
+  "publication": {
+    "deterministic_rerun": true,
+    "live_provider_canary": false,
+    "scope": "simulated owner boundary",
+    "status": "passed"
+  },
+  "repository_regression": {
+    "classification": "pre-existing unrelated fixture, toolchain, lifecycle, and backend expectation failures",
+    "command": "uv run python -m pytest -q tests",
+    "failed": 37,
+    "passed": 996,
+    "phase07_failures": 0,
+    "subtests_passed": 207
+  },
+  "resources": {
+    "all_within_budget": false,
+    "budget": {
+      "max_cpu_seconds_per_tu": 30,
+      "max_elapsed_ms_per_tu": 30000,
+      "max_peak_rss_bytes": 1073741824,
+      "million_loc_measurement_required": true
+    },
+    "measured_limits_passed": true,
+    "million_loc_measured": false,
+    "modes": {
+      "comprehensive": {
+        "cache": {
+          "hits": 7,
+          "misses": 14
+        },
+        "conditions": {
+          "changed_tu": {
+            "cpu_seconds": {
+              "max": 0.053689,
+              "total": 0.369294
+            },
+            "elapsed_ms": {
+              "max": 69.726,
+              "p50": 68.991,
+              "p95": 69.726,
+              "total": 480.839
+            },
+            "failures": 0,
+            "peak_rss_bytes": 56197120,
+            "successes": 7,
+            "tu_runs": 7
+          },
+          "cold": {
+            "cpu_seconds": {
+              "max": 0.053261,
+              "total": 0.367515
+            },
+            "elapsed_ms": {
+              "max": 69.333,
+              "p50": 68.549,
+              "p95": 69.333,
+              "total": 476.922
+            },
+            "failures": 0,
+            "peak_rss_bytes": 56197120,
+            "successes": 7,
+            "tu_runs": 7
+          },
+          "warm": {
+            "cpu_seconds": {
+              "max": 6e-05,
+              "total": 0.000382
+            },
+            "elapsed_ms": {
+              "max": 0.054,
+              "p50": 0.05,
+              "p95": 0.054,
+              "total": 0.344
+            },
+            "failures": 0,
+            "peak_rss_bytes": 517341184,
+            "successes": 7,
+            "tu_runs": 7
+          }
+        },
+        "header_fanout": {
+          "status": "unmeasured"
+        },
+        "queue": {
+          "status": "not_exercised_by_sequential_developer_canary"
+        },
+        "storage_bytes": 14622
+      },
+      "containment": {
+        "cache": {
+          "status": "not_applicable"
+        },
+        "conditions": {
+          "changed_tu": {
+            "cpu_seconds": {
+              "max": 0.000494,
+              "total": 0.004283
+            },
+            "elapsed_ms": {
+              "max": 0.492,
+              "p50": 0.418,
+              "p95": 0.492,
+              "total": 4.267
+            },
+            "failures": 0,
+            "peak_rss_bytes": 517341184,
+            "successes": 10,
+            "tu_runs": 10
+          },
+          "cold": {
+            "cpu_seconds": {
+              "max": 0.005365,
+              "total": 0.01466
+            },
+            "elapsed_ms": {
+              "max": 5.371,
+              "p50": 0.522,
+              "p95": 5.371,
+              "total": 14.653
+            },
+            "failures": 0,
+            "peak_rss_bytes": 517341184,
+            "successes": 10,
+            "tu_runs": 10
+          },
+          "warm": {
+            "cpu_seconds": {
+              "max": 0.000611,
+              "total": 0.004522
+            },
+            "elapsed_ms": {
+              "max": 0.615,
+              "p50": 0.437,
+              "p95": 0.615,
+              "total": 4.515
+            },
+            "failures": 0,
+            "peak_rss_bytes": 517341184,
+            "successes": 10,
+            "tu_runs": 10
+          }
+        },
+        "header_fanout": {
+          "status": "unmeasured"
+        },
+        "queue": {
+          "status": "unmeasured"
+        },
+        "storage_bytes": 0
+      },
+      "sparse": {
+        "cache": {
+          "hits": 6,
+          "misses": 12
+        },
+        "conditions": {
+          "changed_tu": {
+            "cpu_seconds": {
+              "max": 0.053309,
+              "total": 0.316251
+            },
+            "elapsed_ms": {
+              "max": 69.628,
+              "p50": 69.113,
+              "p95": 69.628,
+              "total": 413.864
+            },
+            "failures": 0,
+            "peak_rss_bytes": 56082432,
+            "successes": 6,
+            "tu_runs": 6
+          },
+          "cold": {
+            "cpu_seconds": {
+              "max": 0.05316,
+              "total": 0.316001
+            },
+            "elapsed_ms": {
+              "max": 69.511,
+              "p50": 68.755,
+              "p95": 69.511,
+              "total": 411.954
+            },
+            "failures": 0,
+            "peak_rss_bytes": 55967744,
+            "successes": 6,
+            "tu_runs": 6
+          },
+          "warm": {
+            "cpu_seconds": {
+              "max": 5.4e-05,
+              "total": 0.000307
+            },
+            "elapsed_ms": {
+              "max": 0.05,
+              "p50": 0.046,
+              "p95": 0.05,
+              "total": 0.278
+            },
+            "failures": 0,
+            "peak_rss_bytes": 517341184,
+            "successes": 6,
+            "tu_runs": 6
+          }
+        },
+        "header_fanout": {
+          "status": "unmeasured"
+        },
+        "queue": {
+          "status": "not_exercised_by_sequential_developer_canary"
+        },
+        "storage_bytes": 12543
+      }
+    }
+  },
+  "rollback": {
+    "last_valid_generation_retained": true,
+    "live_provider_canary": false,
+    "scope": "durable local ledger and simulated owner boundary",
+    "status": "passed"
+  },
+  "scale_resource_evidence": {
+    "fingerprint": "",
+    "measured_loc": 0,
+    "status": "not_run",
+    "within_budget": false
+  },
+  "security_and_faults": {
+    "command": "uv run python -m pytest -q tests/test_cplus_call_evidence.py tests/test_cplus_clang_worker.py tests/test_cplus_evidence_merge.py tests/test_cplus_graph_runtime.py tests/test_cplus_guarded_publication.py tests/test_cplus_parse_recovery.py tests/test_cplus_pilot_rollout.py tests/test_cplus_proc_sql.py tests/test_cplus_semantic_context.py tests/test_cplus_semantic_worker.py tests/test_graph_write_journal.py tests/test_graph_write_journal_runtime.py tests/test_parse_quality_contract.py tests/test_proc_semantic_manifest.py tests/test_proc_source_map.py tests/test_storage_concurrency_contract.py tests/test_analyzer_payload_validation.py",
+    "failure_count": 0,
+    "focused_test_count": 303,
+    "status": "passed",
+    "subtest_count": 10
+  },
+  "security_passed": true,
+  "suites": {
+    "adversarial": "passed",
+    "consumer_contract": "passed",
+    "incremental": "passed",
+    "integration": "passed",
+    "provider": "passed",
+    "publication": "passed",
+    "rollback": "passed",
+    "unit": "passed"
+  },
+  "toolchain": {
+    "analysis_artifact_sha256": {
+      "code-tiny/tools/cplus/clang_worker.py": "182fbb4d12dc7030435caca62adb0ebb6424a69d36d515409719ee302368f699",
+      "code-tiny/tools/cplus/pilot_rollout.py": "07d6da4a3b8ca06e193fab2727409df85470f6c9704a7de3e809e8779d49aca0",
+      "code-tiny/tools/cplus/semantic_worker.py": "a8adda02e729e63658a8b2e605d3efd0206ddba356f692f73cba98b05cf91e56",
+      "tests/benchmark_cplus_semantic_calls.py": "f2f30a6e96d04fa9f09be26216a605256fb5ce17eace2344f70c86621a34fb8f"
+    },
+    "clang_probe": {
+      "backend": "cindex-libclang",
+      "expected_libclang_version": "18.1.1",
+      "libclang_version": "18.1.1",
+      "native_library": "",
+      "ready": true,
+      "reason": "ok"
+    },
+    "pilot_policy": "cplus-semantic-pilot-v1",
+    "platform": "macOS-26.4-arm64-arm-64bit",
+    "python": "3.12.13",
+    "semantic_worker_protocol": "2"
+  },
+  "weak_promoted_count": 0,
+  "worker": {
+    "backend": "cindex-libclang",
+    "expected_libclang_version": "18.1.1",
+    "libclang_version": "18.1.1",
+    "native_library": "",
+    "ready": true,
+    "reason": "ok",
+    "status": "passed"
+  }
+}

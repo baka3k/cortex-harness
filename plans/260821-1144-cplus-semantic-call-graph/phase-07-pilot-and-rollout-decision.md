@@ -125,17 +125,23 @@ repository-complete or negative impact claims and must retain visible coverage.
 
 ## Todo
 
-- [ ] Freeze pilot manifest, budgets, expected facts, and query scenarios.
-- [ ] Pass functional, adversarial, provider, and failure-boundary suites.
-- [ ] Publish compile-context and semantic-coverage census.
-- [ ] Benchmark containment, sparse, and comprehensive modes.
-- [ ] Calculate reviewed accuracy and impact-answer correctness.
-- [ ] Verify Pro*C mapping and SQL regression gates.
-- [ ] Complete staging publication, deterministic rerun, and rollback canaries.
-- [ ] Record promote, contain, or revise decision with evidence.
-- [ ] Update operator/developer documentation and defaults only if promoted.
-- [ ] Publish the separate Pro*C component/gate scorecard.
-- [ ] Review combined C-call and SQL/data-impact migration scenarios.
+- [x] Freeze pilot manifest, budgets, expected facts, and query scenarios.
+- [x] Pass functional, adversarial, provider-contract, and failure-boundary suites.
+- [x] Publish compile-context and semantic-coverage census.
+- [x] Benchmark containment, sparse, and comprehensive modes.
+- [x] Calculate reviewed accuracy and impact-answer correctness.
+- [ ] Complete the full Pro*C cohort/map gate. Developer contract tests pass,
+  but `.pcc`, C++ mode, CP932, directive/cursor/dynamic-SQL, eligible mapped
+  output, wrapper, all-map-quality, variant, and generated/map change cohorts
+  remain visibly unavailable in the manifest census.
+- [ ] Complete live Neo4j/FalkorDB staging publication and rollback canaries.
+  Local simulated-owner publication, deterministic rerun, crash/resume, and
+  rollback contracts pass; no live provider configuration was supplied.
+- [x] Record the containment decision with evidence.
+- [x] Update operator/developer documentation; defaults remain unchanged.
+- [x] Publish the separate Pro*C component/gate scorecard.
+- [x] Review the available developer C-call and SQL/data-impact scenarios;
+  full Pro*C cohort replay remains part of the open gate above.
 
 ## Risks
 
