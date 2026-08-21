@@ -11,7 +11,8 @@ dependencies = [
     "click",
     "requests",
     "qdrant-client==1.18.0",
-    "falkordblite==0.10.0",
+    "falkordblite==0.10.0 ; sys_platform != 'win32'",
+    "falkordb ; sys_platform == 'win32'",
     "python-dotenv>=1.2.2",
     "portalocker>=3.2,<4",
 ]
@@ -20,6 +21,8 @@ dependencies = [
 # Optional Neo4j support is isolated from the default local runtime.
 neo4j = ["neo4j", "neo4j-graphrag"]
 # Remote FalkorDB client support (not used by the default local runtime).
+# falkordb is already pulled in by default on Windows; this extra stays for
+# Linux/macOS users who flip storage_backend to "remote".
 falkordb-remote = ["falkordb"]
 
 [project.scripts]
