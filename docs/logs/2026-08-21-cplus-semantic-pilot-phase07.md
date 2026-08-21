@@ -37,7 +37,7 @@ could not be treated as a pass
 - Implementation commit:
   `222f4244bfd775616535f83c6a0b20ed7fc0e162`. Its pre-commit sensitive-value
   hook was bypassed only after a manual staged scan and diff check confirmed two
-  false positives: the test-only `PASSWORD` sentinel and the custom `nec`
+  false positives: the test-only `PASSWORD` sentinel and the custom `ABC`
   substring matching ordinary connect-related words.
 
 ## Impact
