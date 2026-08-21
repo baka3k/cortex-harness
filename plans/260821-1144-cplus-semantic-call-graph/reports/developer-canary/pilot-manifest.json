@@ -1,0 +1,418 @@
+{
+  "corpus": [
+    {
+      "cohort": "c",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c11"
+          ],
+          "coverage_state": "faithful",
+          "id": "c11-default"
+        }
+      ],
+      "expected_calls": [
+        {
+          "callee_name": "target",
+          "expected_class": "direct_resolved",
+          "ordinal": 0
+        },
+        {
+          "callee_name": "missing",
+          "expected_class": "unresolved",
+          "ordinal": 0
+        }
+      ],
+      "id": "direct-c",
+      "path": "tests/fixtures/cplus_semantic_calls/direct.c",
+      "priority": true,
+      "sha256": "aba1a472b8710b779267ce4ae5782abdc4b7e2b88768b34dde32e412d551d730"
+    },
+    {
+      "cohort": "c",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c11"
+          ],
+          "coverage_state": "faithful",
+          "id": "c11-default"
+        }
+      ],
+      "expected_calls": [
+        {
+          "callee_name": "op",
+          "expected_class": "indirect_callsite",
+          "ordinal": 0
+        },
+        {
+          "callee_name": "apply",
+          "expected_class": "direct_resolved",
+          "ordinal": 0
+        }
+      ],
+      "id": "function-pointer-c",
+      "path": "tests/fixtures/cplus_semantic_calls/fp.c",
+      "priority": false,
+      "sha256": "14e2bd521022ccf0b2fd5b87d160f64b23f7dd12b0e5773ab291f9ada78200df"
+    },
+    {
+      "cohort": "cpp",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c++17"
+          ],
+          "coverage_state": "faithful",
+          "id": "cpp17-default"
+        }
+      ],
+      "expected_calls": [
+        {
+          "callee_name": "step",
+          "expected_class": "declared_virtual_target",
+          "ordinal": 0
+        }
+      ],
+      "id": "virtual-cpp",
+      "path": "tests/fixtures/cplus_semantic_calls/virtual.cpp",
+      "priority": true,
+      "sha256": "a2dc795679133ac06e2946f94bbcb048cdd56b0645bfe7cfc439d980f8612e15"
+    },
+    {
+      "cohort": "headers",
+      "configurations": [
+        {
+          "arguments": [
+            "-x",
+            "c++-header",
+            "-std=c++17"
+          ],
+          "coverage_state": "inherited",
+          "id": "cpp17-header",
+          "reason": "header context inherited from the representative including TU"
+        }
+      ],
+      "expected_calls": [
+        {
+          "callee_name": "header_target",
+          "expected_class": "direct_resolved",
+          "ordinal": 0
+        }
+      ],
+      "id": "header-cpp",
+      "path": "tests/fixtures/cplus_semantic_calls/pilot_header.hpp",
+      "priority": false,
+      "sha256": "7c004de7c3d52e27d4893c07bb51a8fbcdd2517e2503e49a893b940a0725064a"
+    },
+    {
+      "cohort": "macro_template",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c11"
+          ],
+          "coverage_state": "faithful",
+          "id": "c11-default"
+        }
+      ],
+      "expected_calls": [
+        {
+          "callee_name": "helper",
+          "expected_class": "direct_resolved",
+          "ordinal": 0
+        },
+        {
+          "callee_name": "internal",
+          "expected_class": "direct_resolved",
+          "ordinal": 0
+        },
+        {
+          "callee_name": "other_file_helper",
+          "expected_class": "direct_resolved",
+          "ordinal": 0
+        }
+      ],
+      "id": "macro-template-c",
+      "path": "tests/fixtures/cplus_semantic_calls/macro_static.c",
+      "priority": true,
+      "sha256": "9f9f6cf5eba93a34dd2bb5c89f762864e2c249f29d9f24912c94f4bcf9e4a876"
+    },
+    {
+      "cohort": "multi_configuration",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c++17",
+            "-DFEATURE=0"
+          ],
+          "coverage_state": "faithful",
+          "id": "cpp17-feature-off"
+        },
+        {
+          "arguments": [
+            "-std=c++17",
+            "-DFEATURE=1"
+          ],
+          "coverage_state": "faithful",
+          "id": "cpp17-feature-on"
+        }
+      ],
+      "expected_calls": [
+        {
+          "callee_name": "pick",
+          "expected_class": "direct_resolved",
+          "ordinal": 0
+        },
+        {
+          "callee_name": "pick",
+          "expected_class": "direct_resolved",
+          "ordinal": 1
+        }
+      ],
+      "id": "overload-multi-config",
+      "path": "tests/fixtures/cplus_semantic_calls/overload.cpp",
+      "priority": true,
+      "sha256": "6e794962140126b3d16649a7398f26606f9a74640efa1352819a0109acb1acad"
+    },
+    {
+      "cohort": "macro_template",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c++17"
+          ],
+          "coverage_state": "faithful",
+          "id": "cpp17-template"
+        }
+      ],
+      "expected_calls": [
+        {
+          "callee_name": "combine",
+          "expected_class": "dependent_template_call",
+          "ordinal": 0
+        }
+      ],
+      "id": "dependent-template-cpp",
+      "path": "tests/fixtures/cplus_semantic_calls/template.cpp",
+      "priority": true,
+      "sha256": "01c65d1cbb27fb37ff21557da3cf3379d256d9ae4ddb8307fda885fd4d073500"
+    },
+    {
+      "cohort": "generated",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c11"
+          ],
+          "coverage_state": "rejected",
+          "id": "proc-generated-c",
+          "reason": "generated fixture lacks a provisioned Oracle include context"
+        }
+      ],
+      "expected_calls": [],
+      "id": "generated-proc-c",
+      "path": "tests/fixtures/proc_source_map/app_gen.c",
+      "priority": false,
+      "semantic_eligible": false,
+      "sha256": "8deeba16940fb49613386fa2c51fadf56bc245ce78553299ac337ca3eafe769c"
+    },
+    {
+      "cohort": "proc",
+      "configurations": [
+        {
+          "arguments": [
+            "-std=c11"
+          ],
+          "coverage_state": "missing",
+          "id": "proc-original-c",
+          "reason": "raw Pro*C requires a reviewed generated artifact and exact source map"
+        }
+      ],
+      "expected_calls": [],
+      "id": "proc-original",
+      "path": "tests/fixtures/cplus_semantic_calls/proc.pc",
+      "priority": true,
+      "semantic_eligible": false,
+      "sha256": "ab15b846c28165baf02a998fd7cd30b2733fde0a5103635f757b7032655c58ca"
+    }
+  ],
+  "parse_policy": {
+    "containment_provider": "tree_sitter",
+    "raw_proc_never_clang_input": true,
+    "semantic_provider": "cindex-libclang",
+    "weak_evidence_never_calls": true
+  },
+  "pilot_id": "cplus-semantic-phase07-developer-canary-v1",
+  "proc_cohort_census": [
+    {
+      "dimension": "pc_extension",
+      "status": "covered"
+    },
+    {
+      "dimension": "pcc_extension",
+      "reason": "no reviewed .pcc fixture is present in the immutable developer corpus",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "c_mode",
+      "status": "covered"
+    },
+    {
+      "dimension": "cpp_mode",
+      "reason": "no reviewed C++-mode Pro*C configuration is present",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "utf8_encoding",
+      "status": "covered"
+    },
+    {
+      "dimension": "cp932_encoding",
+      "reason": "CP932 behavior is unit-tested but absent from this manifest corpus",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "sql_statements",
+      "status": "covered"
+    },
+    {
+      "dimension": "directives",
+      "reason": "directive forms are unit-tested but absent from this manifest corpus",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "cursors",
+      "reason": "cursor forms are unit-tested but absent from this manifest corpus",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "host_variables",
+      "status": "covered"
+    },
+    {
+      "dimension": "dynamic_sql",
+      "reason": "dynamic SQL forms are unit-tested but absent from this manifest corpus",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "application_calls",
+      "status": "covered"
+    },
+    {
+      "dimension": "mapped_generated_output",
+      "reason": "the generated fixture is rejected without its Oracle include context",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "runtime_wrappers",
+      "reason": "wrapper filtering is unit-tested but not measured as an eligible manifest cohort",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "all_map_qualities",
+      "reason": "map-quality states are unit-tested but not all occur in the manifest corpus",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "configuration_variants",
+      "reason": "the Pro*C manifest has one rejected configuration",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "source_change",
+      "status": "covered"
+    },
+    {
+      "dimension": "generated_change",
+      "reason": "generated invalidation is unit-tested but the generated manifest cohort is not eligible",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "map_change",
+      "reason": "map invalidation is unit-tested but no complete map cohort is eligible",
+      "status": "unavailable"
+    },
+    {
+      "dimension": "context_change",
+      "status": "covered"
+    }
+  ],
+  "promotion_thresholds": {
+    "direct_precision_min": 0.98,
+    "direct_recall_min": 0.95,
+    "priority_faithful_context_min": 0.9
+  },
+  "query_scenarios": [
+    {
+      "expected_outcome": "affected",
+      "fact_id": "direct-c:c11-default:target:0",
+      "id": "direct-caller-impact",
+      "kind": "strict_fact_presence",
+      "profile": "strict",
+      "reviewed": true
+    },
+    {
+      "expected_outcome": "incomplete",
+      "fact_id": "direct-c:c11-default:missing:0",
+      "id": "missing-call-incomplete",
+      "kind": "unresolved_fact_safety",
+      "profile": "conservative",
+      "reviewed": true
+    },
+    {
+      "expected_outcome": "incomplete",
+      "id": "proc-dynamic-data-impact",
+      "kind": "proc_dynamic_sql_safety",
+      "profile": "conservative",
+      "reviewed": true
+    }
+  ],
+  "required_cohorts": [
+    "c",
+    "cpp",
+    "headers",
+    "macro_template",
+    "multi_configuration",
+    "generated",
+    "proc"
+  ],
+  "required_providers": [
+    "neo4j",
+    "falkordb"
+  ],
+  "required_suites": [
+    "unit",
+    "integration",
+    "adversarial",
+    "provider",
+    "incremental",
+    "publication",
+    "rollback",
+    "consumer_contract"
+  ],
+  "resource_budgets": {
+    "max_cpu_seconds_per_tu": 30,
+    "max_elapsed_ms_per_tu": 30000,
+    "max_peak_rss_bytes": 1073741824,
+    "million_loc_measurement_required": true
+  },
+  "revision": "0eede02fe2576affb67a16a244e744572da532a7",
+  "schema_version": "1",
+  "semantic_policy": {
+    "candidate_modes": [
+      "containment",
+      "sparse",
+      "comprehensive"
+    ],
+    "negative_claims_require_complete_coverage": true,
+    "publication_mode": "off",
+    "sparse_selection": "priority_or_changed",
+    "strict_resolution_class": "direct_resolved"
+  },
+  "supported_platforms": [
+    "darwin-arm64",
+    "linux-x86_64"
+  ],
+  "workload_class": "synthetic_developer_canary"
+}

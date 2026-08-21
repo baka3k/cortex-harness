@@ -25,6 +25,12 @@ falkordb-remote = ["falkordb"]
 [project.scripts]
 dev = "cortex_harness.dev:cli"
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0,<10",
+    "pytest-asyncio>=1.0,<2",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cortex_harness*"]
