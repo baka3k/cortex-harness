@@ -1,0 +1,50 @@
+{
+  "schema_version": "1",
+  "description": "Reviewed expectations for the cplus_semantic_calls corpus. Each entry records the resolution class the Phase 01 coverage plane must publish (tree_sitter evidence is always weak) and the class an accepted Clang semantic observation should eventually produce (semantic_expectation, enforced from Phase 02).",
+  "files": {
+    "direct.c": {
+      "callsites": [
+        {"callee_name": "target", "phase01_class": "lexical_candidate", "semantic_expectation": "direct_resolved"},
+        {"callee_name": "missing", "phase01_class": "unresolved", "semantic_expectation": "unresolved"}
+      ]
+    },
+    "overload.cpp": {
+      "callsites": [
+        {"callee_name": "pick", "phase01_class": "lexical_candidate", "semantic_expectation": "direct_resolved_distinct_overloads"}
+      ]
+    },
+    "virtual.cpp": {
+      "callsites": [
+        {"callee_name": "step", "phase01_class": "lexical_candidate", "semantic_expectation": "declared_virtual_target"}
+      ]
+    },
+    "fp.c": {
+      "callsites": [
+        {"callee_name": "apply", "phase01_class": "lexical_candidate", "semantic_expectation": "direct_resolved"},
+        {"callee_name": "op", "phase01_class": "lexical_candidate_or_unresolved", "semantic_expectation": "indirect_callsite"}
+      ]
+    },
+    "macro_static.c": {
+      "callsites": [
+        {"callee_name": "helper", "phase01_class": "lexical_candidate", "semantic_expectation": "macro_expansion_to_direct_resolved"},
+        {"callee_name": "internal", "phase01_class": "lexical_candidate", "semantic_expectation": "direct_resolved"},
+        {"callee_name": "other_file_helper", "phase01_class": "unresolved_or_lexical_candidate", "semantic_expectation": "direct_resolved_or_unresolved"}
+      ]
+    },
+    "template.cpp": {
+      "callsites": [
+        {"callee_name": "combine", "phase01_class": "lexical_candidate", "semantic_expectation": "dependent_template_call"}
+      ]
+    },
+    "proc.pc": {
+      "callsites": [
+        {"callee_name": "commit_work", "phase01_class": "lexical_candidate", "semantic_expectation": "direct_resolved_with_proc_bundle"},
+        {"callee_name": "sql", "phase01_class": "unresolved_or_lexical_candidate", "semantic_expectation": "precompiler_runtime_or_unmapped"}
+      ],
+      "sql_facts_must_survive": {
+        "labels": ["SqlStatement", "SqlHostVariable", "DatabaseTable"],
+        "relations": ["READS_FROM", "BINDS_PARAMETER", "DECLARES_STATEMENT"]
+      }
+    }
+  }
+}
