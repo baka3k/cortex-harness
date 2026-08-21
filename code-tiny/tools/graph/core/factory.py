@@ -114,6 +114,7 @@ class GraphDriverFactory:
                 owner_id=config.get("owner_id"),
                 additional_paths=config.get("additional_paths"),
                 query_timeout_ms=config.get("query_timeout_ms"),
+                _suppress_deprecation=bool(config.get("_suppress_deprecation", False)),
             )
         elif provider == GraphProvider.NEPTUNE:
             # Future implementation
@@ -146,17 +147,30 @@ class GraphDriverFactory:
             return await GraphDriverFactory.create_driver(provider, config)
         elif provider == GraphProvider.FALKORDB:
             prefix = env_prefix if env_prefix != "NEO4J" else "FALKORDB"
+            uri = (os.getenv("FALKORDB_URI") or "").strip()
             path = os.getenv("FALKORDB_PATH")
-            if not path:
+            if not uri and not path:
                 from cortex_harness.storage import resolve_storage
                 path = str(resolve_storage(Path.cwd()).falkordb_code_path)
-            config = {
+            config: Dict[str, Any] = {
                 "database": os.getenv(f"{prefix}_GRAPH") or os.getenv(f"{prefix}_DATABASE", "neo4j"),
                 "graph": os.getenv(f"{prefix}_GRAPH"),
                 "path": path,
                 "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
                 "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
             }
+            if uri:
+                # A remote FalkorDB server (e.g. a local Docker container on
+                # platforms without FalkorDBLite) takes precedence over the
+                # embedded path.
+                config.update(
+                    uri=uri,
+                    path=None,
+                    password=os.getenv("FALKORDB_PASSWORD") or None,
+                    ssl=os.getenv("FALKORDB_SSL", "").strip().lower()
+                    not in ("", "0", "false", "no"),
+                    _suppress_deprecation=True,
+                )
             return await GraphDriverFactory.create_driver(provider, config)
         else:
             raise NotImplementedError(f"Environment config not implemented for {provider}")

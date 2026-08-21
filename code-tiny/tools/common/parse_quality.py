@@ -432,17 +432,27 @@ def atomic_write_json(
         raise ValueError(f"artifact exceeds byte cap ({len(encoded)} > {max_bytes})")
     fd, temp_path = tempfile.mkstemp(prefix=".parse-quality-", suffix=".tmp", dir=parent)
     try:
-        os.fchmod(fd, 0o600)
+        # os.fchmod is POSIX-only; on Windows mkstemp already creates the
+        # file with the user's default ACL and os.chmod below is a no-op
+        # for the permission bits that matter here.
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "wb") as handle:
+            fd = -1
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, target)
         os.chmod(target, 0o600)
     except BaseException:
+        if fd >= 0:
+            # Windows refuses to unlink a file that is still open.
+            os.close(fd)
         try:
             os.unlink(temp_path)
         except FileNotFoundError:
+            pass
+        except OSError:
             pass
         raise
     return len(encoded)

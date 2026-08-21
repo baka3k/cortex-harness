@@ -180,6 +180,11 @@ def _translate_os_error(exc: OSError, message: str) -> JournalError:
 
 
 def _fsync_directory(path: Path) -> None:
+    if os.name == "nt":
+        # Windows cannot open a directory with os.open(O_RDONLY); journal
+        # durability degrades to the per-file fsync already performed by the
+        # artifact writers.
+        return
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     descriptor = os.open(path, flags)
     try:
