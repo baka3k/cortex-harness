@@ -57,6 +57,10 @@ class GraphSchemaManifest:
     name: str
     version: int
     indexes: Tuple[SchemaIndex, ...]
+    # Registered relationship types with their endpoint labels.  Additive:
+    # manifests that predate the registry keep an empty tuple.  The registry
+    # documents identity/routing meaning only; it never authorizes writes.
+    relationship_types: Tuple[Tuple[str, Tuple[str, ...], Tuple[str, ...], bool], ...] = ()
 
     def __post_init__(self) -> None:
         validate_cypher_identifier(self.name, kind="manifest name")
@@ -65,6 +69,11 @@ class GraphSchemaManifest:
         keys = [index.key for index in self.indexes]
         if len(keys) != len(set(keys)):
             raise ValueError(f"schema manifest {self.name!r} contains duplicate indexes")
+        rel_names = [rel[0] for rel in self.relationship_types]
+        if len(rel_names) != len(set(rel_names)):
+            raise ValueError(f"schema manifest {self.name!r} contains duplicate relationship types")
+        for rel in self.relationship_types:
+            validate_cypher_identifier(rel[0], kind="relationship type")
 
     @property
     def fingerprint(self) -> str:
@@ -80,6 +89,15 @@ class GraphSchemaManifest:
                     "required": index.required,
                 }
                 for index in sorted(self.indexes)
+            ],
+            "relationship_types": [
+                {
+                    "type": rel[0],
+                    "source_labels": list(rel[1]),
+                    "target_labels": list(rel[2]),
+                    "endpoint_policy": rel[3],
+                }
+                for rel in sorted(self.relationship_types)
             ],
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -110,7 +128,7 @@ def _id_indexes(labels: Iterable[str]) -> Tuple[SchemaIndex, ...]:
 # descriptive properties intentionally remain unindexed.
 CODE_GRAPH_SCHEMA = GraphSchemaManifest(
     name="code_graph",
-    version=1,
+    version=2,
     indexes=(
         SchemaIndex("Project", ("project_id",)),
         SchemaIndex("Repository", ("name",)),
@@ -135,9 +153,11 @@ CODE_GRAPH_SCHEMA = GraphSchemaManifest(
                 "AuthenticationScheme",
                 "Authority",
                 "AuthorizationPolicy",
+                "BuildConfiguration",
                 "BuildDescriptor",
                 "CacheOperation",
                 "CacheRegion",
+                "CallSite",
                 "Class",
                 "CobolCicsCommand",
                 "CobolCopybook",
@@ -228,6 +248,7 @@ CODE_GRAPH_SCHEMA = GraphSchemaManifest(
                 "RouteParam",
                 "Route",
                 "ScheduledTask",
+                "SemanticCoverage",
                 "SecurityConstraint",
                 "SecurityFilterChain",
                 "SecurityRule",
@@ -274,6 +295,23 @@ CODE_GRAPH_SCHEMA = GraphSchemaManifest(
         SchemaIndex("Database", ("symbol_id",)),
         SchemaIndex("Middleware", ("symbol_id",)),
         SchemaIndex("Service", ("symbol_id",)),
+        SchemaIndex("BuildConfiguration", ("config_fingerprint",)),
+        SchemaIndex("CallSite", ("site_id",)),
+        SchemaIndex("SemanticCoverage", ("tu_key",)),
+    ),
+    relationship_types=(
+        # Semantic call-evidence staging plane (Phase 04).  ``direct`` marks
+        # relationships whose endpoints are authoritative identities; the
+        # evidence plane keeps provenance on every edge.
+        ("HAS_CALLSITE", ("Function",), ("CallSite",), True),
+        ("RESOLVES_TO", ("CallSite",), ("Function",), True),
+        ("OBSERVED_AS", ("CallSite",), ("Function",), False),
+        ("IN_CONFIGURATION", ("CallSite",), ("BuildConfiguration",), True),
+        ("MAPS_TO_SOURCE", ("CallSite",), ("File",), False),
+        # Schema-owner-approved cross-domain evidence joins.  These never
+        # redefine the nine Pro*C relationships or ``BINDS_PARAMETER``.
+        ("EXECUTES_SQL", ("Function",), ("SqlStatement",), False),
+        ("RESOLVES_HOST_DECLARATION", ("SqlHostVariable",), ("Function", "Variable", "Field"), False),
     ),
 )
 

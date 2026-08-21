@@ -4,6 +4,8 @@ from typing import Any, Dict, List
 
 from fastapi import Request
 
+from tools.common.call_evidence import traversal_outcome
+
 from ..utils import fetch_node_annotations
 from .graph_service import graph_query_service
 
@@ -75,6 +77,24 @@ class ImpactAnalyzer:
                     "annotation": annotations.get(node_id),
                 }
             )
+        # Thread semantic coverage through the impact answer.  This service
+        # reads through the graph HTTP proxy, which does not yet surface the
+        # coverage plane, so coverage falls back to ``unknown`` — the safe
+        # direction: empty impact sets stay ``incomplete`` rather than
+        # claiming an authoritative negative.  "Unaffected" is measured on
+        # nodes other than the seed function (id coerced to string on both
+        # sides; graph node ids may be int-typed).
+        seed_id = str(
+            payload.get("function_id") or payload.get("id") or payload.get("functionId") or ""
+        )
+        impacted_beyond_seed = [
+            node for node in impacted if str(node.get("id")) != seed_id
+        ]
+        coverage = graph.get("semantic_coverage")
+        if coverage is None:
+            from tools.common.call_evidence import frontier_coverage
+
+            coverage = frontier_coverage([])
         return {
             "risk_score": round(risk, 3),
             "node_count": len(nodes),
@@ -83,6 +103,11 @@ class ImpactAnalyzer:
             "impacted_nodes": impacted,
             "annotations": annotations,
             "suggested_tests": self._suggest_tests(len(nodes), len(externals), annotations),
+            "semantic_coverage": coverage,
+            "outcome": traversal_outcome(
+                str(coverage.get("status") or "unknown"),
+                not impacted_beyond_seed,
+            ),
         }
 
 
