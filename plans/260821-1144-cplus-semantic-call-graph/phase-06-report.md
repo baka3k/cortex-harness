@@ -118,7 +118,7 @@ generation's accepted `Function` identities);
 - `_iter_vector_items` routes Pro*C nodes through the vector sanitizer;
   generated/credential-bearing/masked-origin items never reach Qdrant.
 
-### 7. Tests — `tests/test_cplus_guarded_publication.py` (new, 48 tests)
+### 7. Tests — `tests/test_cplus_guarded_publication.py` (new, 56 tests)
 
 Gate composition (both dimensions, quarantine/policy/unknown tiers, weak
 evidence, generated/map/bundle blocks, mode/env overrides), Pro*C sub-result
@@ -143,7 +143,7 @@ persisted on site props; host-declaration joins declare their graph label.
 
 ## Verification
 
-- New: 48/48 pass (`tests/test_cplus_guarded_publication.py`).
+- New: 56/56 pass (`tests/test_cplus_guarded_publication.py`).
 - Updated lane: `tests/test_cplus_evidence_merge.py` 37/37.
 - Adjacent lanes: `test_analyzer_payload_validation`,
   `test_cplus_call_evidence`, `test_graph_write_journal`,
