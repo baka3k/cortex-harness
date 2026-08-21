@@ -51,8 +51,10 @@ Every TU/configuration record must be one of:
 
 All non-faithful records require a stable reason. Absolute/external corpus
 paths, path traversal, credential-bearing flags, and corpus hash drift fail
-manifest loading before analysis. Every corpus file must also exist at the
-manifest's Git revision; a worktree-only fixture is rejected.
+manifest loading before analysis. In a Git worktree, every corpus file must
+also exist with the same content at the manifest's Git revision. A source tree
+without Git metadata remains eligible for analysis and is bound by its
+manifest SHA-256 values.
 
 The `proc_cohort_census` must enumerate the complete Phase 07 Pro*C matrix.
 Missing developer cohorts remain `unavailable` with stable reasons. They must

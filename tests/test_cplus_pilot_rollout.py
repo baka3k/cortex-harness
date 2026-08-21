@@ -255,6 +255,37 @@ class ManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(PilotContractError, "does not match manifest revision"):
                 load_pilot_manifest(path, workspace_root=root)
 
+    def test_non_git_workspace_uses_content_hash_without_revision_lookup(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "sample.c"
+            source.write_text("int sample(void) { return 1; }\n", encoding="utf-8")
+            source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+            manifest = _complete_manifest()
+            manifest.update(
+                {
+                    "supported_platforms": ["test"],
+                    "corpus": [
+                        {
+                            "id": f"entry-{cohort}",
+                            "cohort": cohort,
+                            "path": "sample.c",
+                            "sha256": source_hash,
+                            "configurations": [
+                                {"id": f"cfg-{cohort}", "coverage_state": "faithful"}
+                            ],
+                        }
+                        for cohort in sorted(REQUIRED_COHORTS)
+                    ],
+                }
+            )
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            loaded = load_pilot_manifest(path, workspace_root=root)
+
+            self.assertEqual(loaded["pilot_id"], manifest["pilot_id"])
+
 
 class MetricTests(unittest.TestCase):
     def test_evidence_rejects_credentials_and_absolute_machine_paths(self):
