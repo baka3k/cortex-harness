@@ -533,6 +533,46 @@ def _container_state(name: str) -> str | None:
     return status or None
 
 
+def _container_published_ports(name: str) -> set[tuple[str, int, int, str]]:
+    """Return ``{(host_ip, host_port, container_port, proto), ...}`` for ``name``.
+
+    Empty when the container is missing or the daemon is unreachable; never
+    raises. Used to detect a running container whose port mapping no longer
+    matches the spec (e.g. a FalkorDB started before the Browser UI port was
+    added) so ``_ensure_service`` can recreate it instead of reporting
+    ``[ok] running`` against a half-published service.
+    """
+    docker = shutil.which("docker")
+    if not docker:
+        return set()
+    fmt = "{{range $p, $bs := .NetworkSettings.Ports}}{{$p}}|"
+    fmt += "{{range $bs}}{{if .}}{{.HostIp}}|{{.HostPort}}{{end}}{{end}}#"
+    fmt += "{{end}}"
+    result = run([docker, "inspect", name, "--format", fmt], capture=True, check=False)
+    if result.returncode != 0:
+        return set()
+    ports: set[tuple[str, int, int, str]] = set()
+    raw = (result.stdout or "").strip()
+    if not raw:
+        return ports
+    for entry in raw.split("#"):
+        entry = entry.strip()
+        if not entry:
+            continue
+        parts = entry.split("|")
+        if len(parts) != 3:
+            continue
+        proto_port, host_ip, host_port = parts[0], parts[1], parts[2]
+        if "/" not in proto_port:
+            continue
+        proto, container_port = proto_port.rsplit("/", 1)
+        try:
+            ports.add((host_ip, int(host_port), int(container_port), proto))
+        except ValueError:
+            continue
+    return ports
+
+
 def _image_present(image: str) -> bool:
     """Return ``True`` if ``image`` is already cached locally."""
     docker = shutil.which("docker")
@@ -601,10 +641,13 @@ def _report_ready(spec: dict, message: str) -> None:
 def _ensure_service(spec: dict) -> None:
     """Idempotently bring ``spec``'s container to the ``running`` state.
 
-    State machine (per plan): running → no-op; stopped/exited → ``docker
-    start``; missing → optionally ``docker pull`` then ``docker run -d``;
-    bind failure on run is reported but not fatal so a native Qdrant/Falkor
-    already on the host port is left alone for the remote probe to discover.
+    State machine: running with matching ports → no-op; running with a
+    stale port mapping (e.g. an older FalkorDB started before the Browser
+    UI port was added) → ``docker rm -f`` + recreate with full port map;
+    stopped/exited → ``docker start``; missing → optionally ``docker pull``
+    then ``docker run -d``. Bind failure on run is reported but not fatal so
+    a native Qdrant/Falkor already on the host port is left alone for the
+    remote probe to discover.
     """
     name = spec["name"]
     image = os.environ.get(spec["image_env"]) or spec["default_image"]
@@ -616,11 +659,31 @@ def _ensure_service(spec: dict) -> None:
     state = _container_state(name)
     host_port, _container_port = _resolved_ports(spec)[spec["primary_port_index"]]
     primary_url = f"{spec['primary_protocol']}://127.0.0.1:{host_port}"
+    expected_ports = {
+        ("127.0.0.1", h, c, "tcp") for h, c in _resolved_ports(spec)
+    }
 
     if state == "running":
-        _report_ready(spec, f"[ok] {name} running ({primary_url})")
-        return
-    if state is not None:
+        existing_ports = _container_published_ports(name)
+        if expected_ports.issubset(existing_ports):
+            _report_ready(spec, f"[ok] {name} running ({primary_url})")
+            return
+        # Stale port mapping: the spec gained an endpoint (typically the
+        # FalkorDB Browser UI) after the container was created. Recreate
+        # so the new port is reachable from the host.
+        missing = sorted(
+            f"127.0.0.1:{h}->{c}/tcp" for _, h, c, _ in expected_ports - existing_ports
+        )
+        print(
+            f"[info] {name} is running but missing port(s) "
+            f"[{', '.join(missing)}] — recreating with full port map"
+        )
+        rm_result = run([docker, "rm", "-f", name], capture=True, check=False)
+        if rm_result.returncode != 0:
+            print(f"[fail] {name}: docker rm failed: {(rm_result.stderr or '').strip()}")
+            return
+        # Fall through to the create path below.
+    elif state is not None:
         result = run([docker, "start", name], capture=True, check=False)
         if result.returncode == 0:
             _report_ready(spec, f"[ok] started existing container {name} ({primary_url})")
