@@ -77,6 +77,20 @@ class GraphWriteJournalRuntime:
                 dependency = self._node_barriers.get(("File", str(row.get("id"))))
                 if dependency:
                     required.add(dependency)
+        elif operation.reconciliation == "evidence_edge":
+            # Evidence-edge rows are self-describing: their endpoint barriers
+            # are whatever node planes produced those identities, regardless
+            # of the physical identity property (``id`` or ``site_id``).
+            for row in rows:
+                for label_key, value_key in (
+                    ("source_label", "source_id"),
+                    ("target_label", "target_id"),
+                ):
+                    dependency = self._node_barriers.get(
+                        (str(row.get(label_key)), str(row.get(value_key)))
+                    )
+                    if dependency:
+                        required.add(dependency)
         elif operation.reconciliation in {"call_edge", "call_site"}:
             for row in rows:
                 for identity_key in ("caller_id", "callee_id"):

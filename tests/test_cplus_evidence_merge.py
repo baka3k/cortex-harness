@@ -394,6 +394,7 @@ class StagingWriterTest(unittest.TestCase):
                 ],
                 proc_host_declarations=[
                     {"host_variable_id": "hv1", "declaration_id": "d1",
+                     "declaration_kind": "variable",
                      "props": {"join_quality": "unique", "is_indicator": False}}
                 ],
             )
@@ -416,7 +417,7 @@ class StagingWriterTest(unittest.TestCase):
         self.assertEqual(row["callee_id"], "f2")
         # Props must be provider-storable scalars plus the joined config list.
         for value in row["props"].values():
-            self.assertIsInstance(value, (str, int, float, bool))
+            self.assertIsInstance(value, (str, int, float, bool, list))
 
     def test_staging_summary_reports_strongest_observed_class(self):
         merge = evidence_merge.merge_call_evidence(
@@ -424,44 +425,31 @@ class StagingWriterTest(unittest.TestCase):
         )
         self.assertEqual(merge.call_sites[0].resolved_class, "unresolved")
 
-    def test_dangling_observations_are_counted_not_dropped(self):
-        class _CountingDriver(_FakeDriver):
-            def __init__(self):
-                super().__init__()
-                self.dangling_writes = 0
-
-            async def execute_query(self, query, parameters=None, database=None, **kwargs):
-                if "dangling_observation_ids" in query:
-                    self.dangling_writes += 1
-                    return ([{"count": 1}], [], None)
-                if "RETURN row.evidence_id AS evidence_id" in query:
-                    # Existence pre-check: callee Function node missing.
-                    return (
-                        [
-                            {"evidence_id": row.get("evidence_id"), "callee_id": None}
-                            for row in dict(parameters or {}).get("rows", [])
-                        ],
-                        [],
-                        None,
-                    )
-                return await super().execute_query(query, parameters, database, **kwargs)
-
-        driver = _CountingDriver()
-        writer = LanguageCodeWriter(driver, database="code")
-        linked = asyncio.run(
-            writer.write_call_evidence_observations(
-                [
-                    {
-                        "site_id": "s1",
-                        "callee_id": "missing",
-                        "evidence_id": "e1",
-                        "props": {"resolution_class": "lexical_candidate"},
-                    }
-                ]
-            )
+    def test_dangling_observations_are_flagged_and_persisted_on_site_props(self):
+        # Phase 06: dangling evidence is computed by the merge layer against
+        # the staged identities and persisted on the staging site's props;
+        # the observation writer skips flagged rows instead of probing the
+        # graph inside a mutation.
+        merge = evidence_merge.merge_call_evidence(
+            [_semantic(callee="missing_callee"), _lexical(callee="f2", line=4)],
+            accepted_function_ids={"f1", "f2"},
+            project_id="p1",
         )
-        self.assertEqual(linked, 0)  # no callee node -> no OBSERVED_AS edge
-        self.assertEqual(driver.dangling_writes, 1)
+        dangling_site = merge.call_sites[0]
+        self.assertEqual(dangling_site.file_path, "a.c")
+        site_row = dangling_site.to_writer_rows(accepted_function_ids={"f1", "f2"})
+        self.assertEqual(len(site_row["props"]["dangling_observation_ids"]), 1)
+        observation_rows = dangling_site.observation_writer_rows({"f1", "f2"})
+        self.assertEqual(sum(1 for row in observation_rows if row["dangling"]), 1)
+
+        driver = _FakeDriver()
+        writer = LanguageCodeWriter(driver, database="code")
+        linked = asyncio.run(writer.write_call_evidence_observations(observation_rows))
+        self.assertEqual(linked, 0)  # the dangling row writes no edge
+        self.assertEqual(driver.queries, [])
+        # The merged result exposes both adapters for the whole staged set.
+        self.assertEqual(len(merge.observation_writer_rows()), 2)
+        self.assertEqual(len(merge.site_writer_rows()), len(merge.call_sites))
 
 
 class OutcomePayloadTest(unittest.TestCase):

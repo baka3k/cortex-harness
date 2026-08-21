@@ -9,10 +9,12 @@ blocks:
   - 260804-1640-port-proc-cplus-to-code-tiny
   - 260807-1329-parser-quality-recovery
   - 260807-2103-toolchain-reliability-hardening
+  - 260821-1144-cplus-semantic-call-graph
 phaseBlockedBy:
   phase-06:
     - original-20186-file-source-root-not-mounted
 relatedPlans:
+  - 260821-1144-cplus-semantic-call-graph
   - 260807-2103-toolchain-reliability-hardening
   - 260807-0929-mcp-ingest-query-concurrency
   - 260804-1640-port-proc-cplus-to-code-tiny
@@ -198,6 +200,12 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
 6. [Phase 06 — canary, graph recovery, and rollout](phase-06-rollout-and-backfill.md)
 
 ## Dependencies and ownership
+
+- `260821-1144-cplus-semantic-call-graph` consumes this plan's canonical
+  schema, typed evidence relationships, mutation journal, integrity checks,
+  and restart-safe publication mechanics in semantic Phases 06-07. This plan
+  remains the graph-write authority; the semantic plan owns which call
+  evidence is eligible for each graph view.
 
 - `260807-2103-toolchain-reliability-hardening` consumes this plan's schema,
   mutation journal, reconciliation, barrier, and integrity contracts for its

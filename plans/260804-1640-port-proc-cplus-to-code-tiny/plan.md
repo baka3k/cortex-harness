@@ -7,10 +7,12 @@ blockedBy: []
 blocks:
   - "260807-1329-parser-quality-recovery"
   - "260807-2103-toolchain-reliability-hardening"
+  - "260821-1144-cplus-semantic-call-graph"
 phaseBlockedBy:
   "03": [260807-1202-graph-ingest-write-path-hardening]
   "04": [260807-1202-graph-ingest-write-path-hardening]
 relatedPlans:
+  - "260821-1144-cplus-semantic-call-graph"
   - "260807-2103-toolchain-reliability-hardening"
   - "260731-1500-legacy-migration-parser-coverage"
   - "260804-1426-proc-cplus-analyzer"
@@ -48,6 +50,17 @@ The patch was generated from inside `code-tiny/` (paths like `tools/cplus/...`),
 - `code-tiny/tools/cplus/clang_parser.py`, `rc_parser.py` — exist ✓
 
 ## Active-plan coordination
+
+- `260821-1144-cplus-semantic-call-graph` consumes this plan's Pro*C SQL
+  facts, masking semantics, and original-source spans. This plan owns those
+  extraction artifacts and blocks semantic-call-graph Phase 05; the semantic
+  plan owns the source-bundle contract, generated/virtual-C-to-original
+  source-map bridge, Clang resolution, generated runtime classification,
+  semantic function/host-variable joins, and coverage-aware call-plus-SQL
+  impact views. Its exhaustive inventory is
+  [`pro-c-component-map.md`](../260821-1144-cplus-semantic-call-graph/pro-c-component-map.md),
+  so neither plan adds a second Pro*C parser or silently changes these five
+  labels and nine relationships.
 
 - `260807-2103-toolchain-reliability-hardening` consumes the stabilized Pro*C
   payload, source mapping, and diagnostics through a validator adapter. This

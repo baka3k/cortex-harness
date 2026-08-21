@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from tools.graph.writer.query_contract import group_typed_relations
+from tools.graph.writer.query_contract import (
+    compile_evidence_edge_readback,
+    group_evidence_edges,
+    group_typed_relations,
+)
 
 from .operation import GraphWriteOperation
 
@@ -52,6 +56,12 @@ def compile_reconciliation_readback(
             "RETURN count(r) AS count",
             {"rows": list(rows)},
         )
+    if operation.reconciliation == "evidence_edge":
+        groups = group_evidence_edges(rows)
+        if len(groups) != 1:
+            raise ValueError("one evidence-edge batch must contain one edge shape")
+        group = next(iter(groups))
+        return compile_evidence_edge_readback(group), {"rows": list(rows)}
     if operation.reconciliation == "repository_file":
         return (
             "UNWIND $rows AS row "

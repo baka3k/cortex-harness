@@ -7,10 +7,12 @@ blockedBy: []
 blocks:
   - 260807-1329-parser-quality-recovery
   - 260807-2103-toolchain-reliability-hardening
+  - 260821-1144-cplus-semantic-call-graph
 phaseBlockedBy:
   "03": [260807-1202-graph-ingest-write-path-hardening]
   "06": [260807-1202-graph-ingest-write-path-hardening]
 relatedPlans:
+  - 260821-1144-cplus-semantic-call-graph
   - 260807-2103-toolchain-reliability-hardening
   - 260806-1648-local-file-storage
   - 260728-0000-unified-ingest-query-contract
@@ -374,6 +376,11 @@ internally inconsistent.
 
 ### Active-plan coordination
 
+- `260821-1144-cplus-semantic-call-graph` consumes this plan's bounded worker
+  admission, staged generations, pinned-reader behavior, and atomic
+  publication in semantic Phases 06-07. This plan remains the store-owner and
+  concurrency authority; the semantic plan owns Clang scheduling policy and
+  call-evidence eligibility within those bounds.
 - `260807-1202-graph-ingest-write-path-hardening` owns canonical graph schema
   preflight, indexable relationship queries, batch integrity, and writer-local
   recovery/progress. This concurrency plan owns physical-store admission,
