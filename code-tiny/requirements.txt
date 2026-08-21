@@ -5,6 +5,10 @@ fastmcp
 
 # New C/C++ analysis tools
 networkx
+# Pinned Clang backend for the isolated semantic callsite worker (Phase 02).
+# The wheel bundles the native libclang library; keep this pin in sync with
+# tools/cplus/semantic_worker.PINNED_LIBCLANG_VERSION.
+libclang==18.1.1
 
 # Additional dependencies for C++ analysis and web services
 pydantic

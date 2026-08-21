@@ -12,7 +12,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
-from tools.cplus import clang_parser  # noqa: E402
+from tools.cplus import clang_parser, semantic_worker  # noqa: E402
 from tools.cplus.parse_recovery import (  # noqa: E402
     MAX_SOURCE_BYTES,
     MAX_WORKER_REQUEST_BYTES,
@@ -64,6 +64,66 @@ def _disable_network() -> None:
     socket.create_connection = denied  # type: ignore[assignment]
 
 
+def _run_semantic_request(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Protocol "2" call-evidence path (see semantic_worker module docs)."""
+
+    validated = semantic_worker.validate_semantic_request(request)
+    root = validated["root"]
+    proc_bundle = validated["proc_bundle"]
+    path = validated["path"]
+    if proc_bundle is not None:
+        # Pro*C semantic input is only the allowlisted generated artifact.
+        path = os.path.join(root, *proc_bundle.artifact_path.replace("\\", "/").split("/"))
+    path = _contained_path(root, path)
+    max_source_bytes = min(
+        int(validated["max_source_bytes"] or MAX_SOURCE_BYTES), MAX_SOURCE_BYTES
+    )
+    if os.path.getsize(path) > max_source_bytes:
+        raise ValueError("source file exceeds worker size cap")
+    if proc_bundle is not None:
+        import hashlib  # noqa: PLC0415
+
+        with open(path, "rb") as handle:
+            artifact_sha = hashlib.sha256(handle.read()).hexdigest()
+        if artifact_sha != proc_bundle.artifact_sha256:
+            raise ValueError("generated artifact hash does not match the source bundle")
+
+    arguments = sanitize_compile_arguments(
+        validated["compile_arguments"],
+        root=root,
+        directory=os.path.dirname(path),
+        source_path=path,
+    )
+    memory_mb = int(validated["memory_mb"] or 1024)
+    cpu_seconds = int(validated["cpu_seconds"] or 30)
+    output_bytes = int(validated["max_output_bytes"] or MAX_SOURCE_BYTES * 2)
+    if not 1 <= memory_mb <= 4096:
+        raise ValueError("worker memory limit is invalid")
+    if not 1 <= cpu_seconds <= 300:
+        raise ValueError("worker CPU limit is invalid")
+    if not 1 <= output_bytes <= MAX_SOURCE_BYTES * 2:
+        raise ValueError("worker output limit is invalid")
+    _apply_limits(memory_mb, cpu_seconds, output_bytes)
+    _disable_network()
+
+    readiness = semantic_worker.probe_clang_runtime()
+    if not readiness["ready"]:
+        raise RuntimeError(f"clang_runtime_not_ready:{readiness['reason']}")
+    extraction = semantic_worker.extract_semantic_callsite_evidence(
+        path,
+        root,
+        list(arguments),
+        config_fingerprint=validated["compile_context_fingerprint"],
+        proc_bundle=proc_bundle,
+    )
+    return semantic_worker.build_semantic_response(
+        validated,
+        extraction,
+        proc_bundle=proc_bundle,
+        libclang_version=readiness["libclang_version"] or "",
+    )
+
+
 def main() -> int:
     try:
         if len(sys.argv) > 1:
@@ -74,6 +134,22 @@ def main() -> int:
             request = json.loads(request_bytes.decode("utf-8"))
         else:
             request = json.load(sys.stdin)
+        if request.get("request_schema") == semantic_worker.SEMANTIC_REQUEST_SCHEMA:
+            try:
+                response = _run_semantic_request(request)
+            except (ValueError, RuntimeError, OSError) as exc:
+                # Typed request/runtime failure: still a well-formed response
+                # so the gateway can classify it precisely.
+                response = {
+                    "protocol_version": semantic_worker.SEMANTIC_WORKER_PROTOCOL_VERSION,
+                    "request_schema": semantic_worker.SEMANTIC_REQUEST_SCHEMA,
+                    "status": "invalid",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "callsites": [],
+                    "coverage": {"status": "failed", "detail": str(exc)[:200]},
+                }
+            sys.stdout.write(json.dumps(response, ensure_ascii=True))
+            return 0 if response["status"] == "ok" else 1
         if request.get("protocol_version") != WORKER_PROTOCOL_VERSION:
             raise ValueError("worker protocol mismatch")
         root = str(request["root"])
@@ -112,7 +188,12 @@ def main() -> int:
         }
     except BaseException as exc:
         response = {
-            "protocol_version": WORKER_PROTOCOL_VERSION,
+            "protocol_version": (
+                semantic_worker.SEMANTIC_WORKER_PROTOCOL_VERSION
+                if isinstance(request, dict)
+                and request.get("request_schema") == semantic_worker.SEMANTIC_REQUEST_SCHEMA
+                else WORKER_PROTOCOL_VERSION
+            ),
             "status": "invalid",
             "payload": None,
             "error": f"{type(exc).__name__}: {exc}",

@@ -1,0 +1,179 @@
+{
+  "backend": "cindex-libclang",
+  "evidence_schema_version": "1",
+  "files": {
+    "direct.c": {
+      "callsites": [
+        {
+          "callee_name": "target",
+          "callee_usr": "c:@F@target",
+          "macro_origin": null,
+          "resolution_class": "direct_resolved"
+        },
+        {
+          "callee_name": "missing",
+          "callee_usr": "c:@F@missing",
+          "macro_origin": null,
+          "resolution_class": "unresolved"
+        }
+      ],
+      "error": "",
+      "expectation_checks": [
+        {
+          "callee_name": "target",
+          "match": "match",
+          "observed": "direct_resolved"
+        },
+        {
+          "callee_name": "missing",
+          "match": "match",
+          "observed": "unresolved"
+        }
+      ],
+      "worker_status": "ok"
+    },
+    "fp.c": {
+      "callsites": [
+        {
+          "callee_name": "op",
+          "callee_usr": "c:fp.c@168@F@apply@op",
+          "macro_origin": null,
+          "resolution_class": "indirect_callsite"
+        },
+        {
+          "callee_name": "apply",
+          "callee_usr": "c:@F@apply",
+          "macro_origin": null,
+          "resolution_class": "direct_resolved"
+        }
+      ],
+      "error": "",
+      "expectation_checks": [
+        {
+          "callee_name": "apply",
+          "match": "match",
+          "observed": "direct_resolved"
+        },
+        {
+          "callee_name": "op",
+          "match": "match",
+          "observed": "indirect_callsite"
+        }
+      ],
+      "worker_status": "ok"
+    },
+    "macro_static.c": {
+      "callsites": [
+        {
+          "callee_name": "helper",
+          "callee_usr": "c:macro_static.c@F@helper",
+          "macro_origin": "WRAP",
+          "resolution_class": "direct_resolved"
+        },
+        {
+          "callee_name": "internal",
+          "callee_usr": "c:macro_static.c@F@internal",
+          "macro_origin": null,
+          "resolution_class": "direct_resolved"
+        },
+        {
+          "callee_name": "other_file_helper",
+          "callee_usr": "c:@F@other_file_helper",
+          "macro_origin": null,
+          "resolution_class": "direct_resolved"
+        }
+      ],
+      "error": "",
+      "expectation_checks": [
+        {
+          "callee_name": "helper",
+          "match": "match",
+          "observed": "direct_resolved"
+        },
+        {
+          "callee_name": "internal",
+          "match": "match",
+          "observed": "direct_resolved"
+        },
+        {
+          "callee_name": "other_file_helper",
+          "match": "match",
+          "observed": "direct_resolved"
+        }
+      ],
+      "worker_status": "ok"
+    },
+    "overload.cpp": {
+      "callsites": [
+        {
+          "callee_name": "pick",
+          "callee_usr": "c:overload.cpp@F@pick#I#",
+          "macro_origin": null,
+          "resolution_class": "direct_resolved"
+        },
+        {
+          "callee_name": "pick",
+          "callee_usr": "c:overload.cpp@F@pick#d#",
+          "macro_origin": null,
+          "resolution_class": "direct_resolved"
+        }
+      ],
+      "error": "",
+      "expectation_checks": [
+        {
+          "callee_name": "pick",
+          "match": "match",
+          "observed": "direct_resolved"
+        }
+      ],
+      "worker_status": "ok"
+    },
+    "template.cpp": {
+      "callsites": [
+        {
+          "callee_name": "combine",
+          "callee_usr": "c:@S@Box>#I@F@combine<#I>#I#",
+          "macro_origin": null,
+          "resolution_class": "dependent_template_call"
+        }
+      ],
+      "error": "",
+      "expectation_checks": [
+        {
+          "callee_name": "combine",
+          "match": "match",
+          "observed": "dependent_template_call"
+        }
+      ],
+      "worker_status": "ok"
+    },
+    "virtual.cpp": {
+      "callsites": [
+        {
+          "callee_name": "step",
+          "callee_usr": "c:@S@Base@F@step#I#",
+          "macro_origin": null,
+          "resolution_class": "declared_virtual_target"
+        }
+      ],
+      "error": "",
+      "expectation_checks": [
+        {
+          "callee_name": "step",
+          "match": "match",
+          "observed": "declared_virtual_target"
+        }
+      ],
+      "worker_status": "ok"
+    }
+  },
+  "mode": "shadow",
+  "published_calls": 0,
+  "schema_version": "1",
+  "summary": {
+    "files": 6,
+    "matched": 10,
+    "mismatched": 0,
+    "missing": 0
+  }
+}
