@@ -273,6 +273,9 @@ class SubResultAccounting:
         counts = (self.discovered, self.accepted, self.quarantined, self.rejected, self.deleted)
         if any(value < 0 for value in counts):
             raise ValueError("sub-result accounting counts must be non-negative")
+        # `deleted` counts edges removed from the active generation (stale-edge
+        # deletions); it is orthogonal to the discovered/accepted/quarantined/
+        # rejected balance of items evaluated in the current pass.
         if self.discovered != self.accepted + self.quarantined + self.rejected:
             raise ValueError("sub-result accounting is not balanced")
 
@@ -482,6 +485,10 @@ class StagedReplacementSet:
                 "evidence_observations": sorted(
                     str(row.get("evidence_id")) for row in self.evidence_observations
                 ),
+                "build_configurations": sorted(
+                    str(row.get("config_fingerprint") or row.get("configuration_id") or "")
+                    for row in self.build_configurations
+                ),
                 "coverage_records": sorted(
                     str(record.get("fingerprint")) for record in self.coverage_records
                 ),
@@ -686,7 +693,7 @@ async def apply_stale_strong_edge_deletions(
         return 0
     from tools.graph.journal.guard import journaled_mutation
 
-    job_id = str(operation_id or uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(rows, sort_keys=True)))
+    job_id = str(operation_id or str(uuid.uuid4()))
     with journaled_mutation(job_id, "staged_replacement:delete_strong_edges"):
         records, _, _ = await driver.execute_query(
             STALE_STRONG_EDGE_DELETE_CYPHER, {"rows": rows}, database
@@ -1262,7 +1269,7 @@ def vector_item_rejection_reason(item: Mapping[str, Any]) -> str | None:
         return f"generated_class_{generated_class}"
     if str(item.get("source_origin") or "") == "generated":
         return "generated_origin"
-    for text_field in ("code", "summary", "note", "comment", "raw_text"):
+    for text_field in ("code", "summary", "note", "comment", "raw_text", "command", "raw_command", "cli_args", "conn_str"):
         marker = secret_bearing_text(str(item.get(text_field) or ""))
         if marker is not None:
             return f"credential_bearing_{text_field}"
