@@ -48,11 +48,20 @@ DEV_CONFIG = Path(".cortext-harness") / "config" / "dev.json"
 
 PYTHON_DEPENDENCY_PROBE = (
     "import qdrant_client, requests; "
-    "from redislite.falkordb_client import FalkorDB; "
-    "import cortex_harness.storage"
+    "import cortex_harness.storage; "
+    + (
+        "from redislite.falkordb_client import FalkorDB"
+        if os.name != "nt"
+        else "from falkordb import FalkorDB"
+    )
 )
 PYTHON_DEPENDENCY_LABEL = (
-    "qdrant_client, FalkorDBLite backend, requests, cortex_harness.storage"
+    "qdrant_client, requests, cortex_harness.storage, "
+    + (
+        "FalkorDBLite backend"
+        if os.name != "nt"
+        else "remote FalkorDB client (falkordb)"
+    )
 )
 
 SERVERS = (
@@ -225,10 +234,18 @@ def run(arguments: list[str], *, capture: bool = False, check: bool = True) -> s
 
 
 def venv_python() -> Path:
-    python = VENV_DIR / "bin" / "python"
-    if not python.is_file():
-        raise RuntimeError(f"Virtualenv Python not found under {VENV_DIR}.")
-    return python
+    # On Windows the venv interpreter lives under ``Scripts\python.exe``; on
+    # POSIX under ``bin/python``. Probe the platform-native path first, then
+    # fall back to the other so cross-platform CI / doctor output stays
+    # deterministic.
+    if os.name == "nt":
+        candidates = (VENV_DIR / "Scripts" / "python.exe", VENV_DIR / "bin" / "python")
+    else:
+        candidates = (VENV_DIR / "bin" / "python", VENV_DIR / "Scripts" / "python.exe")
+    for python in candidates:
+        if python.is_file():
+            return python
+    raise RuntimeError(f"Virtualenv Python not found under {VENV_DIR}.")
 
 
 def uv_executable() -> str:
@@ -950,13 +967,30 @@ def doctor_process_checks(resolved: object | None) -> None:
 
     if resolved is None:
         return
+    # The label and the PID scan depend on which backend the project is
+    # configured for. Remote mode has no in-process FalkorDB to inspect, so
+    # swap the label and skip the scan while still surfacing the URI for
+    # cross-reference with ``doctor_remote_checks``.
+    is_remote = getattr(resolved, "backend_mode", None) == "remote"
+    kind = "remote" if is_remote else "embedded"
+    remote_cfg = getattr(resolved, "remote", None) if is_remote else None
+    uri_hint = getattr(remote_cfg, "falkordb_uri", None) if remote_cfg else None
     for owner, path in (
         ("code", Path(resolved.falkordb_code_path)),
         ("doc", Path(resolved.falkordb_doc_path)),
     ):
+        if is_remote:
+            message = f"idle — {uri_hint}" if uri_hint else "idle (no URI configured)"
+            doctor_check(
+                f"{owner} {kind} FalkorDB",
+                True,
+                message,
+                required=False,
+            )
+            continue
         pids = embedded_falkordb_pids(path)
         doctor_check(
-            f"{owner} embedded FalkorDB",
+            f"{owner} {kind} FalkorDB",
             not pids,
             "idle" if not pids else "running pid(s): " + ", ".join(map(str, pids)),
             required=False,
@@ -1217,7 +1251,16 @@ def invoke_doctor() -> None:
             finally:
                 client.close()
         except ImportError as error:
-            failures += doctor_check("falkordblite round-trip", False, f"dependency missing: {error}")
+            # Local falkordblite is unavailable on Windows (redislite ships
+            # only Linux/macOS wheels). Windows operators run the remote
+            # FalkorDB path, which is exercised by ``doctor_remote_checks``.
+            # Surface as a warning so it never blocks ``make doctor``.
+            failures += doctor_check(
+                "falkordblite round-trip",
+                False,
+                f"skipped (local falkordblite unavailable: {error})",
+                required=False,
+            )
         except Exception as error:
             failures += doctor_check("falkordblite round-trip", False, str(error))
 
