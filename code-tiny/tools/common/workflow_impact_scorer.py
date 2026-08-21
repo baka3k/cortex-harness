@@ -17,6 +17,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
+from tools.common.call_evidence import (
+    frontier_coverage,
+    traversal_outcome,
+)
+
 logger = logging.getLogger(__name__)
 
 # Domain groups for severity rules
@@ -62,6 +67,11 @@ class WorkflowImpactResult:
     workflow_risk_score: float = 0.0
     overall_risk_score: float = 0.0  # set by caller (impact_service) after merging base risk
     recommendation: str = ""
+    # Semantic coverage of the traversal frontier.  When the frontier is not
+    # complete, "no workflow impact" is not an authoritative conclusion.
+    semantic_coverage: Dict[str, Any] = field(default_factory=dict)
+    outcome: str = "complete"
+    evidence_class_note: str = ""
 
 
 # ── Severity helpers ──────────────────────────────────────────────────────────
@@ -190,7 +200,21 @@ def _generate_recommendation(result: "WorkflowImpactResult") -> str:
         parts.append("Recommended: run integration tests for affected workflows before merge.")
 
     if not parts:
+        if result.outcome == "incomplete":
+            return (
+                "No workflow impact detected, but the semantic frontier of this "
+                "traversal is incomplete — this is not an authoritative negative "
+                "result. Extend semantic coverage before relying on it."
+            )
         return "No workflow impact detected. Proceed with standard unit tests."
+
+    if result.outcome == "incomplete":
+        parts.append(
+            "Note: semantic coverage of the visited frontier is incomplete; "
+            "negative conclusions above are not authoritative."
+        )
+    if result.evidence_class_note:
+        parts.append(result.evidence_class_note)
 
     return " ".join(parts)
 
@@ -410,8 +434,45 @@ class WorkflowImpactScorer:
                         )
                         seen_wf_ids.add(wf_id)
 
-        # 5. Compute risk and recommendation ───────────────────────────────────
+        # 5. Semantic coverage and evidence classes ──────────────────────────
+        # Weak evidence classes (possible/indirect/lexical) participate in
+        # conservative traversal; they reduce confidence and are flagged in
+        # the recommendation but never count as confirmed direct calls.
+        try:
+            coverage_rows = await self._query(
+                "MATCH (coverage:SemanticCoverage) "
+                "RETURN coverage.status AS status, coverage.tu_key AS tu_key, "
+                "coverage.detail AS detail",
+                {},
+            )
+        except Exception as exc:
+            logger.warning("Semantic coverage query failed: %s", exc)
+            coverage_rows = []
+        result.semantic_coverage = frontier_coverage(coverage_rows)
+        weak_flow_rels = [
+            rel for rel in self._flow_relationships if rel != "CALLS"
+        ]
+        if weak_flow_rels:
+            result.evidence_class_note = (
+                "Indirect reachability includes weak evidence relationships ("
+                + ", ".join(weak_flow_rels)
+                + "); those paths are conservative evidence, not confirmed direct calls."
+            )
+            for impact in result.indirectly_affected_workflows:
+                impact.confidence = round(impact.confidence * 0.7, 3)
+                impact.reason += " (conservative evidence class)"
+
+        # 6. Compute risk and recommendation ─────────────────────────────────
         result.workflow_risk_score = _compute_workflow_risk(result)
+        result.outcome = traversal_outcome(
+            str(result.semantic_coverage.get("status") or "unknown"),
+            not (
+                result.directly_affected_workflows
+                or result.indirectly_affected_workflows
+                or result.cascade_workflows
+                or result.navigator_impacts
+            ),
+        )
         result.recommendation = _generate_recommendation(result)
 
         return result
