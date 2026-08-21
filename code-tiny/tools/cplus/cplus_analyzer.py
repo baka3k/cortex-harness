@@ -4615,26 +4615,82 @@ SET s.node_type = 'code',
                     flush=True,
                 )
             _buffer_started = time.monotonic()
-            try:
-                await _write_current_stream_buffer()
-            except BaseException as exc:
-                if verbose:
-                    print(
-                        "[graph] buffer_failed index=%d/%d files=%d-%d "
-                        "processed=%d/%d elapsed=%.3fs error=%s"
-                        % (
-                            _stream_buffer_index,
-                            _stream_buffer_total,
-                            _buffer_start,
-                            _buffer_end,
-                            _stream_files_processed,
-                            total_files,
-                            time.monotonic() - _buffer_started,
-                            type(exc).__name__,
-                        ),
-                        flush=True,
-                    )
-                raise
+            # Transient connection drops against the remote graph store must
+            # not abort the whole analyzer run: otherwise the embedding pass
+            # never runs and Qdrant stays empty. Retry with exponential
+            # backoff for network-class errors (idempotent MERGE writes make
+            # this safe); any other failure still aborts immediately.
+            _TRANSIENT_ERRORS = (ConnectionError, OSError, TimeoutError)
+            _max_attempts = 3
+            for _attempt in range(1, _max_attempts + 1):
+                try:
+                    await _write_current_stream_buffer()
+                    break
+                except _TRANSIENT_ERRORS as exc:
+                    if _attempt < _max_attempts:
+                        _backoff = 0.5 * (2 ** (_attempt - 1))
+                        if verbose:
+                            print(
+                                "[graph] buffer_retry index=%d/%d files=%d-%d "
+                                "attempt=%d/%d backoff=%.1fs error=%s"
+                                % (
+                                    _stream_buffer_index,
+                                    _stream_buffer_total,
+                                    _buffer_start,
+                                    _buffer_end,
+                                    _attempt,
+                                    _max_attempts,
+                                    _backoff,
+                                    type(exc).__name__,
+                                ),
+                                flush=True,
+                            )
+                        await asyncio.sleep(_backoff)
+                    else:
+                        # Retries exhausted: log and skip this buffer so the
+                        # remaining files still complete (and embedding runs).
+                        if verbose:
+                            print(
+                                "[graph] buffer_skipped index=%d/%d files=%d-%d "
+                                "processed=%d/%d elapsed=%.3fs error=%s "
+                                "retries_exhausted=true"
+                                % (
+                                    _stream_buffer_index,
+                                    _stream_buffer_total,
+                                    _buffer_start,
+                                    _buffer_end,
+                                    _stream_files_processed,
+                                    total_files,
+                                    time.monotonic() - _buffer_started,
+                                    type(exc).__name__,
+                                ),
+                                flush=True,
+                            )
+                        buf_files = []; buf_namespaces = []; buf_types = []; buf_function_types = []
+                        buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
+                        buf_resources = []; buf_resource_elements = []
+                        buf_proc_sql_statements = {}
+                        buf_relations = []; buf_calls = []; buf_possible_calls = []; buf_unknown_calls = []
+                        _files_in_buf = 0
+                        return
+                except BaseException as exc:
+                    if verbose:
+                        print(
+                            "[graph] buffer_failed index=%d/%d files=%d-%d "
+                            "processed=%d/%d elapsed=%.3fs error=%s"
+                            % (
+                                _stream_buffer_index,
+                                _stream_buffer_total,
+                                _buffer_start,
+                                _buffer_end,
+                                _stream_files_processed,
+                                total_files,
+                                time.monotonic() - _buffer_started,
+                                type(exc).__name__,
+                            ),
+                            flush=True,
+                        )
+                    raise
             _stream_files_processed = _buffer_end
             print(
                 "[graph] buffer_finished index=%d/%d files=%d-%d "
