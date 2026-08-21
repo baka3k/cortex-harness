@@ -16,6 +16,10 @@ from typing import Any, Dict, Iterable, List, Sequence, Set
 
 from tools.common.parse_quality import atomic_write_json
 from tools.cplus.proc_analyzer import prepare_proc_path
+from tools.cplus.proc_source_map import (
+    MASK_POLICY_VERSION,
+    PROC_SOURCE_MAP_VERSION as _SOURCE_MAP_CONTRACT_VERSION,
+)
 from tools.cplus.semantic_context import (
     PINNED_LIBCLANG_VERSION,
     SEMANTIC_REQUEST_SCHEMA,
@@ -27,8 +31,8 @@ from tools.cplus.semantic_context import (
 )
 
 PROC_MANIFEST_VERSION = "1"
-PROC_SOURCE_MAP_VERSION = "proc-source-map-v1"
-PROC_MAPPING_POLICY_VERSION = "mask-v1"
+PROC_SOURCE_MAP_VERSION = _SOURCE_MAP_CONTRACT_VERSION
+PROC_MAPPING_POLICY_VERSION = MASK_POLICY_VERSION
 
 MAX_PROC_DEPENDENCIES = 20_000
 MAX_EXEC_SQL_INCLUDES = 256

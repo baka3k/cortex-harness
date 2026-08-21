@@ -221,13 +221,14 @@ def _mask_executable_sql(source: str) -> Tuple[str, List[ProcRegion], List[ProcD
             continue
 
         # Raw string literal R"delim(...)delim"
-        if ch == "R" and ch2 == "R" and i + 1 < n and source[i + 1] == '"':
+        if ch == "R" and i + 1 < n and source[i + 1] == '"':
             # Find the delimiter (sequence of chars up to the next '(')
             delim_start = i + 2
             paren = source.find("(", delim_start)
             if paren != -1:
                 delim = source[delim_start:paren]
-                end_marker = ')"' + delim
+                # Closing sequence is ')' followed by the delimiter and '"'.
+                end_marker = ")" + delim + '"'
                 end = source.find(end_marker, paren + 1)
                 if end == -1:
                     j = n
@@ -242,9 +243,6 @@ def _mask_executable_sql(source: str) -> Tuple[str, List[ProcRegion], List[ProcD
         match = _EXEC_SQL_RE.match(source, i)
         if match:
             block_start = match.start()
-            # Roll back to the previous newline boundary so the masked
-            # region covers leading whitespace if any.
-            line_start = source.rfind("\n", 0, block_start) + 1
             # Find the matching ';' terminator (skip over nested ; that
             # appear inside string/comment contexts).
             j = match.end()
@@ -337,9 +335,14 @@ def _mask_executable_sql(source: str) -> Tuple[str, List[ProcRegion], List[ProcD
             )
             regions.append(region)
 
-            # Emit whitespace before the block, then a masked span.
-            output.append(source[i:line_start])
-            output.append(" " * (block_end - line_start))
+            # Emit a length-preserving mask over exactly the block span,
+            # keeping newline positions so downstream byte/line offsets stay
+            # aligned.  Chars before ``block_start`` (including indentation)
+            # were already emitted verbatim; masking from the line start
+            # would double-count them and break byte alignment.
+            output.append(
+                "".join("\n" if c == "\n" else " " for c in source[block_start:block_end])
+            )
             i = block_end
             continue
 

@@ -4,17 +4,17 @@
     "fp.c": 1,
     "macro_static.c": 2,
     "overload.cpp": 2,
+    "proc.pc": 1,
     "template.cpp": 1,
     "virtual.cpp": 1
   },
-  "possible_calls": 8,
+  "possible_calls": 9,
   "schema_version": "1",
   "unknown_by_file": {
     "direct.c": 1,
     "fp.c": 1,
     "macro_static.c": 1,
-    "overload.cpp": 1,
-    "proc.pc": 1
+    "overload.cpp": 1
   },
-  "unknown_calls": 5
+  "unknown_calls": 4
 }

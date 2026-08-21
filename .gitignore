@@ -93,6 +93,8 @@ tests/fixtures/**
 !tests/fixtures/database-schema-application/**
 !tests/fixtures/cplus_semantic_calls/
 !tests/fixtures/cplus_semantic_calls/**
+!tests/fixtures/proc_source_map/
+!tests/fixtures/proc_source_map/**
 !tests/fixtures/unified_contract/
 !tests/fixtures/unified_contract/proj_alpha/
 !tests/fixtures/unified_contract/proj_alpha/src/

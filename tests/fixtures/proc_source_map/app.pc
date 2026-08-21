@@ -1,0 +1,15 @@
+/* app.pc — original Pro*C source used by Phase 05 source-map tests. */
+#include <stdio.h>
+
+int load_customer(int customer_id) {
+    char customer_name[64];
+    EXEC SQL SELECT NAME INTO :customer_name
+        FROM CUSTOMER WHERE ID = :customer_id;
+    log_message("loaded customer");
+    return helper_validate(customer_name);
+}
+
+int helper_validate(const char *name) {
+    EXEC SQL COMMIT;
+    return 0;
+}
