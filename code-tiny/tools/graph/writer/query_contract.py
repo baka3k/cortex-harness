@@ -123,9 +123,153 @@ def compile_relationship_endpoint_audit(group: RelationshipGroup) -> str:
     )
 
 
+@dataclass(frozen=True, order=True)
+class EvidenceEdgeGroup:
+    """One staging-plane evidence edge shape.
+
+    Unlike ``RelationshipGroup`` the endpoints are keyed by their own identity
+    property (``CallSite`` by ``site_id``, ``BuildConfiguration`` by
+    ``config_fingerprint``, everything else by ``id``) and the merged edge may
+    carry its own identity property (``evidence_id``, ``statement_id``, …).
+    An empty ``edge_property`` means the endpoint pair itself is the merge
+    identity (pattern merge).
+    """
+
+    source_label: str
+    source_property: str
+    target_label: str
+    target_property: str
+    relationship_type: str
+    edge_property: str = ""
+
+    def __post_init__(self) -> None:
+        for kind, identifier in (
+            ("source label", self.source_label),
+            ("target label", self.target_label),
+            ("relationship type", self.relationship_type),
+            ("source property", self.source_property),
+            ("target property", self.target_property),
+        ):
+            validate_cypher_identifier(identifier, kind=kind)
+        if self.edge_property:
+            validate_cypher_identifier(self.edge_property, kind="edge property")
+        for role, label, prop in (
+            ("source", self.source_label, self.source_property),
+            ("target", self.target_label, self.target_property),
+        ):
+            if not CODE_GRAPH_SCHEMA.has_identity_index(label, prop):
+                raise ValueError(
+                    f"{role} label {label!r} has no required {prop!r} index in "
+                    f"schema {CODE_GRAPH_SCHEMA.name}@{CODE_GRAPH_SCHEMA.fingerprint}"
+                )
+
+    @property
+    def state_key(self) -> str:
+        edge_suffix = f":{self.edge_property}" if self.edge_property else ""
+        return (
+            f"call_evidence:edges:{self.source_label}:{self.source_property}:"
+            f"{self.relationship_type}:{self.target_label}:"
+            f"{self.target_property}{edge_suffix}"
+        )
+
+
+_EVIDENCE_EDGE_ROW_FIELDS = (
+    "source_label",
+    "source_property",
+    "target_label",
+    "target_property",
+    "rel_type",
+)
+
+
+def group_evidence_edges(
+    edges: Iterable[Mapping[str, Any]],
+) -> Dict[EvidenceEdgeGroup, List[Dict[str, Any]]]:
+    """Group self-describing evidence edge rows by their edge shape.
+
+    Every row requires ``source_label``/``source_property``/``source_id``,
+    ``target_label``/``target_property``/``target_id``, and ``rel_type``; the
+    optional ``edge_property`` names the merged edge's identity property.
+    """
+
+    groups: Dict[EvidenceEdgeGroup, List[Dict[str, Any]]] = defaultdict(list)
+    for position, edge in enumerate(edges):
+        missing = [
+            field
+            for field in _EVIDENCE_EDGE_ROW_FIELDS
+            if not str(edge.get(field) or "").strip()
+        ]
+        if missing or not str(edge.get("source_id") or "").strip() or not str(
+            edge.get("target_id") or ""
+        ).strip():
+            raise ValueError(
+                "evidence edge row requires source/target label, property, id, "
+                f"and rel_type (row {position})"
+            )
+        row = dict(edge)
+        group = EvidenceEdgeGroup(
+            str(edge["source_label"]),
+            str(edge["source_property"]),
+            str(edge["target_label"]),
+            str(edge["target_property"]),
+            str(edge["rel_type"]),
+            str(edge.get("edge_property") or ""),
+        )
+        row["edge_id"] = str(edge.get("edge_id") or row["source_id"])
+        groups[group].append(row)
+    return dict(groups)
+
+
+def compile_evidence_edge_upsert(group: EvidenceEdgeGroup) -> str:
+    """Compile one indexable evidence-edge MERGE from validated identifiers."""
+
+    edge_pattern = (
+        f"MERGE (a)-[r:{group.relationship_type} "
+        f"{{{group.edge_property}: row.edge_id}}]->(b) "
+        if group.edge_property
+        else f"MERGE (a)-[r:{group.relationship_type}]->(b) "
+    )
+    return (
+        "UNWIND $rows AS row "
+        f"MATCH (a:{group.source_label} "
+        f"{{{group.source_property}: row.source_id}}) "
+        "WITH row, a "
+        f"MATCH (b:{group.target_label} "
+        f"{{{group.target_property}: row.target_id}}) "
+        + edge_pattern +
+        "SET r += coalesce(row.props, {}), "
+        "r.project_id = row.project_id, "
+        "r.updated_at = datetime() "
+        "RETURN count(r) AS count"
+    )
+
+
+def compile_evidence_edge_readback(group: EvidenceEdgeGroup) -> str:
+    """Compile the deterministic readback for one evidence-edge batch."""
+
+    edge_match = (
+        f"-[r:{group.relationship_type} {{{group.edge_property}: row.edge_id}}]->"
+        if group.edge_property
+        else f"-[r:{group.relationship_type}]->"
+    )
+    return (
+        "UNWIND $rows AS row "
+        f"OPTIONAL MATCH (a:{group.source_label} "
+        f"{{{group.source_property}: row.source_id}}) "
+        + edge_match +
+        f"(b:{group.target_label} "
+        f"{{{group.target_property}: row.target_id}}) "
+        "RETURN count(r) AS count"
+    )
+
+
 __all__ = [
+    "EvidenceEdgeGroup",
     "RelationshipGroup",
+    "compile_evidence_edge_readback",
+    "compile_evidence_edge_upsert",
     "compile_relationship_endpoint_audit",
     "compile_relationship_upsert",
+    "group_evidence_edges",
     "group_typed_relations",
 ]

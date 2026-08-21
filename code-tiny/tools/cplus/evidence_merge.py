@@ -20,7 +20,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, AbstractSet
 
 from tools.common.call_evidence import (
     CALL_EVIDENCE_SCHEMA_VERSION,
@@ -177,13 +177,17 @@ class MergedCallSite:
             key=lambda cls: _CLASS_STRENGTH.get(cls, 0),
         )
 
-    def to_writer_rows(self) -> Dict[str, Any]:
+    def to_writer_rows(self, accepted_function_ids: AbstractSet[str] | None = None) -> Dict[str, Any]:
         """Adapter for ``write_call_evidence_sites``.
 
         Returns the ``{site_id, caller_id, callee_id, resolution_class,
         props}`` row shape the writer consumes; props exclude the nested
         observation list and non-scalar values so both graph providers can
-        store them.
+        store them.  When the accepted function identities of the staged set
+        are supplied, observations whose callee is not part of the staged
+        generation are exposed as ``dangling_observation_ids`` on the site:
+        the evidence stays queryable on the staging plane without inventing
+        graph endpoints.
         """
 
         staging = self.to_staging_row()
@@ -193,6 +197,9 @@ class MergedCallSite:
             if isinstance(value, (str, int, float, bool))
         }
         props["config_fingerprints"] = ",".join(self.configs)
+        dangling = self.dangling_observation_ids(accepted_function_ids)
+        if dangling:
+            props["dangling_observation_ids"] = dangling
         return {
             "site_id": self.site_id,
             "caller_id": self.caller_id,
@@ -200,6 +207,62 @@ class MergedCallSite:
             "resolution_class": staging["resolution_class"],
             "props": props,
         }
+
+    def dangling_observation_ids(
+        self, accepted_function_ids: AbstractSet[str] | None = None
+    ) -> list[str]:
+        """Evidence ids whose callee is not part of the staged identities.
+
+        Without an accepted-identity set nothing can be declared dangling:
+        endpoint resolution is then the writer's required-endpoint contract.
+        """
+
+        if accepted_function_ids is None:
+            return []
+        dangling: list[str] = []
+        for observation in self.observations:
+            callee_id = str(
+                observation.get("callee_id") or observation.get("callee_symbol_id") or ""
+            )
+            if callee_id and callee_id not in accepted_function_ids:
+                evidence_id = str(observation.get("evidence_id") or "")
+                if evidence_id:
+                    dangling.append(evidence_id)
+        return dangling
+
+    def observation_writer_rows(
+        self, accepted_function_ids: AbstractSet[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Adapter for ``write_call_evidence_observations``.
+
+        One row per deduplicated observation carrying its stable evidence
+        identity, site, callee, and scalar contract props.  Rows whose callee
+        is not part of the staged identities are flagged ``dangling`` — the
+        observation writer skips them for edges because their evidence is
+        already persisted on the site props.
+        """
+
+        rows: list[dict[str, Any]] = []
+        for observation in self.observations:
+            callee_id = str(
+                observation.get("callee_id") or observation.get("callee_symbol_id") or ""
+            )
+            row = {
+                key: value
+                for key, value in observation.items()
+                if key not in {"_repeat_runs", "caller_id", "props"}
+                and isinstance(value, (str, int, float, bool))
+            }
+            row["site_id"] = self.site_id
+            row["callee_id"] = callee_id
+            row["evidence_id"] = str(observation.get("evidence_id") or "")
+            row["dangling"] = bool(
+                accepted_function_ids is not None
+                and callee_id
+                and callee_id not in accepted_function_ids
+            )
+            rows.append(row)
+        return rows
 
     def to_staging_row(self) -> dict[str, Any]:
         accepted = self.accepted_observation
@@ -234,10 +297,24 @@ class EvidenceMergeResult:
     configuration_count: int = 0
     project_id: str = ""
     revision: str = ""
+    accepted_function_ids: AbstractSet[str] | None = None
 
     @property
     def frontier(self) -> dict[str, Any]:
         return frontier_coverage(self.coverage_records)
+
+    def site_writer_rows(self) -> list[dict[str, Any]]:
+        """Rows for ``write_call_evidence_sites`` (dangling evidence on props)."""
+
+        return [site.to_writer_rows(self.accepted_function_ids) for site in self.call_sites]
+
+    def observation_writer_rows(self) -> list[dict[str, Any]]:
+        """Rows for ``write_call_evidence_observations`` (dangling flagged)."""
+
+        rows: list[dict[str, Any]] = []
+        for site in self.call_sites:
+            rows.extend(site.observation_writer_rows(self.accepted_function_ids))
+        return rows
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -271,6 +348,7 @@ def merge_call_evidence(
     configurations: Iterable[Mapping[str, Any]] = (),
     project_id: str = "",
     revision: str = "",
+    accepted_function_ids: AbstractSet[str] | None = None,
 ) -> EvidenceMergeResult:
     """Deterministically merge observations, coverage, and configurations.
 
@@ -283,9 +361,15 @@ def merge_call_evidence(
     - Strict compatibility CALLS rows are derived only from a single,
       unambiguous accepted ``direct_resolved`` observation and carry the
       site/evidence identity so the edge stays traceable to its evidence.
+    - ``accepted_function_ids`` are the staged generation's accepted
+      ``Function`` identities; observations pointing outside them keep their
+      evidence on the staging plane as dangling observations instead of
+      inventing graph endpoints.
     """
 
-    result = EvidenceMergeResult(project_id=project_id, revision=revision)
+    result = EvidenceMergeResult(
+        project_id=project_id, revision=revision, accepted_function_ids=accepted_function_ids
+    )
 
     identities: dict[str, dict[str, Any]] = {}
     sites: dict[str, MergedCallSite] = {}

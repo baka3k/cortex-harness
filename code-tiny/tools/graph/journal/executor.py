@@ -6,7 +6,10 @@ from typing import Any, Mapping, Sequence
 
 from tools.graph.schema.manifest import validate_cypher_identifier
 from tools.graph.writer.query_contract import (
+    EvidenceEdgeGroup,
+    compile_evidence_edge_upsert,
     compile_relationship_upsert,
+    group_evidence_edges,
     group_typed_relations,
 )
 
@@ -56,6 +59,15 @@ def compile_persisted_mutation(
             )
         group, grouped_rows = next(iter(groups.items()))
         return compile_relationship_upsert(group), {"rows": grouped_rows}
+    if operation.reconciliation == "evidence_edge":
+        groups = group_evidence_edges(materialized)
+        if len(groups) != 1:
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                "persisted evidence-edge batch must contain one edge shape",
+            )
+        group, grouped_rows = next(iter(groups.items()))
+        return compile_evidence_edge_upsert(group), {"rows": grouped_rows}
     if operation.reconciliation == "repository_file":
         return (
             "UNWIND $rows AS row "
