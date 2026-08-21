@@ -76,6 +76,7 @@ from tools.cplus.rc_parser import (
     read_rc_text,
 )
 from tools.cplus.proc_analyzer import analyze_proc_file, prepare_proc_path
+from tools.cplus.proc_source_map import proc_masking_fingerprint
 from tools.cplus.parse_recovery import (
     MAX_COMPILE_DATABASE_BYTES,
     MAX_COMPILE_DATABASE_ENTRIES,
@@ -790,6 +791,7 @@ def _parse_cache_context_signature(
         parser_language = "windows_rc" if is_resource else ("cpp" if is_cpp else "c")
         parser_version = "1" if is_resource else _runtime_package_version("tree-sitter")
         grammar_version = "1" if is_resource else _grammar_version(is_cpp)
+    source_hash = source_fingerprint(source_bytes)
     context = ParseContext(
         backend=backend,
         parser_language=parser_language,
@@ -801,12 +803,13 @@ def _parse_cache_context_signature(
         ),
         compile_context_available=bool(compile_context),
         compile_context_fingerprint=compile_context,
-        masking_fingerprint="proc-v1" if ext in {".pc", ".pcc"} else "",
+        masking_fingerprint=(
+            proc_masking_fingerprint(source_hash) if ext in {".pc", ".pcc"} else ""
+        ),
         recovery_policy_version=(
             recovery_policy_version or ParseContext().recovery_policy_version
         ),
     )
-    source_hash = source_fingerprint(source_bytes)
     return {
         "file": file_signature(file_path),
         "source_fingerprint": source_hash,
@@ -2325,7 +2328,11 @@ def parse_c_family_file(
         lossy_decode=source_lossy_decode,
         compile_context_available=compile_context_available,
         compile_context_fingerprint=compile_context_fingerprint,
-        masking_fingerprint="proc-v1" if ext in {".pc", ".pcc"} else "",
+        masking_fingerprint=(
+            proc_masking_fingerprint(source_fingerprint(source_bytes))
+            if ext in {".pc", ".pcc"}
+            else ""
+        ),
     )
     quality_record = build_quality_record(
         root=root,
