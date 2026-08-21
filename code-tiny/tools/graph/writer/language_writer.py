@@ -18,8 +18,10 @@ from tools.graph.operations.namespace_ops import NamespaceNodeOperations
 from tools.graph.operations.type_ops import TypeNodeOperations
 from tools.graph.operations.function_ops import FunctionNodeOperations
 from tools.graph.writer.query_contract import (
+    compile_evidence_edge_upsert,
     compile_relationship_endpoint_audit,
     compile_relationship_upsert,
+    group_evidence_edges,
     group_typed_relations,
 )
 from tools.graph.journal.identity import canonical_json
@@ -35,6 +37,18 @@ from tools.graph.journal.models import BatchStatus
 _OPTIONAL_EXTERNAL_RELATION_TYPES = frozenset(
     {"EXTENDS", "IMPLEMENTS", "INHERITS_FROM", "MIXES_IN"}
 )
+
+# Graph labels for host/indicator declaration joins.  A join may also carry
+# an explicit ``target_label``; this mapping covers the standard kinds the
+# Pro*C host-declaration resolver emits.
+_DECLARATION_KIND_LABELS = {
+    "function": "Function",
+    "parameter": "Function",
+    "field": "Field",
+    "variable": "Variable",
+    "local": "Variable",
+    "global": "Variable",
+}
 
 class LanguageCodeWriter:
     """
@@ -1805,6 +1819,41 @@ class LanguageCodeWriter:
             "possible_calls:site", calls, write_batch, state, state_writer
         )
 
+    async def write_evidence_edges(
+        self,
+        edges: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write self-describing staging-plane evidence edges.
+
+        Each row carries ``source_label``/``source_property``/``source_id``,
+        ``target_label``/``target_property``/``target_id``, ``rel_type``, an
+        optional ``edge_property`` naming the merged edge's identity property,
+        and ``props``.  Endpoints are required: a missing endpoint fails the
+        cardinality check instead of silently dropping the edge.  Dangling
+        evidence must be persisted by the caller on the staging node's props
+        (the merge layer computes it before any write), never appended inside
+        a mutation.
+        """
+
+        if not edges:
+            return 0
+        written = 0
+        for group, rows in group_evidence_edges(edges).items():
+            query = compile_evidence_edge_upsert(group)
+
+            async def write_batch(batch: List[Dict[str, Any]], _query: str = query) -> int:
+                records, _, _ = await self.driver.execute_query(
+                    _query, {"rows": batch}, self.database
+                )
+                return int(records[0]["count"]) if records else 0
+
+            written += await self.write_batches(
+                group.state_key, rows, write_batch, state, state_writer
+            )
+        return written
+
     async def write_call_evidence_sites(
         self,
         sites: List[Dict[str, Any]],
@@ -1815,53 +1864,82 @@ class LanguageCodeWriter:
 
         Rows come from the deterministic evidence merge: every site carries
         its stable identity, accepted resolution class, configuration
-        fingerprints, and observation count.  Accepted sites also get a
-        ``RESOLVES_TO`` edge to the semantically resolved callee.  The
-        staging node — not any compatibility ``CALLS`` edge — is the
-        authority for this evidence.
+        fingerprints, observation count, and any precomputed dangling
+        observation ids.  The node merge matches the journal's trusted
+        replay compiler exactly, so required-mode replay reproduces the
+        staging node byte-for-byte.  ``HAS_CALLSITE`` and ``RESOLVES_TO``
+        edges are journaled as required-endpoint evidence edges: unresolved
+        callers/callees fail closed instead of being silently dropped — the
+        merge layer must keep unknown callees as dangling evidence on the
+        site props.
         """
 
         if not sites:
             return 0
 
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
-            # The staging node is the authority and must exist even when the
-            # caller Function node is not (yet) present; only the HAS_CALLSITE
-            # edge is conditional on the caller resolving.
             query = """
             UNWIND $rows AS row
             MERGE (site:CallSite {site_id: row.site_id})
             SET site += row.props,
                 site.updated_at = datetime()
-            WITH site, row
-            CALL {
-                WITH row
-                MATCH (caller:Function {id: row.caller_id})
-                RETURN caller
-                LIMIT 1
-            }
-            MERGE (caller)-[:HAS_CALLSITE]->(site)
-            WITH site, row
-            WHERE row.callee_id <> ''
-            CALL {
-                WITH row
-                MATCH (callee:Function {id: row.callee_id})
-                RETURN callee
-                LIMIT 1
-            }
-            MERGE (site)-[r:RESOLVES_TO]->(callee)
-            SET r.resolution_class = row.resolution_class,
-                r.updated_at = datetime()
-            RETURN count(r) as count
+            RETURN count(site) as count
             """
             records, _, _ = await self.driver.execute_query(
                 query, {"rows": batch}, self.database
             )
             return records[0]["count"] if records else 0
 
-        return await self.write_batches(
+        written = await self.write_batches(
             "call_evidence:sites", sites, write_batch, state, state_writer
         )
+        edges: List[Dict[str, Any]] = []
+        for row in sites:
+            base = {
+                "project_id": str((row.get("props") or {}).get("project_id") or ""),
+                "props": {
+                    key: value
+                    for key, value in (row.get("props") or {}).items()
+                    if isinstance(value, (str, int, float, bool))
+                },
+            }
+            caller_id = str(row.get("caller_id") or "")
+            if caller_id:
+                edges.append(
+                    {
+                        **base,
+                        "source_label": "Function",
+                        "source_property": "id",
+                        "source_id": caller_id,
+                        "target_label": "CallSite",
+                        "target_property": "site_id",
+                        "target_id": row["site_id"],
+                        "rel_type": "HAS_CALLSITE",
+                    }
+                )
+            callee_id = str(row.get("callee_id") or "")
+            if callee_id:
+                edges.append(
+                    {
+                        **base,
+                        "source_label": "CallSite",
+                        "source_property": "site_id",
+                        "source_id": row["site_id"],
+                        "target_label": "Function",
+                        "target_property": "id",
+                        "target_id": callee_id,
+                        "rel_type": "RESOLVES_TO",
+                        "edge_property": "site_id",
+                        "edge_id": row["site_id"],
+                        "props": {
+                            "resolution_class": row.get("resolution_class") or "",
+                        },
+                    }
+                )
+        # The plane count stays the staging-node count; the derived edges are
+        # journaled under their own evidence-edge state keys.
+        await self.write_evidence_edges(edges, state, state_writer)
+        return written
 
     async def write_call_evidence_observations(
         self,
@@ -1873,89 +1951,55 @@ class LanguageCodeWriter:
 
         Each row links a ``CallSite`` to the observed callee function and
         carries the full evidence contract properties (provider, resolution
-        class, TU/configuration provenance, source span).  Observations
-        without an existing callee node are never silently dropped: their
-        evidence stays queryable on the staging plane as a dangling
-        observation count on the ``CallSite``.
+        class, TU/configuration provenance, source span).  Both endpoints are
+        required: an observation whose callee is not part of the staged set
+        must arrive flagged ``dangling`` — its evidence is already persisted
+        on the staging site's ``dangling_observation_ids`` prop by the merge
+        layer, so it is skipped here rather than silently dropped or
+        double-counted.
         """
 
         if not observations:
             return 0
-
-        async def write_batch(batch: List[Dict[str, Any]]) -> int:
-            # Determine exactly which rows can link before writing, so a
-            # missing callee never poisons the dangling counts of its
-            # batch-mates.
-            existence_query = """
-            UNWIND $rows AS row
-            CALL {
-                WITH row
-                MATCH (callee:Function {id: row.callee_id})
-                RETURN callee.id AS callee_id
-                LIMIT 1
-            }
-            RETURN row.evidence_id AS evidence_id, callee_id AS callee_id
-            """
-            records, _, _ = await self.driver.execute_query(
-                existence_query, {"rows": batch}, self.database
+        edges: List[Dict[str, Any]] = []
+        for row in observations:
+            if row.get("dangling"):
+                continue
+            callee_id = str(row.get("callee_id") or row.get("callee_symbol_id") or "")
+            if not callee_id:
+                continue
+            edges.append(
+                {
+                    "source_label": "CallSite",
+                    "source_property": "site_id",
+                    "source_id": str(row["site_id"]),
+                    "target_label": "Function",
+                    "target_property": "id",
+                    "target_id": callee_id,
+                    "rel_type": "OBSERVED_AS",
+                    "edge_property": "evidence_id",
+                    "edge_id": str(row["evidence_id"]),
+                    "project_id": str(row.get("project_id") or ""),
+                    "props": {
+                        key: value
+                        for key, value in row.items()
+                        if key
+                        not in {
+                            "site_id",
+                            "callee_id",
+                            "callee_symbol_id",
+                            "evidence_id",
+                            "dangling",
+                            "props",
+                            "_repeat_runs",
+                            "caller_id",
+                        }
+                        and value not in (None, [], {})
+                        and isinstance(value, (str, int, float, bool))
+                    },
+                }
             )
-            linked_callees = {
-                str(record.get("evidence_id"))
-                for record in records
-                if record.get("callee_id")
-            }
-            linkable = [
-                row for row in batch if str(row.get("evidence_id")) in linked_callees
-            ]
-            linked = 0
-            if linkable:
-                query = """
-                UNWIND $rows AS row
-                CALL {
-                    WITH row
-                    MATCH (site:CallSite {site_id: row.site_id})
-                    RETURN site
-                    LIMIT 1
-                }
-                CALL {
-                    WITH row
-                    MATCH (callee:Function {id: row.callee_id})
-                    RETURN callee
-                    LIMIT 1
-                }
-                MERGE (site)-[r:OBSERVED_AS {evidence_id: row.evidence_id}]->(callee)
-                SET r += row.props,
-                    r.updated_at = datetime()
-                RETURN count(r) as count
-                """
-                records, _, _ = await self.driver.execute_query(
-                    query, {"rows": linkable}, self.database
-                )
-                linked = records[0]["count"] if records else 0
-            dangling = [row for row in batch if row not in linkable]
-            if dangling:
-                # Fail-visible, not fail-silent: observations whose callee
-                # node does not exist are counted on the staging site so the
-                # evidence remains discoverable and reconcilable later.
-                # The count is idempotent per evidence_id via the delta map.
-                dangling_query = """
-                UNWIND $rows AS row
-                MATCH (site:CallSite {site_id: row.site_id})
-                SET site.dangling_observation_ids =
-                        coalesce(site.dangling_observation_ids, []) + row.evidence_id
-                RETURN count(site) as count
-                """
-                try:
-                    await self.driver.execute_query(
-                        dangling_query, {"rows": dangling}, self.database
-                    )
-                except Exception:
-                    pass
-            return linked
-
-        return await self.write_batches(
-            "call_evidence:observations", observations, write_batch, state, state_writer
-        )
+        return await self.write_evidence_edges(edges, state, state_writer)
 
     async def write_build_configurations(
         self,
@@ -1967,7 +2011,10 @@ class LanguageCodeWriter:
 
         Contradictory but valid configurations coexist as distinct nodes
         keyed by ``config_fingerprint``; a site observed under several
-        configurations links to each without erasing the others.
+        configurations links to each without erasing the others.  The node
+        merge is journaled under the canonical staging contract and the
+        links under the evidence-edge contract, so required-mode replay is
+        exact.
         """
 
         if not configurations:
@@ -1979,15 +2026,6 @@ class LanguageCodeWriter:
             MERGE (config:BuildConfiguration {config_fingerprint: row.config_fingerprint})
             SET config += row.props,
                 config.updated_at = datetime()
-            WITH config, row
-            WHERE row.site_id <> ''
-            CALL {
-                WITH config, row
-                MATCH (site:CallSite {site_id: row.site_id})
-                RETURN site
-                LIMIT 1
-            }
-            MERGE (site)-[:IN_CONFIGURATION]->(config)
             RETURN count(config) as count
             """
             records, _, _ = await self.driver.execute_query(
@@ -1995,9 +2033,29 @@ class LanguageCodeWriter:
             )
             return records[0]["count"] if records else 0
 
-        return await self.write_batches(
+        written = await self.write_batches(
             "call_evidence:configurations", configurations, write_batch, state, state_writer
         )
+        edges: List[Dict[str, Any]] = []
+        for row in configurations:
+            site_id = str(row.get("site_id") or "")
+            if not site_id:
+                continue
+            edges.append(
+                {
+                    "source_label": "CallSite",
+                    "source_property": "site_id",
+                    "source_id": site_id,
+                    "target_label": "BuildConfiguration",
+                    "target_property": "config_fingerprint",
+                    "target_id": str(row["config_fingerprint"]),
+                    "rel_type": "IN_CONFIGURATION",
+                    "project_id": str((row.get("props") or {}).get("project_id") or ""),
+                    "props": {},
+                }
+            )
+        await self.write_evidence_edges(edges, state, state_writer)
+        return written
 
     async def write_semantic_coverage(
         self,
@@ -2040,72 +2098,82 @@ class LanguageCodeWriter:
         otherwise) function to the original SQL statement with its join
         quality and source-map provenance.  ``RESOLVES_HOST_DECLARATION``
         links uniquely resolved host/indicator variables to their C
-        declaration evidence.  Neither changes the identity of the Pro*C
-        nodes nor redefines ``BINDS_PARAMETER``.
+        declaration evidence; the declaration's graph label is derived from
+        the declared ``target_label`` or the declaration kind.  Neither
+        changes the identity of the Pro*C nodes nor redefines
+        ``BINDS_PARAMETER``.  All joins are journaled evidence edges with
+        required endpoints.
         """
 
-        written = 0
-        if function_joins:
-            async def write_joins(batch: List[Dict[str, Any]]) -> int:
-                query = """
-                UNWIND $rows AS row
-                CALL {
-                    WITH row
-                    MATCH (f:Function {id: row.function_id})
-                    RETURN f
-                    LIMIT 1
+        edges: List[Dict[str, Any]] = []
+        for join in function_joins or []:
+            edges.append(
+                {
+                    "source_label": "Function",
+                    "source_property": "id",
+                    "source_id": str(join["function_id"]),
+                    "target_label": "SqlStatement",
+                    "target_property": "id",
+                    "target_id": str(join["statement_id"]),
+                    "rel_type": "EXECUTES_SQL",
+                    "edge_property": "statement_id",
+                    "edge_id": str(join["statement_id"]),
+                    "project_id": str(join.get("project_id") or ""),
+                    "props": {
+                        key: value
+                        for key, value in join.items()
+                        if key
+                        not in {"function_id", "statement_id", "props"}
+                        and value not in (None, [], {})
+                        and isinstance(value, (str, int, float, bool))
+                    },
                 }
-                CALL {
-                    WITH row
-                    MATCH (s:SqlStatement {id: row.statement_id})
-                    RETURN s
-                    LIMIT 1
-                }
-                MERGE (f)-[r:EXECUTES_SQL {statement_id: row.statement_id}]->(s)
-                SET r += row.props,
-                    r.updated_at = datetime()
-                RETURN count(r) as count
-                """
-                records, _, _ = await self.driver.execute_query(
-                    query, {"rows": batch}, self.database
-                )
-                return records[0]["count"] if records else 0
-
-            written += await self.write_batches(
-                "proc_evidence:function_joins", function_joins, write_joins, state, state_writer
             )
-        if host_declarations:
-            async def write_hosts(batch: List[Dict[str, Any]]) -> int:
-                query = """
-                UNWIND $rows AS row
-                CALL {
-                    WITH row
-                    MATCH (host:SqlHostVariable {id: row.host_variable_id})
-                    RETURN host
-                    LIMIT 1
-                }
-                CALL {
-                    WITH row
-                    MATCH (declaration)
-                    WHERE (declaration:Function OR declaration:Variable OR declaration:Field)
-                      AND declaration.id = row.declaration_id
-                    RETURN declaration
-                    LIMIT 1
-                }
-                MERGE (host)-[r:RESOLVES_HOST_DECLARATION {declaration_id: row.declaration_id}]->(declaration)
-                SET r += row.props,
-                    r.updated_at = datetime()
-                RETURN count(r) as count
-                """
-                records, _, _ = await self.driver.execute_query(
-                    query, {"rows": batch}, self.database
-                )
-                return records[0]["count"] if records else 0
-
-            written += await self.write_batches(
-                "proc_evidence:host_declarations", host_declarations, write_hosts, state, state_writer
+        for host in host_declarations or []:
+            declaration_id = str(host.get("declaration_id") or "")
+            if not declaration_id:
+                # Unresolved declaration joins stay conservative evidence on
+                # the merge result; they never become graph edges.
+                continue
+            target_label = str(
+                host.get("target_label")
+                or _DECLARATION_KIND_LABELS.get(str(host.get("declaration_kind") or ""))
+                or ""
             )
-        return written
+            if not target_label:
+                raise ValueError(
+                    "host declaration joins require a graph label for the "
+                    f"declaration: {host.get('declaration_kind')!r}"
+                )
+            edges.append(
+                {
+                    "source_label": "SqlHostVariable",
+                    "source_property": "id",
+                    "source_id": str(host["host_variable_id"]),
+                    "target_label": target_label,
+                    "target_property": "id",
+                    "target_id": declaration_id,
+                    "rel_type": "RESOLVES_HOST_DECLARATION",
+                    "edge_property": "declaration_id",
+                    "edge_id": declaration_id,
+                    "project_id": str(host.get("project_id") or ""),
+                    "props": {
+                        key: value
+                        for key, value in host.items()
+                        if key
+                        not in {
+                            "host_variable_id",
+                            "declaration_id",
+                            "declaration_kind",
+                            "target_label",
+                            "props",
+                        }
+                        and value not in (None, [], {})
+                        and isinstance(value, (str, int, float, bool))
+                    },
+                }
+            )
+        return await self.write_evidence_edges(edges, state, state_writer)
 
     async def write_navigators(
         self,

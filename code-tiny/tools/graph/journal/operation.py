@@ -49,6 +49,17 @@ _NODE_CONTRACTS = {
     "param_lists": ("ParamList", "id"),
     "workflows": ("Workflow", "id"),
     "workflow_steps": ("WorkflowStep", "id"),
+    # Semantic call-evidence staging plane (cplus Phase 06).  Rows merge one
+    # staging node per row; the optional third/fourth elements name the row's
+    # identity and properties fields when they differ from ``id``/whole-row.
+    "call_evidence:sites": ("CallSite", "site_id", "site_id", "props"),
+    "call_evidence:configurations": (
+        "BuildConfiguration",
+        "config_fingerprint",
+        "config_fingerprint",
+        "props",
+    ),
+    "call_evidence:coverage": ("SemanticCoverage", "fingerprint", "fingerprint", "props"),
 }
 
 
@@ -97,19 +108,39 @@ class GraphWriteOperation:
     def for_label(cls, label: str) -> "GraphWriteOperation":
         normalized = label.strip().casefold()
         if normalized in _NODE_CONTRACTS:
-            node_label, identity_property = _NODE_CONTRACTS[normalized]
+            contract = _NODE_CONTRACTS[normalized]
+            node_label, identity_property = contract[0], contract[1]
+            row_identity = contract[2] if len(contract) > 2 else "id"
+            row_properties = contract[3] if len(contract) > 3 else None
             return cls(
                 label=label,
                 phase=OperationPhase.NODES,
                 reconciliation="node_identity",
                 node_label=node_label,
                 identity_property=identity_property,
+                row_identity_property=row_identity,
+                row_properties_property=row_properties,
             )
         if normalized.startswith("relations:"):
             return cls(
                 label=label,
                 phase=OperationPhase.RELATIONSHIPS,
                 reconciliation="typed_relationship",
+            )
+        if normalized == "call_evidence:edges" or normalized.startswith(
+            "call_evidence:edges:"
+        ):
+            # Staging-plane evidence edges (HAS_CALLSITE, RESOLVES_TO,
+            # OBSERVED_AS, IN_CONFIGURATION, EXECUTES_SQL,
+            # RESOLVES_HOST_DECLARATION).  Rows are self-describing: they
+            # carry endpoint label/property/value triples, the relationship
+            # type, and an optional edge identity property, so replay and
+            # reconciliation never need stored Cypher.  The label may carry
+            # the compiled group suffix for per-shape journal accounting.
+            return cls(
+                label=label,
+                phase=OperationPhase.RELATIONSHIPS,
+                reconciliation="evidence_edge",
             )
         if normalized == "repo_file_edges":
             return cls(
