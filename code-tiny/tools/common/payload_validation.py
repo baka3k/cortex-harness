@@ -10,10 +10,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence
 
+from tools.common.call_evidence import (
+    PROC_NODE_LABELS,
+    RESOLUTION_CLASS_DIRECT_RESOLVED,
+    is_strong_call_evidence,
+    normalize_call_row,
+)
 from tools.common.reliability import fingerprint_rows
 
 
-PAYLOAD_SCHEMA_VERSION = "1.0"
+PAYLOAD_SCHEMA_VERSION = "1.1"
 MAX_EVIDENCE_CHARS = 512
 
 
@@ -280,8 +286,13 @@ _CPLUS_COLLECTION_LABELS: Mapping[str, str] = {
     "templates": "Template",
     "resources": "Resource",
     "resource_elements": "ResourceElement",
-    "proc_nodes": "ProcStatement",
+    # Pro*C nodes are label-aware: each row declares one of the five concrete
+    # SQL labels. A proc_nodes row without a recognized label is quarantined
+    # instead of collapsing into a generic ProcStatement bucket.
+    "proc_nodes": "SqlStatement",
 }
+
+_PROC_NODE_LABELS = PROC_NODE_LABELS
 
 _CPLUS_REQUIRED_FIELDS: Mapping[str, tuple[str, ...]] = {
     "namespaces": (
@@ -437,7 +448,11 @@ def validate_cplus_payload(
         for row in rows:
             label = str(row.get("label") or default_label)
             identity = _record_identity(row)
-            reason = _identity_reason(identity)
+            reason: QuarantineReason | None = None
+            if collection == "proc_nodes" and label not in _PROC_NODE_LABELS:
+                reason = QuarantineReason.INVALID_RECORD
+            if reason is None:
+                reason = _identity_reason(identity)
             if reason is None and "name" in row:
                 reason = _identity_reason(row.get("name"), name=True)
             if reason is None and _invalid_required_fields(collection, row):
@@ -581,6 +596,18 @@ def validate_cplus_payload(
             continue
         row = dict(call)
         caller_id = str(row.get("caller_id") or "")
+        try:
+            row = normalize_call_row(row)
+        except ValueError:
+            quarantine.append(
+                _quarantine(
+                    "Call",
+                    {"id": caller_id, "name": row.get("callee_name") or "", "file_path": source_path},
+                    QuarantineReason.INVALID_RECORD,
+                    default_path=source_path,
+                )
+            )
+            continue
         if (
             file_quarantined
             or ("Function", caller_id) in invalid_keys
@@ -599,6 +626,18 @@ def validate_cplus_payload(
                 )
             )
             continue
+        if row.get("resolution_class") == RESOLUTION_CLASS_DIRECT_RESOLVED and (
+            not is_strong_call_evidence(row)
+            or ("Function", str(row.get("callee_id") or "")) not in accepted_ids
+        ):
+            # A claimed semantic resolution without an approved provider and
+            # complete identity fields — or pointing at a callee this payload
+            # or the scan did not accept — is not strong evidence. Demote it
+            # explicitly to weak evidence rather than letting a strict CALLS
+            # edge reach the writer.
+            row["demoted_from"] = RESOLUTION_CLASS_DIRECT_RESOLVED
+            row["resolution_class"] = "lexical_candidate"
+            row["semantic_provider"] = "tree_sitter"
         filtered_calls.append(row)
     validated["calls"] = filtered_calls
     validated["_validation_rejected_count"] = rejected_count

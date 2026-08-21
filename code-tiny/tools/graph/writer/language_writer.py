@@ -10,6 +10,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from tools.common.call_evidence import enforce_strong_call_row
 from tools.graph.core.base import GraphDriver
 from tools.graph.operations.package_ops import PackageNodeOperations
 from tools.graph.operations.class_ops import ClassNodeOperations
@@ -1714,9 +1715,20 @@ class LanguageCodeWriter:
         state: Optional[Dict[str, int]] = None,
         state_writer: Optional[Callable] = None,
     ) -> int:
-        """Write CALLS edges that include a site_id (for C++/Android-style calls)."""
+        """Write CALLS edges that include a site_id (for C++/Android-style calls).
+
+        Rows participating in the call-evidence contract (any row carrying a
+        ``resolution_class`` in its props) are re-checked here: a claimed
+        ``direct_resolved`` observation without an approved semantic provider
+        and complete identity fields fails closed instead of publishing CALLS.
+        Rows that do not carry the marker (language analyzers that have not
+        adopted the contract yet) pass through unchanged; enforcement is
+        opt-in by marker until those lanes migrate.
+        """
         if not calls:
             return 0
+        for row in calls:
+            enforce_strong_call_row(row)
 
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
@@ -1744,6 +1756,53 @@ class LanguageCodeWriter:
 
         return await self.write_batches(
             "calls:site", calls, write_batch, state, state_writer
+        )
+
+    async def write_possible_calls_with_site(
+        self,
+        calls: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write weak site-level POSSIBLE_CALLS edges (lexical/heuristic evidence).
+
+        These rows carry a ``resolution_class`` under the call-evidence
+        contract; a strong claim that slipped in fails closed here exactly as
+        in ``write_calls_with_site``. The journal reconciles these under the
+        dedicated ``possible_calls:site`` contract so replay can never
+        materialize weak evidence as a strict CALLS edge.
+        """
+        if not calls:
+            return 0
+        for row in calls:
+            enforce_strong_call_row(row)
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            CALL {
+                WITH row
+                MATCH (caller:Function {id: row.caller_id})
+                RETURN caller
+                LIMIT 1
+            }
+            CALL {
+                WITH row
+                MATCH (callee:Function {id: row.callee_id})
+                RETURN callee
+                LIMIT 1
+            }
+            MERGE (caller)-[r:POSSIBLE_CALLS {site_id: row.site_id}]->(callee)
+            SET r += row.props
+            RETURN count(r) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches(
+            "possible_calls:site", calls, write_batch, state, state_writer
         )
 
     async def write_navigators(

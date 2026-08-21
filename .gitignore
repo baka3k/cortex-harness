@@ -91,6 +91,8 @@ tests/fixtures/**
 !tests/fixtures/web-framework-application/**
 !tests/fixtures/database-schema-application/
 !tests/fixtures/database-schema-application/**
+!tests/fixtures/cplus_semantic_calls/
+!tests/fixtures/cplus_semantic_calls/**
 !tests/fixtures/unified_contract/
 !tests/fixtures/unified_contract/proj_alpha/
 !tests/fixtures/unified_contract/proj_alpha/src/

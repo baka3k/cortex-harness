@@ -1,0 +1,7 @@
+/* Cohort: Pro*C calls around embedded SQL. */
+int commit_work(void);
+int main(void) {
+    EXEC SQL SELECT NAME INTO :customer_name FROM CUSTOMER;
+    EXEC SQL COMMIT WORK;
+    return commit_work();
+}
