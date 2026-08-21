@@ -127,11 +127,48 @@ function Invoke-NativeQuiet {
 }
 
 function Get-PythonLauncher {
-    $python = Get-CommandPath @("py.exe", "python.exe", "python3", "python")
-    if (-not $python) {
-        throw "Python was not found on PATH. Install Python 3.12+ before running make build."
+    # Windows ships a Microsoft Store stub at <…>\Microsoft\WindowsApps\python.exe
+    # that prints "Python was not found…" and exits 9009 instead of running real
+    # Python. Skip it, probe every candidate with `--version`, and fall back to
+    # a uv-managed interpreter when no system launcher works.
+    $seen = @{}
+    $candidates = @()
+    foreach ($name in @("py.exe", "python.exe", "python3", "python")) {
+        foreach ($cmd in @(Get-Command $name -ErrorAction SilentlyContinue)) {
+            if ($cmd.CommandType -ne "Application" -or -not $cmd.Source) { continue }
+            if ($seen.ContainsKey($cmd.Source)) { continue }
+            $seen[$cmd.Source] = $true
+            $candidates += $cmd.Source
+        }
     }
-    return $python
+
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        foreach ($path in $candidates) {
+            if ($path -like "*\Microsoft\WindowsApps\*") { continue }
+            & $path --version *> $null
+            if ($LASTEXITCODE -eq 0) { return $path }
+        }
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+
+    # No working system Python — let uv resolve a managed interpreter.
+    try {
+        $uv = Get-UvLauncher
+        $managed = & $uv python find 2>$null
+        if ($LASTEXITCODE -eq 0 -and $managed) {
+            $managedPath = ($managed | Select-Object -First 1).Trim()
+            if ($managedPath -and (Test-Path -LiteralPath $managedPath)) {
+                return $managedPath
+            }
+        }
+    } catch {
+        # Fall through to the user-facing error below.
+    }
+
+    throw "Python 3.12+ was not found. Disable the Microsoft Store stub (Settings > Apps > Advanced app settings > App execution aliases), install Python 3.12+, or run 'uv python install 3.12' to let uv provide one."
 }
 
 function Get-RootVenvDir {
@@ -178,9 +215,13 @@ function Invoke-Build {
     $uv = Get-UvLauncher
     $venvDir = Get-RootVenvDir
     if (-not (Test-Path -LiteralPath $venvDir)) {
-        $launcher = Get-PythonLauncher
+        # Pin to Python 3.12: pyproject.toml declares requires-python = ">=3.12",
+        # and tree-sitter-languages 1.10.2 (the latest release) only ships wheels
+        # up to cp312. uv resolves the request against managed + system
+        # interpreters and auto-downloads 3.12 when missing.
+        $pythonSpec = "3.12"
         Write-Host "[build] Creating venv: $venvDir"
-        Invoke-Uv -Uv $uv -Arguments @("venv", "--python", $launcher, $venvDir)
+        Invoke-Uv -Uv $uv -Arguments @("venv", "--python", $pythonSpec, $venvDir)
     }
 
     $python = Get-RootVenvPython
