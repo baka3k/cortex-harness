@@ -33,7 +33,7 @@ def extract_exec_sql_statements(source_text: str) -> List[ProcSqlStatement]: ...
 
 Create:
 - `code-tiny/tools/cplus/proc_sql.py`
-- `tests/fixtures/procc-application/BZZAAB02.pc` (small synthetic Pro*C fixture with `EXEC SQL CONNECT`/`COMMIT`/`SELECT`, CP932-encoded)
+- `tests/fixtures/procc-application/Sample02.pc` (small synthetic Pro*C fixture with `EXEC SQL CONNECT`/`COMMIT`/`SELECT`, CP932-encoded)
 - `tests/test_cplus_proc_sql.py`
 
 Modify:
