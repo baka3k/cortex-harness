@@ -361,6 +361,7 @@ def run_clang_worker(
     worker_path: str,
     request: Mapping[str, Any],
     timeout_seconds: float,
+    expected_protocol: str = WORKER_PROTOCOL_VERSION,
 ) -> Dict[str, Any]:
     request_bytes = json.dumps(dict(request), ensure_ascii=True).encode("utf-8")
     if len(request_bytes) > MAX_WORKER_REQUEST_BYTES:
@@ -447,6 +448,15 @@ def run_clang_worker(
         with open(stderr_path, "rb") as handle:
             stderr = handle.read(MAX_WORKER_OUTPUT_BYTES + 1).decode("utf-8", errors="replace")
         if process.returncode != 0:
+            # A non-zero exit with a well-formed protocol response means the
+            # worker classified its own failure (e.g. invalid request); prefer
+            # that typed outcome over a raw stderr tail.
+            try:
+                typed = json.loads(stdout)
+                if isinstance(typed, dict) and typed.get("protocol_version") == expected_protocol:
+                    return typed
+            except ValueError:
+                pass
             return {
                 "status": "failed",
                 "error": (stderr or stdout or f"worker exit {process.returncode}")[-4000:],
@@ -455,9 +465,34 @@ def run_clang_worker(
             result = json.loads(stdout)
         except ValueError:
             return {"status": "invalid", "error": "worker returned invalid JSON"}
-        if not isinstance(result, dict) or result.get("protocol_version") != WORKER_PROTOCOL_VERSION:
+        if not isinstance(result, dict) or result.get("protocol_version") != expected_protocol:
             return {"status": "invalid", "error": "worker protocol mismatch"}
         return result
+
+
+def run_semantic_worker(
+    *,
+    worker_path: str,
+    request: Mapping[str, Any],
+    timeout_seconds: float,
+) -> Dict[str, Any]:
+    """Run one protocol-"2" semantic call-evidence worker request.
+
+    The child worker validates the request itself (schema, containment,
+    credential redaction, Pro*C bundle allowlisting); this wrapper keeps the
+    same disposable-process, output-cap, RSS, and process-tree termination
+    guarantees as the recovery worker and accepts the semantic protocol
+    version on the response.
+    """
+
+    from tools.cplus.semantic_worker import SEMANTIC_WORKER_PROTOCOL_VERSION
+
+    return run_clang_worker(
+        worker_path=worker_path,
+        request=request,
+        timeout_seconds=timeout_seconds,
+        expected_protocol=SEMANTIC_WORKER_PROTOCOL_VERSION,
+    )
 
 
 def _damage_from_record(record: Mapping[str, Any]) -> DamageSummary:
