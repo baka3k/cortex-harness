@@ -453,6 +453,12 @@ def storage_overlay(
             overlay["QDRANT_URL"] = remote.qdrant_url
             if remote.qdrant_api_key:
                 overlay["QDRANT_API_KEY"] = remote.qdrant_api_key
+            # Analyzer ``--qdrant-url`` defaults read from QDRANT_CODE_PATH;
+            # override the local-path value with the remote URL so the
+            # embedding pass targets the configured remote Qdrant instead of
+            # silently falling back to the local filesystem store.
+            overlay[ENV_QDRANT_CODE] = remote.qdrant_url
+            overlay[ENV_QDRANT_DOC] = remote.qdrant_url
         if remote.falkordb_uri:
             # A remote FalkorDB server replaces the embedded store for this
             # project. Drop the local path keys so children cannot silently

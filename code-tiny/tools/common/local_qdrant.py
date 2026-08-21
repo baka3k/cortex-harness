@@ -253,14 +253,34 @@ class LocalQdrantWriter:
         *,
         point_transform: Optional[Callable[[Iterable[Mapping[str, Any]]], list[dict[str, Any]]]] = None,
     ) -> None:
-        self.url = default_local_qdrant_path() if not url else str(_local_path(url))
         self.collection = collection
         self.vector_size = int(vector_size)
         self.timeout = timeout
         self.retries = retries
         self.retry_sleep = retry_sleep
-        self._store = get_code_qdrant_store(self.url)
         self._point_transform = point_transform
+        # A URL-shaped locator (``http://``, ``https://``) means the project is
+        # in remote mode and ``storage_overlay`` exposed the remote Qdrant
+        # endpoint through ``QDRANT_CODE_PATH``. Use the shared remote store
+        # so the embedding pass actually lands vectors on the remote server
+        # instead of raising the legacy "remote URL not supported" error.
+        api_key = os.environ.get("QDRANT_API_KEY")
+        if url and (
+            url.startswith("http://") or url.startswith("https://")
+        ):
+            from cortex_harness.storage import QdrantStorageRole
+            from cortex_harness.storage.qdrant_remote import RemoteQdrantStore
+
+            self.url = url
+            self._store = RemoteQdrantStore(
+                url=url,
+                api_key=api_key,
+                timeout=timeout,
+                role=QdrantStorageRole.CODE,
+            )
+            return
+        self.url = default_local_qdrant_path() if not url else str(_local_path(url))
+        self._store = get_code_qdrant_store(self.url)
 
     def ensure_collection(self) -> None:
         ensure_collection(self._store, self.collection, self.vector_size)
