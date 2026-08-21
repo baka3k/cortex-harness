@@ -203,7 +203,7 @@ def test_relative_data_home_anchors_under_account_home_not_project_root(
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     project = tmp_path / "sources" / "sampledb"
 
-    resolved = resolve_storage(project, data_home="sampledb")
+    resolved = resolve_storage(project, data_home="")
 
     # Lives under the per-account data home, not the source tree.
     assert resolved.data_root == (fake_home / ".cortext-harness" / "sampledb").resolve()
