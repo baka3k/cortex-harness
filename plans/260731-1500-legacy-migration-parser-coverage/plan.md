@@ -35,7 +35,7 @@ Pro*C source (.c / .pc)
 
 ## Verified Project Context
 
-- `_scan_c_family_files` (`code-tiny/tools/cplus/cplus_analyzer.py:2489-2499`) matches only `.c/.h/.hpp/.cpp/.cc/.cxx/.hh/.hxx/.rc/.rc2` — **`.pc` is not scanned**, so Pro*C files (e.g. `BZZAAB02.pc`) are silently skipped today. No `EXEC SQL` handling exists anywhere under `code-tiny/tools/cplus/`.
+- `_scan_c_family_files` (`code-tiny/tools/cplus/cplus_analyzer.py:2489-2499`) matches only `.c/.h/.hpp/.cpp/.cc/.cxx/.hh/.hxx/.rc/.rc2` — **`.pc` is not scanned**, so Pro*C files (e.g. `Sample02.pc`) are silently skipped today. No `EXEC SQL` handling exists anywhere under `code-tiny/tools/cplus/`.
 - `_SOURCE_EXTENSIONS` (`code-tiny/tools/sync/incremental_sync.py:1205-1225`) also omits `.pc`, `.sh`, and `.ini` (it has `.properties/.yml/.yaml/.json` but not `.ini`).
 - `ANALYZERS` (`incremental_sync.py:81-101`) has no `shell` or `jp1` entry; no `tools/shell` or `tools/jp1` package exists.
 - COBOL already has the exact pattern to mirror for `EXEC SQL`: `code-tiny/tools/cobol/parser.py:191-195` extracts `operation`/`targets`/`host_variables` into a `ParsedStatement`; `code-tiny/tools/cobol/semantics.py:231-244` turns that into a `CobolSqlStatement`/`CobolCicsCommand` node plus a `DEFINES` edge from the enclosing paragraph. `cplus_analyzer.py` should reuse the same shape (`CplusSqlStatement`, `DEFINES` edge from the enclosing function).

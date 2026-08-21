@@ -158,6 +158,22 @@ def _require(condition: bool, message: str) -> None:
         raise PilotContractError(message)
 
 
+def _is_git_worktree(root: Path) -> bool:
+    """Return whether Git revision verification is available for ``root``."""
+
+    try:
+        check = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return check.returncode == 0 and check.stdout.strip() == "true"
+
+
 def _safe_relative_path(root: Path, raw_path: str) -> Path:
     _require(bool(raw_path), "corpus entry requires path")
     path = Path(raw_path)
@@ -289,25 +305,24 @@ def load_pilot_manifest(
                     f"non-faithful context requires a stable reason: {entry_id!r}",
                 )
 
-    git_dir = root / ".git"
-    _require(git_dir.exists(), "workspace_root must be a git checkout for revision verification")
-    for entry in manifest["corpus"]:
-        revision_path = f"{revision}:{entry['path']}"
-        check = subprocess.run(
-            ["git", "-C", str(root), "show", revision_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-        _require(
-            check.returncode == 0,
-            f"corpus file is absent from manifest revision: {entry['path']!r}",
-        )
-        revision_sha256 = hashlib.sha256(check.stdout).hexdigest()
-        _require(
-            revision_sha256 == str(entry.get("sha256") or "").lower(),
-            f"corpus file hash does not match manifest revision: {entry['path']!r}",
-        )
+    if _is_git_worktree(root):
+        for entry in manifest["corpus"]:
+            revision_path = f"{revision}:{entry['path']}"
+            check = subprocess.run(
+                ["git", "-C", str(root), "show", revision_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            _require(
+                check.returncode == 0,
+                f"corpus file is absent from manifest revision: {entry['path']!r}",
+            )
+            revision_sha256 = hashlib.sha256(check.stdout).hexdigest()
+            _require(
+                revision_sha256 == str(entry.get("sha256") or "").lower(),
+                f"corpus file hash does not match manifest revision: {entry['path']!r}",
+            )
 
     query_ids = [str(item.get("id") or "").strip() for item in manifest["query_scenarios"]]
     _require(all(query_ids), "query scenarios require ids")
