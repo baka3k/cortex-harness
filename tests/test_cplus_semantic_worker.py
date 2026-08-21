@@ -197,6 +197,66 @@ class SemanticWorkerContractTests(unittest.TestCase):
             self.assertEqual(site["resolution_reason"], "macro_expansion")
             self.assertEqual(site["macro_origin"], "WRAP")
 
+    def test_constructor_call_is_classified_not_forced_direct(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root, "ctor.cpp")
+            path.write_text(
+                "struct Item {\n"
+                "  explicit Item(int v) : value(v) {}\n"
+                "  int value;\n"
+                "};\n"
+                "int run(int v) { Item item(v); return item.value; }\n",
+                encoding="utf-8",
+            )
+            result = self._run(self._request(root, path, ["-std=c++17"]))
+            site = self._site(result, "Item")[0]
+            self.assertEqual(site["resolution_class"], "constructor_call")
+            self.assertEqual(site["resolution_reason"], "cxx_construct_expr")
+            self.assertTrue(site["callee_usr"])
+            self.assertTrue(site["caller_usr"])
+
+    def test_overloaded_operator_via_operator_syntax_is_captured(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root, "operator.cpp")
+            path.write_text(
+                "struct Num {\n"
+                "  int v;\n"
+                "  Num(int v) : v(v) {}\n"
+                "};\n"
+                "static int operator+(const Num& a, const Num& b) { return a.v + b.v; }\n"
+                "int run(int x, int y) { return Num(x) + Num(y); }\n",
+                encoding="utf-8",
+            )
+            result = self._run(self._request(root, path, ["-std=c++17"]))
+            sites = [s for s in result["callsites"] if "operator+" in s["callee_name"]]
+            self.assertTrue(sites, [s["callee_name"] for s in result["callsites"]])
+            self.assertEqual(sites[0]["resolution_class"], "direct_resolved")
+            self.assertTrue(sites[0]["callee_usr"])
+
+    def test_redact_relative_collapses_external_paths(self):
+        from tools.cplus.semantic_worker import redact_relative
+
+        with tempfile.TemporaryDirectory() as root:
+            inside = str(Path(root, "src", "a.c"))
+            self.assertEqual(redact_relative(root, inside), "src/a.c")
+            external = "/usr/include/stdio.h"
+            self.assertEqual(redact_relative(root, external), "<external>/stdio.h")
+            self.assertNotIn("..", redact_relative(root, external))
+
+    def test_error_response_never_leaks_absolute_paths(self):
+        with tempfile.TemporaryDirectory() as root:
+            missing_root = Path(root, "nope")
+            request = self._request(missing_root, missing_root / "a.c", ["-std=c11"])
+            result = run_semantic_worker(
+                worker_path=str(WORKER), request=request, timeout_seconds=20
+            )
+            self.assertNotEqual(result["status"], "ok")
+            encoded = json.dumps(result)
+            self.assertNotIn(str(missing_root), encoded)
+            self.assertNotIn("/Users/", encoded)
+            self.assertNotIn("/tmp/", encoded)
+
+
     # -- safety and containment ----------------------------------------------
 
     def test_raw_proc_source_rejected_without_bundle(self):

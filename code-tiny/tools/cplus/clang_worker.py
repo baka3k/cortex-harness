@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import sys
 
@@ -62,6 +63,34 @@ def _disable_network() -> None:
 
     socket.socket = denied  # type: ignore[assignment]
     socket.create_connection = denied  # type: ignore[assignment]
+
+
+# Exception text (e.g. OSError file paths) must never leak absolute local
+# paths into a worker response.
+_ABSOLUTE_PATH_PATTERN = re.compile(r"(?:[A-Za-z]:)?(?:/[\w.\-+@ ]+)+")
+
+
+def _redact_error_text(text: str) -> str:
+    return _ABSOLUTE_PATH_PATTERN.sub("<path>", str(text))[:500]
+
+
+def _error_response(exc: BaseException, semantic: bool) -> Dict[str, Any]:
+    message = _redact_error_text(f"{type(exc).__name__}: {exc}")
+    if semantic:
+        return {
+            "protocol_version": semantic_worker.SEMANTIC_WORKER_PROTOCOL_VERSION,
+            "request_schema": semantic_worker.SEMANTIC_REQUEST_SCHEMA,
+            "status": "invalid",
+            "error": message,
+            "callsites": [],
+            "coverage": {"status": "failed", "detail": _redact_error_text(str(exc))},
+        }
+    return {
+        "protocol_version": WORKER_PROTOCOL_VERSION,
+        "status": "invalid",
+        "payload": None,
+        "error": message,
+    }
 
 
 def _run_semantic_request(request: Dict[str, Any]) -> Dict[str, Any]:
@@ -140,14 +169,7 @@ def main() -> int:
             except (ValueError, RuntimeError, OSError) as exc:
                 # Typed request/runtime failure: still a well-formed response
                 # so the gateway can classify it precisely.
-                response = {
-                    "protocol_version": semantic_worker.SEMANTIC_WORKER_PROTOCOL_VERSION,
-                    "request_schema": semantic_worker.SEMANTIC_REQUEST_SCHEMA,
-                    "status": "invalid",
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "callsites": [],
-                    "coverage": {"status": "failed", "detail": str(exc)[:200]},
-                }
+                response = _error_response(exc, semantic=True)
             sys.stdout.write(json.dumps(response, ensure_ascii=True))
             return 0 if response["status"] == "ok" else 1
         if request.get("protocol_version") != WORKER_PROTOCOL_VERSION:
@@ -187,17 +209,11 @@ def main() -> int:
             "error": "" if payload is not None else "libclang candidate unavailable",
         }
     except BaseException as exc:
-        response = {
-            "protocol_version": (
-                semantic_worker.SEMANTIC_WORKER_PROTOCOL_VERSION
-                if isinstance(request, dict)
-                and request.get("request_schema") == semantic_worker.SEMANTIC_REQUEST_SCHEMA
-                else WORKER_PROTOCOL_VERSION
-            ),
-            "status": "invalid",
-            "payload": None,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+        response = _error_response(
+            exc,
+            semantic=isinstance(request, dict)
+            and request.get("request_schema") == semantic_worker.SEMANTIC_REQUEST_SCHEMA,
+        )
     sys.stdout.write(json.dumps(response, ensure_ascii=True))
     return 0 if response["status"] == "ok" else 1
 

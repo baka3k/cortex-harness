@@ -35,6 +35,8 @@ CALL_EVIDENCE_SCHEMA_VERSION = "1"
 #   indirect_callsite         -> keep function-type/callback evidence, no target
 #   dependent_template_call   -> candidate until a concrete instantiation resolves
 #   lexical_candidate         -> POSSIBLE_CALLS only
+#   constructor_call          -> object-construction evidence, target is a
+#                                constructor decl; never a plain CALLS target
 #   unresolved                -> UNKNOWN_CALL with a bounded reason
 RESOLUTION_CLASS_DIRECT_RESOLVED = "direct_resolved"
 RESOLUTION_CLASS_LEXICAL_CANDIDATE = "lexical_candidate"
@@ -46,6 +48,7 @@ RESOLUTION_CLASSES = frozenset({
     "indirect_callsite",
     "dependent_template_call",
     RESOLUTION_CLASS_LEXICAL_CANDIDATE,
+    "constructor_call",
     RESOLUTION_CLASS_UNRESOLVED,
 })
 

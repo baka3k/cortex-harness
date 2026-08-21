@@ -234,11 +234,12 @@ def redact_relative(root: str, path: Optional[str]) -> str:
     if not path:
         return ""
     root_real = os.path.realpath(os.path.abspath(root))
-    try:
-        real = os.path.realpath(os.path.abspath(path))
-        return os.path.relpath(real, root_real).replace("\\", "/")
-    except ValueError:
-        return "<external>/" + os.path.basename(path)
+    real = os.path.realpath(os.path.abspath(path))
+    # os.path.relpath never raises for foreign paths on POSIX (only on
+    # Windows cross-drive), so containment must be checked explicitly.
+    if real != root_real and not real.startswith(root_real + os.sep):
+        return "<external>/" + os.path.basename(real)
+    return os.path.relpath(real, root_real).replace("\\", "/")
 
 
 def redacted_fingerprint(*values: str) -> str:
@@ -297,14 +298,16 @@ def classify_call(
         indirect_kinds.append(ci.CursorKind.BINDING_DECL)
     if kind in indirect_kinds:
         return "indirect_callsite", f"callee_is_{kind.name.lower()}"
+    if hasattr(ci.CursorKind, "CONSTRUCTOR") and kind == ci.CursorKind.CONSTRUCTOR:
+        return "constructor_call", "cxx_construct_expr"
     if kind in (ci.CursorKind.FUNCTION_TEMPLATE, ci.CursorKind.CXX_METHOD) and (
         "<#" in (referenced.get_usr() or "") or ">#" in (referenced.get_usr() or "")
     ):
         return "dependent_template_call", "unresolved_template_parameter"
-    if kind == ci.CursorKind.CXX_METHOD and referenced.is_virtual_method():
-        return "declared_virtual_target", "virtual_dispatch"
     if kind == ci.CursorKind.CXX_METHOD and referenced.is_pure_virtual_method():
         return "declared_virtual_target", "pure_virtual_dispatch"
+    if kind == ci.CursorKind.CXX_METHOD and referenced.is_virtual_method():
+        return "declared_virtual_target", "virtual_dispatch"
     # Implicitly-created declarations (C implicit function declarations) share
     # the call's location and have an empty extent.
     if (
@@ -459,7 +462,13 @@ def extract_semantic_callsite_evidence(
                         )
                     )
 
-            if kind != ci.CursorKind.CALL_EXPR:
+            # Direct calls plus object-construction sites.  Overloaded
+            # operators invoked via operator syntax (``a + b``) surface as
+            # CALL_EXPR cursors referencing the operator declaration.
+            construct_kind = getattr(ci.CursorKind, "CXX_CONSTRUCT_EXPR", None)
+            if kind != ci.CursorKind.CALL_EXPR and not (
+                construct_kind is not None and kind == construct_kind
+            ):
                 continue
             if len(result.callsites) >= limits.max_callsites:
                 truncated = True
