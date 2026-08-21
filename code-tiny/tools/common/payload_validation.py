@@ -12,6 +12,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from tools.common.call_evidence import (
     PROC_NODE_LABELS,
+    PROC_RELATION_TYPES,
     RESOLUTION_CLASS_DIRECT_RESOLVED,
     is_strong_call_evidence,
     normalize_call_row,
@@ -294,6 +295,22 @@ _CPLUS_COLLECTION_LABELS: Mapping[str, str] = {
 
 _PROC_NODE_LABELS = PROC_NODE_LABELS
 
+# Endpoint-label contract for the nine Pro*C relationships.  A Pro*C
+# relationship whose endpoints are not one of these approved pairs is
+# quarantined before any graph or vector effect — validation is
+# concrete-label aware and never collapses to a generic statement bucket.
+_PROC_RELATION_ENDPOINTS: Mapping[str, frozenset[tuple[str, str]]] = {
+    "DECLARES_STATEMENT": frozenset({("Function", "SqlStatement")}),
+    "DECLARES_DIRECTIVE": frozenset({("Function", "SqlDirective")}),
+    "BINDS_PARAMETER": frozenset({("SqlStatement", "SqlHostVariable")}),
+    "DECLARES_CURSOR": frozenset({("Function", "SqlCursor")}),
+    "REFERENCES_CURSOR": frozenset({("SqlStatement", "SqlCursor")}),
+    "REFERENCES_STATEMENT": frozenset({("SqlStatement", "SqlStatement")}),
+    "READS_FROM": frozenset({("SqlStatement", "DatabaseTable")}),
+    "WRITES_TO": frozenset({("SqlStatement", "DatabaseTable")}),
+    "REFERENCES_TABLE": frozenset({("SqlStatement", "DatabaseTable")}),
+}
+
 _CPLUS_REQUIRED_FIELDS: Mapping[str, tuple[str, ...]] = {
     "namespaces": (
         "symbol_id", "name", "qualified_name", "file_path", "start_line",
@@ -449,7 +466,11 @@ def validate_cplus_payload(
             label = str(row.get("label") or default_label)
             identity = _record_identity(row)
             reason: QuarantineReason | None = None
-            if collection == "proc_nodes" and label not in _PROC_NODE_LABELS:
+            if collection == "proc_nodes" and (
+                not str(row.get("label") or "").strip() or label not in _PROC_NODE_LABELS
+            ):
+                # Pro*C rows must declare one of the five concrete labels; a
+                # missing or unknown label never falls back to a default.
                 reason = QuarantineReason.INVALID_RECORD
             if reason is None:
                 reason = _identity_reason(identity)
@@ -556,6 +577,19 @@ def validate_cplus_payload(
             continue
         source_key = (str(row.get("source_label") or ""), str(row.get("source_id") or ""))
         target_key = (str(row.get("target_label") or ""), str(row.get("target_id") or ""))
+        rel_type = str(row.get("rel_type") or "")
+        if rel_type in PROC_RELATION_TYPES and (source_key[0], target_key[0]) not in _PROC_RELATION_ENDPOINTS.get(
+            rel_type, frozenset()
+        ):
+            quarantine.append(
+                _quarantine(
+                    "Relation",
+                    {"id": f"{source_key[1]}->{target_key[1]}", "file_path": source_path},
+                    QuarantineReason.INVALID_RECORD,
+                    default_path=source_path,
+                )
+            )
+            continue
         registry = known_identities if known_identities is not None else accepted_ids
         unresolved = (
             source_key in invalid_keys

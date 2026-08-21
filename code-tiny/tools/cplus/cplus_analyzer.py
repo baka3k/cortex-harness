@@ -2766,7 +2766,10 @@ def _stable_point_id(symbol_id: str) -> str:
 
 
 def _iter_vector_items(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
-    yield from payload.get("functions", [])
+    from tools.cplus.guarded_publication import vector_item_rejection_reason
+
+    for function in payload.get("functions", []):
+        yield function
     for resource in payload.get("resources", []):
         item = dict(resource)
         item["node_type"] = "resource"
@@ -2774,6 +2777,10 @@ def _iter_vector_items(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     for proc_node in payload.get("proc_nodes", []):
         item = dict(proc_node)
         item.setdefault("node_type", "proc")
+        # Generated code, precompiler runtime wrappers, and credential-bearing
+        # text never enter embeddings; only approved original SQL facts do.
+        if vector_item_rejection_reason(item) is not None:
+            continue
         yield item
 
 
@@ -3718,7 +3725,10 @@ async def build_call_graph(
         "templates": "Template",
         "resources": "Resource",
         "resource_elements": "ResourceElement",
-        "proc_nodes": "ProcStatement",
+        # Pro*C rows always declare one of the five concrete labels; this
+        # default mirrors the validation envelope so preflight identity
+        # registration and payload validation agree.
+        "proc_nodes": "SqlStatement",
     }
 
     def raw_payload_for(file_path: str) -> Dict[str, Any]:

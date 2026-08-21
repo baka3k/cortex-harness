@@ -21,6 +21,7 @@ phaseBlockedBy:
     - 260804-1640-port-proc-cplus-to-code-tiny
     - 260807-0929-mcp-ingest-query-concurrency
 relatedPlans:
+  - 260821-1144-cplus-semantic-call-graph
   - 260807-1202-graph-ingest-write-path-hardening
   - 260807-1329-parser-quality-recovery
   - 260804-1640-port-proc-cplus-to-code-tiny
@@ -209,6 +210,7 @@ progress, and child output become structured events attached to the same run ID.
 
 | Area | Owning plan | This plan consumes/defines |
 | --- | --- | --- |
+| C/C++/Pro*C semantic call evidence and graph views | `260821-1144-cplus-semantic-call-graph` | Semantic-evidence validator adapter, rollout report, and certification gates |
 | Graph schema, typed relations, journal, barriers | `260807-1202-graph-ingest-write-path-hardening` | Verified effect result, failure mapping, certification gates |
 | C/C++ quality, provenance, bounded recovery | `260807-1329-parser-quality-recovery` | Record-level validation/quarantine and policy enforcement contract |
 | Pro*C extraction and masking semantics | `260804-1640-port-proc-cplus-to-code-tiny` | Pro*C validator adapter and mixed-corpus conformance |

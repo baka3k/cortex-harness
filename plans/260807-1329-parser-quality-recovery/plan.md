@@ -7,12 +7,14 @@ scope: "C/C++ parse-quality reporting, classification, provenance, cache correct
 blockedBy: []
 blocks:
   - 260807-2103-toolchain-reliability-hardening
+  - 260821-1144-cplus-semantic-call-graph
 phaseBlockedBy:
   "05":
     - 260804-1640-port-proc-cplus-to-code-tiny
     - 260807-1202-graph-ingest-write-path-hardening
     - 260807-0929-mcp-ingest-query-concurrency
 relatedPlans:
+  - 260821-1144-cplus-semantic-call-graph
   - 260807-2103-toolchain-reliability-hardening
   - 260804-1640-port-proc-cplus-to-code-tiny
   - 260807-1202-graph-ingest-write-path-hardening
@@ -200,6 +202,14 @@ compatible alias during migration.
 6. [Phase 06 — security, performance, canary, and rollout](phase-06-validation-and-rollout.md)
 
 ## Cross-plan dependencies and ownership
+
+### `260821-1144-cplus-semantic-call-graph`
+
+The semantic-call-graph plan consumes this plan's parse-quality tiers,
+provenance, cache identity, bounded recovery, and guarded-publication policy.
+This plan remains the owner of parser assessment/recovery and blocks semantic
+Phase 06; the semantic plan owns callsite taxonomy, Clang resolution, and the
+strict/conservative call-graph views.
 
 ### `260807-2103-toolchain-reliability-hardening`
 
