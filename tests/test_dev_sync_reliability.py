@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -200,7 +201,8 @@ class DevSyncReliabilityTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("--falkordb-path", result.output)
         self.assertIn("--qdrant-path", result.output)
-        self.assertIn("/qdrant/doc", result.output)
+        # Path separators differ by platform (Windows uses backslashes).
+        self.assertIn(f"{os.sep}qdrant{os.sep}doc", result.output)
         self.assertNotIn("--qdrant-url", result.output)
 
 

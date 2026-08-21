@@ -395,6 +395,16 @@ async def main(argv: Optional[List[str]] = None) -> int:
         return 2
     project_id = args.project_id or os.path.basename(args.root) or "perl-project"
     try:
+        from tools.perl.parser_runtime import capabilities
+
+        capabilities()
+    except RuntimeError as exc:
+        # A platform without a loadable Perl grammar (e.g. the pinned
+        # tree-sitter-perl capsule cannot be constructed on win32) must skip
+        # perl ingestion instead of failing the whole sync.
+        print(f"[warn] {exc} — skipping perl ingestion", file=sys.stderr)
+        return 0
+    try:
         changed: Optional[Iterable[str]] = implicit_changed
         deleted: Iterable[str] = ()
         if args.incremental:

@@ -10,6 +10,7 @@ relatedPlans:
   - neo4j-to-falkordb-migration
   - 260728-0000-unified-ingest-query-contract
   - 260820-dev-init-backend-selection
+  - 260821-2115-dev-sync-code-windows (extends remote overlay to dev sync code)
 blockedBy: []
 blocks: []
 ---

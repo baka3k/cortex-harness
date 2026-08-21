@@ -165,19 +165,27 @@ def secure_atomic_json_write(path: str, payload: Dict[str, Any]) -> str:
     envelope["payload_sha256"] = checksum
     fd, temp_path = tempfile.mkstemp(prefix=f".{os.path.basename(destination)}.", suffix=".tmp", dir=parent, text=True)
     try:
-        os.fchmod(fd, 0o600)
+        # os.fchmod and directory fsyncs are POSIX-only; on Windows mkstemp's
+        # default ACL already restricts the temp file to the current user.
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
             json.dump(envelope, handle, ensure_ascii=True, indent=2, sort_keys=True)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, destination)
-        dir_fd = os.open(parent, os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        if os.name != "nt":
+            dir_fd = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
     except Exception:
+        if fd >= 0:
+            # Windows refuses to unlink a file that is still open.
+            os.close(fd)
         try:
             os.unlink(temp_path)
         except OSError:

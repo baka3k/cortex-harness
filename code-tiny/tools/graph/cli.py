@@ -63,6 +63,29 @@ def add_graph_provider_args(parser: ArgumentParser) -> None:
             default=os.getenv("FALKORDB_PATH"),
             help="Owner-specific FalkorDBLite .rdb path (derived when omitted).",
         )
+    if not _has_option(parser, "--falkordb-uri"):
+        parser.add_argument(
+            "--falkordb-uri",
+            default=os.getenv("FALKORDB_URI"),
+            help=(
+                "Remote FalkorDB server URI (scheme://host:port or host:port). "
+                "When set, --falkordb-path and the embedded backend are ignored."
+            ),
+        )
+    if not _has_option(parser, "--falkordb-password"):
+        parser.add_argument(
+            "--falkordb-password",
+            default=os.getenv("FALKORDB_PASSWORD"),
+            help="Password for the remote FalkorDB server (optional).",
+        )
+    if not _has_option(parser, "--falkordb-ssl"):
+        parser.add_argument(
+            "--falkordb-ssl",
+            action="store_true",
+            default=os.getenv("FALKORDB_SSL", "").strip().lower()
+            not in ("", "0", "false", "no"),
+            help="Use TLS for the remote FalkorDB server.",
+        )
     if not _has_option(parser, "--falkordb-graph"):
         parser.add_argument(
             "--falkordb-graph",
@@ -173,11 +196,18 @@ def prepare_graph_args(args: Namespace) -> bool:
             and getattr(args, "neo4j_password", None)
         )
 
-    path = getattr(args, "falkordb_path", None)
-    if not path:
-        from cortex_harness.storage import resolve_storage
-        path = str(resolve_storage(Path.cwd()).falkordb_code_path)
-        setattr(args, "falkordb_path", path)
+    falkordb_uri = getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI")
+    if falkordb_uri:
+        # Remote FalkorDB project: never synthesize an embedded local path —
+        # FalkorDBLite may not even be installable on this platform (win32).
+        args.falkordb_uri = falkordb_uri
+        args.falkordb_path = None
+    else:
+        path = getattr(args, "falkordb_path", None)
+        if not path:
+            from cortex_harness.storage import resolve_storage
+            path = str(resolve_storage(Path.cwd()).falkordb_code_path)
+            setattr(args, "falkordb_path", path)
     setattr(args, "neo4j_uri", None)
     setattr(args, "neo4j_user", getattr(args, "falkordb_user", None) or "")
     setattr(args, "neo4j_password", getattr(args, "falkordb_password", None) or "")
@@ -229,16 +259,35 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
         or "neo4j"
     )
     setattr(args, "neo4j_db", graph_name)
-    driver = await GraphDriverFactory.create_driver(
-        GraphProvider.FALKORDB,
-        {
-            "graph": graph_name,
-            "database": graph_name,
-            "path": getattr(args, "falkordb_path", None),
-            "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
-            "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
-        },
-    )
+    falkordb_uri = getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI")
+    if falkordb_uri:
+        driver = await GraphDriverFactory.create_driver(
+            GraphProvider.FALKORDB,
+            {
+                "graph": graph_name,
+                "database": graph_name,
+                "uri": falkordb_uri,
+                "password": getattr(args, "falkordb_password", None)
+                or os.getenv("FALKORDB_PASSWORD"),
+                "ssl": bool(
+                    getattr(args, "falkordb_ssl", False)
+                    or os.getenv("FALKORDB_SSL", "").strip().lower()
+                    not in ("", "0", "false", "no")
+                ),
+                "_suppress_deprecation": True,
+            },
+        )
+    else:
+        driver = await GraphDriverFactory.create_driver(
+            GraphProvider.FALKORDB,
+            {
+                "graph": graph_name,
+                "database": graph_name,
+                "path": getattr(args, "falkordb_path", None),
+                "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+                "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
+            },
+        )
     from tools.graph.journal.config import attach_journal_config
     from tools.graph.journal.consumer import resume_journal
 

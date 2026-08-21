@@ -408,7 +408,13 @@ def _env_to_neo4j_args(env: dict) -> list:
     provider = _graph_provider(env, "DOC_GRAPH_PROVIDER")
     args = ["--graph-provider", provider]
     if provider == "falkordb":
-        if env.get("FALKORDB_PATH"):
+        if env.get("FALKORDB_URI"):
+            args += ["--falkordb-uri", str(env["FALKORDB_URI"])]
+            if env.get("FALKORDB_PASSWORD"):
+                args += ["--falkordb-password", str(env["FALKORDB_PASSWORD"])]
+            if env.get("FALKORDB_SSL"):
+                args += ["--falkordb-ssl"]
+        elif env.get("FALKORDB_PATH"):
             args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
         args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
     else:
@@ -425,7 +431,13 @@ def _neo4j_args_code(env: dict) -> list:
     provider = _graph_provider(env, "CODE_GRAPH_PROVIDER")
     args = ["--graph-provider", provider]
     if provider == "falkordb":
-        if env.get("FALKORDB_PATH"):
+        if env.get("FALKORDB_URI"):
+            args += ["--falkordb-uri", str(env["FALKORDB_URI"])]
+            if env.get("FALKORDB_PASSWORD"):
+                args += ["--falkordb-password", str(env["FALKORDB_PASSWORD"])]
+            if env.get("FALKORDB_SSL"):
+                args += ["--falkordb-ssl"]
+        elif env.get("FALKORDB_PATH"):
             args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
         args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
     else:
@@ -477,15 +489,51 @@ def _storage_env_for_process(cfg: dict, project_root: Optional[Path], role: Stor
     section = "doc" if role == StorageRole.DOCUMENT else "code"
     env = dict(cfg.get(section, {}).get("env", {}))
     code_graph, doc_graph, code_collection, doc_collection = _storage_targets(cfg)
+    # Top-level storage_backend/remote select the backend mode; without them
+    # resolve_storage defaults to local embedded storage (macOS unchanged).
+    resolve_config: dict = dict(env)
+    if cfg.get("storage_backend"):
+        resolve_config["storage_backend"] = cfg.get("storage_backend")
+    if cfg.get("remote"):
+        resolve_config["remote"] = cfg.get("remote")
     resolved = resolve_storage(
         Path(project_root or "."),
-        config=env,
+        config=resolve_config,
         code_graph=code_graph,
         doc_graph=doc_graph,
         code_collection=code_collection,
         doc_collection=doc_collection,
     )
     return storage_overlay(resolved, owner=role)
+
+
+def _normalize_embed_device(device: str) -> str:
+    """Drop devices the local torch build cannot serve.
+
+    A config written on one machine (``mps`` on macOS, ``cuda`` on a GPU box)
+    must not crash sentence-transformers on another (e.g. a CPU-only torch on
+    Windows). Falls back to cuda when available, else cpu; any other value
+    passes through untouched so explicit ``cpu`` never changes.
+    """
+    value = str(device).strip().lower()
+    if value not in {"mps", "cuda"}:
+        return str(device)
+    try:
+        import torch
+    except Exception:
+        return str(device)
+    if value == "cuda" and torch.cuda.is_available():
+        return value
+    if (
+        value == "mps"
+        and sys.platform == "darwin"
+        and getattr(torch.backends, "mps", None) is not None
+        and torch.backends.mps.is_available()
+    ):
+        return value
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
 
 def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict:
@@ -505,7 +553,7 @@ def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dic
         result.setdefault("CODE_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
         result.setdefault("EMBED_MODEL", str(env["EMBEDDING_MODEL"]))
     if env.get("device"):
-        result.setdefault("EMBED_DEVICE", str(env["device"]))
+        result.setdefault("EMBED_DEVICE", _normalize_embed_device(env["device"]))
     if env.get("BATCH_SIZE"):
         result.setdefault("EMBED_BATCH_SIZE", str(env["BATCH_SIZE"]))
     if env.get("MAX_EMBED_CHARS"):
@@ -524,6 +572,8 @@ def _doc_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict
     result.update(_storage_env_for_process(cfg, project_root, StorageRole.DOCUMENT))
     if env.get("EMBEDDING_MODEL"):
         result.setdefault("DOC_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
+    if env.get("device"):
+        result.setdefault("EMBED_DEVICE", _normalize_embed_device(env["device"]))
     # Per Phase 06 of the unified ingest/query contract plan, the doc
     # server's Qdrant collection is resolved through the ProjectRegistry
     # so it matches the doc graph name (``{project_id}_doc``) by default.
@@ -1759,11 +1809,16 @@ def _pause_mcp_for_sync(
 
     Embedded FalkorDBLite is process-exclusive.  A running code MCP therefore
     has to be paused for the duration of a real code sync; the sync's child
-    analyzers acquire the same lease as they write the store.  Remote Neo4j
-    and dry-runs do not need this lifecycle transition.
+    analyzers acquire the same lease as they write the store.  Remote Neo4j,
+    remote FalkorDB (FALKORDB_URI), and dry-runs do not need this lifecycle
+    transition — the server arbitrates concurrency.
     """
     provider_key = "CODE_GRAPH_PROVIDER" if owner == "code" else "DOC_GRAPH_PROVIDER"
     if not enabled or _graph_provider(process_env, provider_key) != "falkordb":
+        yield
+        return
+    if not str(process_env.get("FALKORDB_PATH") or "").strip():
+        # Remote FalkorDB project: no embedded lease to hand over.
         yield
         return
 
@@ -1855,8 +1910,19 @@ def _echo_sync_stop_report(report, *, prefix: str) -> None:
         )
 
 
-def _stop_sync_workers(owner: str, process_env: dict, *, prefix: str) -> None:
-    report = stop_sync_processes(owner, root=REPO_ROOT)
+def _stop_sync_workers(
+    owner: str,
+    process_env: dict,
+    *,
+    prefix: str,
+    include_launchers: bool = False,
+) -> None:
+    # Lifecycle sweeps clear orphaned workers only; terminating another
+    # session's interactive launcher here made concurrent sync runs kill
+    # each other. Explicit `dev sync <owner> stop` passes True.
+    report = stop_sync_processes(
+        owner, root=REPO_ROOT, include_launchers=include_launchers
+    )
     _echo_sync_stop_report(report, prefix=prefix)
     configured_path = str(process_env.get("FALKORDB_PATH") or "").strip()
     if configured_path:
@@ -1875,17 +1941,70 @@ def _stop_sync_workers(owner: str, process_env: dict, *, prefix: str) -> None:
 
 
 @contextmanager
-def _sync_process_scope(owner: str, process_env: dict, *, enabled: bool):
-    """Replace older sync runs and guarantee cleanup on Ctrl-C/errors."""
+def _sync_process_scope(
+    owner: str,
+    process_env: dict,
+    *,
+    enabled: bool,
+    project_path: Optional[Path] = None,
+):
+    """Serialize sync runs per owner and guarantee cleanup on Ctrl-C/errors.
+
+    The old startup sweep terminated any other live ``dev sync <owner>``
+    launcher unconditionally. With concurrent sessions (e.g. two agent
+    terminals on one machine) that made runs assassinate each other right
+    after the folder prompt — each new run killed the previous one mid-flight.
+    An exclusive advisory lock replaces that race: the second run fails fast
+    with the holder's pid, and the OS releases the lock when a holder dies,
+    so abandoned runs never block fresh ones. The startup/cleanup sweeps stay
+    (they now only ever see true orphans), and ``dev sync <owner> stop``
+    remains the explicit way to clear a stuck run.
+    """
 
     if not enabled:
         yield
         return
-    _stop_sync_workers(owner, process_env, prefix="cleared previous run")
+
+    import portalocker
+
+    lock_dir = (project_path or Path.cwd()) / SYNC_STATE_DIR
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = lock_dir / f"sync-{owner}.lock"
+    handle = open(lock_path, "a+", encoding="utf-8")
     try:
-        yield
+        try:
+            portalocker.lock(handle, portalocker.LOCK_EX | portalocker.LOCK_NB)
+        except (portalocker.LockException, OSError):
+            holder = "unknown"
+            try:
+                handle.seek(0)
+                holder = (handle.read().strip() or "unknown")
+            except (OSError, PermissionError):
+                # Windows msvcrt locks are OS-enforced exclusive locks;
+                # reading the holder pid through any other open handle
+                # also fails with ERROR_LOCK_VIOLATED. Fall back to a
+                # generic hint rather than letting that PermissionError
+                # mask the friendly "another sync is active" message.
+                pass
+            raise click.ClickException(
+                f"Another 'dev sync {owner}' run is active (pid={holder}). "
+                "Wait for it to finish, or run 'dev sync "
+                f"{owner} stop' to clear a stuck run."
+            )
+        handle.seek(0)
+        handle.truncate()
+        handle.write(str(os.getpid()))
+        handle.flush()
+        _stop_sync_workers(owner, process_env, prefix="cleared previous run")
+        try:
+            yield
+        finally:
+            _stop_sync_workers(owner, process_env, prefix="cleanup")
     finally:
-        _stop_sync_workers(owner, process_env, prefix="cleanup")
+        try:
+            portalocker.unlock(handle)
+        finally:
+            handle.close()
 
 
 def _stop_sync_command(owner: str, *, project_path: Path, process_env: dict) -> None:
@@ -1894,7 +2013,9 @@ def _stop_sync_command(owner: str, *, project_path: Path, process_env: dict) -> 
     with _pause_mcp_for_sync(
         owner, process_env, project_path=project_path, enabled=True
     ):
-        _stop_sync_workers(owner, process_env, prefix="explicit stop")
+        _stop_sync_workers(
+            owner, process_env, prefix="explicit stop", include_launchers=True
+        )
     click.echo(f"[sync] {owner} sync stop complete")
 
 
@@ -1910,7 +2031,9 @@ def _sync_lifecycle(
 
     with _pause_mcp_for_sync(
         owner, process_env, project_path=project_path, enabled=enabled
-    ), _sync_process_scope(owner, process_env, enabled=enabled):
+    ), _sync_process_scope(
+        owner, process_env, enabled=enabled, project_path=project_path
+    ):
         yield
 
 
