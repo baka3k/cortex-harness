@@ -59,6 +59,14 @@ from framework_registry import (
     servlet_active_generation_predicate,
     text_search_properties,
 )
+from tools.common.call_evidence import (
+    RESOLUTION_CLASS_DIRECT_RESOLVED,
+    frontier_coverage,
+    suggested_next_semantic_scope,
+    traversal_outcome,
+)
+from tools.cplus.evidence_merge import proc_data_impact_coverage
+from tools.graph.schema.manifest import CODE_GRAPH_SCHEMA as _CODE_GRAPH_SCHEMA
 
 
 def _load_env_file(env_path: str) -> None:
@@ -152,6 +160,7 @@ Discovery:
 Core capability groups:
 - Symbol/graph search: search_functions, search_by_code, get_symbol, get_node_details
 - Call graph traversal: query_subgraph, find_paths, find_path_between_module, trace_flow, trace_flow_between_module
+- Pro*C migration impact: analyze_proc_data_impact (function -> SQL -> tables, host joins, coverage-aware)
 - Module/class views: listup_symbols_matching_file_path, listup_class_matching_path, list_up_entrypoint
 - Infrastructure: list_databases, list_qdrant_collections, list_parsers
 - Utilities: semantic_search, get_ipc_message, list_possible_calls, annotate_node, find_screen_workflows
@@ -165,6 +174,8 @@ Call-path relationship defaults (query_subgraph/find_paths/find_path_between_mod
 - Optional parser_type selects default relation types when include_possible/include_fp are both false.
 - Parser mapping: cplus/cpp/c++/c/clang/delphi/pascal -> C++ rel types; android/android-kotlin/kotlin-android/java/kotlin/jvm -> Android rel types; others -> generic rel types.
 - If include_possible/include_fp is set, relation types are forced to CALLS plus requested optional types.
+- query_subgraph accepts query_profile: 'strict' (accepted direct semantic CALLS only) or 'conservative' (unions weaker evidence without relabeling).
+- Semantic evidence results carry semantic_coverage (status complete/partial/unknown with reasons); an empty traversal over an incomplete frontier returns outcome='incomplete' with suggested_next_semantic_scope — never treat it as 'no callers'.
 - The server filters chosen relation types to relationship types that actually exist in the selected Neo4j database.
 
 When include_raw_fields=false, only properties.content is returned (plus metadata) to reduce payload size.
@@ -454,6 +465,145 @@ def _get_default_flow_rel_types(parser_type: Optional[str]) -> List[str]:
     if capability:
         return list(default_relationships(capability.name))
     return list(DEFAULT_FLOW_REL_TYPES_GENERIC)
+
+
+def _profile_rel_types(parser_type: Optional[str], profile: Optional[str]) -> Optional[List[str]]:
+    """Relationship types for a named query profile, or None when absent.
+
+    ``strict`` selects accepted direct semantic CALLS only; ``conservative``
+    unions the weaker evidence classes without relabeling them.  Unknown
+    profiles fail closed with ``ValueError``.
+    """
+
+    normalized = str(profile or "").strip().lower()
+    if not normalized or normalized == "default":
+        return None
+    capability = capability_for_parser(_normalize_parser_type(parser_type) or "cplus")
+    if capability is None:
+        return None
+    relationships = capability.default_query_profiles.get(normalized)
+    if relationships is None:
+        raise ValueError(
+            f"unknown query profile: {profile!r} for parser {capability.name!r}; "
+            f"expected one of {sorted(capability.default_query_profiles)}"
+        )
+    return list(relationships)
+
+
+async def _semantic_coverage_block(
+    dbs: List[str], project_id: Optional[str]
+) -> Dict[str, Any]:
+    """Aggregate semantic coverage/freshness over the queried databases.
+
+    Reads persisted ``SemanticCoverage`` records for the requested scope.
+    A missing coverage plane yields ``unknown`` — which never licenses a
+    negative conclusion downstream.
+    """
+
+    query = (
+        "MATCH (coverage:SemanticCoverage) "
+        "WHERE coverage.project_id = $project_id OR $project_id IS NULL "
+        "RETURN coverage.status AS status, coverage.tu_key AS tu_key, "
+        "coverage.detail AS detail, coverage.revision AS revision, "
+        "coverage.policy_version AS policy_version"
+    )
+    params: Dict[str, Any] = {"project_id": project_id or None}
+    records: List[Dict[str, Any]] = []
+    for db in dbs:
+        try:
+            records.extend(await _run_cypher(query, params, db))
+        except Exception as exc:
+            if _is_db_not_found(exc):
+                continue
+            logger.warning("Unable to read semantic coverage from %s: %s", db, exc)
+    revisions = sorted({str(row.get("revision")) for row in records if row.get("revision")})
+    block = frontier_coverage(records)
+    block.update(
+        {
+            "served_revision": revisions[-1] if revisions else None,
+            "served_schema_fingerprint": _CODE_GRAPH_SCHEMA.fingerprint,
+            "semantic_policy_version": next(
+                (str(row.get("policy_version")) for row in records if row.get("policy_version")),
+                None,
+            ),
+            "evidence_record_count": block.get("record_count", 0),
+        }
+    )
+    return block
+
+
+def _outcome_payload(
+    coverage_block: Dict[str, Any], *, result_is_empty: bool, extra: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Typed outcome fields attached to graph/impact results.
+
+    Fail-closed: an empty traversal under incomplete/unknown coverage is
+    reported as ``incomplete`` with reasons and a suggested next semantic
+    scope, never as an authoritative negative answer.
+    """
+
+    outcome = traversal_outcome(str(coverage_block.get("status")), result_is_empty)
+    payload: Dict[str, Any] = {
+        "outcome": outcome,
+        "semantic_coverage": coverage_block,
+    }
+    if outcome == "incomplete":
+        payload["suggested_next_semantic_scope"] = suggested_next_semantic_scope(coverage_block)
+        payload["reason"] = "semantic frontier incomplete; negative conclusions are not authoritative"
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _filter_strict_edges(
+    graph: Dict[str, Any], function_id: str
+) -> Tuple[Dict[str, Any], int]:
+    """Restrict a subgraph to accepted direct semantic CALLS edges.
+
+    Relationship type alone cannot express the strict contract: legacy
+    ``CALLS`` edges written without the evidence contract have no
+    ``resolution_class`` and must not appear as accepted semantic calls.
+    Only edges carrying ``resolution_class = direct_resolved`` survive;
+    nodes are pruned to the surviving frontier plus the seed function.
+    """
+
+    kept_edges: List[Dict[str, Any]] = []
+    dropped = 0
+    seed = str(function_id)
+    for edge in graph.get("edges") or []:
+        props = edge.get("properties") or {}
+        if (
+            edge.get("type") == "CALLS"
+            and props.get("resolution_class") == RESOLUTION_CLASS_DIRECT_RESOLVED
+        ):
+            kept_edges.append(edge)
+        else:
+            dropped += 1
+    keep_ids = {seed}
+    for edge in kept_edges:
+        keep_ids.add(str(edge.get("start_id")))
+        keep_ids.add(str(edge.get("end_id")))
+    graph["edges"] = kept_edges
+    graph["nodes"] = [
+        node for node in graph.get("nodes") or [] if str(node.get("id")) in keep_ids
+    ]
+    return graph, dropped
+
+
+async def _attach_semantic_result_fields(
+    dbs: List[str],
+    project_id: Optional[str],
+    *,
+    result_is_empty: bool,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Coverage/outcome fields shared by graph, trace, and impact results."""
+
+    if not dbs:
+        coverage = frontier_coverage([])
+    else:
+        coverage = await _semantic_coverage_block(dbs, project_id)
+    return _outcome_payload(coverage, result_is_empty=result_is_empty, extra=extra)
 
 
 def _fallback_node_name(properties: Dict[str, Any], node_id: Optional[str]) -> str:
@@ -1910,7 +2060,15 @@ async def tool_get_node_details(
 
 @mcp_server.tool(
     name="query_subgraph",
-    description="Return call graph context around a function ID. Supports content_mode/include_raw_fields.",
+    description=(
+        "Return call graph context around a function ID. Supports content_mode/include_raw_fields. "
+        "query_profile 'strict' selects accepted direct semantic CALLS only (edges are "
+        "post-filtered to resolution_class=direct_resolved; at depth>1 a kept edge may share a "
+        "path with a legacy CALLS hop — treat deep strict results as best-effort); "
+        "'conservative' unions POSSIBLE_CALLS/CALLS_FUNCTION_POINTER without relabeling them. "
+        "Results carry semantic_coverage; an empty traversal over an incomplete frontier "
+        "returns outcome='incomplete', never an authoritative negative."
+    ),
     output_schema=None
 )
 async def tool_query_subgraph(
@@ -1921,6 +2079,7 @@ async def tool_query_subgraph(
     include_fp: bool = False,
     rel_types: Optional[List[str]] = None,
     relationship_types: Optional[Any] = None,
+    query_profile: Optional[str] = None,
     parser_type: Optional[str] = None,
     project_id: Optional[str] = None,
     content_mode: Optional[str] = None,
@@ -1938,6 +2097,7 @@ async def tool_query_subgraph(
             "include_fp": include_fp,
             "rel_types": rel_types,
             "relationship_types": relationship_types,
+            "query_profile": query_profile,
             "parser_type": parser_type,
             "project_id": project_id,
             "content_mode": content_mode,
@@ -1950,6 +2110,7 @@ async def tool_query_subgraph(
     max_depth = payload.get("max_depth", 2)
     include_possible = bool(payload.get("include_possible", False))
     include_fp = bool(payload.get("include_fp", False))
+    query_profile = payload.get("query_profile")
     parser_type = payload.get("parser_type")
     project_id = payload.get("project_id")
     content_mode = payload.get("content_mode")
@@ -1961,9 +2122,14 @@ async def tool_query_subgraph(
     function_id = str(function_id)
     depth = _normalize_depth(max_depth, default=2, max_limit=10)
     direction = direction.lower()
+    profile_rels = _profile_rel_types(parser_type, query_profile)
     rel_input = payload.get("relationship_types")
     if rel_input is None:
         rel_input = payload.get("rel_types")
+    if rel_input is None and profile_rels is not None:
+        # A named profile overrides the legacy include_possible/include_fp
+        # switches; its evidence-class selection is explicit and versioned.
+        rel_input = profile_rels
     if rel_input is None:
         rel_input = ["CALLS"]
         if include_possible:
@@ -1978,9 +2144,12 @@ async def tool_query_subgraph(
         candidates,
         explicit=not bool(payload.get("_capability_default_relationships")),
     )
+    if query_profile:
+        capability_diagnostics = dict(capability_diagnostics)
+        capability_diagnostics["query_profile"] = str(query_profile).strip().lower()
     if not rel_types:
         return _unsupported_relationship_result(parser_type, capability_diagnostics)
-    
+
     driver = await _get_graph_driver()
     last_error: Optional[Exception] = None
     for candidate in candidates:
@@ -1999,8 +2168,22 @@ async def tool_query_subgraph(
                     content_mode=content_mode or "auto",
                     include_raw_fields=include_raw_fields,
                 )
+                result_is_empty = False
+                if str(query_profile or "").strip().lower() == "strict":
+                    graph, dropped_edges = _filter_strict_edges(graph, function_id)
+                    capability_diagnostics = dict(capability_diagnostics)
+                    capability_diagnostics["strict_edges_dropped"] = dropped_edges
+                    if not graph["edges"]:
+                        result_is_empty = True
                 graph["db"] = candidate
                 graph["capability_diagnostics"] = capability_diagnostics
+                graph.update(
+                    await _attach_semantic_result_fields(
+                        candidates, project_id, result_is_empty=result_is_empty
+                    )
+                )
+                if result_is_empty and graph.get("outcome") != "incomplete":
+                    graph["reason"] = "no_accepted_strict_edges"
                 return graph
         except Exception as exc:
             last_error = exc
@@ -2009,13 +2192,21 @@ async def tool_query_subgraph(
             raise
     if last_error:
         raise last_error
-    return {
+    result = {
         "db": candidates[0] if candidates else None,
         "nodes": [],
         "edges": [],
-        "reason": "no_subgraph",
         "capability_diagnostics": capability_diagnostics,
     }
+    # Fail closed: an empty subgraph is only an authoritative "no callers"
+    # when the semantic frontier is complete.  Otherwise the outcome is a
+    # typed incomplete result with a suggested next semantic scope.
+    result.update(
+        await _attach_semantic_result_fields(candidates, project_id, result_is_empty=True)
+    )
+    if result.get("outcome") != "incomplete":
+        result["reason"] = "no_subgraph"
+    return result
 
 
 @mcp_server.tool(
@@ -2116,6 +2307,192 @@ async def tool_find_paths(
                 continue
             raise
     raise RuntimeError("No path found in any db.")
+
+
+@mcp_server.tool(
+    name="analyze_proc_data_impact",
+    description=(
+        "Pro*C call-plus-data impact for a function: traverses the evidence plane "
+        "EXECUTES_SQL -> SqlStatement -> DatabaseTable (READS_FROM/WRITES_TO/REFERENCES_TABLE), "
+        "host-variable declaration joins, and strict CALLS callers. Preserves join quality, "
+        "source-map quality, dynamic-SQL flags, and configuration provenance. Dynamic SQL or an "
+        "ambiguous/unresolved function/host join makes the data-impact frontier 'partial', so an "
+        "empty table list is returned as outcome='incomplete' — never an authoritative "
+        "'no data impact'."
+    ),
+    output_schema=None
+)
+async def tool_analyze_proc_data_impact(
+    function_id: Any = None,
+    project_id: Optional[str] = None,
+    include_callers: bool = True,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    payload = _merge_payload(
+        payload,
+        {
+            "function_id": function_id,
+            "project_id": project_id,
+            "include_callers": include_callers,
+        },
+    )
+    function_id = payload.get("function_id")
+    project_id = payload.get("project_id")
+    include_callers = bool(payload.get("include_callers", True))
+    if function_id is None:
+        raise ValueError("function_id is required.")
+    candidates = _resolve_db_candidates(project_id)
+    _require(candidates[0] if candidates else None, "db")
+    function_id = str(function_id)
+
+    query = (
+        "MATCH (f:Function {id: $function_id}) "
+        "OPTIONAL MATCH (f)-[exec:EXECUTES_SQL]->(s:SqlStatement) "
+        "OPTIONAL MATCH (s)-[table_rel:READS_FROM|WRITES_TO|REFERENCES_TABLE]->(t:DatabaseTable) "
+        "RETURN f.id AS function_id, f.name AS function_name, "
+        "s.id AS statement_id, s.operation AS operation, "
+        "exec.join_quality AS join_quality, exec.source_map_quality AS source_map_quality, "
+        "exec.is_dynamic_sql AS is_dynamic_sql, exec.config_fingerprint AS config_fingerprint, "
+        "type(table_rel) AS table_rel_type, t.id AS table_id, t.name AS table_name"
+    )
+    params: Dict[str, Any] = {"function_id": function_id}
+    rows: List[Dict[str, Any]] = []
+    used_db: Optional[str] = None
+    for db in candidates:
+        try:
+            rows = await _run_cypher(query, params, db)
+        except Exception as exc:
+            if _is_db_not_found(exc):
+                continue
+            raise
+        if rows:
+            used_db = db
+            break
+    if used_db is None:
+        used_db = candidates[0]
+
+    statements: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        statement_id = row.get("statement_id")
+        if not statement_id:
+            continue
+        statement = statements.setdefault(
+            str(statement_id),
+            {
+                "statement_id": str(statement_id),
+                "operation": row.get("operation"),
+                "join_quality": row.get("join_quality") or "unresolved",
+                "source_map_quality": row.get("source_map_quality"),
+                "is_dynamic_sql": bool(row.get("is_dynamic_sql")),
+                "config_fingerprint": row.get("config_fingerprint"),
+                "tables": [],
+            },
+        )
+        if row.get("table_id"):
+            statement["tables"].append(
+                {
+                    "table_id": row.get("table_id"),
+                    "table_name": row.get("table_name"),
+                    "relation": row.get("table_rel_type"),
+                }
+            )
+    statement_list = sorted(statements.values(), key=lambda item: item["statement_id"])
+
+    host_query = (
+        "MATCH (f:Function {id: $function_id})-[exec:EXECUTES_SQL]->(s:SqlStatement) "
+        "MATCH (s)-[:BINDS_PARAMETER|DECLARES_STATEMENT*0..1]->(host:SqlHostVariable) "
+        "OPTIONAL MATCH (host)-[decl:RESOLVES_HOST_DECLARATION]->(d) "
+        "RETURN host.id AS host_variable_id, host.name AS host_name, "
+        "decl.join_quality AS join_quality, "
+        "d.id AS declaration_id, labels(d) AS declaration_labels"
+    )
+    host_rows: List[Dict[str, Any]] = []
+    host_query_failed = False
+    try:
+        host_rows = await _run_cypher(host_query, params, used_db)
+    except Exception as exc:
+        host_query_failed = True
+        logger.warning("Unable to read host declarations from %s: %s", used_db, exc)
+    host_variables: List[Dict[str, Any]] = []
+    seen_hosts: set = set()
+    for row in host_rows:
+        host_id = str(row.get("host_variable_id") or "")
+        if not host_id or host_id in seen_hosts:
+            continue
+        seen_hosts.add(host_id)
+        host_variables.append(
+            {
+                "host_variable_id": host_id,
+                "host_name": row.get("host_name"),
+                "declaration_join_quality": row.get("join_quality") or "unresolved",
+                "declaration_id": row.get("declaration_id"),
+            }
+        )
+
+    callers: List[Dict[str, Any]] = []
+    caller_query_failed = False
+    if include_callers:
+        caller_query = (
+            "MATCH (caller:Function)-[c:CALLS]->(f:Function {id: $function_id}) "
+            "RETURN caller.id AS caller_id, caller.name AS caller_name, "
+            "c.site_id AS site_id, c.resolution_class AS resolution_class, "
+            "c.semantic_provider AS semantic_provider"
+        )
+        try:
+            caller_rows = await _run_cypher(caller_query, params, used_db)
+            callers = [
+                {
+                    "caller_id": row.get("caller_id"),
+                    "caller_name": row.get("caller_name"),
+                    "site_id": row.get("site_id"),
+                    "resolution_class": row.get("resolution_class"),
+                    "semantic_provider": row.get("semantic_provider"),
+                }
+                for row in caller_rows
+            ]
+        except Exception as exc:
+            caller_query_failed = True
+            logger.warning("Unable to read strict callers from %s: %s", used_db, exc)
+
+    coverage = proc_data_impact_coverage(statement_list)
+    # A failed evidence query is a partial frontier, never a silent negative:
+    # fail closed so "no callers / no host joins" cannot look authoritative.
+    if host_query_failed:
+        coverage["status"] = "partial"
+        coverage["reasons"] = list(coverage.get("reasons") or []) + [
+            "host_declaration_query_failed"
+        ]
+    if caller_query_failed:
+        coverage["status"] = "partial"
+        coverage["reasons"] = list(coverage.get("reasons") or []) + [
+            "strict_caller_query_failed"
+        ]
+    result_is_empty = not statement_list and not host_variables
+    result: Dict[str, Any] = {
+        "db": used_db,
+        "function_id": function_id,
+        "function_name": rows[0].get("function_name") if rows else None,
+        "sql_statements": statement_list,
+        "host_variables": host_variables,
+        "strict_callers": callers,
+        "data_impact_coverage": coverage,
+    }
+    result.update(await _attach_semantic_result_fields(candidates, project_id, result_is_empty=result_is_empty))
+    if coverage.get("status") == "partial" and result.get("outcome") != "incomplete":
+        # Dynamic SQL, ambiguous joins, or a failed evidence query make the
+        # data-impact frontier partial even when SQL statements were found.
+        result["outcome"] = "incomplete"
+        result["reason"] = (
+            "data-impact frontier is partial ("
+            + "; ".join(coverage.get("reasons") or [])
+            + "); negative conclusions are not authoritative"
+        )
+    if result_is_empty and result.get("outcome") == "incomplete":
+        result["reason"] = (
+            "no SQL evidence joined to this function and the semantic frontier is incomplete; "
+            "'no data impact' is not authoritative"
+        )
+    return result
 
 
 @mcp_server.tool(
@@ -2990,6 +3367,7 @@ _CPLUS_TOOL_NAMES: frozenset = frozenset({
     "semantic_search", "get_ipc_message", "list_possible_calls",
     "annotate_node", "list_databases", "list_qdrant_collections",
     "list_parsers", "list_mcp_functions", "find_screen_workflows",
+    "analyze_proc_data_impact",
 })
 _cplus_catalog = build_catalog(_CPLUS_TOOL_NAMES)
 _CPLUS_PARAMETER_GUIDELINES: Dict[str, Any] = {

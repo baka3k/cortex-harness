@@ -51,6 +51,9 @@ CPLUS_RELATIONSHIPS = (
     "DECLARES_STATEMENT", "DECLARES_DIRECTIVE", "BINDS_PARAMETER",
     "DECLARES_CURSOR", "REFERENCES_CURSOR", "REFERENCES_STATEMENT",
     "READS_FROM", "WRITES_TO", "REFERENCES_TABLE",
+    # Cross-domain evidence joins (Phase 04); additive, they never redefine
+    # the nine Pro*C relationships above.
+    "EXECUTES_SQL", "RESOLVES_HOST_DECLARATION",
 )
 CPLUS_LABELS = GENERIC_LABELS | frozenset({
     "SqlStatement",
@@ -58,6 +61,10 @@ CPLUS_LABELS = GENERIC_LABELS | frozenset({
     "SqlCursor",
     "SqlHostVariable",
     "DatabaseTable",
+    # Semantic call-evidence staging plane (Phase 04).
+    "CallSite",
+    "BuildConfiguration",
+    "SemanticCoverage",
 })
 SHELL_LABELS = GENERIC_LABELS | frozenset({"ShellScript", "ShellFunction"})
 JP1_LABELS = GENERIC_LABELS | frozenset({"Jp1Unit", "ShellScript"})
@@ -422,6 +429,7 @@ def _generic_profile(
     support_level: str = "generic",
     features: FrozenSet[str] = GENERIC_FEATURES,
     labels: FrozenSet[str] = GENERIC_LABELS,
+    profiles: Optional[Mapping[str, Tuple[str, ...]]] = None,
 ) -> FrameworkQueryConfig:
     return FrameworkQueryConfig(
         name=name,
@@ -432,6 +440,7 @@ def _generic_profile(
         relationships=relationships,
         searchable_properties=GENERIC_SEARCHABLE_PROPERTIES,
         features=features,
+        default_query_profiles=dict(profiles or {}),
     )
 
 
@@ -447,6 +456,24 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
     "cplus": _generic_profile(
         "cplus", {"cplus", "cpp", "c++", "c", "clang", "proc", "pro*c", "pro-c"},
         relationships=CPLUS_RELATIONSHIPS, support_level="full", labels=CPLUS_LABELS,
+        profiles={
+            # Strict: accepted direct semantic CALLS only.  Results must be
+            # paired with semantic coverage; absence of an edge is never
+            # proof of no call under incomplete coverage.
+            "strict": ("CALLS",),
+            # Conservative: strict calls plus explicitly weaker evidence
+            # classes.  Every result keeps its own resolution class; the
+            # classes are unioned, never flattened.
+            "conservative": ("CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER"),
+            # Pro*C call-plus-data impact: caller -> function -> SQL -> table
+            # plus host-variable evidence joins.
+            "proc_data_impact": (
+                "EXECUTES_SQL", "RESOLVES_HOST_DECLARATION",
+                "READS_FROM", "WRITES_TO", "REFERENCES_TABLE",
+                "REFERENCES_STATEMENT", "BINDS_PARAMETER",
+                "DECLARES_STATEMENT",
+            ),
+        },
     ),
     "python": FrameworkQueryConfig(
         name="python",
