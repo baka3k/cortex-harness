@@ -323,6 +323,26 @@ class StagedReplacementTest(unittest.TestCase):
         self.assertEqual(len(first.stale_strong_edges), 1)
         self.assertEqual(first.stale_strong_edges[0].reason, "downgraded")
 
+    def test_fingerprint_differs_when_build_configurations_differ(self):
+        merge = evidence_merge.merge_call_evidence(
+            [_semantic_observation()], project_id="p1"
+        )
+        base_kwargs = dict(
+            project_id="p1",
+            revision="r1",
+            policy=SemanticPublicationPolicy(),
+            merge_result=merge,
+        )
+        staged_a = build_staged_replacement(
+            **base_kwargs,
+            build_configurations=[{"config_fingerprint": "cf-gcc-11"}],
+        )
+        staged_b = build_staged_replacement(
+            **base_kwargs,
+            build_configurations=[{"config_fingerprint": "cf-clang-15"}],
+        )
+        self.assertNotEqual(staged_a.fingerprint(), staged_b.fingerprint())
+
     def test_policy_downgrade_removes_all_affected_strong_edges(self):
         merge = evidence_merge.merge_call_evidence(
             [_semantic_observation()], project_id="p1"
@@ -876,6 +896,14 @@ class VectorSafetyTest(unittest.TestCase):
             {rejection["identity"]: rejection["reason"] for rejection in rejections},
             {"gen1": "generated_class_precompiler_runtime", "secret1": "credential_bearing_code"},
         )
+
+    def test_credential_in_command_field_never_embeds(self):
+        for field in ("command", "raw_command", "cli_args", "conn_str"):
+            with self.subTest(field=field):
+                item = {"id": "cmd1", field: "proc iname=app.pc userid=scott/tiger@orcl"}
+                reason = vector_item_rejection_reason(item)
+                self.assertIsNotNone(reason, field)
+                self.assertTrue(reason.startswith("credential_bearing_"), reason)
 
 
 class JournalEvidenceOperationTest(unittest.TestCase):
