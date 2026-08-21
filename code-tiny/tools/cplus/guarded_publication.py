@@ -580,9 +580,14 @@ def build_staged_replacement(
     """Assemble one staged replacement set from validated evidence.
 
     ``merge_result`` may be an ``EvidenceMergeResult`` or its mapping form;
-    explicit row arguments win when both are supplied.  Every strict row is
-    re-checked against the composed publication gate so a downgraded policy
-    or a quarantined file can never carry a strong edge into staging.
+    explicit row arguments win when both are supplied.  Two re-checks are
+    enforced here: the policy mode (``off``/``rollback`` never stage strict
+    rows, pairing suppression with stale-edge removal) and evidence strength
+    (a claimed ``direct_resolved`` row without an approved provider and
+    complete identity fails closed).  The full per-file gate composition —
+    parse tier, map quality, bundle state, generated class — is applied at
+    evidence assembly via ``strong_edge_publication_decision`` before rows
+    reach this builder.
     """
 
     staged = StagedReplacementSet(
@@ -662,14 +667,18 @@ async def apply_stale_strong_edge_deletions(
     stale_edges: Sequence[StaleStrongEdge],
     operation_id: str = "",
 ) -> int:
-    """Delete staged stale strong edges and verify the exact deleted count.
+    """Delete staged stale strong edges, returning the deleted count.
 
     Runs inside a journal mutation fence so the required-mode write guard
-    admits it; like the incremental cleanup path it executes before the
-    staged writes, and the post-write publication validation proves no stale
-    edge survived.  The delete is idempotent: replaying it removes zero
-    edges and the readback in ``validate_staged_publication`` fails closed
-    on any survivor.
+    admits it.  It executes before the staged writes and before
+    publication; the active generation stays physically isolated by the
+    concurrency owner (staged generations build under their own generation
+    root), so a failure after this delete but before publication leaves the
+    active generation untouched.  The delete is idempotent — replaying it
+    removes zero edges — so it carries no exact-count assertion of its own;
+    ``validate_staged_publication``'s stale-survivor readback is the
+    fail-closed check that no stale strong edge survived into the staged
+    generation.
     """
 
     rows = [edge.to_dict() for edge in stale_edges]
@@ -724,10 +733,17 @@ class PublicationValidationResult:
 
 
 def expected_effects(staged: StagedReplacementSet) -> PublicationExpectation:
-    """Exact expected effects derived from the staged replacement set."""
+    """Exact expected effects derived from the staged replacement set.
+
+    Mirrors the observation writer's rule: a row produces an edge only when
+    it is not flagged dangling and carries a callee endpoint.
+    """
 
     linkable_observations = sum(
-        1 for row in staged.evidence_observations if not row.get("dangling")
+        1
+        for row in staged.evidence_observations
+        if not row.get("dangling")
+        and str(row.get("callee_id") or row.get("callee_symbol_id") or "")
     )
     return PublicationExpectation(
         strict_call_count=len(staged.strict_call_rows),
@@ -815,14 +831,21 @@ class SemanticGenerationLedger:
         self.path = Path(path)
 
     def load(self) -> dict[str, Any]:
+        empty = {"schema_version": GUARDED_PUBLICATION_SCHEMA_VERSION, "generations": []}
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = self.path.read_text(encoding="utf-8")
         except FileNotFoundError:
-            return {"schema_version": GUARDED_PUBLICATION_SCHEMA_VERSION, "generations": []}
-        except (OSError, ValueError):
-            return {"schema_version": GUARDED_PUBLICATION_SCHEMA_VERSION, "generations": []}
+            return empty
+        except OSError:
+            return {**empty, "unreadable": True}
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            # A present-but-corrupt ledger must be visible to operators, not
+            # silently reset: rollback history is incomplete until repaired.
+            return {**empty, "unreadable": True}
         if not isinstance(payload, Mapping):
-            return {"schema_version": GUARDED_PUBLICATION_SCHEMA_VERSION, "generations": []}
+            return {**empty, "unreadable": True}
         generations = payload.get("generations")
         if not isinstance(generations, list):
             generations = []
@@ -867,16 +890,23 @@ class SemanticGenerationLedger:
         return entry
 
     def status(self) -> dict[str, Any]:
-        last = self.last_valid()
-        if last is None:
-            return {"last_valid_generation": None, "generation_count": 0}
-        return {
-            "last_valid_generation": last["generation_id"],
-            "last_valid_revision": last.get("revision") or "",
-            "last_valid_fingerprint": last.get("fingerprint") or "",
-            "last_valid_policy_version": last.get("policy_version") or "",
-            "generation_count": len(self.load()["generations"]),
-        }
+        payload = self.load()
+        last = payload["generations"][-1] if payload["generations"] else None
+        status: dict[str, Any] = {"last_valid_generation": None, "generation_count": 0}
+        if payload.get("unreadable"):
+            status["unreadable"] = True
+            status["detail"] = "ledger file exists but could not be read; rollback history is incomplete until repaired"
+        if last is not None:
+            status.update(
+                {
+                    "last_valid_generation": last["generation_id"],
+                    "last_valid_revision": last.get("revision") or "",
+                    "last_valid_fingerprint": last.get("fingerprint") or "",
+                    "last_valid_policy_version": last.get("policy_version") or "",
+                    "generation_count": len(payload["generations"]),
+                }
+            )
+        return status
 
 
 @dataclass(frozen=True)
@@ -941,14 +971,18 @@ def publish_staged_generation(
 ) -> PublicationOutcome:
     """Publish one staged generation atomically or keep the last generation.
 
-    ``validate_and_publish(manifest_like, validate)`` follows the concurrency
-    owner's ``GenerationManager.publish`` contract: the caller-supplied
-    ``validate`` callback runs inside the publication boundary and the
-    manifest flips atomically only when it passes.  A ``GenerationManager``
-    instance is accepted directly.  Any validation failure, undrained queue,
-    or publication error returns a typed failure with the previous
-    generation retained — it never converts to an empty successful strict
-    graph.
+    ``validate_and_publish`` follows the concurrency owner's
+    ``publish(manifest, validate)`` contract: a ``GenerationManager`` or
+    ``StoreGateway`` instance is accepted directly (its ``allocate`` builds
+    the real ``GenerationManifest``), or any callable taking
+    ``(manifest_like, validate)``.  The caller-supplied ``validate``
+    callback runs inside the publication boundary and the manifest flips
+    atomically only when it passes.  Owner-side contract rejections
+    (``ValueError`` — wrong target, non-isolated generation paths) return a
+    terminal typed failure; any other exception at the boundary is treated
+    as ambiguous and must be reconciled before retry.  Every failure path
+    retains the previous generation — it never converts to an empty
+    successful strict graph.
     """
 
     run_id = run_id or staged.revision or "semantic-publication"
@@ -996,20 +1030,45 @@ def publish_staged_generation(
     generation_id = generation_id or str(
         uuid.uuid5(uuid.NAMESPACE_URL, f"{staged.project_id}:{fingerprint}")
     )
+    source_revision = revision or staged.revision
 
     def _validate(manifest: Any) -> None:
         if not validation.ok:  # pragma: no cover - guarded above
             raise ValueError("staged generation failed publication validation")
 
+    publisher = validate_and_publish
     try:
-        published = validate_and_publish(
-            _PublishedManifest(
+        if hasattr(publisher, "allocate") and hasattr(publisher, "publish"):
+            # Real concurrency-owner boundary: build the owner's manifest and
+            # publish through its atomic validate-and-flip path.
+            manifest = publisher.allocate(source_revision, generation_id=generation_id)
+            published = publisher.publish(manifest, _validate)
+        else:
+            manifest = _PublishedManifest(
                 generation_id=generation_id,
-                source_revision=revision or staged.revision,
+                source_revision=source_revision,
                 fingerprint=fingerprint,
                 validation={"guarded_publication": validation.to_dict()},
+            )
+            published = publisher(manifest, _validate)
+    except ValueError as exc:
+        # The owner rejects the manifest before any write (wrong target,
+        # non-isolated generation paths): terminal, not ambiguous.
+        return PublicationOutcome(
+            outcome=RunOutcome.FAILED_TERMINAL,
+            generation_id=generation_id,
+            retained_generation=retained_generation,
+            validation=validation,
+            failure=_publication_failure(
+                code="semantic_publication_contract_rejected",
+                failure_class=FailureClass.CONFIGURATION,
+                summary=f"publication boundary rejected the generation manifest: {exc}",
+                safe_action="correct the generation/target configuration; the active generation is unchanged",
+                run_id=run_id,
+                correlation_id=correlation_id,
+                details={"error_type": type(exc).__name__},
             ),
-            _validate,
+            accounting=staged.to_dict(),
         )
     except Exception as exc:
         return PublicationOutcome(
@@ -1031,12 +1090,33 @@ def publish_staged_generation(
 
     published_id = str(getattr(published, "generation_id", "") or generation_id)
     if ledger is not None:
-        ledger.record(
-            generation_id=published_id,
-            revision=revision or staged.revision,
-            fingerprint=fingerprint,
-            policy=staged.policy.to_dict(),
-        )
+        try:
+            ledger.record(
+                generation_id=published_id,
+                revision=source_revision,
+                fingerprint=fingerprint,
+                policy=staged.policy.to_dict(),
+            )
+        except OSError as exc:
+            # The generation published but the rollback ledger did not
+            # record it: retryable operator action, and the published id is
+            # reported so the entry can be reconciled.
+            return PublicationOutcome(
+                outcome=RunOutcome.FAILED_RETRYABLE,
+                generation_id=published_id,
+                retained_generation=retained_generation,
+                validation=validation,
+                failure=_publication_failure(
+                    code="semantic_ledger_write_failed",
+                    failure_class=FailureClass.STORAGE_UNAVAILABLE,
+                    summary="generation published but the semantic generation ledger could not record it",
+                    safe_action="reconcile the ledger entry for the published generation; rollback history is incomplete until then",
+                    run_id=run_id,
+                    correlation_id=correlation_id,
+                    details={"error_type": type(exc).__name__, "published_generation": published_id},
+                ),
+                accounting=staged.to_dict(),
+            )
     return PublicationOutcome(
         outcome=RunOutcome.SUCCESS,
         generation_id=published_id,
@@ -1101,14 +1181,20 @@ def rollback_to_last_valid_generation(
         ).parse_tiers_allowing_strong,
     )
     last = ledger.last_valid()
+    unreadable = bool(ledger.load().get("unreadable"))
     if last is None:
+        detail = (
+            "ledger unreadable; repair it before relying on rollback history"
+            if unreadable
+            else "containment active; no recorded semantic generation, serving structure plus weak evidence"
+        )
         state = RollbackState(
             active=True,
             served_generation="",
             served_revision="",
             mode="rollback",
             weak_evidence_preserved=True,
-            detail="containment active; no recorded semantic generation, serving structure plus weak evidence",
+            detail=detail,
         )
     else:
         state = RollbackState(

@@ -329,14 +329,6 @@ class _FakeDriver:
     async def execute_query(self, query, parameters=None, database=None, **kwargs):
         params = dict(parameters or {})
         self.queries.append((query, params, database))
-        if "RETURN row.evidence_id AS evidence_id" in query:
-            # Existence pre-check for OBSERVED_AS linking: report every
-            # callee as present so observations link normally.
-            rows = [
-                {"evidence_id": row.get("evidence_id"), "callee_id": row.get("callee_id")}
-                for row in params.get("rows", [])
-            ]
-            return (rows, [], None)
         return ([{"count": len(params.get("rows", []))}], [], None)
 
 

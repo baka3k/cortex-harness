@@ -298,6 +298,10 @@ CODE_GRAPH_SCHEMA = GraphSchemaManifest(
         SchemaIndex("BuildConfiguration", ("config_fingerprint",)),
         SchemaIndex("CallSite", ("site_id",)),
         SchemaIndex("SemanticCoverage", ("tu_key",)),
+        # Coverage nodes merge and reconcile on their content fingerprint
+        # (Phase 06 journaled staging contract); tu_key remains the lookup
+        # index for coverage queries.
+        SchemaIndex("SemanticCoverage", ("fingerprint",)),
     ),
     relationship_types=(
         # Semantic call-evidence staging plane (Phase 04).  ``direct`` marks

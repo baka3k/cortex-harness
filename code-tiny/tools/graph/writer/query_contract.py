@@ -207,15 +207,24 @@ def group_evidence_edges(
                 f"and rel_type (row {position})"
             )
         row = dict(edge)
+        edge_property = str(edge.get("edge_property") or "")
+        edge_id = str(edge.get("edge_id") or "")
+        if edge_property and not edge_id:
+            # A keyed merge without its key value would collapse distinct
+            # edges onto the endpoint identity and silently lose evidence.
+            raise ValueError(
+                "evidence edge row with an edge_property requires a non-empty "
+                f"edge_id (row {position})"
+            )
+        row["edge_id"] = edge_id or row["source_id"]
         group = EvidenceEdgeGroup(
             str(edge["source_label"]),
             str(edge["source_property"]),
             str(edge["target_label"]),
             str(edge["target_property"]),
             str(edge["rel_type"]),
-            str(edge.get("edge_property") or ""),
+            edge_property,
         )
-        row["edge_id"] = str(edge.get("edge_id") or row["source_id"])
         groups[group].append(row)
     return dict(groups)
 
