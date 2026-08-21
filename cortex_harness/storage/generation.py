@@ -76,11 +76,14 @@ class GenerationManager:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.manifest_path)
-            directory_fd = os.open(str(self.root), os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            if os.name != "nt":
+                # Windows cannot open a directory with os.open(O_RDONLY); the
+                # durability sync is POSIX-only.
+                directory_fd = os.open(str(self.root), os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         return published
 
     def _validate_paths(self, manifest: GenerationManifest) -> None:

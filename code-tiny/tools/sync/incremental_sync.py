@@ -887,17 +887,29 @@ async def _query_impacted_files(
     provider = normalize_graph_provider(graph_provider)
     config: Dict[str, Any]
     if provider == GraphProvider.FALKORDB:
-        if not falkordb_path:
-            from cortex_harness.storage import resolve_storage
+        falkordb_uri = (os.environ.get("FALKORDB_URI") or "").strip()
+        if falkordb_uri:
+            config = {
+                "uri": falkordb_uri,
+                "password": os.environ.get("FALKORDB_PASSWORD") or None,
+                "ssl": os.environ.get("FALKORDB_SSL", "").strip().lower()
+                not in ("", "0", "false", "no"),
+                "graph": neo4j_db,
+                "database": neo4j_db,
+                "_suppress_deprecation": True,
+            }
+        else:
+            if not falkordb_path:
+                from cortex_harness.storage import resolve_storage
 
-            falkordb_path = str(resolve_storage(Path.cwd()).falkordb_code_path)
-        config = {
-            "path": falkordb_path,
-            "graph": neo4j_db,
-            "database": neo4j_db,
-            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
-            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
-        }
+                falkordb_path = str(resolve_storage(Path.cwd()).falkordb_code_path)
+            config = {
+                "path": falkordb_path,
+                "graph": neo4j_db,
+                "database": neo4j_db,
+                "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+                "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+            }
     else:
         config = {
             "uri": neo4j_uri,
@@ -975,13 +987,27 @@ async def _project_topology_bootstrap_needed(
         }
     else:
         graph_name = getattr(args, "falkordb_graph", None) or database
-        config = {
-            "path": getattr(args, "falkordb_path", None),
-            "graph": graph_name,
-            "database": graph_name,
-            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
-            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
-        }
+        falkordb_uri = (
+            getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
+        ).strip()
+        if falkordb_uri:
+            config = {
+                "uri": falkordb_uri,
+                "password": getattr(args, "falkordb_password", None)
+                or os.environ.get("FALKORDB_PASSWORD"),
+                "ssl": bool(getattr(args, "falkordb_ssl", False)),
+                "graph": graph_name,
+                "database": graph_name,
+                "_suppress_deprecation": True,
+            }
+        else:
+            config = {
+                "path": getattr(args, "falkordb_path", None),
+                "graph": graph_name,
+                "database": graph_name,
+                "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+                "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+            }
     try:
         driver = await GraphDriverFactory.create_driver(provider, config)
     except Exception:
@@ -1024,13 +1050,27 @@ async def _resume_configured_journal(args: argparse.Namespace, config: Any) -> i
             "database": database,
         }
     else:
-        driver_config = {
-            "path": getattr(args, "falkordb_path", None),
-            "graph": getattr(args, "falkordb_graph", None) or database,
-            "database": database,
-            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
-            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
-        }
+        falkordb_uri = (
+            getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
+        ).strip()
+        if falkordb_uri:
+            driver_config = {
+                "uri": falkordb_uri,
+                "password": getattr(args, "falkordb_password", None)
+                or os.environ.get("FALKORDB_PASSWORD"),
+                "ssl": bool(getattr(args, "falkordb_ssl", False)),
+                "graph": getattr(args, "falkordb_graph", None) or database,
+                "database": database,
+                "_suppress_deprecation": True,
+            }
+        else:
+            driver_config = {
+                "path": getattr(args, "falkordb_path", None),
+                "graph": getattr(args, "falkordb_graph", None) or database,
+                "database": database,
+                "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+                "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+            }
     driver = await GraphDriverFactory.create_driver(provider, driver_config)
     try:
         return await resume_journal(config, driver)
@@ -1064,6 +1104,9 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
         env["GRAPH_PROVIDER"] = "neo4j"
         for key in (
             "FALKORDB_PATH",
+            "FALKORDB_URI",
+            "FALKORDB_PASSWORD",
+            "FALKORDB_SSL",
             "FALKORDB_GRAPH",
             "FALKORDB_DATABASE",
             "NEO4J_URI",
@@ -1084,7 +1127,22 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
         env["NEO4J_PASS"] = args.neo4j_password
     if args.neo4j_db:
         env["NEO4J_DB"] = args.neo4j_db
-    if getattr(args, "falkordb_path", None):
+    falkordb_uri = (
+        getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
+    ).strip()
+    if falkordb_uri:
+        # Remote FalkorDB: children must not fall back to the embedded path
+        # (FalkorDBLite is unavailable on win32).
+        env["FALKORDB_URI"] = falkordb_uri
+        env.pop("FALKORDB_PATH", None)
+        password = getattr(args, "falkordb_password", None) or os.environ.get(
+            "FALKORDB_PASSWORD"
+        )
+        if password:
+            env["FALKORDB_PASSWORD"] = str(password)
+        if getattr(args, "falkordb_ssl", False):
+            env["FALKORDB_SSL"] = "1"
+    elif getattr(args, "falkordb_path", None):
         env["FALKORDB_PATH"] = str(args.falkordb_path)
     if getattr(args, "falkordb_graph", None):
         env["FALKORDB_GRAPH"] = str(args.falkordb_graph)
@@ -1131,6 +1189,9 @@ def _embedding_phase_env(base_env: Dict[str, str]) -> Dict[str, str]:
     env["GRAPH_PROVIDER"] = "neo4j"
     for key in (
         "FALKORDB_PATH",
+        "FALKORDB_URI",
+        "FALKORDB_PASSWORD",
+        "FALKORDB_SSL",
         "FALKORDB_GRAPH",
         "FALKORDB_DATABASE",
         "NEO4J_URI",
@@ -1381,16 +1442,20 @@ def _write_summary(path: str, payload: Dict[str, object]) -> None:
             try:
                 os.replace(temporary, target)
                 os.chmod(target, 0o600)
-                directory_fd = os.open(target.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
                 break
             except PermissionError:
                 if attempt == 4:
                     raise
                 time.sleep(0.02 * (attempt + 1))
+        if os.name != "nt":
+            # Windows cannot open a directory with os.open(O_RDONLY); the
+            # PermissionError would re-run the rename above and mask the real
+            # result with WinError 2, so the durability sync is POSIX-only.
+            directory_fd = os.open(target.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         if descriptor >= 0:
             os.close(descriptor)

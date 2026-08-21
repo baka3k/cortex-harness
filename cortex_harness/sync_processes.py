@@ -98,8 +98,16 @@ def sync_processes(
     root: Path,
     processes: dict[int, ProcessRecord] | None = None,
     exclude_pids: Iterable[int] = (),
+    include_launchers: bool = True,
 ) -> list[ProcessRecord]:
-    """Find only harness sync launchers/workers for ``owner``."""
+    """Find only harness sync launchers/workers for ``owner``.
+
+    ``include_launchers=False`` restricts the match to worker processes
+    (incremental sync + analyzers). A lifecycle sweep must never terminate
+    another session's interactive ``dev sync <owner>`` launcher — with
+    concurrent terminals that made runs kill each other right after the
+    folder prompt. Explicit ``stop`` commands still match launchers.
+    """
 
     table = process_table() if processes is None else processes
     excluded = {int(pid) for pid in exclude_pids}
@@ -107,7 +115,7 @@ def sync_processes(
     for record in table.values():
         if record.pid in excluded:
             continue
-        if _is_dev_sync(record, owner, root) or (
+        if (include_launchers and _is_dev_sync(record, owner, root)) or (
             _is_code_worker(record, root)
             if owner == "code"
             else _is_doc_worker(record, root)
@@ -145,6 +153,7 @@ def stop_sync_processes(
     root: Path,
     exclude_pids: Iterable[int] = (),
     timeout: float = 5.0,
+    include_launchers: bool = True,
 ) -> StopReport:
     """Terminate matching workers and descendants, escalating only after timeout."""
 
@@ -153,7 +162,11 @@ def stop_sync_processes(
     matched = {
         record.pid
         for record in sync_processes(
-            owner, root=root, processes=table, exclude_pids=excluded
+            owner,
+            root=root,
+            processes=table,
+            exclude_pids=excluded,
+            include_launchers=include_launchers,
         )
     }
     targets = _descendants(matched, table) - excluded
