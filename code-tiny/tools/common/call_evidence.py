@@ -363,6 +363,106 @@ class SemanticCoverageRecord:
         }
 
 
+# ---------------------------------------------------------------------------
+# Phase 04: staging graph labels and evidence joins
+# ---------------------------------------------------------------------------
+
+# Staging-graph node labels.  ``CallSite`` is the primary fact; compatibility
+# ``CALLS`` edges may only be derived from accepted ``direct_resolved``
+# evidence and must stay linked to these stable site/evidence identities.
+EVIDENCE_NODE_LABELS = frozenset({"CallSite", "BuildConfiguration", "SemanticCoverage"})
+
+# Evidence-plane relationship types.  None of these redefine existing Pro*C
+# or call relationships; the nine Pro*C relations and ``BINDS_PARAMETER``
+# keep their meanings.
+HAS_CALLSITE_REL = "HAS_CALLSITE"
+RESOLVES_TO_REL = "RESOLVES_TO"
+OBSERVED_AS_REL = "OBSERVED_AS"
+IN_CONFIGURATION_REL = "IN_CONFIGURATION"
+MAPS_TO_SOURCE_REL = "MAPS_TO_SOURCE"
+
+# Schema-owner-approved cross-domain evidence joins.  ``EXECUTES_SQL`` links
+# a reconciled semantic function to the original SQL region; it never changes
+# the SQL node's identity.  ``RESOLVES_HOST_DECLARATION`` links a uniquely
+# resolved host/indicator variable to its C declaration evidence;
+# ``BINDS_PARAMETER`` remains the statement-to-host relationship.
+EXECUTES_SQL_REL = "EXECUTES_SQL"
+RESOLVES_HOST_DECLARATION_REL = "RESOLVES_HOST_DECLARATION"
+
+EVIDENCE_RELATION_TYPES = frozenset({
+    HAS_CALLSITE_REL,
+    RESOLVES_TO_REL,
+    OBSERVED_AS_REL,
+    IN_CONFIGURATION_REL,
+    MAPS_TO_SOURCE_REL,
+    EXECUTES_SQL_REL,
+    RESOLVES_HOST_DECLARATION_REL,
+})
+
+# Quality of an enclosing-function / host-variable reconciliation join.
+JOIN_QUALITY_STATES = frozenset({
+    "unique",       # lexical and semantic identities agree
+    "ambiguous",    # multiple candidates retained; no selection by name/proximity
+    "unresolved",   # no semantic identity mapped yet
+    "cross_config", # agreement only under some build configurations
+})
+
+# Query profiles.  ``strict`` selects only accepted direct semantic CALLS;
+# ``conservative`` unions the explicitly weaker evidence classes without
+# relabeling them.  The registry of tool-facing profiles (including Pro*C
+# data-impact profiles) lives in ``mcp/framework_registry.py``; this module
+# owns only the two evidence-view names and their admission rules.
+QUERY_PROFILE_STRICT = "strict"
+QUERY_PROFILE_CONSERVATIVE = "conservative"
+QUERY_PROFILE_DEFAULT = "default"
+
+STRICT_PROFILE_REL_TYPES = ("CALLS",)
+CONSERVATIVE_PROFILE_REL_TYPES = (
+    "CALLS",
+    "POSSIBLE_CALLS",
+    "CALLS_FUNCTION_POINTER",
+)
+
+# Typed traversal outcomes.  ``incomplete`` replaces authoritative negative
+# answers (``no callers`` / ``unaffected``) whenever the semantic frontier of
+# the traversal is not complete under the requested configuration policy.
+OUTCOME_COMPLETE = "complete"
+OUTCOME_INCOMPLETE = "incomplete"
+OUTCOME_EMPTY = "empty"
+TRAVERSAL_OUTCOMES = frozenset({OUTCOME_COMPLETE, OUTCOME_INCOMPLETE, OUTCOME_EMPTY})
+
+# Resolution classes admitted by each profile.  Strict admits only accepted
+# direct_resolved observations; conservative adds the possible/indirect/
+# lexical/unresolved classes while every result retains its own class.
+CONSERVATIVE_EXTRA_CLASSES = frozenset({
+    "declared_virtual_target",
+    "possible_dispatch_target",
+    "indirect_callsite",
+    "dependent_template_call",
+    RESOLUTION_CLASS_LEXICAL_CANDIDATE,
+    "constructor_call",
+    RESOLUTION_CLASS_UNRESOLVED,
+})
+
+# Classes that downgrade traversal confidence but never count as confirmed
+# direct calls in impact scoring.
+WEAK_EVIDENCE_CLASSES = CONSERVATIVE_EXTRA_CLASSES
+
+
+def class_allowed_in_profile(resolution_class: str, profile: str) -> bool:
+    """Whether a resolution class may appear in a profile's results."""
+
+    normalized = str(profile or QUERY_PROFILE_DEFAULT).strip().lower()
+    if normalized == QUERY_PROFILE_STRICT:
+        return resolution_class == RESOLUTION_CLASS_DIRECT_RESOLVED
+    if normalized == QUERY_PROFILE_CONSERVATIVE:
+        return (
+            resolution_class == RESOLUTION_CLASS_DIRECT_RESOLVED
+            or resolution_class in CONSERVATIVE_EXTRA_CLASSES
+        )
+    return resolution_class == RESOLUTION_CLASS_DIRECT_RESOLVED
+
+
 def coverage_is_complete(records: Iterable[Any]) -> bool:
     """True only when every record in the frontier reports complete status."""
 
@@ -373,3 +473,84 @@ def coverage_is_complete(records: Iterable[Any]) -> bool:
         if status != "complete":
             return False
     return seen
+
+
+def _record_status(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return str(record.get("status") or "")
+    return str(getattr(record, "status", "") or "")
+
+
+def _record_detail(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return str(record.get("detail") or "")
+    return str(getattr(record, "detail", "") or "")
+
+
+def _record_identity(record: Any) -> str:
+    if isinstance(record, Mapping):
+        return str(record.get("tu_key") or record.get("frontier") or "")
+    return str(getattr(record, "tu_key", "") or "")
+
+
+def frontier_coverage(records: Iterable[Any]) -> dict[str, Any]:
+    """Accumulate coverage over a visited frontier.
+
+    Returns a provider-neutral block with ``status`` one of ``complete``,
+    ``partial``, or ``unknown`` (no coverage records at all), the per-status
+    reasons, and evidence counts.  ``unknown`` never licenses a negative
+    conclusion.
+    """
+
+    counts: dict[str, int] = {}
+    reasons: list[str] = []
+    for record in records:
+        status = _record_status(record)
+        counts[status] = counts.get(status, 0) + 1
+        detail = _record_detail(record)
+        identity = _record_identity(record)
+        if status != "complete":
+            reason = f"{identity or 'frontier'}: {status}"
+            if detail:
+                reason += f" ({detail})"
+            reasons.append(reason)
+    if not counts:
+        return {
+            "status": "unknown",
+            "reasons": ["no semantic coverage records found for the visited frontier"],
+            "counts": {},
+            "record_count": 0,
+        }
+    if counts.get("complete", 0) == sum(counts.values()):
+        status = "complete"
+    else:
+        status = "partial"
+    return {
+        "status": status,
+        "reasons": reasons,
+        "counts": counts,
+        "record_count": sum(counts.values()),
+    }
+
+
+def traversal_outcome(coverage_status: str, result_is_empty: bool) -> str:
+    """Typed outcome for a traversal: empty answers are authoritative only
+    under complete coverage; otherwise the traversal is ``incomplete``."""
+
+    if result_is_empty:
+        return OUTCOME_COMPLETE if coverage_status == "complete" else OUTCOME_INCOMPLETE
+    return OUTCOME_COMPLETE
+
+
+def suggested_next_semantic_scope(coverage_block: Mapping[str, Any]) -> list[str]:
+    """Bounded next-scope hints derived from non-complete coverage reasons."""
+
+    reasons = [
+        str(reason)
+        for reason in (coverage_block.get("reasons") or [])
+        if ": " in str(reason)
+    ]
+    scopes = [reason.split(":", 1)[0] for reason in reasons][:10]
+    if not scopes and str(coverage_block.get("status")) != "complete":
+        scopes = ["run semantic analysis to produce coverage records"]
+    return scopes

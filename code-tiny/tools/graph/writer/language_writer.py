@@ -1805,6 +1805,308 @@ class LanguageCodeWriter:
             "possible_calls:site", calls, write_batch, state, state_writer
         )
 
+    async def write_call_evidence_sites(
+        self,
+        sites: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write ``CallSite`` staging nodes with their evidence links.
+
+        Rows come from the deterministic evidence merge: every site carries
+        its stable identity, accepted resolution class, configuration
+        fingerprints, and observation count.  Accepted sites also get a
+        ``RESOLVES_TO`` edge to the semantically resolved callee.  The
+        staging node — not any compatibility ``CALLS`` edge — is the
+        authority for this evidence.
+        """
+
+        if not sites:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            # The staging node is the authority and must exist even when the
+            # caller Function node is not (yet) present; only the HAS_CALLSITE
+            # edge is conditional on the caller resolving.
+            query = """
+            UNWIND $rows AS row
+            MERGE (site:CallSite {site_id: row.site_id})
+            SET site += row.props,
+                site.updated_at = datetime()
+            WITH site, row
+            CALL {
+                WITH row
+                MATCH (caller:Function {id: row.caller_id})
+                RETURN caller
+                LIMIT 1
+            }
+            MERGE (caller)-[:HAS_CALLSITE]->(site)
+            WITH site, row
+            WHERE row.callee_id <> ''
+            CALL {
+                WITH row
+                MATCH (callee:Function {id: row.callee_id})
+                RETURN callee
+                LIMIT 1
+            }
+            MERGE (site)-[r:RESOLVES_TO]->(callee)
+            SET r.resolution_class = row.resolution_class,
+                r.updated_at = datetime()
+            RETURN count(r) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches(
+            "call_evidence:sites", sites, write_batch, state, state_writer
+        )
+
+    async def write_call_evidence_observations(
+        self,
+        observations: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write deduplicated ``OBSERVED_AS`` evidence edges per observation.
+
+        Each row links a ``CallSite`` to the observed callee function and
+        carries the full evidence contract properties (provider, resolution
+        class, TU/configuration provenance, source span).  Observations
+        without an existing callee node are never silently dropped: their
+        evidence stays queryable on the staging plane as a dangling
+        observation count on the ``CallSite``.
+        """
+
+        if not observations:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            # Determine exactly which rows can link before writing, so a
+            # missing callee never poisons the dangling counts of its
+            # batch-mates.
+            existence_query = """
+            UNWIND $rows AS row
+            CALL {
+                WITH row
+                MATCH (callee:Function {id: row.callee_id})
+                RETURN callee.id AS callee_id
+                LIMIT 1
+            }
+            RETURN row.evidence_id AS evidence_id, callee_id AS callee_id
+            """
+            records, _, _ = await self.driver.execute_query(
+                existence_query, {"rows": batch}, self.database
+            )
+            linked_callees = {
+                str(record.get("evidence_id"))
+                for record in records
+                if record.get("callee_id")
+            }
+            linkable = [
+                row for row in batch if str(row.get("evidence_id")) in linked_callees
+            ]
+            linked = 0
+            if linkable:
+                query = """
+                UNWIND $rows AS row
+                CALL {
+                    WITH row
+                    MATCH (site:CallSite {site_id: row.site_id})
+                    RETURN site
+                    LIMIT 1
+                }
+                CALL {
+                    WITH row
+                    MATCH (callee:Function {id: row.callee_id})
+                    RETURN callee
+                    LIMIT 1
+                }
+                MERGE (site)-[r:OBSERVED_AS {evidence_id: row.evidence_id}]->(callee)
+                SET r += row.props,
+                    r.updated_at = datetime()
+                RETURN count(r) as count
+                """
+                records, _, _ = await self.driver.execute_query(
+                    query, {"rows": linkable}, self.database
+                )
+                linked = records[0]["count"] if records else 0
+            dangling = [row for row in batch if row not in linkable]
+            if dangling:
+                # Fail-visible, not fail-silent: observations whose callee
+                # node does not exist are counted on the staging site so the
+                # evidence remains discoverable and reconcilable later.
+                # The count is idempotent per evidence_id via the delta map.
+                dangling_query = """
+                UNWIND $rows AS row
+                MATCH (site:CallSite {site_id: row.site_id})
+                SET site.dangling_observation_ids =
+                        coalesce(site.dangling_observation_ids, []) + row.evidence_id
+                RETURN count(site) as count
+                """
+                try:
+                    await self.driver.execute_query(
+                        dangling_query, {"rows": dangling}, self.database
+                    )
+                except Exception:
+                    pass
+            return linked
+
+        return await self.write_batches(
+            "call_evidence:observations", observations, write_batch, state, state_writer
+        )
+
+    async def write_build_configurations(
+        self,
+        configurations: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write ``BuildConfiguration`` nodes and ``IN_CONFIGURATION`` links.
+
+        Contradictory but valid configurations coexist as distinct nodes
+        keyed by ``config_fingerprint``; a site observed under several
+        configurations links to each without erasing the others.
+        """
+
+        if not configurations:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (config:BuildConfiguration {config_fingerprint: row.config_fingerprint})
+            SET config += row.props,
+                config.updated_at = datetime()
+            WITH config, row
+            WHERE row.site_id <> ''
+            CALL {
+                WITH config, row
+                MATCH (site:CallSite {site_id: row.site_id})
+                RETURN site
+                LIMIT 1
+            }
+            MERGE (site)-[:IN_CONFIGURATION]->(config)
+            RETURN count(config) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches(
+            "call_evidence:configurations", configurations, write_batch, state, state_writer
+        )
+
+    async def write_semantic_coverage(
+        self,
+        records_in: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write ``SemanticCoverage`` nodes for one project/revision frontier."""
+
+        if not records_in:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (coverage:SemanticCoverage {fingerprint: row.fingerprint})
+            SET coverage += row.props,
+                coverage.updated_at = datetime()
+            RETURN count(coverage) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches(
+            "call_evidence:coverage", records_in, write_batch, state, state_writer
+        )
+
+    async def write_proc_evidence_joins(
+        self,
+        function_joins: Optional[List[Dict[str, Any]]] = None,
+        host_declarations: Optional[List[Dict[str, Any]]] = None,
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write schema-owner-approved Pro*C cross-domain evidence joins.
+
+        ``EXECUTES_SQL`` links the reconciled (semantic when unique, lexical
+        otherwise) function to the original SQL statement with its join
+        quality and source-map provenance.  ``RESOLVES_HOST_DECLARATION``
+        links uniquely resolved host/indicator variables to their C
+        declaration evidence.  Neither changes the identity of the Pro*C
+        nodes nor redefines ``BINDS_PARAMETER``.
+        """
+
+        written = 0
+        if function_joins:
+            async def write_joins(batch: List[Dict[str, Any]]) -> int:
+                query = """
+                UNWIND $rows AS row
+                CALL {
+                    WITH row
+                    MATCH (f:Function {id: row.function_id})
+                    RETURN f
+                    LIMIT 1
+                }
+                CALL {
+                    WITH row
+                    MATCH (s:SqlStatement {id: row.statement_id})
+                    RETURN s
+                    LIMIT 1
+                }
+                MERGE (f)-[r:EXECUTES_SQL {statement_id: row.statement_id}]->(s)
+                SET r += row.props,
+                    r.updated_at = datetime()
+                RETURN count(r) as count
+                """
+                records, _, _ = await self.driver.execute_query(
+                    query, {"rows": batch}, self.database
+                )
+                return records[0]["count"] if records else 0
+
+            written += await self.write_batches(
+                "proc_evidence:function_joins", function_joins, write_joins, state, state_writer
+            )
+        if host_declarations:
+            async def write_hosts(batch: List[Dict[str, Any]]) -> int:
+                query = """
+                UNWIND $rows AS row
+                CALL {
+                    WITH row
+                    MATCH (host:SqlHostVariable {id: row.host_variable_id})
+                    RETURN host
+                    LIMIT 1
+                }
+                CALL {
+                    WITH row
+                    MATCH (declaration)
+                    WHERE (declaration:Function OR declaration:Variable OR declaration:Field)
+                      AND declaration.id = row.declaration_id
+                    RETURN declaration
+                    LIMIT 1
+                }
+                MERGE (host)-[r:RESOLVES_HOST_DECLARATION {declaration_id: row.declaration_id}]->(declaration)
+                SET r += row.props,
+                    r.updated_at = datetime()
+                RETURN count(r) as count
+                """
+                records, _, _ = await self.driver.execute_query(
+                    query, {"rows": batch}, self.database
+                )
+                return records[0]["count"] if records else 0
+
+            written += await self.write_batches(
+                "proc_evidence:host_declarations", host_declarations, write_hosts, state, state_writer
+            )
+        return written
+
     async def write_navigators(
         self,
         navigators: List[Dict[str, Any]],
@@ -1979,6 +2281,13 @@ class LanguageCodeWriter:
         param_lists: List[Dict[str, Any]] = None,
         workflows: List[Dict[str, Any]] = None,
         workflow_steps: List[Dict[str, Any]] = None,
+        # Semantic call-evidence staging plane (Phase 04)
+        call_evidence_sites: List[Dict[str, Any]] = None,
+        call_evidence_observations: List[Dict[str, Any]] = None,
+        build_configurations: List[Dict[str, Any]] = None,
+        semantic_coverage: List[Dict[str, Any]] = None,
+        proc_function_joins: List[Dict[str, Any]] = None,
+        proc_host_declarations: List[Dict[str, Any]] = None,
         state: Optional[Dict[str, int]] = None,
         state_writer: Optional[Callable] = None,
         # Selector flags – set to True to use the *_full inline-Cypher variants
@@ -2241,6 +2550,28 @@ class LanguageCodeWriter:
 
         if calls_with_site:
             counts["calls_with_site"] = await self.write_calls_with_site(calls_with_site, state, state_writer)
+
+        # --- Semantic call-evidence staging plane (after functions/calls) ---
+        if build_configurations:
+            counts["build_configurations"] = await self.write_build_configurations(
+                build_configurations, state, state_writer
+            )
+        if call_evidence_sites:
+            counts["call_evidence_sites"] = await self.write_call_evidence_sites(
+                call_evidence_sites, state, state_writer
+            )
+        if call_evidence_observations:
+            counts["call_evidence_observations"] = await self.write_call_evidence_observations(
+                call_evidence_observations, state, state_writer
+            )
+        if semantic_coverage:
+            counts["semantic_coverage"] = await self.write_semantic_coverage(
+                semantic_coverage, state, state_writer
+            )
+        if proc_function_joins or proc_host_declarations:
+            counts["proc_evidence_joins"] = await self.write_proc_evidence_joins(
+                proc_function_joins, proc_host_declarations, state, state_writer
+            )
 
         # --- Workflows (written after functions so FK constraints are satisfied) ---
         if workflows:

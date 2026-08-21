@@ -118,6 +118,11 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "max_depth", "type": "int", "required": False, "description": "Graph traversal depth (default: 2)"},
             {"name": "relationship_types", "type": "List[str]", "required": False,
              "description": "Filter by rel types (default: CALLS)"},
+            {"name": "query_profile", "type": "str", "required": False,
+             "description": "Evidence view: 'strict' (accepted direct semantic CALLS only) or "
+                            "'conservative' (unions POSSIBLE_CALLS/CALLS_FUNCTION_POINTER without "
+                            "relabeling). Results carry semantic_coverage; an empty traversal over "
+                            "an incomplete frontier returns outcome='incomplete'."},
             {"name": "direction", "type": "str", "required": False,
              "description": "'out' (callees), 'in' (callers), 'both' (default)"},
             {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
@@ -528,6 +533,24 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         ],
         "output": "Dict with POSSIBLE_CALLS edges",
         "example": "list_possible_calls(limit=50)",
+    },
+    {
+        "name": "analyze_proc_data_impact",
+        "description": "Pro*C call-plus-data impact: function -> EXECUTES_SQL -> SqlStatement -> DatabaseTable "
+                       "with host-variable declaration joins, strict CALLS callers, join/source-map quality, "
+                       "dynamic-SQL flags, and semantic coverage. Dynamic SQL or ambiguous/unresolved joins make "
+                       "the frontier partial, so empty results return outcome='incomplete' rather than an "
+                       "authoritative 'no data impact'.",
+        "use_cases": ["Migration data impact", "Function-to-SQL-to-table tracing",
+                      "Pro*C host variable analysis", "Cursor/table impact for a changed function"],
+        "inputs": [
+            {"name": "function_id", "type": "str", "required": True, "description": "Function node ID"},
+            {"name": "include_callers", "type": "bool", "required": False,
+             "description": "Include strict CALLS callers (default: true)"},
+            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
+        ],
+        "output": "Dict with sql_statements, host_variables, strict_callers, data_impact_coverage, semantic_coverage, outcome",
+        "example": "analyze_proc_data_impact(function_id='fn_order_proc')",
     },
     {
         "name": "annotate_node",
