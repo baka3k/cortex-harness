@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [C++ semantic pilot and rollout decision (Phase 07)](2026-08-21-cplus-semantic-pilot-phase07.md)
 - [graph_mcp non-text property search fix](2026-08-20-graph-mcp-non-text-property-search-fix.md)
 - [FalkorDB Browser UI URL in infra-up and doctor](2026-08-20-falkordb-browser-ui-url.md)
 - [dev doctor caller-aware config resolution](2026-08-20-doctor-caller-aware-scan.md)
