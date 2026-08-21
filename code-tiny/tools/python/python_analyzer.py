@@ -842,7 +842,10 @@ def parse_python_file(path: str, root: str) -> Tuple[
     List[RelationEdge],
     FileDef,
 ]:
-    rel_path = os.path.relpath(path, root)
+    # Graph identity uses forward slashes on every platform; os.path.relpath
+    # yields backslashes on Windows, which would desynchronize File ids from
+    # import-resolution targets and relation endpoints.
+    rel_path = os.path.relpath(path, root).replace(os.sep, "/")
     tree, source_bytes = _parse_file(path)
     snippet = source_bytes.decode("utf-8", errors="ignore")
     start_line = 1
@@ -1241,7 +1244,7 @@ def _load_or_parse_payload(
                     ensure_exported_field(item)
         return payload
 
-    rel_path = os.path.relpath(file_path, root)
+    rel_path = os.path.relpath(file_path, root).replace(os.sep, "/")
     cached_payload = None
     signature = None
     if parse_cache:

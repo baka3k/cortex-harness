@@ -70,7 +70,21 @@ def load_harness_config(config_path: str) -> None:
         else config_file.parent
     )
     resolved = resolve_storage(project_root, config=local_keys)
+    remote_uri = ""
+    if str(cfg.get("storage_backend") or "local").strip().lower() == "remote":
+        remote_section = cfg.get("remote") or {}
+        remote_uri = str(remote_section.get("falkordb_uri") or "").strip()
+        if remote_uri and "FALKORDB_URI" not in os.environ:
+            os.environ["FALKORDB_URI"] = remote_uri
+            remote_password = str(remote_section.get("falkordb_password") or "").strip()
+            if remote_password and "FALKORDB_PASSWORD" not in os.environ:
+                os.environ["FALKORDB_PASSWORD"] = remote_password
+            if remote_section.get("falkordb_ssl") and "FALKORDB_SSL" not in os.environ:
+                os.environ["FALKORDB_SSL"] = "1"
     for key, value in storage_overlay(resolved, owner="code").items():
+        if remote_uri and key.startswith("FALKORDB_") and key.endswith("_PATH"):
+            # Remote graph projects must not fall back to embedded paths.
+            continue
         os.environ.setdefault(key, value)
 
     # Qdrant collection defaults — code side reads code.env, doc side reads

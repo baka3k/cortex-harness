@@ -447,6 +447,25 @@ def storage_overlay(
         ENV_FALKORDB_CODE: str(resolved.falkordb_code_path), ENV_FALKORDB_DOC: str(resolved.falkordb_doc_path),
         ENV_FALKORDB_PATH: str(falkor_selected), "CORTEX_STORAGE_OWNER": selected,
     }
+    remote = resolved.remote
+    if resolved.backend_mode == BackendMode.REMOTE and remote is not None:
+        if remote.qdrant_url:
+            overlay["QDRANT_URL"] = remote.qdrant_url
+            if remote.qdrant_api_key:
+                overlay["QDRANT_API_KEY"] = remote.qdrant_api_key
+        if remote.falkordb_uri:
+            # A remote FalkorDB server replaces the embedded store for this
+            # project. Drop the local path keys so children cannot silently
+            # fall back to FalkorDBLite (unavailable on win32) and pass the
+            # connection details through instead. The FalkorDBDriver accepts
+            # both ``scheme://host:port`` URIs and bare ``host:port`` values.
+            overlay["FALKORDB_URI"] = remote.falkordb_uri
+            for key in (ENV_FALKORDB_PATH, ENV_FALKORDB_CODE, ENV_FALKORDB_DOC):
+                overlay.pop(key, None)
+            if remote.falkordb_password:
+                overlay["FALKORDB_PASSWORD"] = remote.falkordb_password
+            if remote.falkordb_ssl:
+                overlay["FALKORDB_SSL"] = "1"
     if code_collection or resolved.code_collection:
         overlay["QDRANT_COLLECTION"] = code_collection or str(resolved.code_collection)
         overlay["QDRANT_COLLECTION_CODE"] = overlay["QDRANT_COLLECTION"]

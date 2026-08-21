@@ -647,6 +647,11 @@ def _build_directory_nodes_and_relations(
             current = current.rsplit("/", 1)[0]
 
     directory_rows: List[Dict[str, Any]] = []
+    # Relation preflight audits match endpoints on project_id_normalized;
+    # Directory rows must carry it like every other node producer.
+    from tools.common.project_scope import project_id_lookup_key
+
+    normalized_project_id = project_id_lookup_key(project_id) or str(project_id)
     for dir_path in sorted(dir_paths):
         parts = [part for part in dir_path.split("/") if part]
         directory_rows.append(
@@ -656,6 +661,7 @@ def _build_directory_nodes_and_relations(
                 "path": dir_path,
                 "depth": len(parts),
                 "project_id": project_id,
+                "project_id_normalized": normalized_project_id,
                 "project_name": project_name,
                 "language": language,
                 "repo": repo,

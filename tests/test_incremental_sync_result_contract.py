@@ -4,6 +4,7 @@ import contextlib
 import asyncio
 import io
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -298,5 +299,8 @@ def test_summary_artifact_is_atomic_and_owner_only(tmp_path: Path):
     _write_summary(str(path), {"status": "success"})
 
     assert json.loads(path.read_text(encoding="utf-8")) == {"status": "success"}
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        # Windows has no owner/group/other permission bits; os.chmod there
+        # only toggles the read-only flag.
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert not [item for item in tmp_path.iterdir() if item.name.endswith(".tmp")]

@@ -418,11 +418,14 @@ def atomic_write_run_result(
             os.fsync(handle.fileno())
         os.replace(temporary, target)
         os.chmod(target, 0o600)
-        directory_fd = os.open(target.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        if os.name != "nt":
+            # Windows cannot open a directory with os.open(O_RDONLY); the
+            # durability sync is POSIX-only.
+            directory_fd = os.open(target.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         if descriptor >= 0:
             os.close(descriptor)

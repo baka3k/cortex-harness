@@ -5661,10 +5661,19 @@ SET s.node_type = 'code',
             )
 
         # Write tail relations (event/possible-call) + inferred nodes/relations
-        tail_and_inferred: List[Dict[str, Any]] = tail_relations + inferred_relations
-        if inferred_types or tail_and_inferred:
+        # This call passes no projects/files rows, so write_all cannot infer a
+        # default project scope — stamp every row explicitly.
+        tail_and_inferred: List[Dict[str, Any]] = [
+            {**rel, "project_id": rel.get("project_id") or project_id}
+            for rel in (tail_relations + inferred_relations)
+        ]
+        stamped_inferred_types = [
+            {**node, "project_id": node.get("project_id") or project_id}
+            for node in (inferred_types or [])
+        ]
+        if stamped_inferred_types or tail_and_inferred:
             await code_writer.write_all(
-                types=inferred_types or None,
+                types=stamped_inferred_types or None,
                 relations=tail_and_inferred or None,
                 use_full_writers=True,
             )

@@ -12,6 +12,7 @@ relatedPlans:
   - 260806-1648-local-file-storage
   - 260820-dev-init-backend-selection
   - 260820-doctor-caller-config
+  - 260821-2115-dev-sync-code-windows (consumes local Docker FalkorDB for Windows sync)
 blockedBy: []
 blocks: []
 ---

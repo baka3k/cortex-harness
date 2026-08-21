@@ -2865,6 +2865,7 @@ async def build_call_graph(
                 UNWIND $rows AS row
                 MERGE (p:Project {project_id: row.id})
                 SET p.id = row.id,
+                    p.project_id_normalized = row.project_id_normalized,
                     p.name = row.name,
                     p.language = row.language,
                     p.repo = row.repo,
@@ -2883,6 +2884,7 @@ async def build_call_graph(
                     p.summary = row.summary,
                     p.note = row.note,
                     p.project_id = row.project_id,
+p.project_id_normalized = row.project_id_normalized,
                     p.project_name = row.project_name,
                     p.language = row.language,
                     p.repo = row.repo,
@@ -2902,6 +2904,8 @@ async def build_call_graph(
                     n.summary = row.summary,
                     n.note = row.note,
                     n.project_id = row.project_id,
+
+                    n.project_id_normalized = row.project_id_normalized,
                     n.project_name = row.project_name,
                     n.language = row.language,
                     n.repo = row.repo,
@@ -2920,6 +2924,7 @@ async def build_call_graph(
                     f.summary = row.summary,
                     f.note = row.note,
                     f.project_id = row.project_id,
+                    f.project_id_normalized = row.project_id_normalized,
                     f.project_name = row.project_name,
                     f.language = row.language,
                     f.repo = row.repo,
@@ -2933,6 +2938,7 @@ async def build_call_graph(
                     d.path = row.path,
                     d.depth = row.depth,
                     d.project_id = row.project_id,
+                    d.project_id_normalized = row.project_id_normalized,
                     d.project_name = row.project_name,
                     d.language = row.language,
                     d.repo = row.repo,
@@ -2959,6 +2965,7 @@ async def build_call_graph(
                     c.export_evidence = coalesce(row.export_evidence, ''),
                     c.signature = coalesce(row.signature, ''),
                     c.project_id = row.project_id,
+c.project_id_normalized = row.project_id_normalized,
                     c.project_name = row.project_name,
                     c.language = row.language,
                     c.repo = row.repo,
@@ -2974,6 +2981,8 @@ async def build_call_graph(
                     t.end_line = row.end_line,
                     t.code = row.code,
                     t.project_id = row.project_id,
+
+                    t.project_id_normalized = row.project_id_normalized,
                     t.project_name = row.project_name,
                     t.language = row.language,
                     t.repo = row.repo,
@@ -3003,6 +3012,7 @@ async def build_call_graph(
                     f.export_evidence = coalesce(row.export_evidence, ''),
                     f.signature = coalesce(row.signature, ''),
                     f.project_id = row.project_id,
+f.project_id_normalized = row.project_id_normalized,
                     f.project_name = row.project_name,
                     f.language = row.language,
                     f.repo = row.repo,
@@ -3021,6 +3031,8 @@ async def build_call_graph(
                     m.summary = row.summary,
                     m.note = row.note,
                     m.project_id = row.project_id,
+
+                    m.project_id_normalized = row.project_id_normalized,
                     m.project_name = row.project_name,
                     m.language = row.language,
                     m.repo = row.repo,
@@ -3050,6 +3062,7 @@ async def build_call_graph(
                     c.summary = row.summary,
                     c.note = row.note,
                     c.project_id = row.project_id,
+c.project_id_normalized = row.project_id_normalized,
                     c.project_name = row.project_name,
                     c.language = row.language,
                     c.repo = row.repo,
@@ -3066,6 +3079,8 @@ async def build_call_graph(
                     r.summary = row.summary,
                     r.note = row.note,
                     r.project_id = row.project_id,
+
+                    r.project_id_normalized = row.project_id_normalized,
                     r.project_name = row.project_name,
                     r.language = row.language,
                     r.repo = row.repo,
@@ -3084,6 +3099,7 @@ async def build_call_graph(
                     m.summary = row.summary,
                     m.note = row.note,
                     m.project_id = row.project_id,
+m.project_id_normalized = row.project_id_normalized,
                     m.project_name = row.project_name,
                     m.language = row.language,
                     m.repo = row.repo,
@@ -3100,6 +3116,8 @@ async def build_call_graph(
                     d.summary = row.summary,
                     d.note = row.note,
                     d.project_id = row.project_id,
+
+                    d.project_id_normalized = row.project_id_normalized,
                     d.project_name = row.project_name,
                     d.language = row.language,
                     d.repo = row.repo,
@@ -3113,6 +3131,7 @@ async def build_call_graph(
                     a.summary = row.summary,
                     a.note = row.note,
                     a.project_id = row.project_id,
+a.project_id_normalized = row.project_id_normalized,
                     a.project_name = row.project_name,
                     a.language = row.language,
                     a.repo = row.repo,
@@ -3127,6 +3146,8 @@ async def build_call_graph(
                     r.summary = row.summary,
                     r.note = row.note,
                     r.project_id = row.project_id,
+
+                    r.project_id_normalized = row.project_id_normalized,
                     r.project_name = row.project_name,
                     r.language = row.language,
                     r.repo = row.repo,
@@ -3140,6 +3161,7 @@ async def build_call_graph(
                     a.summary = row.summary,
                     a.note = row.note,
                     a.project_id = row.project_id,
+a.project_id_normalized = row.project_id_normalized,
                     a.project_name = row.project_name,
                     a.language = row.language,
                     a.repo = row.repo,
@@ -3153,6 +3175,8 @@ async def build_call_graph(
                     m.summary = row.summary,
                     m.note = row.note,
                     m.project_id = row.project_id,
+
+                    m.project_id_normalized = row.project_id_normalized,
                     m.project_name = row.project_name,
                     m.language = row.language,
                     m.repo = row.repo,
@@ -3162,6 +3186,8 @@ async def build_call_graph(
                 UNWIND $rows AS row
                 MERGE (e:Event {id: row.id})
                 SET e:Event,
+                    e.project_id = row.project_id,
+                    e.project_id_normalized = row.project_id_normalized,
                     e.name = row.name,
                     e.namespace = row.namespace,
                     e.version = row.version,
@@ -3356,13 +3382,21 @@ async def build_call_graph(
                     },
                 )
 
+            from tools.common.project_scope import project_id_lookup_key
+
+            normalized_project_id = project_id_lookup_key(project_id) or str(project_id)
             for payload in selected_payloads:
                 file_def = payload["file_def"]
+                # os.path-derived file paths carry backslashes on Windows;
+                # File identity everywhere else uses forward slashes.
+                normalized_file_path = android_common._normalize_rel_path(
+                    file_def["file_path"]
+                )
                 add_node_row(
                     "files",
                     {
-                        "id": file_def["file_path"],
-                        "path": file_def["file_path"],
+                        "id": normalized_file_path,
+                        "path": normalized_file_path,
                         "package_name": file_def["package_name"],
                         "start_line": file_def["start_line"],
                         "end_line": file_def["end_line"],
@@ -3371,6 +3405,7 @@ async def build_call_graph(
                         "summary": file_def["summary"],
                         "note": file_def["note"],
                         "project_id": project_id,
+                        "project_id_normalized": normalized_project_id,
                         "project_name": project_name,
                         "language": language,
                         "repo": repo,
@@ -3798,32 +3833,15 @@ async def build_call_graph(
                     },
                 )
 
-            file_paths_for_tree: List[str] = []
-            file_paths_for_tree.extend(
+            # Only files that actually get File nodes may receive
+            # Directory-CONTAINS-File edges — relation preflight fails closed
+            # on dangling endpoints, and manifests/resources/gradle files are
+            # written under their own labels, never as File.
+            file_paths_for_tree: List[str] = [
                 str(row.get("path") or "")
                 for row in node_rows.get("files", [])
                 if str(row.get("path") or "")
-            )
-            file_paths_for_tree.extend(
-                str(row.get("file_path") or "")
-                for row in node_rows.get("android_manifests", [])
-                if str(row.get("file_path") or "")
-            )
-            file_paths_for_tree.extend(
-                str(row.get("file_path") or "")
-                for row in node_rows.get("android_resources", [])
-                if str(row.get("file_path") or "")
-            )
-            file_paths_for_tree.extend(
-                str(row.get("file_path") or "")
-                for row in node_rows.get("gradle_modules", [])
-                if str(row.get("file_path") or "")
-            )
-            file_paths_for_tree.extend(
-                str(row.get("file_path") or "")
-                for row in node_rows.get("android_components", [])
-                if str(row.get("file_path") or "")
-            )
+            ]
             directory_paths_for_tree = android_common._scan_android_directory_paths(root)
             directory_rows, directory_relations = android_common._build_directory_nodes_and_relations(
                 file_paths=file_paths_for_tree,
@@ -4160,9 +4178,23 @@ async def build_call_graph(
                     )
 
             # --- Write all collected nodes via language_writer ---
+            # Relation preflight audits match endpoints on project_id and
+            # project_id_normalized; stamp both centrally so every custom
+            # node query can rely on them being present.
             for label, rows in node_rows.items():
                 if rows:
-                    await code_writer.write_nodes_batch(label, node_queries[label], rows)
+                    stamped_rows = [
+                        {
+                            **row,
+                            "project_id": row.get("project_id") or project_id,
+                            "project_id_normalized": row.get("project_id_normalized")
+                            or normalized_project_id,
+                        }
+                        for row in rows
+                    ]
+                    await code_writer.write_nodes_batch(
+                        label, node_queries[label], stamped_rows
+                    )
 
             # --- Write all collected relations ---
             await code_writer.write_relations_typed(
