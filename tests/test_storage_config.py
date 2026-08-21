@@ -184,6 +184,37 @@ def test_data_home_override_is_not_project_relative_when_absolute(tmp_path: Path
     assert resolved.data_root == data_home.resolve()
 
 
+def test_relative_data_home_anchors_under_account_home_not_project_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Bare-name ``data_home`` must live under ~/.cortext-harness, never under project_root.
+
+    Regression guard for the silent project-root anchor introduced by commit
+    2704da8 (2026-08-06). Before the fix, a relative value such as
+    ``data_home="sampledb"`` was joined onto the source repository's project
+    root, trapping data inside scanned repositories and breaking the
+    "centralized per-account data home" contract documented at the top of
+    ``cortex_harness/storage/config.py``. Operators running ``dev sync code``
+    against multiple projects must be able to find every instance under
+    ``~/.cortext-harness/v1/instances/<id>/...`` regardless of where the
+    source tree lives.
+    """
+    fake_home = tmp_path / "account"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    project = tmp_path / "sources" / "sampledb"
+
+    resolved = resolve_storage(project, data_home="sampledb")
+
+    # Lives under the per-account data home, not the source tree.
+    assert resolved.data_root == (fake_home / ".cortext-harness" / "sampledb").resolve()
+    assert not resolved.data_root.is_relative_to(project.resolve())
+    # FalkorDB + Qdrant both follow the relocated data_root.
+    assert resolved.data_root.is_relative_to(fake_home / ".cortext-harness")
+    assert resolved.falkordb_code_path.is_relative_to(resolved.data_root)
+    assert resolved.qdrant_code_path.is_relative_to(resolved.data_root)
+    assert resolved.path_provenance == "explicit-relative-anchored-to-home"
+
+
 def test_project_local_config_discovery_does_not_change_default_data_root(tmp_path: Path, monkeypatch) -> None:
     fake_home = tmp_path / "account"
     monkeypatch.setattr(Path, "home", lambda: fake_home)

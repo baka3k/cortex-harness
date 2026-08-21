@@ -366,8 +366,20 @@ def resolve_storage(
 
     data_raw = _select(data_home, _nonempty(cfg, CFG_DATA_HOME), os.environ.get(ENV_DATA_HOME))
     if data_raw:
-        data_root = _resolve_override(data_raw, root)
-        provenance = "explicit-override"
+        expanded = Path(data_raw).expanduser()
+        if expanded.is_absolute():
+            data_root = expanded.resolve()
+            provenance = "explicit-absolute-override"
+        else:
+            # A bare name like ``"sampledb"`` MUST NOT be silently anchored to
+            # ``project_root``; that traps data inside source trees (regression
+            # introduced by commit 2704da8 in 2026-08) and breaks the
+            # centralized per-account data-home contract documented at the
+            # top of this module. Mirror ``dev init``'s "blank = account
+            # default" prompt contract: treat relative names as sub-paths
+            # under ``~/.cortext-harness`` so siblings stay co-located.
+            data_root = (default_data_home() / expanded).resolve()
+            provenance = "explicit-relative-anchored-to-home"
     else:
         data_root = default_data_home().resolve()
         provenance = "account-home-default"
