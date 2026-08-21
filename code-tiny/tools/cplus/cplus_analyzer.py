@@ -4620,7 +4620,14 @@ SET s.node_type = 'code',
             # never runs and Qdrant stays empty. Retry with exponential
             # backoff for network-class errors (idempotent MERGE writes make
             # this safe); any other failure still aborts immediately.
-            _TRANSIENT_ERRORS = (ConnectionError, OSError, TimeoutError)
+            # NOTE: redis.exceptions.ConnectionError is NOT a subclass of
+            # builtin ConnectionError, so we import the redis class too.
+            from redis.exceptions import ConnectionError as _RedisConnectionError
+            from redis.exceptions import TimeoutError as _RedisTimeoutError
+            _TRANSIENT_ERRORS = (
+                ConnectionError, OSError, TimeoutError,
+                _RedisConnectionError, _RedisTimeoutError,
+            )
             _max_attempts = 3
             for _attempt in range(1, _max_attempts + 1):
                 try:
