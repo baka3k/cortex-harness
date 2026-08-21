@@ -501,8 +501,13 @@ function Wait-RedisPingReady {
 }
 
 function Invoke-InfraUp {
-    Write-Host "[warn] 'infra-up' is deprecated; initializing embedded storage instead."
-    Invoke-StorageLifecycle -StorageAction "storage-init"
+    # Routes to the Python ``invoke_infra_up`` so Docker-managed services
+    # (Qdrant + FalkorDB Browser UI) actually come up; the previous shortcut
+    # only ran ``storage-init`` and silently left the Browser UI off-host.
+    param(
+        [string[]]$StorageArguments = @()
+    )
+    Invoke-StorageLifecycle -StorageAction "infra-up" -StorageArguments $StorageArguments
 }
 
 function Invoke-InfraDown {
