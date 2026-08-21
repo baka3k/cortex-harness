@@ -216,16 +216,33 @@ int main(void) {
             "[graph] buffer_finished index=1/1 files=1-1 processed=1/1",
             output,
         )
-        self.assertTrue(first.calls)
+
+        def possible_calls(writer):
+            return [
+                row
+                for query, params, _ in writer.driver.queries
+                if "POSSIBLE_CALLS" in query
+                for row in params.get("rows", [])
+            ]
+
+        first_possible = possible_calls(first)
+        second_possible = possible_calls(second)
+        # Tree-sitter evidence is weak: lexical candidates publish as
+        # POSSIBLE_CALLS, never as strict CALLS edges.
+        self.assertTrue(first_possible)
+        self.assertFalse(first.calls)
         self.assertEqual(
-            [call["site_id"] for call in first.calls],
-            [call["site_id"] for call in second.calls],
+            [call["site_id"] for call in first_possible],
+            [call["site_id"] for call in second_possible],
         )
         self.assertTrue(
-            all(call["site_id"] == call["props"]["stable_site_id"] for call in first.calls)
+            all(call["site_id"] == call["props"]["stable_site_id"] for call in first_possible)
         )
-        self.assertTrue(all(call["props"]["parse_run_id"] == "run-one" for call in first.calls))
-        self.assertTrue(all(call["props"]["parse_run_id"] == "run-two" for call in second.calls))
+        self.assertTrue(
+            all(call["props"]["resolution_class"] == "lexical_candidate" for call in first_possible)
+        )
+        self.assertTrue(all(call["props"]["parse_run_id"] == "run-one" for call in first_possible))
+        self.assertTrue(all(call["props"]["parse_run_id"] == "run-two" for call in second_possible))
 
         first_unknown = [
             row

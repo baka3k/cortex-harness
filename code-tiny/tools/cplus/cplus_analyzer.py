@@ -111,7 +111,7 @@ def _effective_fallback_threshold(file_size: int) -> int:
     return _CLANG_FALLBACK_BASE_THRESHOLD
 
 
-_PARSE_CACHE_VERSION = "cplus-v2026-08-07-quality1"
+_PARSE_CACHE_VERSION = "cplus-v2026-08-21-call-evidence1"
 # Imported lazily so the analyzer module stays usable when invoked outside
 # the ``code-tiny`` package layout (e.g. direct path-based tests).
 try:
@@ -2796,8 +2796,9 @@ def _call_site_id(
     column: int,
     call_type: str,
 ) -> str:
-    key = f"{caller_id}:{callee_id}:{file_path}:{line}:{column}:{call_type}"
-    return _stable_point_id(key)
+    from tools.common.call_evidence import callsite_site_id
+
+    return callsite_site_id(caller_id, callee_id, file_path, line, column, call_type)
 
 
 def _unknown_function_id(callee_name: str) -> str:
@@ -4356,6 +4357,7 @@ async def build_call_graph(
         buf_proc_sql_statements: Dict[str, List[Dict[str, Any]]] = {}
         buf_relations: List[Dict[str, Any]] = []
         buf_calls: List[Dict[str, Any]] = []
+        buf_possible_calls: List[Dict[str, Any]] = []
         buf_unknown_calls: List[Dict[str, Any]] = []
         _files_in_buf: int = 0
         # --- Lean metadata for post-loop DECLARES-inference (memory-compact) ---
@@ -4387,6 +4389,27 @@ MERGE (unknown:UnknownFunction {id: row.unknown_id})
 SET unknown.name = row.props.callee_name,
     unknown.updated_at = datetime()
 MERGE (caller)-[r:UNKNOWN_CALL {site_id: row.site_id}]->(unknown)
+SET r += row.props
+RETURN count(r) AS count
+"""
+        # Weak lexical-call evidence. Tree-sitter and name/scope/file/arity
+        # heuristics can never publish a strict CALLS edge; every call this
+        # analyzer extracts directly is a lexical_candidate POSSIBLE_CALLS
+        # observation carrying its resolution class and evidence provider.
+        _POSSIBLE_CALLS_CYPHER = """UNWIND $rows AS row
+CALL {
+    WITH row
+    MATCH (caller:Function {id: row.caller_id})
+    RETURN caller
+    LIMIT 1
+}
+CALL {
+    WITH row
+    MATCH (callee:Function {id: row.callee_id})
+    RETURN callee
+    LIMIT 1
+}
+MERGE (caller)-[r:POSSIBLE_CALLS {site_id: row.site_id}]->(callee)
 SET r += row.props
 RETURN count(r) AS count
 """
@@ -4550,7 +4573,7 @@ SET s.node_type = 'code',
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
             nonlocal buf_fields, buf_aliases, buf_templates, buf_resources, buf_resource_elements
             nonlocal buf_proc_sql_statements
-            nonlocal buf_relations, buf_calls, buf_unknown_calls
+            nonlocal buf_relations, buf_calls, buf_possible_calls, buf_unknown_calls
             nonlocal _files_in_buf, _total_files_written, _total_calls_written, _total_unknown_calls_written
             nonlocal _stream_buffer_index, _stream_files_processed
             if _files_in_buf <= 0:
@@ -4615,7 +4638,7 @@ SET s.node_type = 'code',
             nonlocal buf_files, buf_namespaces, buf_types, buf_function_types, buf_functions
             nonlocal buf_fields, buf_aliases, buf_templates, buf_resources, buf_resource_elements
             nonlocal buf_proc_sql_statements
-            nonlocal buf_relations, buf_calls, buf_unknown_calls
+            nonlocal buf_relations, buf_calls, buf_possible_calls, buf_unknown_calls
             nonlocal _files_in_buf, _total_files_written, _total_calls_written, _total_unknown_calls_written
             if buf_resources:
                 await code_writer.write_nodes_batch("resources", _RESOURCES_CYPHER, buf_resources)
@@ -4646,14 +4669,23 @@ SET s.node_type = 'code',
                     use_full_writers=True,
                 )
                 _total_files_written += len(buf_files)
-            if buf_calls:
-                _orig_bs = code_writer.batch_size
+            if buf_possible_calls:
+                _pos_bs = code_writer.batch_size
                 code_writer.batch_size = max(1, neo4j_calls_batch_size)
                 try:
-                    await code_writer.write_calls_with_site(buf_calls)
+                    if isinstance(code_writer, LanguageCodeWriter):
+                        await code_writer.write_possible_calls_with_site(buf_possible_calls)
+                    else:
+                        for _poff in range(0, len(buf_possible_calls), _pos_bs):
+                            _pbatch = buf_possible_calls[_poff : _poff + _pos_bs]
+                            await code_writer.driver.execute_query(
+                                _POSSIBLE_CALLS_CYPHER,
+                                {"rows": _pbatch},
+                                database=code_writer.database,
+                            )
                 finally:
-                    code_writer.batch_size = _orig_bs
-                _total_calls_written += len(buf_calls)
+                    code_writer.batch_size = _pos_bs
+                _total_calls_written += len(buf_possible_calls)
             if buf_unknown_calls:
                 _unk_bs = max(1, neo4j_calls_batch_size)
                 _orig_unknown_bs = code_writer.batch_size
@@ -4680,7 +4712,7 @@ SET s.node_type = 'code',
             buf_functions = []; buf_fields = []; buf_aliases = []; buf_templates = []
             buf_resources = []; buf_resource_elements = []
             buf_proc_sql_statements = {}
-            buf_relations = []; buf_calls = []; buf_unknown_calls = []
+            buf_relations = []; buf_calls = []; buf_possible_calls = []; buf_unknown_calls = []
             _files_in_buf = 0
 
         allowed_rel_types = {
@@ -5306,6 +5338,8 @@ SET s.node_type = 'code',
                                 "call_arity": int(call.get("call_arity") or 0),
                                 "callee_name": callee_name,
                                 "caller_scope": caller_scope,
+                                "resolution_class": "unresolved",
+                                "semantic_provider": "tree_sitter",
                                 "parse_run_id": parse_run_id,
                                 "commit_sha": commit_sha,
                                 "stable_site_id": stable_site_id,
@@ -5354,7 +5388,11 @@ SET s.node_type = 'code',
                 site_id = stable_site_id
                 total, resolved = call_stats_by_file.get(call_file, (0, 0))
                 call_stats_by_file[call_file] = (total + 1, resolved + 1)
-                buf_calls.append({
+                # The callee above came from the name/scope/file/arity
+                # heuristic over Tree-sitter candidates. That is weak
+                # evidence: publish POSSIBLE_CALLS with the lexical class,
+                # never a strict CALLS edge.
+                buf_possible_calls.append({
                     "caller_id": call["caller_id"],
                     "callee_id": callee_id,
                     "site_id": site_id,
@@ -5370,6 +5408,8 @@ SET s.node_type = 'code',
                         "call_arity": int(call.get("call_arity") or 0),
                         "callee_name": callee_name,
                         "caller_scope": caller_scope,
+                        "resolution_class": "lexical_candidate",
+                        "semantic_provider": "tree_sitter",
                         "parse_run_id": parse_run_id,
                         "commit_sha": commit_sha,
                         "stable_site_id": stable_site_id,
