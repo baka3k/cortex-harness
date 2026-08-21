@@ -271,7 +271,16 @@ def requirement_files() -> list[Path]:
 def invoke_build() -> None:
     uv = uv_executable()
     if not VENV_DIR.exists():
-        launcher = shutil.which("python3") or shutil.which("python")
+        # Prefer a Python 3.12+ launcher; many deps (e.g. tree-sitter-languages)
+        # do not yet ship wheels for the latest CPython release, so the generic
+        # ``python3`` symlink may resolve to a too-new interpreter. Fall back to
+        # ``python3``/``python`` last so the build keeps working on lean systems.
+        launcher = (
+            shutil.which("python3.12")
+            or shutil.which("python3.13")
+            or shutil.which("python3")
+            or shutil.which("python")
+        )
         if not launcher:
             raise RuntimeError("Python was not found on PATH. Install Python 3.12+ before running make build.")
         print(f"[build] Creating venv: {VENV_DIR}")
