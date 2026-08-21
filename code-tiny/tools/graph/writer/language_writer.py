@@ -1895,6 +1895,8 @@ class LanguageCodeWriter:
         )
         edges: List[Dict[str, Any]] = []
         for row in sites:
+            if not str(row.get("site_id") or "").strip():
+                raise ValueError("call evidence site rows require site_id")
             base = {
                 "project_id": str((row.get("props") or {}).get("project_id") or ""),
                 "props": {
@@ -1963,11 +1965,23 @@ class LanguageCodeWriter:
             return 0
         edges: List[Dict[str, Any]] = []
         for row in observations:
-            if row.get("dangling"):
-                continue
             callee_id = str(row.get("callee_id") or row.get("callee_symbol_id") or "")
             if not callee_id:
+                if row.get("dangling"):
+                    continue
+                # A non-dangling row without a callee would silently lose
+                # evidence: the merge layer must classify it (dangling) or
+                # supply the endpoint.  Fail closed here.
+                raise ValueError(
+                    "call evidence observation requires callee_id or an explicit "
+                    f"dangling flag: evidence_id={row.get('evidence_id')!r}"
+                )
+            if row.get("dangling"):
                 continue
+            if not str(row.get("evidence_id") or "").strip():
+                raise ValueError(
+                    "call evidence observation rows require evidence_id"
+                )
             edges.append(
                 {
                     "source_label": "CallSite",
@@ -2107,6 +2121,12 @@ class LanguageCodeWriter:
 
         edges: List[Dict[str, Any]] = []
         for join in function_joins or []:
+            if not str(join.get("function_id") or "").strip() or not str(
+                join.get("statement_id") or ""
+            ).strip():
+                raise ValueError(
+                    "proc function joins require function_id and statement_id"
+                )
             edges.append(
                 {
                     "source_label": "Function",
@@ -2130,6 +2150,8 @@ class LanguageCodeWriter:
                 }
             )
         for host in host_declarations or []:
+            if not str(host.get("host_variable_id") or "").strip():
+                raise ValueError("proc host declaration joins require host_variable_id")
             declaration_id = str(host.get("declaration_id") or "")
             if not declaration_id:
                 # Unresolved declaration joins stay conservative evidence on
@@ -2620,10 +2642,8 @@ class LanguageCodeWriter:
             counts["calls_with_site"] = await self.write_calls_with_site(calls_with_site, state, state_writer)
 
         # --- Semantic call-evidence staging plane (after functions/calls) ---
-        if build_configurations:
-            counts["build_configurations"] = await self.write_build_configurations(
-                build_configurations, state, state_writer
-            )
+        # Sites merge before configurations: IN_CONFIGURATION edges are
+        # required-endpoint evidence edges sourced from the CallSite nodes.
         if call_evidence_sites:
             counts["call_evidence_sites"] = await self.write_call_evidence_sites(
                 call_evidence_sites, state, state_writer
@@ -2631,6 +2651,10 @@ class LanguageCodeWriter:
         if call_evidence_observations:
             counts["call_evidence_observations"] = await self.write_call_evidence_observations(
                 call_evidence_observations, state, state_writer
+            )
+        if build_configurations:
+            counts["build_configurations"] = await self.write_build_configurations(
+                build_configurations, state, state_writer
             )
         if semantic_coverage:
             counts["semantic_coverage"] = await self.write_semantic_coverage(

@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CODE_TINY = ROOT / "code-tiny"
 if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from tools.common import payload_validation  # noqa: E402
 from tools.common.payload_validation import (  # noqa: E402
@@ -681,6 +683,58 @@ class PublicationPipelineTest(unittest.TestCase):
             self.assertEqual(outcome.retained_generation, "gen-prev")
             self.assertEqual(ledger.last_valid()["generation_id"], "gen-prev")
 
+    def test_real_generation_manager_boundary_publishes_atomically(self):
+        import tempfile
+
+        from cortex_harness.storage.contracts import GenerationState, PhysicalTargetKey
+        from cortex_harness.storage.generation import GenerationManager
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = PhysicalTargetKey.from_paths(
+                instance_id="local",
+                owner_id="cplus",
+                graph_path=Path(tmp) / "graph.rdb",
+                vector_path=Path(tmp) / "vector",
+            )
+            manager = GenerationManager(Path(tmp) / "store", target)
+            ledger = SemanticGenerationLedger(Path(tmp) / "ledger.json")
+            outcome = publish_staged_generation(
+                self._staged(),
+                validate_and_publish=manager,
+                readback=self._readback(),
+                ledger=ledger,
+                revision="rev-1",
+            )
+            self.assertEqual(outcome.outcome, RunOutcome.SUCCESS)
+            active = manager.load_active()
+            self.assertIsNotNone(active)
+            self.assertEqual(active.state, GenerationState.PUBLISHED)
+            self.assertEqual(active.generation_id, outcome.generation_id)
+            self.assertEqual(ledger.last_valid()["generation_id"], outcome.generation_id)
+
+    def test_owner_contract_rejection_is_terminal_not_ambiguous(self):
+        import tempfile
+
+        class _RejectingManager:
+            def allocate(self, revision, generation_id=None):
+                return None
+
+            def publish(self, manifest, validate):
+                raise ValueError("cannot publish a generation for a different physical target")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = SemanticGenerationLedger(Path(tmp) / "ledger.json")
+            outcome = publish_staged_generation(
+                self._staged(),
+                validate_and_publish=_RejectingManager(),
+                readback=self._readback(),
+                ledger=ledger,
+                revision="rev-1",
+            )
+            self.assertEqual(outcome.outcome, RunOutcome.FAILED_TERMINAL)
+            self.assertEqual(outcome.failure.code, "semantic_publication_contract_rejected")
+            self.assertIsNone(ledger.last_valid())
+
 
 class RollbackTest(unittest.TestCase):
     def test_rollback_selects_last_valid_generation_without_reparse(self):
@@ -735,6 +789,19 @@ class RollbackTest(unittest.TestCase):
             status = ledger.status()
             self.assertEqual(status["generation_count"], 8)
             self.assertEqual(status["last_valid_generation"], "gen-11")
+
+    def test_corrupt_ledger_is_visible_not_silently_reset(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ledger.json"
+            path.write_text("{not json", encoding="utf-8")
+            ledger = SemanticGenerationLedger(path)
+            status = ledger.status()
+            self.assertTrue(status.get("unreadable"))
+            self.assertIn("repair", status.get("detail", ""))
+            _, rollback = rollback_to_last_valid_generation(ledger)
+            self.assertIn("repair", rollback.detail)
 
     def test_status_surfaces_queue_coverage_generation_revision_policy(self):
         import tempfile
@@ -876,6 +943,26 @@ class JournalEvidenceOperationTest(unittest.TestCase):
         query, _ = compile_persisted_mutation(operation, rows)
         self.assertIn("MERGE (a)-[r:HAS_CALLSITE]->(b)", query)
 
+    def test_keyed_edge_without_edge_id_fails_closed(self):
+        from tools.graph.writer.query_contract import group_evidence_edges
+
+        with self.assertRaises(ValueError):
+            group_evidence_edges(
+                [
+                    {
+                        "source_label": "CallSite",
+                        "source_property": "site_id",
+                        "source_id": "s1",
+                        "target_label": "Function",
+                        "target_property": "id",
+                        "target_id": "f2",
+                        "rel_type": "OBSERVED_AS",
+                        "edge_property": "evidence_id",
+                        "project_id": "p1",
+                    }
+                ]
+            )
+
     def test_unregistered_labels_still_fail_closed(self):
         operation = GraphWriteOperation.for_label("call_evidence:observations")
         self.assertEqual(operation.reconciliation, "unsupported")
@@ -891,6 +978,27 @@ class _RequiredModeDriver:
     async def execute_query(self, query, parameters=None, database=None):
         values = dict(parameters or {})
         self.calls.append((query, values))
+        return ([{"count": len(values.get("rows", []))}], [], None)
+
+
+class _CountMismatchDriver(_RequiredModeDriver):
+    """Simulates a batch whose required endpoints did not all resolve."""
+
+    async def execute_query(self, query, parameters=None, database=None):
+        values = dict(parameters or {})
+        self.calls.append((query, values))
+        count = len(values.get("rows", []))
+        if "OBSERVED_AS" in query and "MATCH (a:CallSite" in query:
+            count = max(0, count - 1)  # one callee endpoint missing
+        return ([{"count": count}], [], None)
+
+
+class _RecordingDeleteDriver(_RequiredModeDriver):
+    async def execute_query(self, query, parameters=None, database=None):
+        values = dict(parameters or {})
+        self.calls.append((query, values))
+        if query.strip().startswith("UNWIND $rows AS row") and "DELETE r" in query:
+            return ([{"count": len(values.get("rows", []))}], [], None)
         return ([{"count": len(values.get("rows", []))}], [], None)
 
 
@@ -1001,6 +1109,118 @@ class RequiredModeWriterTest(unittest.TestCase):
             joined = "\n".join(query for query, _ in driver.calls)
             self.assertIn("EXECUTES_SQL", joined)
             self.assertIn("RESOLVES_HOST_DECLARATION", joined)
+
+    def test_unresolved_required_endpoint_fails_closed_in_required_mode(self):
+        import tempfile
+
+        from tools.graph.journal import JournalError
+
+        merge = evidence_merge.merge_call_evidence(
+            [_semantic_observation()], project_id="p1"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env: dict[str, str] = {}
+            config = configure_journal_env(
+                env,
+                root=Path(tmp) / "source",
+                project_id="demo",
+                parser="python",
+                source_revision="revision-1",
+                source_snapshot="snapshot-1",
+                physical_target=f"falkordb:{tmp}/code.rdb:demo",
+                cache_dir=Path(tmp) / "cache",
+                generation="attempt-1",
+            )
+            driver = _CountMismatchDriver(config)
+            writer = LanguageCodeWriter(driver, batch_size=10)
+            try:
+                with self.assertRaises(JournalError):
+                    asyncio.run(
+                        writer.write_call_evidence_observations(
+                            merge.observation_writer_rows()
+                        )
+                    )
+            finally:
+                writer.close_journal()
+
+    def test_sites_merge_before_configuration_edges(self):
+        import tempfile
+
+        merge = evidence_merge.merge_call_evidence(
+            [_semantic_observation()], project_id="p1"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            writer, driver = self._writer(Path(tmp))
+            try:
+                asyncio.run(
+                    writer.write_all(
+                        call_evidence_sites=merge.site_writer_rows(),
+                        build_configurations=[
+                            {
+                                "config_fingerprint": "cf1",
+                                "site_id": merge.call_sites[0].site_id,
+                                "props": {"project_id": "p1", "compiler": "gcc"},
+                            }
+                        ],
+                    )
+                )
+            finally:
+                writer.close_journal()
+            queries = [query for query, _ in driver.calls]
+            site_merge_index = next(
+                index
+                for index, query in enumerate(queries)
+                if "MERGE (site:CallSite {site_id: row.site_id})" in query
+            )
+            in_configuration_index = next(
+                index
+                for index, query in enumerate(queries)
+                if "IN_CONFIGURATION" in query
+            )
+            # The required-endpoint IN_CONFIGURATION edge can only run after
+            # the CallSite nodes it targets were merged.
+            self.assertLess(site_merge_index, in_configuration_index)
+
+    def test_non_dangling_observation_without_callee_fails_closed(self):
+        driver = _RequiredModeDriver()
+        writer = LanguageCodeWriter(driver, database="code")
+        with self.assertRaises(ValueError):
+            asyncio.run(
+                writer.write_call_evidence_observations(
+                    [{"site_id": "s1", "callee_id": "", "evidence_id": "e1"}]
+                )
+            )
+
+    def test_stale_strong_edge_deletion_runs_fenced_and_counts(self):
+        import tempfile
+
+        from tools.cplus.guarded_publication import (
+            StaleStrongEdge,
+            apply_stale_strong_edge_deletions,
+        )
+
+        stale = [
+            StaleStrongEdge("f1", "f2", "s1", "a.c", "stale_map"),
+            StaleStrongEdge("f1", "f3", "s2", "a.c", "downgraded"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            _, driver = self._writer(Path(tmp))
+            deleted = asyncio.run(
+                apply_stale_strong_edge_deletions(
+                    driver=driver, database="code", stale_edges=stale
+                )
+            )
+            self.assertEqual(deleted, 2)
+            delete_queries = [
+                (query, params)
+                for query, params in driver.calls
+                if "DELETE r" in query
+            ]
+            self.assertEqual(len(delete_queries), 1)
+            self.assertIn("MATCH (caller:Function {id: row.caller_id})", delete_queries[0][0])
+            self.assertEqual(
+                [row["site_id"] for row in delete_queries[0][1]["rows"]], ["s1", "s2"]
+            )
 
 
 if __name__ == "__main__":
