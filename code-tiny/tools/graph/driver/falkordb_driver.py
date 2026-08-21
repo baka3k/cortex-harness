@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import threading
+import time
 from concurrent.futures import Future
 import warnings
 from collections.abc import Mapping
@@ -564,11 +565,26 @@ class FalkorDBDriver(Neo4jDriver):
         graph = self._graph_for(database)
         query, params = _prepare_falkordb_query(query, parameters)
 
-        # A mutation might have committed before a Python exception bubbles
-        # out, so only unambiguously read-only Cypher gets a single retry.
+        # Retry policy:
+        # - Read-only queries get a single retry on any failure.
+        # - Mutations get retries only for *transient* connection-class
+        #   errors (ConnectionError/OSError and redis.client subclasses).
+        #   MERGE-based upserts are idempotent so re-issuing a batched
+        #   ``MERGE ... SET`` after the socket dropped is safe. Timeouts on
+        #   mutations stay ``AmbiguousWriteTimeoutError`` — the commit
+        #   outcome is unknown and must be reconciled by the caller, never
+        #   silently retried.
+        # NOTE: redis.exceptions.ConnectionError is NOT a subclass of
+        # Python's builtin ConnectionError — we have to import it explicitly.
+        from redis.exceptions import ConnectionError as _RedisConnectionError
+        from redis.exceptions import TimeoutError as _RedisTimeoutError
+        transient_errors = (
+            ConnectionError, OSError,
+            _RedisConnectionError, _RedisTimeoutError,
+        )
+        max_attempts = 4
         result = None
-        attempts = 2 if _is_retryable_read(query) else 1
-        for attempt in range(attempts):
+        for attempt in range(max_attempts):
             try:
                 result = graph.query(
                     query,
@@ -582,9 +598,18 @@ class FalkorDBDriver(Neo4jDriver):
                         "FalkorDB mutation timed out; commit outcome is ambiguous and "
                         "must be reconciled before retry"
                     ) from exc
-                if attempt == attempts - 1:
+                is_transient = isinstance(exc, transient_errors)
+                # Mutations only retry on transient errors; reads retry on any.
+                can_retry = _is_retryable_read(query) or is_transient
+                if not can_retry or attempt == max_attempts - 1:
                     raise
-                logger.warning("FalkorDB query failed (attempt 1), retrying: %s", exc)
+                backoff = min(2.0, 0.25 * (2 ** attempt))
+                logger.warning(
+                    "FalkorDB query failed (attempt %d/%d), retrying in %.2fs: %s",
+                    attempt + 1, max_attempts, backoff, exc,
+                )
+                if backoff:
+                    time.sleep(backoff)
 
         keys = [_result_key(item) for item in result.header]
         records = [
