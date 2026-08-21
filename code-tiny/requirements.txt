@@ -1,5 +1,6 @@
 qdrant-client==1.18.0
-falkordblite==0.10.0
+falkordblite==0.10.0 ; sys_platform != 'win32'
+falkordb ; sys_platform == 'win32'
 # FastMCP dependencies
 fastmcp
 
