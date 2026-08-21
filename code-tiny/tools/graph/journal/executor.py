@@ -88,6 +88,16 @@ def compile_persisted_mutation(
             "RETURN count(edge) AS count",
             {"rows": materialized},
         )
+    if operation.reconciliation == "possible_call_site":
+        return (
+            "UNWIND $rows AS row "
+            "MATCH (caller:Function {id: row.caller_id}) "
+            "MATCH (callee:Function {id: row.callee_id}) "
+            "MERGE (caller)-[edge:POSSIBLE_CALLS {site_id: row.site_id}]->(callee) "
+            "SET edge += coalesce(row.props, {}) "
+            "RETURN count(edge) AS count",
+            {"rows": materialized},
+        )
     raise _unsupported(operation)
 
 

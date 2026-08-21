@@ -129,6 +129,14 @@ class GraphWriteOperation:
                 phase=OperationPhase.CALLS,
                 reconciliation="call_site",
             )
+        if normalized == "possible_calls:site":
+            # Same row shape as call_site but a weak-evidence edge; journal
+            # replay must never materialize it as a strict CALLS relation.
+            return cls(
+                label=label,
+                phase=OperationPhase.CALLS,
+                reconciliation="possible_call_site",
+            )
         return cls(label=label, phase=phase_for_label(label))
 
     @classmethod
