@@ -1232,7 +1232,9 @@ def main() -> None:
     device = resolve_embedding_device(args.embedding_device)
     embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
 
-    qdrant = get_document_qdrant_store(args.qdrant_path)
+    qdrant = get_document_qdrant_store(
+        args.qdrant_path, project_id=project_id_normalized
+    )
     create_collection(qdrant, args.collection, vector_size=embedder.get_sentence_embedding_dimension())
 
     driver = create_graph_store_from_args(args)
