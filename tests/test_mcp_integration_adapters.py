@@ -115,13 +115,37 @@ def test_doc_wrapper_routes_via_factory(tmp_path: Path, monkeypatch) -> None:
     from qdrant_client import QdrantClient  # type: ignore
     monkeypatch.setattr(QdrantClient, "__init__", lambda self, **kw: None)
     monkeypatch.setattr(QdrantClient, "close", lambda self: None)
+    monkeypatch.chdir(tmp_path)
 
-    store = get_document_qdrant_store(
-        project_id="remote_doc_proj", project_root=tmp_path,
-    )
+    store = get_document_qdrant_store(project_id="remote_doc_proj")
     from cortex_harness.storage import RemoteQdrantStore
 
     assert isinstance(store, RemoteQdrantStore)
+
+
+def test_doc_wrapper_project_id_preserves_local_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Project routing without an explicit root also keeps local storage."""
+    from doc_local_qdrant import get_document_qdrant_store
+
+    test_root = _get_test_root()
+    _write_project_config(
+        test_root,
+        "local_doc_proj",
+        {
+            "project": {"code": "local_doc_proj", "name": "Local Doc"},
+            "storage_backend": "local",
+        },
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CORTEX_DATA_HOME", str(tmp_path / "data-home"))
+
+    store = get_document_qdrant_store(project_id="local_doc_proj")
+    from cortex_harness.storage import LocalQdrantStore
+
+    assert isinstance(store, LocalQdrantStore)
+    assert store.path.is_relative_to(tmp_path)
 
 
 def test_doc_wrapper_falls_back_to_local(tmp_path: Path, monkeypatch) -> None:

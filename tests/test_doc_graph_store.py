@@ -86,6 +86,27 @@ class DocGraphStoreTests(unittest.TestCase):
         self.assertTrue(driver.call_args.kwargs["path"])
         self.assertEqual(driver.call_args.kwargs["graph"], "docs")
 
+    def test_create_graph_store_from_args_prefers_remote_falkordb_uri(self):
+        args = Namespace(
+            graph_provider="falkordb",
+            falkordb_uri="localhost:6379",
+            falkordb_password="test-secret",
+            falkordb_path="/unused/local/data.rdb",
+            falkordb_graph="docs",
+            falkordb_ssl=True,
+            neo4j_uri="bolt://localhost:7687",
+            neo4j_user="neo4j",
+            neo4j_pass="password",
+        )
+
+        with patch("graph_store.FalkorDBDriver", return_value=FakeDriver()) as driver:
+            store = create_graph_store_from_args(args)
+
+        self.assertEqual(store.provider, "falkordb")
+        self.assertEqual(driver.call_args.kwargs["uri"], "localhost:6379")
+        self.assertNotIn("path", driver.call_args.kwargs)
+        self.assertTrue(driver.call_args.kwargs["ssl"])
+
 
 if __name__ == "__main__":
     unittest.main()
