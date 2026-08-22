@@ -171,16 +171,18 @@ class StorageFactory:
 def create_storage(
     targets: "ProjectTargets",
     *,
-    project_root: Path = Path.cwd(),
+    project_root: Optional[Path] = None,
     resolved: Optional[ResolvedStorage] = None,
 ) -> StorageFactory:
     """One-call factory used by ingest scripts and MCP tools.
 
     Resolves local paths (when not already supplied) and binds them with the
     project's ``storage_backend`` choice into a :class:`StorageFactory`.
+    Optional-root wrappers use the current working directory at call time.
     """
     if resolved is None:
-        resolved = resolve_storage(project_root)
+        root = Path.cwd() if project_root is None else Path(project_root)
+        resolved = resolve_storage(root)
     return StorageFactory.from_targets(targets, resolved)
 
 

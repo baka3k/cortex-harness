@@ -156,6 +156,26 @@ def add_graph_store_args(parser) -> None:
     )
     parser.add_argument("--falkordb-path", default=os.getenv("FALKORDB_PATH"))
     parser.add_argument(
+        "--falkordb-uri",
+        default=os.getenv("FALKORDB_URI"),
+        help=(
+            "Remote FalkorDB server URI (scheme://host:port or host:port). "
+            "When set, --falkordb-path and the embedded backend are ignored."
+        ),
+    )
+    parser.add_argument(
+        "--falkordb-password",
+        default=os.getenv("FALKORDB_PASSWORD"),
+        help="Password for the remote FalkorDB server (optional).",
+    )
+    parser.add_argument(
+        "--falkordb-ssl",
+        action="store_true",
+        default=os.getenv("FALKORDB_SSL", "").strip().lower()
+        not in ("", "0", "false", "no"),
+        help="Use TLS for the remote FalkorDB server.",
+    )
+    parser.add_argument(
         "--falkordb-graph",
         default=os.getenv("FALKORDB_GRAPH") or os.getenv("FALKORDB_DATABASE", "neo4j"),
     )
@@ -169,6 +189,17 @@ def create_graph_store_from_args(args):
             args.neo4j_user,
             args.neo4j_pass,
             getattr(args, "neo4j_db", None) or os.getenv("NEO4J_DB"),
+        )
+    falkordb_uri = getattr(args, "falkordb_uri", None)
+    if falkordb_uri:
+        return FalkorDBGraphStore(
+            FalkorDBDriver(
+                uri=falkordb_uri,
+                password=getattr(args, "falkordb_password", None),
+                ssl=bool(getattr(args, "falkordb_ssl", False)),
+                graph=getattr(args, "falkordb_graph", None),
+                _suppress_deprecation=True,
+            )
         )
     path = getattr(args, "falkordb_path", None)
     if not path:
@@ -192,6 +223,19 @@ def create_graph_store_from_env():
             os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j"),
             os.getenv("NEO4J_PASS", "password"),
             os.getenv("NEO4J_DB"),
+        )
+    falkordb_uri = (os.getenv("FALKORDB_URI") or "").strip()
+    if falkordb_uri:
+        return FalkorDBGraphStore(
+            FalkorDBDriver(
+                uri=falkordb_uri,
+                password=os.getenv("FALKORDB_PASSWORD"),
+                ssl=os.getenv("FALKORDB_SSL", "").strip().lower()
+                not in ("", "0", "false", "no"),
+                graph=os.getenv("FALKORDB_GRAPH")
+                or os.getenv("FALKORDB_DATABASE", "neo4j"),
+                _suppress_deprecation=True,
+            )
         )
     path = os.getenv("FALKORDB_PATH")
     if not path:
@@ -219,6 +263,18 @@ def create_graph_store_for_project(project_id: str):
             os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j"),
             os.getenv("NEO4J_PASS", "password"),
             targets.doc_graph,
+        )
+    falkordb_uri = (os.getenv("FALKORDB_URI") or "").strip()
+    if falkordb_uri:
+        return FalkorDBGraphStore(
+            FalkorDBDriver(
+                uri=falkordb_uri,
+                password=os.getenv("FALKORDB_PASSWORD"),
+                ssl=os.getenv("FALKORDB_SSL", "").strip().lower()
+                not in ("", "0", "false", "no"),
+                graph=targets.doc_graph,
+                _suppress_deprecation=True,
+            )
         )
     path = os.getenv("FALKORDB_PATH")
     if not path:
