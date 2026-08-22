@@ -267,6 +267,38 @@ def test_create_storage_returns_factory(tmp_path: Path, monkeypatch) -> None:
     assert factory.backend_mode is BackendMode.LOCAL
 
 
+@pytest.mark.parametrize(
+    ("storage_backend", "remote_config", "expected_mode"),
+    [
+        ("local", None, BackendMode.LOCAL),
+        (
+            "remote",
+            {"qdrant_url": "http://qdrant:6333"},
+            BackendMode.REMOTE,
+        ),
+    ],
+)
+def test_create_storage_none_project_root_uses_cwd(
+    tmp_path: Path,
+    monkeypatch,
+    storage_backend: str,
+    remote_config: dict | None,
+    expected_mode: BackendMode,
+) -> None:
+    """Optional wrapper roots must preserve both local and remote routing."""
+    monkeypatch.chdir(tmp_path)
+    targets = _FakeTargets(
+        project_id=f"{storage_backend}_proj",
+        storage_backend=storage_backend,
+        remote_config=remote_config,
+    )
+
+    factory = create_storage(targets, project_root=None)
+
+    assert factory.backend_mode is expected_mode
+    assert factory.resolved.project_root == tmp_path.resolve()
+
+
 # ---------------------------------------------------------------------------
 # Emergency rollback (Red Team Q6)
 # ---------------------------------------------------------------------------
