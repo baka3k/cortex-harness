@@ -1761,6 +1761,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "framework_overlays": [],
         "topology_overlays": [],
         "vector_embeddings": [],
+        "component_failures": [],
         "state_before": {},
         "state_after": {},
         "dirty_marked": False,
@@ -1781,6 +1782,36 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     parse_quality_artifact_dir: Optional[str] = None
     parse_quality_manifest_path: Optional[str] = None
     parse_quality_manifest_entries: List[Dict[str, object]] = []
+    component_failure_exceptions: List[Exception] = []
+
+    def record_component_failure(
+        *,
+        role: str,
+        name: str,
+        info: Dict[str, object],
+        exc: Exception,
+    ) -> None:
+        info["status"] = "failed"
+        info["error"] = str(exc)
+        failures = summary["component_failures"]
+        assert isinstance(failures, list)
+        failures.append(
+            {
+                "component": f"{role}:{name}",
+                "role": role,
+                "name": name,
+                "error": str(exc),
+                "exception_type": type(exc).__name__,
+            }
+        )
+        component_failure_exceptions.append(exc)
+        print(
+            f"[continue] component={role}:{name} failed: {exc}; "
+            "continuing remaining components",
+            file=sys.stderr,
+            flush=True,
+        )
+
     if args.verbose and args.ignore_cache:
         print("[cache] ignore-cache enabled: analyzers will run with isolated cache scope")
 
@@ -2535,9 +2566,12 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                             f"{journal_status.value}"
                         )
             except Exception as exc:
-                parser_info["status"] = "failed"
-                parser_info["error"] = str(exc)
-                raise
+                record_component_failure(
+                    role="primary",
+                    name=parser,
+                    info=parser_info,
+                    exc=exc,
+                )
             else:
                 parser_info["status"] = "success"
                 if parse_quality_report_path and os.path.isfile(parse_quality_report_path):
@@ -2686,9 +2720,12 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                             f"{framework_status.value}"
                         )
             except Exception as exc:
-                framework_info["status"] = "failed"
-                framework_info["error"] = str(exc)
-                raise
+                record_component_failure(
+                    role="overlay",
+                    name=framework,
+                    info=framework_info,
+                    exc=exc,
+                )
             else:
                 framework_info["status"] = "success"
                 executed_parsers.append(framework)
@@ -2798,9 +2835,12 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                             f"{topology_status.value}"
                         )
             except Exception as exc:
-                topology_info["status"] = "failed"
-                topology_info["error"] = str(exc)
-                raise
+                record_component_failure(
+                    role="topology",
+                    name="project_topology",
+                    info=topology_info,
+                    exc=exc,
+                )
             else:
                 topology_info["status"] = "success"
                 executed_parsers.append("project_topology")
@@ -2922,13 +2962,16 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=dict(embedding_env)
                 )
             except Exception as exc:
-                vector_info["status"] = "failed"
                 vector_info["vector_status"] = "failed"
-                vector_info["error"] = str(exc)
                 for parser_info in parser_summaries:
                     if parser_info.get("parser") == parser:
                         parser_info["vector_status"] = "failed"
-                raise
+                record_component_failure(
+                    role="embedding",
+                    name=parser,
+                    info=vector_info,
+                    exc=exc,
+                )
             else:
                 vector_info["status"] = "success"
                 if args.qdrant_url:
@@ -2961,6 +3004,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             + topology_summaries
             + vector_summaries
         )
+        if component_failure_exceptions:
+            raise component_failure_exceptions[0]
         current_phase = RunPhase.VERIFYING_GENERATION
         summary["phase"] = current_phase.value
         verification_paths = (

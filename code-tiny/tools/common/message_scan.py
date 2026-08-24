@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Set,
 
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.incremental_cleanup import cleanup_qdrant_for_files
-from tools.common.local_qdrant import delete_by_filter, ensure_collection, get_code_qdrant_store
+from tools.common.local_qdrant import LocalQdrantWriter, delete_by_filter
 from tools.common.message_detectors import get_detector, has_specific_detector, supported_parsers
 from tools.common.message_detectors.base import BaseMessageDetector, unquote
 from tools.common.project_scope import (
@@ -375,16 +375,11 @@ async def cleanup_all_message_nodes_neo4j(
 
 def _qdrant_delete_by_project(
     *,
-    qdrant_url: str,
-    collection: str,
+    writer: LocalQdrantWriter,
     project_id: str,
-    timeout: float,
-    retries: int,
-    retry_sleep: float,
 ) -> None:
-    del timeout, retries, retry_sleep
-    store = get_code_qdrant_store(qdrant_url)
-    if not store.collection_exists(collection):
+    store = writer._store
+    if not store.collection_exists(writer.collection):
         return
     point_filter = {
         "must": [{
@@ -392,36 +387,7 @@ def _qdrant_delete_by_project(
             "match": {"value": project_id_lookup_key(project_id)},
         }]
     }
-    delete_by_filter(store, collection, point_filter)
-
-
-def _ensure_qdrant_collection(
-    *,
-    qdrant_url: str,
-    collection: str,
-    vector_size: int,
-    timeout: float,
-    retries: int,
-    retry_sleep: float,
-) -> None:
-    del timeout, retries, retry_sleep
-    ensure_collection(get_code_qdrant_store(qdrant_url), collection, vector_size)
-
-
-def _ensure_qdrant_project_scope_index(
-    *,
-    qdrant_url: str,
-    collection: str,
-    timeout: float,
-    retries: int,
-    retry_sleep: float,
-) -> None:
-    del timeout, retries, retry_sleep
-    get_code_qdrant_store(qdrant_url).create_payload_index(
-        collection,
-        PROJECT_ID_NORMALIZED_FIELD,
-        wait=True,
-    )
+    delete_by_filter(store, writer.collection, point_filter)
 
 
 def _hash_vector(text: str, size: int) -> List[float]:
@@ -467,25 +433,24 @@ def upsert_messages_to_qdrant(
     retries: int = 3,
     retry_sleep: float = 2.0,
     verbose: bool = False,
+    writer: Optional[LocalQdrantWriter] = None,
 ) -> Dict[str, int]:
     if not records:
         return {"upserted_points": 0}
-    _ensure_qdrant_collection(
-        qdrant_url=qdrant_url,
-        collection=collection,
-        vector_size=vector_size,
+    writer = writer or LocalQdrantWriter(
+        qdrant_url,
+        collection,
+        vector_size,
         timeout=timeout,
         retries=retries,
         retry_sleep=retry_sleep,
     )
-    _ensure_qdrant_project_scope_index(
-        qdrant_url=qdrant_url,
-        collection=collection,
-        timeout=timeout,
-        retries=retries,
-        retry_sleep=retry_sleep,
+    writer.ensure_collection()
+    writer._store.create_payload_index(
+        writer.collection,
+        PROJECT_ID_NORMALIZED_FIELD,
+        wait=True,
     )
-    store = get_code_qdrant_store(qdrant_url)
     total = len(records)
     sent = 0
     for offset in range(0, total, max(1, batch_size)):
@@ -524,7 +489,7 @@ def upsert_messages_to_qdrant(
                     "payload": _message_point_payload(record, project_name),
                 }
             )
-        store.upsert(collection, points, wait=True)
+        writer.upsert(points)
         sent += len(points)
         if verbose:
             print(f"[message][qdrant] upsert {sent}/{total}")
@@ -748,9 +713,18 @@ async def run_message_scan_pipeline(
                 verbose=verbose,
             )
 
+    qdrant_writer: Optional[LocalQdrantWriter] = None
     if qdrant_url and qdrant_collection:
         if incremental and cleanup_paths:
             try:
+                qdrant_writer = LocalQdrantWriter(
+                    qdrant_url,
+                    qdrant_collection,
+                    qdrant_vector_size,
+                    timeout=qdrant_timeout,
+                    retries=qdrant_retries,
+                    retry_sleep=qdrant_retry_sleep,
+                )
                 cleanup_qdrant_for_files(
                     qdrant_url=qdrant_url,
                     collection=qdrant_collection,
@@ -761,6 +735,7 @@ async def run_message_scan_pipeline(
                     retry_sleep=qdrant_retry_sleep,
                     batch_size=qdrant_batch_size,
                     verbose=verbose,
+                    store=qdrant_writer._store,
                 )
             except Exception:
                 if verbose:
@@ -771,13 +746,17 @@ async def run_message_scan_pipeline(
         elif not incremental and replace_existing_on_full:
             if verbose:
                 print(f"[message][cleanup][qdrant] clear project_id={project_id}")
-            _qdrant_delete_by_project(
-                qdrant_url=qdrant_url,
-                collection=qdrant_collection,
-                project_id=project_id,
+            qdrant_writer = LocalQdrantWriter(
+                qdrant_url,
+                qdrant_collection,
+                qdrant_vector_size,
                 timeout=qdrant_timeout,
                 retries=qdrant_retries,
                 retry_sleep=qdrant_retry_sleep,
+            )
+            _qdrant_delete_by_project(
+                writer=qdrant_writer,
+                project_id=project_id,
             )
 
     target_files = normalized_changed if incremental else None
@@ -829,6 +808,7 @@ async def run_message_scan_pipeline(
             retries=qdrant_retries,
             retry_sleep=qdrant_retry_sleep,
             verbose=verbose,
+            writer=qdrant_writer,
         )
 
     artifact_path = write_message_artifact(
