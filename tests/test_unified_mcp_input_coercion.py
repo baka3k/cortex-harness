@@ -819,6 +819,85 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("db", accepted)
         self.assertNotIn("search_full", accepted)
 
+    async def test_semantic_search_without_project_dispatches_unscoped_once(self):
+        seen_projects = []
+
+        async def fake_semantic_search(payload=None):
+            project_id = (payload or {}).get("project_id")
+            seen_projects.append(project_id)
+            return {
+                "mode": "combined",
+                "query": "orders",
+                "content_mode": "summary",
+                "results": [{
+                    "id": "shared-id",
+                    "score": 0.9,
+                    "payload": {"name": project_id},
+                }],
+            }
+
+        fake_module = types.SimpleNamespace(
+            tool_semantic_search=fake_semantic_search,
+        )
+        with patch.object(
+            unified_mcp,
+            "list_registered_projects",
+            side_effect=AssertionError(
+                "unscoped semantic search must not enumerate the project registry"
+            ),
+            create=True,
+        ), patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(
+                    name="cplus", module=fake_module,
+                ),
+            },
+            clear=True,
+        ):
+            result = await unified_mcp._dispatch_tool(
+                "semantic_search",
+                {"query": "orders", "top_k": 1},
+            )
+
+        self.assertEqual(seen_projects, [None])
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["score"], 0.9)
+        self.assertNotIn("projects_searched", result)
+
+    async def test_semantic_search_with_project_uses_single_target(self):
+        seen_projects = []
+
+        async def fake_semantic_search(payload=None):
+            seen_projects.append((payload or {}).get("project_id"))
+            return {"results": []}
+
+        fake_module = types.SimpleNamespace(
+            tool_semantic_search=fake_semantic_search,
+        )
+        with patch.object(
+            unified_mcp,
+            "list_registered_projects",
+            side_effect=AssertionError("scoped search must not enumerate projects"),
+            create=True,
+        ), patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(
+                    name="cplus", module=fake_module,
+                ),
+            },
+            clear=True,
+        ):
+            result = await unified_mcp._dispatch_tool(
+                "semantic_search",
+                {"query": "orders", "project_id": "procsample"},
+            )
+
+        self.assertEqual(seen_projects, ["procsample"])
+        self.assertTrue(result["ok"])
+        self.assertNotIn("projects_searched", result)
+
     async def test_build_tool_error_received_params_exclude_missing_values(self):
         # A param that is empty must not be reported as both "received" and
         # "missing". Regression for the contradiction in the user-facing
