@@ -450,6 +450,11 @@ class SemanticWorkerContractTests(unittest.TestCase):
             self.assertEqual(summary["missing"], 0, report["files"])
             self.assertGreater(summary["matched"], 0)
             self.assertEqual(report["published_calls"], 0)
+            self.assertEqual(summary["differential_failed"], 0, report["files"])
+            self.assertEqual(summary["differential_passed"], 6)
+            self.assertTrue(
+                all(entry["differential"]["passed"] for entry in report["files"].values())
+            )
             saved = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(saved["mode"], "shadow")
 

@@ -154,7 +154,7 @@ harness, remain redacted from reports, and target validated isolated names.
 
 ## Todo
 
-- [ ] Repair focused-suite environment and immutable-manifest prerequisites.
+- [x] Repair focused-suite environment and immutable-manifest prerequisites.
 - [ ] Complete raw/validated/persisted differential canary.
 - [ ] Pass clean FalkorDB and Neo4j deterministic/rollback checks.
 - [ ] Recalculate all promotion gates on one horizon.
