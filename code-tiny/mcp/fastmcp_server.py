@@ -840,7 +840,7 @@ async def _resolve_base_collections(
     payload = await _fetch_qdrant_collections(qdrant_url)
     available = payload.get("collections", [])
     if not available:
-        return tokens, explicit
+        return [], explicit
 
     if not tokens:
         return available, explicit
@@ -848,11 +848,9 @@ async def _resolve_base_collections(
     resolved = _resolve_collection_scopes(tokens, available)
     if resolved:
         return resolved, explicit
-    # No collection matched the requested scope(s). If the caller passed an
-    # explicit scope (e.g. project_id="client-alpha") but no Qdrant collection matches
-    # it, raise loudly so the surface mismatch is visible — otherwise we
-    # silently query a non-existent collection literal and return empty,
-    # which hides the real problem (incomplete sync / un-registered project).
+    # An explicit collection is an escape hatch and must match literally or
+    # by collection-prefix convention. ``project_id`` is deliberately not
+    # involved here; it is applied later as a Qdrant payload filter.
     if explicit:
         missing = [t for t in tokens if t not in available]
         scope_matches = {
@@ -863,10 +861,8 @@ async def _resolve_base_collections(
             "Requested Qdrant collection scope does not match any available "
             f"collection. scopes={tokens!r} available={available!r} "
             f"missing_literal={missing!r} scope_matches={scope_matches!r}. "
-            "Common causes: (1) the project was not yet synced to Qdrant "
-            "(FalkorDB may have data but Qdrant is empty — see "
-            "incremental_sync summary), (2) project_id is un-registered "
-            "(run list_qdrant_collections to see the actual inventory)."
+            "Pass a valid collection name/prefix or omit collection to search "
+            "every available collection."
         )
     return available, explicit
 
@@ -1388,11 +1384,6 @@ async def tool_semantic_search(
         raise ValueError("query is required.")
     model_name = model_path or DEFAULT_MODEL
     qdrant_url = qdrant_url or DEFAULT_QDRANT_PATH
-    if project_id and not collection:
-        try:
-            collection = resolve_project_targets(project_id).code_qdrant_collection
-        except ProjectNotRegisteredError:
-            collection = str(project_id).strip()
     vector = _embed_query(query, model_name)
     vector_len = len(vector)
     logger.info("[semantic_search] model=%s vector_len=%s", model_name, vector_len)

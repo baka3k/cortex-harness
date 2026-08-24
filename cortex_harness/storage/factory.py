@@ -21,7 +21,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Iterable,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    runtime_checkable,
+)
 
 from .config import (
     BackendMode,
@@ -39,7 +48,151 @@ if TYPE_CHECKING:  # pragma: no cover - circular import guard
     from tools.common.project_registry import ProjectTargets
     from tools.graph.driver.falkordb_driver import FalkorDBDriver
 
-QdrantStore = Union[LocalQdrantStore, RemoteQdrantStore]
+
+@runtime_checkable
+class QdrantStore(Protocol):
+    """Structural contract shared by local-file and remote Qdrant adapters."""
+
+    @property
+    def client(self) -> Any: ...
+
+    @property
+    def role(self) -> QdrantStorageRole: ...
+
+    def list_collection_names(self) -> list[str]: ...
+
+    def collection_exists(self, name: str) -> bool: ...
+
+    def get_collection_info(self, name: str) -> Any: ...
+
+    def create_collection(
+        self,
+        name: str,
+        *,
+        vectors_config: Any,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def recreate_collection(
+        self,
+        name: str,
+        *,
+        vectors_config: Any,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def delete_collection(self, name: str) -> Any: ...
+
+    def upsert(
+        self,
+        collection_name: str,
+        points: Sequence[Any],
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def upload_points(
+        self,
+        collection_name: str,
+        points: Iterable[Any],
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def search(
+        self,
+        collection_name: str,
+        query_vector: Sequence[float],
+        *,
+        limit: int = 10,
+        query_filter: Any = None,
+        with_payload: Any = True,
+        with_vectors: Any = False,
+        **kwargs: Any,
+    ) -> list[Any]: ...
+
+    def query_points(
+        self,
+        collection_name: str,
+        *,
+        query: Any = None,
+        limit: int = 10,
+        query_filter: Any = None,
+        with_payload: Any = True,
+        with_vectors: Any = False,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def scroll(
+        self,
+        collection_name: str,
+        *,
+        scroll_filter: Any = None,
+        limit: int = 100,
+        with_payload: Any = True,
+        with_vectors: Any = False,
+        offset: Any = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def retrieve(
+        self,
+        collection_name: str,
+        ids: Sequence[Any],
+        *,
+        with_payload: Any = True,
+        with_vectors: Any = False,
+        **kwargs: Any,
+    ) -> list[Any]: ...
+
+    def count(
+        self,
+        collection_name: str,
+        *,
+        count_filter: Any = None,
+        exact: bool = True,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def delete(
+        self,
+        collection_name: str,
+        *,
+        points_selector: Any = None,
+        points_selector_ids: Any = None,
+        filter_selector: Any = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def set_payload(
+        self,
+        collection_name: str,
+        payload: Mapping[str, Any],
+        *,
+        points: Any = None,
+        filter: Any = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def overwrite_payload(
+        self,
+        collection_name: str,
+        payload: Mapping[str, Any],
+        *,
+        points: Any = None,
+        filter: Any = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def create_payload_index(
+        self,
+        collection_name: str,
+        field_name: str,
+        *,
+        field_schema: Any = None,
+        field_type: Any = None,
+        **kwargs: Any,
+    ) -> Any: ...
+
+    def close(self) -> None: ...
 
 
 # Emergency rollback: force every project onto the local backend even when

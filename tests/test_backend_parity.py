@@ -182,6 +182,18 @@ def test_method_parity(tmp_path_factory) -> None:
     assert not unexpected_on_remote, f"Unexpected extras: {unexpected_on_remote}"
 
 
+def test_adapters_satisfy_runtime_qdrant_store_protocol(tmp_path_factory) -> None:
+    from cortex_harness.storage import QdrantStore
+
+    local = _build_local(tmp_path_factory)
+    remote = _build_remote()
+
+    assert getattr(QdrantStore, "_is_protocol", False)
+    assert getattr(QdrantStore, "_is_runtime_protocol", False)
+    assert isinstance(local, QdrantStore)
+    assert isinstance(remote, QdrantStore)
+
+
 # ---------------------------------------------------------------------------
 # Behaviour parity
 # ---------------------------------------------------------------------------

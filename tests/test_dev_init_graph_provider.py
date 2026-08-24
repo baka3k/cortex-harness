@@ -42,6 +42,7 @@ class DevInitGraphProviderTests(unittest.TestCase):
         self.assertEqual(env["EMBED_BATCH_SIZE"], "6")
         self.assertEqual(env["MAX_EMBED_CHARS"], "700")
         self.assertEqual(env["QDRANT_CACHE_DIR"], "/tmp/code-cache")
+        self.assertEqual(env["CORTEX_STORAGE_PROJECT_ID"], "SHOP")
         self.assertEqual(env["FALKORDB_PATH"], env["FALKORDB_CODE_PATH"])
         self.assertTrue(env["QDRANT_CODE_PATH"].endswith("/qdrant/code"))
 

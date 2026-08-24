@@ -733,7 +733,7 @@ async def _resolve_base_collections(
     payload = await _fetch_qdrant_collections(qdrant_url)
     available = payload.get("collections", [])
     if not available:
-        return tokens, explicit
+        return [], explicit
 
     if not tokens:
         return available, explicit
@@ -741,7 +741,14 @@ async def _resolve_base_collections(
     resolved = _resolve_collection_scopes(tokens, available)
     if resolved:
         return resolved, explicit
-    return tokens if explicit else available, explicit
+    if explicit:
+        raise ValueError(
+            "Requested Qdrant collection scope does not match any available "
+            f"collection. scopes={tokens!r} available={available!r}. "
+            "Pass a valid collection name/prefix or omit collection to search "
+            "every available collection."
+        )
+    return available, explicit
 
 
 def _merge_qdrant_results(
@@ -1191,11 +1198,6 @@ async def tool_semantic_search(
         raise ValueError("query is required.")
     model_name = model_path or DEFAULT_MODEL
     qdrant_url = qdrant_url or DEFAULT_QDRANT_PATH
-    if project_id and not collection:
-        try:
-            collection = resolve_project_targets(project_id).code_qdrant_collection
-        except ProjectNotRegisteredError:
-            collection = str(project_id).strip()
     vector = _embed_query(query, model_name)
     vector_len = len(vector)
     logger.info("[semantic_search] model=%s vector_len=%s", model_name, vector_len)
