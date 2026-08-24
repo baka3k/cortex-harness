@@ -1,5 +1,12 @@
 # Phase 04: Isolated bounded recovery and candidate selection
 
+> **Amended 2026-08-24:** cross-backend whole-payload selection in this phase is
+> superseded by
+> [`260824-1411-cplus-clang-containment-hardening`](../260824-1411-cplus-clang-containment-hardening/plan.md).
+> Keep same-backend Tree-sitter recovery; route Clang protocol 2 to the separate
+> semantic-evidence plane only. Historical LIBCLANG structural-worker tasks below
+> are not implementation authority.
+
 ## Context
 
 The current libclang fallback runs in-process after Tree-sitter extraction and is

@@ -13,7 +13,11 @@ phaseBlockedBy:
     - 260804-1640-port-proc-cplus-to-code-tiny
     - 260807-1202-graph-ingest-write-path-hardening
     - 260807-0929-mcp-ingest-query-concurrency
+    - 260824-1411-cplus-clang-containment-hardening
+  "06":
+    - 260824-1411-cplus-clang-containment-hardening
 relatedPlans:
+  - 260824-1411-cplus-clang-containment-hardening
   - 260821-1144-cplus-semantic-call-graph
   - 260807-2103-toolchain-reliability-hardening
   - 260804-1640-port-proc-cplus-to-code-tiny
@@ -23,6 +27,16 @@ sourceReport: plans/reports/260807-1315-parser-error-recovery-prediction.md
 ---
 
 # C/C++ parser quality diagnostics and bounded recovery
+
+## 2026-08-24 dual-plane amendment
+
+The cross-backend whole-file winner described in this plan and Phase 04 is
+superseded by
+[`260824-1411-cplus-clang-containment-hardening`](../260824-1411-cplus-clang-containment-hardening/plan.md).
+Only same-backend Tree-sitter recovery may replace the structural payload.
+Clang protocol 2 is additive semantic evidence for faithful contexts; legacy
+and bounded LIBCLANG structural payload selection/cache reuse must be removed.
+Completion of Phases 05-06 is blocked on that containment cutover and canary.
 
 ## Overview
 
