@@ -123,8 +123,8 @@ structural replacement path; temporarily disable semantic work instead.
 
 ## Todo
 
-- [ ] Freeze the same-backend structural-selection invariant.
-- [ ] Remove legacy fallback and parse-quality `off` coupling.
-- [ ] Retire whole-payload `repair` selection.
-- [ ] Invalidate legacy LIBCLANG structure caches.
-- [ ] Update focused tests and CLI documentation.
+- [x] Freeze the same-backend structural-selection invariant.
+- [x] Remove legacy fallback and parse-quality `off` coupling.
+- [x] Retire whole-payload `repair` selection.
+- [x] Invalidate legacy LIBCLANG structure caches.
+- [x] Update focused tests and CLI documentation.
