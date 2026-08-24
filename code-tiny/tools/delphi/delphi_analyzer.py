@@ -28,10 +28,8 @@ from tools.common.embedding_runtime import resolve_embedding_cache
 from tools.common.analyzer_cache import (
     file_signature,
     load_parse_cache,
-    load_state,
     safe_cache_root,
     write_parse_cache,
-    write_state,
 )
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
@@ -1751,6 +1749,13 @@ async def build_call_graph(
     deleted_files: Optional[Iterable[str]] = None,
     commit_sha_before: str = "",
 ) -> None:
+    if neo4j_state_path:
+        raise ValueError(
+            "Delphi graph resume is disabled until durable checkpoints include "
+            "project, revision, schema, and query-shape fingerprints; remove "
+            "--neo4j-state and restart the scan"
+        )
+
     start_time = time.time()
     cache_root = safe_cache_root(cache_dir, "delphi_analyzer", project_root=root)
     parse_cache_root = os.path.join(cache_root, "parse")
@@ -2144,6 +2149,11 @@ async def build_call_graph(
                         "start_line": field["start_line"],
                         "end_line": field["end_line"],
                         "code": field["code"],
+                        "project_id": project_id,
+                        "project_name": project_name,
+                        "language": language,
+                        "repo": repo,
+                        "build_system": build_system,
                     }
                 )
                 all_relations.append(
@@ -2202,12 +2212,6 @@ async def build_call_graph(
                         }
                     )
 
-        state = load_state(neo4j_state_path) if neo4j_state_path else None
-
-        def state_writer(updated_state: Dict[str, int]) -> None:
-            if neo4j_state_path:
-                write_state(neo4j_state_path, updated_state)
-
         await code_writer.write_all(
             projects=all_projects,
             namespaces=all_namespaces or None,
@@ -2216,8 +2220,6 @@ async def build_call_graph(
             functions=all_functions or None,
             fields=all_fields or None,
             relations=all_relations or None,
-            state=state,
-            state_writer=state_writer,
             use_full_writers=True,
             files_variant="default",
         )
@@ -2239,8 +2241,6 @@ async def build_call_graph(
                         }
                         for row in all_calls
                     ],
-                    state=state,
-                    state_writer=state_writer,
                 )
             finally:
                 code_writer.batch_size = original_batch_size
@@ -2550,6 +2550,14 @@ async def main(argv: Optional[List[str]] = None) -> int:
     if not os.path.isdir(args.root):
         print(f"Root not found: {args.root}", file=sys.stderr)
         return 2
+    if args.neo4j_state:
+        print(
+            "[state] Delphi graph resume is disabled until durable checkpoint "
+            "fingerprints are implemented; remove --neo4j-state and restart",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
 
     driver = None
     code_writer = None
@@ -2601,11 +2609,13 @@ async def main(argv: Optional[List[str]] = None) -> int:
                 % (len(changed_manifest_files), len(deleted_manifest_files))
             )
     neo4j_state_path = None
-    if not args.disable_neo4j_resume and not args.incremental:
-        cache_root = safe_cache_root(effective_cache_dir, "delphi_analyzer", project_root=args.root)
-        neo4j_state_path = args.neo4j_state or os.path.join(cache_root, "neo4j_state.json")
-    elif args.incremental and args.verbose:
-        print("[state] incremental mode disables neo4j resume state")
+    if args.verbose:
+        print(
+            "[state] Delphi graph resume mode=full-idempotent-replay "
+            "checkpoint=disabled persistent_retry_queue=false; interrupted work "
+            "restarts on the next analyzer attempt",
+            flush=True,
+        )
 
     project_id = args.project_id or os.path.basename(os.path.abspath(args.root))
     project_name = args.project_name or project_id
