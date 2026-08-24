@@ -1597,6 +1597,17 @@ def _failure_record_for_exception(
             code = "relationship_cardinality_mismatch"
             failure_class = FailureClass.INTEGRITY
             safe_action = "inspect unresolved endpoint evidence; do not retry until reconciled"
+        elif any(
+            marker in child_output
+            for marker in (
+                "graph journal did not drain",
+                "journal recovery failed",
+                "journal reconciliation failed",
+            )
+        ):
+            code = "analyzer_journal_recovery_failure"
+            failure_class = FailureClass.JOURNAL_RECOVERY
+            safe_action = "run journal reconciliation and resume only a compatible run"
         elif "Traceback (most recent call last)" in child_stderr:
             code = "analyzer_internal_defect"
             failure_class = FailureClass.INTERNAL_DEFECT
@@ -1738,6 +1749,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         "full_scan": bool(args.full_scan),
         "sync_mode": args.sync_mode,
         "bootstrap_full_scan": False,
+        "recovery_full_scan": False,
         "started_at": _now_iso(),
         "finished_at": None,
         "duration_seconds": None,
@@ -1782,17 +1794,65 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     parse_quality_artifact_dir: Optional[str] = None
     parse_quality_manifest_path: Optional[str] = None
     parse_quality_manifest_entries: List[Dict[str, object]] = []
-    component_failure_exceptions: List[Exception] = []
+    component_failures: List[Tuple[Exception, FailureRecord]] = []
 
-    def record_component_failure(
+    def component_failure_priority(failure: FailureRecord) -> int:
+        priorities = {
+            FailureClass.AMBIGUOUS_MUTATION: 100,
+            FailureClass.INTEGRITY: 90,
+            FailureClass.JOURNAL_RECOVERY: 90,
+            FailureClass.INTERNAL_DEFECT: 80,
+            FailureClass.CAPACITY: 70,
+            FailureClass.CONFIGURATION: 60,
+            FailureClass.STORAGE_UNAVAILABLE: 50,
+            FailureClass.TIMEOUT: 50,
+            FailureClass.SOURCE_CHANGED: 40,
+            FailureClass.LOCK: 30,
+            FailureClass.INPUT_VALIDATION: 20,
+            FailureClass.PARSER_ISOLATION: 10,
+        }
+        return priorities.get(failure.failure_class, 0)
+
+    def annotate_component_failure(
         *,
         role: str,
         name: str,
         info: Dict[str, object],
         exc: Exception,
-    ) -> None:
+        continued: bool,
+    ) -> FailureRecord:
+        component_artifact: Optional[ArtifactReference] = None
+        if isinstance(exc, subprocess.CalledProcessError):
+            component_slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{role}_{name}")
+            debug_text = (
+                f"command: {' '.join(str(item) for item in exc.cmd)}\n"
+                f"exit_code: {exc.returncode}\n"
+                f"stdout_tail:\n{exc.output or ''}\n"
+                f"stderr_tail:\n{exc.stderr or ''}\n"
+            )
+            try:
+                component_artifact = _write_debug_artifact(
+                    f"{summary_path}.{component_slug}.debug.log",
+                    debug_text,
+                    roots=(root,),
+                )
+                result_artifacts.append(component_artifact)
+            except OSError:
+                component_artifact = None
+        failure = _failure_record_for_exception(
+            exc,
+            run_id=run_id,
+            correlation_id=correlation_id,
+            phase=current_phase,
+            artifacts=((component_artifact,) if component_artifact else ()),
+        )
         info["status"] = "failed"
         info["error"] = str(exc)
+        info["failure_class"] = failure.failure_class.value
+        info["failure_code"] = failure.code
+        info["failure_artifacts"] = [
+            artifact.to_dict() for artifact in failure.artifact_references
+        ]
         failures = summary["component_failures"]
         assert isinstance(failures, list)
         failures.append(
@@ -1802,9 +1862,34 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "name": name,
                 "error": str(exc),
                 "exception_type": type(exc).__name__,
+                "failure_class": failure.failure_class.value,
+                "failure_code": failure.code,
+                "retryable": failure.retryable,
+                "safe_action": failure.safe_action,
+                "continued": continued,
+                "details": dict(failure.details),
+                "artifacts": [
+                    artifact.to_dict() for artifact in failure.artifact_references
+                ],
             }
         )
-        component_failure_exceptions.append(exc)
+        return failure
+
+    def record_component_failure(
+        *,
+        role: str,
+        name: str,
+        info: Dict[str, object],
+        exc: Exception,
+    ) -> None:
+        failure = annotate_component_failure(
+            role=role,
+            name=name,
+            info=info,
+            exc=exc,
+            continued=True,
+        )
+        component_failures.append((exc, failure))
         print(
             f"[continue] component={role}:{name} failed: {exc}; "
             "continuing remaining components",
@@ -1823,8 +1908,10 @@ async def _run_incremental(args: argparse.Namespace) -> int:
     before_sha = str(args.before_sha or "")
     after_sha = str(args.after_sha or "")
     full_scan = bool(args.full_scan)
+    recovery_full_scan = False
     current_inventory = None
     previous_inventory = None
+    dirty_inventories = []
     repository_state: Dict[str, Dict[str, object]] = {}
     working_tree_paths: Set[str] = set()
     try:
@@ -1905,6 +1992,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             "last_good_sha": state.last_good_sha,
             "snapshot_id": state.snapshot_id,
             "inventory_path": state.inventory_path,
+            "dirty_inventory_paths": list(state.dirty_inventory_paths),
             "migration_required": state.migration_required,
             "last_error": state.last_error,
             "last_run_before": state.last_run_before,
@@ -1918,6 +2006,63 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             except (OSError, ValueError, KeyError) as exc:
                 summary["coverage_warnings"].append(
                     {"code": "inventory_unavailable", "path": state.inventory_path, "error": str(exc)}
+                )
+
+        dirty_inventory_errors = []
+        for dirty_inventory_path in state.dirty_inventory_paths:
+            try:
+                dirty_inventories.append(
+                    load_inventory_generation(dirty_inventory_path)
+                )
+            except (OSError, ValueError, KeyError) as exc:
+                dirty_inventory_errors.append(
+                    {"path": dirty_inventory_path, "error": str(exc)}
+                )
+        if dirty_inventory_errors:
+            summary["coverage_warnings"].append(
+                {
+                    "code": "dirty_inventory_unavailable",
+                    "artifacts": dirty_inventory_errors,
+                }
+            )
+
+        if state.dirty:
+            if state.inventory_path and previous_inventory is None:
+                raise RuntimeError(
+                    "dirty sync state's last-good inventory is unavailable; "
+                    "refusing recovery without project-scoped storage reconciliation"
+                )
+            if dirty_inventory_errors:
+                raise RuntimeError(
+                    "dirty sync state has incomplete recovery inventory; "
+                    "refusing to clear dirty state without project-scoped "
+                    "storage reconciliation"
+                )
+            if not dirty_inventories and previous_inventory is not None:
+                dirty_inventories.append(previous_inventory)
+                summary["coverage_warnings"].append(
+                    {
+                        "code": "legacy_dirty_recovery_from_last_good_inventory",
+                        "path": state.inventory_path,
+                        "warning": (
+                            "failed-attempt inventory was not recorded by the older "
+                            "state format; replay covers the last-good inventory but "
+                            "cannot prove cleanup of transient new paths"
+                        ),
+                    }
+                )
+            if not dirty_inventories:
+                raise RuntimeError(
+                    "dirty sync state has no recovery or last-good inventory; "
+                    "project-scoped storage reconciliation is required"
+                )
+            recovery_full_scan = True
+            summary["full_scan"] = True
+            summary["recovery_full_scan"] = True
+            if args.verbose:
+                print(
+                    "[recovery] previous run is dirty; replaying all current files "
+                    "and retained deletions"
                 )
 
         if not full_scan and (
@@ -2220,11 +2365,22 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         inventory_changed, inventory_deleted = diff_source_inventories(
             previous_inventory, current_inventory
         )
+        recovery_deleted = {
+            path
+            for dirty_inventory in dirty_inventories
+            for path in dirty_inventory.entries
+            if path not in current_inventory.entries
+            and not _under_preserved_prefix(path)
+        }
         summary["change_sources"]["inventory"] = len(inventory_changed) + len(inventory_deleted)
 
-        if full_scan:
+        if full_scan or recovery_full_scan:
             changed_paths = set(all_source_paths)
-            deleted_paths: Set[str] = set()
+            deleted_paths: Set[str] = (
+                set(inventory_deleted) | recovery_deleted
+                if recovery_full_scan
+                else set()
+            )
         elif effective_detection in {"hybrid", "hash"}:
             changed_paths = set(inventory_changed)
             deleted_paths = set(inventory_deleted)
@@ -2233,7 +2389,11 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             deleted_paths = set(committed_deleted)
 
         summary["diff"] = {
-            "entries": len(changed_paths) if full_scan else git_entry_count,
+            "entries": (
+                len(changed_paths) + len(deleted_paths)
+                if full_scan or recovery_full_scan
+                else git_entry_count
+            ),
             "changed": len(changed_paths),
             "deleted": len(deleted_paths),
         }
@@ -2246,7 +2406,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         summary["before_sha"] = before_sha
         summary["after_sha"] = after_sha
 
-        if not changed_paths and not deleted_paths:
+        if not changed_paths and not deleted_paths and not recovery_full_scan:
             validate_inventory_unchanged(root, current_inventory, force_hash_paths)
             unchanged_paths = _normalize_project_paths(root, _walk_all_source_files(root))
             unchanged_paths = {
@@ -2278,6 +2438,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "last_good_sha": state.last_good_sha,
                 "snapshot_id": current_inventory.snapshot_id,
                 "inventory_path": inventory_path,
+                "dirty_inventory_paths": [],
                 "last_error": "",
                 "last_run_before": before_sha,
                 "last_run_after": after_sha,
@@ -2288,7 +2449,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             return 0
 
         impacted_paths: Set[str] = set()
-        if not full_scan and graph_ready and changed_paths:
+        if not full_scan and not recovery_full_scan and graph_ready and changed_paths:
             summary["services"]["impact_expansion_used"] = True
             impacted_paths = await _query_impacted_files(
                 graph_provider=getattr(args, "graph_provider", None),
@@ -2329,6 +2490,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         topology_bootstrap_needed = False
         if (
             not full_scan
+            and not recovery_full_scan
             and "project_topology" in parser_filter
             and not topology_changed
             and not topology_deleted
@@ -2472,7 +2634,10 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     f"parser '{parser}' has no incremental mode yet; rerun with --allow-full-fallback or exclude parser."
                 )
 
-            run_incrementally = bool(config.incremental_supported and not full_scan)
+            run_incrementally = bool(
+                config.incremental_supported
+                and (not full_scan or recovery_full_scan)
+            )
             if run_incrementally:
                 cmd = _build_analyzer_cmd(
                     python_bin=args.python_bin,
@@ -2565,13 +2730,22 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                             f"parser '{parser}' graph journal did not drain: "
                             f"{journal_status.value}"
                         )
-            except Exception as exc:
+            except subprocess.CalledProcessError as exc:
                 record_component_failure(
                     role="primary",
                     name=parser,
                     info=parser_info,
                     exc=exc,
                 )
+            except Exception as exc:
+                annotate_component_failure(
+                    role="primary",
+                    name=parser,
+                    info=parser_info,
+                    exc=exc,
+                    continued=False,
+                )
+                raise
             else:
                 parser_info["status"] = "success"
                 if parse_quality_report_path and os.path.isfile(parse_quality_report_path):
@@ -2675,13 +2849,17 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 project_name=project_name,
                 before_sha=before_sha,
                 after_sha=after_sha,
-                changed_manifest=changed_manifest if not full_scan else None,
-                deleted_manifest=deleted_manifest if not full_scan else None,
+                changed_manifest=(
+                    changed_manifest if not full_scan or recovery_full_scan else None
+                ),
+                deleted_manifest=(
+                    deleted_manifest if not full_scan or recovery_full_scan else None
+                ),
                 qdrant_collection=None,
                 message_scan_enabled=False,
                 message_output_dir=None,
                 message_qdrant_collection=None,
-                incremental=not full_scan,
+                incremental=not full_scan or recovery_full_scan,
                 verbose=args.verbose,
                 ignore_cache=bool(args.ignore_cache),
             )
@@ -2719,13 +2897,22 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                             f"framework '{framework}' graph journal did not drain: "
                             f"{framework_status.value}"
                         )
-            except Exception as exc:
+            except subprocess.CalledProcessError as exc:
                 record_component_failure(
                     role="overlay",
                     name=framework,
                     info=framework_info,
                     exc=exc,
                 )
+            except Exception as exc:
+                annotate_component_failure(
+                    role="overlay",
+                    name=framework,
+                    info=framework_info,
+                    exc=exc,
+                    continued=False,
+                )
+                raise
             else:
                 framework_info["status"] = "success"
                 executed_parsers.append(framework)
@@ -2737,6 +2924,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         summary["topology_overlays"] = topology_summaries
         if run_graph_pass and "project_topology" in parser_filter and (
             full_scan
+            or recovery_full_scan
             or topology_changed
             or topology_deleted
             or topology_bootstrap_needed
@@ -2777,16 +2965,20 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 before_sha=before_sha,
                 after_sha=after_sha,
                 changed_manifest=(
-                    topology_changed_manifest if not full_scan else None
+                    topology_changed_manifest
+                    if not full_scan or recovery_full_scan
+                    else None
                 ),
                 deleted_manifest=(
-                    topology_deleted_manifest if not full_scan else None
+                    topology_deleted_manifest
+                    if not full_scan or recovery_full_scan
+                    else None
                 ),
                 qdrant_collection=None,
                 message_scan_enabled=False,
                 message_output_dir=None,
                 message_qdrant_collection=None,
-                incremental=not full_scan,
+                incremental=not full_scan or recovery_full_scan,
                 verbose=args.verbose,
                 ignore_cache=bool(args.ignore_cache),
             )
@@ -2811,7 +3003,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 )
                 topology_info["journal_path"] = str(topology_journal.path)
             topology_mode = (
-                "full" if full_scan
+                "recovery" if recovery_full_scan
+                else "full" if full_scan
                 else "bootstrap" if topology_bootstrap_needed
                 else "incremental"
             )
@@ -2834,13 +3027,22 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                             "project topology graph journal did not drain: "
                             f"{topology_status.value}"
                         )
-            except Exception as exc:
+            except subprocess.CalledProcessError as exc:
                 record_component_failure(
                     role="topology",
                     name="project_topology",
                     info=topology_info,
                     exc=exc,
                 )
+            except Exception as exc:
+                annotate_component_failure(
+                    role="topology",
+                    name="project_topology",
+                    info=topology_info,
+                    exc=exc,
+                    continued=False,
+                )
+                raise
             else:
                 topology_info["status"] = "success"
                 executed_parsers.append("project_topology")
@@ -2922,7 +3124,10 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     f"parser '{parser}' has no incremental mode yet; rerun with --allow-full-fallback or exclude parser."
                 )
 
-            run_incrementally = bool(config.incremental_supported and not full_scan)
+            run_incrementally = bool(
+                config.incremental_supported
+                and (not full_scan or recovery_full_scan)
+            )
             cmd = _build_analyzer_cmd(
                 python_bin=args.python_bin,
                 analyzer=config,
@@ -2961,7 +3166,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 analyzer_output = _run(
                     cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=dict(embedding_env)
                 )
-            except Exception as exc:
+            except subprocess.CalledProcessError as exc:
                 vector_info["vector_status"] = "failed"
                 for parser_info in parser_summaries:
                     if parser_info.get("parser") == parser:
@@ -2972,6 +3177,19 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     info=vector_info,
                     exc=exc,
                 )
+            except Exception as exc:
+                vector_info["vector_status"] = "failed"
+                for parser_info in parser_summaries:
+                    if parser_info.get("parser") == parser:
+                        parser_info["vector_status"] = "failed"
+                annotate_component_failure(
+                    role="embedding",
+                    name=parser,
+                    info=vector_info,
+                    exc=exc,
+                    continued=False,
+                )
+                raise
             else:
                 vector_info["status"] = "success"
                 if args.qdrant_url:
@@ -3004,13 +3222,20 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             + topology_summaries
             + vector_summaries
         )
-        if component_failure_exceptions:
-            raise component_failure_exceptions[0]
+        if component_failures:
+            selected_exception, _ = max(
+                component_failures,
+                key=lambda item: component_failure_priority(item[1]),
+            )
+            raise selected_exception
         current_phase = RunPhase.VERIFYING_GENERATION
         summary["phase"] = current_phase.value
         verification_paths = (
             set(current_inventory.entries)
-            if full_scan or effective_detection == "hash" or args.reconcile
+            if full_scan
+            or recovery_full_scan
+            or effective_detection == "hash"
+            or args.reconcile
             else (changed_paths | impacted_paths)
         )
         verification_paths = {
@@ -3052,6 +3277,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "last_good_sha": state.last_good_sha,
                 "snapshot_id": current_inventory.snapshot_id,
                 "inventory_path": inventory_path,
+                "dirty_inventory_paths": [],
                 "last_error": "",
                 "last_run_before": before_sha,
                 "last_run_after": after_sha,
@@ -3063,6 +3289,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 "last_good_sha": state.last_good_sha,
                 "snapshot_id": state.snapshot_id,
                 "inventory_path": state.inventory_path,
+                "dirty_inventory_paths": list(state.dirty_inventory_paths),
                 "last_error": state.last_error,
                 "last_run_before": state.last_run_before,
                 "last_run_after": state.last_run_after,
@@ -3117,18 +3344,40 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             artifacts=((debug_artifact,) if debug_artifact else ()),
         )
         dirty_marked = False
-        if lock_acquired and state is not None and state_path:
+        dirty_inventory_path: Optional[str] = None
+        if current_inventory is not None:
+            try:
+                dirty_inventory_path = write_inventory_generation(
+                    control_cache_dir,
+                    current_inventory,
+                )
+            except (OSError, ValueError) as inventory_exc:
+                summary["coverage_warnings"].append(
+                    {
+                        "code": "dirty_inventory_write_failed",
+                        "error": str(inventory_exc),
+                    }
+                )
+        if (
+            lock_acquired
+            and state is not None
+            and state_path
+            and (current_inventory is not None or state.dirty)
+        ):
             mark_dirty(
                 state_path,
                 state,
                 error=str(exc),
                 before_sha=str(before_sha or ""),
                 after_sha=str(after_sha or ""),
+                dirty_inventory_path=dirty_inventory_path,
             )
             dirty_marked = True
             summary["state_after"] = {
                 "dirty": True,
                 "last_good_sha": state.last_good_sha,
+                "inventory_path": state.inventory_path,
+                "dirty_inventory_paths": list(state.dirty_inventory_paths),
                 "last_error": str(exc),
                 "last_run_before": str(before_sha or ""),
                 "last_run_after": str(after_sha or ""),
@@ -3140,6 +3389,23 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             print(f"[state] failed before dirty-state update: {exc}", file=sys.stderr)
         return 1
     finally:
+        aggregate_parsers: List[Dict[str, object]] = []
+        seen_parser_entries: Set[int] = set()
+        for summary_key in (
+            "primary_parsers",
+            "framework_overlays",
+            "topology_overlays",
+            "vector_embeddings",
+        ):
+            entries = summary.get(summary_key)
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                if not isinstance(entry, dict) or id(entry) in seen_parser_entries:
+                    continue
+                seen_parser_entries.add(id(entry))
+                aggregate_parsers.append(entry)
+        summary["parsers"] = aggregate_parsers
         if run_lock and lock_acquired:
             run_lock.release()
             if args.verbose:

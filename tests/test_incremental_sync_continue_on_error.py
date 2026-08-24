@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,7 +20,14 @@ from tools.sync import incremental_sync  # noqa: E402
 
 
 class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
-    def _run(self, root: Path, parsers: str, run_side_effect):
+    def _run(
+        self,
+        root: Path,
+        parsers: str,
+        run_side_effect,
+        *,
+        finalize_side_effect=None,
+    ):
         summary_path = root / "summary.json"
         args = incremental_sync.parse_args(
             [
@@ -65,6 +73,7 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
                 incremental_sync,
                 "finalize_journal_from_env",
                 return_value=None,
+                side_effect=finalize_side_effect,
             ),
             patch.object(
                 incremental_sync,
@@ -74,6 +83,15 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
         ):
             result = asyncio.run(incremental_sync._run_incremental(args))
         return result, json.loads(summary_path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _child_failure(command, message: str) -> subprocess.CalledProcessError:
+        return subprocess.CalledProcessError(
+            1,
+            command,
+            output="",
+            stderr=message,
+        )
 
     def test_primary_failure_continues_other_primary_topology_and_embedding(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -87,7 +105,7 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
                 graph_disabled = (kwargs.get("env") or {}).get("CORTEX_DISABLE_GRAPH") == "1"
                 calls.append((name, graph_disabled))
                 if name == "python_analyzer.py" and not graph_disabled:
-                    raise RuntimeError("python graph failed")
+                    raise self._child_failure(command, "python graph failed")
                 return ""
 
             result, summary = self._run(
@@ -136,7 +154,7 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
                 graph_disabled = (kwargs.get("env") or {}).get("CORTEX_DISABLE_GRAPH") == "1"
                 calls.append((name, graph_disabled))
                 if name == "web_framework_analyzer.py":
-                    raise RuntimeError("framework failed")
+                    raise self._child_failure(command, "framework failed")
                 return ""
 
             result, summary = self._run(
@@ -175,7 +193,7 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
                 graph_disabled = (kwargs.get("env") or {}).get("CORTEX_DISABLE_GRAPH") == "1"
                 calls.append((name, graph_disabled))
                 if name == "python_analyzer.py" and graph_disabled:
-                    raise RuntimeError("python embedding failed")
+                    raise self._child_failure(command, "python embedding failed")
                 return ""
 
             result, summary = self._run(root, "python,js", run_or_fail)
@@ -210,7 +228,7 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
                 graph_disabled = (kwargs.get("env") or {}).get("CORTEX_DISABLE_GRAPH") == "1"
                 calls.append((name, graph_disabled))
                 if name == "topology_analyzer.py":
-                    raise RuntimeError("topology failed")
+                    raise self._child_failure(command, "topology failed")
                 return ""
 
             result, summary = self._run(
@@ -241,9 +259,12 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
                 name = Path(command[1]).name
                 graph_disabled = (kwargs.get("env") or {}).get("CORTEX_DISABLE_GRAPH") == "1"
                 if name == "python_analyzer.py" and not graph_disabled:
-                    raise RuntimeError("python graph failed")
+                    raise self._child_failure(
+                        command,
+                        "Traceback (most recent call last):\nRuntimeError: python graph failed",
+                    )
                 if name == "js_analyzer.py" and graph_disabled:
-                    raise RuntimeError("js embedding failed")
+                    raise self._child_failure(command, "js embedding failed")
                 return ""
 
             result, summary = self._run(root, "python,js", run_or_fail)
@@ -256,6 +277,81 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
         self.assertEqual(
             [item["status"] for item in summary["vector_embeddings"]],
             ["success", "failed"],
+        )
+
+    def test_highest_severity_failure_controls_final_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.py").write_text("print('python')\n", encoding="utf-8")
+            (root / "main.js").write_text("console.log('js');\n", encoding="utf-8")
+
+            def run_or_fail(command, **kwargs):
+                name = Path(command[1]).name
+                graph_disabled = (kwargs.get("env") or {}).get("CORTEX_DISABLE_GRAPH") == "1"
+                if name == "python_analyzer.py" and not graph_disabled:
+                    raise self._child_failure(
+                        command,
+                        "Traceback (most recent call last):\nRuntimeError: python defect",
+                    )
+                if name == "js_analyzer.py" and graph_disabled:
+                    raise self._child_failure(
+                        command,
+                        "relationship batch integrity failure: expected=2 matched=1",
+                    )
+                return ""
+
+            result, summary = self._run(root, "python,js", run_or_fail)
+
+        self.assertEqual(result, 1)
+        self.assertEqual(
+            [item["failure_class"] for item in summary["component_failures"]],
+            ["internal_defect", "integrity"],
+        )
+        self.assertTrue(all(item["continued"] for item in summary["component_failures"]))
+        self.assertEqual(
+            len(summary["component_failures"][0]["details"]["issue_fingerprint"]),
+            16,
+        )
+        self.assertEqual(len(summary["component_failures"][0]["artifacts"]), 1)
+        self.assertEqual(
+            summary["run_result"]["failure"]["class"],
+            "integrity",
+        )
+
+    def test_journal_failure_stops_before_later_analyzers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "main.py").write_text("print('python')\n", encoding="utf-8")
+            (root / "main.js").write_text("console.log('js');\n", encoding="utf-8")
+            calls = []
+
+            def run_successfully(command, **kwargs):
+                calls.append(Path(command[1]).name)
+                return ""
+
+            result, summary = self._run(
+                root,
+                "python,js",
+                run_successfully,
+                finalize_side_effect=RuntimeError("journal did not drain"),
+            )
+
+        self.assertEqual(result, 1)
+        self.assertEqual(calls, ["python_analyzer.py"])
+        self.assertEqual(summary["primary_parsers"][0]["status"], "failed")
+        self.assertEqual(summary["parsers"][0]["status"], "failed")
+        self.assertEqual(
+            summary["component_failures"][0]["component"],
+            "primary:python",
+        )
+        self.assertFalse(summary["component_failures"][0]["continued"])
+        self.assertEqual(
+            summary["component_failures"][0]["failure_class"],
+            "journal_recovery",
+        )
+        self.assertEqual(
+            summary["run_result"]["failure"]["class"],
+            "journal_recovery",
         )
 
 
