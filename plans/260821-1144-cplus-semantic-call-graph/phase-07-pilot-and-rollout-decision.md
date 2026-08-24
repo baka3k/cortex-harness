@@ -1,5 +1,11 @@
 # Phase 07: Stratified pilot, scale gates, and rollout decision
 
+> **Remediation dependency (2026-08-24):** rerun this phase only after
+> [`260824-1411-cplus-clang-containment-hardening`](../260824-1411-cplus-clang-containment-hardening/plan.md)
+> removes all structural Clang replacement/cache paths, wires faithful-context
+> protocol-2 evidence into the normal runtime, and proves exact-frontier query
+> coverage. Until then, `remain_in_containment` is unchanged.
+
 ## Context
 
 The brainstorm decision was conditional because compile-context coverage,
