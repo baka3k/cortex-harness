@@ -1,7 +1,7 @@
 ---
 title: "C/C++ Clang containment and dual-plane hardening"
 description: "Preserve Tree-sitter structure, restrict Clang to faithful-context semantic evidence, and prove safe FalkorDB publication and queries."
-status: pending
+status: in_progress
 priority: P1
 effort: "4-6 engineering weeks plus external provider and scale canary time"
 issue: null
