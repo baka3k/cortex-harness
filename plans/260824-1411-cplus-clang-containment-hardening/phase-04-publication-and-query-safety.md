@@ -53,27 +53,46 @@ frontier it serves before returning an authoritative negative.
 2. In the normal analyzer path, write Tree-sitter callsites as weak evidence,
    then append eligible Clang observations/configurations/coverage. Derive
    strict `CALLS` only from accepted `direct_resolved` observations.
-3. Route the combined staged set through existing writer/journal/generation
-   contracts. Do not write semantic rows directly around those owners.
-4. On source deletion, context loss, downgrade, rejection, configuration
-   removal, or worker failure, schedule stale strong-edge deletion while
-   preserving Tree-sitter structure, weak observations, and the last valid
-   generation until validation succeeds.
-5. Define the query coverage key as project + served revision + semantic policy
-   + configuration set + requested/visited TU frontier. Missing, stale,
-   duplicate, or mismatched records make the frontier incomplete.
-6. Change `_semantic_coverage_block` to fetch only the exact frontier. It must
-   not allow one unrelated `complete` row to cover other files or configs.
-7. Thread frontier coverage through direct MCP and HTTP service responses.
-   Include project/revision/profile/policy in graph-service cache keys so a
-   cached result cannot cross coverage or query-profile boundaries.
-8. Keep the negative rule centralized: an empty result yields `no_callers`,
-   `unaffected`, or `no_impact` only for exact complete coverage. Otherwise it
-   yields `incomplete` with reasons and a suggested next semantic scope.
-9. Apply the same contract to subgraph, path, trace, impact, Pro*C call/data
-   impact, and workflow-scoring consumers.
-10. Validate expected counts, dangling observations, stale-edge absence, and
-    exact coverage readback before atomic publication.
+3. Put `project_id` and immutable `generation_id` on every graph/vector/
+   coverage row and in every identity, constraint, `MATCH`, `MERGE`, deletion,
+   endpoint join, and readback. Remove global `LIMIT 1`/ID-only matches; test
+   identical symbols in two projects and two generations.
+4. Route the combined set through the admitted owner into an inactive staged
+   graph/vector generation. Journal deterministic stale deletion and replacement
+   operations; no worker or analyzer writes around the owner.
+5. Under the owner's lock/transaction boundary, read back the exact staged
+   target and compare canonical row sets/full content digests, dangling
+   observations, manifest coverage, and stale-edge absence. Bind validation to
+   provider/physical target/project/generation/revision/policy/content, recheck
+   immediately before an atomic pointer flip, and keep the old active generation
+   immutable. Equal counts are insufficient; a provider without generation
+   isolation cannot be promoted.
+6. On source/config deletion, fidelity loss, rejection, or worker failure,
+   stage and atomically publish a current containment generation: Tree-sitter
+   structure + weak evidence + exact noncoverage, with no stale strict edges.
+   Keep the prior semantic snapshot only as immutable history under its former
+   generation/revision/context identity. If containment publication fails,
+   there is no current answer; never relabel the old snapshot as current.
+7. Define query scope before traversal from `SemanticScopeManifest`. The default
+   authoritative caller/impact domain is the entire selected project and exact
+   configuration policy; a smaller shard is allowed only when predeclared and
+   proven closed. Completeness requires actual keys = expected keys, exactly one
+   current complete row per key, and matching generation/revision/policy.
+8. Change `_semantic_coverage_block` to left-join expected manifest keys to
+   actual rows. Missing, duplicate, stale, mismatched, capped, pending, or
+   partial keys make scope incomplete; runtime visited nodes cannot shrink it.
+9. Store strong observations per configuration and require an explicit query
+   policy: exact configuration, union, or intersection. Never materialize or
+   cache a configuration-neutral `CALLS` edge from one favorable variant.
+10. Separate `result_state` from `coverage_state`. A non-empty traversal under
+    incomplete coverage is `partial`; an empty traversal yields `no_callers`,
+    `unaffected`, or `no_impact` only for exact complete scope, otherwise
+    `incomplete` with stable reasons and a suggested semantic scope.
+11. Thread both states through MCP/HTTP subgraph, path, trace, impact, Pro*C
+    call/data impact, and workflow scoring. Query-cache keys include provider,
+    resolved physical target, project, generation, revision, schema, profile,
+    semantic policy, configuration policy/set, and scope fingerprint; pointer
+    flips invalidate atomically, and cached negatives retain coverage digest.
 
 ## Adversarial query matrix
 
@@ -86,6 +105,8 @@ frontier it serves before returning an authoritative negative.
 | Context downgraded after prior success | Old strict edge removed; weak baseline retained |
 | Graph proxy omits coverage | `unknown`/`incomplete`, never negative |
 | Conservative view contains weak edge | Evidence labeled weak; no semantic relabeling |
+| Positive path, one expected key incomplete | Result returned as `partial`, never `complete` |
+| Same symbol in another project/generation | Never matches, deletes, or contaminates result |
 
 ## Tests
 
@@ -94,28 +115,31 @@ frontier it serves before returning an authoritative negative.
 - Add frontier tests where aggregate project coverage is complete but one
   visited TU/config is absent; negative conclusions must remain blocked.
 - Verify graph cache isolation across project, revision, policy, profile, and
-  configuration.
-- Rehearse context downgrade/stale-edge cleanup and last-generation retention.
+  configuration, provider target, generation, schema, and scope.
+- Rehearse context downgrade into a new containment generation and prove the
+  old semantic snapshot is historical only.
+- Inject wrong-target/equal-count readback, forged rows, pointer races, and
+  concurrent publication; validation must fail before activation.
 - Run:
 
 ```bash
-.venv/bin/python -m unittest \
-  tests.test_cplus_call_evidence \
-  tests.test_cplus_evidence_merge \
-  tests.test_cplus_guarded_publication \
-  tests.test_cplus_pilot_rollout
+.venv/bin/python -m pytest -q \
+  tests/test_cplus_call_evidence.py \
+  tests/test_cplus_evidence_merge.py \
+  tests/test_cplus_guarded_publication.py \
+  tests/test_cplus_pilot_rollout.py
 ```
 
 ## Acceptance criteria
 
 - Weak Tree-sitter evidence and non-faithful Clang observations cannot become
   strict `CALLS` through any validation or writer path.
-- Coverage is exact-frontier scoped end to end, including cache hits and HTTP
-  service consumers.
+- Scope-manifest coverage is exact and generation-bound end to end, including
+  cache hits and HTTP consumers; incomplete positives are visibly partial.
 - Every incomplete empty traversal has `outcome=incomplete`, stable reasons,
   and no unsafe negative wording.
-- Context loss removes stale strong evidence without deleting structure or
-  corrupting the last valid generation.
+- Context loss publishes a current containment generation without deleting
+  structure, mixing generations, or relabeling historical semantics.
 
 ## Todo
 
