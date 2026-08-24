@@ -50,6 +50,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from tools.graph.core.provider_contract import normalize_graph_provider_name
+
 logger = logging.getLogger("project_call_graph.mcp.explore")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,18 +61,21 @@ logger = logging.getLogger("project_call_graph.mcp.explore")
 _DEFAULT_QDRANT_PATH = os.environ.get("QDRANT_CODE_PATH", "")
 _DEFAULT_COLLECTION  = os.environ.get("QDRANT_COLLECTION", "")
 _DEFAULT_MODEL       = os.environ.get("EMBED_MODEL", "")
-_DEFAULT_NEO4J_URI   = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-_DEFAULT_NEO4J_USER  = os.environ.get("NEO4J_USER", "")
-_DEFAULT_NEO4J_PASS  = os.environ.get("NEO4J_PASS", "")
-_DEFAULT_NEO4J_DB    = os.environ.get("NEO4J_DB", "hyper_graph")
-_DEFAULT_GRAPH_PROVIDER = (
+_DEFAULT_GRAPH_PROVIDER = normalize_graph_provider_name(
     os.environ.get("CODE_GRAPH_PROVIDER")
     or os.environ.get("GRAPH_PROVIDER")
     or os.environ.get("MCP_GRAPH_PROVIDER")
-    or "falkordb"
-).strip().lower()
-if _DEFAULT_GRAPH_PROVIDER in {"falkor", "falkor-db"}:
-    _DEFAULT_GRAPH_PROVIDER = "falkordb"
+)
+if _DEFAULT_GRAPH_PROVIDER == "neo4j":
+    _DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    _DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER", "")
+    _DEFAULT_NEO4J_PASS = os.environ.get("NEO4J_PASS", "")
+    _DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB", "hyper_graph")
+else:
+    _DEFAULT_NEO4J_URI = "bolt://localhost:7687"
+    _DEFAULT_NEO4J_USER = ""
+    _DEFAULT_NEO4J_PASS = ""
+    _DEFAULT_NEO4J_DB = "hyper_graph"
 _DEFAULT_FALKORDB_GRAPH = (
     os.environ.get("FALKORDB_GRAPH")
     or os.environ.get("FALKORDB_DATABASE")
@@ -141,11 +146,10 @@ async def _make_graph_driver(
 
     Neo4j remains an explicit legacy option; FalkorDB uses its local file.
     """
-    provider_text = (provider or _DEFAULT_GRAPH_PROVIDER or "falkordb").strip().lower()
-    if provider_text in {"falkor", "falkor-db"}:
-        provider_text = "falkordb"
-    if provider_text not in {"falkordb", "neo4j"}:
-        raise ValueError(f"Unsupported graph provider: {provider_text}")
+    provider_text = normalize_graph_provider_name(
+        provider,
+        default=_DEFAULT_GRAPH_PROVIDER,
+    )
     use_falkor = provider_text in {"falkor", "falkordb"} or _is_falkordb_uri(uri)
     if not use_falkor and not (user and password):
         logger.info(
@@ -237,9 +241,10 @@ class ExploreService:
         self._neo4j_uri   = neo4j_uri   or _DEFAULT_NEO4J_URI
         self._neo4j_user  = neo4j_user  or _DEFAULT_NEO4J_USER
         self._neo4j_pass  = neo4j_pass  or _DEFAULT_NEO4J_PASS
-        self._graph_provider = (graph_provider or _DEFAULT_GRAPH_PROVIDER or "falkordb").strip().lower()
-        if self._graph_provider in {"falkor", "falkor-db"}:
-            self._graph_provider = "falkordb"
+        self._graph_provider = normalize_graph_provider_name(
+            graph_provider,
+            default=_DEFAULT_GRAPH_PROVIDER,
+        )
         self._neo4j_db    = neo4j_db or _DEFAULT_GRAPH_DB
 
     # ── Public API ────────────────────────────────────────────────────────────

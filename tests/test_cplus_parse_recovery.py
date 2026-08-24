@@ -91,7 +91,7 @@ class CPlusQualityCacheTests(unittest.TestCase):
             write_parse_cache(root, "legacy.py", signature, {"ok": True})
             self.assertEqual(load_parse_cache(root, "legacy.py", signature), {"ok": True})
 
-    def test_libclang_recovery_uses_backend_specific_cache_identity(self):
+    def test_legacy_libclang_structure_cache_is_ignored(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root, "broken.cpp")
             path.write_text("class Broken { public: void run( {\n", encoding="utf-8")
@@ -117,28 +117,23 @@ class CPlusQualityCacheTests(unittest.TestCase):
                     "recovery_policy_version": cplus_analyzer.RECOVERY_POLICY_VERSION,
                 },
             }
-            original_runtime_version = cplus_analyzer._runtime_package_version
-
-            def runtime_version(name):
-                if name == "libclang":
-                    return "18.1-test"
-                return original_runtime_version(name)
-
-            with (
-                mock.patch.object(
-                    cplus_analyzer,
-                    "_clang_parser",
-                    mock.Mock(parse_and_extract=mock.Mock(return_value=candidate)),
-                ),
-                mock.patch.object(
-                    cplus_analyzer, "_effective_fallback_threshold", return_value=0
-                ),
-                mock.patch.object(
-                    cplus_analyzer,
-                    "_runtime_package_version",
-                    side_effect=runtime_version,
-                ),
-            ):
+            libclang_signature = cplus_analyzer._parse_cache_context_signature(
+                file_path=str(path),
+                rel_path="broken.cpp",
+                is_cpp=True,
+                is_resource=False,
+                compile_db_index=None,
+                project_id="demo",
+                selected_backend=cplus_analyzer.ParserBackend.LIBCLANG,
+                selected_parser_version="18.1-test",
+                recovery_policy_version=cplus_analyzer.RECOVERY_POLICY_VERSION,
+            )
+            write_parse_cache(cache_root, "broken.cpp", libclang_signature, candidate)
+            with mock.patch.object(
+                cplus_analyzer,
+                "parse_c_family_file",
+                wraps=cplus_analyzer.parse_c_family_file,
+            ) as parse_mock:
                 result = cplus_analyzer._load_or_parse_payload(
                     str(path),
                     root,
@@ -146,7 +141,6 @@ class CPlusQualityCacheTests(unittest.TestCase):
                     True,
                     None,
                     "demo",
-                    allow_inprocess_clang_fallback=True,
                 )
                 cached_result = cplus_analyzer._load_or_parse_payload(
                     str(path),
@@ -155,7 +149,6 @@ class CPlusQualityCacheTests(unittest.TestCase):
                     True,
                     None,
                     "demo",
-                    prefer_recovered_cache=True,
                 )
                 tree_sitter_signature = cplus_analyzer._parse_cache_context_signature(
                     file_path=str(path),
@@ -164,17 +157,6 @@ class CPlusQualityCacheTests(unittest.TestCase):
                     is_resource=False,
                     compile_db_index=None,
                     project_id="demo",
-                )
-                libclang_signature = cplus_analyzer._parse_cache_context_signature(
-                    file_path=str(path),
-                    rel_path="broken.cpp",
-                    is_cpp=True,
-                    is_resource=False,
-                    compile_db_index=None,
-                    project_id="demo",
-                    selected_backend=cplus_analyzer.ParserBackend.LIBCLANG,
-                    selected_parser_version="18.1-test",
-                    recovery_policy_version=cplus_analyzer.RECOVERY_POLICY_VERSION,
                 )
                 other_libclang_version_signature = (
                     cplus_analyzer._parse_cache_context_signature(
@@ -203,12 +185,12 @@ class CPlusQualityCacheTests(unittest.TestCase):
                     )
                 )
 
-            self.assertIs(result, candidate)
-            self.assertEqual(cached_result["parse_meta"]["error_nodes"], 0)
+            self.assertEqual(parse_mock.call_count, 1)
             self.assertEqual(
-                cached_result["parse_meta"]["recovery_policy_version"],
-                cplus_analyzer.RECOVERY_POLICY_VERSION,
+                result["quality_provenance"]["backend"],
+                cplus_analyzer.ParserBackend.TREE_SITTER.value,
             )
+            self.assertEqual(cached_result, result)
             self.assertNotEqual(tree_sitter_signature, libclang_signature)
             self.assertNotEqual(
                 libclang_signature, other_libclang_version_signature
@@ -216,12 +198,12 @@ class CPlusQualityCacheTests(unittest.TestCase):
             self.assertNotEqual(
                 libclang_signature, other_recovery_policy_signature
             )
-            self.assertIsNone(
-                load_parse_cache(cache_root, "broken.cpp", tree_sitter_signature)
-            )
             self.assertEqual(
-                load_parse_cache(cache_root, "broken.cpp", libclang_signature),
-                candidate,
+                load_parse_cache(cache_root, "broken.cpp", tree_sitter_signature),
+                result,
+            )
+            self.assertIsNone(
+                load_parse_cache(cache_root, "broken.cpp", libclang_signature)
             )
 
 
@@ -441,7 +423,7 @@ class CPlusBoundedRecoveryTests(unittest.TestCase):
             self.assertLessEqual(observed_timeouts[0], 1)
             self.assertEqual(metrics["stop_reason"], "wall_time_budget")
 
-    def test_recovery_selects_only_strict_improvement_and_caches_terminal_result(self):
+    def test_recovery_keeps_libclang_payload_diagnostic_only(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root, "broken.cpp")
             path.write_text("class Broken { public: void run( {\n", encoding="utf-8")
@@ -500,8 +482,13 @@ class CPlusBoundedRecoveryTests(unittest.TestCase):
                     worker_path="unused",
                 )
             self.assertEqual(worker_mock.call_count, 1)
-            self.assertEqual(metrics["improved"], 1)
-            self.assertEqual(selected[str(path)]["quality_provenance"]["backend"], "libclang")
+            self.assertEqual(metrics["improved"], 0)
+            self.assertEqual(metrics["non_improved"], 1)
+            self.assertEqual(selected[str(path)]["quality_provenance"]["backend"], "tree_sitter")
+            self.assertEqual(
+                selected[str(path)]["quality_provenance"]["selection_reason"],
+                "cross_backend_structure_forbidden",
+            )
             self.assertEqual(selected_again, {})
             self.assertEqual(metrics_again["attempted"], 0)
 

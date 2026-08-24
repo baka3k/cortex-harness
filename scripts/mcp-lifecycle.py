@@ -224,6 +224,24 @@ def format_bash_exports(environment: dict[str, str]) -> str:
     return render_bash_exports(environment)
 
 
+def graph_provider(environment: dict[str, str], server_name: str) -> str:
+    """Resolve the provider for one MCP server with strict validation."""
+    from mcp_runtime_config import normalize_graph_provider
+
+    scoped_provider = "DOC_GRAPH_PROVIDER" if server_name == "doc-tiny" else "CODE_GRAPH_PROVIDER"
+    return normalize_graph_provider(environment, scoped_provider)
+
+
+def isolate_graph_provider_environment(
+    environment: dict[str, str], server_name: str
+) -> str:
+    """Remove graph settings belonging to the inactive provider."""
+    from mcp_runtime_config import isolate_graph_provider_environment as isolate
+
+    scoped_provider = "DOC_GRAPH_PROVIDER" if server_name == "doc-tiny" else "CODE_GRAPH_PROVIDER"
+    return isolate(environment, scoped_provider)
+
+
 def run(arguments: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         arguments,
@@ -1676,6 +1694,7 @@ def runtime_overrides(
     server_name: str,
     instance: str,
     multiple_servers: bool,
+    environment: dict[str, str] | None = None,
 ) -> dict[str, str]:
     is_code = server_name == "code-tiny"
     database = options.code_database if is_code else options.doc_database
@@ -1690,8 +1709,15 @@ def runtime_overrides(
     }
     if options.project:
         overrides.update({"PROJECT_ID": options.project, "PROJECT_NAME": options.project})
+    provider_environment = dict(environment or {})
+    if options.provider:
+        provider_environment["GRAPH_PROVIDER"] = options.provider
+        provider_environment[
+            "CODE_GRAPH_PROVIDER" if is_code else "DOC_GRAPH_PROVIDER"
+        ] = options.provider
+    provider = graph_provider(provider_environment, server_name)
     if database:
-        overrides.update({"FALKORDB_GRAPH": database, "NEO4J_DB": database})
+        overrides["FALKORDB_GRAPH" if provider == "falkordb" else "NEO4J_DB"] = database
     if collection:
         overrides["QDRANT_COLLECTION" if is_code else "QDRANT_COLLECTION_DOC"] = collection
     if options.provider:
@@ -1735,9 +1761,20 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
             raise RuntimeError(f"MCP script not found: {script}")
         runtime_env = runtime_environments[str(server["name"])]
         if custom:
-            runtime_env.update(runtime_overrides(options, str(server["name"]), instance, len(servers) > 1))
+            runtime_env.update(
+                runtime_overrides(
+                    options,
+                    str(server["name"]),
+                    instance,
+                    len(servers) > 1,
+                    runtime_env,
+                )
+            )
 
-        graph = runtime_env.get("FALKORDB_GRAPH") or runtime_env.get("NEO4J_DB") or ""
+        provider = isolate_graph_provider_environment(runtime_env, str(server["name"]))
+        graph = runtime_env.get(
+            "FALKORDB_GRAPH" if provider == "falkordb" else "NEO4J_DB", ""
+        )
         existing = next(
             (
                 record
@@ -1780,6 +1817,7 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
             doc_collection=runtime_env.get("QDRANT_COLLECTION_DOC"),
         )
         runtime_env.update(storage_overlay(storage_config, owner=owner))
+        isolate_graph_provider_environment(runtime_env, str(server["name"]))
         runtime_env_path.write_text(
             format_bash_exports(runtime_env) + ("\n" if runtime_env else ""),
             encoding="utf-8",

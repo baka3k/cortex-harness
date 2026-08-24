@@ -55,6 +55,11 @@ def _semantic(callee="f2", config="cf1", line=3, callee_usr="usr:f2", **extra):
         "config_fingerprint": config,
         "callee_usr": callee_usr,
         "project_id": "p1",
+        "context_fidelity": "faithful",
+        "context_admission": "accepted",
+        "execution_coverage": "complete",
+        "context_attestation": "attestation-1",
+        "manifest_key": f"p1:g1:r1:policy:a.c:{config}",
         **extra,
     }
 
@@ -268,6 +273,35 @@ class SchemaRegistryTest(unittest.TestCase):
 
 
 class QueryProfileTest(unittest.TestCase):
+    def test_exact_scope_manifest_blocks_missing_duplicate_and_partial_keys(self):
+        expected = [
+            {
+                "project_id": "p1",
+                "generation_id": "g1",
+                "revision": "r1",
+                "policy_version": "v1",
+                "tu_key": name,
+                "config_fingerprint": "cfg",
+            }
+            for name in ("a.c", "b.c")
+        ]
+        complete = [dict(item, status="complete") for item in expected]
+        self.assertEqual(
+            call_evidence.exact_frontier_coverage(expected, complete)["status"],
+            "complete",
+        )
+        missing = call_evidence.exact_frontier_coverage(expected, complete[:1])
+        self.assertEqual(missing["status"], "partial")
+        self.assertIn("scope_keys_missing", missing["reasons"])
+        duplicate = call_evidence.exact_frontier_coverage(
+            expected, [complete[0], complete[0], complete[1]]
+        )
+        self.assertIn("scope_keys_duplicate", duplicate["reasons"])
+        partial = call_evidence.exact_frontier_coverage(
+            expected, [complete[0], dict(complete[1], status="partial")]
+        )
+        self.assertIn("scope_keys_incomplete", partial["reasons"])
+
     def test_profile_relationship_selection(self):
         # The registry is the single authority for profile -> relationships.
         from framework_registry import CAPABILITIES

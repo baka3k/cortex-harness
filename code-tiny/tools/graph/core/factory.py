@@ -8,8 +8,6 @@ based on configuration.
 from pathlib import Path
 from typing import Any, Dict, Optional
 from tools.graph.core.base import GraphDriver, GraphProvider
-from tools.graph.driver.falkordb_driver import FalkorDBDriver
-from tools.graph.driver.neo4j_driver import Neo4jDriver
 
 
 class GraphWritesDisabledError(RuntimeError):
@@ -90,6 +88,8 @@ class GraphDriverFactory:
             }
 
         if provider == GraphProvider.NEO4J:
+            from tools.graph.driver.neo4j_driver import Neo4jDriver
+
             return Neo4jDriver(
                 uri=config["uri"],
                 user=config["user"],
@@ -100,6 +100,8 @@ class GraphDriverFactory:
             # Future implementation
             raise NotImplementedError("Kuzu driver not yet implemented")
         elif provider == GraphProvider.FALKORDB:
+            from tools.graph.driver.falkordb_driver import FalkorDBDriver
+
             return FalkorDBDriver(
                 uri=config.get("uri") or config.get("url"),
                 user=config.get("user") or config.get("username"),
@@ -153,7 +155,8 @@ class GraphDriverFactory:
                 from cortex_harness.storage import resolve_storage
                 path = str(resolve_storage(Path.cwd()).falkordb_code_path)
             config: Dict[str, Any] = {
-                "database": os.getenv(f"{prefix}_GRAPH") or os.getenv(f"{prefix}_DATABASE", "neo4j"),
+                "database": os.getenv(f"{prefix}_GRAPH")
+                or os.getenv(f"{prefix}_DATABASE", "hyper_graph"),
                 "graph": os.getenv(f"{prefix}_GRAPH"),
                 "path": path,
                 "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),

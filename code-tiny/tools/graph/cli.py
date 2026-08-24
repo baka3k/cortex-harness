@@ -10,18 +10,10 @@ from typing import Optional
 
 from tools.graph.core.base import GraphDriver, GraphProvider
 from tools.graph.core.factory import GraphDriverFactory
+from tools.graph.core.provider_contract import normalize_graph_provider
 
 
 logger = logging.getLogger(__name__)
-
-
-def normalize_graph_provider(value: Optional[str]) -> GraphProvider:
-    provider = (value or "falkordb").strip().lower()
-    if provider in {"neo4j", "neo"}:
-        return GraphProvider.NEO4J
-    if provider in {"falkor", "falkordb"}:
-        return GraphProvider.FALKORDB
-    raise ValueError(f"Unsupported graph provider: {value}")
 
 
 def env_graph_provider(default: str = "falkordb") -> str:
@@ -214,7 +206,7 @@ def prepare_graph_args(args: Namespace) -> bool:
     resolved_graph = (
         getattr(args, "falkordb_graph", None)
         or getattr(args, "project_id", None)
-        or "neo4j"
+        or "hyper_graph"
     )
     setattr(args, "neo4j_db", resolved_graph)
     if not getattr(args, "falkordb_graph", None):
@@ -254,9 +246,8 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
 
     graph_name = (
         getattr(args, "falkordb_graph", None)
-        or getattr(args, "neo4j_db", None)
         or getattr(args, "project_id", None)
-        or "neo4j"
+        or "hyper_graph"
     )
     setattr(args, "neo4j_db", graph_name)
     falkordb_uri = getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI")

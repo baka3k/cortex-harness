@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +13,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from mcp_runtime_config import (  # noqa: E402
+    format_bash_exports,
     load_active_config,
     runtime_environment,
 )
@@ -69,7 +72,7 @@ class McpRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(env["GRAPH_PROVIDER"], "falkordb")
         self.assertEqual(env["CODE_GRAPH_PROVIDER"], "falkordb")
         self.assertEqual(env["FALKORDB_GRAPH"], "sample-graph")
-        self.assertEqual(env["NEO4J_DB"], "sample-graph")
+        self.assertNotIn("NEO4J_DB", env)
         self.assertNotIn("NEO4J_URI", env)
         self.assertNotIn("QDRANT_URL", env)
         self.assertNotIn("FALKORDB_URI", env)
@@ -107,12 +110,112 @@ class McpRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(env["DOC_GRAPH_PROVIDER"], "falkordb")
         self.assertNotIn("CODE_GRAPH_PROVIDER", env)
         self.assertEqual(env["FALKORDB_GRAPH"], "docs-graph")
-        self.assertEqual(env["NEO4J_DB"], "docs-graph")
+        self.assertNotIn("NEO4J_DB", env)
         self.assertNotIn("QDRANT_URL", env)
         self.assertNotIn("FALKORDB_HOST", env)
         self.assertEqual(env["FALKORDB_PATH"], env["FALKORDB_DOC_PATH"])
         self.assertTrue(env["QDRANT_DOC_PATH"].endswith("/qdrant/doc"))
         self.assertEqual(env["QDRANT_COLLECTION_DOC"], "bespoke-doc-vectors")
+
+    def test_falkor_ignores_stale_neo4j_database_alias(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_config(
+                root,
+                "dev",
+                {
+                    "active": True,
+                    "project": {"code": "primary", "name": "Primary"},
+                    "code": {
+                        "env": {
+                            "GRAPH_PROVIDER": "falkordb",
+                            "NEO4J_DB": "stale-legacy-graph",
+                        }
+                    },
+                },
+            )
+
+            env = runtime_environment(root, "code-tiny")
+
+        self.assertEqual(env["FALKORDB_GRAPH"], "primary")
+        self.assertFalse(any(key.startswith("NEO4J_") for key in env))
+
+    def test_invalid_provider_never_falls_back_to_neo4j(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_config(
+                root,
+                "dev",
+                {
+                    "active": True,
+                    "project": {"code": "primary"},
+                    "code": {"env": {"CODE_GRAPH_PROVIDER": "falkord"}},
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "Unsupported graph provider"):
+                runtime_environment(root, "code-tiny")
+
+    def test_explicit_neo4j_environment_drops_stale_falkordb_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_config(
+                root,
+                "dev",
+                {
+                    "active": True,
+                    "project": {"code": "primary"},
+                    "code": {
+                        "env": {
+                            "GRAPH_PROVIDER": "neo4j",
+                            "CODE_GRAPH_PROVIDER": "neo4j",
+                            "NEO4J_URI": "bolt://graph.example:7687",
+                            "NEO4J_DB": "primary-neo4j",
+                            "FALKORDB_GRAPH": "stale-falkor-graph",
+                            "FALKORDB_PATH": "/tmp/stale-falkor.rdb",
+                        }
+                    },
+                },
+            )
+
+            env = runtime_environment(root, "code-tiny")
+
+        self.assertEqual(env["GRAPH_PROVIDER"], "neo4j")
+        self.assertEqual(env["NEO4J_DB"], "primary-neo4j")
+        self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
+        self.assertFalse(any(key.startswith("FALKORDB_") for key in env))
+
+    def test_bash_runtime_actively_unsets_inherited_inactive_provider_values(self):
+        command = format_bash_exports(
+            {
+                "GRAPH_PROVIDER": "falkordb",
+                "CODE_GRAPH_PROVIDER": "falkordb",
+                "FALKORDB_GRAPH": "primary",
+            }
+        )
+        inherited = os.environ.copy()
+        inherited.update(
+            {
+                "NEO4J_URI": "bolt://must-not-leak:7687",
+                "NEO4J_DB": "must-not-leak",
+            }
+        )
+
+        completed = subprocess.run(
+            ["bash", "-c", command + "\nenv"],
+            env=inherited,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        child_keys = {
+            line.partition("=")[0]
+            for line in completed.stdout.splitlines()
+            if "=" in line
+        }
+        self.assertFalse(any(key.startswith("NEO4J_") for key in child_keys))
 
     def test_runtime_environment_is_empty_when_project_has_no_harness_config(self):
         with tempfile.TemporaryDirectory() as directory:

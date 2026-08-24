@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -29,9 +30,65 @@ class GenerationManager:
         self.retain = retain
         self.manifest_path = self.root / "active-generation.json"
         self.generations_root = self.root / "generations"
+        self.compatibility_root = self.root / "generation-compatibility"
         self._publication_lock = threading.Lock()
         self._reference_lock = threading.Lock()
         self._references: dict[str, int] = {}
+
+    @staticmethod
+    def _safe_generation_id(generation_id: str) -> str:
+        value = str(generation_id or "")
+        if not value or re.fullmatch(r"[A-Za-z0-9._-]+", value) is None:
+            raise ValueError("generation ID is not safe for compatibility metadata")
+        return value
+
+    def _compatibility_path(self, generation_id: str) -> Path:
+        return self.compatibility_root / f"{self._safe_generation_id(generation_id)}.json"
+
+    def mark_incompatible(
+        self,
+        generation_id: str,
+        *,
+        reason: str,
+        provenance: str = "unknown_or_legacy_clang_structure",
+    ) -> Path:
+        """Durably fence a generation without deleting or pointer-flipping it."""
+
+        if not str(reason or "").strip():
+            raise ValueError("generation incompatibility requires a reason")
+        path = self._compatibility_path(generation_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        payload = {
+            "schema_version": "1",
+            "generation_id": generation_id,
+            "compatible": False,
+            "reason": str(reason),
+            "provenance": str(provenance),
+        }
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        if os.name != "nt":
+            directory_fd = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        return path
+
+    def incompatibility(self, generation_id: str) -> dict[str, object] | None:
+        try:
+            payload = json.loads(
+                self._compatibility_path(generation_id).read_text(encoding="utf-8")
+            )
+        except FileNotFoundError:
+            return None
+        if payload.get("compatible") is not False:
+            raise ValueError("invalid generation compatibility marker")
+        return payload
 
     def allocate(self, source_revision: str, *, generation_id: str | None = None) -> GenerationManifest:
         generation_id = generation_id or uuid.uuid4().hex
@@ -54,12 +111,16 @@ class GenerationManager:
         if manifest.target != self.target or manifest.state is not GenerationState.PUBLISHED:
             raise ValueError("active generation manifest does not describe this published physical target")
         self._validate_paths(manifest)
+        if self.incompatibility(manifest.generation_id) is not None:
+            raise ValueError("active generation is structurally incompatible")
         return manifest
 
     def publish(self, manifest: GenerationManifest, validate: Callable[[GenerationManifest], None]) -> GenerationManifest:
         if manifest.target != self.target:
             raise ValueError("cannot publish a generation for a different physical target")
         self._validate_paths(manifest)
+        if self.incompatibility(manifest.generation_id) is not None:
+            raise ValueError("cannot publish a structurally incompatible generation")
         validate(manifest)
         published = replace(
             manifest,

@@ -31,6 +31,7 @@ from tools.common.call_evidence import (
     CALL_EVIDENCE_SCHEMA_VERSION,
     RESOLUTION_CLASS_DIRECT_RESOLVED,
 )
+from tools.cplus.function_identity import build_function_identity, normalize_syntax
 
 # Protocol "1" is the whole-payload recovery contract owned by
 # parse_recovery.WORKER_PROTOCOL_VERSION.  Protocol "2" adds the semantic
@@ -265,9 +266,58 @@ _FUNCTION_CURSOR_KINDS = (
 
 
 def _function_symbol_id(cursor: Any, rel_path: str) -> str:
-    arity = sum(1 for _ in cursor.get_arguments())
-    spelling = cursor.spelling or cursor.displayname or "<anon>"
-    return f"{spelling}/{arity}@{rel_path}"
+    parameters = []
+    for argument in cursor.get_arguments():
+        try:
+            parameters.append(argument.type.spelling or "?")
+        except Exception:
+            parameters.append("?")
+    if not parameters:
+        for child in cursor.get_children():
+            if getattr(child.kind, "name", "") == "PARM_DECL":
+                try:
+                    parameters.append(child.type.spelling or "?")
+                except Exception:
+                    parameters.append("?")
+    try:
+        type_spelling = cursor.type.spelling or ""
+    except Exception:
+        type_spelling = ""
+    close = type_spelling.rfind(")")
+    qualifiers = normalize_syntax(type_spelling[close + 1 :] if close >= 0 else "")
+    try:
+        linkage_name = cursor.linkage.name.lower()
+    except Exception:
+        linkage_name = "external"
+    linkage = "internal" if linkage_name in {"internal", "unique_external", "no_linkage"} else "external"
+    scope_parts: List[str] = []
+    parent = cursor.semantic_parent
+    while parent is not None and getattr(parent.kind, "name", "") != "TRANSLATION_UNIT":
+        if parent.spelling:
+            scope_parts.append(parent.spelling)
+        parent = parent.semantic_parent
+    spelling = cursor.spelling or cursor.displayname or "<anonymous>"
+    qualified = "::".join([*reversed(scope_parts), spelling])
+    template_arity = sum(
+        1
+        for child in cursor.get_children()
+        if getattr(child.kind, "name", "")
+        in {
+            "TEMPLATE_TYPE_PARAMETER",
+            "TEMPLATE_NON_TYPE_PARAMETER",
+            "TEMPLATE_TEMPLATE_PARAMETER",
+        }
+    )
+    return build_function_identity(
+        qualified_name=qualified,
+        parameter_types=parameters,
+        qualifiers=qualifiers,
+        template_arity=template_arity,
+        linkage=linkage,
+        rel_path=rel_path,
+        start_byte=int(cursor.extent.start.offset or 0),
+        parseable=bool(cursor.spelling),
+    ).logical_id
 
 
 def classify_call(
@@ -417,17 +467,8 @@ def extract_semantic_callsite_evidence(
         return ""
 
     function_extents: List[Tuple[int, int, str, str]] = []  # (start, end, usr, symbol_id)
-
-    def enclosing_function(offset: int) -> Tuple[str, str]:
-        best_span = None
-        best: Tuple[str, str] = ("", "")
-        for start, end, usr, symbol_id in function_extents:
-            if start <= offset <= end:
-                span = end - start
-                if best_span is None or span < best_span:
-                    best_span = span
-                    best = (usr, symbol_id)
-        return best
+    function_symbols_by_usr: Dict[str, str] = {}
+    pending_calls: List[Any] = []
 
     error_count = 0
     truncated = False
@@ -450,17 +491,20 @@ def extract_semantic_callsite_evidence(
                 except Exception:
                     pass
 
-            if kind.name in _FUNCTION_CURSOR_KINDS and cursor.is_definition():
+            if kind.name in _FUNCTION_CURSOR_KINDS:
                 usr = cursor.get_usr() or ""
                 if usr:
-                    function_extents.append(
-                        (
-                            cursor.extent.start.offset,
-                            cursor.extent.end.offset,
-                            usr,
-                            _function_symbol_id(cursor, rel_path),
+                    symbol_id = _function_symbol_id(cursor, rel_path)
+                    function_symbols_by_usr[usr] = symbol_id
+                    if cursor.is_definition():
+                        function_extents.append(
+                            (
+                                cursor.extent.start.offset,
+                                cursor.extent.end.offset,
+                                usr,
+                                symbol_id,
+                            )
                         )
-                    )
 
             # Direct calls plus object-construction sites.  Overloaded
             # operators invoked via operator syntax (``a + b``) surface as
@@ -470,10 +514,29 @@ def extract_semantic_callsite_evidence(
                 construct_kind is not None and kind == construct_kind
             ):
                 continue
-            if len(result.callsites) >= limits.max_callsites:
+            if len(pending_calls) >= limits.max_callsites:
                 truncated = True
                 break
+            pending_calls.append(cursor)
 
+        frozen_extents = tuple(
+            sorted(function_extents, key=lambda item: (item[0], item[1], item[2]))
+        )
+
+        def enclosing_function(offset: int) -> Tuple[str, str]:
+            best_span = None
+            best: Tuple[str, str] = ("", "")
+            for start, end, usr, symbol_id in frozen_extents:
+                if start <= offset <= end:
+                    span = end - start
+                    if best_span is None or span < best_span:
+                        best_span = span
+                        best = (usr, symbol_id)
+            return best
+
+        call_ordinals: Dict[Tuple[str, int], int] = {}
+        for cursor in pending_calls:
+            loc = cursor.location
             referenced = cursor.referenced
             call_offset = cursor.extent.start.offset
             if referenced is not None:
@@ -492,15 +555,15 @@ def extract_semantic_callsite_evidence(
             )
 
             caller_usr, caller_symbol_id = enclosing_function(call_offset)
+            ordinal_key = (caller_symbol_id, call_offset)
+            call_ordinal = call_ordinals.get(ordinal_key, 0)
+            call_ordinals[ordinal_key] = call_ordinal + 1
             callee_usr = referenced.get_usr() if referenced is not None else ""
             callee_symbol_id = ""
             callee_linkage = ""
             if referenced is not None:
                 callee_linkage = referenced.linkage.name
-                for start, end, usr, symbol_id in function_extents:
-                    if usr == callee_usr:
-                        callee_symbol_id = symbol_id
-                        break
+                callee_symbol_id = function_symbols_by_usr.get(callee_usr, "")
 
             site: Dict[str, Any] = {
                 "schema_version": CALL_EVIDENCE_SCHEMA_VERSION,
@@ -508,6 +571,9 @@ def extract_semantic_callsite_evidence(
                 "backend": SEMANTIC_BACKEND_ID,
                 "file_path": rel_path,
                 "call_start_byte": call_offset,
+                "spelling_start_byte": call_offset,
+                "expansion_start_byte": call_offset,
+                "call_ordinal": call_ordinal,
                 "call_end_byte": cursor.extent.end.offset,
                 "call_line": loc.line if loc else 0,
                 "call_column": loc.column if loc else 0,

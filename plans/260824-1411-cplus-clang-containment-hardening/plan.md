@@ -9,8 +9,9 @@ branch: develop
 tags: [cplus, clang, tree-sitter, semantic-coverage, falkordb, correctness]
 blockedBy: []
 phaseBlockedBy:
-  phase-04: [260807-1202-graph-ingest-write-path-hardening, 260807-0929-mcp-ingest-query-concurrency]
-  phase-05: [260807-1202-graph-ingest-write-path-hardening, 260807-0929-mcp-ingest-query-concurrency, 260817-storage-backend-adapter]
+  "03": [260807-0929-mcp-ingest-query-concurrency]
+  "04": [260807-1202-graph-ingest-write-path-hardening, 260807-0929-mcp-ingest-query-concurrency]
+  "05": [260807-1202-graph-ingest-write-path-hardening, 260807-0929-mcp-ingest-query-concurrency, 260817-storage-backend-adapter]
 blocks:
   - 260807-1329-parser-quality-recovery
   - 260821-1144-cplus-semantic-call-graph
@@ -22,10 +23,7 @@ mode: hi-plan --full
 
 ## Outcome
 
-Tree-sitter remains the sole structural coverage payload for every C/C++ file.
-Clang protocol 2 adds classified call evidence only for translation-unit/configuration
-contexts proven faithful. Missing buildability never deletes Tree-sitter facts, and
-incomplete semantic coverage never licenses a negative caller or impact answer.
+Tree-sitter remains the sole structural payload; Clang protocol 2 adds call evidence only for proven-faithful TU/configuration contexts, and incomplete coverage never licenses a negative answer.
 
 ## Decision contract
 
@@ -56,7 +54,7 @@ incomplete semantic coverage never licenses a negative caller or impact answer.
 
 ## Ownership and dependencies
 
-The parser-quality plan owns structural containment; the semantic plan owns protocol 2. Incremental sync plus `StoreGateway`/`GenerationManager` is the sole admission/publication owner. Phases 4-5 wait for the phase blockers above; this plan blocks both parents' rollout completion.
+The parser-quality plan owns structural containment; the semantic plan owns protocol 2. Incremental sync plus `StoreGateway`/`GenerationManager` is the sole admission/publication owner. Phase 3 waits for concurrency ownership; Phases 4-5 also wait for their listed provider blockers. This plan blocks both parents' rollout completion.
 
 ## Acceptance gates
 
@@ -64,7 +62,7 @@ The parser-quality plan owns structural containment; the semantic plan owns prot
 - No cache, worker, CLI policy, or recovery path can return a Clang structural winner.
 - Later-function calls are retained; overload, pure-virtual, template, function-pointer, prototype, and missing-header cases have reviewed outcomes.
 - Expected and actual scope-manifest keys match exactly; non-eligible contexts publish zero strict `CALLS` and one stable reason per TU/configuration.
-- Any traversal under incomplete coverage is `partial`; an empty result is negative only for an exact complete project/generation/revision/policy/configuration frontier.
+- Any traversal under incomplete coverage is `partial`; empty results are authoritative only as policy-qualified negatives over an exact complete project/generation/revision/configuration scope.
 - Direct precision is at least 98%, recall at least 95%, priority faithful-context coverage at least 90%, and weak-to-`CALLS` promotion is zero.
 - Clean FalkorDB/Neo4j readback, deterministic rerun, context-loss downgrade, and rollback all pass before promotion.
 

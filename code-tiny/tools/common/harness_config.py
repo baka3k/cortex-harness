@@ -6,6 +6,17 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+def _normalize_graph_provider(value: Any) -> str:
+    normalized = str(value or "falkordb").strip().lower()
+    if normalized in {"falkordb", "falkor", "local", "embedded"}:
+        return "falkordb"
+    if normalized in {"neo4j", "neo"}:
+        return "neo4j"
+    raise ValueError(
+        f"Unsupported graph provider '{value}'. Expected 'falkordb' or 'neo4j'."
+    )
+
+
 def _read_config(config_path: str) -> Dict[str, Any]:
     try:
         with open(config_path, encoding="utf-8") as f:
@@ -19,10 +30,10 @@ def load_harness_config(config_path: str) -> None:
     """Load code.env + doc.env from a harness dev.json and populate env vars.
 
     Per Phase 06 of the unified ingest/query contract plan, the loader is
-    provider-neutral: it now reads both ``code.env`` and ``doc.env`` and
-    stamps FalkorDB variables alongside the legacy Neo4j ones. Existing env
-    vars take precedence over config values so callers can override at the
-    shell level.
+    provider-aware: it reads both ``code.env`` and ``doc.env`` but exposes
+    graph settings only for the explicitly selected provider. Existing
+    provider env vars take precedence so callers can override at the shell
+    level without allowing stale settings from the inactive provider through.
     """
     cfg = _read_config(config_path)
     if not cfg:
@@ -31,16 +42,30 @@ def load_harness_config(config_path: str) -> None:
     code_env = dict(cfg.get("code", {}).get("env") or {})
     doc_env = dict(cfg.get("doc", {}).get("env") or {})
 
-    # Neo4j credentials — set only when the value is provided.
-    for key in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASS", "NEO4J_DB"):
-        if key in code_env and key not in os.environ:
-            os.environ[key] = str(code_env[key])
+    provider = _normalize_graph_provider(
+        os.environ.get("CODE_GRAPH_PROVIDER")
+        or os.environ.get("GRAPH_PROVIDER")
+        or code_env.get("CODE_GRAPH_PROVIDER")
+        or code_env.get("GRAPH_PROVIDER")
+    )
+    os.environ["GRAPH_PROVIDER"] = provider
+    os.environ["CODE_GRAPH_PROVIDER"] = provider
 
-    # FalkorDB graph/database — preferred over NEO4J_DB when both are set.
-    for key in ("FALKORDB_GRAPH", "FALKORDB_DATABASE"):
-        value = code_env.get(key) or doc_env.get(key)
-        if value and key not in os.environ:
-            os.environ[key] = str(value)
+    if provider == "neo4j":
+        for key in tuple(os.environ):
+            if key.startswith("FALKORDB_"):
+                os.environ.pop(key, None)
+        for key in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASS", "NEO4J_DB"):
+            if key in code_env and key not in os.environ:
+                os.environ[key] = str(code_env[key])
+    else:
+        for key in tuple(os.environ):
+            if key.startswith("NEO4J_"):
+                os.environ.pop(key, None)
+        for key in ("FALKORDB_GRAPH", "FALKORDB_DATABASE"):
+            value = code_env.get(key) or doc_env.get(key)
+            if value and key not in os.environ:
+                os.environ[key] = str(value)
 
     # Resolve one canonical local-storage overlay for all child processes.
     from cortex_harness.storage import resolve_storage, storage_overlay
@@ -71,7 +96,10 @@ def load_harness_config(config_path: str) -> None:
     )
     resolved = resolve_storage(project_root, config=local_keys)
     remote_uri = ""
-    if str(cfg.get("storage_backend") or "local").strip().lower() == "remote":
+    if (
+        provider == "falkordb"
+        and str(cfg.get("storage_backend") or "local").strip().lower() == "remote"
+    ):
         remote_section = cfg.get("remote") or {}
         remote_uri = str(remote_section.get("falkordb_uri") or "").strip()
         if remote_uri and "FALKORDB_URI" not in os.environ:
@@ -82,6 +110,8 @@ def load_harness_config(config_path: str) -> None:
             if remote_section.get("falkordb_ssl") and "FALKORDB_SSL" not in os.environ:
                 os.environ["FALKORDB_SSL"] = "1"
     for key, value in storage_overlay(resolved, owner="code").items():
+        if provider == "neo4j" and key.startswith("FALKORDB_"):
+            continue
         if remote_uri and key.startswith("FALKORDB_") and key.endswith("_PATH"):
             # Remote graph projects must not fall back to embedded paths.
             continue
@@ -122,16 +152,6 @@ def load_harness_config(config_path: str) -> None:
         os.environ["EMBED_BATCH_SIZE"] = str(merged_env["BATCH_SIZE"])
     if "MAX_EMBED_CHARS" not in os.environ and "MAX_EMBED_CHARS" in merged_env:
         os.environ["MAX_EMBED_CHARS"] = str(merged_env["MAX_EMBED_CHARS"])
-
-    # GRAPH_PROVIDER — first non-empty wins.
-    provider = (
-        code_env.get("GRAPH_PROVIDER")
-        or doc_env.get("GRAPH_PROVIDER")
-        or os.environ.get("GRAPH_PROVIDER")
-    )
-    if provider and "GRAPH_PROVIDER" not in os.environ:
-        os.environ["GRAPH_PROVIDER"] = str(provider)
-
 
 def load_harness_targets(
     config_path: str, project_id: Optional[str] = None

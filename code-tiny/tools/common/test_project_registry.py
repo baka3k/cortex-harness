@@ -60,6 +60,9 @@ _LEAKED_ENV_KEYS = (
     "QDRANT_COLLECTION",
     "QDRANT_COLLECTION_DOC",
     "GRAPH_PROVIDER",
+    "CODE_GRAPH_PROVIDER",
+    "DOC_GRAPH_PROVIDER",
+    "MCP_GRAPH_PROVIDER",
 )
 
 
@@ -208,7 +211,7 @@ class ExplicitConfigOverrideTests(_BaseTest):
             code_env={
                 "FALKORDB_GRAPH": "beta_code_graph",
                 "QDRANT_COLLECTION": "beta_code_q",
-                "GRAPH_PROVIDER": "neo4j",
+                "GRAPH_PROVIDER": "falkordb",
             },
             doc_env={
                 "FALKORDB_GRAPH": "beta_doc_graph",
@@ -222,7 +225,7 @@ class ExplicitConfigOverrideTests(_BaseTest):
         self.assertEqual(targets.code_qdrant_collection, "beta_code_q")
         self.assertEqual(targets.doc_graph, "beta_doc_graph")
         self.assertEqual(targets.doc_qdrant_collection, "beta_doc_q")
-        self.assertEqual(targets.provider, "neo4j")
+        self.assertEqual(targets.provider, "falkordb")
         self.assertEqual(targets.source, "registry")
 
     def test_partial_config_falls_back_to_naming_rule(self) -> None:
@@ -234,6 +237,50 @@ class ExplicitConfigOverrideTests(_BaseTest):
         self.assertEqual(targets.code_qdrant_collection, "gamma")
         self.assertEqual(targets.doc_graph, "gamma_doc")
         self.assertEqual(targets.doc_qdrant_collection, "gamma_doc")
+
+    def test_falkor_targets_ignore_stale_neo4j_database_values(self) -> None:
+        self.write_config(
+            "gamma",
+            code_env={
+                "GRAPH_PROVIDER": "falkordb",
+                "NEO4J_DB": "stale_code_graph",
+            },
+            doc_env={
+                "GRAPH_PROVIDER": "falkordb",
+                "NEO4J_DB": "stale_doc_graph",
+            },
+        )
+
+        targets = project_registry.resolve_project_targets(
+            "gamma", config_dir=self.config_dir
+        )
+
+        self.assertEqual(targets.provider, "falkordb")
+        self.assertEqual(targets.code_graph, "gamma")
+        self.assertEqual(targets.doc_graph, "gamma_doc")
+
+    def test_explicit_neo4j_targets_use_only_neo4j_database_values(self) -> None:
+        self.write_config(
+            "gamma",
+            code_env={
+                "GRAPH_PROVIDER": "neo4j",
+                "FALKORDB_GRAPH": "stale_falkor_code",
+                "NEO4J_DB": "neo4j_code",
+            },
+            doc_env={
+                "GRAPH_PROVIDER": "neo4j",
+                "FALKORDB_GRAPH": "stale_falkor_doc",
+                "NEO4J_DB": "neo4j_doc",
+            },
+        )
+
+        targets = project_registry.resolve_project_targets(
+            "gamma", config_dir=self.config_dir
+        )
+
+        self.assertEqual(targets.provider, "neo4j")
+        self.assertEqual(targets.code_graph, "neo4j_code")
+        self.assertEqual(targets.doc_graph, "neo4j_doc")
 
     def test_parser_type_is_read_from_project_descriptor(self) -> None:
         payload = {

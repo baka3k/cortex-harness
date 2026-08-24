@@ -36,6 +36,7 @@ class QuarantineReason(str, Enum):
     UNRESOLVED_REFERENCE = "unresolved_reference"
     INVALID_PATH = "invalid_path"
     INVALID_RECORD = "invalid_record"
+    LEGACY_STRUCTURE_BACKEND = "legacy_structure_backend"
 
 
 @dataclass(frozen=True)
@@ -173,7 +174,16 @@ def identity_merge_fingerprint(label: str, record: Mapping[str, Any]) -> str:
 
     shared_fields = ("name", "qualified_name", "kind")
     label_fields: Mapping[str, tuple[str, ...]] = {
-        "Function": ("scope_name", "arity"),
+        "Function": (
+            "scope_name",
+            "arity",
+            "identity_schema",
+            "signature",
+            "parameter_types",
+            "qualifiers",
+            "template_arity",
+            "linkage",
+        ),
         "FunctionType": ("type_signature",),
         "Field": ("scope_name", "type_signature"),
         "Alias": ("target_name",),
@@ -384,6 +394,15 @@ def validate_cplus_payload(
     validated["_validation_rejected_count"] = rejected_count
     quarantine: list[QuarantineRecord] = []
     file_def = dict(payload.get("file_def") or {})
+    quality_provenance = payload.get("quality_provenance") or {}
+    parse_meta = payload.get("parse_meta") or {}
+    quality_context = (parse_meta.get("quality") or {}).get("context") or {}
+    structural_backend = str(
+        quality_provenance.get("backend")
+        or quality_context.get("backend")
+        or parse_meta.get("parser_backend")
+        or ""
+    )
     source_path = _record_path(file_def)
     try:
         source_path = normalize_relative_path(source_path)
@@ -421,6 +440,31 @@ def validate_cplus_payload(
     file_def.setdefault("end_line", file_def["start_line"])
     for field_name in ("code", "comment", "summary", "note"):
         file_def.setdefault(field_name, "")
+    if structural_backend == "libclang":
+        quarantine.append(
+            _quarantine(
+                "File",
+                file_def,
+                QuarantineReason.LEGACY_STRUCTURE_BACKEND,
+                default_path=source_path,
+            )
+        )
+        for collection in _CPLUS_COLLECTION_LABELS:
+            for record in payload.get(collection, []) or []:
+                if isinstance(record, Mapping):
+                    quarantine.append(
+                        _quarantine(
+                            str(record.get("label") or _CPLUS_COLLECTION_LABELS[collection]),
+                            record,
+                            QuarantineReason.LEGACY_STRUCTURE_BACKEND,
+                            default_path=source_path,
+                        )
+                    )
+            validated[collection] = []
+        validated["relations"] = []
+        validated["calls"] = []
+        validated["_quarantine_entire_payload"] = True
+        return validated, tuple(quarantine)
     evidence_policy = payload.get("evidence_policy") or {}
     file_quarantined = (
         str((file_def.get("parse_quality") or {}).get("tier") or "") == "quarantined"

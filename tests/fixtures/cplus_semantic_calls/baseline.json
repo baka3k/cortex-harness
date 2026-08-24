@@ -9,7 +9,7 @@
     "virtual.cpp": 1
   },
   "possible_calls": 9,
-  "schema_version": "1",
+  "schema_version": "2",
   "unknown_by_file": {
     "direct.c": 1,
     "fp.c": 1,

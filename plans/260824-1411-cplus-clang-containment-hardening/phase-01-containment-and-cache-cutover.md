@@ -64,10 +64,12 @@ LIBCLANG cache entry from bypassing the new rule.
    protocol, evidence/merge, semantic cache, coverage, graph rows, HTTP query
    cache, and provider generation. A legacy provenance/version at any surface
    is a cache miss or quarantine, never silently upgraded.
-9. Build and validate a clean Tree-sitter-only generation, then atomically
-   switch to it. If the generation manager cannot prove the active graph free
-   of legacy Clang-owned structure, refuse activation and keep queries
-   fail-closed; do not delete or rewrite an unknown active graph in place.
+9. End Phase 1 at the parser/cache boundary: write a durable incompatibility
+   marker for provider generations containing unknown or legacy Clang structural
+   provenance and refuse to serve/reuse them as current. Do not rebuild, delete,
+   or pointer-flip provider storage here. Phase 4, under its runtime-owner
+   blockers, must consume the marker and build/validate/activate a clean inactive
+   Tree-sitter generation.
 10. Update CLI help and operator docs with the new `off`, `report`, and
     `repair` meanings and the cache/generation migration behavior.
 
@@ -77,7 +79,7 @@ LIBCLANG cache entry from bypassing the new rule.
 | --- | --- | --- |
 | Parse/recovery cache | Miss/quarantine LIBCLANG winners | Tree-sitter structure only |
 | Protocol 1 | Decoder fixture only | Cannot enter selection or publication |
-| Graph/vector rows | Rebuild clean inactive generation | Versioned provenance on every row |
+| Graph/vector rows | Mark incompatible and block current serving | Phase 4 rebuilds a clean inactive generation |
 | Coverage/query cache | Invalidate old keys | Project/generation/policy scoped |
 | Journal/generation | Never replay incompatible entries | Atomic validated cutover |
 
@@ -108,15 +110,16 @@ LIBCLANG cache entry from bypassing the new rule.
 - Cross-backend candidate selection fails closed even if a future caller tries
   to reintroduce it.
 - Cache/policy version changes are covered by a migration regression test.
-- The activated generation has no legacy Clang structural provenance; an
-  unprovable state refuses cutover without mutating the prior generation.
+- Phase 1 performs no provider activation. Legacy/unprovable generations are
+  durably marked incompatible and fail closed until Phase 4 performs the clean
+  generation rebuild/cutover.
 - Phase 1 can ship alone as the immediate safe containment state.
 
 ## Rollback
 
-Rollback means returning to the last Tree-sitter-only cache generation. Do not
-restore either Clang structural replacement path; temporarily disable semantic
-work instead.
+Rollback restores the prior parser/cache policy only if it is Tree-sitter-only.
+It never clears a provider incompatibility marker or restores either Clang
+structural replacement path; temporarily disable semantic work instead.
 
 ## Todo
 

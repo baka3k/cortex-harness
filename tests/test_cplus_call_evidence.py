@@ -38,6 +38,11 @@ def _strong_row(**overrides):
         "tu_key": "tu://direct.c:1",
         "config_fingerprint": "cfg-1",
         "callee_usr": "c:@F@target",
+        "context_fidelity": "faithful",
+        "context_admission": "accepted",
+        "execution_coverage": "complete",
+        "context_attestation": "attestation-1",
+        "manifest_key": "p1:g1:r1:policy:a.c:cfg-1",
     }
     props.update(overrides)
     return {
@@ -55,7 +60,14 @@ class CallEvidenceContractTests(unittest.TestCase):
 
     def test_strong_evidence_requires_provider_and_identity(self) -> None:
         self.assertTrue(call_evidence.is_strong_call_evidence(_strong_row()["props"]))
-        for missing in ("semantic_provider", "tu_key", "config_fingerprint", "callee_usr"):
+        for missing in (
+            "semantic_provider",
+            "tu_key",
+            "config_fingerprint",
+            "callee_usr",
+            "context_attestation",
+            "manifest_key",
+        ):
             props = dict(_strong_row()["props"])
             props.pop(missing)
             self.assertFalse(call_evidence.is_strong_call_evidence(props), missing)
@@ -65,6 +77,16 @@ class CallEvidenceContractTests(unittest.TestCase):
         lexical = dict(_strong_row()["props"])
         lexical["resolution_class"] = "lexical_candidate"
         self.assertFalse(call_evidence.is_strong_call_evidence(lexical))
+
+    def test_non_faithful_incomplete_or_rejected_context_is_never_strong(self) -> None:
+        for field, value in (
+            ("context_fidelity", "synthetic"),
+            ("context_admission", "rejected"),
+            ("execution_coverage", "partial"),
+        ):
+            props = dict(_strong_row()["props"])
+            props[field] = value
+            self.assertFalse(call_evidence.is_strong_call_evidence(props), field)
 
     def test_enforce_strong_call_row_fails_closed_and_ignores_foreign_rows(self) -> None:
         with self.assertRaisesRegex(ValueError, "approved semantic provider"):

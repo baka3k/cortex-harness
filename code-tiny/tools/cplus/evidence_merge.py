@@ -35,10 +35,11 @@ from tools.common.call_evidence import (
     callsite_site_id,
     frontier_coverage,
     is_strong_call_evidence,
+    logical_callsite_id,
     normalize_call_row,
 )
 
-EVIDENCE_MERGE_SCHEMA_VERSION = "1"
+EVIDENCE_MERGE_SCHEMA_VERSION = "2"
 
 
 def callsite_node_id(
@@ -47,6 +48,10 @@ def callsite_node_id(
     line: int,
     column: int,
     call_type: str,
+    *,
+    spelling_offset: int | None = None,
+    expansion_offset: int | None = None,
+    ordinal: int = 0,
 ) -> str:
     """Stable identity of the ``CallSite`` staging node.
 
@@ -55,6 +60,15 @@ def callsite_node_id(
     callee identity lives on each observation (``OBSERVED_AS``/``RESOLVES_TO``).
     """
 
+    if spelling_offset is not None:
+        return logical_callsite_id(
+            caller_id=caller_id,
+            file_path=file_path,
+            spelling_offset=spelling_offset,
+            expansion_offset=expansion_offset,
+            ordinal=ordinal,
+            call_type=call_type,
+        )
     key = f"{caller_id}:{file_path}:{int(line)}:{int(column)}:{call_type}"
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
@@ -412,7 +426,25 @@ def merge_call_evidence(
         identities[identity] = normalized
 
         caller_id, file_path, line, column, call_type = _observation_site_parts(normalized)
-        site_id = callsite_node_id(caller_id, file_path, line, column, call_type)
+        raw_spelling_offset = normalized.get("spelling_start_byte")
+        if raw_spelling_offset is None:
+            raw_spelling_offset = normalized.get("call_start_byte")
+        site_id = callsite_node_id(
+            caller_id,
+            file_path,
+            line,
+            column,
+            call_type,
+            spelling_offset=(
+                int(raw_spelling_offset) if raw_spelling_offset is not None else None
+            ),
+            expansion_offset=(
+                int(normalized.get("expansion_start_byte"))
+                if normalized.get("expansion_start_byte") is not None
+                else None
+            ),
+            ordinal=int(normalized.get("call_ordinal") or 0),
+        )
         site = sites.get(site_id)
         if site is None:
             site = MergedCallSite(
