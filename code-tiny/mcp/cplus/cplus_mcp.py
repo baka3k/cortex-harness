@@ -18,12 +18,6 @@ import torch
 from fastmcp import FastMCP
 from transformers import AutoModel, AutoTokenizer
 
-try:
-    from neo4j.exceptions import Neo4jError
-except ImportError:  # Neo4j is an optional compatibility extra.
-    class Neo4jError(Exception):
-        """Fallback used when only the FalkorDB provider is installed."""
-
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
@@ -33,10 +27,13 @@ _MCP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _MCP_DIR not in sys.path:
     sys.path.insert(0, _MCP_DIR)
 
-from tools.graph import GraphProvider
-from tools.graph.core.base import GraphDriver
+from tools.graph.core.base import GraphDriver, GraphProvider
+from tools.graph.core.provider_contract import (
+    is_database_not_found_error,
+    normalize_graph_direction,
+    normalize_graph_provider_name,
+)
 from tools.graph.core.shared_runtime import get_shared_graph_driver
-from tools.graph.driver.neo4j_driver import normalize_graph_direction
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
 from tools.common.local_qdrant import (
     collection_info_payload,
@@ -67,6 +64,7 @@ from framework_registry import (
 )
 from tools.common.call_evidence import (
     RESOLUTION_CLASS_DIRECT_RESOLVED,
+    exact_frontier_coverage,
     frontier_coverage,
     suggested_next_semantic_scope,
     traversal_outcome,
@@ -134,10 +132,7 @@ DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "kotlin_function
 
 
 def _normalize_graph_provider(value: Optional[str]) -> str:
-    normalized = (value or "falkordb").strip().lower()
-    if normalized in {"falkor", "falkordb", "falkor-db"}:
-        return "falkordb"
-    return "neo4j"
+    return normalize_graph_provider_name(value)
 
 
 DEFAULT_GRAPH_PROVIDER = _normalize_graph_provider(
@@ -145,10 +140,16 @@ DEFAULT_GRAPH_PROVIDER = _normalize_graph_provider(
     or os.environ.get("GRAPH_PROVIDER")
     or os.environ.get("MCP_GRAPH_PROVIDER")
 )
-DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
-DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
-DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "hyper_graph"
+if DEFAULT_GRAPH_PROVIDER == "neo4j":
+    DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
+    DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
+    DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "hyper_graph"
+else:
+    DEFAULT_NEO4J_URI = "bolt://localhost:7687"
+    DEFAULT_NEO4J_USER = None
+    DEFAULT_NEO4J_PASSWORD = None
+    DEFAULT_NEO4J_DB = "hyper_graph"
 DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
 DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
@@ -507,11 +508,20 @@ async def _semantic_coverage_block(
     """
 
     query = (
-        "MATCH (coverage:SemanticCoverage) "
-        "WHERE coverage.project_id = $project_id OR $project_id IS NULL "
-        "RETURN coverage.status AS status, coverage.tu_key AS tu_key, "
-        "coverage.detail AS detail, coverage.revision AS revision, "
-        "coverage.policy_version AS policy_version"
+        "MATCH (scope:SemanticScopeManifestKey) "
+        "WHERE scope.project_id = $project_id OR $project_id IS NULL "
+        "OPTIONAL MATCH (coverage:SemanticCoverage) "
+        "WHERE coverage.project_id = scope.project_id "
+        "AND coverage.generation_id = scope.generation_id "
+        "AND coverage.revision = scope.revision "
+        "AND coverage.policy_version = scope.policy_version "
+        "AND coverage.tu_key = scope.tu_key "
+        "AND coverage.config_fingerprint = scope.config_fingerprint "
+        "RETURN scope.project_id AS project_id, "
+        "scope.generation_id AS generation_id, scope.revision AS revision, "
+        "scope.policy_version AS policy_version, scope.tu_key AS tu_key, "
+        "scope.config_fingerprint AS config_fingerprint, "
+        "coverage.status AS status, coverage.detail AS detail"
     )
     params: Dict[str, Any] = {"project_id": project_id or None}
     records: List[Dict[str, Any]] = []
@@ -523,7 +533,15 @@ async def _semantic_coverage_block(
                 continue
             logger.warning("Unable to read semantic coverage from %s: %s", db, exc)
     revisions = sorted({str(row.get("revision")) for row in records if row.get("revision")})
-    block = frontier_coverage(records)
+    expected = [
+        {field: row.get(field) for field in (
+            "project_id", "generation_id", "revision", "policy_version",
+            "tu_key", "config_fingerprint",
+        )}
+        for row in records
+    ]
+    actual = [row for row in records if row.get("status") is not None]
+    block = exact_frontier_coverage(expected, actual)
     block.update(
         {
             "served_revision": revisions[-1] if revisions else None,
@@ -532,7 +550,7 @@ async def _semantic_coverage_block(
                 (str(row.get("policy_version")) for row in records if row.get("policy_version")),
                 None,
             ),
-            "evidence_record_count": block.get("record_count", 0),
+            "evidence_record_count": len(actual),
         }
     )
     return block
@@ -1146,12 +1164,7 @@ async def _filter_collections_for_vector(
 
 
 def _is_db_not_found(exc: Exception) -> bool:
-    if isinstance(exc, Neo4jError):
-        code = getattr(exc, "code", "") or ""
-        if "DatabaseNotFound" in code:
-            return True
-    text = str(exc)
-    return "Database does not exist" in text or "graph reference" in text
+    return is_database_not_found_error(exc)
 
 
 def _format_collection_errors(errors: List[Dict[str, str]], max_items: int = 5) -> str:

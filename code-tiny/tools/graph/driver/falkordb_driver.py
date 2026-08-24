@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from tools.graph.core.base import GraphProvider
-from tools.graph.driver.neo4j_driver import Neo4jDriver
+from tools.graph.core.cypher_driver import CypherGraphDriver
 from tools.common.project_scope import prepare_project_scope_parameters
 from cortex_harness.storage.lease import StorageLease, StorageLeaseConflictError
 from cortex_harness.storage.admission import BoundedLane, LaneLimits
@@ -200,13 +200,13 @@ def _open_local_falkordb(path: Path):
     )
 
 
-class FalkorDBDriver(Neo4jDriver):
+class FalkorDBDriver(CypherGraphDriver):
     """
     FalkorDB graph driver.
 
-    The class inherits Neo4jDriver's high-level Cypher methods where FalkorDB
-    supports the same query shape, and overrides provider-specific connection,
-    schema, discovery, full-text, and ID lookup behavior.
+    The class inherits provider-neutral high-level Cypher methods and owns its
+    provider-specific connection, schema, discovery, full-text, and ID lookup
+    behavior.
 
     Local mode is the supported default after the docker-free cutover. Pass
     ``path=...`` to open an embedded FalkorDBLite backend against an ``.rdb``
@@ -231,7 +231,7 @@ class FalkorDBDriver(Neo4jDriver):
         self._uri = uri
         self._user = user
         self._password = password
-        self._database = graph or database or "neo4j"
+        self._database = graph or database or "hyper_graph"
         self._path: Optional[Path] = Path(path).resolve() if path is not None else None
         self._storage_lease: Optional[StorageLease] = None
         self._additional_clients: List[Any] = []
@@ -358,6 +358,10 @@ class FalkorDBDriver(Neo4jDriver):
 
     def _register_client_graphs(self, client: Any) -> List[str]:
         names: List[str] = []
+        graph_clients = getattr(self, "_graph_clients", None)
+        if graph_clients is None:
+            graph_clients = {}
+            self._graph_clients = graph_clients
         try:
             raw_names = client.list_graphs()
         except Exception as exc:
@@ -372,7 +376,7 @@ class FalkorDBDriver(Neo4jDriver):
                     continue
             if isinstance(name, str) and name:
                 names.append(name)
-                self._graph_clients.setdefault(name, client)
+                graph_clients.setdefault(name, client)
         return names
 
     def _open_additional_local_clients(
@@ -738,7 +742,10 @@ class FalkorDBDriver(Neo4jDriver):
 
     async def list_databases(self) -> List[str]:
         normalized_names: List[str] = []
-        for client in (self._client, *self._additional_clients):
+        for client in (
+            self._client,
+            *getattr(self, "_additional_clients", ()),
+        ):
             for name in self._register_client_graphs(client):
                 if name not in normalized_names:
                     normalized_names.append(name)

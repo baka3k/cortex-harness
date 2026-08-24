@@ -98,11 +98,29 @@ _PROJECT_CODE_KEY = "code"
 DEFAULT_CONFIG_DIRNAME = ".cortext-harness/config"
 
 # Env vars consulted as ad-hoc overrides when a project has no config entry.
-_ENV_CODE_GRAPH = ("FALKORDB_GRAPH", "NEO4J_DB")
+# Graph targets are deliberately provider-specific: a stale Neo4j variable
+# must never choose a FalkorDB graph (or vice versa).
+_ENV_FALKOR_CODE_GRAPH = "FALKORDB_GRAPH"
+_ENV_NEO4J_CODE_GRAPH = "NEO4J_DB"
 _ENV_CODE_COLLECTION = "QDRANT_COLLECTION"
 _ENV_DOC_GRAPH = "FALKORDB_GRAPH_DOC"
 _ENV_DOC_COLLECTION = "QDRANT_COLLECTION_DOC"
-_ENV_PROVIDER = "GRAPH_PROVIDER"
+_ENV_CODE_PROVIDER = ("CODE_GRAPH_PROVIDER", "GRAPH_PROVIDER")
+_ENV_DOC_PROVIDER = ("DOC_GRAPH_PROVIDER", "GRAPH_PROVIDER")
+
+_FALKORDB_PROVIDER_ALIASES = frozenset({"falkordb", "falkor", "local", "embedded"})
+_NEO4J_PROVIDER_ALIASES = frozenset({"neo4j", "neo"})
+
+
+def _normalize_graph_provider(value: Any) -> str:
+    normalized = str(value or "falkordb").strip().lower()
+    if normalized in _FALKORDB_PROVIDER_ALIASES:
+        return "falkordb"
+    if normalized in _NEO4J_PROVIDER_ALIASES:
+        return "neo4j"
+    raise ValueError(
+        f"Unsupported graph provider '{value}'. Expected 'falkordb' or 'neo4j'."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -261,17 +279,25 @@ def _resolve_targets(
             match = entry
             break
 
+    env_provider_value = _first_env(_ENV_CODE_PROVIDER)
+
     # If a config registry exists and this project isn't in it, raise.
     # When no registry exists at all, env vars seed an ad-hoc project —
     # but only when the env actually has values to seed. With no config
     # AND no env, the project is genuinely unknown and we raise.
     if match is None:
+        env_provider = _normalize_graph_provider(env_provider_value)
+        env_graph = os.environ.get(
+            _ENV_NEO4J_CODE_GRAPH
+            if env_provider == "neo4j"
+            else _ENV_FALKOR_CODE_GRAPH
+        )
         env_seeds = (
-            _first_env(_ENV_CODE_GRAPH)
+            env_graph
             or os.environ.get(_ENV_CODE_COLLECTION)
             or os.environ.get(_ENV_DOC_COLLECTION)
             or _first_env((_ENV_DOC_GRAPH,))
-            or os.environ.get(_ENV_PROVIDER)
+            or env_provider_value
         )
         if entries:
             # A registry exists but this project isn't in it.
@@ -295,15 +321,31 @@ def _resolve_targets(
     doc_env: Mapping[str, Any] = (match or {}).get("doc_env") or {}
     env_allowed = match is None  # only ad-hoc projects may use env vars
 
+    provider = _normalize_graph_provider(
+        provider_override
+        or code_env.get("CODE_GRAPH_PROVIDER")
+        or code_env.get("GRAPH_PROVIDER")
+        or (env_provider_value if env_allowed else None)
+    )
+    doc_provider = _normalize_graph_provider(
+        doc_env.get("DOC_GRAPH_PROVIDER")
+        or doc_env.get("GRAPH_PROVIDER")
+        or (_first_env(_ENV_DOC_PROVIDER) if env_allowed else None)
+        or provider
+    )
+
     def _code_graph() -> str:
         if code_graph_override:
             return code_graph_override
-        if code_env.get("FALKORDB_GRAPH"):
-            return str(code_env["FALKORDB_GRAPH"])
-        if code_env.get("NEO4J_DB"):
-            return str(code_env["NEO4J_DB"])
+        graph_key = "NEO4J_DB" if provider == "neo4j" else "FALKORDB_GRAPH"
+        if code_env.get(graph_key):
+            return str(code_env[graph_key])
         if env_allowed:
-            env_value = _first_env(_ENV_CODE_GRAPH)
+            env_value = os.environ.get(
+                _ENV_NEO4J_CODE_GRAPH
+                if provider == "neo4j"
+                else _ENV_FALKOR_CODE_GRAPH
+            )
             if env_value:
                 return env_value
         return canonical_project_id
@@ -322,10 +364,9 @@ def _resolve_targets(
     def _doc_graph() -> str:
         if doc_graph_override:
             return doc_graph_override
-        if doc_env.get("FALKORDB_GRAPH"):
-            return str(doc_env["FALKORDB_GRAPH"])
-        if doc_env.get("NEO4J_DB"):
-            return str(doc_env["NEO4J_DB"])
+        graph_key = "NEO4J_DB" if doc_provider == "neo4j" else "FALKORDB_GRAPH"
+        if doc_env.get(graph_key):
+            return str(doc_env[graph_key])
         if env_allowed:
             env_value = _first_env((_ENV_DOC_GRAPH,))
             if env_value:
@@ -344,13 +385,6 @@ def _resolve_targets(
         return f"{canonical_project_id}_doc"
 
     parser_type = parser_type_override or (match or {}).get("parser_type")
-    provider = (
-        provider_override
-        or code_env.get("GRAPH_PROVIDER")
-        or (os.environ.get(_ENV_PROVIDER) if env_allowed else None)
-        or "falkordb"
-    )
-
     storage_backend = (match or {}).get("storage_backend") or "local"
     remote_config = (match or {}).get("remote_config")
 
@@ -362,7 +396,7 @@ def _resolve_targets(
         doc_graph=_doc_graph(),
         doc_qdrant_collection=_doc_qdrant(),
         parser_type=parser_type,
-        provider=str(provider),
+        provider=provider,
         storage_backend=storage_backend,
         remote_config=remote_config,
         source="registry" if match is not None else "env+defaults",

@@ -24,7 +24,10 @@ import logging
 import os
 import shlex
 from bisect import bisect_right
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+
+from tools.cplus.function_identity import build_function_identity, normalize_syntax
 
 logger = logging.getLogger(__name__)
 
@@ -201,41 +204,33 @@ def _extract_leading_comment(text: str, start_line: int) -> str:
     return "\n".join(reversed(parts))
 
 
-def _find_enclosing_func(
-    offset: int, func_extents: List[Tuple[int, int, str]]
-) -> Optional[str]:
+@dataclass(frozen=True)
+class FunctionExtentIndex:
+    """Immutable parse-local lookup index for enclosing functions."""
+
+    extents: Tuple[Tuple[int, int, str], ...]
+    starts: Tuple[int, ...]
+
+    @classmethod
+    def build(cls, extents: List[Tuple[int, int, str]]) -> "FunctionExtentIndex":
+        ordered = tuple(sorted(extents, key=lambda item: (item[0], item[1], item[2])))
+        return cls(ordered, tuple(item[0] for item in ordered))
+
+
+def _find_enclosing_func(offset: int, index: FunctionExtentIndex) -> Optional[str]:
     """Return the *symbol_id* of the innermost function that contains *offset*.
 
-    Uses bisect on the pre-sorted (by start offset) *func_extents* list for
+    Uses bisect on the frozen, pre-sorted parse-local extent index for
     O(log n) candidate lookup instead of linear scan.
     """
-    if not func_extents:
+    if not index.extents:
         return None
-
-    # Build the index array for start offsets (lazy, on first call).
-    # Cache keyed by ``id(func_extents)`` so we don't rebuild across calls
-    # on the same list.
-    cache: List[Tuple[int, int, str]] = getattr(  # type: ignore[assignment]
-        _find_enclosing_func, "_cache", None
-    )
-    if cache is None or getattr(_find_enclosing_func, "_cache_id", None) != id(
-        func_extents
-    ):
-        # Sort by start offset (pre-order DFS already guarantees this, but
-        # ensure it explicitly).
-        sorted_extents = sorted(func_extents, key=lambda x: x[0])
-        _find_enclosing_func._cache = sorted_extents  # type: ignore[attr-defined]
-        _find_enclosing_func._cache_id = id(func_extents)  # type: ignore[attr-defined]
-        _find_enclosing_func._starts = [s[0] for s in sorted_extents]  # type: ignore[attr-defined]
-        cache = sorted_extents
-
-    starts: List[int] = getattr(_find_enclosing_func, "_starts")  # type: ignore[attr-defined]
-    idx = bisect_right(starts, offset) - 1
+    idx = bisect_right(index.starts, offset) - 1
 
     best_span: Optional[int] = None
     best_id: Optional[str] = None
     while idx >= 0:
-        start, end, symbol_id = cache[idx]
+        start, end, symbol_id = index.extents[idx]
         # A function to the left starts earlier but may end later
         # (outer scope), so we cannot break early.  Check every candidate.
         if start <= offset <= end:
@@ -255,6 +250,49 @@ def _function_type_id(type_signature: str, rel_path: str) -> str:
     normalized = " ".join(type_signature.split())
     digest = hashlib.sha256(normalized.encode()).hexdigest()[:16]
     return f"functype::{digest}@{rel_path}"
+
+
+def _clang_function_identity(cursor: Any, rel_path: str):
+    parameter_types = []
+    for argument in cursor.get_arguments():
+        try:
+            parameter_types.append(argument.type.spelling or "?")
+        except Exception:
+            parameter_types.append("?")
+    if not parameter_types:
+        for child in cursor.get_children():
+            if getattr(child.kind, "name", "") == "PARM_DECL":
+                try:
+                    parameter_types.append(child.type.spelling or "?")
+                except Exception:
+                    parameter_types.append("?")
+    try:
+        type_spelling = cursor.type.spelling or ""
+    except Exception:
+        type_spelling = ""
+    close = type_spelling.rfind(")")
+    qualifiers = normalize_syntax(type_spelling[close + 1 :] if close >= 0 else "")
+    template_arity = sum(
+        1 for child in cursor.get_children() if child.kind in _TEMPLATE_PARAM_KINDS
+    )
+    try:
+        linkage_name = cursor.linkage.name.lower()
+    except Exception:
+        linkage_name = "external"
+    linkage = "internal" if linkage_name in {"internal", "unique_external", "no_linkage"} else "external"
+    scope = _build_scope(cursor)
+    name = cursor.spelling or cursor.displayname or "<anonymous>"
+    qualified = f"{scope}::{name}" if scope else name
+    return build_function_identity(
+        qualified_name=qualified,
+        parameter_types=parameter_types,
+        qualifiers=qualifiers,
+        template_arity=template_arity,
+        linkage=linkage,
+        rel_path=rel_path,
+        start_byte=int(cursor.extent.start.offset or 0),
+        parseable=bool(cursor.spelling),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -334,12 +372,15 @@ def parse_and_extract(
     macros: Dict[str, str] = {}
 
     seen_func_ids: set = set()
+    func_index_by_id: Dict[str, int] = {}
     seen_type_ids: set = set()
     seen_ns_ids: set = set()
 
-    # (start_offset, end_offset, symbol_id) — used to find the enclosing
-    # function of a CALL_EXPR during the single-pass traversal.
+    # Collect structural extents and callsite observations independently.
+    # The immutable extent index is built only after traversal, so a call in a
+    # later function cannot consult an index frozen while the list was shorter.
     func_extents: List[Tuple[int, int, str]] = []
+    pending_calls: List[Dict[str, Any]] = []
 
     # Iterative pre-order DFS (same pattern as tree-sitter TreeCursor fix).
     # Children are pushed in reversed order so left-to-right processing is
@@ -404,12 +445,13 @@ def parse_and_extract(
         end_byte: int = ext.end.offset
         code = source_bytes[start_byte:end_byte].decode("utf-8", errors="ignore")
 
-        # -- FUNCTION / METHOD DEFINITIONS --------------------------------
-        if kind in _FUNC_KINDS and cursor.is_definition() and cursor.spelling:
+        # -- FUNCTION / METHOD DECLARATIONS AND DEFINITIONS -----------------
+        if kind in _FUNC_KINDS and cursor.spelling:
             scope = _build_scope(cursor)
             name = cursor.spelling
             qualified = f"{scope}::{name}" if scope else name
             arity = sum(1 for _ in cursor.get_arguments())
+            is_definition = bool(cursor.is_definition())
             _kind_map = {
                 _ci.CursorKind.FUNCTION_DECL: "function",
                 _ci.CursorKind.CXX_METHOD: "method",
@@ -417,8 +459,9 @@ def parse_and_extract(
                 _ci.CursorKind.DESTRUCTOR: "destructor",
                 _ci.CursorKind.FUNCTION_TEMPLATE: "function_template",
             }
-            fkind = _kind_map.get(kind, "function")
-            symbol_id = f"{qualified}/{arity}@{rel_path}"
+            fkind = _kind_map.get(kind, "function") if is_definition else "declaration"
+            identity = _clang_function_identity(cursor, rel_path)
+            symbol_id = identity.logical_id
             if symbol_id not in seen_func_ids:
                 seen_func_ids.add(symbol_id)
                 comment = _extract_leading_comment(source_text, start_line)
@@ -439,8 +482,36 @@ def parse_and_extract(
                         "comment": comment,
                         "summary": comment,
                         "note": "",
+                        "identity_schema": identity.schema_version,
+                        "signature": identity.canonical_signature,
+                        "parameter_types": list(identity.parameter_types),
+                        "qualifiers": identity.qualifiers,
+                        "template_arity": identity.template_arity,
+                        "linkage": identity.linkage,
+                        "legacy_symbol_id": identity.legacy_alias,
+                        "clang_usr": cursor.get_usr() or "",
+                        "semantic_role": (
+                            "declared_virtual_target"
+                            if kind == _ci.CursorKind.CXX_METHOD
+                            and cursor.is_pure_virtual_method()
+                            else ("definition" if is_definition else "declaration")
+                        ),
                     }
                 )
+                func_index_by_id[symbol_id] = len(functions) - 1
+            elif is_definition and functions[func_index_by_id[symbol_id]]["kind"] == "declaration":
+                functions[func_index_by_id[symbol_id]].update(
+                    {
+                        "kind": _kind_map.get(kind, "function"),
+                        "start_byte": start_byte,
+                        "end_byte": end_byte,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "code": code,
+                        "semantic_role": "definition",
+                    }
+                )
+            if is_definition:
                 func_extents.append((start_byte, end_byte, symbol_id))
 
             # Emit template parameter entries when this is a template
@@ -468,32 +539,28 @@ def parse_and_extract(
                             }
                         )
 
-        # -- CALL EXPRESSIONS ---------------------------------------------
+        # -- CALL EXPRESSIONS (resolved after extents are frozen) ----------
         elif kind == _ci.CursorKind.CALL_EXPR:
             ref = cursor.referenced
             callee_name = (ref.spelling if ref and ref.spelling else None) or cursor.spelling or ""
             if callee_name:
-                caller_id = _find_enclosing_func(start_byte, func_extents)
-                if caller_id:
-                    parent_cursor = cursor.semantic_parent
-                    caller_scope = _build_scope(parent_cursor) if parent_cursor else None
-                    calls.append(
-                        {
-                            "caller_id": caller_id,
-                            "caller_file": rel_path,
-                            "caller_scope": caller_scope,
-                            "call_line": loc.line if loc else start_line,
-                            "call_column": loc.column if loc else 0,
-                            "call_start_byte": start_byte,
-                            "call_branch_kind": "none",
-                            "call_loop_depth": 0,
-                            "call_control_frames_json": "[]",
-                            "call_type": "call_expression",
-                            "call_arity": sum(1 for _ in cursor.get_arguments()),
-                            "callee_name": callee_name,
-                            "callee_id": None,
-                        }
-                    )
+                parent_cursor = cursor.semantic_parent
+                pending_calls.append(
+                    {
+                        "caller_file": rel_path,
+                        "caller_scope": _build_scope(parent_cursor) if parent_cursor else None,
+                        "call_line": loc.line if loc else start_line,
+                        "call_column": loc.column if loc else 0,
+                        "call_start_byte": start_byte,
+                        "call_branch_kind": "none",
+                        "call_loop_depth": 0,
+                        "call_control_frames_json": "[]",
+                        "call_type": "call_expression",
+                        "call_arity": sum(1 for _ in cursor.get_arguments()),
+                        "callee_name": callee_name,
+                        "callee_id": None,
+                    }
+                )
 
         # -- CLASS / STRUCT / UNION / ENUM --------------------------------
         elif kind in _TYPE_KINDS and cursor.spelling:
@@ -666,6 +733,12 @@ def parse_and_extract(
                             "code": code,
                         }
                     )
+
+    extent_index = FunctionExtentIndex.build(func_extents)
+    for call in pending_calls:
+        caller_id = _find_enclosing_func(int(call["call_start_byte"]), extent_index)
+        if caller_id:
+            calls.append({"caller_id": caller_id, **call})
 
     # -- Parse meta -------------------------------------------------------
     error_count = 0

@@ -83,7 +83,7 @@ class ParseQualityContractTests(unittest.TestCase):
             backend=ParserBackend.LIBCLANG,
         )
         self.assertLess(candidate_score(improved), candidate_score(baseline))
-        self.assertTrue(candidate_is_strictly_better(improved, baseline))
+        self.assertFalse(candidate_is_strictly_better(improved, baseline))
         self.assertFalse(candidate_is_strictly_better(baseline, baseline))
 
     def test_cross_backend_diagnostic_counts_do_not_break_ties(self):

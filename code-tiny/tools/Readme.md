@@ -58,12 +58,12 @@
 
 ##  <language>_parser.py
 
-Parser fallback 
+Clang diagnostic adapter (never a structural fallback)
 
 ```text
 clang_parser.py
 
-├── parse_and_extract()
+├── parse_and_extract()  # fixture/differential inventory only
 
 │
 ├── helper
@@ -81,7 +81,18 @@ clang_parser.py
 Do not resolve graph.
 Do not write Neo4j/Falkor.
 Do not embedding.
-JUST parse & extract. 
+JUST parse & extract diagnostic/shadow evidence. Tree-sitter is the sole
+structural payload owner; this adapter must never replace, cache, validate, or
+publish a whole-file graph payload.
+
+Parser-quality policy is orthogonal to Clang semantics:
+
+- `off`: Tree-sitter structure only; quality artifacts are disabled.
+- `report`: Tree-sitter structure plus quality reporting.
+- `repair`: Tree-sitter structure plus bounded same-backend grammar retry.
+
+Legacy LIBCLANG structural caches are incompatible with the current
+`cplus-function-v2`/Tree-sitter policy and are ignored rather than upgraded.
 
 ---
 
