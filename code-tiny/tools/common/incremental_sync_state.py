@@ -29,6 +29,7 @@ class IncrementalSyncState:
     updated_at: str = ""
     snapshot_id: str = ""
     inventory_path: str = ""
+    dirty_inventory_paths: List[str] = field(default_factory=list)
     repositories: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     working_tree_paths: List[str] = field(default_factory=list)
     filter_version: int = 1
@@ -57,6 +58,7 @@ class IncrementalSyncState:
             updated_at=str(data.get("updated_at") or ""),
             snapshot_id=str(data.get("snapshot_id") or ""),
             inventory_path=str(data.get("inventory_path") or ""),
+            dirty_inventory_paths=list(data.get("dirty_inventory_paths") or []),
             repositories=dict(data.get("repositories") or {}),
             working_tree_paths=list(data.get("working_tree_paths") or []),
             filter_version=int(data.get("filter_version") or 1),
@@ -77,6 +79,7 @@ class IncrementalSyncState:
             "updated_at": self.updated_at,
             "snapshot_id": self.snapshot_id,
             "inventory_path": self.inventory_path,
+            "dirty_inventory_paths": sorted(set(self.dirty_inventory_paths)),
             "repositories": self.repositories,
             "working_tree_paths": sorted(set(self.working_tree_paths)),
             "filter_version": self.filter_version,
@@ -151,11 +154,16 @@ def mark_dirty(
     error: str,
     before_sha: str,
     after_sha: str,
+    dirty_inventory_path: Optional[str] = None,
 ) -> IncrementalSyncState:
     state.dirty = True
     state.last_error = error
     state.last_run_before = before_sha
     state.last_run_after = after_sha
+    if dirty_inventory_path:
+        state.dirty_inventory_paths = sorted(
+            {*state.dirty_inventory_paths, dirty_inventory_path}
+        )
     state.updated_at = _now_iso()
     save_sync_state(path, state)
     return state
@@ -175,6 +183,7 @@ def mark_clean(
     filter_version: int = 1,
 ) -> IncrementalSyncState:
     state.dirty = False
+    state.dirty_inventory_paths = []
     state.last_error = ""
     state.last_good_sha = last_good_sha
     state.last_run_before = before_sha
