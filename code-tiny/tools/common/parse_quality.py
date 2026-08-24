@@ -16,8 +16,8 @@ from enum import Enum
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 
-PARSE_QUALITY_SCHEMA_VERSION = "1"
-RECOVERY_POLICY_VERSION = "1"
+PARSE_QUALITY_SCHEMA_VERSION = "2"
+RECOVERY_POLICY_VERSION = "2-tree-sitter-structure-only"
 MAX_DAMAGE_SIGNATURES = 32
 
 
@@ -49,6 +49,7 @@ class CandidateOutcome(str, Enum):
     TIMED_OUT = "timed_out"
     RESOURCE_LIMIT = "resource_limit"
     INVALID = "invalid"
+    CROSS_BACKEND_STRUCTURE_FORBIDDEN = "cross_backend_structure_forbidden"
 
 
 @dataclass(frozen=True)
@@ -311,20 +312,10 @@ def candidate_is_strictly_better(
     candidate_value = candidate_score(candidate)
     baseline_value = candidate_score(baseline)
     if candidate.backend != baseline.backend:
-        # Parser-specific syntax damage and diagnostic ranges are not comparable
-        # across backends. Cross-backend replacement therefore requires a strict
-        # improvement in the provider-neutral semantic-yield tuple.
-        candidate_semantic = candidate.semantic_yield
-        baseline_semantic = baseline.semantic_yield
-        return (
-            -candidate_semantic.top_level_count,
-            -candidate_semantic.stable_scope_count,
-            -candidate_semantic.useful_reference_count,
-        ) < (
-            -baseline_semantic.top_level_count,
-            -baseline_semantic.stable_scope_count,
-            -baseline_semantic.useful_reference_count,
-        )
+        # Structural payloads are owned by one backend. Diagnostics and
+        # semantic yield from another parser are useful shadow evidence, but
+        # they can never authorize whole-payload replacement.
+        return False
     return candidate_value < baseline_value
 
 

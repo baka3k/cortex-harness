@@ -247,6 +247,23 @@ def test_unsafe_source_path_handles_non_mapping_records_without_crashing():
     }
 
 
+def test_legacy_libclang_structural_payload_is_quarantined_entirely():
+    validated, quarantine = validate_cplus_payload(
+        {
+            "file_def": {"file_path": "src/main.cpp"},
+            "functions": [_function("legacy", "legacy")],
+            "quality_provenance": {"backend": "libclang"},
+        },
+        project_id="demo",
+    )
+
+    assert validated["_quarantine_entire_payload"] is True
+    assert validated["functions"] == []
+    assert {record.reason for record in quarantine} == {
+        QuarantineReason.LEGACY_STRUCTURE_BACKEND
+    }
+
+
 def test_missing_downstream_required_function_field_is_quarantined():
     malformed = _function("fn:missing-kind", "broken")
     malformed.pop("kind")

@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Request
 
+from tools.graph.core.provider_contract import normalize_graph_provider_name
+
 from ..utils import fetch_node_annotations
 from .graph_service import graph_query_service
 
@@ -35,11 +37,11 @@ class ImpactAnalyzer:
 
         try:
             from tools.common.workflow_impact_scorer import WorkflowImpactScorer  # noqa: PLC0415
-            from tools.graph.cli import env_graph_provider, normalize_graph_provider  # noqa: PLC0415
+            from tools.graph.cli import env_graph_provider  # noqa: PLC0415
             from tools.graph.core.base import GraphProvider  # noqa: PLC0415
             from tools.graph.core.shared_runtime import get_shared_graph_driver  # noqa: PLC0415
 
-            provider = normalize_graph_provider(env_graph_provider())
+            provider = GraphProvider(normalize_graph_provider_name(env_graph_provider()))
             if provider == GraphProvider.FALKORDB:
                 from cortex_harness.storage import resolve_storage  # noqa: PLC0415
                 from falkordb_discovery import discover_falkordb_data_files  # noqa: PLC0415
@@ -147,7 +149,21 @@ class ImpactAnalyzer:
 
         # ── Workflow impact layer (non-breaking extension) ─────────────────────
         function_id = payload.get("function_id", "")
-        db = payload.get("db", "neo4j")
+        db = payload.get("db")
+        if not db:
+            provider_name = normalize_graph_provider_name(
+                os.environ.get("CODE_GRAPH_PROVIDER")
+                or os.environ.get("GRAPH_PROVIDER")
+                or os.environ.get("MCP_GRAPH_PROVIDER")
+            )
+            if provider_name == "neo4j":
+                db = os.environ.get("NEO4J_DB") or "neo4j"
+            else:
+                db = (
+                    os.environ.get("FALKORDB_GRAPH")
+                    or os.environ.get("FALKORDB_DATABASE")
+                    or "hyper_graph"
+                )
         scorer = await self._get_workflow_scorer(db)
         if scorer and function_id:
             try:

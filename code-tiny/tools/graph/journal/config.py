@@ -179,7 +179,11 @@ def physical_target_from_env(env: Mapping[str, str]) -> str:
     if provider in {"neo4j", "neo"}:
         return f"neo4j:{env.get('NEO4J_URI', '')}:{env.get('NEO4J_DB', 'neo4j')}"
     path = str(env.get("FALKORDB_PATH") or "embedded")
-    graph = str(env.get("FALKORDB_GRAPH") or env.get("NEO4J_DB") or "neo4j")
+    graph = str(
+        env.get("FALKORDB_GRAPH")
+        or env.get("FALKORDB_DATABASE")
+        or "hyper_graph"
+    )
     return f"falkordb:{path}:{graph}"
 
 

@@ -86,33 +86,20 @@ from tools.cplus.parse_recovery import (
     load_compile_database,
     recover_payload_candidates,
 )
+from tools.cplus.function_identity import (
+    FUNCTION_IDENTITY_SCHEMA,
+    FunctionIdentity,
+    build_function_identity,
+    normalize_syntax,
+)
 try:
     from tools.cplus.bootstrap_compile_commands import ensure_compile_commands
 except Exception:
     ensure_compile_commands = None  # type: ignore[assignment]
 
-try:
-    from tools.cplus import clang_parser as _clang_parser  # optional libclang fallback
-except Exception:
-    _clang_parser = None  # type: ignore[assignment]
-
 from tools.cplus.windows_resource_parser import is_windows_resource_file
 
-# Number of tree-sitter error nodes that triggers the optional libclang fallback.
-# Set to 0 to always prefer libclang (when available); set very high to disable.
-_CLANG_FALLBACK_BASE_THRESHOLD: int = 50
-
-
-def _effective_fallback_threshold(file_size: int) -> int:
-    """Dynamic threshold: larger files need more errors before triggering libclang fallback."""
-    if file_size > 1_000_000:   # >1MB — generated / macro-heavy headers
-        return 200
-    if file_size > 100_000:     # >100KB
-        return 100
-    return _CLANG_FALLBACK_BASE_THRESHOLD
-
-
-_PARSE_CACHE_VERSION = "cplus-v2026-08-21-call-evidence1"
+_PARSE_CACHE_VERSION = "cplus-v2026-08-24-tree-sitter-structure-v2"
 # Imported lazily so the analyzer module stays usable when invoked outside
 # the ``code-tiny`` package layout (e.g. direct path-based tests).
 try:
@@ -192,6 +179,13 @@ class FunctionDef:
     comment: str = ""
     summary: str = ""
     note: str = ""
+    identity_schema: str = FUNCTION_IDENTITY_SCHEMA
+    signature: str = ""
+    parameter_types: Tuple[str, ...] = ()
+    qualifiers: str = ""
+    template_arity: int = 0
+    linkage: str = "external"
+    legacy_symbol_id: str = ""
 
 
 def _cplus_api_visibility(code: str, file_path: str) -> Tuple[str, bool, str]:
@@ -430,9 +424,22 @@ def _function_type_id(type_signature: str) -> str:
     return f"functype::{_stable_point_id(normalized)}"
 
 
-def _symbol_id(scope: Optional[str], name: str, arity: int, rel_path: str) -> str:
+def _symbol_id(
+    scope: Optional[str],
+    name: str,
+    arity: int,
+    rel_path: str,
+    *,
+    start_byte: int = 0,
+) -> str:
     qualified = f"{scope}::{name}" if scope else name
-    return f"{qualified}/{arity}@{rel_path}"
+    return build_function_identity(
+        qualified_name=qualified,
+        parameter_types=("?",) * max(0, int(arity)),
+        rel_path=rel_path,
+        start_byte=start_byte,
+        parseable=False,
+    ).logical_id
 
 
 def _qualified_name(scope: Optional[str], name: str) -> str:
@@ -1037,6 +1044,70 @@ def _iter_parameter_declarations(declarator) -> Iterable:
         return
 
 
+def _parameter_type_text(param, source_bytes: bytes) -> str:
+    text = _node_text(param, source_bytes).strip()
+    declarator = param.child_by_field_name("declarator")
+    if declarator is not None:
+        name = _field_name_from_declarator(declarator, source_bytes) or ""
+        if name:
+            text = re.sub(rf"\b{re.escape(name)}\b", "", text, count=1)
+    text = text.split("=", 1)[0]
+    return normalize_syntax(text) or "?"
+
+
+def _function_qualifiers(declarator, source_bytes: bytes) -> str:
+    if declarator is None:
+        return ""
+    text = _node_text(declarator, source_bytes)
+    close = text.rfind(")")
+    trailer = text[close + 1 :] if close >= 0 else ""
+    tokens = re.findall(r"\bconst\b|\bvolatile\b|&&|&|\bnoexcept(?:\s*\([^)]*\))?", trailer)
+    return normalize_syntax(" ".join(tokens))
+
+
+def _template_arity(node) -> int:
+    current = node
+    for _ in range(3):
+        if current is None:
+            break
+        for child in current.children:
+            if child.type == "template_parameter_list":
+                return sum(1 for item in child.children if item.is_named)
+        if current.type == "translation_unit":
+            break
+        current = current.parent
+    return 0
+
+
+def _function_identity_from_declarator(
+    *,
+    scope: Optional[str],
+    name: str,
+    declarator,
+    owner_node,
+    source_bytes: bytes,
+    rel_path: str,
+) -> FunctionIdentity:
+    qualified = _qualified_name(scope, name)
+    parameters = tuple(
+        _parameter_type_text(param, source_bytes)
+        for param in _iter_parameter_declarations(declarator)
+    )
+    if parameters == ("void",):
+        parameters = ()
+    owner_text = _node_text(owner_node, source_bytes)
+    linkage = "internal" if re.search(r"(^|\s)static(?:\s|$)", owner_text) else "external"
+    parseable = bool(name and not name.startswith("<anonymous"))
+    return build_function_identity(
+        qualified_name=qualified,
+        parameter_types=parameters,
+        qualifiers=_function_qualifiers(declarator, source_bytes),
+        template_arity=_template_arity(owner_node),
+        linkage=linkage,
+        rel_path=rel_path,
+        start_byte=int(getattr(owner_node, "start_byte", 0) or 0),
+        parseable=parseable,
+    )
 def _is_function_pointer_declarator(declarator, source_bytes: bytes) -> bool:
     if declarator is None:
         return False
@@ -1395,7 +1466,14 @@ def _walk_tree(
                                     break
                             if params is not None:
                                 arity = sum(1 for grand in params.children if grand.type == "parameter_declaration")
-                        target_id = _symbol_id(scope, target_name, arity, rel_path)
+                        target_id = _function_identity_from_declarator(
+                            scope=scope,
+                            name=target_name,
+                            declarator=declarator,
+                            owner_node=child,
+                            source_bytes=source_bytes,
+                            rel_path=rel_path,
+                        ).logical_id
                         target_label = "Function"
                     if child.type in {"class_specifier", "struct_specifier", "union_specifier", "enum_specifier"}:
                         tname = _first_identifier(child, source_bytes) or _anonymous_name("Type", child)
@@ -1559,7 +1637,15 @@ def _walk_tree(
             name = _extract_function_name(declarator, source_bytes)
             if name:
                 arity = _declarator_arity(declarator)
-                symbol_id = _symbol_id(scope, name, arity, rel_path)
+                function_identity = _function_identity_from_declarator(
+                    scope=scope,
+                    name=name,
+                    declarator=declarator,
+                    owner_node=node,
+                    source_bytes=source_bytes,
+                    rel_path=rel_path,
+                )
+                symbol_id = function_identity.logical_id
                 qualified = _qualified_name(scope, name)
                 snippet, start_line, end_line = _node_snippet(node, source_bytes)
                 comment = _extract_leading_comment(node, source_bytes)
@@ -1582,6 +1668,12 @@ def _walk_tree(
                         comment=comment,
                         summary=summary,
                         note=note,
+                        signature=function_identity.canonical_signature,
+                        parameter_types=function_identity.parameter_types,
+                        qualifiers=function_identity.qualifiers,
+                        template_arity=function_identity.template_arity,
+                        linkage=function_identity.linkage,
+                        legacy_symbol_id=function_identity.legacy_alias,
                     )
                 )
                 if namespace_stack:
@@ -1748,7 +1840,15 @@ def _walk_tree(
             name = _extract_function_name(declarator, source_bytes)
             if name:
                 arity = _declarator_arity(declarator)
-                symbol_id = _symbol_id(scope, name, arity, rel_path)
+                function_identity = _function_identity_from_declarator(
+                    scope=scope,
+                    name=name,
+                    declarator=declarator,
+                    owner_node=node,
+                    source_bytes=source_bytes,
+                    rel_path=rel_path,
+                )
+                symbol_id = function_identity.logical_id
                 qualified = _qualified_name(scope, name)
                 snippet, start_line, end_line = _node_snippet(node, source_bytes)
                 comment = _extract_leading_comment(node, source_bytes)
@@ -1771,6 +1871,12 @@ def _walk_tree(
                         comment=comment,
                         summary=summary,
                         note=note,
+                        signature=function_identity.canonical_signature,
+                        parameter_types=function_identity.parameter_types,
+                        qualifiers=function_identity.qualifiers,
+                        template_arity=function_identity.template_arity,
+                        linkage=function_identity.linkage,
+                        legacy_symbol_id=function_identity.legacy_alias,
                     )
                 )
                 if namespace_stack:
@@ -1847,7 +1953,15 @@ def _walk_tree(
                     if func_key in seen_function_keys:
                         continue
                     seen_function_keys.add(func_key)
-                    symbol_id = _symbol_id(scope, name, arity, rel_path)
+                    function_identity = _function_identity_from_declarator(
+                        scope=scope,
+                        name=name,
+                        declarator=declarator,
+                        owner_node=node,
+                        source_bytes=source_bytes,
+                        rel_path=rel_path,
+                    )
+                    symbol_id = function_identity.logical_id
                     qualified = _qualified_name(scope, name)
                     functions.append(
                         FunctionDef(
@@ -1866,6 +1980,12 @@ def _walk_tree(
                             comment=comment,
                             summary=summary,
                             note=note,
+                            signature=function_identity.canonical_signature,
+                            parameter_types=function_identity.parameter_types,
+                            qualifiers=function_identity.qualifiers,
+                            template_arity=function_identity.template_arity,
+                            linkage=function_identity.linkage,
+                            legacy_symbol_id=function_identity.legacy_alias,
                         )
                     )
                     if namespace_stack:
@@ -1963,7 +2083,15 @@ def _walk_tree(
                     if method_key in seen_method_keys:
                         continue
                     seen_method_keys.add(method_key)
-                    symbol_id = _symbol_id(scope, method_name, arity, rel_path)
+                    function_identity = _function_identity_from_declarator(
+                        scope=scope,
+                        name=method_name,
+                        declarator=declarator,
+                        owner_node=node,
+                        source_bytes=source_bytes,
+                        rel_path=rel_path,
+                    )
+                    symbol_id = function_identity.logical_id
                     qualified = _qualified_name(scope, method_name)
                     functions.append(
                         FunctionDef(
@@ -1982,6 +2110,12 @@ def _walk_tree(
                             comment="",
                             summary="",
                             note="",
+                            signature=function_identity.canonical_signature,
+                            parameter_types=function_identity.parameter_types,
+                            qualifiers=function_identity.qualifiers,
+                            template_arity=function_identity.template_arity,
+                            linkage=function_identity.linkage,
+                            legacy_symbol_id=function_identity.legacy_alias,
                         )
                     )
                     if type_stack:
@@ -3005,8 +3139,6 @@ def _load_or_parse_payload(
     parse_cache: bool,
     compile_db_index: Optional[Dict[str, Any]] = None,
     project_id: str = "",
-    allow_inprocess_clang_fallback: bool = False,
-    prefer_recovered_cache: bool = False,
 ) -> Dict[str, Any]:
     def ensure_text_fields(item: Dict[str, Any]) -> None:
         if "comment" not in item:
@@ -3213,21 +3345,6 @@ def _load_or_parse_payload(
     cached_payload = None
     signature = None
     if parse_cache:
-        if (prefer_recovered_cache or allow_inprocess_clang_fallback) and not is_resource:
-            recovered_signature = _parse_cache_context_signature(
-                file_path=file_path,
-                rel_path=rel_path,
-                is_cpp=is_cpp,
-                is_resource=False,
-                compile_db_index=compile_db_index,
-                project_id=project_id,
-                selected_backend=ParserBackend.LIBCLANG,
-                selected_parser_version=_runtime_package_version("libclang"),
-                recovery_policy_version=RECOVERY_POLICY_VERSION,
-            )
-            cached_payload = load_parse_cache(
-                parse_cache_root, rel_path, recovered_signature
-            )
         signature = _parse_cache_context_signature(
             file_path=file_path,
             rel_path=rel_path,
@@ -3236,8 +3353,7 @@ def _load_or_parse_payload(
             compile_db_index=compile_db_index,
             project_id=project_id,
         )
-        if cached_payload is None:
-            cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
+        cached_payload = load_parse_cache(parse_cache_root, rel_path, signature)
     if cached_payload:
         cached_calls = cached_payload.get("calls")
         missing_call_metadata = isinstance(cached_calls, list) and any(
@@ -3332,76 +3448,6 @@ def _load_or_parse_payload(
             )
         ),
     )
-
-    # -----------------------------------------------------------------------
-    # libclang fallback: when tree-sitter produces too many error nodes,
-    # try parsing with libclang for better accuracy on macro-heavy files.
-    #
-    # Guard conditions:
-    #   1. _clang_parser module imported successfully (libclang installed)
-    #   2. error_nodes >= dynamic threshold (base=50, scales with file size)
-    #
-    # NOTE: compile_commands.json is NOT required. libclang can parse in
-    # "free mode" (empty flags) — less accurate on includes/macros but still
-    # gives better scope/type resolution than tree-sitter on error-heavy code.
-    # -----------------------------------------------------------------------
-    if (
-        allow_inprocess_clang_fallback
-        and
-        _clang_parser is not None
-        and os.path.splitext(file_path)[1].lower() not in {".pc", ".pcc"}
-        and parse_meta.get("error_nodes", 0) >= _effective_fallback_threshold(
-            os.path.getsize(file_path)
-        )
-    ):
-        _cc_path = (compile_db_index or {}).get("path")
-        try:
-            _clang_result = _clang_parser.parse_and_extract(file_path, root, _cc_path or "")
-            if _clang_result is not None:
-                _ts_errors = parse_meta.get("error_nodes", 0)
-                _clang_errors = _clang_result.get("parse_meta", {}).get("error_nodes", 0) or 0
-                if _clang_errors < _ts_errors:
-                    # Libclang gave better result — REPLACE tree-sitter output
-                    logging.info(
-                        "libclang fallback OK for %s (ts_errors=%d -> clang_errors=%d)",
-                        rel_path, _ts_errors, _clang_errors,
-                    )
-                    if parse_cache:
-                        _clang_parse_meta = _clang_result.get("parse_meta") or {}
-                        _clang_quality_context = (
-                            (_clang_parse_meta.get("quality") or {}).get("context") or {}
-                        )
-                        _clang_signature = _parse_cache_context_signature(
-                            file_path=file_path,
-                            rel_path=rel_path,
-                            is_cpp=is_cpp,
-                            is_resource=False,
-                            compile_db_index=compile_db_index,
-                            project_id=project_id,
-                            selected_backend=ParserBackend.LIBCLANG,
-                            selected_parser_version=_runtime_package_version("libclang"),
-                            recovery_policy_version=str(
-                                _clang_quality_context.get("recovery_policy_version")
-                                or _clang_parse_meta.get("recovery_policy_version")
-                                or ""
-                            ),
-                        )
-                        write_parse_cache(
-                            parse_cache_root, rel_path, _clang_signature, _clang_result
-                        )
-                    return _clang_result
-                else:
-                    # Libclang not better — keep tree-sitter, no cache waste
-                    logging.debug(
-                        "libclang no better for %s (ts_errors=%d, clang_errors=%d) — keep TS",
-                        rel_path, _ts_errors, _clang_errors,
-                    )
-        except Exception as _clang_exc:
-            logging.warning(
-                "libclang fallback failed for %s: %s — using tree-sitter result",
-                file_path,
-                _clang_exc,
-            )
 
     proc_nodes: List[Dict[str, Any]] = []
     proc_diagnostics: List[Dict[str, Any]] = []
@@ -3590,8 +3636,6 @@ async def build_call_graph(
                 parse_cache,
                 compile_db_index,
                 project_id=project_id,
-                allow_inprocess_clang_fallback=False,
-                prefer_recovered_cache=True,
             )
             quality = (baseline_payload.get("parse_meta") or {}).get("quality") or {}
             if quality.get("tier") not in {"retry_required", "quarantined"}:
@@ -3662,20 +3706,6 @@ async def build_call_graph(
                         continue
                     rel_path = os.path.relpath(file_path, root)
                     is_cpp = _is_cpp_file(file_path, root, compile_db_index)
-                    repaired_parse_meta = repaired_payload.get("parse_meta") or {}
-                    repaired_quality_context = (
-                        (repaired_parse_meta.get("quality") or {}).get("context") or {}
-                    )
-                    try:
-                        selected_backend = ParserBackend(
-                            str(
-                                repaired_quality_context.get("backend")
-                                or repaired_parse_meta.get("parser_backend")
-                                or ParserBackend.TREE_SITTER.value
-                            )
-                        )
-                    except ValueError:
-                        selected_backend = ParserBackend.TREE_SITTER
                     signature = _parse_cache_context_signature(
                         file_path=file_path,
                         rel_path=rel_path,
@@ -3683,17 +3713,6 @@ async def build_call_graph(
                         is_resource=False,
                         compile_db_index=compile_db_index,
                         project_id=project_id,
-                        selected_backend=selected_backend,
-                        selected_parser_version=(
-                            _runtime_package_version("libclang")
-                            if selected_backend == ParserBackend.LIBCLANG
-                            else ""
-                        ),
-                        recovery_policy_version=str(
-                            repaired_quality_context.get("recovery_policy_version")
-                            or repaired_parse_meta.get("recovery_policy_version")
-                            or ""
-                        ),
                     )
                     write_parse_cache(parse_cache_root, rel_path, signature, repaired_payload)
             except Exception as exc:
@@ -3741,8 +3760,6 @@ async def build_call_graph(
             parse_cache,
             compile_db_index,
             project_id=project_id,
-            allow_inprocess_clang_fallback=parse_quality_policy == "off",
-            prefer_recovered_cache=parse_quality_policy == "repair",
         )
 
     identity_records: Dict[Tuple[str, str], str] = {}
@@ -6066,7 +6083,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--parse-quality",
         choices=("off", "report", "repair"),
         default="report",
-        help="Parser-quality policy (repair remains bounded and opt-in)",
+        help=(
+            "Tree-sitter parser-quality policy: off disables quality artifacts; "
+            "report records diagnostics; repair also permits same-backend grammar retry"
+        ),
     )
     parser.add_argument(
         "--parse-quality-report",

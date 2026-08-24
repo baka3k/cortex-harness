@@ -399,8 +399,33 @@ def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
 
 
 def _graph_provider(env: dict, scoped_key: str) -> str:
-    provider = (env.get(scoped_key) or env.get("GRAPH_PROVIDER") or "falkordb").strip().lower()
-    return "falkordb" if provider in {"falkor", "falkordb"} else "neo4j"
+    scoped_value = str(env.get(scoped_key) or "").strip()
+    global_value = str(env.get("GRAPH_PROVIDER") or "").strip()
+    source = scoped_key if scoped_value else "GRAPH_PROVIDER"
+    provider = (scoped_value or global_value or "falkordb").casefold()
+    if provider in {"falkor", "falkordb"}:
+        return "falkordb"
+    if provider == "neo4j":
+        return "neo4j"
+    raise ValueError(
+        f"Unsupported graph provider for {source}: {provider!r}; expected "
+        "'falkordb' (alias 'falkor') or 'neo4j'"
+    )
+
+
+def _isolate_graph_provider_environment(env: dict, scoped_key: str) -> str:
+    """Keep only the selected provider's graph configuration in ``env``."""
+    provider = _graph_provider(env, scoped_key)
+    env["GRAPH_PROVIDER"] = provider
+    env[scoped_key] = provider
+    for key in tuple(env):
+        if provider == "falkordb" and key.startswith("NEO4J_"):
+            env.pop(key, None)
+        elif provider == "neo4j" and (
+            key.startswith("FALKORDB_") or key == "DOC_FALKORDB_GRAPH"
+        ):
+            env.pop(key, None)
+    return provider
 
 
 def _env_to_neo4j_args(env: dict) -> list:
@@ -469,10 +494,14 @@ def _storage_targets(cfg: dict) -> tuple[str, str, str, str]:
     project_id = str(project.get("code") or "default").strip()
     code_env = dict(cfg.get("code", {}).get("env", {}))
     doc_env = dict(cfg.get("doc", {}).get("env", {}))
-    code_graph = str(code_env.get("FALKORDB_GRAPH") or code_env.get("NEO4J_DB") or project_id)
+    code_provider = _graph_provider(code_env, "CODE_GRAPH_PROVIDER")
+    doc_provider = _graph_provider(doc_env, "DOC_GRAPH_PROVIDER")
+    code_graph = str(
+        code_env.get("NEO4J_DB" if code_provider == "neo4j" else "FALKORDB_GRAPH")
+        or project_id
+    )
     doc_graph = str(
-        doc_env.get("FALKORDB_GRAPH")
-        or doc_env.get("NEO4J_DB")
+        doc_env.get("NEO4J_DB" if doc_provider == "neo4j" else "FALKORDB_GRAPH")
         or f"{project_id}_doc"
     )
     code_collection = _code_qdrant_collection(code_env, project)
@@ -496,6 +525,10 @@ def _storage_env_for_process(cfg: dict, project_root: Optional[Path], role: Stor
         resolve_config["storage_backend"] = cfg.get("storage_backend")
     if cfg.get("remote"):
         resolve_config["remote"] = cfg.get("remote")
+    _isolate_graph_provider_environment(
+        resolve_config,
+        "DOC_GRAPH_PROVIDER" if role == StorageRole.DOCUMENT else "CODE_GRAPH_PROVIDER",
+    )
     resolved = resolve_storage(
         Path(project_root or "."),
         config=resolve_config,
@@ -560,6 +593,7 @@ def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dic
         result.setdefault("MAX_EMBED_CHARS", str(env["MAX_EMBED_CHARS"]))
     if env.get("CACHE_DIR"):
         result.setdefault("QDRANT_CACHE_DIR", str(env["CACHE_DIR"]))
+    _isolate_graph_provider_environment(result, "CODE_GRAPH_PROVIDER")
     return result
 
 
@@ -599,7 +633,7 @@ def _doc_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict
         result.setdefault("QDRANT_COLLECTION_DOC", str(doc_collection))
     if targets is not None and _graph_provider(result, "DOC_GRAPH_PROVIDER") == "falkordb":
         result["FALKORDB_GRAPH"] = targets.doc_graph
-        result["NEO4J_DB"] = targets.doc_graph
+    _isolate_graph_provider_environment(result, "DOC_GRAPH_PROVIDER")
     return result
 
 
@@ -1774,7 +1808,8 @@ def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
     # the docker-free cutover: an old FALKORDB_URI/FALKORDB_PORT can otherwise
     # silently route a local process back to localhost:6379.
     scoped_provider = "DOC_GRAPH_PROVIDER" if name == "doc-tiny" else "CODE_GRAPH_PROVIDER"
-    if _graph_provider(env, scoped_provider) == "falkordb":
+    provider = _isolate_graph_provider_environment(env, scoped_provider)
+    if provider == "falkordb":
         for key in _REMOTE_STORAGE_KEYS:
             env.pop(key, None)
 
@@ -2755,7 +2790,10 @@ def sync():
     type=click.Choice(["off", "report", "repair"]),
     default="report",
     show_default=True,
-    help="C/C++ parser-quality diagnostics policy.",
+    help=(
+        "C/C++ Tree-sitter quality policy: off disables artifacts; report records "
+        "diagnostics; repair permits same-backend grammar retry."
+    ),
 )
 @click.option("--parse-quality-max-files", type=click.IntRange(min=1), default=500, show_default=True)
 @click.option("--parse-quality-wall-seconds", type=click.IntRange(min=1), default=900, show_default=True)

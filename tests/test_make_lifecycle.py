@@ -207,6 +207,17 @@ class MakeLifecycleTests(unittest.TestCase):
         self.assertIn('@("pip", "install", "--python", $python)', lifecycle)
         self.assertNotIn("-m pip", lifecycle)
 
+    def test_windows_start_isolates_graph_provider_environment(self):
+        lifecycle = (ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
+        self.assertIn("function Get-GraphProvider", lifecycle)
+        self.assertIn("function Remove-InactiveGraphEnvironment", lifecycle)
+        self.assertIn('if ($effectiveProvider -eq "falkordb")', lifecycle)
+        self.assertIn('$overrides.FALKORDB_GRAPH = $databaseName', lifecycle)
+        self.assertIn('$overrides.NEO4J_DB = $databaseName', lifecycle)
+        self.assertIn("Unsupported graph provider", lifecycle)
+        self.assertIn("Env:NEO4J_*", lifecycle)
+        self.assertIn("Env:FALKORDB_*", lifecycle)
+
     def test_install_and_uninstall_use_user_local_bin(self):
         with tempfile.TemporaryDirectory() as home:
             with mock.patch.dict(os.environ, {"HOME": home}), mock.patch.object(
@@ -496,6 +507,7 @@ class MakeLifecycleTests(unittest.TestCase):
             self.assertIn("export MCP_SERVER_NAME=shop-code", env_content)
             self.assertIn("export PROJECT_ID=SHOP", env_content)
             self.assertIn("export FALKORDB_GRAPH=SHOP", env_content)
+            self.assertNotIn("NEO4J_", env_content)
             self.assertIn("export QDRANT_COLLECTION=SHOP", env_content)
 
     def test_custom_start_supports_independent_code_and_doc_settings(self):
@@ -523,10 +535,56 @@ class MakeLifecycleTests(unittest.TestCase):
         doc_env = LIFECYCLE.runtime_overrides(options, "doc-tiny", "mixed", True)
         self.assertEqual(code_env["MCP_SERVER_NAME"], "mixed-code")
         self.assertEqual(code_env["FALKORDB_GRAPH"], "CODE_DB")
+        self.assertNotIn("NEO4J_DB", code_env)
         self.assertEqual(code_env["QDRANT_COLLECTION"], "code_vectors")
         self.assertEqual(doc_env["MCP_SERVER_NAME"], "mixed-doc")
         self.assertEqual(doc_env["FALKORDB_GRAPH"], "DOC_DB")
+        self.assertNotIn("NEO4J_DB", doc_env)
         self.assertEqual(doc_env["QDRANT_COLLECTION_DOC"], "doc_vectors")
+
+    def test_custom_start_database_override_is_scoped_to_explicit_neo4j(self):
+        options = LIFECYCLE.start_options(
+            [
+                "--server",
+                "code",
+                "--name",
+                "neo-code",
+                "--database",
+                "NEO_DB",
+                "--provider",
+                "neo4j",
+            ]
+        )
+
+        env = LIFECYCLE.runtime_overrides(
+            options,
+            "code-tiny",
+            "neo-code",
+            False,
+            {
+                "GRAPH_PROVIDER": "falkordb",
+                "CODE_GRAPH_PROVIDER": "falkordb",
+                "FALKORDB_GRAPH": "stale",
+            },
+        )
+
+        self.assertEqual(env["GRAPH_PROVIDER"], "neo4j")
+        self.assertEqual(env["CODE_GRAPH_PROVIDER"], "neo4j")
+        self.assertEqual(env["NEO4J_DB"], "NEO_DB")
+        self.assertNotIn("FALKORDB_GRAPH", env)
+
+    def test_custom_start_invalid_configured_provider_fails_closed(self):
+        options = LIFECYCLE.start_options(
+            ["--server", "code", "--name", "invalid", "--database", "graph"]
+        )
+        with self.assertRaisesRegex(ValueError, "GRAPH_PROVIDER.*falkordb.*neo4j"):
+            LIFECYCLE.runtime_overrides(
+                options,
+                "code-tiny",
+                "invalid",
+                False,
+                {"GRAPH_PROVIDER": "neo"},
+            )
 
     def test_named_stop_preserves_other_instance_records(self):
         with tempfile.TemporaryDirectory() as directory:

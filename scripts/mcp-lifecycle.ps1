@@ -807,6 +807,49 @@ if (-not `$env:FALKORDB_GRAPH) { `$env:FALKORDB_GRAPH = 'hyper_graph' }
 "@
 }
 
+function Get-GraphProvider {
+    param(
+        [System.Collections.IDictionary]$Environment,
+        [string]$ServerName
+    )
+
+    $scopedProvider = if ($ServerName -eq "doc-tiny") { "DOC_GRAPH_PROVIDER" } else { "CODE_GRAPH_PROVIDER" }
+    $scopedValue = [string]$Environment[$scopedProvider]
+    $globalValue = [string]$Environment["GRAPH_PROVIDER"]
+    $source = if (-not [string]::IsNullOrWhiteSpace($scopedValue)) { $scopedProvider } else { "GRAPH_PROVIDER" }
+    $value = if (-not [string]::IsNullOrWhiteSpace($scopedValue)) {
+        $scopedValue.Trim().ToLowerInvariant()
+    } elseif (-not [string]::IsNullOrWhiteSpace($globalValue)) {
+        $globalValue.Trim().ToLowerInvariant()
+    } else {
+        "falkordb"
+    }
+    if ($value -eq "falkor" -or $value -eq "falkordb") { return "falkordb" }
+    if ($value -eq "neo4j") { return "neo4j" }
+    throw "Unsupported graph provider for ${source}: '$value'; expected 'falkordb' (alias 'falkor') or 'neo4j'"
+}
+
+function Remove-InactiveGraphEnvironment {
+    param(
+        [System.Collections.IDictionary]$Environment,
+        [string]$ServerName
+    )
+
+    $scopedProvider = if ($ServerName -eq "doc-tiny") { "DOC_GRAPH_PROVIDER" } else { "CODE_GRAPH_PROVIDER" }
+    $provider = Get-GraphProvider -Environment $Environment -ServerName $ServerName
+    $Environment["GRAPH_PROVIDER"] = $provider
+    $Environment[$scopedProvider] = $provider
+    foreach ($key in @($Environment.Keys)) {
+        $name = [string]$key
+        if ($provider -eq "falkordb" -and $name.StartsWith("NEO4J_")) {
+            $Environment.Remove($key)
+        } elseif ($provider -eq "neo4j" -and ($name.StartsWith("FALKORDB_") -or $name -eq "DOC_FALKORDB_GRAPH")) {
+            $Environment.Remove($key)
+        }
+    }
+    return $provider
+}
+
 function Get-StartConfiguration {
     $custom = (
         $Server -ne "all" -or $Name -or $Project -or $Database -or $CodeDatabase -or $DocDatabase -or
@@ -889,7 +932,8 @@ function Get-StartConfiguration {
 function Get-RuntimeOverrides {
     param(
         [object]$Config,
-        [object]$ServerConfig
+        [object]$ServerConfig,
+        [System.Collections.IDictionary]$RuntimeData
     )
 
     $isCode = $ServerConfig.Name -eq "code-tiny"
@@ -907,9 +951,22 @@ function Get-RuntimeOverrides {
         $overrides.PROJECT_ID = $Project
         $overrides.PROJECT_NAME = $Project
     }
+    $providerEnvironment = [ordered]@{}
+    foreach ($entry in $RuntimeData.GetEnumerator()) {
+        $providerEnvironment[$entry.Key] = [string]$entry.Value
+    }
+    $providerKey = if ($isCode) { "CODE_GRAPH_PROVIDER" } else { "DOC_GRAPH_PROVIDER" }
+    if ($Provider) {
+        $providerEnvironment["GRAPH_PROVIDER"] = $Provider
+        $providerEnvironment[$providerKey] = $Provider
+    }
+    $effectiveProvider = Get-GraphProvider -Environment $providerEnvironment -ServerName $ServerConfig.Name
     if ($databaseName) {
-        $overrides.FALKORDB_GRAPH = $databaseName
-        $overrides.NEO4J_DB = $databaseName
+        if ($effectiveProvider -eq "falkordb") {
+            $overrides.FALKORDB_GRAPH = $databaseName
+        } else {
+            $overrides.NEO4J_DB = $databaseName
+        }
     }
     if ($collectionName) {
         $collectionKey = if ($isCode) { "QDRANT_COLLECTION" } else { "QDRANT_COLLECTION_DOC" }
@@ -917,7 +974,6 @@ function Get-RuntimeOverrides {
     }
     if ($Provider) {
         $overrides.GRAPH_PROVIDER = $Provider
-        $providerKey = if ($isCode) { "CODE_GRAPH_PROVIDER" } else { "DOC_GRAPH_PROVIDER" }
         $overrides[$providerKey] = $Provider
     }
     return $overrides
@@ -963,17 +1019,22 @@ function Invoke-Start {
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to render active MCP environment for $($server.Name)."
         }
+        $runtimeData = [ordered]@{}
+        $parsedRuntime = ($runtimeJson -join [Environment]::NewLine) | ConvertFrom-Json
+        $parsedRuntime.PSObject.Properties | ForEach-Object { $runtimeData[$_.Name] = [string]$_.Value }
         if ($config.Custom) {
-            $runtimeData = [ordered]@{}
-            $parsedRuntime = ($runtimeJson -join [Environment]::NewLine) | ConvertFrom-Json
-            $parsedRuntime.PSObject.Properties | ForEach-Object { $runtimeData[$_.Name] = [string]$_.Value }
-            $overrides = Get-RuntimeOverrides -Config $config -ServerConfig $server
+            $overrides = Get-RuntimeOverrides -Config $config -ServerConfig $server -RuntimeData $runtimeData
             foreach ($entry in $overrides.GetEnumerator()) {
                 $runtimeData[$entry.Key] = [string]$entry.Value
-                $runtimeBash += "export $($entry.Key)=$(Quote-Bash ([string]$entry.Value))"
             }
-            $runtimeJson = @($runtimeData | ConvertTo-Json -Compress)
         }
+        $null = Remove-InactiveGraphEnvironment -Environment $runtimeData -ServerName $server.Name
+        $runtimeJson = @($runtimeData | ConvertTo-Json -Compress)
+        $runtimeBash = @(
+            $runtimeData.GetEnumerator() |
+                Sort-Object -Property Key |
+                ForEach-Object { "export $($_.Key)=$(Quote-Bash ([string]$_.Value))" }
+        )
         [System.IO.File]::WriteAllText($runtimeJsonPath, ($runtimeJson -join [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
         [System.IO.File]::WriteAllText($runtimeBashPath, (($runtimeBash -join [Environment]::NewLine) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
 
@@ -1016,6 +1077,17 @@ if (Test-Path -LiteralPath `$envFile) {
 `$runtimeEnvironment = Get-Content -Raw -LiteralPath $runtimeJsonArg | ConvertFrom-Json
 `$runtimeEnvironment.PSObject.Properties | ForEach-Object {
     [Environment]::SetEnvironmentVariable(`$_.Name, [string]`$_.Value, 'Process')
+}
+`$activeProvider = [string]`$runtimeEnvironment.GRAPH_PROVIDER
+if (`$activeProvider -eq 'falkordb') {
+    Get-ChildItem Env:NEO4J_* -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
+} elseif (`$activeProvider -eq 'neo4j') {
+    Get-ChildItem Env:FALKORDB_* -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
+    Remove-Item Env:DOC_FALKORDB_GRAPH -ErrorAction SilentlyContinue
+} else {
+    throw "Unsupported graph provider in runtime environment: '`$activeProvider'"
 }
 & $pythonArg $pythonScriptArg @serverArgs
 "@

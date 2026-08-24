@@ -63,6 +63,11 @@ def _semantic_observation(callee="f2", line=3):
         "config_fingerprint": "cf1",
         "callee_usr": f"usr:{callee}",
         "project_id": "p1",
+        "context_fidelity": "faithful",
+        "context_admission": "accepted",
+        "execution_coverage": "complete",
+        "context_attestation": "attestation-1",
+        "manifest_key": "p1:g1:r1:policy:a.c:cf1",
     }
 
 
@@ -79,6 +84,11 @@ def _strict_row(site_id="site-1", caller="f1", callee="f2", file_path="a.c"):
             "callee_usr": f"usr:{callee}",
             "site_id": site_id,
             "project_id": "p1",
+            "context_fidelity": "faithful",
+            "context_admission": "accepted",
+            "execution_coverage": "complete",
+            "context_attestation": "attestation-1",
+            "manifest_key": "p1:g1:r1:policy:a.c:cf1",
         },
     }
 

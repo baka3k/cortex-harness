@@ -7,6 +7,11 @@ protocol-2 worker, and evidence merge to the real analyzer/sync path. Clang is
 useful without a successful whole-project build only where one TU/configuration
 has faithful frontend inputs.
 
+Runtime wiring starts only after
+`260807-0929-mcp-ingest-query-concurrency` exposes the single admitted job/
+generation owner. Component contracts and fixtures may be prepared earlier,
+but no second scheduler or provisional publisher is allowed.
+
 ## Runtime contract
 
 ```text
@@ -91,10 +96,12 @@ or source/dependency fingerprints do.
    coverage but zero diagnostics never establishes fidelity/completeness.
 10. Harden the semantic cache under a trusted per-project root: no-follow and
     permission checks, locks, atomic rename plus fsync, corruption/orphan
-    recovery, and keys including project/root/generation/revision/horizon,
-    attestation, configuration, policy, worker, and dependencies. Validate a
-    cache hit exactly like a fresh response; external caches require a content
-    digest/authenticator.
+    recovery, and keys including project/root, immutable content horizon
+    (revision or dirty-snapshot digest), attestation, configuration, policy,
+    worker, and dependencies. Exclude ephemeral publication `generation_id` so
+    unchanged content can reuse observations; rebind only after fresh validation
+    to the new scope manifest/physical generation. External caches require a
+    content digest/authenticator.
 11. Feed lexical and eligible semantic observations to deterministic merge,
     preserving per-configuration contradictions. Redact/harden `-D` values,
     paths, diagnostics, errors, cache artifacts, and reports using structured

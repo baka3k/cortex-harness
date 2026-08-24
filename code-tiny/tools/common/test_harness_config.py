@@ -62,6 +62,7 @@ def _scrubbed_env():
         "NEO4J_URI",
         "NEO4J_USER",
         "NEO4J_PASS",
+        "NEO4J_PASSWORD",
         "NEO4J_DB",
         "FALKORDB_GRAPH",
         "FALKORDB_DATABASE",
@@ -75,6 +76,7 @@ def _scrubbed_env():
         "EMBED_BATCH_SIZE",
         "MAX_EMBED_CHARS",
         "GRAPH_PROVIDER",
+        "CODE_GRAPH_PROVIDER",
     )
     originals = {key: os.environ.get(key) for key in leaked}
     for key in leaked:
@@ -130,8 +132,27 @@ class LoadHarnessConfigTests(_BaseTest):
         self.assertEqual(os.environ["FALKORDB_GRAPH"], "cortext")
         self.assertEqual(os.environ["QDRANT_COLLECTION"], "cortext")
         self.assertEqual(os.environ["QDRANT_COLLECTION_DOC"], "cortext_doc")
-        self.assertEqual(os.environ["NEO4J_USER"], "neo4j")
+        self.assertNotIn("NEO4J_USER", os.environ)
         self.assertEqual(os.environ["GRAPH_PROVIDER"], "falkordb")
+
+    def test_explicit_neo4j_loads_only_neo4j_graph_settings(self) -> None:
+        path = self.write_dev(
+            "cortext",
+            code_env={
+                "GRAPH_PROVIDER": "neo4j",
+                "FALKORDB_GRAPH": "stale_falkor_graph",
+                "NEO4J_URI": "bolt://graph.example:7687",
+                "NEO4J_USER": "neo4j",
+                "NEO4J_PASS": "secret",
+                "NEO4J_DB": "cortext_neo4j",
+            },
+        )
+
+        harness_config.load_harness_config(str(path))
+
+        self.assertEqual(os.environ["GRAPH_PROVIDER"], "neo4j")
+        self.assertEqual(os.environ["NEO4J_DB"], "cortext_neo4j")
+        self.assertNotIn("FALKORDB_GRAPH", os.environ)
 
     def test_doc_collection_defaults_to_project_doc_naming(self) -> None:
         # No doc.env override — the loader should derive

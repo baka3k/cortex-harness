@@ -49,10 +49,11 @@ a second owner of repository structure.
    internal linkage and a normalized-span suffix only for anonymous/unparseable
    declarations. Name+arity is forbidden. Store a versioned legacy alias for
    diagnostics, never as a unique join key.
-4. Re-key Tree-sitter functions, structural endpoints, callsites, Pro*C host
-   joins, caches, journals, and provider rows in one clean-generation migration.
-   Preserve declaration/definition coalescing tests and explicitly quarantine
-   ambiguous legacy rows; never mutate old IDs in place.
+4. Version/re-key emitted Tree-sitter functions, structural endpoints,
+   callsites, Pro*C host joins, and local cache/journal schemas. Preserve
+   declaration/definition coalescing tests and quarantine ambiguous legacy rows.
+   Do not mutate provider rows here; Phase 4 rebuilds them in one clean inactive
+   generation under the blocked owner contract.
 5. Preserve Clang USR as observation identity. Join it to exactly one accepted
    signature-v2 `Function` by normalized declaration coordinates/signature and
    project/config provenance. Zero or multiple matches remain dangling and can
@@ -69,8 +70,13 @@ a second owner of repository structure.
    payload, and expected persisted identities. Compare a canonical projection:
    label, signature-v2 ID, normalized span, relation type/endpoints, and stable
    properties. Exclude ordering, elapsed time, timestamps, and run IDs.
-9. Bind every differential identity and endpoint to project + generation; a
-   fixture with identical paths/symbols in two projects must prove isolation.
+9. Separate stable `logical_symbol_id` and `logical_callsite_id` from storage
+   isolation. Function IDs use `cplus-function-v2`; callsite IDs derive from the
+   logical caller + normalized expansion/spelling location + ordinal. The
+   physical storage address is `(resolved_target, project_id, generation_id,
+   logical_id)`.
+   Differential invariance removes generation values, while separate fixtures
+   with identical paths/symbols prove project/generation isolation.
 10. Classify every delta as `expected_plane_difference`, `adapter_loss`,
    `identity_collision`, `validation_rejection`, or `unexpected_persistence`.
 11. Assert the key invariant separately: within identity schema v2, enabling
@@ -110,7 +116,8 @@ coverage or overload identity.
 - Every reviewed fixture delta is classified; unexplained disappearance is a
   failure even if Clang reports zero diagnostics.
 - Protocol 2 emits distinct overload USRs, and every strict endpoint joins one
-  project/generation-scoped signature-v2 `Function` without ambiguity.
+  signature-v2 logical `Function` without ambiguity; its physical endpoint is
+  scoped by project and generation.
 - The canonical Tree-sitter structural projection is identical with the
   diagnostic/semantic lane enabled.
 

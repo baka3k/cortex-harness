@@ -26,7 +26,7 @@ from enum import Enum
 from typing import Any, Iterable, Mapping
 
 
-CALL_EVIDENCE_SCHEMA_VERSION = "1"
+CALL_EVIDENCE_SCHEMA_VERSION = "2"
 
 # Resolution classes.  Publication rules per class:
 #   direct_resolved           -> eligible for strict CALLS when every gate passes
@@ -77,7 +77,30 @@ STRONG_CALL_REQUIRED_PROPS = (
     "tu_key",
     "config_fingerprint",
     "callee_usr",
+    "context_attestation",
+    "manifest_key",
 )
+
+CONTEXT_FIDELITIES = frozenset({"faithful", "inherited", "synthetic", "missing"})
+CONTEXT_ADMISSION_STATES = frozenset({"accepted", "rejected"})
+EXECUTION_COVERAGE_STATES = frozenset(
+    {"not_analyzed", "complete", "partial", "failed", "truncated", "cancelled"}
+)
+
+
+def context_is_strictly_eligible(props: Mapping[str, Any]) -> bool:
+    """Require the three independent context axes and parent attestation."""
+
+    if props.get("context_fidelity") != "faithful":
+        return False
+    if props.get("context_admission") != "accepted":
+        return False
+    if props.get("execution_coverage") != "complete":
+        return False
+    for field in ("context_attestation", "manifest_key"):
+        if not isinstance(props.get(field), str) or not str(props[field]).strip():
+            return False
+    return True
 
 
 def callsite_site_id(
@@ -96,6 +119,35 @@ def callsite_site_id(
     """
 
     key = f"{caller_id}:{callee_id}:{file_path}:{line}:{column}:{call_type}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
+
+
+def logical_callsite_id(
+    *,
+    caller_id: str,
+    file_path: str,
+    spelling_offset: int,
+    expansion_offset: int | None = None,
+    ordinal: int = 0,
+    call_type: str = "call",
+) -> str:
+    """Stable callee-independent identity for one syntactic callsite."""
+
+    expansion = int(spelling_offset if expansion_offset is None else expansion_offset)
+    key = json.dumps(
+        {
+            "schema": CALL_EVIDENCE_SCHEMA_VERSION,
+            "caller": str(caller_id),
+            "file": str(file_path).replace("\\", "/"),
+            "spelling_offset": max(0, int(spelling_offset)),
+            "expansion_offset": max(0, expansion),
+            "ordinal": max(0, int(ordinal)),
+            "call_type": str(call_type or "call"),
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
@@ -124,6 +176,8 @@ def is_strong_call_evidence(props: Mapping[str, Any]) -> bool:
     if props.get("resolution_class") != RESOLUTION_CLASS_DIRECT_RESOLVED:
         return False
     if props.get("semantic_provider") not in SEMANTIC_PROVIDERS:
+        return False
+    if not context_is_strictly_eligible(props):
         return False
     for prop in STRONG_CALL_REQUIRED_PROPS:
         value = props.get(prop)
@@ -530,6 +584,79 @@ def frontier_coverage(records: Iterable[Any]) -> dict[str, Any]:
         "reasons": reasons,
         "counts": counts,
         "record_count": sum(counts.values()),
+    }
+
+
+_SCOPE_KEY_FIELDS = (
+    "project_id",
+    "generation_id",
+    "revision",
+    "policy_version",
+    "tu_key",
+    "config_fingerprint",
+)
+
+
+def semantic_scope_key(record: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(str(record.get(field) or "") for field in _SCOPE_KEY_FIELDS)
+
+
+def exact_frontier_coverage(
+    expected_keys: Iterable[Mapping[str, Any]],
+    actual_records: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Compare immutable expected scope keys with current coverage records.
+
+    Completeness is fail-closed: missing, duplicate, unexpected, stale, or
+    non-complete actual rows make the whole requested scope partial. Runtime
+    traversal results cannot shrink the expected domain.
+    """
+
+    expected = [semantic_scope_key(record) for record in expected_keys]
+    actual = [dict(record) for record in actual_records]
+    if not expected:
+        return {
+            "status": "unknown",
+            "expected_key_count": 0,
+            "actual_key_count": len(actual),
+            "reasons": ["semantic_scope_manifest_missing"],
+        }
+    expected_set = set(expected)
+    counts: dict[tuple[str, ...], int] = {}
+    actual_by_key: dict[tuple[str, ...], list[Mapping[str, Any]]] = {}
+    for record in actual:
+        key = semantic_scope_key(record)
+        counts[key] = counts.get(key, 0) + 1
+        actual_by_key.setdefault(key, []).append(record)
+    actual_set = set(actual_by_key)
+    missing = sorted(expected_set - actual_set)
+    unexpected = sorted(actual_set - expected_set)
+    duplicates = sorted(key for key, count in counts.items() if count != 1)
+    incomplete = sorted(
+        key
+        for key in expected_set & actual_set
+        if len(actual_by_key[key]) != 1
+        or str(actual_by_key[key][0].get("status") or "") != "complete"
+    )
+    reasons: list[str] = []
+    if missing:
+        reasons.append("scope_keys_missing")
+    if unexpected:
+        reasons.append("scope_keys_unexpected")
+    if duplicates:
+        reasons.append("scope_keys_duplicate")
+    if incomplete:
+        reasons.append("scope_keys_incomplete")
+    return {
+        "status": "complete" if not reasons else "partial",
+        "expected_key_count": len(expected_set),
+        "actual_key_count": len(actual),
+        "missing_key_count": len(missing),
+        "unexpected_key_count": len(unexpected),
+        "duplicate_key_count": len(duplicates),
+        "incomplete_key_count": len(incomplete),
+        "reasons": reasons,
+        "scope_fingerprint": _fingerprint_payload(sorted(expected_set)),
     }
 
 

@@ -92,6 +92,10 @@ class DevInitGraphProviderTests(unittest.TestCase):
                     "FALKORDB_HOST": "localhost",
                     "FALKORDB_PORT": "6379",
                     "QDRANT_URL": "http://localhost:6333",
+                    "NEO4J_URI": "bolt://stale.example:7687",
+                    "NEO4J_USER": "stale-user",
+                    "NEO4J_PASS": "stale-pass",
+                    "NEO4J_DB": "stale-graph",
                 },
                 clear=False,
             ), patch("cortex_harness.dev._venv_python", return_value="/fake/python"), patch(
@@ -111,6 +115,7 @@ class DevInitGraphProviderTests(unittest.TestCase):
         self.assertNotIn("FALKORDB_HOST", child_env)
         self.assertNotIn("FALKORDB_PORT", child_env)
         self.assertNotIn("QDRANT_URL", child_env)
+        self.assertFalse(any(key.startswith("NEO4J_") for key in child_env))
 
     def test_graph_args_fallback_to_falkordb_hyper_graph(self):
         self.assertIn("--graph-provider", _neo4j_args_code({}))
@@ -124,12 +129,44 @@ class DevInitGraphProviderTests(unittest.TestCase):
         self.assertIn("hyper_graph", _env_to_neo4j_args({}))
 
     def test_graph_args_use_local_path_without_remote_falkordb_flags(self):
-        env = {"FALKORDB_PATH": "/tmp/falkor/code.rdb", "FALKORDB_GRAPH": "shop"}
+        env = {
+            "GRAPH_PROVIDER": "falkordb",
+            "FALKORDB_PATH": "/tmp/falkor/code.rdb",
+            "FALKORDB_GRAPH": "shop",
+            "NEO4J_URI": "bolt://stale.example:7687",
+            "NEO4J_DB": "stale",
+        }
         for args in (_neo4j_args_code(env), _env_to_neo4j_args(env)):
             self.assertIn("--falkordb-path", args)
             self.assertNotIn("--falkordb-uri", args)
             self.assertNotIn("--falkordb-host", args)
             self.assertNotIn("--neo4j-uri", args)
+
+    def test_invalid_graph_provider_fails_closed_instead_of_selecting_neo4j(self):
+        with self.assertRaisesRegex(ValueError, "GRAPH_PROVIDER.*falkordb.*neo4j"):
+            _neo4j_args_code({"GRAPH_PROVIDER": "falkord"})
+
+    def test_falkordb_process_environment_drops_all_neo4j_settings(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cfg = {
+                "project": {"code": "SHOP"},
+                "code": {
+                    "env": {
+                        "GRAPH_PROVIDER": "falkordb",
+                        "CODE_GRAPH_PROVIDER": "falkordb",
+                        "CORTEX_DATA_HOME": temp_dir,
+                        "NEO4J_URI": "bolt://stale.example:7687",
+                        "NEO4J_USER": "stale-user",
+                        "NEO4J_PASS": "stale-pass",
+                        "NEO4J_DB": "stale-graph",
+                    }
+                },
+            }
+
+            env = _code_env_for_process(cfg, Path(temp_dir))
+
+        self.assertEqual(env["FALKORDB_GRAPH"], "SHOP")
+        self.assertFalse(any(key.startswith("NEO4J_") for key in env))
 
     def test_graph_args_keep_neo4j_only_when_explicitly_selected(self):
         env = {
@@ -154,6 +191,8 @@ class DevInitGraphProviderTests(unittest.TestCase):
                     "NEO4J_DB": "docs_archive",
                     "NEO4J_USER": "neo4j",
                     "NEO4J_PASS": "secret",
+                    "FALKORDB_GRAPH": "stale-doc-graph",
+                    "FALKORDB_PATH": "/tmp/stale-doc.rdb",
                     "CORTEX_DATA_HOME": temp_dir,
                 }},
             }
@@ -162,6 +201,7 @@ class DevInitGraphProviderTests(unittest.TestCase):
 
         self.assertEqual(env["NEO4J_URI"], "bolt://graph.example:7687")
         self.assertEqual(env["NEO4J_DB"], "docs_archive")
+        self.assertFalse(any(key.startswith("FALKORDB_") for key in env))
         self.assertIn("--neo4j-uri", _env_to_neo4j_args(env))
         self.assertNotIn("--falkordb-path", _env_to_neo4j_args(env))
 

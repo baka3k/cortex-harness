@@ -6,13 +6,15 @@ updated: 2026-08-17
 mode: hi-plan --full
 scope: cortex_harness/storage, code-tiny/tools/graph, code-tiny/mcp, doc-tiny, project config schema
 relatedPlans:
+  - 260824-1411-cplus-clang-containment-hardening
   - 260806-1648-local-file-storage
   - neo4j-to-falkordb-migration
   - 260728-0000-unified-ingest-query-contract
   - 260820-dev-init-backend-selection
   - 260821-2115-dev-sync-code-windows (extends remote overlay to dev sync code)
 blockedBy: []
-blocks: []
+blocks:
+  - 260824-1411-cplus-clang-containment-hardening
 ---
 
 # Storage Backend Adapter — Local File ↔ Server URL Switching

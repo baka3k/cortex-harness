@@ -4,24 +4,27 @@ Neo4j Implementation of Graph Driver
 Concrete implementation of the GraphDriver abstraction for Neo4j.
 """
 
+from __future__ import annotations
+
 import base64
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
-try:
-    from neo4j import GraphDatabase, Driver, Session
-except ImportError:  # Neo4j is an optional compatibility extra.
-    GraphDatabase = None  # type: ignore[assignment]
-    Driver = Any  # type: ignore[misc,assignment]
-    Session = Any  # type: ignore[misc,assignment]
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import logging
 
-from tools.graph.core.base import GraphDriver, GraphProvider
+from tools.graph.core.base import GraphProvider
+from tools.graph.core.cypher_driver import CypherGraphDriver
+from tools.graph.core.provider_contract import (
+    normalize_graph_direction as normalize_graph_direction,
+)
 from tools.common.project_scope import (
     matches_project_scope,
     prepare_project_scope_parameters,
 )
-from tools.graph.writer.query_contract import RelationshipGroup
+
+
+if TYPE_CHECKING:
+    from neo4j import Driver, Session
 
 
 _FERNET_TOKEN_RE = re.compile(r'^gAAAAA')
@@ -129,31 +132,7 @@ _FALLBACK_FIND_NODES_BY_IDS_QUERY = _build_id_lookup_query(for_multiple=True, la
 _FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 _FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 
-_DIRECTION_ALIASES = {
-    "in": "in", "incoming": "in", "callers": "in", "upstream": "in",
-    "out": "out", "outgoing": "out", "callees": "out", "downstream": "out",
-    "both": "both", "all": "both", "any": "both", "undirected": "both",
-}
-
-
-def normalize_graph_direction(direction: Any) -> str:
-    """Normalize a traversal direction alias to ``in``/``out``/``both``.
-
-    Raises ValueError on unknown values instead of silently falling back to
-    ``both`` — a typo like ``"sideways"`` used to be swallowed and returned
-    an undirected subgraph the caller never asked for.
-    """
-    normalized = str(direction or "both").strip().lower()
-    mapped = _DIRECTION_ALIASES.get(normalized)
-    if mapped is None:
-        valid = ", ".join(sorted(_DIRECTION_ALIASES))
-        raise ValueError(
-            f"Invalid direction {direction!r}. Valid values (or aliases): {valid}."
-        )
-    return mapped
-
-
-class Neo4jDriver(GraphDriver):
+class Neo4jDriver(CypherGraphDriver):
     """
     Neo4j implementation of the GraphDriver interface
     """
@@ -174,10 +153,12 @@ class Neo4jDriver(GraphDriver):
             password: Password
             database: Optional database name (defaults to 'neo4j')
         """
-        if GraphDatabase is None:
+        try:
+            from neo4j import GraphDatabase
+        except ImportError as exc:
             raise ImportError(
                 "Neo4j support is optional. Install cortex-harness[neo4j] to use GraphProvider.NEO4J."
-            )
+            ) from exc
         self._uri = uri
         self._user = user
         self._password = _maybe_decrypt_neo4j_password(password)
@@ -247,82 +228,6 @@ class Neo4jDriver(GraphDriver):
             summary = result.consume()
             
             return records, keys, summary
-    
-    async def batch_write_nodes(
-        self,
-        nodes: List[Dict[str, Any]],
-        label: str,
-        database: Optional[str] = None,
-    ) -> int:
-        """
-        Batch create nodes using UNWIND
-        """
-        if not nodes:
-            return 0
-        
-        query = f"""
-        UNWIND $nodes AS node
-        CREATE (n:{label})
-        SET n = node
-        RETURN count(n) as count
-        """
-        
-        records, _, _ = await self.execute_query(
-            query,
-            {"nodes": nodes},
-            database
-        )
-        
-        return records[0]["count"] if records else 0
-    
-    async def batch_write_edges(
-        self,
-        edges: List[Dict[str, Any]],
-        relationship_type: str,
-        source_label: str,
-        target_label: str,
-        database: Optional[str] = None,
-    ) -> int:
-        """
-        Batch create relationships using UNWIND
-        
-        Each edge dict must have 'source_id' and 'target_id' keys
-        """
-        if not edges:
-            return 0
-        
-        from tools.graph.schema.manifest import validate_cypher_identifier
-
-        rel_type = validate_cypher_identifier(relationship_type, kind="relationship type")
-        source_node_label = validate_cypher_identifier(source_label, kind="source label")
-        target_node_label = validate_cypher_identifier(target_label, kind="target label")
-        RelationshipGroup(source_node_label, target_node_label, rel_type)
-        query = f"""
-        UNWIND $edges AS edge
-        MATCH (source:{source_node_label} {{id: edge.source_id}})
-        MATCH (target:{target_node_label} {{id: edge.target_id}})
-        MERGE (source)-[r:{rel_type}]->(target)
-        SET r = edge.properties
-        RETURN count(r) as count
-        """
-        
-        records, _, _ = await self.execute_query(
-            query,
-            {"edges": edges},
-            database
-        )
-        
-        return records[0]["count"] if records else 0
-    
-    async def verify_connection(self) -> bool:
-        """Test the database connection"""
-        try:
-            query = "RETURN 1 as test"
-            records, _, _ = await self.execute_query(query)
-            return len(records) > 0 and records[0]["test"] == 1
-        except Exception as e:
-            logger.error(f"Connection verification failed: {e}")
-            return False
     
     async def create_indexes(
         self,
@@ -405,34 +310,6 @@ class Neo4jDriver(GraphDriver):
                 }
             )
         return normalized
-    
-    async def get_node_count(
-        self,
-        label: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> int:
-        """Get count of nodes, optionally filtered by label"""
-        if label:
-            query = f"MATCH (n:{label}) RETURN count(n) as count"
-        else:
-            query = "MATCH (n) RETURN count(n) as count"
-        
-        records, _, _ = await self.execute_query(query, database=database)
-        return records[0]["count"] if records else 0
-    
-    async def get_edge_count(
-        self,
-        relationship_type: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> int:
-        """Get count of relationships, optionally filtered by type"""
-        if relationship_type:
-            query = f"MATCH ()-[r:{relationship_type}]->() RETURN count(r) as count"
-        else:
-            query = "MATCH ()-[r]->() RETURN count(r) as count"
-        
-        records, _, _ = await self.execute_query(query, database=database)
-        return records[0]["count"] if records else 0
     
     def _run_transaction(
         self,
@@ -614,7 +491,6 @@ class Neo4jDriver(GraphDriver):
             database
         )
         return [record.get("n") for record in records if record.get("n")]
-    
     async def search_by_code(
         self,
         query: str,
@@ -657,299 +533,3 @@ class Neo4jDriver(GraphDriver):
             database
         )
         return [record.get("n") for record in records if record.get("n")]
-    
-    async def find_function_paths(
-        self,
-        start_id: str,
-        end_id: str,
-        relationship_types: List[str],
-        max_depth: int = 8,
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-        limit: int = 10,
-    ) -> List[Any]:
-        """Find shortest paths between two functions.
-
-        FalkorDB (and its embedded lite build) only allows ``shortestPaths``
-        inside WITH/RETURN clauses, so the Neo4j-style ``MATCH
-        p=shortestPath(...)`` form is rejected at runtime. Use a plain
-        variable-length match ordered by path length instead — portable
-        across FalkorDB and Neo4j.
-        """
-        rel_pattern = f"[:{'|'.join(relationship_types)}*..{max_depth}]"
-        cypher = f"""
-        MATCH (a:Function) WHERE a.id = $start
-          AND ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized)
-        MATCH (b:Function) WHERE b.id = $end
-          AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized)
-        AND a.id <> b.id
-        MATCH p=(a)-{rel_pattern}->(b)
-        RETURN p ORDER BY length(p) LIMIT $limit
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"start": start_id, "end": end_id, "project_id": project_id, "limit": int(limit)},
-            database
-        )
-        return [record.get("p") for record in records if record.get("p")]
-    
-    async def query_function_subgraph(
-        self,
-        function_id: str,
-        relationship_types: List[str],
-        direction: str = "both",
-        max_depth: int = 2,
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Any]:
-        """Query subgraph around a function"""
-        direction = normalize_graph_direction(direction)
-        rel_pattern = f"[:{'|'.join(relationship_types)}*1..{max_depth}]"
-
-        if direction == "in":
-            pattern = f"<-{rel_pattern}-"
-        elif direction == "out":
-            pattern = f"-{rel_pattern}->"
-        else:  # both
-            pattern = f"-{rel_pattern}-"
-        
-        cypher = f"""
-        MATCH (f:Function) WHERE f.id = $id
-          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
-        MATCH p=(f){pattern}(n)
-        RETURN p
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"id": function_id, "project_id": project_id},
-            database
-        )
-        return [record.get("p") for record in records if record.get("p")]
-    
-    async def find_paths_between_modules(
-        self,
-        source_modules: List[str],
-        target_modules: List[str],
-        relationship_types: List[str],
-        max_depth: int = 8,
-        limit: int = 10,
-        direction: str = "out",
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Any]:
-        """Find paths between modules (file paths)"""
-        # Try with specified direction first
-        paths = await self._find_module_paths_directed(
-            source_modules, target_modules, relationship_types,
-            max_depth, limit, direction, project_id, database
-        )
-        
-        # If no paths found and direction is not 'both', try bidirectional
-        if not paths and direction.lower() not in {"both", "any", "undirected"}:
-            paths = await self._find_module_paths_directed(
-                source_modules, target_modules, relationship_types,
-                max_depth, limit, "both", project_id, database
-            )
-        
-        return paths
-    
-    async def _find_module_paths_directed(
-        self,
-        source_modules: List[str],
-        target_modules: List[str],
-        relationship_types: List[str],
-        max_depth: int,
-        limit: int,
-        direction: str,
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Any]:
-        """Internal helper for directional path finding"""
-        rel_types_str = "|".join(relationship_types)
-        
-        # Build relationship pattern based on direction
-        if direction.lower() in {"in", "incoming"}:
-            rel_pattern = f"<-[:{rel_types_str}*..{max_depth}]-"
-        elif direction.lower() in {"both", "any", "undirected"}:
-            rel_pattern = f"-[:{rel_types_str}*..{max_depth}]-"
-        else:  # out/outgoing
-            rel_pattern = f"-[:{rel_types_str}*..{max_depth}]->"
-        
-        cypher = f"""
-        WITH [t IN $sources | toLower(t)] AS sources, [t IN $targets | toLower(t)] AS targets
-        MATCH (s:Function)<-[:CONTAINS]-(sf:File)
-        MATCH (t:Function)<-[:CONTAINS]-(tf:File)
-        WHERE any(token IN sources WHERE
-            toLower(coalesce(s.file_path, '')) CONTAINS token OR
-            toLower(coalesce(sf.path, '')) CONTAINS token OR
-            toLower(coalesce(sf.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized)
-        AND any(token IN targets WHERE
-            toLower(coalesce(t.file_path, '')) CONTAINS token OR
-            toLower(coalesce(tf.path, '')) CONTAINS token OR
-            toLower(coalesce(tf.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized)
-        AND s.id <> t.id
-        MATCH p=shortestPath((s){rel_pattern}(t))
-        RETURN p
-        LIMIT $limit
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"sources": source_modules, "targets": target_modules, "limit": limit, "project_id": project_id},
-            database
-        )
-        return [record.get("p") for record in records if record.get("p")]
-    
-    async def list_possible_calls(
-        self,
-        limit: int = 200,
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """List POSSIBLE_CALLS relationships"""
-        cypher = """
-        MATCH (a:Function)-[r:POSSIBLE_CALLS]->(b:Function)
-        WHERE ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized)
-        AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized)
-        RETURN a, b, r
-        LIMIT $limit
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"limit": limit, "project_id": project_id},
-            database
-        )
-        
-        nodes = []
-        edges = []
-        seen_ids = set()
-        
-        for record in records:
-            a_node = record.get("a")
-            b_node = record.get("b")
-            rel = record.get("r")
-            
-            if a_node:
-                a_id = a_node.get("id")
-                if a_id and a_id not in seen_ids:
-                    nodes.append(a_node)
-                    seen_ids.add(a_id)
-            
-            if b_node:
-                b_id = b_node.get("id")
-                if b_id and b_id not in seen_ids:
-                    nodes.append(b_node)
-                    seen_ids.add(b_id)
-            
-            if rel:
-                edges.append(rel)
-        
-        return nodes, edges
-    
-    async def list_symbols_by_file_path(
-        self,
-        file_paths: List[str],
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """List symbols (functions) in files matching path tokens"""
-        cypher = """
-        WITH [t IN $tokens | toLower(t)] AS tokens
-        MATCH (f:Function)<-[:CONTAINS]-(file:File)
-        WHERE any(token IN tokens WHERE
-            toLower(coalesce(f.file_path, '')) CONTAINS token OR
-            toLower(coalesce(file.path, '')) CONTAINS token OR
-            toLower(coalesce(file.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
-        RETURN DISTINCT f
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"tokens": file_paths, "project_id": project_id},
-            database
-        )
-        return [record.get("f") for record in records if record.get("f")]
-    
-    async def list_functions_by_class(
-        self,
-        class_names: List[str],
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """List functions in classes matching names"""
-        cypher = """
-        WITH [t IN $tokens | toLower(t)] AS tokens
-        MATCH (c:Class)
-        WHERE any(token IN tokens WHERE
-            toLower(coalesce(c.name, '')) CONTAINS token OR
-            toLower(coalesce(c.qualified_name, '')) CONTAINS token)
-          AND ($project_id IS NULL OR c.project_id_normalized = $project_id_normalized)
-        MATCH (c)-[:CONTAINS]->(f:Function)
-        WHERE ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
-        RETURN DISTINCT f
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"tokens": class_names, "project_id": project_id},
-            database
-        )
-        return [record.get("f") for record in records if record.get("f")]
-    
-    async def list_functions_by_file(
-        self,
-        file_path: str,
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """List functions in a specific file"""
-        cypher = """
-        MATCH (f:Function)<-[:CONTAINS]-(file:File)
-        WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower($token)
-           OR toLower(coalesce(file.path, '')) CONTAINS toLower($token)
-           OR toLower(coalesce(file.file_path, '')) CONTAINS toLower($token)
-          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
-        RETURN DISTINCT f
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"token": file_path, "project_id": project_id},
-            database
-        )
-        return [record.get("f") for record in records if record.get("f")]
-    
-    async def list_entrypoints(
-        self,
-        modules: List[str],
-        relationship_types: List[str],
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """List entrypoint functions called from outside specified modules"""
-        rel_pattern = "|".join(relationship_types)
-        cypher = f"""
-        WITH [t IN $modules | toLower(t)] AS modules
-        MATCH (internalFile:File)-[:CONTAINS]->(internalFn:Function)
-        WHERE any(token IN modules WHERE
-            toLower(coalesce(internalFn.file_path, '')) CONTAINS token OR
-            toLower(coalesce(internalFile.path, '')) CONTAINS token OR
-            toLower(coalesce(internalFile.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR internalFn.project_id_normalized = $project_id_normalized)
-        WITH collect(internalFn.id) AS internalIds, modules
-        MATCH (externalFile:File)-[:CONTAINS]->(externalFn:Function)
-        WHERE NOT any(token IN modules WHERE
-            toLower(coalesce(externalFn.file_path, '')) CONTAINS token OR
-            toLower(coalesce(externalFile.path, '')) CONTAINS token OR
-            toLower(coalesce(externalFile.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR externalFn.project_id_normalized = $project_id_normalized)
-        MATCH (externalFn)-[:{rel_pattern}]->(entryFn:Function)
-        WHERE entryFn.id IN internalIds
-          AND ($project_id IS NULL OR entryFn.project_id_normalized = $project_id_normalized)
-        RETURN DISTINCT entryFn
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"modules": modules, "project_id": project_id},
-            database
-        )
-        return [record.get("entryFn") for record in records if record.get("entryFn")]
