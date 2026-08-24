@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -152,9 +153,13 @@ class IncrementalSyncPhaseModeTests(unittest.TestCase):
             ]
         )
 
-        def run_or_fail(_command, **kwargs):
+        def run_or_fail(command, **kwargs):
             if (kwargs.get("env") or {}).get("CORTEX_DISABLE_GRAPH") == "1":
-                raise RuntimeError("embedding failed")
+                raise subprocess.CalledProcessError(
+                    1,
+                    command,
+                    stderr="embedding failed",
+                )
             return ""
 
         journal = SimpleNamespace(path=root / "journal.sqlite")
