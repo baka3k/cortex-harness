@@ -1,4 +1,7 @@
 import ast
+import subprocess
+import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -46,6 +49,29 @@ def _fastmcp_constructor_keywords(path: Path) -> dict[str, object]:
 
 
 class McpHttpResilienceTests(unittest.TestCase):
+    def test_unified_mcp_imports_without_optional_neo4j(self):
+        probe = textwrap.dedent(
+            f"""
+            import runpy
+            import sys
+
+            sys.modules["neo4j"] = None
+            sys.modules["neo4j.exceptions"] = None
+            runpy.run_path({str(UNIFIED_MCP)!r}, run_name="graph_mcp_import_probe")
+            """
+        )
+
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_unified_mcp_avoids_sse_responses_for_local_streamable_http(self):
         options = _constant_subscript_assignments(UNIFIED_MCP, "kwargs")
 
