@@ -24,6 +24,8 @@ a second owner of repository structure.
 - `code-tiny/tools/cplus/clang_parser.py`
   - module/`parse_and_extract` contract
   - `_find_enclosing_func`, `func_extents`, pending `CALL_EXPR` handling
+- `code-tiny/tools/cplus/cplus_analyzer.py`
+  - `_symbol_id`, structural `Function` extraction and call resolution
 - `code-tiny/tools/cplus/semantic_worker.py`
   - `_function_symbol_id`, `extract_semantic_callsite_evidence`
 - `code-tiny/tools/cplus/semantic_shadow.py`
@@ -41,24 +43,38 @@ a second owner of repository structure.
    second pass. Apply the same two-pass endpoint map to protocol-2 extraction.
 2. Make enclosing-function lookup deterministic for nested constructs and safe
    across repeated/concurrent parses; no object-id cache or list-length race.
-3. Preserve Clang USR as the semantic identity. Use normalized signature,
-   linkage, and repository-relative file only as a bounded fallback; do not use
-   name plus arity as the semantic overload key.
-4. Treat prototype and pure-virtual cursors as semantic references/inventory,
+3. Introduce structural identity schema `cplus-function-v2`: qualified name +
+   normalized syntactic parameter types + cv/ref/noexcept qualifiers + template
+   arity + linkage discriminator. Add repository-relative file only for
+   internal linkage and a normalized-span suffix only for anonymous/unparseable
+   declarations. Name+arity is forbidden. Store a versioned legacy alias for
+   diagnostics, never as a unique join key.
+4. Re-key Tree-sitter functions, structural endpoints, callsites, Pro*C host
+   joins, caches, journals, and provider rows in one clean-generation migration.
+   Preserve declaration/definition coalescing tests and explicitly quarantine
+   ambiguous legacy rows; never mutate old IDs in place.
+5. Preserve Clang USR as observation identity. Join it to exactly one accepted
+   signature-v2 `Function` by normalized declaration coordinates/signature and
+   project/config provenance. Zero or multiple matches remain dangling and can
+   never create a strict edge.
+6. Treat prototype and pure-virtual cursors as semantic references/inventory,
    not as permission to replace Tree-sitter declaration nodes. An absent local
    target becomes unresolved/dangling evidence unless it can join an accepted
    structural identity.
-5. Retain conservative classifications: pure virtual is
+7. Retain conservative classifications: pure virtual is
    `declared_virtual_target`, a function-pointer invocation is
    `indirect_callsite`, and a dependent template call is not direct.
-6. Produce a deterministic differential artifact with four stages per file:
+8. Produce a deterministic differential artifact with four stages per file:
    raw Tree-sitter payload, raw Clang cursor/evidence inventory, validated
-   payload, and expected persisted identities. Compare by label, stable ID,
-   source span, and evidence class rather than one total count.
-7. Classify every delta as `expected_plane_difference`, `adapter_loss`,
+   payload, and expected persisted identities. Compare a canonical projection:
+   label, signature-v2 ID, normalized span, relation type/endpoints, and stable
+   properties. Exclude ordering, elapsed time, timestamps, and run IDs.
+9. Bind every differential identity and endpoint to project + generation; a
+   fixture with identical paths/symbols in two projects must prove isolation.
+10. Classify every delta as `expected_plane_difference`, `adapter_loss`,
    `identity_collision`, `validation_rejection`, or `unexpected_persistence`.
-8. Assert the key invariant separately: enabling Clang cannot remove or mutate
-   any Tree-sitter structural identity/relation.
+11. Assert the key invariant separately: within identity schema v2, enabling
+   Clang cannot remove or mutate any Tree-sitter structural identity/relation.
 
 ## Regression matrix
 
@@ -76,11 +92,11 @@ a second owner of repository structure.
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest \
-  tests.test_cplus_clang_parser \
-  tests.test_cplus_clang_differential \
-  tests.test_cplus_clang_worker \
-  tests.test_cplus_semantic_worker
+.venv/bin/python -m pytest -q \
+  tests/test_cplus_clang_parser.py \
+  tests/test_cplus_clang_differential.py \
+  tests/test_cplus_clang_worker.py \
+  tests/test_cplus_semantic_worker.py
 ```
 
 The real libclang tests must use the pinned runtime and fail visibly when it is
@@ -93,15 +109,15 @@ coverage or overload identity.
   with a parse-local two-pass index.
 - Every reviewed fixture delta is classified; unexplained disappearance is a
   failure even if Clang reports zero diagnostics.
-- Protocol 2 emits distinct overload USRs and all expected callsites without
-  turning virtual/indirect/dependent calls into direct calls.
-- Tree-sitter structural identity and relation sets are byte-for-byte stable
-  with the diagnostic/semantic lane enabled.
+- Protocol 2 emits distinct overload USRs, and every strict endpoint joins one
+  project/generation-scoped signature-v2 `Function` without ambiguity.
+- The canonical Tree-sitter structural projection is identical with the
+  diagnostic/semantic lane enabled.
 
 ## Todo
 
 - [ ] Replace mutable extent caching with two-pass local indexing.
-- [ ] Harden semantic identity and endpoint mapping.
+- [ ] Migrate structural Function IDs and semantic endpoint mapping to v2.
 - [ ] Add the adversarial differential fixture matrix.
 - [ ] Emit deterministic per-plane delta artifacts.
 - [ ] Prove exact Tree-sitter structural invariance.
