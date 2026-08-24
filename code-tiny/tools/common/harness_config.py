@@ -120,6 +120,8 @@ def load_harness_config(config_path: str) -> None:
     # Qdrant collection defaults — code side reads code.env, doc side reads
     # doc.env, both fall back to ``project.code`` then the naming rule.
     project_code = (cfg.get("project") or {}).get("code")
+    if project_code and "CORTEX_STORAGE_PROJECT_ID" not in os.environ:
+        os.environ["CORTEX_STORAGE_PROJECT_ID"] = str(project_code)
     if "QDRANT_COLLECTION" not in os.environ:
         collection = (
             code_env.get("QDRANT_COLLECTION")

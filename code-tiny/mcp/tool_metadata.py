@@ -485,7 +485,10 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "collection", "type": "str", "required": False,
              "description": "Qdrant collection name or project scope prefix"},
             {"name": "project_id", "type": "str", "required": False,
-             "description": "Case-insensitive Qdrant and graph project scope"},
+             "description": (
+                 "Case-insensitive Qdrant payload filter. Omit to search all "
+                 "projects in the selected or discovered collections."
+             )},
             {"name": "qdrant_url", "type": "str", "required": False},
             {"name": "expand_graph", "type": "bool", "required": False,
              "description": "When true, expand Qdrant seed hits through the configured graph database"},

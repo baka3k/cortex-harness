@@ -181,6 +181,7 @@ def runtime_environment(
     project_name = str(project.get("name") or project_id).strip()
     if project_id:
         env["PROJECT_ID"] = project_id
+        env["CORTEX_STORAGE_PROJECT_ID"] = project_id
     if project_name:
         env["PROJECT_NAME"] = project_name
 

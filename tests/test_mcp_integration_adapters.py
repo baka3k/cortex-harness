@@ -197,6 +197,57 @@ def test_code_wrapper_routes_via_factory(tmp_path: Path, monkeypatch) -> None:
     assert isinstance(store, RemoteQdrantStore)
 
 
+def test_code_wrapper_runtime_source_routes_via_factory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Runtime storage source is independent from a semantic query project."""
+    from tools.common.local_qdrant import get_code_qdrant_store
+
+    test_root = _get_test_root()
+    _write_project_config(
+        test_root,
+        "remote_source",
+        {
+            "project": {"code": "remote_source", "name": "Remote Source"},
+            "storage_backend": "remote",
+            "remote": {"qdrant_url": "http://qdrant:6333"},
+        },
+    )
+
+    from qdrant_client import QdrantClient  # type: ignore
+    monkeypatch.setattr(QdrantClient, "__init__", lambda self, **kw: None)
+    monkeypatch.setattr(QdrantClient, "close", lambda self: None)
+    monkeypatch.setenv("CORTEX_STORAGE_PROJECT_ID", "remote_source")
+
+    store = get_code_qdrant_store(project_root=tmp_path)
+    from cortex_harness.storage import RemoteQdrantStore
+
+    assert isinstance(store, RemoteQdrantStore)
+
+
+def test_code_wrapper_runtime_source_preserves_local_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from tools.common.local_qdrant import get_code_qdrant_store
+
+    test_root = _get_test_root()
+    _write_project_config(
+        test_root,
+        "local_source",
+        {
+            "project": {"code": "local_source", "name": "Local Source"},
+            "storage_backend": "local",
+        },
+    )
+    monkeypatch.setenv("CORTEX_STORAGE_PROJECT_ID", "local_source")
+    monkeypatch.setenv("CORTEX_DATA_HOME", str(tmp_path / "data-home"))
+
+    store = get_code_qdrant_store(project_root=tmp_path)
+    from cortex_harness.storage import LocalQdrantStore
+
+    assert isinstance(store, LocalQdrantStore)
+
+
 def test_code_wrapper_legacy_url_locator_rejected(tmp_path: Path) -> None:
     from tools.common.local_qdrant import (
         RemoteQdrantUnsupportedError,

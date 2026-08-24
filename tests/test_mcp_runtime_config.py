@@ -79,6 +79,7 @@ class McpRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(env["FALKORDB_PATH"], env["FALKORDB_CODE_PATH"])
         self.assertTrue(env["QDRANT_CODE_PATH"].endswith("/qdrant/code"))
         self.assertEqual(env["PROJECT_ID"], "sample")
+        self.assertEqual(env["CORTEX_STORAGE_PROJECT_ID"], "sample")
         self.assertEqual(env["PROJECT_NAME"], "Sample")
         self.assertEqual(env["CORTEX_HARNESS_CONFIG_PATH"], str(config_path))
 

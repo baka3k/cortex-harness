@@ -580,6 +580,9 @@ def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dic
         if v is not None and k not in _REMOTE_STORAGE_KEYS
     }
     result.update(_storage_env_for_process(cfg, project_root, StorageRole.CODE))
+    project_id = str(project.get("code") or project.get("name") or "").strip()
+    if project_id:
+        result.setdefault("CORTEX_STORAGE_PROJECT_ID", project_id)
     result.setdefault("QDRANT_COLLECTION", collection)
     result.setdefault("QDRANT_COLLECTION_CODE", collection)
     if env.get("EMBEDDING_MODEL"):

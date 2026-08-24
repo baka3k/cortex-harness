@@ -30,6 +30,10 @@ from cortex_harness.storage import (  # noqa: E402
 from qdrant_client.http import models as qmodels  # noqa: E402
 
 
+ENV_STORAGE_PROJECT_ID = "CORTEX_STORAGE_PROJECT_ID"
+ENV_HARNESS_CONFIG_PATH = "CORTEX_HARNESS_CONFIG_PATH"
+
+
 class RemoteQdrantUnsupportedError(ValueError):
     """Raised when a legacy network locator reaches the local-only runtime.
 
@@ -74,19 +78,38 @@ def get_code_qdrant_store(
     1. ``project_id`` supplied → :class:`StorageFactory` chooses
        :class:`LocalQdrantStore` or :class:`RemoteQdrantStore` based on the
        project's ``storage_backend``.
-    2. ``locator`` URL-shaped → kept for backward compatibility: raises
+    2. ``CORTEX_STORAGE_PROJECT_ID`` set by the MCP launcher → the same
+       factory selects the runtime data source independently from any query
+       ``project_id`` payload filter.
+    3. ``locator`` URL-shaped → kept for backward compatibility: raises
        :class:`RemoteQdrantUnsupportedError` so legacy callers fail loudly
        instead of silently switching modes.
-    3. Falls back to the local path resolution.
+    4. Falls back to the local path resolution.
     """
 
-    if project_id:
+    storage_project_id = str(
+        project_id or os.environ.get(ENV_STORAGE_PROJECT_ID) or ""
+    ).strip()
+    if storage_project_id:
         # Lazy import to avoid a static code-tiny → tools.common.project_registry
         # import cycle when callers don't supply project_id.
         from tools.common.project_registry import resolve_project_targets
 
-        targets = resolve_project_targets(project_id)
-        factory = create_storage(targets, project_root=project_root)
+        config_path = str(os.environ.get(ENV_HARNESS_CONFIG_PATH) or "").strip()
+        config_dir = Path(config_path).resolve().parent if config_path else None
+        targets = resolve_project_targets(
+            storage_project_id,
+            config_dir=config_dir,
+        )
+        effective_root = project_root
+        if effective_root is None and config_path:
+            path = Path(config_path).resolve()
+            if (
+                path.parent.name == "config"
+                and path.parent.parent.name == ".cortext-harness"
+            ):
+                effective_root = path.parents[2]
+        factory = create_storage(targets, project_root=effective_root)
         return factory.get_qdrant_store(QdrantStorageRole.CODE)
 
     root = Path(project_root or os.getcwd()).resolve()
@@ -142,7 +165,7 @@ def vector_sizes(info: Any) -> dict[str, int]:
 
 
 def ensure_collection(
-    store: LocalQdrantStore,
+    store: QdrantStore,
     collection: str,
     vector_size: int,
     *,
@@ -165,13 +188,13 @@ def ensure_collection(
     )
 
 
-def collection_info_payload(store: LocalQdrantStore, collection: str) -> dict[str, Any]:
+def collection_info_payload(store: QdrantStore, collection: str) -> dict[str, Any]:
     info = store.get_collection_info(collection)
     return {"result": model_to_dict(info), "status": "ok"}
 
 
 def collections_payload(
-    store: LocalQdrantStore,
+    store: QdrantStore,
     *,
     include_vectors: bool = False,
 ) -> dict[str, Any]:
@@ -187,7 +210,7 @@ def collections_payload(
 
 
 def query_points(
-    store: LocalQdrantStore,
+    store: QdrantStore,
     collection: str,
     vector: Sequence[float],
     *,
@@ -211,7 +234,7 @@ def query_points(
 
 
 def scroll_points(
-    store: LocalQdrantStore,
+    store: QdrantStore,
     collection: str,
     *,
     query_filter: Any = None,
@@ -231,7 +254,7 @@ def scroll_points(
     return [model_to_dict(point) for point in points], next_offset
 
 
-def delete_by_filter(store: LocalQdrantStore, collection: str, value: Any) -> None:
+def delete_by_filter(store: QdrantStore, collection: str, value: Any) -> None:
     store.delete(
         collection,
         filter_selector=qmodels.FilterSelector(filter=normalize_filter(value)),
@@ -272,7 +295,7 @@ class LocalQdrantWriter:
             from cortex_harness.storage.qdrant_remote import RemoteQdrantStore
 
             self.url = url
-            self._store = RemoteQdrantStore(
+            self._store: QdrantStore = RemoteQdrantStore(
                 url=url,
                 api_key=api_key,
                 timeout=timeout,
