@@ -49,15 +49,121 @@ def _fastmcp_constructor_keywords(path: Path) -> dict[str, object]:
 
 
 class McpHttpResilienceTests(unittest.TestCase):
-    def test_unified_mcp_imports_without_optional_neo4j(self):
+    def test_falkor_mcp_startup_and_driver_never_import_neo4j(self):
         probe = textwrap.dedent(
             f"""
+            import asyncio
+            import builtins
+            import os
             import runpy
             import sys
+            import tempfile
+            from pathlib import Path
 
-            sys.modules["neo4j"] = None
-            sys.modules["neo4j.exceptions"] = None
+            real_import = builtins.__import__
+
+            def reject_neo4j(name, globals=None, locals=None, fromlist=(), level=0):
+                forbidden = (
+                    name == "neo4j"
+                    or name.startswith("neo4j.")
+                    or name.endswith(".neo4j_driver")
+                    or name.endswith(".require_neo4j")
+                )
+                if forbidden:
+                    raise AssertionError(f"Falkor path attempted forbidden import: {{name}}")
+                return real_import(name, globals, locals, fromlist, level)
+
+            builtins.__import__ = reject_neo4j
+            os.environ["GRAPH_PROVIDER"] = "falkordb"
+            os.environ["CODE_GRAPH_PROVIDER"] = "falkordb"
+            os.environ["MCP_GRAPH_PROVIDER"] = "falkordb"
+            os.environ["NEO4J_URI"] = "bolt://must-not-leak:7687"
+            os.environ["NEO4J_USER"] = "must-not-leak"
+            os.environ["NEO4J_PASS"] = "must-not-leak"
+            os.environ["NEO4J_DB"] = "must-not-leak"
+
             runpy.run_path({str(UNIFIED_MCP)!r}, run_name="graph_mcp_import_probe")
+            assert not any(key.startswith("NEO4J_") for key in os.environ), {{
+                key: "<redacted>"
+                for key in os.environ
+                if key.startswith("NEO4J_")
+            }}
+
+            from tools.graph.core.base import GraphProvider
+            from tools.graph.core.factory import GraphDriverFactory
+
+            with tempfile.TemporaryDirectory() as directory:
+                driver = asyncio.run(
+                    GraphDriverFactory.create_driver(
+                        GraphProvider.FALKORDB,
+                        {{
+                            "path": str(Path(directory) / "falkor.rdb"),
+                            "graph": "falkor-primary",
+                        }},
+                    )
+                )
+                assert driver.provider is GraphProvider.FALKORDB
+                records, _, _ = asyncio.run(
+                    driver.execute_query("RETURN 1 AS value", database="falkor-primary")
+                )
+                assert records and records[0]["value"] == 1, records
+                driver.close()
+            """
+        )
+
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_neo4j_dependency_is_loaded_only_after_explicit_selection(self):
+        probe = textwrap.dedent(
+            f"""
+            import asyncio
+            import builtins
+            import sys
+
+            sys.path.insert(0, {str(ROOT / "code-tiny")!r})
+
+            attempts = []
+            real_import = builtins.__import__
+
+            def hide_neo4j(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == "neo4j" or name.startswith("neo4j."):
+                    attempts.append(name)
+                    error = ModuleNotFoundError(f"blocked optional dependency: {{name}}")
+                    error.name = name
+                    raise error
+                return real_import(name, globals, locals, fromlist, level)
+
+            builtins.__import__ = hide_neo4j
+
+            from tools.graph.core.base import GraphProvider
+            from tools.graph.core.factory import GraphDriverFactory
+
+            assert attempts == [], f"Neo4j loaded before provider selection: {{attempts}}"
+            try:
+                asyncio.run(
+                    GraphDriverFactory.create_driver(
+                        GraphProvider.NEO4J,
+                        {{
+                            "uri": "bolt://127.0.0.1:7687",
+                            "user": "neo4j",
+                            "password": "secret",
+                        }},
+                    )
+                )
+            except ImportError as exc:
+                assert "cortex-harness[neo4j]" in str(exc), str(exc)
+            else:
+                raise AssertionError("Selecting Neo4j without its extra did not fail")
+            assert attempts, "Explicit Neo4j selection never tried to load its dependency"
             """
         )
 

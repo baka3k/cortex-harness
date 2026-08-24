@@ -12,6 +12,8 @@ import logging
 import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from tools.graph.core.provider_contract import normalize_graph_provider_name
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,14 +37,22 @@ async def run_find_screen_workflows(
     node_b_raw = payload.get("node_b") or payload.get("target")
     node_b = node_b_raw.strip() if isinstance(node_b_raw, str) and node_b_raw.strip() else None
     direction = (payload.get("direction") or "bidirectional").strip().lower()
-    database = (
-        payload.get("db")
-        or payload.get("database")
-        or os.environ.get("FALKORDB_GRAPH")
-        or os.environ.get("FALKORDB_DATABASE")
-        or os.environ.get("NEO4J_DB")
-        or "hyper_graph"
-    ).strip() or "hyper_graph"
+    database_value = payload.get("db") or payload.get("database")
+    if not database_value:
+        provider = normalize_graph_provider_name(
+            os.environ.get("CODE_GRAPH_PROVIDER")
+            or os.environ.get("GRAPH_PROVIDER")
+            or os.environ.get("MCP_GRAPH_PROVIDER")
+        )
+        if provider == "neo4j":
+            database_value = os.environ.get("NEO4J_DB") or "hyper_graph"
+        else:
+            database_value = (
+                os.environ.get("FALKORDB_GRAPH")
+                or os.environ.get("FALKORDB_DATABASE")
+                or "hyper_graph"
+            )
+    database = str(database_value).strip() or "hyper_graph"
 
     def _int(key: str, default: int) -> int:
         val = payload.get(key)

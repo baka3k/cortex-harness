@@ -20,15 +20,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from tools.common.parse_quality import (
     RECOVERY_POLICY_VERSION,
     CandidateOutcome,
-    CandidateSummary,
-    DamageSummary,
-    ParseContext,
     ParserBackend,
     RetryStage,
-    SemanticYield,
     atomic_write_json,
-    build_quality_record,
-    candidate_is_strictly_better,
 )
 
 
@@ -305,6 +299,7 @@ class PersistentRecoveryQueue:
         if existing and existing.get("status") in {
             "selected",
             "not_improved",
+            "diagnostic_only",
             "invalid",
             "failed",
             "timed_out",
@@ -495,91 +490,6 @@ def run_semantic_worker(
     )
 
 
-def _damage_from_record(record: Mapping[str, Any]) -> DamageSummary:
-    damage = record.get("damage") or {}
-    return DamageSummary(
-        error_count=int(damage.get("error_count") or 0),
-        missing_count=int(damage.get("missing_count") or 0),
-        damaged_bytes=int(damage.get("damaged_bytes") or 0),
-        source_bytes=int(damage.get("source_bytes") or 0),
-        damaged_span_ratio=float(damage.get("damaged_span_ratio") or 0.0),
-        critical_structural_damage=bool(damage.get("critical_structural_damage")),
-        structural_contexts=tuple(damage.get("structural_contexts") or ()),
-        signatures=tuple(damage.get("signatures") or ()),
-    )
-
-
-def _yield_from_record(record: Mapping[str, Any]) -> SemanticYield:
-    semantic = record.get("semantic_yield") or {}
-    return SemanticYield(
-        function_count=int(semantic.get("function_count") or 0),
-        type_count=int(semantic.get("type_count") or 0),
-        declaration_count=int(semantic.get("declaration_count") or 0),
-        stable_scope_count=int(semantic.get("stable_scope_count") or 0),
-        call_count=int(semantic.get("call_count") or 0),
-        include_count=int(semantic.get("include_count") or 0),
-    )
-
-
-def _candidate_quality(
-    *,
-    root: str,
-    path: str,
-    payload: Dict[str, Any],
-    compile_context: CompileContext,
-) -> Dict[str, Any]:
-    parse_meta = payload.get("parse_meta") or {}
-    source = Path(path).read_bytes()
-    error_count = int(parse_meta.get("error_nodes") or 0)
-    damaged_bytes = int(parse_meta.get("damaged_bytes") or min(len(source), error_count))
-    semantic = SemanticYield(
-        function_count=len(payload.get("functions") or ()),
-        type_count=len(payload.get("types") or ()),
-        declaration_count=len(payload.get("fields") or ())
-        + len(payload.get("aliases") or ())
-        + len(payload.get("templates") or ()),
-        stable_scope_count=sum(
-            1
-            for item in [
-                *(payload.get("functions") or ()),
-                *(payload.get("types") or ()),
-                *(payload.get("namespaces") or ()),
-            ]
-            if isinstance(item, dict) and item.get("qualified_name")
-        ),
-        call_count=len(payload.get("calls") or ()),
-        include_count=len(payload.get("includes") or ()),
-    )
-    damage = DamageSummary(
-        error_count=error_count,
-        damaged_bytes=damaged_bytes,
-        source_bytes=len(source),
-        damaged_span_ratio=round(damaged_bytes / len(source), 8) if source else 0.0,
-        critical_structural_damage=bool(error_count and semantic.top_level_count == 0),
-    )
-    record = build_quality_record(
-        root=root,
-        path=path,
-        source=source,
-        damage=damage,
-        semantic_yield=semantic,
-        context=ParseContext(
-            backend=ParserBackend.LIBCLANG,
-            parser_language="clang",
-            parser_version="libclang",
-            grammar_version="clang-ast",
-            source_encoding="raw",
-            compile_context_available=not compile_context.free_mode,
-            compile_context_fingerprint=compile_context.fingerprint,
-        ),
-        retry_stages=(RetryStage.LIBCLANG,),
-        candidate_outcome=CandidateOutcome.SELECTED,
-        selected_candidate=RetryStage.LIBCLANG.value,
-        selection_reason="strictly_better_common_quality_tuple",
-    )
-    return record.to_dict()
-
-
 def _attach_quality(payload: Dict[str, Any], record: Dict[str, Any]) -> Dict[str, Any]:
     payload["parse_meta"] = {
         **dict(payload.get("parse_meta") or {}),
@@ -746,45 +656,26 @@ def recover_payload_candidates(
                     consecutive_non_improvements += 1
                     trailing.append(False)
                     continue
-                context = resolved_compile_contexts.get(
-                    rel_path,
-                    CompileContext(rel_path, (), "free-mode", free_mode=True),
+                # Protocol 1 is retained only as a bounded diagnostic fixture.
+                # Its whole-file payload can never replace Tree-sitter
+                # structure, regardless of diagnostics or semantic yield.
+                updated = dict(baseline_record)
+                updated["retry_stages"] = sorted(
+                    set(updated.get("retry_stages") or ()) | {RetryStage.LIBCLANG.value}
                 )
-                candidate_payload = dict(result["payload"])
-                candidate_record = _candidate_quality(
-                    root=root,
-                    path=path,
-                    payload=candidate_payload,
-                    compile_context=context,
+                updated["candidate_outcome"] = (
+                    CandidateOutcome.CROSS_BACKEND_STRUCTURE_FORBIDDEN.value
                 )
-                baseline_summary = CandidateSummary(
-                    damage=_damage_from_record(baseline_record),
-                    semantic_yield=_yield_from_record(baseline_record),
-                    backend=ParserBackend.TREE_SITTER,
+                updated["selection_reason"] = "cross_backend_structure_forbidden"
+                selected_payloads[path] = _attach_quality(baseline_payload, updated)
+                queue.finish(
+                    str(item["id"]),
+                    "diagnostic_only",
+                    "cross_backend_structure_forbidden",
                 )
-                candidate_summary = CandidateSummary(
-                    damage=_damage_from_record(candidate_record),
-                    semantic_yield=_yield_from_record(candidate_record),
-                    backend=ParserBackend.LIBCLANG,
-                )
-                if candidate_is_strictly_better(candidate_summary, baseline_summary):
-                    selected_payloads[path] = _attach_quality(candidate_payload, candidate_record)
-                    queue.finish(str(item["id"]), "selected", "strictly_better_common_quality_tuple")
-                    improved += 1
-                    consecutive_non_improvements = 0
-                    trailing.append(True)
-                else:
-                    updated = dict(baseline_record)
-                    updated["retry_stages"] = sorted(
-                        set(updated.get("retry_stages") or ()) | {RetryStage.LIBCLANG.value}
-                    )
-                    updated["candidate_outcome"] = CandidateOutcome.NOT_IMPROVED.value
-                    updated["selection_reason"] = "candidate_not_strictly_better"
-                    selected_payloads[path] = _attach_quality(baseline_payload, updated)
-                    queue.finish(str(item["id"]), "not_improved", "candidate_not_strictly_better")
-                    non_improved += 1
-                    consecutive_non_improvements += 1
-                    trailing.append(False)
+                non_improved += 1
+                consecutive_non_improvements += 1
+                trailing.append(False)
             if time.monotonic() >= deadline:
                 stop_reason = "wall_time_budget"
                 break

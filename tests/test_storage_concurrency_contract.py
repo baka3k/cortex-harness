@@ -75,6 +75,25 @@ def test_publish_is_atomic_selection_boundary_and_reader_pin_blocks_retirement(t
     assert manager.retire(first) is True
 
 
+def test_legacy_clang_structural_generation_marker_fails_closed(tmp_path: Path):
+    manager = GenerationManager(tmp_path / "owner", _target(tmp_path))
+    active = manager.publish(
+        manager.allocate("rev-legacy", generation_id="generation-legacy"),
+        lambda manifest: None,
+    )
+
+    marker = manager.mark_incompatible(
+        active.generation_id,
+        reason="legacy LIBCLANG structural provenance cannot be proven compatible",
+    )
+
+    assert marker.is_file()
+    with pytest.raises(ValueError, match="structurally incompatible"):
+        manager.load_active()
+    with pytest.raises(ValueError, match="structurally incompatible"):
+        manager.publish(active, lambda manifest: None)
+
+
 def test_bounded_lane_returns_structured_overload_without_unbounded_queue():
     async def exercise() -> None:
         lane = BoundedLane("graph", LaneLimits(concurrency=1, max_queue_items=1, max_queue_bytes=10))

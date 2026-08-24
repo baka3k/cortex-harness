@@ -23,7 +23,27 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import Tool
 from fastmcp.tools.tool import ToolResult
 
+
+ROOT_DIR = Path(__file__).resolve().parent
+_CODE_TINY_DIR = str(ROOT_DIR.parent)
+if _CODE_TINY_DIR not in sys.path:
+    sys.path.insert(0, _CODE_TINY_DIR)
+
 load_dotenv()  # Load environment variables from .env file if present
+
+from tools.graph.core.provider_contract import (  # noqa: E402
+    isolate_graph_provider_environment,
+)
+
+isolate_graph_provider_environment(
+    os.environ,
+    os.environ.get("CODE_GRAPH_PROVIDER")
+    or os.environ.get("GRAPH_PROVIDER")
+    or os.environ.get("MCP_GRAPH_PROVIDER"),
+    scoped_key=(
+        "CODE_GRAPH_PROVIDER" if "CODE_GRAPH_PROVIDER" in os.environ else None
+    ),
+)
 
 
 def _load_module(module_name: str, file_path: Path) -> Any:
@@ -34,8 +54,6 @@ def _load_module(module_name: str, file_path: Path) -> Any:
     spec.loader.exec_module(module)
     return module
 
-
-ROOT_DIR = Path(__file__).resolve().parent
 
 _mcp_dir = str(ROOT_DIR)
 if _mcp_dir not in sys.path:

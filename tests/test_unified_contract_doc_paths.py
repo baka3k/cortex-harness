@@ -385,5 +385,5 @@ def test_dev_doc_env_exports_registry_targets_and_project_id():
     env = _doc_env_for_process(cfg)
     assert env["PROJECT_ID"] == "cortext"
     assert env["FALKORDB_GRAPH"] == "cortext_doc"
-    assert env["NEO4J_DB"] == "cortext_doc"
+    assert not any(key.startswith("NEO4J_") for key in env)
     assert env["QDRANT_COLLECTION_DOC"] == "cortext_doc"

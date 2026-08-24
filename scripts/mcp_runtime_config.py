@@ -33,6 +33,41 @@ LOCAL_STORAGE_KEYS = frozenset({
     "QDRANT_DOC_PATH", "FALKORDB_PATH", "FALKORDB_CODE_PATH", "FALKORDB_DOC_PATH",
 })
 
+_FALKORDB_PROVIDER_VALUES = frozenset({"falkor", "falkordb"})
+
+
+def normalize_graph_provider(env: Dict[str, str], scoped_provider: str) -> str:
+    """Resolve one explicit graph provider and reject ambiguous values."""
+    scoped_value = str(env.get(scoped_provider) or "").strip()
+    global_value = str(env.get("GRAPH_PROVIDER") or "").strip()
+    source = scoped_provider if scoped_value else "GRAPH_PROVIDER"
+    value = (scoped_value or global_value or "falkordb").casefold()
+    if value in _FALKORDB_PROVIDER_VALUES:
+        return "falkordb"
+    if value == "neo4j":
+        return "neo4j"
+    raise ValueError(
+        f"Unsupported graph provider for {source}: {value!r}; expected "
+        "'falkordb' (alias 'falkor') or 'neo4j'"
+    )
+
+
+def isolate_graph_provider_environment(
+    env: Dict[str, str], scoped_provider: str
+) -> str:
+    """Mutate ``env`` so it contains configuration for only one provider."""
+    provider = normalize_graph_provider(env, scoped_provider)
+    env["GRAPH_PROVIDER"] = provider
+    env[scoped_provider] = provider
+    for key in tuple(env):
+        if provider == "falkordb" and key.startswith("NEO4J_"):
+            env.pop(key, None)
+        elif provider == "neo4j" and (
+            key.startswith("FALKORDB_") or key == "DOC_FALKORDB_GRAPH"
+        ):
+            env.pop(key, None)
+    return provider
+
 
 def load_config_file(path: Path) -> Tuple[dict, Optional[Path]]:
     """Load one explicit harness config without applying active-file selection."""
@@ -149,21 +184,20 @@ def runtime_environment(
     if project_name:
         env["PROJECT_NAME"] = project_name
 
-    provider = (
-        env.get(scoped_provider)
-        or env.get("GRAPH_PROVIDER")
-        or "falkordb"
-    ).strip().lower()
-    provider = "falkordb" if provider in {"falkor", "falkordb"} else "neo4j"
-    env["GRAPH_PROVIDER"] = provider
-    env[scoped_provider] = provider
+    provider = isolate_graph_provider_environment(env, scoped_provider)
 
     if provider == "falkordb":
-        explicit_graph = (env.get("FALKORDB_GRAPH") or env.get("NEO4J_DB") or "").strip()
-        graph = (explicit_graph if section_name == "code" else project_id or "default").strip()
+        explicit_graph = (env.get("FALKORDB_GRAPH") or "").strip()
+        graph = (
+            (explicit_graph or project_id or "default")
+            if section_name == "code"
+            else (project_id or "default")
+        ).strip()
+        default_doc_graph = f"{project_id}_doc" if project_id else "default_doc"
         doc_graph = (
-            explicit_graph if section_name == "doc" else env.get("DOC_FALKORDB_GRAPH")
-            or (f"{project_id}_doc" if project_id else "default_doc")
+            (explicit_graph or default_doc_graph)
+            if section_name == "doc"
+            else (env.get("DOC_FALKORDB_GRAPH") or default_doc_graph)
         ).strip()
         code_collection = (env.get("QDRANT_COLLECTION") or project_id or "default").strip()
         doc_collection = (
@@ -181,8 +215,6 @@ def runtime_environment(
         for key in tuple(env):
             if key.startswith("QDRANT_") and key in {"QDRANT_URL", "QDRANT_HOST", "QDRANT_PORT", "QDRANT_API_KEY"}:
                 env.pop(key, None)
-            if key in {"NEO4J_URI", "NEO4J_USER", "NEO4J_USERNAME", "NEO4J_PASS", "NEO4J_PASSWORD"}:
-                env.pop(key, None)
             if key.startswith("FALKORDB_") and key in {
                 "FALKORDB_URI", "FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT",
                 "FALKORDB_USER", "FALKORDB_PASSWORD", "FALKORDB_SSL",
@@ -190,16 +222,39 @@ def runtime_environment(
                 env.pop(key, None)
         env.update(storage_overlay(resolved, owner=role))
         env["FALKORDB_GRAPH"] = doc_graph if role == StorageRole.DOCUMENT else graph
-        env["NEO4J_DB"] = env["FALKORDB_GRAPH"]
+    isolate_graph_provider_environment(env, scoped_provider)
     env["CORTEX_HARNESS_CONFIG_PATH"] = str(config_path)
     return env
 
 
 def format_bash_exports(env: Dict[str, str]) -> str:
-    return "\n".join(
+    lines = [
         f"export {key}={shlex.quote(value)}"
         for key, value in sorted(env.items())
-    )
+    ]
+    provider = str(
+        env.get("CODE_GRAPH_PROVIDER")
+        or env.get("DOC_GRAPH_PROVIDER")
+        or env.get("GRAPH_PROVIDER")
+        or "falkordb"
+    ).casefold()
+    if provider == "falkordb":
+        lines.extend(
+            (
+                'for _cortex_inactive_key in "${!NEO4J_@}"; do unset "$_cortex_inactive_key"; done',
+                "unset _cortex_inactive_key 2>/dev/null || true",
+            )
+        )
+    elif provider == "neo4j":
+        lines.extend(
+            (
+                'for _cortex_inactive_key in "${!FALKORDB_@}"; do unset "$_cortex_inactive_key"; done',
+                "unset DOC_FALKORDB_GRAPH _cortex_inactive_key 2>/dev/null || true",
+            )
+        )
+    else:
+        raise ValueError(f"Unsupported graph provider: {provider}")
+    return "\n".join(lines)
 
 
 def parse_args() -> argparse.Namespace:

@@ -8,10 +8,12 @@ blocks:
   - 260807-1329-parser-quality-recovery
   - 260807-2103-toolchain-reliability-hardening
   - 260821-1144-cplus-semantic-call-graph
+  - 260824-1411-cplus-clang-containment-hardening
 phaseBlockedBy:
   "03": [260807-1202-graph-ingest-write-path-hardening]
   "06": [260807-1202-graph-ingest-write-path-hardening]
 relatedPlans:
+  - 260824-1411-cplus-clang-containment-hardening
   - 260821-1144-cplus-semantic-call-graph
   - 260807-2103-toolchain-reliability-hardening
   - 260806-1648-local-file-storage

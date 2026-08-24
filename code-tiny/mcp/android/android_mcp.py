@@ -18,12 +18,6 @@ import torch
 from fastmcp import FastMCP
 from transformers import AutoModel, AutoTokenizer
 
-try:
-    from neo4j.exceptions import Neo4jError
-except ImportError:  # Neo4j is an optional compatibility extra.
-    class Neo4jError(Exception):
-        """Fallback used when only the FalkorDB provider is installed."""
-
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
@@ -33,8 +27,11 @@ _MCP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _MCP_DIR not in sys.path:
     sys.path.insert(0, _MCP_DIR)
 
-from tools.graph import GraphProvider
-from tools.graph.core.base import GraphDriver
+from tools.graph.core.base import GraphDriver, GraphProvider
+from tools.graph.core.provider_contract import (
+    is_database_not_found_error,
+    normalize_graph_provider_name,
+)
 from tools.graph.core.shared_runtime import get_shared_graph_driver
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
 from tools.common.local_qdrant import (
@@ -114,10 +111,7 @@ DEFAULT_QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "android_kotlin_
 
 
 def _normalize_graph_provider(value: Optional[str]) -> str:
-    normalized = (value or "falkordb").strip().lower()
-    if normalized in {"falkor", "falkordb", "falkor-db"}:
-        return "falkordb"
-    return "neo4j"
+    return normalize_graph_provider_name(value)
 
 
 DEFAULT_GRAPH_PROVIDER = _normalize_graph_provider(
@@ -125,10 +119,16 @@ DEFAULT_GRAPH_PROVIDER = _normalize_graph_provider(
     or os.environ.get("GRAPH_PROVIDER")
     or os.environ.get("MCP_GRAPH_PROVIDER")
 )
-DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
-DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
-DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "hyper_graph"
+if DEFAULT_GRAPH_PROVIDER == "neo4j":
+    DEFAULT_NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    DEFAULT_NEO4J_USER = os.environ.get("NEO4J_USER")
+    DEFAULT_NEO4J_PASSWORD = os.environ.get("NEO4J_PASS")
+    DEFAULT_NEO4J_DB = os.environ.get("NEO4J_DB") or "hyper_graph"
+else:
+    DEFAULT_NEO4J_URI = "bolt://localhost:7687"
+    DEFAULT_NEO4J_USER = None
+    DEFAULT_NEO4J_PASSWORD = None
+    DEFAULT_NEO4J_DB = "hyper_graph"
 DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
 DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
@@ -1031,12 +1031,7 @@ async def _filter_collections_for_vector(
 
 
 def _is_db_not_found(exc: Exception) -> bool:
-    if isinstance(exc, Neo4jError):
-        code = getattr(exc, "code", "") or ""
-        if "DatabaseNotFound" in code:
-            return True
-    text = str(exc)
-    return "Database does not exist" in text or "graph reference" in text
+    return is_database_not_found_error(exc)
 
 
 def _format_collection_errors(errors: List[Dict[str, str]], max_items: int = 5) -> str:
