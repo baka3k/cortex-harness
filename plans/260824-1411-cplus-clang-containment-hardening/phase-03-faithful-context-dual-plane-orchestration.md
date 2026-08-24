@@ -30,6 +30,8 @@ or source/dependency fingerprints do.
   - `build_call_graph`, `raw_payload_for`, callsite buffer/write path, `parse_args`
 - `code-tiny/tools/sync/incremental_sync.py`
   - `_build_analyzer_cmd`, C/C++ policy forwarding and run artifacts
+- `cortex_harness/storage/gateway.py`, `generation.py`, `admission.py`
+  - sole job admission, physical-target ownership, and generation lifecycle
 - `cortex_harness/dev.py`
   - sync-code option forwarding/status surface
 - `code-tiny/tools/cplus/semantic_context.py`
@@ -47,39 +49,58 @@ or source/dependency fingerprints do.
 
 ## Implementation steps
 
-1. Add one explicit C/C++ semantic mode surface reused from the pilot contract:
-   `containment` (default), `sparse`, or `comprehensive`. Forward it through
-   `dev sync code` and incremental sync without adding another scheduler.
-2. Load only an existing bounded/sanitized compile database. Do not execute
-   repository build commands, bootstrap CMake/Make/Bear, or synthesize missing
-   generated inputs in this plan.
-3. Register every TU/configuration and normalize external coverage states to
-   `faithful`, `inherited`, `synthetic`, `missing`, `rejected`, or `failed` with
-   one stable reason. Header-borrowed/inherited contexts remain ineligible for
-   strict publication.
-4. Select protocol-2 work only for `RegisteredContext.eligible` entries. Sparse
-   mode additionally applies the bounded cohort/budget policy; comprehensive
-   means all eligible contexts, not all repository files.
-5. Extend request/response provenance with context state, project, revision,
-   semantic-policy version, configuration identity, source/dependency hashes,
-   and worker/backend versions. Reject mismatches at both worker response and
-   parent-process acceptance boundaries.
-6. Stop deriving semantic completeness from zero Clang diagnostics alone.
-   `complete` requires faithful context, non-truncated successful extraction,
-   current contained dependencies, and exact provenance. Diagnostics may only
-   reduce completeness, never establish context fidelity.
-7. Emit one `SemanticCoverage` record for every TU/configuration in the served
-   scope, including `not_analyzed`, ineligible, rejected, failed, partial, and
-   complete outcomes. Absence of a row is treated as unknown later.
-8. Feed Tree-sitter lexical observations and eligible Clang observations to
-   `merge_call_evidence`. Preserve contradictory configuration observations
-   rather than choosing an implicit winner.
-9. Use the existing semantic cache and bounded scheduler identities. A change
-   to context, target, source, dependency, configuration, policy, worker, or
-   generated map must invalidate the affected semantic entry without
-   invalidating Tree-sitter structure.
-10. Export a run-scoped coverage/context/queue artifact and surface counts plus
-    stable failure reasons in the sync summary.
+1. Add one explicit C/C++ semantic mode surface: `containment` (default),
+   `sparse`, or `comprehensive`. `parse-quality` controls only Tree-sitter
+   reporting/same-backend retry; no cross-product combination can enable Clang
+   structure. Sparse/comprehensive alone may request protocol 2.
+2. Make incremental sync inside the admitted `StoreGateway` job the sole
+   orchestration owner. Its bounded worker pool emits artifacts to the job;
+   workers never own queues, provider clients, publication, or pointer flips.
+3. Load an existing bounded/sanitized compile database as a TU -> configuration
+   multimap, not first-command-wins. Canonicalize real working directory,
+   compiler family, target/sysroot/toolchain roots, language/dialect, macros,
+   includes, forced inputs, and generated/dependency hashes; deterministically
+   deduplicate variants and reject unsupported semantic-changing flags. Do not
+   execute builds or synthesize missing generated inputs.
+4. Separate three axes in the registry: `context_fidelity` = faithful,
+   inherited, synthetic, missing; `admission` = accepted/rejected plus reasons;
+   `execution_coverage` = not_analyzed, complete, partial, failed, truncated,
+   cancelled. Strict eligibility is exactly faithful + accepted + complete +
+   matching provenance. `safe_to_parse` is not evidence of faithful build
+   context.
+5. Treat fidelity as a parent-side attestation derived from a trusted compile
+   database origin, freshness, contained dependency graph, and approved roots.
+   Serialized requests/responses and worker-supplied fidelity fields are
+   untrusted; omitted, self-asserted, forged, or stale attestations fail closed.
+6. Before enqueueing, persist an immutable `SemanticScopeManifest` containing
+   expected `(project, generation, revision, policy, TU, configuration)` keys.
+   Sparse budgets and configuration caps stay visible as `not_analyzed` or
+   `variant_cap_exceeded`; they make the scope partial, never silently smaller.
+7. Maintain a header/dependency reverse index. A changed shared/generated
+   header invalidates every affected variant subject to a visible fan-out
+   budget; any deferred affected key remains pending and makes coverage partial.
+8. Run protocol 2 under OS-enforced isolation: dedicated low-privilege process
+   or container, read-only repository and approved toolchain roots, no network,
+   private empty temp, cleared `PYTHONPATH`/loader variables, resource/time/output
+   limits, verified interpreter/worker/native-library digests, no-follow path
+   containment, and an explicit external-header manifest. Sandbox unavailable
+   means noncoverage, not an in-process fallback.
+9. Extend request/response provenance with the manifest key, attestation,
+   source/dependency/generated hashes, and worker/backend versions. The parent
+   independently recomputes and verifies them; Clang diagnostics may reduce
+   coverage but zero diagnostics never establishes fidelity/completeness.
+10. Harden the semantic cache under a trusted per-project root: no-follow and
+    permission checks, locks, atomic rename plus fsync, corruption/orphan
+    recovery, and keys including project/root/generation/revision/horizon,
+    attestation, configuration, policy, worker, and dependencies. Validate a
+    cache hit exactly like a fresh response; external caches require a content
+    digest/authenticator.
+11. Feed lexical and eligible semantic observations to deterministic merge,
+    preserving per-configuration contradictions. Redact/harden `-D` values,
+    paths, diagnostics, errors, cache artifacts, and reports using structured
+    secret tainting rather than string-only best effort.
+12. Export the scope manifest plus context/admission/coverage/queue accounting
+    and stable reason IDs in the sync summary.
 
 ## Failure-state expectations
 
@@ -98,26 +119,31 @@ or source/dependency fingerprints do.
 - Missing include, generated header, target flag, or context produces explicit
   noncoverage and zero strict edges while retaining every Tree-sitter identity.
 - A forged non-empty fingerprint with non-faithful state is rejected.
+- Forged/stale/omitted fidelity, symlink escape, malicious include/plugin flags,
+  loader-variable injection, cache tampering, and cross-project cache reuse are
+  rejected; lack of sandbox yields typed noncoverage.
 - Context/source/dependency/config/policy mutations invalidate only expected
   semantic cache entries.
+- Two compile variants for one TU remain distinct; header fan-out and variant
+  caps leave explicit pending/not-analyzed manifest keys.
 - Queue overload, timeout, cancellation, crash, and truncated output cannot
   mutate the structural baseline or claim complete coverage.
 - Run:
 
 ```bash
-.venv/bin/python -m unittest \
-  tests.test_cplus_semantic_context \
-  tests.test_cplus_semantic_worker \
-  tests.test_cplus_dual_plane_integration \
-  tests.test_incremental_sync_parse_quality
+.venv/bin/python -m pytest -q \
+  tests/test_cplus_semantic_context.py \
+  tests/test_cplus_semantic_worker.py \
+  tests/test_cplus_dual_plane_integration.py \
+  tests/test_incremental_sync_parse_quality.py
 ```
 
 ## Acceptance criteria
 
 - Normal analyzer/sync code, not only benchmark/shadow tests, invokes protocol
   2 through the bounded context-aware lane.
-- Every served TU/configuration has a deterministic coverage record or is
-  explicitly outside the requested scope.
+- Actual manifest keys equal expected keys and each has exactly one current
+  coverage record; no runtime traversal is allowed to define completeness.
 - Only faithful, complete, provenance-matched worker results reach the strong
   evidence candidate set.
 - Structural payload counts, IDs, ranges, and relations match containment mode
