@@ -213,6 +213,46 @@ def test_known_relationship_mismatch_is_terminal_integrity_not_internal_defect()
     assert failure.retryable is False
 
 
+def test_child_journal_failure_is_classified_before_generic_traceback():
+    failure = _failure_record_for_exception(
+        subprocess.CalledProcessError(
+            1,
+            ["worker"],
+            stderr=(
+                "Traceback (most recent call last):\n"
+                "RuntimeError: graph journal did not drain: quarantined"
+            ),
+        ),
+        run_id="run-1",
+        correlation_id="corr-1",
+        phase=RunPhase.PARSING,
+    )
+
+    assert failure.code == "analyzer_journal_recovery_failure"
+    assert failure.failure_class is FailureClass.JOURNAL_RECOVERY
+    assert failure.retryable is False
+
+
+def test_normal_journal_log_does_not_mask_analyzer_traceback():
+    failure = _failure_record_for_exception(
+        subprocess.CalledProcessError(
+            1,
+            ["worker"],
+            stderr=(
+                "[journal] configured shared-shadow mode\n"
+                "Traceback (most recent call last):\n"
+                "RuntimeError: unrelated analyzer defect"
+            ),
+        ),
+        run_id="run-1",
+        correlation_id="corr-1",
+        phase=RunPhase.PARSING,
+    )
+
+    assert failure.code == "analyzer_internal_defect"
+    assert failure.failure_class is FailureClass.INTERNAL_DEFECT
+
+
 def test_timeout_is_ambiguous_unless_submission_is_explicitly_known_safe():
     ambiguous = _failure_record_for_exception(
         TimeoutError("write timed out"),
