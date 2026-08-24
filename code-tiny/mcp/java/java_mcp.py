@@ -16,8 +16,14 @@ import httpx
 import mcp.types as mcp_types
 import torch
 from fastmcp import FastMCP
-from neo4j.exceptions import Neo4jError
 from transformers import AutoModel, AutoTokenizer
+
+try:
+    from neo4j.exceptions import Neo4jError
+except ImportError:  # Neo4j is an optional compatibility extra.
+    class Neo4jError(Exception):
+        """Fallback used when only the FalkorDB provider is installed."""
+
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:

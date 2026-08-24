@@ -19,7 +19,9 @@ phaseBlockedBy:
     - 260807-1202-graph-ingest-write-path-hardening
     - 260807-1329-parser-quality-recovery
     - 260807-0929-mcp-ingest-query-concurrency
+    - 260824-1411-cplus-clang-containment-hardening
 relatedPlans:
+  - 260824-1411-cplus-clang-containment-hardening
   - 260804-1640-port-proc-cplus-to-code-tiny
   - 260807-1202-graph-ingest-write-path-hardening
   - 260807-1329-parser-quality-recovery
@@ -29,6 +31,15 @@ relatedPlans:
 ---
 
 # C/C++/Pro*C semantic call graph with Tree-sitter coverage and Clang authority
+
+## 2026-08-24 runtime-hardening amendment
+
+[`260824-1411-cplus-clang-containment-hardening`](../260824-1411-cplus-clang-containment-hardening/plan.md)
+closes the remaining contradiction between this dual-plane design and two live
+whole-payload Clang replacement/cache paths. It also owns normal-path protocol-2
+orchestration, faithful-context enforcement, exact-frontier query coverage, and
+the missing provider readback/rollback proof. Phase 07 cannot promote until that
+remediation finishes; the current containment decision remains authoritative.
 
 ## Overview
 
