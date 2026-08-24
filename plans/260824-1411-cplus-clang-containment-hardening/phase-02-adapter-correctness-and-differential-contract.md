@@ -123,8 +123,8 @@ coverage or overload identity.
 
 ## Todo
 
-- [ ] Replace mutable extent caching with two-pass local indexing.
-- [ ] Migrate structural Function IDs and semantic endpoint mapping to v2.
-- [ ] Add the adversarial differential fixture matrix.
-- [ ] Emit deterministic per-plane delta artifacts.
-- [ ] Prove exact Tree-sitter structural invariance.
+- [x] Replace mutable extent caching with two-pass local indexing.
+- [x] Migrate structural Function IDs and semantic endpoint mapping to v2.
+- [x] Add the adversarial differential fixture matrix.
+- [x] Emit deterministic per-plane delta artifacts.
+- [x] Prove exact Tree-sitter structural invariance.
