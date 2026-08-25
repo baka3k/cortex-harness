@@ -63,6 +63,7 @@ _LEAKED_ENV_KEYS = (
     "CODE_GRAPH_PROVIDER",
     "DOC_GRAPH_PROVIDER",
     "MCP_GRAPH_PROVIDER",
+    "CORTEX_HARNESS_CONFIG_PATH",
 )
 
 
@@ -147,6 +148,16 @@ class CaseInsensitiveLookupTests(_BaseTest):
             "  cortext  ", config_dir=self.config_dir
         )
         self.assertEqual(targets.project_id, "cortext")
+
+    def test_explicit_runtime_config_path_wins_over_cwd_discovery(self) -> None:
+        config_path = self.write_config("stock")
+        with mock.patch.dict(
+            os.environ,
+            {"CORTEX_HARNESS_CONFIG_PATH": str(config_path)},
+            clear=False,
+        ):
+            targets = project_registry.resolve_project_targets("stock")
+        self.assertEqual(targets.project_id, "stock")
 
     def test_none_or_empty_raises(self) -> None:
         self.write_config("cortext")

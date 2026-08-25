@@ -27,11 +27,14 @@ def _driver_key(
     if provider == GraphProvider.FALKORDB:
         raw_path = config.get("path")
         path = str(Path(raw_path).resolve()) if raw_path else ""
+        uri = str(config.get("uri") or "")
         return (
             provider.value,
+            uri,
             path,
             str(config.get("instance_id") or "default"),
             str(config.get("owner_id") or "code"),
+            bool(config.get("ssl", False)),
         )
     return (
         provider.value,

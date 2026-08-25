@@ -36,6 +36,7 @@ if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
 from cortex_harness.storage import StorageRole, resolve_storage, storage_overlay
+from cortex_harness.project_config import resolve_start_config
 from cortex_harness.storage.config import LEGACY_REMOTE_KEYS, validate_backend_config
 from cortex_harness.sync_processes import (
     embedded_falkordb_pids as _embedded_falkordb_pids,
@@ -569,7 +570,30 @@ def _normalize_embed_device(device: str) -> str:
     return "cpu"
 
 
-def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict:
+def _active_config_path_for_process(project_root: Optional[Path]) -> Optional[Path]:
+    """Return the selected config path without terminating when none exists."""
+    if project_root is None:
+        return None
+    config_dir = _config_dir(Path(project_root))
+    configs = sorted(config_dir.glob("*.json")) if config_dir.is_dir() else []
+    first: Optional[Path] = None
+    for path in configs:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        first = first or path
+        if isinstance(payload, dict) and payload.get("active") is True:
+            return Path(os.path.abspath(path))
+    return Path(os.path.abspath(first)) if first is not None else None
+
+
+def _code_env_for_process(
+    cfg: dict,
+    project_root: Optional[Path] = None,
+    *,
+    config_path: Optional[Path] = None,
+) -> dict:
     """Build the code-owner process environment for analyzers and MCP."""
     project = cfg.get("project", {})
     env = dict(cfg.get("code", {}).get("env", {}))
@@ -582,6 +606,7 @@ def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dic
     result.update(_storage_env_for_process(cfg, project_root, StorageRole.CODE))
     project_id = str(project.get("code") or project.get("name") or "").strip()
     if project_id:
+        result.setdefault("PROJECT_ID", project_id)
         result.setdefault("CORTEX_STORAGE_PROJECT_ID", project_id)
     result.setdefault("QDRANT_COLLECTION", collection)
     result.setdefault("QDRANT_COLLECTION_CODE", collection)
@@ -596,11 +621,19 @@ def _code_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dic
         result.setdefault("MAX_EMBED_CHARS", str(env["MAX_EMBED_CHARS"]))
     if env.get("CACHE_DIR"):
         result.setdefault("QDRANT_CACHE_DIR", str(env["CACHE_DIR"]))
+    config_path = config_path or _active_config_path_for_process(project_root)
+    if config_path is not None:
+        result["CORTEX_HARNESS_CONFIG_PATH"] = str(config_path)
     _isolate_graph_provider_environment(result, "CODE_GRAPH_PROVIDER")
     return result
 
 
-def _doc_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict:
+def _doc_env_for_process(
+    cfg: dict,
+    project_root: Optional[Path] = None,
+    *,
+    config_path: Optional[Path] = None,
+) -> dict:
     env = dict(cfg.get("doc", {}).get("env", {}))
     result = {
         k: str(v) for k, v in env.items()
@@ -617,16 +650,23 @@ def _doc_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict
     # An explicit value in ``doc.env.QDRANT_COLLECTION`` still wins.
     project_id = (cfg.get("project") or {}).get("code")
     targets = None
+    config_path = config_path or _active_config_path_for_process(project_root)
+    if config_path is not None:
+        result["CORTEX_HARNESS_CONFIG_PATH"] = str(config_path)
     if project_id:
         try:
             # Local import — dev.py is part of the cortex_harness package;
             # project_registry lives in code-tiny.
             from tools.common.project_registry import resolve_project_targets
 
-            targets = resolve_project_targets(project_id)
+            targets = resolve_project_targets(
+                project_id,
+                config_dir=config_path.parent if config_path is not None else None,
+            )
         except Exception:
             targets = None
         result.setdefault("PROJECT_ID", str(project_id))
+        result.setdefault("CORTEX_STORAGE_PROJECT_ID", str(project_id))
     doc_collection = result.get("QDRANT_COLLECTION_DOC") or result.get(
         "QDRANT_COLLECTION"
     )
@@ -641,28 +681,22 @@ def _doc_env_for_process(cfg: dict, project_root: Optional[Path] = None) -> dict
 
 
 def _mcp_env_from_config(project_dir: Path, service_name: str) -> dict:
+    config_root, cfg_path = resolve_start_config(Path(project_dir), REPO_ROOT)
+    if not cfg_path.is_file():
+        return {}
     try:
-        cfg_dir = _config_dir(project_dir)
-        configs = sorted(cfg_dir.glob("*.json")) if cfg_dir.exists() else []
-        if not configs:
-            return {}
-        cfg = None
-        for path in configs:
-            with open(path, encoding="utf-8") as f:
-                candidate = json.load(f)
-            if candidate.get("active"):
-                cfg = candidate
-                break
-        if cfg is None:
-            with open(configs[0], encoding="utf-8") as f:
-                cfg = json.load(f)
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
     if service_name == "code-tiny":
-        return _code_env_for_process(cfg, project_dir)
-    if service_name == "doc-tiny":
-        return _doc_env_for_process(cfg, project_dir)
-    return {}
+        result = _code_env_for_process(cfg, config_root, config_path=cfg_path)
+    elif service_name == "doc-tiny":
+        result = _doc_env_for_process(cfg, config_root, config_path=cfg_path)
+    else:
+        return {}
+    result["CORTEX_HARNESS_CONFIG_PATH"] = str(Path(os.path.abspath(cfg_path)))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1813,8 +1847,17 @@ def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
     scoped_provider = "DOC_GRAPH_PROVIDER" if name == "doc-tiny" else "CODE_GRAPH_PROVIDER"
     provider = _isolate_graph_provider_environment(env, scoped_provider)
     if provider == "falkordb":
+        explicit_remote = {
+            key: str(value)
+            for key, value in (extra_env or {}).items()
+            if key in _REMOTE_STORAGE_KEYS and str(value).strip()
+        }
         for key in _REMOTE_STORAGE_KEYS:
             env.pop(key, None)
+        env.update(explicit_remote)
+        if env.get("FALKORDB_URI") or env.get("FALKORDB_URL"):
+            for key in ("FALKORDB_PATH", "FALKORDB_CODE_PATH", "FALKORDB_DOC_PATH"):
+                env.pop(key, None)
 
     MCP_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = MCP_LOG_DIR / f"dev-mcp-{name}.log"

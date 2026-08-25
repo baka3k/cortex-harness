@@ -41,10 +41,11 @@ CODE_TINY = ROOT / "code-tiny"
 if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
+from cortex_harness.project_config import resolve_start_config as resolve_project_start_config
+
 STATE_DIR = ROOT / ".cache" / "mcp"
 PID_FILE = STATE_DIR / "pids.json"
 VENV_DIR = ROOT / ".venv"
-DEV_CONFIG = Path(".cortext-harness") / "config" / "dev.json"
 
 PYTHON_DEPENDENCY_PROBE = (
     "import qdrant_client, requests; "
@@ -1707,14 +1708,7 @@ def validate_instance_name(value: str) -> str:
 
 def resolve_start_config(start: Path | None = None) -> tuple[Path, Path]:
     """Find the nearest project dev.json, then fall back to the install config."""
-    current = (start or Path.cwd()).absolute()
-    if current.is_file():
-        current = current.parent
-    for candidate_root in (current, *current.parents):
-        config_path = candidate_root / DEV_CONFIG
-        if config_path.is_file():
-            return candidate_root, config_path
-    return ROOT, ROOT / DEV_CONFIG
+    return resolve_project_start_config(start or Path.cwd(), ROOT)
 
 
 def config_instance(environment: dict[str, str]) -> str:
@@ -1778,7 +1772,11 @@ def runtime_overrides(
         "CORTEX_STORAGE_OWNER": "code" if is_code else "doc",
     }
     if options.project:
-        overrides.update({"PROJECT_ID": options.project, "PROJECT_NAME": options.project})
+        overrides.update({
+            "PROJECT_ID": options.project,
+            "CORTEX_STORAGE_PROJECT_ID": options.project,
+            "PROJECT_NAME": options.project,
+        })
     provider_environment = dict(environment or {})
     if options.provider:
         provider_environment["GRAPH_PROVIDER"] = options.provider
@@ -1874,19 +1872,10 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
         wrapper = STATE_DIR / f"start-{state_name}.command"
         pid_path = STATE_DIR / f"{state_name}.pid"
         runtime_env_path = STATE_DIR / f"{state_name}.active.env"
-        from cortex_harness.storage import resolve_storage, storage_overlay
-
-        owner = "code" if server["name"] == "code-tiny" else "doc"
-        storage_config = resolve_storage(
-            config_root,
-            config=runtime_env,
-            instance_id=runtime_env.get("CORTEX_STORAGE_INSTANCE", "default"),
-            code_graph=runtime_env.get("FALKORDB_GRAPH") if owner == "code" else None,
-            doc_graph=runtime_env.get("FALKORDB_GRAPH") if owner == "doc" else None,
-            code_collection=runtime_env.get("QDRANT_COLLECTION"),
-            doc_collection=runtime_env.get("QDRANT_COLLECTION_DOC"),
-        )
-        runtime_env.update(storage_overlay(storage_config, owner=owner))
+        # ``runtime_environment`` is the authoritative, fully resolved storage
+        # overlay. Re-resolving its environment-shaped output here loses the
+        # top-level remote backend contract and can silently route MCP back to
+        # an embedded local database.
         isolate_graph_provider_environment(runtime_env, str(server["name"]))
         runtime_env_path.write_text(
             format_bash_exports(runtime_env) + ("\n" if runtime_env else ""),

@@ -278,9 +278,11 @@ class MakeLifecycleTests(unittest.TestCase):
                 self.assertNotIn("FALKORDB_URI", content)
                 self.assertIn("export CORTEX_STORAGE_INSTANCE=default", active_content)
                 self.assertIn("export CORTEX_DATA_HOME=", active_content)
-                self.assertIn("export FALKORDB_PATH=", active_content)
+                self.assertTrue(
+                    "export FALKORDB_PATH=" in active_content
+                    or "export FALKORDB_URI=" in active_content
+                )
                 self.assertIn("export QDRANT_CODE_PATH=", active_content)
-                self.assertNotIn("QDRANT_URL", active_content)
                 scoped_provider = "DOC_GRAPH_PROVIDER" if server["name"] == "doc-tiny" else "CODE_GRAPH_PROVIDER"
                 self.assertIn(
                     f'export {scoped_provider}="${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}"',
@@ -506,8 +508,9 @@ class MakeLifecycleTests(unittest.TestCase):
             env_content = active_env.read_text(encoding="utf-8")
             self.assertIn("export MCP_SERVER_NAME=shop-code", env_content)
             self.assertIn("export PROJECT_ID=SHOP", env_content)
+            self.assertIn("export CORTEX_STORAGE_PROJECT_ID=SHOP", env_content)
             self.assertIn("export FALKORDB_GRAPH=SHOP", env_content)
-            self.assertNotIn("NEO4J_", env_content)
+            self.assertNotIn("export NEO4J_", env_content)
             self.assertIn("export QDRANT_COLLECTION=SHOP", env_content)
 
     def test_custom_start_supports_independent_code_and_doc_settings(self):

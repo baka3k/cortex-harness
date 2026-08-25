@@ -88,6 +88,10 @@ def extract_seed_ids(items: List[Dict[str, Any]]) -> List[str]:
         node_id = payload.get("node_id") or payload.get("symbol_id")
         if node_id:
             text = str(node_id)
+            # Python vector payloads identify file-level hits as
+            # ``file::<path>`` while graph File nodes use the bare path.
+            if text.startswith("file::"):
+                text = text[len("file::"):]
             if text not in seed_ids:
                 seed_ids.append(text)
     return seed_ids

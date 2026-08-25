@@ -14,7 +14,10 @@ Run from the repo root::
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -154,26 +157,23 @@ class TestProjectIdOptional(unittest.TestCase):
                 self.assertEqual(result, "cortext_doc")
                 resolve_mock.assert_called_once_with("cortext")
 
-    def test_resolve_doc_collection_unregistered_falls_back_to_project_id(self):
-        """The headline fix: an unknown project_id must NOT raise."""
+    def test_resolve_doc_collection_unregistered_fails_closed(self):
         with patch.object(
             self.project_contract,
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
         ):
-            # The requested scope is not registered (only 'cortext' is) — fall back.
-            result = self.mcp._resolve_doc_collection("client-alpha")
-            self.assertEqual(result, "client-alpha")
+            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
+                self.mcp._resolve_doc_collection("client-alpha")
 
-    def test_resolve_doc_collection_empty_known_list_still_falls_back(self):
-        """No registered projects at all — still fall back to project_id."""
+    def test_resolve_doc_collection_empty_known_list_fails_closed(self):
         with patch.object(
             self.project_contract,
             "_read_project_entries",
             return_value=[],
         ):
-            result = self.mcp._resolve_doc_collection("anything")
-            self.assertEqual(result, "anything")
+            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
+                self.mcp._resolve_doc_collection("anything")
 
     # -- _resolve_doc_collections ------------------------------------------------
     def test_resolve_doc_collections_no_project_id_returns_all_registered(self):
@@ -188,14 +188,14 @@ class TestProjectIdOptional(unittest.TestCase):
             result = self.mcp._resolve_doc_collections(None)
         self.assertEqual(set(result), {"a_doc", "b_doc"})
 
-    def test_resolve_doc_collections_unregistered_returns_singleton(self):
+    def test_resolve_doc_collections_unregistered_fails_closed(self):
         with patch.object(
             self.project_contract,
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
         ):
-            result = self.mcp._resolve_doc_collections("client-alpha")
-        self.assertEqual(result, ["client-alpha"])
+            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
+                self.mcp._resolve_doc_collections("client-alpha")
 
     def test_resolve_doc_collections_explicit_collection_wins(self):
         result = self.mcp._resolve_doc_collections(None, collection="explicit")
@@ -217,53 +217,39 @@ class TestProjectIdOptional(unittest.TestCase):
             result = names
         self.assertEqual(result, ["aa", "bb", "cc"])
 
-    def test_list_qdrant_collections_unregistered_returns_all(self):
-        """A project-scoped lookup used to
-        raise; now it should behave like 'no project_id' and return all."""
-        qdrant = _StubQdrant(["alpha", "beta", "gamma"])
-        # Replicate the tool's body but call the helper directly.
-        with patch.object(self.mcp, "get_qdrant", return_value=qdrant), \
-             patch.object(
+    def test_list_qdrant_collections_unregistered_fails_closed(self):
+        with patch.object(
                 self.project_contract,
                 "_read_project_entries",
                 return_value=[{"project_id": "cortext", "doc_env": {}}],
-             ):
-            # The actual call via the registered tool goes through _resolve_doc_collection.
-            # If that helper raises ProjectNotRegisteredError, the new list_qdrant_collections
-            # body catches it and returns the full list. Verify that contract.
-            try:
-                expected = self.mcp._resolve_doc_collection("client-alpha")
-                # If registration succeeded, the filter applies:
-                result = [n for n in qdrant.list_collection_names() if n == expected]
-                self.assertEqual(result, [])
-            except self.project_contract.ProjectNotRegisteredError:
-                # The new code path catches this and returns all names:
-                result = qdrant.list_collection_names()
-                self.assertEqual(result, ["alpha", "beta", "gamma"])
+        ):
+            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
+                self.mcp._resolve_doc_collection("client-alpha")
 
     # -- _acquire_graph_store ----------------------------------------------------
-    def test_acquire_graph_store_unregistered_project_id_fall_back(self):
-        """An unregistered project_id should still produce a scoped store
-        via the per-project naming convention (not raise)."""
-        captured = {}
-
-        class _FakeBase:
-            provider = "falkordb"
-
-            def for_graph(self, name):
-                captured["graph_name"] = name
-                return f"store({name})"
-
-        with patch.object(self.mcp, "get_neo4j", return_value=_FakeBase()), \
-             patch.object(
-                self.project_contract,
-                "_read_project_entries",
-                return_value=[{"project_id": "cortext", "doc_env": {}}],
-             ):
-            store, owned = self.mcp._acquire_graph_store("client-alpha")
-        self.assertEqual(captured.get("graph_name"), "client-alpha")
-        self.assertEqual(store, "store(client-alpha)")
+    def test_acquire_graph_store_routes_project_to_project_factory(self):
+        scoped = object()
+        with patch.object(self.mcp, "get_neo4j", return_value=scoped) as get_graph:
+            store, owned = self.mcp._acquire_graph_store("cortext")
+        self.assertIs(store, scoped)
+        get_graph.assert_called_once_with("cortext")
         self.assertFalse(owned)
+
+    def test_explicit_runtime_config_path_wins_over_cwd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_dir = Path(directory)
+            config_path = config_dir / "stock.json"
+            config_path.write_text(json.dumps({
+                "project": {"code": "stock"},
+                "doc": {"env": {"FALKORDB_GRAPH": "stock_doc"}},
+            }), encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {"CORTEX_HARNESS_CONFIG_PATH": str(config_path)},
+                clear=False,
+            ):
+                targets = self.project_contract.resolve_project_targets("stock")
+        self.assertEqual(targets.doc_graph, "stock_doc")
 
 
 if __name__ == "__main__":

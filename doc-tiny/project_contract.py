@@ -28,6 +28,7 @@ applied.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -108,6 +109,10 @@ class DuplicateProjectRegistrationError(ProjectContractError):
 
 def _default_config_dir() -> Path:
     """Locate ``.cortext-harness/config`` from CWD, walking up."""
+    explicit = str(os.environ.get("CORTEX_HARNESS_CONFIG_PATH") or "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_dir() else path.parent
     cwd = Path.cwd()
     for candidate in (cwd, *cwd.parents):
         path = candidate / ".cortext-harness" / "config"

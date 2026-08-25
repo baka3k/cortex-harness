@@ -850,6 +850,27 @@ function Remove-InactiveGraphEnvironment {
     return $provider
 }
 
+function Resolve-StartConfig {
+    $current = [System.IO.Path]::GetFullPath((Get-Location).Path)
+    while ($true) {
+        $candidate = Join-Path $current ".cortext-harness\config\dev.json"
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return [pscustomobject]@{
+                Root = $current
+                Path = (Resolve-Path -LiteralPath $candidate).Path
+            }
+        }
+        $parent = [System.IO.Directory]::GetParent($current)
+        if ($null -eq $parent) { break }
+        $current = $parent.FullName
+    }
+
+    return [pscustomobject]@{
+        Root = $Root
+        Path = Join-Path $Root ".cortext-harness\config\dev.json"
+    }
+}
+
 function Get-StartConfiguration {
     $custom = (
         $Server -ne "all" -or $Name -or $Project -or $Database -or $CodeDatabase -or $DocDatabase -or
@@ -949,6 +970,7 @@ function Get-RuntimeOverrides {
     }
     if ($Project) {
         $overrides.PROJECT_ID = $Project
+        $overrides.CORTEX_STORAGE_PROJECT_ID = $Project
         $overrides.PROJECT_NAME = $Project
     }
     $providerEnvironment = [ordered]@{}
@@ -981,6 +1003,10 @@ function Get-RuntimeOverrides {
 
 function Invoke-Start {
     $config = Get-StartConfiguration
+    $startConfig = Resolve-StartConfig
+    if (-not (Test-Path -LiteralPath $startConfig.Path -PathType Leaf)) {
+        throw "MCP config not found: $($startConfig.Path)"
+    }
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
     if ($config.Custom) {
         Invoke-Stop -InstanceName $config.Instance
@@ -1011,11 +1037,11 @@ function Invoke-Start {
         $runtimeJsonPath = Join-Path $StateDir "$stateName.active.json"
         $runtimeBashPath = Join-Path $StateDir "$stateName.active.env"
         $rootPython = Get-RootVenvPython
-        $runtimeJson = & $rootPython $runtimeConfigScript --root $Root --server $server.Name --format json
+        $runtimeJson = & $rootPython $runtimeConfigScript --root $startConfig.Root --config $startConfig.Path --server $server.Name --format json
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to resolve active MCP environment for $($server.Name)."
         }
-        $runtimeBash = & $rootPython $runtimeConfigScript --root $Root --server $server.Name --format bash
+        $runtimeBash = & $rootPython $runtimeConfigScript --root $startConfig.Root --config $startConfig.Path --server $server.Name --format bash
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to render active MCP environment for $($server.Name)."
         }

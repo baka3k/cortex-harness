@@ -172,7 +172,7 @@ def _shortest_hop_cypher(rel_types: List[str], depth: int) -> str:
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
 WHERE ($project_id IS NULL OR seed.project_id_normalized = $project_id_normalized)
-MATCH p = shortestPath((seed)-[:{rel}*1..{depth}]-(target {{id: $target_id}}))
+MATCH p = (seed)-[:{rel}*1..{depth}]-(target {{id: $target_id}})
 WHERE ($project_id IS NULL OR target.project_id_normalized = $project_id_normalized)
 RETURN length(p) AS hops
 ORDER BY hops
@@ -360,8 +360,8 @@ RETURN
         records: List[Dict[str, Any]],
     ) -> Dict[str, int]:
         """
-        Use Neo4j shortestPath to compute exact hop distances for returned
-        neighbor node IDs.
+        Use the shortest returned variable-length path to compute exact hop
+        distances for returned neighbor node IDs across supported providers.
 
         The expansion query returns the minimum path length for every node.
         Keep a conservative fallback for legacy/fake drivers that omit it.

@@ -8,10 +8,16 @@ MCP_DIR = ROOT / "code-tiny" / "mcp"
 if str(MCP_DIR) not in sys.path:
     sys.path.insert(0, str(MCP_DIR))
 
-from semantic_graph_expansion import expand_semantic_results  # noqa: E402
+from semantic_graph_expansion import expand_semantic_results, extract_seed_ids  # noqa: E402
 
 
 class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
+    def test_file_vector_ids_are_normalized_to_graph_file_ids(self):
+        self.assertEqual(
+            extract_seed_ids([{"payload": {"symbol_id": "file::src/auth/login.py"}}]),
+            ["src/auth/login.py"],
+        )
+
     async def test_project_scope_filters_seeds_neighbors_and_edges(self):
         calls = []
 

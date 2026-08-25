@@ -200,14 +200,23 @@ async def _get_graph_driver() -> GraphDriver:
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
         from cortex_harness.storage import resolve_storage
 
+        remote_uri = os.environ.get("FALKORDB_URI") or os.environ.get("FALKORDB_URL")
         config = {
-            "path": os.environ.get("FALKORDB_PATH")
-            or str(resolve_storage(Path.cwd()).falkordb_code_path),
+            "uri": remote_uri,
+            "path": None if remote_uri else (
+                os.environ.get("FALKORDB_PATH")
+                or str(resolve_storage(Path.cwd()).falkordb_code_path)
+            ),
             "graph": DEFAULT_FALKORDB_GRAPH,
+            "password": os.environ.get("FALKORDB_PASSWORD"),
+            "ssl": os.environ.get("FALKORDB_SSL", "").strip().lower()
+            in {"1", "true", "yes", "on"},
+            "_suppress_deprecation": bool(remote_uri),
             "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
             "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
-            "additional_paths": discover_falkordb_data_files(),
         }
+        if not remote_uri:
+            config["additional_paths"] = discover_falkordb_data_files()
         _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
         return _graph_driver
     if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
@@ -1713,8 +1722,8 @@ async def tool_find_path_between_module(
         "AND any(token IN $targets WHERE t.file_path CONTAINS token) "
         "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
         "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
-        f"MATCH p=shortestPath((s)-[:CALLS*..{depth}]->(t)) "
-        "RETURN p LIMIT 10"
+        f"MATCH p=(s)-[:CALLS*..{depth}]->(t) "
+        "RETURN p ORDER BY length(p) LIMIT 10"
     )
     used_db, results = await _run_cypher_first(query, {"sources": source_modules, "targets": target_modules, "project_id": project_id}, db_candidates)
     paths = [row["p"] for row in results]

@@ -33,6 +33,12 @@ LOCAL_STORAGE_KEYS = frozenset({
     "QDRANT_DOC_PATH", "FALKORDB_PATH", "FALKORDB_CODE_PATH", "FALKORDB_DOC_PATH",
 })
 
+REMOTE_STORAGE_KEYS = frozenset({
+    "QDRANT_URL", "QDRANT_HOST", "QDRANT_PORT", "QDRANT_API_KEY",
+    "FALKORDB_URI", "FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT",
+    "FALKORDB_USER", "FALKORDB_PASSWORD", "FALKORDB_SSL",
+})
+
 _FALKORDB_PROVIDER_VALUES = frozenset({"falkor", "falkordb"})
 
 
@@ -150,12 +156,20 @@ def resolve_active_storage(
     **logical_targets: object,
 ):
     """Resolve the active config, with explicit process-local path overrides winning."""
+    config, loaded_path = (
+        load_config_file(config_path) if config_path is not None else load_active_config(root)
+    )
+    if loaded_path is None:
+        config = {}
+    else:
+        config = dict(config)
     local_config, _ = active_local_storage_config(root, config_path)
+    config.update(local_config)
     for key in LOCAL_STORAGE_KEYS:
         value = os.environ.get(key, "").strip()
         if value:
-            local_config[key] = value
-    return resolve_storage(Path(root), config=local_config, **logical_targets)
+            config[key] = value
+    return resolve_storage(Path(root), config=config, **logical_targets)
 
 
 def runtime_environment(
@@ -211,16 +225,11 @@ def runtime_environment(
             code_collection=code_collection, doc_collection=doc_collection,
         )
         role = StorageRole.DOCUMENT if section_name == "doc" else StorageRole.CODE
-        # Remove the network-era fields from the process environment. The
-        # default local runtime must not accidentally connect to a service.
-        for key in tuple(env):
-            if key.startswith("QDRANT_") and key in {"QDRANT_URL", "QDRANT_HOST", "QDRANT_PORT", "QDRANT_API_KEY"}:
-                env.pop(key, None)
-            if key.startswith("FALKORDB_") and key in {
-                "FALKORDB_URI", "FALKORDB_URL", "FALKORDB_HOST", "FALKORDB_PORT",
-                "FALKORDB_USER", "FALKORDB_PASSWORD", "FALKORDB_SSL",
-            }:
-                env.pop(key, None)
+        # Replace both endpoint and path fields with the single resolved
+        # storage overlay. This prevents stale shell values from winning while
+        # preserving an explicit top-level ``storage_backend: remote`` config.
+        for key in LOCAL_STORAGE_KEYS | REMOTE_STORAGE_KEYS:
+            env.pop(key, None)
         env.update(storage_overlay(resolved, owner=role))
         env["FALKORDB_GRAPH"] = doc_graph if role == StorageRole.DOCUMENT else graph
     isolate_graph_provider_environment(env, scoped_provider)
@@ -261,6 +270,7 @@ def format_bash_exports(env: Dict[str, str]) -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--server", choices=("code-tiny", "doc-tiny"), required=True)
     parser.add_argument("--format", choices=("json", "bash"), default="json")
     return parser.parse_args()
@@ -268,7 +278,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    env = runtime_environment(args.root, args.server)
+    env = runtime_environment(args.root, args.server, args.config)
     if args.format == "bash":
         print(format_bash_exports(env))
     else:

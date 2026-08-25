@@ -215,14 +215,23 @@ async def _get_graph_driver() -> GraphDriver:
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
         from cortex_harness.storage import resolve_storage
 
+        remote_uri = os.environ.get("FALKORDB_URI") or os.environ.get("FALKORDB_URL")
         config = {
-            "path": os.environ.get("FALKORDB_PATH")
-            or str(resolve_storage(Path.cwd()).falkordb_code_path),
+            "uri": remote_uri,
+            "path": None if remote_uri else (
+                os.environ.get("FALKORDB_PATH")
+                or str(resolve_storage(Path.cwd()).falkordb_code_path)
+            ),
             "graph": DEFAULT_FALKORDB_GRAPH,
+            "password": os.environ.get("FALKORDB_PASSWORD"),
+            "ssl": os.environ.get("FALKORDB_SSL", "").strip().lower()
+            in {"1", "true", "yes", "on"},
+            "_suppress_deprecation": bool(remote_uri),
             "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
             "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
-            "additional_paths": discover_falkordb_data_files(),
         }
+        if not remote_uri:
+            config["additional_paths"] = discover_falkordb_data_files()
         _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
         return _graph_driver
     if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
@@ -488,6 +497,11 @@ def _profile_rel_types(parser_type: Optional[str], profile: Optional[str]) -> Op
     capability = capability_for_parser(_normalize_parser_type(parser_type) or "cplus")
     if capability is None:
         return None
+    if normalized in {"strict", "conservative"} and capability.name != "cplus":
+        raise ValueError(
+            f"query_profile {normalized!r} is only supported for C/C++/Pro*C; "
+            f"parser {capability.name!r} does not publish compatible call-evidence metadata"
+        )
     relationships = capability.default_query_profiles.get(normalized)
     if relationships is None:
         raise ValueError(
@@ -676,7 +690,10 @@ def _record_node(
     mode = _normalize_content_mode(content_mode)
     if isinstance(node, dict):
         node_id = node.get("id")
-        props = {key: value for key, value in node.items() if key != "labels"}
+        props = {
+            key: value for key, value in node.items()
+            if key not in {"labels", "_graph_id"}
+        }
         content = _select_content(props, node_id, mode)
         if not include_raw_fields:
             _prune_content_fields(props)
@@ -702,13 +719,32 @@ def _record_node(
     }
 
 
-def _record_rel(rel: Any) -> Dict[str, Any]:
+def _record_rel(
+    rel: Any,
+    graph_node_ids: Optional[Dict[Any, str]] = None,
+) -> Dict[str, Any]:
     if isinstance(rel, dict):
+        raw_start = rel.get("start_id", rel.get("_start_id"))
+        raw_end = rel.get("end_id", rel.get("_end_id"))
+
+        def endpoint(value: Any) -> Any:
+            if isinstance(value, dict):
+                return value.get("id")
+            return (graph_node_ids or {}).get(value, value)
+
+        properties = rel.get("properties")
+        if not isinstance(properties, dict):
+            properties = {
+                key: value for key, value in rel.items()
+                if key not in {
+                    "type", "_type", "start_id", "_start_id", "end_id", "_end_id"
+                }
+            }
         return {
-            "type": rel.get("type"),
-            "properties": dict(rel.get("properties", {})),
-            "start_id": rel.get("start_id"),
-            "end_id": rel.get("end_id"),
+            "type": rel.get("type", rel.get("_type")),
+            "properties": properties,
+            "start_id": endpoint(raw_start),
+            "end_id": endpoint(raw_end),
         }
     # neo4j 6.x: record.data() serializes Relationship as (start_node_dict, type_str, end_node_dict)
     if isinstance(rel, (list, tuple)):
@@ -781,8 +817,15 @@ def _paths_to_graph(
             node_id = node.get("id")
             if node_id and node_id not in nodes:
                 nodes[node_id] = _record_node(node, mode, include_raw_fields=include_raw_fields)
+        graph_node_ids = {
+            node.get("_graph_id"): str(node.get("id"))
+            for node in path_nodes
+            if isinstance(node, dict)
+            and node.get("_graph_id") is not None
+            and node.get("id") is not None
+        }
         for rel in path_rels:
-            edges.append(_record_rel(rel))
+            edges.append(_record_rel(rel, graph_node_ids))
     return {"nodes": list(nodes.values()), "edges": edges}
 
 
@@ -1758,20 +1801,29 @@ async def tool_semantic_search(
     db = payload.get("db")
     project_id = payload.get("project_id")
     capability_diagnostics: Optional[Dict[str, Any]] = None
+    graph_expansion_unavailable = False
     if expand_graph:
+        explicit_relationship_request = (
+            graph_rel_types is not None
+            and not bool(payload.get("_capability_default_relationships"))
+        )
         graph_rel_types, capability_diagnostics = await _resolve_rel_types_with_diagnostics(
             graph_rel_types,
             payload.get("parser_type"),
             _resolve_db_candidates(project_id),
-            explicit=(
-                graph_rel_types is not None
-                and not bool(payload.get("_capability_default_relationships"))
-            ),
+            explicit=explicit_relationship_request,
         )
         if not graph_rel_types:
-            return _unsupported_relationship_result(
-                payload.get("parser_type"), capability_diagnostics,
-            )
+            if explicit_relationship_request:
+                return _unsupported_relationship_result(
+                    payload.get("parser_type"), capability_diagnostics,
+                )
+            # Vector retrieval is independently useful. Treat unavailable
+            # graph relationships as a degraded expansion stage instead of
+            # failing the complete semantic-search request.
+            graph_expansion_unavailable = True
+            expand_graph = False
+            graph_rel_types = []
     query = (query or "").strip()
     if not query:
         raise ValueError("query is required.")
@@ -1841,6 +1893,13 @@ async def tool_semantic_search(
             graph_limit=graph_limit,
             project_id=project_id,
         )
+        if graph_expansion_unavailable:
+            results["graph_expansion"].update({
+                "requested": True,
+                "outcome": "unavailable",
+                "reason": "No requested relationships are available in the active graph provider.",
+                "relationship_types": [],
+            })
         if capability_diagnostics:
             results["capability_diagnostics"] = capability_diagnostics
         return results
@@ -1869,6 +1928,13 @@ async def tool_semantic_search(
             graph_limit=graph_limit,
             project_id=project_id,
         )
+        if graph_expansion_unavailable:
+            results["graph_expansion"].update({
+                "requested": True,
+                "outcome": "unavailable",
+                "reason": "No requested relationships are available in the active graph provider.",
+                "relationship_types": [],
+            })
         if capability_diagnostics:
             results["capability_diagnostics"] = capability_diagnostics
         return results
@@ -1900,6 +1966,13 @@ async def tool_semantic_search(
         graph_limit=graph_limit,
         project_id=project_id,
     )
+    if graph_expansion_unavailable:
+        results["graph_expansion"].update({
+            "requested": True,
+            "outcome": "unavailable",
+            "reason": "No requested relationships are available in the active graph provider.",
+            "relationship_types": [],
+        })
     if capability_diagnostics:
         results["capability_diagnostics"] = capability_diagnostics
     return results
@@ -2909,7 +2982,7 @@ async def tool_trace_flow(
     end_id = str(end_id) if end_id is not None else None
 
     if end_id is not None:
-        # FalkorDB rejects Neo4j-style ``MATCH p=shortestPath(...)`` (it only
+        # FalkorDB rejects Neo4j-style shortest-path MATCH expressions (it only
         # allows shortestPaths in WITH/RETURN), so use a variable-length match
         # ordered by path length.
         query = (
@@ -3076,8 +3149,8 @@ async def tool_trace_flow_between_module(
         "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
         "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
         "AND s.id <> t.id "
-        f"MATCH p=shortestPath((s){rel_match}(t)) "
-        "RETURN p LIMIT $limit"
+        f"MATCH p=(s){rel_match}(t) "
+        "RETURN p ORDER BY length(p) LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         query,
@@ -3101,8 +3174,8 @@ async def tool_trace_flow_between_module(
             "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
             "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
             "AND s.id <> t.id "
-            f"MATCH p=shortestPath((s){rel_match}(t)) "
-            "RETURN p LIMIT $limit"
+            f"MATCH p=(s){rel_match}(t) "
+            "RETURN p ORDER BY length(p) LIMIT $limit"
         )
         used_db, results = await _run_cypher_first(
             fallback_query,

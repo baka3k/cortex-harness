@@ -136,6 +136,20 @@ def test_fanout_tools_advertise_parser_type_in_catalog():
     assert seen == set(module.FANOUT_SEARCH_TOOL_NAMES)
 
 
+def test_catalog_contains_each_registered_tool_once():
+    spec = importlib.util.spec_from_file_location("test_tool_metadata_unique", TOOL_METADATA)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    requested = {entry["name"] for entry in module._FULL_CATALOG}
+    catalog = module.build_catalog(requested)
+    names = [entry["name"] for entry in catalog]
+
+    assert len(names) == len(set(names))
+    assert set(names) == requested
+
+
 def test_catalog_inputs_are_accepted_by_handwritten_wrappers():
     wrappers = _function_nodes()
     mismatches = {}
@@ -183,8 +197,8 @@ def test_graph_backends_honor_configured_falkordb_provider():
         assert "DEFAULT_GRAPH_DB" in source, backend
 
 
-def test_graph_backends_default_to_falkordb_hyper_graph():
+def test_graph_backends_use_shared_provider_default_and_hyper_graph():
     for backend in GRAPH_BACKENDS:
         source = backend.read_text(encoding="utf-8")
-        assert '(value or "falkordb")' in source, backend
+        assert "normalize_graph_provider_name(value)" in source, backend
         assert 'or "hyper_graph"' in source, backend

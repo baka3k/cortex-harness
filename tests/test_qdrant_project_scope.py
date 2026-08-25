@@ -163,6 +163,69 @@ class QdrantProjectScopeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cplus_semantic_search_keeps_vector_results_when_graph_is_unavailable(self):
+        tool = getattr(cplus_mcp.tool_semantic_search, "fn", cplus_mcp.tool_semantic_search)
+        store = _LocalStore()
+        diagnostics = {
+            "schema_status": "available",
+            "support_status": "unsupported",
+            "requested_relationships": ["CALLS"],
+            "used_relationships": [],
+            "available_relationships": [],
+        }
+        with patch.object(
+            cplus_mcp,
+            "_resolve_rel_types_with_diagnostics",
+            AsyncMock(return_value=([], diagnostics)),
+        ), patch.object(
+            cplus_mcp, "_embed_query", return_value=[0.1, 0.2],
+        ), patch.object(
+            cplus_mcp,
+            "_resolve_base_collections",
+            AsyncMock(return_value=(["symbols"], True)),
+        ), patch.object(
+            cplus_mcp,
+            "_filter_collections_for_vector",
+            AsyncMock(return_value=([("symbols", None)], [])),
+        ), patch.object(
+            cplus_mcp, "get_code_qdrant_store", return_value=store,
+        ):
+            result = await tool(payload={
+                "query": "login",
+                "collection": "symbols",
+                "project_id": "stock",
+                "expand_graph": True,
+            })
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["graph_expansion"]["outcome"], "unavailable")
+        self.assertEqual(result["capability_diagnostics"], diagnostics)
+
+    async def test_cplus_semantic_search_fails_for_explicit_unsupported_relationships(self):
+        tool = getattr(cplus_mcp.tool_semantic_search, "fn", cplus_mcp.tool_semantic_search)
+        diagnostics = {
+            "schema_status": "available",
+            "support_status": "unsupported",
+            "requested_relationships": ["NOT_INGESTED"],
+            "used_relationships": [],
+            "available_relationships": ["CALLS"],
+        }
+        with patch.object(
+            cplus_mcp,
+            "_resolve_rel_types_with_diagnostics",
+            AsyncMock(return_value=([], diagnostics)),
+        ), patch.object(cplus_mcp, "_embed_query") as embed:
+            result = await tool(payload={
+                "query": "login",
+                "project_id": "stock",
+                "expand_graph": True,
+                "graph_rel_types": ["NOT_INGESTED"],
+            })
+
+        self.assertEqual(result["error_type"], "unsupported_capability")
+        self.assertEqual(result["capability_diagnostics"], diagnostics)
+        embed.assert_not_called()
+
     async def test_unregistered_project_filters_discovered_collections(self):
         for backend in (fastmcp_server, cplus_mcp, android_mcp, java_mcp):
             tool = getattr(
