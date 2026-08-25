@@ -296,7 +296,13 @@ def _inputs_from_signature(fn: Any, existing_inputs: List[Dict[str, Any]]) -> Li
             {
                 "name": param_name,
                 "type": _annotation_to_type_str(param.annotation),
-                "required": param.default is param.empty,
+                # Some FastMCP wrappers use an empty-string default so they can
+                # return our structured error instead of a transport-level
+                # schema error. Preserve the catalog's logical requirement in
+                # that case while still deriving the accepted parameter list
+                # from the callable signature.
+                "required": bool(previous.get(param_name, {}).get("required"))
+                or param.default is param.empty,
                 "description": description,
             }
         )
@@ -933,6 +939,18 @@ class _ProxyMiddleware(Middleware):
         'to_mcp_result'`` at the protocol boundary.
         """
         if isinstance(result, ToolResult):
+            structured = result.structured_content
+            if (
+                isinstance(structured, dict)
+                and structured.get("ok") is False
+                and not result.is_error
+            ):
+                return ToolResult(
+                    content=result.content,
+                    structured_content=structured,
+                    meta=result.meta,
+                    is_error=True,
+                )
             return result
         if result is None:
             return ToolResult(content="")
@@ -944,6 +962,7 @@ class _ProxyMiddleware(Middleware):
             return ToolResult(
                 content=message or "Tool execution failed.",
                 structured_content=result,
+                is_error=True,
             )
         if isinstance(result, dict):
             return ToolResult(content="", structured_content=result)
@@ -964,7 +983,7 @@ class _ProxyMiddleware(Middleware):
             else:
                 result = await _dispatch_tool(name, arguments)
             return self._wrap_dispatch_result(result)
-        return await call_next(context)
+        return self._wrap_dispatch_result(await call_next(context))
 
 
 _proxy_middleware = _ProxyMiddleware()
@@ -1625,6 +1644,8 @@ async def tool_explore_graph(
         )
     backend_name = _resolve_backend_name(selected_parser)
     capability = capability_for_parser(selected_parser)
+    requested_mode = mode or "hybrid"
+    effective_mode = requested_mode
     relationship_types: Optional[List[str]] = None
     capability_diagnostics: Optional[Dict[str, Any]] = None
     if capability and backend_name != "android" and (mode or "hybrid") != "semantic":
@@ -1637,18 +1658,7 @@ async def tool_explore_graph(
             )
         )
         if not relationship_types:
-            result = _build_tool_error(
-                "explore_graph",
-                {"query": q, "parser_type": selected_parser},
-                ValueError(
-                    f"Parser '{selected_parser}' has no relationships available in the active provider."
-                ),
-                backend_name=backend_name,
-            )
-            result["error"]["type"] = "unsupported_capability"
-            result["capability"] = _capability_summary(selected_parser, backend_name)
-            result["capability_diagnostics"] = capability_diagnostics
-            return result
+            effective_mode = "semantic"
     service = get_explore_service()
     active_db = _resolve_graph_database(project_id=project_id or None) if project_id else None
     resolved_collection = collection or None
@@ -1662,7 +1672,7 @@ async def tool_explore_graph(
     result = await service.explore(
         query      = q,
         top_k      = k,
-        mode       = mode or "hybrid",
+        mode       = effective_mode,
         db         = active_db,
         collection = resolved_collection,
         debug      = debug,
@@ -1676,6 +1686,15 @@ async def tool_explore_graph(
     result["capability"] = _capability_summary(selected_parser, backend_name)
     if capability_diagnostics:
         result["capability_diagnostics"] = capability_diagnostics
+    if effective_mode != requested_mode:
+        result["requested_mode"] = requested_mode
+        result["graph_expansion"] = {
+            "requested": True,
+            "enabled": False,
+            "outcome": "unavailable",
+            "reason": "No requested relationships are available in the active graph provider.",
+            "relationship_types": [],
+        }
     return result
 
 

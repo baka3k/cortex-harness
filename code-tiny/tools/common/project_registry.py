@@ -169,6 +169,10 @@ def _default_config_dir() -> Path:
     reached. Falls back to the CWD-relative path so tests can monkeypatch the
     surrounding directory.
     """
+    explicit = str(os.environ.get("CORTEX_HARNESS_CONFIG_PATH") or "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_dir() else path.parent
     cwd = Path.cwd()
     for candidate in (cwd, *cwd.parents):
         path = candidate / DEFAULT_CONFIG_DIRNAME

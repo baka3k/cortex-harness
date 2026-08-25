@@ -75,7 +75,79 @@ class DevInitGraphProviderTests(unittest.TestCase):
 
     def test_mcp_env_without_config_is_empty(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            self.assertEqual(_mcp_env_from_config(Path(temp_dir), "code-tiny"), {})
+            empty_harness = Path(temp_dir) / "harness"
+            empty_harness.mkdir()
+            with patch("cortex_harness.dev.REPO_ROOT", empty_harness):
+                self.assertEqual(_mcp_env_from_config(Path(temp_dir), "code-tiny"), {})
+
+    def test_mcp_env_exposes_selected_config_path_to_project_registry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_dir = root / ".cortext-harness" / "config"
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "dev.json"
+            config_path.write_text(json.dumps({
+                "active": True,
+                "project": {"code": "stock"},
+                "code": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+                "doc": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+            }), encoding="utf-8")
+
+            env = _mcp_env_from_config(root, "code-tiny")
+
+        self.assertEqual(env["CORTEX_HARNESS_CONFIG_PATH"], str(config_path))
+
+    def test_mcp_env_uses_nearest_parent_dev_config_for_both_services(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "project"
+            nested = root / "src" / "feature"
+            config_path = root / ".cortext-harness" / "config" / "dev.json"
+            config_path.parent.mkdir(parents=True)
+            nested.mkdir(parents=True)
+            config_path.write_text(json.dumps({
+                "active": True,
+                "project": {"code": "SHOP", "name": "Shop"},
+                "code": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+                "doc": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+            }), encoding="utf-8")
+            (config_path.parent / "prod.json").write_text(json.dumps({
+                "active": True,
+                "project": {"code": "WRONG", "name": "Wrong"},
+                "code": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+                "doc": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+            }), encoding="utf-8")
+
+            environments = {
+                service: _mcp_env_from_config(nested, service)
+                for service in ("code-tiny", "doc-tiny")
+            }
+
+        for env in environments.values():
+            self.assertEqual(env["PROJECT_ID"], "SHOP")
+            self.assertEqual(env["CORTEX_STORAGE_PROJECT_ID"], "SHOP")
+            self.assertEqual(env["CORTEX_HARNESS_CONFIG_PATH"], str(config_path))
+
+    def test_mcp_env_falls_back_to_harness_dev_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            caller = base / "caller" / "nested"
+            harness = base / "cortex-harness"
+            config_path = harness / ".cortext-harness" / "config" / "dev.json"
+            caller.mkdir(parents=True)
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(json.dumps({
+                "active": True,
+                "project": {"code": "FALLBACK", "name": "Fallback"},
+                "code": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+                "doc": {"env": {"GRAPH_PROVIDER": "falkordb"}},
+            }), encoding="utf-8")
+
+            with patch("cortex_harness.dev.REPO_ROOT", harness):
+                env = _mcp_env_from_config(caller, "code-tiny")
+
+        self.assertEqual(env["PROJECT_ID"], "FALLBACK")
+        self.assertEqual(env["CORTEX_STORAGE_PROJECT_ID"], "FALLBACK")
+        self.assertEqual(env["CORTEX_HARNESS_CONFIG_PATH"], str(config_path))
 
     def test_mcp_start_scrubs_inherited_remote_endpoints_for_local_falkordb(self):
         svc_dir = Path(__file__).resolve().parents[1] / "code-tiny"
@@ -117,6 +189,37 @@ class DevInitGraphProviderTests(unittest.TestCase):
         self.assertNotIn("FALKORDB_PORT", child_env)
         self.assertNotIn("QDRANT_URL", child_env)
         self.assertFalse(any(key.startswith("NEO4J_") for key in child_env))
+
+    def test_mcp_start_preserves_explicit_remote_storage_endpoints(self):
+        svc_dir = Path(__file__).resolve().parents[1] / "code-tiny"
+        svc = {
+            "dir": svc_dir,
+            "cmd": ["mcp/unified_mcp.py"],
+            "url": "http://127.0.0.1:8788/mcp",
+        }
+        remote_env = {
+            "GRAPH_PROVIDER": "falkordb",
+            "CODE_GRAPH_PROVIDER": "falkordb",
+            "FALKORDB_URI": "redis://graph.internal:6379",
+            "FALKORDB_GRAPH": "stock",
+            "QDRANT_URL": "http://qdrant.internal:6333",
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict("os.environ", {}, clear=True), patch(
+                "cortex_harness.dev._venv_python", return_value="/fake/python"
+            ), patch(
+                "cortex_harness.dev._load_dotenv", return_value={}
+            ), patch("cortex_harness.dev.subprocess.Popen") as popen, patch(
+                "cortex_harness.dev.MCP_LOG_DIR", Path(temp_dir)
+            ):
+                popen.return_value = SimpleNamespace(pid=123)
+                _mcp_start_one("code-tiny", svc, extra_env=remote_env)
+
+        child_env = popen.call_args.kwargs["env"]
+        self.assertEqual(child_env["FALKORDB_URI"], remote_env["FALKORDB_URI"])
+        self.assertEqual(child_env["QDRANT_URL"], remote_env["QDRANT_URL"])
+        self.assertNotIn("FALKORDB_PATH", child_env)
 
     def test_graph_args_fallback_to_falkordb_hyper_graph(self):
         self.assertIn("--graph-provider", _neo4j_args_code({}))

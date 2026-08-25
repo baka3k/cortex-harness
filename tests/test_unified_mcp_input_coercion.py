@@ -20,6 +20,62 @@ from tools.common.workflow_impact_scorer import WorkflowImpactScorer
 
 
 class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
+    def test_proxy_marks_structured_application_errors_as_mcp_errors(self):
+        result = unified_mcp._ProxyMiddleware._wrap_dispatch_result(
+            {
+                "ok": False,
+                "error": {
+                    "type": "unsupported_capability",
+                    "message": "graph unavailable",
+                },
+            }
+        )
+
+        self.assertTrue(result.is_error)
+        self.assertFalse(result.structured_content["ok"])
+
+        direct_result = unified_mcp.ToolResult(
+            content="graph unavailable",
+            structured_content={"ok": False, "error": {"message": "graph unavailable"}},
+        )
+        normalized = unified_mcp._ProxyMiddleware._wrap_dispatch_result(direct_result)
+        self.assertTrue(normalized.is_error)
+        self.assertFalse(normalized.structured_content["ok"])
+
+    async def test_hybrid_explore_degrades_to_semantic_when_graph_is_unavailable(self):
+        captured = {}
+
+        class FakeExploreService:
+            async def explore(self, **kwargs):
+                captured.update(kwargs)
+                return {"matched_nodes": [{"node_id": "login"}]}
+
+        diagnostics = {
+            "schema_status": "available",
+            "support_status": "unsupported",
+            "requested_relationships": ["CALLS"],
+            "used_relationships": [],
+            "available_relationships": [],
+        }
+        tool = getattr(unified_mcp.tool_explore_graph, "fn", unified_mcp.tool_explore_graph)
+        with patch(
+            "services.explore_service.get_explore_service",
+            return_value=FakeExploreService(),
+        ), patch.object(
+            unified_mcp.cplus_backend,
+            "_resolve_rel_types_with_diagnostics",
+            AsyncMock(return_value=([], diagnostics)),
+        ):
+            result = await tool(
+                query="login", mode="hybrid", parser_type="python",
+                project_id="stock",
+            )
+
+        self.assertEqual(captured["mode"], "semantic")
+        self.assertEqual(result["requested_mode"], "hybrid")
+        self.assertEqual(result["graph_expansion"]["outcome"], "unavailable")
+        self.assertEqual(result["matched_nodes"][0]["node_id"], "login")
+
     async def test_semantic_only_explore_does_not_require_graph_relationships(self):
         captured = {}
 

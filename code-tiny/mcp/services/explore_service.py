@@ -165,15 +165,24 @@ async def _make_graph_driver(
             from cortex_harness.storage import resolve_storage
             from falkordb_discovery import discover_falkordb_data_files
 
+            remote_uri = os.environ.get("FALKORDB_URI") or os.environ.get("FALKORDB_URL")
             config = {
-                "path": os.environ.get("FALKORDB_PATH")
-                or str(resolve_storage(Path.cwd()).falkordb_code_path),
+                "uri": remote_uri,
+                "path": None if remote_uri else (
+                    os.environ.get("FALKORDB_PATH")
+                    or str(resolve_storage(Path.cwd()).falkordb_code_path)
+                ),
                 "database": database,
                 "graph": database,
+                "password": os.environ.get("FALKORDB_PASSWORD"),
+                "ssl": os.environ.get("FALKORDB_SSL", "").strip().lower()
+                in {"1", "true", "yes", "on"},
+                "_suppress_deprecation": bool(remote_uri),
                 "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
                 "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
-                "additional_paths": discover_falkordb_data_files(),
             }
+            if not remote_uri:
+                config["additional_paths"] = discover_falkordb_data_files()
             return await get_shared_graph_driver(GraphProvider.FALKORDB, config)
 
         return await get_shared_graph_driver(

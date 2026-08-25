@@ -21,6 +21,7 @@ from cortex_harness.storage import (
     RemoteStorageConfig,
     ResolvedStorage,
     StorageFactory,
+    StorageRole,
     create_storage,
 )
 
@@ -111,6 +112,17 @@ def _resolved_storage(tmp_path: Path) -> ResolvedStorage:
         falkordb_doc_path=tmp_path / "falkordb" / "doc" / "data.rdb",
         instance_id="default",
     )
+
+
+def test_local_falkordb_document_role_uses_document_path_and_owner(tmp_path):
+    resolved = _resolved_storage(tmp_path)
+    factory = StorageFactory(backend_mode=BackendMode.LOCAL, resolved=resolved)
+
+    driver = factory.get_falkordb_driver("stock_doc", role=StorageRole.DOCUMENT)
+
+    assert driver.path == str(resolved.falkordb_doc_path)
+    assert driver.owner_id == resolved.doc_owner_id
+    assert driver.graph == "stock_doc"
 
 
 class _FakeTargets:
