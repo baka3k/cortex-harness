@@ -9,6 +9,7 @@ invoking a real docker daemon.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from unittest import mock
@@ -37,19 +38,25 @@ LIFECYCLE = _load_lifecycle()
 
 
 @pytest.fixture
-def fake_run():
+def fake_run(monkeypatch):
     """Patch ``LIFECYCLE.run`` with a side-effect router keyed on the
     docker subcommand (``argv[1]``) — the test harness resolves
     ``shutil.which`` to ``/usr/bin/docker`` so the full path differs across
     hosts but the subcommand is stable.
     """
 
+    monkeypatch.setattr(LIFECYCLE, "_wait_for_service", lambda _spec: True)
+
     def factory(handlers: dict[str, mock.Mock]):
         default = mock.Mock(returncode=1, stdout="", stderr="unexpected call")
-        router = mock.Mock(side_effect=lambda argv, **_kwargs: handlers.get(
-            argv[1] if len(argv) > 1 else "",
-            default,
-        ))
+
+        def route(argv, **_kwargs):
+            key = argv[1] if len(argv) > 1 else ""
+            if key == "inspect" and argv[-1] == "{{json .NetworkSettings.Ports}}":
+                key = "inspect-ports"
+            return handlers.get(key, default)
+
+        router = mock.Mock(side_effect=route)
 
         def fake_run(arguments, *, capture=False, check=True):
             return router(arguments, capture=capture, check=check)
@@ -77,6 +84,15 @@ def _qdrant_spec():
 
 def _falkordb_spec():
     return next(spec for spec in LIFECYCLE.DOCKER_SERVICES if spec["name"] == "cortex-falkordb")
+
+
+def _inspect_ports_output(spec):
+    return json.dumps({
+        f"{container_port}/tcp": [
+            {"HostIp": "127.0.0.1", "HostPort": str(host_port)}
+        ]
+        for host_port, container_port in LIFECYCLE._resolved_ports(spec)
+    })
 
 
 # ── _docker_available ─────────────────────────────────────────────────────
@@ -124,6 +140,63 @@ class TestContainerState:
             assert LIFECYCLE._container_state("cortex-qdrant") is None
 
 
+# ── _container_published_ports ───────────────────────────────────────────
+
+
+class TestContainerPublishedPorts:
+    def test_parses_docker_network_settings_json(self):
+        payload = json.dumps({
+            "3000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3000"}],
+            "6379/tcp": [{"HostIp": "127.0.0.1", "HostPort": "6379"}],
+        })
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            LIFECYCLE,
+            "run",
+            return_value=mock.Mock(returncode=0, stdout=payload, stderr=""),
+        ):
+            assert LIFECYCLE._container_published_ports("cortex-falkordb") == {
+                ("127.0.0.1", 3000, 3000, "tcp"),
+                ("127.0.0.1", 6379, 6379, "tcp"),
+            }
+
+    @pytest.mark.parametrize("payload", ["", "not-json", "[]", "null"])
+    def test_malformed_or_non_mapping_output_is_empty(self, payload):
+        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+            LIFECYCLE,
+            "run",
+            return_value=mock.Mock(returncode=0, stdout=payload, stderr=""),
+        ):
+            assert LIFECYCLE._container_published_ports("cortex-falkordb") == set()
+
+
+# ── _wait_for_service ────────────────────────────────────────────────────
+
+
+class TestWaitForService:
+    def test_retries_until_storage_port_accepts_connections(self):
+        with mock.patch.object(
+            LIFECYCLE, "redis_ping", side_effect=[False, True]
+        ) as redis_ready, mock.patch.object(LIFECYCLE.time, "sleep"):
+            assert LIFECYCLE._wait_for_service(
+                _falkordb_spec(), timeout=1.0, interval=0.0
+            ) is True
+        assert [call.args[1] for call in redis_ready.call_args_list] == [6379, 6379]
+
+    def test_returns_false_after_timeout(self):
+        with mock.patch.object(LIFECYCLE, "tcp_port_open", return_value=False):
+            assert LIFECYCLE._wait_for_service(
+                _qdrant_spec(), timeout=0.0, interval=0.0
+            ) is False
+
+    def test_falkordb_uses_redis_ping_not_plain_tcp(self):
+        with mock.patch.object(LIFECYCLE, "redis_ping", return_value=True) as ping, mock.patch.object(
+            LIFECYCLE, "tcp_port_open"
+        ) as tcp:
+            assert LIFECYCLE._wait_for_service(_falkordb_spec(), timeout=0.0) is True
+        ping.assert_called_once_with("127.0.0.1", 6379, timeout=1.0)
+        tcp.assert_not_called()
+
+
 # ── _ensure_service: running branch ───────────────────────────────────────
 
 
@@ -131,6 +204,9 @@ class TestEnsureServiceRunning:
     def test_running_container_is_left_alone(self, fake_run):
         handlers = {
             "inspect": mock.Mock(returncode=0, stdout="running\n", stderr=""),
+            "inspect-ports": mock.Mock(
+                returncode=0, stdout=_inspect_ports_output(_qdrant_spec()), stderr=""
+            ),
         }
         run_fn, router = fake_run(handlers)
         with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
@@ -227,6 +303,9 @@ class TestEnsureServiceMissingImageAbsent:
         assert "created + started cortex-falkordb" in rendered
         # FalkorDB's primary port is the Browser UI (index 1 → 3000).
         assert "http://127.0.0.1:3000" in rendered
+        argv = _find_run_call(router).args[0]
+        assert "cortex-falkordb-data:/var/lib/falkordb/data" in argv
+        assert "cortex-falkordb-data:/data" not in argv
 
 
 # ── _ensure_service: image + env overrides ────────────────────────────────
@@ -357,6 +436,9 @@ class TestEndpointOutput:
     def test_falkordb_output_includes_browser_ui_and_redis_urls(self, fake_run):
         handlers = {
             "inspect": mock.Mock(returncode=0, stdout="running\n", stderr=""),
+            "inspect-ports": mock.Mock(
+                returncode=0, stdout=_inspect_ports_output(_falkordb_spec()), stderr=""
+            ),
         }
         run_fn, _router = fake_run(handlers)
         with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
@@ -400,16 +482,20 @@ class TestEndpointOutput:
         assert "Browser UI" in rendered
 
     def test_endpoint_lines_honor_port_overrides(self, fake_run):
-        handlers = {
-            "inspect": mock.Mock(returncode=0, stdout="running\n", stderr=""),
-        }
-        run_fn, _router = fake_run(handlers)
-        with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
-            LIFECYCLE, "run", side_effect=run_fn
-        ), mock.patch.dict(
+        with mock.patch.dict(
             "os.environ", {"FALKORDB_PORT": "16379", "FALKORDB_UI_PORT": "3001"}, clear=True
-        ), mock.patch("builtins.print") as output:
-            LIFECYCLE._ensure_service(_falkordb_spec())
+        ):
+            handlers = {
+                "inspect": mock.Mock(returncode=0, stdout="running\n", stderr=""),
+                "inspect-ports": mock.Mock(
+                    returncode=0, stdout=_inspect_ports_output(_falkordb_spec()), stderr=""
+                ),
+            }
+            run_fn, _router = fake_run(handlers)
+            with mock.patch.object(LIFECYCLE.shutil, "which", return_value="/usr/bin/docker"), mock.patch.object(
+                LIFECYCLE, "run", side_effect=run_fn
+            ), mock.patch("builtins.print") as output:
+                LIFECYCLE._ensure_service(_falkordb_spec())
         rendered = "\n".join(call.args[0] for call in output.call_args_list if call.args)
         assert "redis://127.0.0.1:16379" in rendered
         assert "http://127.0.0.1:3001" in rendered
