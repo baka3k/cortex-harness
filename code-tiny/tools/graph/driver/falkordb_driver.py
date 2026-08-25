@@ -152,7 +152,9 @@ def _normalize_falkordb_value(value: Any) -> Any:
 
     if hasattr(value, "properties") and hasattr(value, "labels"):
         node = _as_properties(value)
-        node.setdefault("_graph_id", getattr(value, "id", None))
+        graph_id = getattr(value, "id", None)
+        if graph_id is not None:
+            node.setdefault("_graph_id", graph_id)
         return node
 
     if hasattr(value, "properties") and hasattr(value, "relation"):

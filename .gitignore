@@ -79,6 +79,15 @@ cortex_harness/CLAUDE.md
 frontend/**/CLAUDE.md
 backendjs/**/CLAUDE.md
 tests/fixtures/**
+!tests/fixtures/cobol-application/
+!tests/fixtures/cobol-application/**
+!tests/fixtures/cobol-dialects/
+!tests/fixtures/cobol-dialects/**
+!tests/fixtures/flutter-app/
+!tests/fixtures/flutter-app/**
+!tests/fixtures/flutter-protocol-v1.jsonl
+!tests/fixtures/framework-java-app/
+!tests/fixtures/framework-java-app/**
 !tests/fixtures/shell-application/
 !tests/fixtures/shell-application/batch_entry.sh
 !tests/fixtures/aspnet-core-application/

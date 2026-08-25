@@ -1,0 +1,7 @@
+name: cortex_flutter_fixture
+description: Parser fixture for the Cortex Flutter analyzer.
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+dependencies:
+  flutter:
+    sdk: flutter
