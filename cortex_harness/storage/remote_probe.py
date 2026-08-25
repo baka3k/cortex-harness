@@ -74,7 +74,10 @@ def probe_falkordb(config: RemoteStorageConfig) -> ProbeResult:
             graph="__probe__",
             _suppress_deprecation=True,
         )
-        driver.execute_query("RETURN 1 AS ok")
+        # Lifecycle probes are synchronous. Calling the async execute_query()
+        # without awaiting it reports a false positive and emits an un-awaited
+        # coroutine warning; use the driver's explicit synchronous boundary.
+        driver.execute_query_sync("RETURN 1 AS ok")
         return ProbeResult("falkordb", config.falkordb_uri, True, "reachable")
     except Exception as exc:
         return ProbeResult("falkordb", config.falkordb_uri, False, str(exc), cause=exc)
@@ -147,7 +150,7 @@ def provision_falkordb_graph(
             _suppress_deprecation=True,
         )
         # FalkorDB auto-creates graphs on first query.
-        driver.execute_query("RETURN 1 AS ok")
+        driver.execute_query_sync("RETURN 1 AS ok")
         return ProvisionResult(
             f"falkordb:{graph_name}", "exists",
             f"graph '{graph_name}' is accessible",

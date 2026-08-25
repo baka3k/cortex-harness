@@ -2,7 +2,7 @@
 title: "FalkorDB Browser UI — infra-up ensure + doctor hiển thị UI URL"
 status: active
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-25
 mode: hi-plan --full
 scope: scripts/mcp-lifecycle.py, cortex_harness/storage/remote_probe.py (read-only), tests/test_doctor_remote.py, tests/test_docker_ensure.py, ReadMe.md
 relatedPlans:
@@ -89,3 +89,10 @@ thậm chí dùng nó làm primary URL khi in trạng thái. Vậy:
       parse đúng host; `unix://` không crash, không in UI URL.
 - [x] `FALKORDB_UI_PORT=3001` được tôn trọng ở cả infra-up và doctor.
 - [x] Test suites liên quan pass: `test_doctor_remote.py`, `test_docker_ensure.py`.
+
+## 2026-08-25 Follow-up
+
+The Browser UI remains the displayed primary URL, but container readiness now
+targets the Redis endpoint with a real `PING`. The FalkorDB volume target is
+also corrected from `/data` to `/var/lib/falkordb/data`, preventing graph loss
+when the lifecycle legitimately recreates a container to update port mappings.
