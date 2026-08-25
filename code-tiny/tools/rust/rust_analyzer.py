@@ -306,6 +306,95 @@ def _namespace_id(qualified_name: str) -> str:
     return f"namespace::{qualified_name}"
 
 
+def _register_type(
+    type_def: TypeDef,
+    types: List[TypeDef],
+    type_registry: Dict[str, TypeDef],
+) -> None:
+    existing = type_registry.get(type_def.symbol_id)
+    if existing is None:
+        type_registry[type_def.symbol_id] = type_def
+        types.append(type_def)
+        return
+    if existing.kind != "external" or type_def.kind == "external":
+        return
+    type_registry[type_def.symbol_id] = type_def
+    for index, item in enumerate(types):
+        if item is existing:
+            types[index] = type_def
+            break
+
+
+def _ensure_external_type(
+    type_id: str,
+    *,
+    rel_path: str,
+    node,
+    types: List[TypeDef],
+    type_registry: Dict[str, TypeDef],
+) -> None:
+    if type_id in type_registry:
+        return
+    _register_type(
+        TypeDef(
+            symbol_id=type_id,
+            qualified_name=type_id,
+            name=type_id.rsplit("::", 1)[-1],
+            kind="external",
+            file_path=rel_path,
+            start_line=node.start_point[0] + 1,
+            end_line=node.end_point[0] + 1,
+            code=type_id,
+        ),
+        types,
+        type_registry,
+    )
+
+
+def _impl_owner_name(
+    node,
+    source_bytes: bytes,
+    scope_stack: List[str],
+    type_registry: Dict[str, TypeDef],
+) -> Optional[str]:
+    type_node = node.child_by_field_name("type")
+    if type_node is None:
+        return None
+    while type_node.type in {"generic_type", "reference_type", "pointer_type"}:
+        inner_type = type_node.child_by_field_name("type")
+        if inner_type is None or inner_type is type_node:
+            break
+        type_node = inner_type
+    owner_name = re.sub(r"\s+", " ", _node_text(type_node, source_bytes)).strip()
+    if not owner_name:
+        return None
+    owner_scope = _scope_name(scope_stack)
+    qualified_name = f"{owner_scope}::{owner_name}" if owner_scope else owner_name
+    if qualified_name in type_registry:
+        return qualified_name
+    if owner_name in type_registry:
+        return owner_name
+    if owner_scope and "::" not in owner_name and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", owner_name):
+        return qualified_name
+    return owner_name
+
+
+def _scope_owner_endpoint(
+    scope_stack: List[str],
+    namespace_registry: Dict[str, NamespaceDef],
+    type_registry: Dict[str, TypeDef],
+) -> Optional[Tuple[str, str]]:
+    owner_scope = _scope_name(scope_stack)
+    if not owner_scope:
+        return None
+    if owner_scope in type_registry:
+        return owner_scope, "Type"
+    namespace_id = _namespace_id(owner_scope)
+    if namespace_id in namespace_registry:
+        return namespace_id, "Namespace"
+    return None
+
+
 def _anonymous_name(prefix: str, node) -> str:
     return f"Anonymous{prefix}@{node.start_point[0] + 1}:{node.start_point[1] + 1}"
 
@@ -584,12 +673,11 @@ def _walk_tree(
             code=snippet,
             comment=_extract_comment(node, source_bytes),
         )
-        if type_id not in type_registry:
-            type_registry[type_id] = type_def
-            types.append(type_def)
-        owner_scope = _scope_name(scope_stack)
-        if owner_scope:
-            _record_relation(relations, _namespace_id(owner_scope), "Namespace", type_id, "Type", "DECLARES")
+        _register_type(type_def, types, type_registry)
+        owner_endpoint = _scope_owner_endpoint(scope_stack, namespace_registry, type_registry)
+        if owner_endpoint:
+            owner_id, owner_label = owner_endpoint
+            _record_relation(relations, owner_id, owner_label, type_id, "Type", "DECLARES")
         if node.type == "trait_item":
             for bound in _find_nodes_by_type(node, "trait_bounds"):
                 _add_type_use(type_id, "Type", _node_text(bound, source_bytes), rel_path, types, relations, external_types)
@@ -629,8 +717,16 @@ def _walk_tree(
         return
 
     if node.type in _IMPL_NODES:
-        impl_name = _extract_name(node, source_bytes)
-        child_scope = scope_stack + [impl_name] if impl_name else scope_stack
+        impl_name = _impl_owner_name(node, source_bytes, scope_stack, type_registry)
+        if impl_name:
+            _ensure_external_type(
+                impl_name,
+                rel_path=rel_path,
+                node=node,
+                types=types,
+                type_registry=type_registry,
+            )
+        child_scope = impl_name.split("::") if impl_name else scope_stack
         for child in node.children:
             _walk_tree(
                 child,
@@ -672,10 +768,9 @@ def _walk_tree(
             comment=_extract_comment(node, source_bytes),
         )
         functions.append(func)
-        owner_scope = _scope_name(scope_stack)
-        if owner_scope:
-            owner_id = _type_id(owner_scope) if owner_scope in type_registry else _namespace_id(owner_scope)
-            owner_label = "Type" if owner_scope in type_registry else "Namespace"
+        owner_endpoint = _scope_owner_endpoint(scope_stack, namespace_registry, type_registry)
+        if owner_endpoint:
+            owner_id, owner_label = owner_endpoint
             _record_relation(relations, owner_id, owner_label, func.symbol_id, "Function", "DECLARES")
         for child in node.children:
             _walk_tree(
@@ -716,6 +811,13 @@ def _walk_tree(
         aliases.append(alias)
         if target:
             target_id = _type_id(target)
+            _ensure_external_type(
+                target_id,
+                rel_path=rel_path,
+                node=node,
+                types=types,
+                type_registry=type_registry,
+            )
             _record_relation(relations, alias.symbol_id, "Alias", target_id, "Type", "ALIASES")
             _add_type_use(alias.symbol_id, "Alias", target, rel_path, types, relations, external_types)
 
