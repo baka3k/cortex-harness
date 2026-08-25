@@ -42,6 +42,7 @@ def local_config_dir(tmp_path, monkeypatch):
     config_dir = tmp_path / ".cortext-harness" / "config"
     config_dir.mkdir(parents=True)
     monkeypatch.setattr(LIFECYCLE, "ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
     return config_dir
 
 

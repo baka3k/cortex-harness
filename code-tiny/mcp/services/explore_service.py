@@ -167,21 +167,26 @@ async def _make_graph_driver(
 
             remote_uri = os.environ.get("FALKORDB_URI") or os.environ.get("FALKORDB_URL")
             config = {
-                "uri": remote_uri,
-                "path": None if remote_uri else (
-                    os.environ.get("FALKORDB_PATH")
-                    or str(resolve_storage(Path.cwd()).falkordb_code_path)
-                ),
                 "database": database,
                 "graph": database,
-                "password": os.environ.get("FALKORDB_PASSWORD"),
-                "ssl": os.environ.get("FALKORDB_SSL", "").strip().lower()
-                in {"1", "true", "yes", "on"},
                 "_suppress_deprecation": bool(remote_uri),
                 "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
                 "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
             }
-            if not remote_uri:
+            if remote_uri:
+                config.update(
+                    {
+                        "uri": remote_uri,
+                        "password": os.environ.get("FALKORDB_PASSWORD"),
+                        "ssl": os.environ.get("FALKORDB_SSL", "").strip().lower()
+                        in {"1", "true", "yes", "on"},
+                    }
+                )
+            else:
+                config["path"] = (
+                    os.environ.get("FALKORDB_PATH")
+                    or str(resolve_storage(Path.cwd()).falkordb_code_path)
+                )
                 config["additional_paths"] = discover_falkordb_data_files()
             return await get_shared_graph_driver(GraphProvider.FALKORDB, config)
 

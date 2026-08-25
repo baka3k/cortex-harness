@@ -18,9 +18,11 @@ from tools.aspnet_framework.pipeline import run_aspnet_framework_analysis
 
 CORE_FIXTURE = ROOT / "tests" / "fixtures" / "aspnet-core-application"
 FRAMEWORK_FIXTURE = ROOT / "tests" / "fixtures" / "aspnet-framework-application"
+DOTNET_AVAILABLE = shutil.which("dotnet") is not None
 
 
 class AspNetFixtureAnalysisTest(unittest.TestCase):
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_core_fixture_has_routes_pipeline_di_views_and_redacted_config(self) -> None:
         result = run_aspnet_core_analysis(
             root=str(CORE_FIXTURE), project_id="core-fixture", semantic_mode="off",
@@ -37,6 +39,7 @@ class AspNetFixtureAnalysisTest(unittest.TestCase):
         )
         self.assertEqual([item.properties["position"] for item in middleware], list(range(len(middleware))))
 
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_framework_fixture_has_legacy_pipeline_webforms_and_redacted_config(self) -> None:
         result = run_aspnet_framework_analysis(
             root=str(FRAMEWORK_FIXTURE), project_id="framework-fixture", semantic_mode="off",
@@ -128,6 +131,7 @@ class AspNetFixtureAnalysisTest(unittest.TestCase):
         self.assertIn("HttpEndpoint", {item.kind for item in result.facts})
         self.assertIn("aspnet_core.config.parse_error", {item.code for item in result.diagnostics})
 
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_frameworks_share_the_public_migration_vocabulary(self) -> None:
         core = run_aspnet_core_analysis(
             root=str(CORE_FIXTURE), project_id="core-contract", semantic_mode="off",
@@ -143,6 +147,7 @@ class AspNetFixtureAnalysisTest(unittest.TestCase):
         self.assertTrue({"HttpEndpoint", "Route", "Controller", "ConfigurationKey"} <= shared_labels)
         self.assertTrue({"MAPPED_TO", "HANDLED_BY"} <= shared_relationships)
 
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_semantic_links_target_canonical_csharp_ids_only_when_compilation_succeeds(self) -> None:
         core = run_aspnet_core_analysis(
             root=str(CORE_FIXTURE), project_id="core-semantic", semantic_mode="on",
@@ -157,6 +162,7 @@ class AspNetFixtureAnalysisTest(unittest.TestCase):
         )
         self.assertTrue(all(not item.to_generated for item in semantic_links))
 
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_controller_properties_constructors_and_private_helpers_are_not_actions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             copied = Path(temporary) / "copy"

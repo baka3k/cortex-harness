@@ -8,7 +8,6 @@ Run from the repo root::
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import sys
@@ -19,29 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 
-_PROJECT_SCOPE_PATH = (
-    Path(__file__).resolve().parents[0] / "project_scope.py"
-)
-_PROJECT_REGISTRY_PATH = (
-    Path(__file__).resolve().parents[0] / "project_registry.py"
-)
-_HARNESS_CONFIG_PATH = (
-    Path(__file__).resolve().parents[0] / "harness_config.py"
-)
-
-
-def _load_module(name: str, file_path: Path):
-    spec = importlib.util.spec_from_file_location(name, file_path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-_load_module("tools.common.project_scope", _PROJECT_SCOPE_PATH)
-_load_module("tools.common.project_registry", _PROJECT_REGISTRY_PATH)
-harness_config = _load_module("harness_config_under_test", _HARNESS_CONFIG_PATH)
+from tools.common import harness_config
 
 
 @contextmanager
@@ -53,6 +30,7 @@ def _scrubbed_env():
         "CORTEX_CODE_STORAGE_OWNER",
         "CORTEX_DOC_STORAGE_OWNER",
         "CORTEX_STORAGE_OWNER",
+        "CORTEX_STORAGE_PROJECT_ID",
         "QDRANT_PATH",
         "QDRANT_CODE_PATH",
         "QDRANT_DOC_PATH",

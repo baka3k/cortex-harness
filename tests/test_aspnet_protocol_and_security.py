@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 import tempfile
 import unittest
@@ -16,7 +17,11 @@ from tools.common.aspnet.models import AnalysisResult, Diagnostic, SourceSpan
 from tools.common.aspnet.safe_formats import parse_xml_file
 
 
+DOTNET_AVAILABLE = shutil.which("dotnet") is not None
+
+
 class AspNetProtocolAndSecurityTest(unittest.TestCase):
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_worker_emits_versioned_syntax_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary, "Program.cs")
@@ -38,6 +43,7 @@ class AspNetProtocolAndSecurityTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 analyze_csharp_files(root=root, files=[str(source)], semantic_mode="off")
 
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_semantic_mode_never_evaluates_project_targets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -61,6 +67,7 @@ class AspNetProtocolAndSecurityTest(unittest.TestCase):
             self.assertEqual(payload["workspace_kind"], "safe_compilation")
             self.assertFalse(marker.exists())
 
+    @unittest.skipUnless(DOTNET_AVAILABLE, "requires the .NET SDK for the Roslyn worker")
     def test_project_semantics_are_explicitly_partial_when_safe_compilation_cannot_honor_properties(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

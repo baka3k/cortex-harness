@@ -166,6 +166,11 @@ def load_parser(language_library: str | None = None):
 def preflight(language_library: str | None = None) -> RuntimeInfo:
     parser, info = load_parser(language_library)
     tree = parser.parse(MINIMAL_PROGRAM)
-    if tree.root_node.type != "start" or not tree.root_node.named_child_count:
+    root = tree.root_node
+    if (
+        root.type not in {"start", "source_file"}
+        or not root.named_child_count
+        or root.has_error
+    ):
         raise CobolRuntimeError("COBOL_RUNTIME_PARSE_FAILED", "minimal COBOL parse produced no program tree")
     return info
