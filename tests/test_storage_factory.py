@@ -59,19 +59,17 @@ class _FakeFalkorDBDriver:
         _FakeFalkorDBDriver.instances.append(self)
 
 
-def _install_falkordb_stub() -> None:
+def _install_falkordb_stub(monkeypatch) -> None:
     """Replace ``tools.graph.driver.falkordb_driver.FalkorDBDriver`` with a fake."""
     fake = types.ModuleType("tools.graph.driver.falkordb_driver")
     fake.FalkorDBDriver = _FakeFalkorDBDriver  # type: ignore[attr-defined]
-    sys.modules.setdefault("tools", types.ModuleType("tools"))
-    sys.modules.setdefault("tools.graph", types.ModuleType("tools.graph"))
-    sys.modules["tools.graph.driver.falkordb_driver"] = fake
+    monkeypatch.setitem(sys.modules, "tools.graph.driver.falkordb_driver", fake)
 
 
 @pytest.fixture(autouse=True)
 def _fakes(monkeypatch) -> None:
     _FakeFalkorDBDriver.instances = []
-    _install_falkordb_stub()
+    _install_falkordb_stub(monkeypatch)
     from cortex_harness.storage import factory as factory_mod
 
     # Ensure env var doesn't leak across tests.

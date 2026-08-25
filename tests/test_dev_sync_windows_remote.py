@@ -185,16 +185,17 @@ def test_write_summary_roundtrip(tmp_path: Path) -> None:
 def test_sync_processes_excludes_launchers_when_disabled(monkeypatch) -> None:
     from cortex_harness import sync_processes as sp
 
+    process_root = Path(r"C:\ai\cortex-harness") if os.name == "nt" else REPO_ROOT
     dev_sync_argv = (
-        r"C:\ai\cortex-harness\.venv\Scripts\python.exe",
-        r"C:\ai\cortex-harness\cortex_harness\dev.py",
+        str(process_root / ".venv" / "Scripts" / "python.exe"),
+        str(process_root / "cortex_harness" / "dev.py"),
         "sync",
         "code",
     )
     worker_argv = (
-        r"C:\ai\cortex-harness\.venv\Scripts\python.exe",
-        r"C:\ai\cortex-harness\code-tiny\tools\sync\incremental_sync.py",
-        "--root", r"C:\ai\cortex-harness",
+        str(process_root / ".venv" / "Scripts" / "python.exe"),
+        str(process_root / "code-tiny" / "tools" / "sync" / "incremental_sync.py"),
+        "--root", str(process_root),
     )
     table = {
         111: sp.ProcessRecord(pid=111, ppid=1, argv=dev_sync_argv),
@@ -202,11 +203,11 @@ def test_sync_processes_excludes_launchers_when_disabled(monkeypatch) -> None:
     }
     monkeypatch.setattr(sp, "process_table", lambda: table)
 
-    matched_all = sp.sync_processes("code", root=REPO_ROOT, processes=table)
+    matched_all = sp.sync_processes("code", root=process_root, processes=table)
     assert {r.pid for r in matched_all} == {111, 222}
 
     matched_workers = sp.sync_processes(
-        "code", root=REPO_ROOT, processes=table, include_launchers=False
+        "code", root=process_root, processes=table, include_launchers=False
     )
     assert {r.pid for r in matched_workers} == {222}
 

@@ -132,6 +132,27 @@ class ExploreGraphFalkorCompatTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config["database"], "code_graph")
         self.assertFalse({"uri", "host", "port", "user", "password"} & config.keys())
 
+    async def test_make_graph_driver_passes_only_remote_falkordb_options_for_remote_uri(self):
+        fake_driver = object()
+        environment = {
+            "FALKORDB_URI": "rediss://graph.example:6379",
+            "FALKORDB_PASSWORD": "secret",
+            "FALKORDB_SSL": "true",
+        }
+        with patch.dict(os.environ, environment, clear=True), patch(
+            "tools.graph.GraphDriverFactory.create_driver",
+            new=AsyncMock(return_value=fake_driver),
+        ) as create_driver:
+            driver = await _make_graph_driver("", "", "", "code_graph", provider="falkordb")
+
+        self.assertIs(driver, fake_driver)
+        _, config = create_driver.await_args.args
+        self.assertEqual(config["uri"], environment["FALKORDB_URI"])
+        self.assertEqual(config["password"], environment["FALKORDB_PASSWORD"])
+        self.assertTrue(config["ssl"])
+        self.assertNotIn("path", config)
+        self.assertNotIn("additional_paths", config)
+
     def test_keyword_search_uses_graph_driver_execute_query_sync(self):
         driver = SessionlessFalkorLikeDriver()
 
