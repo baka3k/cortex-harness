@@ -11,6 +11,7 @@ from sentence_transformers import SentenceTransformer
 
 from embedding_utils import resolve_embedding_device, resolve_embedding_model
 from graph_store import (
+    FalkorDBGraphStore,
     create_graph_store_for_project,
     create_graph_store_from_env,
     env_graph_provider,
@@ -22,6 +23,7 @@ from project_contract import (
     qdrant_project_filter as _pc_qdrant_project_filter,
     resolve_project_targets,
 )
+from cortex_harness.storage import StorageRole
 
 
 MCP_NAME = os.getenv("MCP_SERVER_NAME", "mind_mcp")
@@ -78,6 +80,21 @@ _embedder: Optional[SentenceTransformer] = None
 logger = logging.getLogger("graph_rag.mcp")
 
 
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError(f"invalid boolean value: {value!r}")
+
+
 def get_qdrant(project_id: Optional[str] = None) -> Any:
     """Return the Qdrant store for ``project_id``.
 
@@ -121,8 +138,13 @@ def get_neo4j(project_id: Optional[str] = None) -> Any:
 
             targets = resolve_project_targets(project_id)
             factory = create_storage(targets)
-            _graph_drivers[project_id] = factory.get_falkordb_driver(
-                targets.doc_graph
+            driver = factory.get_falkordb_driver(
+                targets.doc_graph,
+                role=StorageRole.DOCUMENT,
+            )
+            _graph_drivers[project_id] = FalkorDBGraphStore(
+                driver,
+                targets.doc_graph,
             )
         return _graph_drivers[project_id]
     return create_graph_store_from_env()
@@ -132,17 +154,9 @@ def _acquire_graph_store(project_id: Optional[str]):
     if project_id and env_graph_provider() == "neo4j":
         # Preserve the legacy Neo4j request-scoped database session behavior.
         return create_graph_store_for_project(project_id), True
+    if project_id:
+        return get_neo4j(project_id), False
     base = get_neo4j()
-    if not project_id:
-        return base, False
-    if getattr(base, "provider", None) == "falkordb":
-        try:
-            targets = resolve_project_targets(project_id)
-            return base.for_graph(targets.doc_graph), False
-        except ProjectNotRegisteredError:
-            # Unregistered project_id — fall back to treating it as the
-            # graph name (matches graph_mcp's per-project naming convention).
-            return base.for_graph(str(project_id).strip()), False
     return base, False
 
 
@@ -170,12 +184,7 @@ def _resolve_doc_collection(
     if collection:
         return collection
     if project_id:
-        try:
-            return resolve_project_targets(project_id).doc_qdrant_collection
-        except ProjectNotRegisteredError:
-            # Unregistered project_id — fall back to treating it as the
-            # collection name (matches graph_mcp's per-project naming convention).
-            return str(project_id).strip()
+        return resolve_project_targets(project_id).doc_qdrant_collection
     return QDRANT_COLLECTION
 
 
@@ -185,12 +194,7 @@ def _resolve_doc_collections(
     if collection:
         return [collection]
     if project_id:
-        try:
-            return [resolve_project_targets(project_id).doc_qdrant_collection]
-        except ProjectNotRegisteredError:
-            # Unregistered project_id — fall back to treating it as the
-            # collection name (matches graph_mcp's per-project naming convention).
-            return [str(project_id).strip()]
+        return [resolve_project_targets(project_id).doc_qdrant_collection]
 
     collections: List[str] = []
     for registered_project in list_registered_projects():
@@ -207,7 +211,7 @@ def qdrant_search_entity_payload(
     collection: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    qdrant = get_qdrant()
+    qdrant = get_qdrant(project_id)
     collection_names = _resolve_doc_collections(project_id, collection)
 
     # Build the Qdrant filter. The project filter combines with the
@@ -238,6 +242,12 @@ def qdrant_search_entity_payload(
     available = None
     if hasattr(qdrant, "list_collection_names"):
         available = set(qdrant.list_collection_names())
+        missing = [name for name in collection_names if name not in available]
+        if missing and (project_id or collection):
+            raise LookupError(
+                "Requested document collection is not ingested or unavailable: "
+                + ", ".join(missing)
+            )
 
     payloads_by_key: Dict[Any, Dict[str, Any]] = {}
     for collection_name in collection_names:
@@ -583,21 +593,14 @@ def register_tools(mcp: FastMCP) -> None:
         - ``project_id`` is optional. When omitted (or empty), returns every
           collection (``None`` semantics = full-search across all projects).
         - When supplied AND registered, filters to that project's collection.
-        - When supplied but NOT registered in
-          ``.cortext-harness/config/*.json``, falls back to listing every
-          collection (matches ``graph_mcp`` behavior). The caller wanted to
-          scope the query, but the project is unknown — surfacing all
-          collections lets the agent pick a matching one rather than failing
-          closed.
+        - When supplied but not registered, fails closed with the project
+          registry error instead of silently querying another project's data.
         """
-        qdrant = get_qdrant()
+        qdrant = get_qdrant(project_id)
         names = qdrant.list_collection_names()
         if not project_id:
             return names
-        try:
-            expected = _resolve_doc_collection(project_id)
-        except ProjectNotRegisteredError:
-            return names
+        expected = _resolve_doc_collection(project_id)
         return [name for name in names if name == expected]
 
     @mcp.tool()
@@ -623,10 +626,8 @@ def register_tools(mcp: FastMCP) -> None:
         query = str(query) if query else ""
         top_k = int(top_k) if top_k is not None else 5
         max_passage_chars = int(max_passage_chars) if max_passage_chars is not None else None
-        include_entity_ids = bool(include_entity_ids) if include_entity_ids is not None else True
-        include_entity_mentions = (
-            bool(include_entity_mentions) if include_entity_mentions is not None else False
-        )
+        include_entity_ids = _coerce_bool(include_entity_ids, True)
+        include_entity_mentions = _coerce_bool(include_entity_mentions, False)
 
         embedder = get_embedder()
         q_vec = embedder.encode([query])[0].tolist()
@@ -696,10 +697,10 @@ def register_tools(mcp: FastMCP) -> None:
         top_k = int(top_k) if top_k is not None else 5
         related_k = int(related_k) if related_k is not None else 50
         graph_depth = int(graph_depth) if graph_depth is not None else 1
-        include_entities = bool(include_entities) if include_entities is not None else True
-        include_relations = bool(include_relations) if include_relations is not None else True
-        expand_related = bool(expand_related) if expand_related is not None else True
-        rerank = bool(rerank) if rerank is not None else False
+        include_entities = _coerce_bool(include_entities, True)
+        include_relations = _coerce_bool(include_relations, True)
+        expand_related = _coerce_bool(expand_related, True)
+        rerank = _coerce_bool(rerank, False)
         rerank_entity_weight = float(rerank_entity_weight) if rerank_entity_weight is not None else 0.05
         rerank_type_weight = float(rerank_type_weight) if rerank_type_weight is not None else 0.1
         rerank_confidence_weight = float(rerank_confidence_weight) if rerank_confidence_weight is not None else 0.3

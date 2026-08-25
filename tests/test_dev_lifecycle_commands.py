@@ -189,6 +189,13 @@ class DevLifecycleCommandTests(unittest.TestCase):
         self.assertIn("[Environment]::SetEnvironmentVariable(`$_.Name", lifecycle)
         self.assertIn("RuntimeConfig = $runtimeJsonPath", lifecycle)
 
+    def test_windows_start_uses_caller_config_and_keeps_project_ids_equal(self):
+        lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("function Resolve-StartConfig", lifecycle)
+        self.assertIn("--config $startConfig.Path", lifecycle)
+        self.assertIn("$overrides.CORTEX_STORAGE_PROJECT_ID = $Project", lifecycle)
+
     def test_windows_lifecycle_has_no_container_runtime_behavior(self):
         lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
         self.assertNotIn("docker", lifecycle.casefold())

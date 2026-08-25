@@ -151,13 +151,21 @@ def _normalize_falkordb_value(value: Any) -> Any:
         return tuple(_normalize_falkordb_value(item) for item in value)
 
     if hasattr(value, "properties") and hasattr(value, "labels"):
-        return _as_properties(value)
+        node = _as_properties(value)
+        node.setdefault("_graph_id", getattr(value, "id", None))
+        return node
 
     if hasattr(value, "properties") and hasattr(value, "relation"):
         edge = _as_properties(value)
         edge.setdefault("_type", getattr(value, "relation", None))
-        edge.setdefault("_start_id", getattr(value, "src_node", None))
-        edge.setdefault("_end_id", getattr(value, "dest_node", None))
+        edge.setdefault(
+            "_start_id",
+            _normalize_falkordb_value(getattr(value, "src_node", None)),
+        )
+        edge.setdefault(
+            "_end_id",
+            _normalize_falkordb_value(getattr(value, "dest_node", None)),
+        )
         return edge
 
     if callable(getattr(value, "nodes", None)) and callable(getattr(value, "edges", None)):

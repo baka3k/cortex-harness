@@ -34,6 +34,37 @@ cplus_mcp = _load(
 
 
 class CPlusMCPTests(unittest.IsolatedAsyncioTestCase):
+    def test_falkordb_path_edges_keep_type_and_domain_node_ids(self):
+        graph = cplus_mcp._paths_to_graph([{
+            "nodes": [
+                {"id": "function-a", "_graph_id": 10},
+                {"id": "function-b", "_graph_id": 20},
+            ],
+            "edges": [{
+                "_type": "CALLS",
+                "_start_id": 10,
+                "_end_id": 20,
+                "confidence": 0.9,
+            }],
+        }])
+
+        self.assertEqual(graph["edges"], [{
+            "type": "CALLS",
+            "properties": {"confidence": 0.9},
+            "start_id": "function-a",
+            "end_id": "function-b",
+        }])
+        self.assertNotIn("_graph_id", graph["nodes"][0]["properties"])
+
+    def test_query_profile_error_scopes_strict_modes_to_cplus(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "only supported for C/C\\+\\+/Pro\\*C",
+        ):
+            cplus_mcp._profile_rel_types("python", "strict")
+
+        self.assertEqual(cplus_mcp._profile_rel_types("cplus", "strict"), ["CALLS"])
+
     def test_discovery_honors_relocated_data_home(self):
         with tempfile.TemporaryDirectory() as directory:
             data_home = Path(directory)
@@ -131,6 +162,31 @@ class CPlusMCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(resolved, driver)
         config = create_driver.await_args.args[1]
         self.assertEqual(config["additional_paths"], [primary_path, sibling_path])
+        cplus_mcp._graph_driver = None
+
+    async def test_graph_driver_prefers_explicit_remote_uri(self):
+        driver = SimpleNamespace()
+        create_driver = AsyncMock(return_value=driver)
+
+        with (
+            patch.object(cplus_mcp, "DEFAULT_GRAPH_PROVIDER", "falkordb"),
+            patch.dict(
+                cplus_mcp.os.environ,
+                {
+                    "FALKORDB_URI": "redis://graph.internal:6379",
+                    "FALKORDB_PATH": "/tmp/stale-local.rdb",
+                },
+                clear=False,
+            ),
+            patch.object(cplus_mcp, "get_shared_graph_driver", create_driver),
+        ):
+            cplus_mcp._graph_driver = None
+            resolved = await cplus_mcp._get_graph_driver()
+
+        self.assertIs(resolved, driver)
+        config = create_driver.await_args.args[1]
+        self.assertEqual(config["uri"], "redis://graph.internal:6379")
+        self.assertIsNone(config["path"])
         cplus_mcp._graph_driver = None
 
     async def test_list_databases_falls_back_to_driver_when_no_siblings(self):

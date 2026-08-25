@@ -83,6 +83,39 @@ class McpRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(env["PROJECT_NAME"], "Sample")
         self.assertEqual(env["CORTEX_HARNESS_CONFIG_PATH"], str(config_path))
 
+    def test_code_runtime_environment_preserves_top_level_remote_backend(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = self._write_config(
+                root,
+                "dev",
+                {
+                    "active": True,
+                    "project": {"code": "stock", "name": "Stock"},
+                    "storage_backend": "remote",
+                    "remote": {
+                        "falkordb_uri": "redis://graph.internal:6379",
+                        "qdrant_url": "http://qdrant.internal:6333",
+                    },
+                    "code": {
+                        "env": {
+                            "GRAPH_PROVIDER": "falkordb",
+                            "CODE_GRAPH_PROVIDER": "falkordb",
+                            "FALKORDB_GRAPH": "stock",
+                            "QDRANT_COLLECTION": "stock",
+                        }
+                    },
+                },
+            )
+
+            env = runtime_environment(root, "code-tiny")
+
+        self.assertEqual(env["FALKORDB_URI"], "redis://graph.internal:6379")
+        self.assertEqual(env["QDRANT_URL"], "http://qdrant.internal:6333")
+        self.assertNotIn("FALKORDB_PATH", env)
+        self.assertEqual(env["FALKORDB_GRAPH"], "stock")
+        self.assertEqual(env["CORTEX_HARNESS_CONFIG_PATH"], str(config_path))
+
     def test_doc_runtime_environment_uses_doc_section_and_scoped_provider(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -109,6 +142,8 @@ class McpRuntimeConfigTests(unittest.TestCase):
             env = runtime_environment(root, "doc-tiny")
 
         self.assertEqual(env["DOC_GRAPH_PROVIDER"], "falkordb")
+        self.assertEqual(env["PROJECT_ID"], "docs")
+        self.assertEqual(env["CORTEX_STORAGE_PROJECT_ID"], "docs")
         self.assertNotIn("CODE_GRAPH_PROVIDER", env)
         self.assertEqual(env["FALKORDB_GRAPH"], "docs-graph")
         self.assertNotIn("NEO4J_DB", env)

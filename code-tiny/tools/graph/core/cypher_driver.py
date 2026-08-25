@@ -241,8 +241,8 @@ class CypherGraphDriver(GraphDriver):
             toLower(coalesce(tf.file_path, '')) CONTAINS token)
           AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized)
         AND s.id <> t.id
-        MATCH p=shortestPath((s){rel_pattern}(t))
-        RETURN p
+        MATCH p=(s){rel_pattern}(t)
+        RETURN p ORDER BY length(p)
         LIMIT $limit
         """
         records, _, _ = await self.execute_query(

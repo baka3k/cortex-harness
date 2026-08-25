@@ -289,7 +289,11 @@ class StorageFactory:
 
     # ── FalkorDB ────────────────────────────────────────────────────────────
 
-    def get_falkordb_driver(self, graph_name: str) -> "FalkorDBDriver":
+    def get_falkordb_driver(
+        self,
+        graph_name: str,
+        role: StorageRole = StorageRole.CODE,
+    ) -> "FalkorDBDriver":
         """Return a FalkorDB driver for ``graph_name`` using the project's backend.
 
         Falls back to local when ``storage_backend == remote`` but
@@ -314,9 +318,13 @@ class StorageFactory:
                 _suppress_deprecation=True,
             )
         return FalkorDBDriver(
-            path=str(self._resolved.falkordb_path_for_role(StorageRole.CODE)),
+            path=str(self._resolved.falkordb_path_for_role(role)),
             graph=graph_name,
-            owner_id=self._resolved.code_owner_id,
+            owner_id=(
+                self._resolved.doc_owner_id
+                if role == StorageRole.DOCUMENT
+                else self._resolved.code_owner_id
+            ),
             instance_id=self._resolved.instance_id,
         )
 

@@ -153,15 +153,37 @@ def test_mind_qdrant_search_resolves_collection_and_filter_from_project():
             captured.update(kwargs)
             return []
 
-    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=FakeQdrant()):
+    with mock.patch.object(
+        mcp_graph_rag, "get_qdrant", return_value=FakeQdrant()
+    ) as get_qdrant:
         result = mcp_graph_rag.qdrant_search_entity_payload(
             [0.1, 0.2], 3, None, project_id="cortext"
         )
     assert result == []
+    get_qdrant.assert_called_once_with("cortext")
     assert captured["collection_name"] == "cortext_doc"
     condition = captured["query_filter"].must[0]
     assert condition.key == "project_id_normalized"
     assert condition.match.value == "cortext"
+
+
+def test_mind_qdrant_reports_missing_scoped_collection():
+    class FakeQdrant:
+        def list_collection_names(self):
+            return []
+
+    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=FakeQdrant()):
+        with pytest.raises(LookupError, match="not ingested or unavailable"):
+            mcp_graph_rag.qdrant_search_entity_payload(
+                [0.1, 0.2], 3, None, project_id="cortext"
+            )
+
+
+def test_mind_boolean_string_coercion_is_not_python_truthiness():
+    assert mcp_graph_rag._coerce_bool("false", True) is False
+    assert mcp_graph_rag._coerce_bool("true", False) is True
+    with pytest.raises(ValueError, match="invalid boolean"):
+        mcp_graph_rag._coerce_bool("sometimes", False)
 
 
 def test_unscoped_doc_qdrant_search_aggregates_registered_collections_bounded():
@@ -262,6 +284,29 @@ def test_explicit_neo4j_project_keeps_request_scoped_store_behavior():
     assert owned is True
     create_scoped.assert_called_once_with("Alpha")
     get_global.assert_not_called()
+
+
+def test_project_falkordb_driver_is_wrapped_with_session_adapter():
+    driver = object()
+    factory = mock.Mock()
+    factory.get_falkordb_driver.return_value = driver
+    targets = SimpleNamespace(doc_graph="stock_doc")
+    mcp_graph_rag._graph_drivers.clear()
+
+    with mock.patch(
+        "cortex_harness.storage.create_storage", return_value=factory
+    ), mock.patch(
+        "tools.common.project_registry.resolve_project_targets",
+        return_value=targets,
+    ):
+        store = mcp_graph_rag.get_neo4j("stock")
+
+    assert isinstance(store, graph_store.FalkorDBGraphStore)
+    assert store._driver is driver
+    factory.get_falkordb_driver.assert_called_once_with(
+        "stock_doc", role=mcp_graph_rag.StorageRole.DOCUMENT
+    )
+    mcp_graph_rag._graph_drivers.clear()
 
 
 class _Result:

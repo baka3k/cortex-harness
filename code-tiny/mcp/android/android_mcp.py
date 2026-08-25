@@ -194,14 +194,23 @@ async def _get_graph_driver() -> GraphDriver:
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
         from cortex_harness.storage import resolve_storage
 
+        remote_uri = os.environ.get("FALKORDB_URI") or os.environ.get("FALKORDB_URL")
         config = {
-            "path": os.environ.get("FALKORDB_PATH")
-            or str(resolve_storage(Path.cwd()).falkordb_code_path),
+            "uri": remote_uri,
+            "path": None if remote_uri else (
+                os.environ.get("FALKORDB_PATH")
+                or str(resolve_storage(Path.cwd()).falkordb_code_path)
+            ),
             "graph": DEFAULT_FALKORDB_GRAPH,
+            "password": os.environ.get("FALKORDB_PASSWORD"),
+            "ssl": os.environ.get("FALKORDB_SSL", "").strip().lower()
+            in {"1", "true", "yes", "on"},
+            "_suppress_deprecation": bool(remote_uri),
             "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
             "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
-            "additional_paths": discover_falkordb_data_files(),
         }
+        if not remote_uri:
+            config["additional_paths"] = discover_falkordb_data_files()
         _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
         return _graph_driver
     if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
@@ -1951,7 +1960,7 @@ async def tool_find_paths(
         "AND ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized) "
         f"MATCH (b:Function) WHERE b.id = $end "
         "AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized) "
-        f"MATCH p=shortestPath((a)-{rel_pattern}->(b)) RETURN p"
+        f"MATCH p=(a)-{rel_pattern}->(b) RETURN p ORDER BY length(p) LIMIT 1"
     )
     used_db, result = await _run_cypher_first(query, {"start": start_id, "end": end_id, "project_id": project_id}, candidates)
     if result:
@@ -2182,8 +2191,8 @@ async def tool_find_path_between_module(
         "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
         "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
         "AND s.id <> t.id "
-        f"MATCH p=shortestPath((s)-{rel_pattern}->(t)) "
-        "RETURN p LIMIT 10"
+        f"MATCH p=(s)-{rel_pattern}->(t) "
+        "RETURN p ORDER BY length(p) LIMIT 10"
     )
     used_db, results = await _run_cypher_first(
         query,
@@ -2206,8 +2215,8 @@ async def tool_find_path_between_module(
             "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
             "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
             "AND s.id <> t.id "
-            f"MATCH p=shortestPath((s)-{rel_pattern}-(t)) "
-            "RETURN p LIMIT 10"
+            f"MATCH p=(s)-{rel_pattern}-(t) "
+            "RETURN p ORDER BY length(p) LIMIT 10"
         )
         used_db, results = await _run_cypher_first(
             fallback_query,
@@ -2493,8 +2502,8 @@ async def tool_trace_flow(
             "WHERE ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized) "
             "MATCH (b {id: $end}) "
             "WHERE ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized) "
-            f"MATCH p=shortestPath((a){rel_match}(b)) "
-            "RETURN p"
+            f"MATCH p=(a){rel_match}(b) "
+            "RETURN p ORDER BY length(p) LIMIT 1"
         )
         used_db, result = await _run_cypher_first(
             query,
@@ -2639,8 +2648,8 @@ async def tool_trace_flow_between_module(
         "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
         "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
         "AND s.id <> t.id "
-        f"MATCH p=shortestPath((s){rel_match}(t)) "
-        "RETURN p LIMIT $limit"
+        f"MATCH p=(s){rel_match}(t) "
+        "RETURN p ORDER BY length(p) LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         query,
@@ -2664,8 +2673,8 @@ async def tool_trace_flow_between_module(
             "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
             "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
             "AND s.id <> t.id "
-            f"MATCH p=shortestPath((s){rel_match}(t)) "
-            "RETURN p LIMIT $limit"
+            f"MATCH p=(s){rel_match}(t) "
+            "RETURN p ORDER BY length(p) LIMIT $limit"
         )
         used_db, results = await _run_cypher_first(
             fallback_query,
