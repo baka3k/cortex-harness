@@ -28,6 +28,10 @@ def _run_lifecycle(
     data_home: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
+    # These subprocess tests exercise storage layout and command output only.
+    # Hide host executables so infra-up/down cannot start or stop the developer's
+    # real Docker containers while the repository suite is running.
+    environment["PATH"] = ""
     if data_home is not None:
         environment["CORTEX_DATA_HOME"] = str(data_home)
         environment["CORTEX_STORAGE_INSTANCE"] = "test"
