@@ -2,7 +2,7 @@
 title: "infra-up Docker Idempotent Lifecycle — Qdrant & FalkorDB Containers"
 status: completed
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-25
 mode: hi-plan (full)
 scope: scripts/mcp-lifecycle.py, Makefile, tests, docs
 relatedPlans:
@@ -49,7 +49,7 @@ ensure Qdrant + FalkorDB (kèm Browser UI) chạy trên localhost:
 - Image: `falkordb/falkordb:latest` (env `FALKORDB_IMAGE`)
 - Container: `cortex-falkordb`
 - Ports: `127.0.0.1:6379->6379` (FalkorDB/Redis protocol), `127.0.0.1:3000->3000` (Browser UI)
-- Volume: `cortex-falkordb-data:/data`
+- Volume: `cortex-falkordb-data:/var/lib/falkordb/data`
 - Extra: `--restart unless-stopped`
 
 Port mappings pin về `127.0.0.1` để không expose ra network ngoài máy.
@@ -106,3 +106,11 @@ Config override qua env (không hardcode trong argparse): `QDRANT_IMAGE`,
 - Docker compose file, Kubernetes, remote host provisioning (thuộc plan 260818).
 - Pin image versions vào lockfile (env override là đủ).
 - Qdrant Dashboard (chỉ có sẵn trong image tại /dashboard — không cần làm gì).
+
+## 2026-08-25 Corrective Note
+
+The original `/data` target did not match the current image's
+`FALKORDB_DATA_PATH=/var/lib/falkordb/data`, so graph data stayed in the
+container writable layer. The port-map parser also reversed Docker keys such
+as `6379/tcp`, forcing recreation on every run. Both defects are corrected,
+and readiness uses Redis `PING` before remote probing.

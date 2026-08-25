@@ -94,6 +94,8 @@ DOCKER_SERVICES = (
             ("QDRANT_GRPC_PORT", 6334, 6334),
         ),
         "primary_port_index": 0,
+        "readiness_port_index": 0,
+        "readiness_protocol": "tcp",
         "primary_protocol": "http",
         "volume": "cortex-qdrant-storage:/qdrant/storage",
     },
@@ -106,6 +108,10 @@ DOCKER_SERVICES = (
             ("FALKORDB_UI_PORT", 3000, 3000),
         ),
         "primary_port_index": 1,
+        # Probe Redis/FalkorDB itself for readiness; the Browser UI is the
+        # displayed primary endpoint but is not the storage dependency.
+        "readiness_port_index": 0,
+        "readiness_protocol": "redis",
         "primary_protocol": "http",
         # ``(label, scheme)`` per port, aligned with ``ports``. Present only for
         # services whose ports serve distinct protocols, so ``infra-up`` can
@@ -115,7 +121,10 @@ DOCKER_SERVICES = (
             ("redis", "redis"),
             ("Browser UI", "http"),
         ),
-        "volume": "cortex-falkordb-data:/data",
+        # FalkorDB's Redis config writes dump.rdb here (FALKORDB_DATA_PATH).
+        # Mounting the named volume at /data leaves the real data directory in
+        # the container writable layer, which is deleted on container recreate.
+        "volume": "cortex-falkordb-data:/var/lib/falkordb/data",
     },
 )
 
@@ -368,6 +377,16 @@ def tcp_port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def redis_ping(host: str, port: int, timeout: float = 1.0) -> bool:
+    """Return whether a Redis-compatible endpoint answers ``PING`` with PONG."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as connection:
+            connection.sendall(b"*1\r\n$4\r\nPING\r\n")
+            return connection.recv(64).startswith(b"+PONG")
+    except OSError:
+        return False
+
+
 def _collect_from_dir(
     config_dir: Path,
     out: list[dict[str, object]],
@@ -572,9 +591,7 @@ def _container_published_ports(name: str) -> set[tuple[str, int, int, str]]:
     docker = shutil.which("docker")
     if not docker:
         return set()
-    fmt = "{{range $p, $bs := .NetworkSettings.Ports}}{{$p}}|"
-    fmt += "{{range $bs}}{{if .}}{{.HostIp}}|{{.HostPort}}{{end}}{{end}}#"
-    fmt += "{{end}}"
+    fmt = "{{json .NetworkSettings.Ports}}"
     result = run([docker, "inspect", name, "--format", fmt], capture=True, check=False)
     if result.returncode != 0:
         return set()
@@ -582,21 +599,33 @@ def _container_published_ports(name: str) -> set[tuple[str, int, int, str]]:
     raw = (result.stdout or "").strip()
     if not raw:
         return ports
-    for entry in raw.split("#"):
-        entry = entry.strip()
-        if not entry:
+    try:
+        published = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return ports
+    if not isinstance(published, dict):
+        return ports
+    for endpoint, bindings in published.items():
+        if not isinstance(endpoint, str) or "/" not in endpoint:
             continue
-        parts = entry.split("|")
-        if len(parts) != 3:
-            continue
-        proto_port, host_ip, host_port = parts[0], parts[1], parts[2]
-        if "/" not in proto_port:
-            continue
-        proto, container_port = proto_port.rsplit("/", 1)
+        container_port_text, proto = endpoint.rsplit("/", 1)
         try:
-            ports.add((host_ip, int(host_port), int(container_port), proto))
+            container_port = int(container_port_text)
         except ValueError:
             continue
+        if not isinstance(bindings, list):
+            continue
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            host_ip = binding.get("HostIp")
+            host_port = binding.get("HostPort")
+            if not isinstance(host_ip, str):
+                continue
+            try:
+                ports.add((host_ip, int(host_port), container_port, proto))
+            except (TypeError, ValueError):
+                continue
     return ports
 
 
@@ -665,6 +694,45 @@ def _report_ready(spec: dict, message: str) -> None:
         print(line)
 
 
+def _wait_for_service(
+    spec: dict,
+    *,
+    timeout: float = 15.0,
+    interval: float = 0.1,
+) -> bool:
+    """Wait until a newly started container's storage endpoint accepts TCP.
+
+    Docker reports a container as running before its process necessarily
+    listens on the published port. Without this bounded wait, ``infra-up`` can
+    race its immediate remote probe after create, recreate, or start.
+    """
+    readiness_index = int(spec.get("readiness_port_index", spec["primary_port_index"]))
+    host_port, _container_port = _resolved_ports(spec)[readiness_index]
+    deadline = time.monotonic() + max(timeout, 0.0)
+    protocol = str(spec.get("readiness_protocol", "tcp"))
+    readiness_check = redis_ping if protocol == "redis" else tcp_port_open
+    while True:
+        if readiness_check("127.0.0.1", host_port, timeout=1.0):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(max(interval, 0.0), remaining))
+
+
+def _report_container_ready(spec: dict, message: str) -> None:
+    """Report a running container after its storage endpoint is ready."""
+    if _wait_for_service(spec):
+        _report_ready(spec, message)
+        return
+    readiness_index = int(spec.get("readiness_port_index", spec["primary_port_index"]))
+    host_port, _container_port = _resolved_ports(spec)[readiness_index]
+    print(
+        f"[warn] {spec['name']} is running but 127.0.0.1:{host_port} "
+        "did not become ready within 15s; remote probe will report reachability"
+    )
+
+
 def _ensure_service(spec: dict) -> None:
     """Idempotently bring ``spec``'s container to the ``running`` state.
 
@@ -693,7 +761,7 @@ def _ensure_service(spec: dict) -> None:
     if state == "running":
         existing_ports = _container_published_ports(name)
         if expected_ports.issubset(existing_ports):
-            _report_ready(spec, f"[ok] {name} running ({primary_url})")
+            _report_container_ready(spec, f"[ok] {name} running ({primary_url})")
             return
         # Stale port mapping: the spec gained an endpoint (typically the
         # FalkorDB Browser UI) after the container was created. Recreate
@@ -713,7 +781,9 @@ def _ensure_service(spec: dict) -> None:
     elif state is not None:
         result = run([docker, "start", name], capture=True, check=False)
         if result.returncode == 0:
-            _report_ready(spec, f"[ok] started existing container {name} ({primary_url})")
+            _report_container_ready(
+                spec, f"[ok] started existing container {name} ({primary_url})"
+            )
         else:
             print(f"[fail] {name}: docker start failed: {(result.stderr or '').strip()}")
         return
@@ -734,7 +804,7 @@ def _ensure_service(spec: dict) -> None:
 
     result = run(cmd, capture=True, check=False)
     if result.returncode == 0:
-        _report_ready(spec, f"[ok] created + started {name} ({primary_url})")
+        _report_container_ready(spec, f"[ok] created + started {name} ({primary_url})")
         return
 
     stderr = (result.stderr or "").strip()

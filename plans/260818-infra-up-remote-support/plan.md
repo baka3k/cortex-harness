@@ -2,7 +2,7 @@
 title: "infra-up Remote Support — Qdrant & FalkorDB Server Lifecycle"
 status: active
 created: 2026-08-18
-updated: 2026-08-18
+updated: 2026-08-25
 mode: hi-plan (fast)
 scope: scripts/mcp-lifecycle.py, cortex_harness/storage, cortex_harness/dev.py, tests
 relatedPlans:
@@ -198,6 +198,19 @@ Không thay đổi behavior của `infra-up` / `doctor`; chỉ đảm bảo conf
   hoạt động như `local`.
 - Test suite cover: local routing, remote probe, remote provision, doctor
   remote checks, mixed local/remote projects.
+
+## 2026-08-25 Persistence Hardening
+
+An incident exposed two defects in the Docker ensure path: Docker's
+`<container-port>/tcp` keys were parsed backward, causing healthy containers
+to be classified as missing all published ports, and the FalkorDB named volume
+was mounted at `/data` while Redis writes to `/var/lib/falkordb/data`. The
+remediation corrects both contracts and waits for a Redis `PING` response
+before the immediate remote probe. The synchronous lifecycle probe also uses
+`execute_query_sync()` rather than dropping the coroutine returned by
+`execute_query()`. Regression coverage pins the real Docker inspect JSON
+shape, the exact FalkorDB mount target, readiness behavior, and a real query
+failure result.
 
 ## Implementation Handoff
 

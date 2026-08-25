@@ -129,7 +129,21 @@ class TestProbeFalkordb:
         with mock.patch.object(fmod, "FalkorDBDriver", return_value=driver):
             result = REMOTE_PROBE.probe_falkordb(config)
         assert result.reachable is True
-        driver.execute_query.assert_called_once()
+        driver.execute_query_sync.assert_called_once_with("RETURN 1 AS ok")
+        driver.execute_query.assert_not_called()
+
+    def test_query_failure_reports_unreachable(self):
+        from cortex_harness.storage.config import RemoteStorageConfig
+
+        config = RemoteStorageConfig(falkordb_uri="redis://falkor.invalid:6379")
+        driver = mock.Mock()
+        driver.execute_query_sync.side_effect = ConnectionError("connection closed")
+        from tools.graph.driver import falkordb_driver as fmod
+
+        with mock.patch.object(fmod, "FalkorDBDriver", return_value=driver):
+            result = REMOTE_PROBE.probe_falkordb(config)
+        assert result.reachable is False
+        assert result.message == "connection closed"
 
 
 class TestProbeAll:
@@ -207,7 +221,8 @@ class TestProvisionFalkordb:
         with mock.patch.object(fmod, "FalkorDBDriver", return_value=driver):
             result = REMOTE_PROBE.provision_falkordb_graph(config, "graph")
         assert result.action == "exists"
-        driver.execute_query.assert_called_once()
+        driver.execute_query_sync.assert_called_once_with("RETURN 1 AS ok")
+        driver.execute_query.assert_not_called()
 
 
 # ── setup_remote_falkordb_schema (subprocess wrapper) ────────────────────
