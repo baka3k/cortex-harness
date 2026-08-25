@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -87,14 +88,17 @@ class MakeLifecycleTests(unittest.TestCase):
         for relative in ("requirements.txt", "code-tiny/requirements.txt", "doc-tiny/requirements.txt"):
             with self.subTest(requirements=relative):
                 lines = {
-                    line.strip()
+                    line.split(";", 1)[0].strip()
                     for line in (ROOT / relative).read_text(encoding="utf-8").splitlines()
                     if line.strip() and not line.lstrip().startswith("#")
                 }
                 self.assertTrue(expected.issubset(lines))
-        metadata = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        for dependency in expected:
-            self.assertIn(f'"{dependency}"', metadata)
+        metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        project_dependencies = {
+            dependency.split(";", 1)[0].strip()
+            for dependency in metadata["project"]["dependencies"]
+        }
+        self.assertTrue(expected.issubset(project_dependencies))
 
     def test_make_help_does_not_require_powershell(self):
         result = subprocess.run(
@@ -201,7 +205,7 @@ class MakeLifecycleTests(unittest.TestCase):
         lifecycle = (ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
         self.assertIn("function Get-UvLauncher", lifecycle)
         self.assertIn(
-            'Invoke-Uv -Uv $uv -Arguments @("venv", "--python", $launcher, $venvDir)',
+            'Invoke-Uv -Uv $uv -Arguments @("venv", "--python", $pythonSpec, $venvDir)',
             lifecycle,
         )
         self.assertIn('@("pip", "install", "--python", $python)', lifecycle)

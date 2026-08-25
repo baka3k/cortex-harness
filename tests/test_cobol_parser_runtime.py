@@ -18,8 +18,14 @@ from tools.cobol.cobol_analyzer import _manifest_paths  # noqa: E402
 
 class CobolParserRuntimeTest(unittest.TestCase):
     def test_portable_runtime_preflight(self):
-        info = preflight()
+        with patch.object(parser_runtime, "resolve_language_library", return_value=None):
+            info = preflight()
         self.assertEqual(info.provider, "tree-sitter-language-pack")
+        self.assertGreaterEqual(info.grammar_abi, 13)
+
+    def test_default_runtime_preflight_accepts_bundled_grammar_root(self):
+        info = preflight()
+        self.assertIn(info.provider, {"native-library", "tree-sitter-language-pack"})
         self.assertGreaterEqual(info.grammar_abi, 13)
 
     def test_missing_override_has_actionable_code(self):

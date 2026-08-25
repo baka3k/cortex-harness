@@ -30,7 +30,7 @@ class _FakeFalkorDBDriver:
         _FakeFalkorDBDriver.instances.append(self)
 
 
-def _install_stubs() -> None:
+def _install_stubs(monkeypatch) -> None:
     """Replace *only* the falkordb_driver module — keep the real ``tools`` package intact.
 
     Importing ``tools.common.project_registry`` requires the real
@@ -39,13 +39,13 @@ def _install_stubs() -> None:
     """
     fake = types.ModuleType("tools.graph.driver.falkordb_driver")
     fake.FalkorDBDriver = _FakeFalkorDBDriver  # type: ignore[attr-defined]
-    sys.modules["tools.graph.driver.falkordb_driver"] = fake
+    monkeypatch.setitem(sys.modules, "tools.graph.driver.falkordb_driver", fake)
 
 
 @pytest.fixture(autouse=True)
 def _setup(monkeypatch, tmp_path_factory) -> None:
     _FakeFalkorDBDriver.instances = []
-    _install_stubs()
+    _install_stubs(monkeypatch)
     # Reset cache between tests.
     from cortex_harness.storage import qdrant_remote as qremote_mod
     from cortex_harness.storage import qdrant as qdrant_mod

@@ -43,7 +43,8 @@ def test_incremental_selection_retains_cross_file_endpoint_labels() -> None:
     selected = select_incremental_result(result, ["changed.cbl"])
     node_rows, relation_rows = graph_rows(selected)
 
-    assert {node.id for node in selected.nodes} == {"program", "copybook"}
-    assert set(node_rows) == {"CobolProgram", "CobolCopybook"}
+    assert {node.id for node in selected.nodes} == {"program"}
+    assert set(node_rows) == {"CobolProgram"}
     assert relation_rows[0]["source_label"] == "CobolProgram"
     assert relation_rows[0]["target_label"] == "CobolCopybook"
+    assert "_target_label" not in relation_rows[0]["properties"]

@@ -1,0 +1,5 @@
+{"analyzer_version":"fixture/1.0","mode":"flutter","project_id":"fixture","root":"/fixture","schema_version":"1.0","sdk_version":"fixture","type":"header"}
+{"evidence":{"end_column":16,"end_line":1,"file":"lib/main.dart","length":15,"offset":0,"start_column":1,"start_line":1},"identity":"file:lib/main.dart","kind":"file","properties":{"name":"main.dart","package_uri":"package:cortex_flutter_fixture/main.dart","path":"lib/main.dart"},"type":"node"}
+{"evidence":{"end_column":15,"end_line":1,"file":"lib/main.dart","length":14,"offset":0,"start_column":1,"start_line":1},"identity":"function:main","kind":"function","properties":{"code":"void main() {}","name":"main","package_uri":"package:cortex_flutter_fixture/main.dart","qualified_name":"main"},"type":"node"}
+{"confidence":1.0,"evidence":{"end_column":15,"end_line":1,"file":"lib/main.dart","length":14,"offset":0,"start_column":1,"start_line":1},"properties":{},"relationship":"CONTAINS","source":"file:lib/main.dart","target":"function:main","type":"edge"}
+{"elapsed_ms":1,"error_count":0,"processed_files":1,"skipped_files":0,"type":"summary"}

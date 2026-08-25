@@ -56,22 +56,20 @@ def analyze_project(
 
 def select_incremental_result(result: AnalysisResult, impacted_paths: Iterable[str]) -> AnalysisResult:
     impacted = {str(path).replace("\\", "/") for path in impacted_paths}
-    initially_selected = tuple(node for node in result.nodes if node.file_path in impacted)
-    selected_ids = {node.id for node in initially_selected}
+    nodes = tuple(node for node in result.nodes if node.file_path in impacted)
+    selected_ids = {node.id for node in nodes}
+    labels_by_id = {node.id: node.label for node in result.nodes}
     edges = tuple(
-        edge
+        replace(
+            edge,
+            properties={
+                **dict(edge.properties),
+                "_source_label": labels_by_id[edge.source_id],
+                "_target_label": labels_by_id[edge.target_id],
+            },
+        )
         for edge in result.edges
         if edge.source_id in selected_ids or edge.evidence.file in impacted
-    )
-    endpoint_ids = {
-        identity
-        for edge in edges
-        for identity in (edge.source_id, edge.target_id)
-    }
-    nodes = tuple(
-        node
-        for node in result.nodes
-        if node.file_path in impacted or node.id in endpoint_ids
     )
     diagnostics = tuple(
         item for item in result.diagnostics
@@ -105,15 +103,25 @@ def graph_rows(result: AnalysisResult) -> tuple[dict[str, list[dict[str, Any]]],
             "source_end_byte": node.evidence.end_byte,
         })
         nodes_by_label.setdefault(node.label, []).append({"id": node.id, "properties": properties})
-    relations = [
-        {
+    relations = []
+    for edge in result.edges:
+        edge_properties = dict(edge.properties)
+        source_label = label_by_id.get(edge.source_id) or edge_properties.pop(
+            "_source_label", None
+        )
+        target_label = label_by_id.get(edge.target_id) or edge_properties.pop(
+            "_target_label", None
+        )
+        if not source_label or not target_label:
+            raise ValueError(f"missing endpoint label for COBOL edge {edge.id}")
+        relations.append({
             "source_id": edge.source_id,
-            "source_label": label_by_id[edge.source_id],
+            "source_label": source_label,
             "target_id": edge.target_id,
-            "target_label": label_by_id[edge.target_id],
+            "target_label": target_label,
             "rel_type": edge.relationship,
             "properties": {
-                **dict(edge.properties),
+                **edge_properties,
                 "id": edge.id,
                 "confidence": edge.confidence,
                 "dynamic": edge.dynamic,
@@ -121,9 +129,7 @@ def graph_rows(result: AnalysisResult) -> tuple[dict[str, list[dict[str, Any]]],
                 "start_line": edge.evidence.start_line,
                 "end_line": edge.evidence.end_line,
             },
-        }
-        for edge in result.edges
-    ]
+        })
     return nodes_by_label, relations
 
 

@@ -51,14 +51,13 @@ class _StubFastMCP:
         return deco
 
 
-def _install_stubs():
-    """Insert lightweight stubs so mcp_graph_rag imports cleanly."""
+def _build_stubs():
+    """Build isolated lightweight modules for importing ``mcp_graph_rag``."""
     # FastMCP stub
     fastmcp_mod = type(sys)("mcp.server.fastmcp")
     fastmcp_mod.FastMCP = _StubFastMCP
-    sys.modules["mcp"] = type(sys)("mcp")
-    sys.modules["mcp.server"] = type(sys)("mcp.server")
-    sys.modules["mcp.server.fastmcp"] = fastmcp_mod
+    mcp_mod = type(sys)("mcp")
+    mcp_server_mod = type(sys)("mcp.server")
 
     # qdrant_client stub
     qdrant_mod = type(sys)("qdrant_client")
@@ -67,36 +66,46 @@ def _install_stubs():
     qdrant_mod.http.models.FieldCondition = type("FieldCondition", (), {})
     qdrant_mod.http.models.MatchValue = type("MatchValue", (), {})
     qdrant_mod.http.models.Filter = type("Filter", (), {})
-    sys.modules["qdrant_client"] = qdrant_mod
-    sys.modules["qdrant_client.http"] = qdrant_mod.http
-    sys.modules["qdrant_client.http.models"] = qdrant_mod.http.models
 
     # sentence_transformers stub
     st_mod = type(sys)("sentence_transformers")
     st_mod.SentenceTransformer = type("SentenceTransformer", (), {})
-    sys.modules["sentence_transformers"] = st_mod
 
     # dotenv stub
     dotenv_mod = type(sys)("dotenv")
     dotenv_mod.load_dotenv = lambda *a, **k: None
-    sys.modules["dotenv"] = dotenv_mod
-
-    # Local modules
-    for local in ("embedding_utils", "graph_store", "doc_local_qdrant"):
-        if local not in sys.modules:
-            mod = type(sys)(local)
-            sys.modules[local] = mod
-
-    sys.modules["embedding_utils"].resolve_embedding_device = lambda *a, **k: None
-    sys.modules["embedding_utils"].resolve_embedding_model = (
+    # Local modules must always be fresh stubs. Mutating an already-imported
+    # real module makes the rest of the pytest process order-dependent.
+    embedding_mod = type(sys)("embedding_utils")
+    graph_store_mod = type(sys)("graph_store")
+    doc_qdrant_mod = type(sys)("doc_local_qdrant")
+    embedding_mod.resolve_embedding_device = lambda *a, **k: None
+    embedding_mod.resolve_embedding_model = (
         lambda *a, **k: ("stub-model", False)
     )
-    sys.modules["graph_store"].create_graph_store_for_project = (
+    graph_store_mod.FalkorDBGraphStore = type(
+        "FalkorDBGraphStore", (), {"__init__": lambda self, *a, **k: None}
+    )
+    graph_store_mod.create_graph_store_for_project = (
         lambda *a, **k: None
     )
-    sys.modules["graph_store"].create_graph_store_from_env = lambda: None
-    sys.modules["graph_store"].env_graph_provider = lambda: "falkordb"
-    sys.modules["doc_local_qdrant"].get_document_qdrant_store = lambda: None
+    graph_store_mod.create_graph_store_from_env = lambda: None
+    graph_store_mod.env_graph_provider = lambda: "falkordb"
+    doc_qdrant_mod.get_document_qdrant_store = lambda *a, **k: None
+
+    return {
+        "mcp": mcp_mod,
+        "mcp.server": mcp_server_mod,
+        "mcp.server.fastmcp": fastmcp_mod,
+        "qdrant_client": qdrant_mod,
+        "qdrant_client.http": qdrant_mod.http,
+        "qdrant_client.http.models": qdrant_mod.http.models,
+        "sentence_transformers": st_mod,
+        "dotenv": dotenv_mod,
+        "embedding_utils": embedding_mod,
+        "graph_store": graph_store_mod,
+        "doc_local_qdrant": doc_qdrant_mod,
+    }
 
 
 class _StubQdrant:
@@ -119,7 +128,9 @@ class _RegisteredProject:
 class TestProjectIdOptional(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        _install_stubs()
+        cls._stub_modules = patch.dict(sys.modules, _build_stubs(), clear=False)
+        cls._stub_modules.start()
+        cls.addClassCleanup(cls._stub_modules.stop)
         # Load as the canonical name so mcp_graph_rag's `from project_contract import …`
         # resolves to the same module instance the tests patch.
         cls.project_contract = _load_module("project_contract", _PROJECT_CONTRACT_PATH)

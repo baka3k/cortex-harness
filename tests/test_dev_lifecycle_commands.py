@@ -150,7 +150,10 @@ class DevLifecycleCommandTests(unittest.TestCase):
             with self.subTest(action=action), mock.patch("cortex_harness.dev._run_lifecycle") as run:
                 result = self.runner.invoke(cli, [action])
                 self.assertEqual(result.exit_code, 0, result.output)
-                run.assert_called_once_with(action)
+                if action == "infra-up":
+                    run.assert_called_once_with(action, [])
+                else:
+                    run.assert_called_once_with(action)
 
     def test_storage_migration_forwards_dry_run_and_apply_options(self):
         with mock.patch("cortex_harness.dev._run_lifecycle") as run:
@@ -198,7 +201,10 @@ class DevLifecycleCommandTests(unittest.TestCase):
 
     def test_windows_lifecycle_has_no_container_runtime_behavior(self):
         lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
-        self.assertNotIn("docker", lifecycle.casefold())
+        executable_lines = "\n".join(
+            line for line in lifecycle.splitlines() if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn("docker", executable_lines.casefold())
         for action in ("storage-layout", "storage-init", "storage-migrate-layout", "storage-backup"):
             self.assertIn(f'"{action}"', lifecycle)
 
@@ -213,8 +219,8 @@ class DevLifecycleCommandTests(unittest.TestCase):
     def test_mcp_server_names_can_be_overridden_per_instance(self):
         code_server = (REPO_ROOT / "code-tiny" / "mcp" / "unified_mcp.py").read_text(encoding="utf-8")
         doc_server = (REPO_ROOT / "doc-tiny" / "mcp_graph_rag.py").read_text(encoding="utf-8")
-        self.assertIn('os.getenv("MCP_SERVER_NAME", "Project Call Graph Unified")', code_server)
-        self.assertIn('os.getenv("MCP_SERVER_NAME", "graph_rag")', doc_server)
+        self.assertIn('os.getenv("MCP_SERVER_NAME", "graph_mcp")', code_server)
+        self.assertIn('os.getenv("MCP_SERVER_NAME", "mind_mcp")', doc_server)
 
     def test_windows_mcp_pid_discovery_uses_python_command_lines(self):
         completed = subprocess.CompletedProcess([], 0, stdout="101\n202\n")

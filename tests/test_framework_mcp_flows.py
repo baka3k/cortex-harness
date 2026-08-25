@@ -222,7 +222,7 @@ class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
         ):
             candidates = unified_mcp.cplus_backend._resolve_db_candidates(None)
 
-        self.assertEqual(candidates, ["shared_graph", "beta_graph"])
+        self.assertEqual(candidates, ["shared_graph", "beta_graph", "hyper_graph"])
 
     def test_unregistered_project_candidate_never_falls_back_across_backends(self):
         backends = (
