@@ -1,6 +1,6 @@
 ---
 type: MCP health report
-date: 2026-08-25
+date: 2026-08-26
 scope: graph_mcp, mind_mcp, project stock
 status: fixed-and-retested
 ---
@@ -122,6 +122,27 @@ Catalog từng lặp `trace_flow_between_module`, có input `project_id` trùng,
 - Structured `ok=false` được chuẩn hóa thành MCP `isError=true` cho cả proxy và direct tools.
 - `strict`/`conservative` được giới hạn rõ cho C/C++/Pro*C thay vì quảng cáo sai trên parser generic.
 
+### 8. Full-suite bị lỗi collection, rò module giả và tác động Docker thật
+
+Sau khi MCP focused suite đã xanh, full repository suite vẫn còn lỗi rộng do test infrastructure chứ không phải “legacy ngoài phạm vi” có thể bỏ qua:
+
+- Hai test trùng basename bị import theo cơ chế mặc định của pytest; `doc-tiny` cũng không có trên import path lúc collection.
+- Một số test thay trực tiếp `sys.modules`, environment và module Falkor/Qdrant giả nhưng không hoàn nguyên, làm kết quả phụ thuộc thứ tự chạy.
+- Fixture COBOL, Flutter và framework Java vẫn còn test/CI contract nhưng đã bị xóa hoặc bị `.gitignore` che mất.
+- COBOL preflight chỉ chấp nhận root `start`, trong khi bundled grammar hợp lệ trả `source_file`.
+- Incremental COBOL kéo node ngoài phạm vi vào batch ghi, có nguy cơ ghi đè fact không bị invalidation.
+- Một test lifecycle chạy subprocess thật đã gọi `infra-down`, dừng hai container `cortex-qdrant` và `cortex-falkordb` của developer dù bản thân test vẫn pass.
+
+Đã sửa:
+
+- Cấu hình pytest dùng importlib mode và thêm `code-tiny`, `doc-tiny` vào python path.
+- Cô lập `sys.modules`/environment bằng patch có cleanup; không thay module canonical toàn cục.
+- Khôi phục fixture lịch sử COBOL/Java, bổ sung fixture Flutter theo protocol contract và mở đúng exception trong `.gitignore`.
+- Chấp nhận cả hai root grammar hợp lệ nhưng vẫn fail nếu parse error hoặc không có program tree.
+- Chỉ ghi node COBOL thuộc tập impacted; nhãn endpoint ngoài phạm vi được giữ nội bộ cho relation rồi loại khỏi payload persisted.
+- Test Roslyn chỉ skip có điều kiện khi host không có .NET SDK; không dùng regex fallback thay Roslyn.
+- Test subprocess lifecycle ẩn host executables để không thể start/stop Docker thật. Sau full-suite cuối, hai container vẫn `Up` và live MCP query tiếp tục trả dữ liệu.
+
 ## Kết quả từng hàm Graph MCP
 
 | # | Hàm | Trạng thái | Bằng chứng sau sửa |
@@ -178,13 +199,16 @@ Catalog từng lặp `trace_flow_between_module`, có input `project_id` trùng,
 
 ## Kiểm thử và trạng thái runtime
 
-- Focused regression liên quan các thay đổi: **192 passed**, 42 subtests passed, 2 warning kết nối Qdrant giả lập.
+- Focused regression MCP/storage sau toàn bộ sửa đổi: **257 passed**, 60 subtests passed, 2 warning kết nối Qdrant giả lập.
 - Direct MCP smoke: **44/44 hàm đã được gọi**, không còn lỗi MCP implementation chưa phân loại.
-- Runtime đã restart thành công:
-  - graph/code MCP: `http://127.0.0.1:8788/mcp`, PID tại lần retest `39703`.
-  - mind/doc MCP: `http://127.0.0.1:8789/mcp`, PID tại lần retest `39716`.
+- Live critical query sau full-suite cuối:
+  - `graph_mcp`: 39/39 tool unique; payload login gốc trả `isError=false`, `ok=true`, 15 vector results, 12 seeds, 44 graph nodes, 100 graph edges.
+  - `mind_mcp`: 5/5 tool unique; `semantic_search(project_id=stock)` trả `isError=false`, collection `stock_doc`, 5 passages.
+  - `cortex-qdrant` và `cortex-falkordb` vẫn ở trạng thái `Up` sau khi chạy suite, xác nhận lỗi side effect lifecycle đã hết.
 - `git diff --check`: pass.
-- Full repository suite không phải gate sạch sẵn có: chạy mặc định dừng ở 2 lỗi collection; chạy với `PYTHONPATH=doc-tiny --import-mode=importlib` cho **1229 passed, 2 skipped, 66 failed, 21 errors**. Các lỗi rộng này thuộc parser fixtures, lifecycle/platform, global test-module pollution và storage legacy; focused MCP suite ở trên vẫn sạch. Không coi full-suite hiện hữu là đã được sửa trong nhiệm vụ này.
+- Full repository suite chuẩn `.venv/bin/pytest -q`: **1311 passed, 10 skipped, 0 failed, 0 errors, 270 subtests passed** trong 118.30 giây.
+- 10 skip là điều kiện dependency/platform; 8 test Roslyn yêu cầu .NET SDK không có trên host hiện tại. Đây là skip có điều kiện rõ ràng, không phải pass giả.
+- 15 warning còn lại: 13 deprecation warning có chủ đích từ test network-style Falkor driver và 2 warning Qdrant remote giả lập không có server version; không có warning nào làm mất dữ liệu live.
 
 ## Giới hạn còn lại của dữ liệu `stock`
 
@@ -199,4 +223,4 @@ Nếu các chức năng này được yêu cầu cho `stock`, cần mở rộng 
 
 ## Kết luận bàn giao
 
-Tiêu chí quan trọng nhất đã đạt: truy vấn login bằng `semantic_search(expand_graph=true)` trả dữ liệu vector và graph thực. Các vấn đề được nêu trong report baseline về routing sai, graph rỗng, Mind không có corpus, duplicate catalog, query profile, error flag, seed ID, edge serialization và FalkorDB path syntax đều đã được xử lý và kiểm tra lại.
+Tiêu chí quan trọng nhất đã đạt: truy vấn login bằng `semantic_search(expand_graph=true)` trả dữ liệu vector và graph thực. Các vấn đề về routing sai, graph rỗng, Mind không có corpus, duplicate catalog, query profile, error flag, seed ID, edge serialization, FalkorDB path syntax, test pollution, fixture drift và lifecycle side effect đều đã được xử lý. Cả focused MCP suite lẫn full repository suite hiện là gate sạch trong môi trường này.
