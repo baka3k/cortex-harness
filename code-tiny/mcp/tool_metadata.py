@@ -119,7 +119,7 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "relationship_types", "type": "List[str]", "required": False,
              "description": "Filter by rel types (default: CALLS)"},
             {"name": "query_profile", "type": "str", "required": False,
-             "description": "Evidence view: 'strict' (accepted direct semantic CALLS only) or "
+             "description": "C/C++/Pro*C only. Evidence view: 'strict' (accepted direct semantic CALLS only) or "
                             "'conservative' (unions POSSIBLE_CALLS/CALLS_FUNCTION_POINTER without "
                             "relabeling). Results carry semantic_coverage; an empty traversal over "
                             "an incomplete frontier returns outcome='incomplete'."},
@@ -179,7 +179,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "include_fp", "type": "bool", "required": False,
              "description": "Include function pointer calls"},
             {"name": "limit", "type": "int", "required": False, "description": "Max paths to return (default: 10)"},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
         ],
         "output": "Dict with paths between modules, graph visualization data",
         "example": "find_path_between_module(source_modules=['sample_module'], target_modules=['sample_target'], direction='both')",
@@ -207,7 +206,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "inputs": [
             {"name": "class_names", "type": "List[str]", "required": True,
              "description": "Class name patterns"},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
         ],
         "output": "Dict with classes and their functions",
         "example": "listup_class_matching_path(class_names=['SampleClass', 'SampleHandler'])",
@@ -446,8 +444,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
             {"name": "collection", "type": "str", "required": False,
              "description": "Qdrant collection name or project scope prefix"},
-            {"name": "project_id", "type": "str", "required": False,
-             "description": "Case-insensitive project scope applied to vector, keyword, BM25, and graph stages"},
             {"name": "debug", "type": "bool", "required": False,
              "description": "Include per-signal score breakdown in results"},
             {"name": "parser_type", "type": "str", "required": False,
@@ -824,18 +820,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
         "example": "find_workflows_containing(function_id='func_123', include_indirect=True)",
     },
     {
-        "name": "trace_flow_between_module",
-        "description": (
-            "Trace flow paths between functions in two modules using Android interaction edges "
-            "(CALLS, routes, intents, events, etc.)."
-        ),
-        "use_cases": [
-            "Trace cross-module Android IPC",
-            "Find inter-module event flows",
-        ],
-        "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])",
-    },
-    {
         "name": "get_project_modules",
         "description": "Return canonical project modules, descriptors, and bounded dependency context.",
         "use_cases": ["Understand repository module topology", "List internal and external dependencies"],
@@ -846,7 +830,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "include_dependencies", "type": "bool", "required": False},
             {"name": "offset", "type": "int", "required": False},
             {"name": "limit", "type": "int", "required": False},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
             {"name": "parser_type", "type": "str", "required": True, "description": "Required for this tool. Pass a parser alias (e.g. 'android', 'spring', 'typescript'). See list_parsers."},
         ],
         "output": "Paginated canonical module records with capability diagnostics",
@@ -864,7 +847,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "include_inferred", "type": "bool", "required": False},
             {"name": "offset", "type": "int", "required": False},
             {"name": "limit", "type": "int", "required": False},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
             {"name": "parser_type", "type": "str", "required": True, "description": "Required for this tool. Pass a parser alias (e.g. 'android', 'spring', 'typescript'). See list_parsers."},
         ],
         "output": "Paginated APIs with visibility, evidence, confidence, and module ownership",
@@ -883,7 +865,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "query", "type": "str", "required": False},
             {"name": "offset", "type": "int", "required": False},
             {"name": "limit", "type": "int", "required": False},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
             {"name": "parser_type", "type": "str", "required": True, "description": "Required for this tool. Pass a parser alias (e.g. 'android', 'spring', 'typescript'). See list_parsers."},
         ],
         "output": "Paginated normalized endpoint records retaining original labels",
@@ -899,7 +880,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "all_modules", "type": "bool", "required": False},
             {"name": "detail_level", "type": "str", "required": False},
             {"name": "item_limit", "type": "int", "required": False},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
             {"name": "parser_type", "type": "str", "required": True, "description": "Required for this tool. Pass a parser alias (e.g. 'android', 'spring', 'typescript'). See list_parsers."},
         ],
         "output": "Counts and bounded samples for modules, APIs, endpoints, frameworks, and special files",
@@ -920,7 +900,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "include_generated", "type": "bool", "required": False},
             {"name": "offset", "type": "int", "required": False},
             {"name": "limit", "type": "int", "required": False},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
             {"name": "parser_type", "type": "str", "required": True, "description": "Required for this tool. Pass a parser alias (e.g. 'android', 'spring', 'typescript'). See list_parsers."},
         ],
         "output": "Paginated redaction-safe special-file records with provenance and diagnostics",
@@ -937,7 +916,6 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
             {"name": "dimensions", "type": "List[str]", "required": False},
             {"name": "offset", "type": "int", "required": False},
             {"name": "limit", "type": "int", "required": False},
-            {"name": "project_id", "type": "str", "required": False, "description": "Project identifier — selects the graph shard via the project registry. Omit for env-default full search."},
             {"name": "parser_type", "type": "str", "required": True, "description": "Required for this tool. Pass a parser alias (e.g. 'android', 'spring', 'typescript'). See list_parsers."},
         ],
         "output": "Paginated framework contexts with coverage, evidence, and diagnostics",
@@ -1035,12 +1013,14 @@ def build_catalog(
     """
     overrides = overrides or {}
     result: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
     for entry in _FULL_CATALOG:
         name = entry["name"]
-        if name not in tool_names:
+        if name not in tool_names or name in seen:
             continue
         item = deepcopy(entry)
         if name in overrides:
             item.update(overrides[name])
         result.append(item)
+        seen.add(name)
     return result
