@@ -63,12 +63,12 @@ visible to status/doctor; they are never silently deleted or replayed.
 
 ## Todo
 
-- [ ] Leased claim and fencing are implemented.
-- [ ] Retry taxonomy and bounded scheduling are implemented.
-- [ ] Ambiguous graph outcomes reconcile without blind mutation retry.
-- [ ] Compatible startup resume and incompatible quarantine are implemented.
-- [ ] Stable identity crosses outer CLI retries and analyzer subprocesses.
-- [ ] Dirty/clean and generation-publication gates consume journal state.
+- [x] Leased claim and fencing are implemented.
+- [x] Retry taxonomy and bounded scheduling are implemented.
+- [x] Ambiguous graph outcomes reconcile without blind mutation retry.
+- [x] Compatible startup resume and incompatible quarantine are implemented.
+- [x] Stable identity crosses outer CLI retries and analyzer subprocesses.
+- [x] Dirty/clean and generation-publication gates consume journal state.
 
 ## Risks
 

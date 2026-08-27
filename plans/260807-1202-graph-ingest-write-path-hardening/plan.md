@@ -12,8 +12,6 @@ blocks:
   - 260821-1144-cplus-semantic-call-graph
   - 260824-1411-cplus-clang-containment-hardening
 phaseBlockedBy:
-  phase-04e:
-    - 260817-storage-backend-adapter
   phase-06:
     - original-20186-file-source-root-not-mounted
 relatedPlans:
