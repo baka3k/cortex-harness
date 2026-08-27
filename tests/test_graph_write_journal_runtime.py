@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,7 @@ from tools.graph.journal.consumer import resume_journal  # noqa: E402
 from tools.graph.journal.executor import compile_persisted_mutation  # noqa: E402
 from tools.graph.journal.guard import journaled_mutation  # noqa: E402
 from tools.graph.journal.operation import operation_for_custom_query  # noqa: E402
+from tools.graph.journal.retry import classify_error, retry_at  # noqa: E402
 from tools.graph.journal.runtime import GraphWriteJournalRuntime  # noqa: E402
 from tools.graph.writer.language_writer import LanguageCodeWriter  # noqa: E402
 
@@ -70,6 +72,24 @@ class _ConsumerDriver(_Driver):
         return ([{"count": len(values.get("rows", []))}], [], None)
 
 
+class _ReadbackUnavailableDriver(_ConsumerDriver):
+    async def execute_query(self, query, parameters=None, database=None):
+        values = dict(parameters or {})
+        self.calls.append((query, values))
+        if query.lstrip().startswith("MATCH (receipt:GraphWriteReceipt"):
+            raise ConnectionError("receipt store temporarily unavailable")
+        return ([{"count": len(values.get("rows", []))}], [], None)
+
+
+class _DuplicateReceiptDriver(_ConsumerDriver):
+    async def execute_query(self, query, parameters=None, database=None):
+        values = dict(parameters or {})
+        self.calls.append((query, values))
+        if query.lstrip().startswith("MATCH (receipt:GraphWriteReceipt"):
+            return ([{"count": 2}], [], None)
+        return ([{"count": len(values.get("rows", []))}], [], None)
+
+
 def _config(tmp_path: Path, parser: str = "python"):
     env: dict[str, str] = {}
     config = configure_journal_env(
@@ -84,6 +104,27 @@ def _config(tmp_path: Path, parser: str = "python"):
         generation="attempt-1",
     )
     return env, config
+
+
+def test_retry_taxonomy_and_backoff_are_bounded_and_injectable() -> None:
+    now = datetime(2026, 8, 7, tzinfo=timezone.utc)
+    deadline = retry_at(
+        2,
+        now=now,
+        base_seconds=2,
+        max_seconds=10,
+        jitter=lambda _low, high: high,
+    )
+    assert deadline == now + timedelta(seconds=5)
+    assert retry_at(
+        10,
+        now=now,
+        base_seconds=2,
+        max_seconds=10,
+        jitter=lambda _low, high: high,
+    ) == now + timedelta(seconds=10)
+    assert classify_error(ConnectionError("offline")).value == "transient"
+    assert classify_error(ValueError("bad contract")).value == "terminal"
 
 
 @pytest.mark.asyncio
@@ -297,6 +338,150 @@ async def test_autonomous_consumer_acks_exact_receipt_without_replay(
     assert await resume_journal(config, driver) == 1
     assert not any("MERGE (n:File" in query for query, _ in driver.calls)
     assert finalize_journal_from_env(env) is RunStatus.DRAINED
+
+
+@pytest.mark.asyncio
+async def test_transient_receipt_failure_stays_reconciling_without_mutation_retry(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    ticket = runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.mark_ambiguous(ticket)
+    runtime.close()
+
+    driver = _ReadbackUnavailableDriver()
+    with pytest.raises(ConnectionError, match="temporarily unavailable"):
+        await resume_journal(config, driver)
+
+    assert not any("MERGE (n:File" in query for query, _ in driver.calls)
+    with SQLiteJournal(config.path) as journal:
+        recovered = journal.get_batch(ticket.batch.job_id)
+        assert recovered is not None
+        assert recovered.status is BatchStatus.RECONCILING
+        assert recovered.fencing_token is None
+        assert recovered.next_attempt_at is not None
+        assert journal.claim_batch(run_id_value=ticket.batch.run_id) is None
+
+
+@pytest.mark.asyncio
+async def test_inline_recovery_backs_off_transient_receipt_failure(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    ticket = runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.mark_ambiguous(ticket)
+    runtime.close()
+
+    driver = _ReadbackUnavailableDriver()
+    driver.journal_config = config
+    writer = LanguageCodeWriter(driver)
+    with pytest.raises(ConnectionError, match="temporarily unavailable"):
+        await writer.write_batches("files", [{"id": "a.py"}], lambda _rows: None)
+    writer.close_journal()
+
+    assert not any("MERGE (n:File" in query for query, _ in driver.calls)
+    with SQLiteJournal(config.path) as journal:
+        recovered = journal.get_batch(ticket.batch.job_id)
+        assert recovered is not None
+        assert recovered.status is BatchStatus.RECONCILING
+        assert recovered.fencing_token is None
+        assert recovered.next_attempt_at is not None
+
+
+@pytest.mark.asyncio
+async def test_invalid_receipt_cardinality_blocks_without_mutation_retry(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    ticket = runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.mark_ambiguous(ticket)
+    runtime.close()
+
+    driver = _DuplicateReceiptDriver()
+    with pytest.raises(JournalError, match="must be zero or one"):
+        await resume_journal(config, driver)
+
+    assert not any("MERGE (n:File" in query for query, _ in driver.calls)
+    with SQLiteJournal(config.path) as journal:
+        blocked = journal.get_batch(ticket.batch.job_id)
+        assert blocked is not None
+        assert blocked.status is BatchStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_inline_recovery_blocks_invalid_receipt_cardinality(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    ticket = runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.mark_ambiguous(ticket)
+    runtime.close()
+
+    driver = _DuplicateReceiptDriver()
+    driver.journal_config = config
+    writer = LanguageCodeWriter(driver)
+    with pytest.raises(JournalError, match="no safe readback"):
+        await writer.write_batches("files", [{"id": "a.py"}], lambda _rows: None)
+    writer.close_journal()
+
+    assert not any("MERGE (n:File" in query for query, _ in driver.calls)
+    with SQLiteJournal(config.path) as journal:
+        blocked = journal.get_batch(ticket.batch.job_id)
+        assert blocked is not None
+        assert blocked.status is BatchStatus.BLOCKED
+
+
+@pytest.mark.asyncio
+async def test_compatible_draining_run_resumes_across_generation_attempt(
+    tmp_path: Path,
+) -> None:
+    env, first_config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(first_config)
+    ticket = runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.close()
+    with SQLiteJournal(first_config.path) as journal:
+        assert (
+            journal.close_run_production(ticket.batch.run_id).status
+            is RunStatus.DRAINING
+        )
+
+    next_env: dict[str, str] = {}
+    resumed_config = configure_journal_env(
+        next_env,
+        root=tmp_path / "source",
+        project_id="demo",
+        parser="python",
+        source_revision="revision-1",
+        source_snapshot="snapshot-1",
+        physical_target=f"falkordb:{tmp_path}/code.rdb:demo",
+        cache_dir=tmp_path / "cache",
+        generation="attempt-2",
+    )
+    assert resumed_config.metadata.generation == first_config.metadata.generation
+
+    driver = _ConsumerDriver()
+    await resume_journal(resumed_config, driver)
+    with SQLiteJournal(resumed_config.path) as journal:
+        assert journal.get_run(ticket.batch.run_id).status is RunStatus.DRAINED  # type: ignore[union-attr]
+
+    callbacks = 0
+
+    async def should_not_replay(_batch):
+        nonlocal callbacks
+        callbacks += 1
+        return 1
+
+    writer = LanguageCodeWriter(_Driver(resumed_config))
+    assert await writer.write_batches(
+        "files", [{"id": "a.py"}], should_not_replay
+    ) == 1
+    writer.close_journal()
+    assert finalize_journal_from_env(next_env) is RunStatus.DRAINED
+    assert callbacks == 0
 
 
 @pytest.mark.asyncio

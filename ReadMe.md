@@ -172,6 +172,8 @@ The CLI has **two independent command groups** serving different roles:
 | `dev init --env prod` | Configure the `prod` environment (default: `dev`) |
 | `dev init --project-dir /path` | Target a specific project directory |
 | `dev status` | Show active config (Neo4j, Qdrant, folders, environments) |
+| `dev journal status --journal-path PATH` | Show payload-free recovery queue state |
+| `dev journal purge --journal-path PATH --run-id ID --project-id ID --root ROOT` | Purge one expired terminal run after exact-scope safety checks |
 
 > **Remote storage:** `dev init` prompts for `local` or `remote` backend. Press Enter
 > to accept local Docker defaults (`http://localhost:6333` / `localhost:6379`), then
@@ -201,6 +203,22 @@ switching procedure, and force-local behavior.
 > **Later runs:** Git supplies committed/staged/unstaged/untracked candidates and SHA-256 inventory confirms content changes. Initialized submodules are discovered recursively. Non-Git roots automatically use hash mode.
 > Use `--change-detection hash` or `--reconcile` for a full content check, `--submodules ignore` to disable recursive submodule coverage, and `--lock-timeout-seconds N` to control same-scope contention.
 > Support: C#, C/C++, Java, JavaScript, Kotlin, PHP, PL/SQL, Swift, TypeScript, Android Kotlin, Android Java, Python, Go, Perl 5 (`.pl`, `.pm`, `.t`), Rust, Delphi
+
+Graph-write recovery is controlled by `CORTEX_GRAPH_JOURNAL_MODE`: `off`,
+`cplus-canary`, `shared-shadow`, or `shared-required`. Global `all-required`
+remains fail-closed until every direct mutation path is migrated. Positive
+integer overrides are available for `CORTEX_GRAPH_JOURNAL_MAX_BATCHES`,
+`CORTEX_GRAPH_JOURNAL_MAX_PAYLOAD_BYTES`,
+`CORTEX_GRAPH_JOURNAL_MAX_ARTIFACT_BYTES`,
+`CORTEX_GRAPH_JOURNAL_MAX_DATABASE_BYTES`,
+`CORTEX_GRAPH_JOURNAL_MIN_FREE_BYTES`,
+`CORTEX_GRAPH_JOURNAL_RETENTION_SECONDS`,
+`CORTEX_GRAPH_JOURNAL_LEASE_SECONDS`,
+`CORTEX_GRAPH_JOURNAL_MAX_ATTEMPTS`, and the retry base/maximum seconds. Invalid
+values stop ingestion before graph mutation. Use
+`dev journal status --journal-path <exact-path> --json-output` for payload-free
+queue state. `dev journal purge` additionally requires the exact run, project,
+and source root; active, leased, or retained runs are refused.
 
 #### Graph and embedding phases
 

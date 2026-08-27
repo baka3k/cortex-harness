@@ -195,6 +195,35 @@ def test_remote_falkordb_route(tmp_path: Path) -> None:
     assert driver.path is None
 
 
+def test_remote_falkordb_connection_failure_never_retries_local(
+    tmp_path: Path, monkeypatch
+) -> None:
+    attempts: list[dict[str, Any]] = []
+
+    class _FailingRemoteDriver:
+        def __init__(self, **kwargs: Any) -> None:
+            attempts.append(kwargs)
+            raise ConnectionError("remote transport failed")
+
+    monkeypatch.setattr(
+        sys.modules["tools.graph.driver.falkordb_driver"],
+        "FalkorDBDriver",
+        _FailingRemoteDriver,
+    )
+    factory = StorageFactory(
+        backend_mode=BackendMode.REMOTE,
+        resolved=_resolved_storage(tmp_path),
+        remote=RemoteStorageConfig(falkordb_uri="redis://falkordb:6379"),
+    )
+
+    with pytest.raises(ConnectionError, match="remote transport failed"):
+        factory.get_falkordb_driver("hyper")
+
+    assert len(attempts) == 1
+    assert attempts[0]["uri"] == "redis://falkordb:6379"
+    assert "path" not in attempts[0]
+
+
 # ---------------------------------------------------------------------------
 # Mixed / partial remote
 # ---------------------------------------------------------------------------

@@ -17,6 +17,7 @@ from .models import (
     TerminalErrorCode,
 )
 from .operation import GraphWriteOperation
+from .retry import classify_error, retry_at
 from .sqlite_store import SQLiteJournal
 
 
@@ -166,7 +167,9 @@ class GraphWriteJournalRuntime:
                 f"journal batch {batch.job_id} is terminal ({batch.status.value})",
             )
         if batch.status is BatchStatus.RECONCILING:
-            reconciliation = self.journal.claim_reconciling_job(batch.job_id)
+            reconciliation = self.journal.claim_reconciling_job(
+                batch.job_id, lease_seconds=self.config.lease_seconds
+            )
             if reconciliation is None or not reconciliation.fencing_token:
                 raise JournalError(
                     TerminalErrorCode.INVALID_TRANSITION,
@@ -280,6 +283,37 @@ class GraphWriteJournalRuntime:
             execute=True,
             operation=ticket.operation,
             rows=ticket.rows,
+        )
+
+    def defer_reconciliation_error(
+        self, ticket: JournalTicket, error: Exception
+    ) -> None:
+        """Persist readback failure without ever making ambiguity executable."""
+
+        if not ticket.reconcile or not ticket.batch.fencing_token:
+            raise ValueError("ticket is not fenced for reconciliation")
+        retry_class = classify_error(error)
+        if retry_class is RetryClass.TRANSIENT:
+            self.journal.schedule_reconciliation_retry(
+                ticket.batch.job_id,
+                ticket.batch.fencing_token,
+                retry_at=retry_at(
+                    ticket.batch.attempt,
+                    base_seconds=self.config.retry_base_seconds,
+                    max_seconds=self.config.retry_max_seconds,
+                ),
+                error_code=TerminalErrorCode.INVALID_TRANSITION,
+            )
+            return
+        self.journal.block_batch(
+            ticket.batch.job_id,
+            ticket.batch.fencing_token,
+            retry_class=retry_class,
+            error_code=(
+                error.code
+                if isinstance(error, JournalError)
+                else TerminalErrorCode.INVALID_CONTRACT
+            ),
         )
 
     def acknowledge(self, ticket: JournalTicket, count: int, elapsed_ms: int) -> None:

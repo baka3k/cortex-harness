@@ -35,6 +35,7 @@ from tools.graph.journal import (  # noqa: E402
     run_fingerprint,
 )
 from tools.graph.journal import artifacts as artifact_module  # noqa: E402
+from tools.graph.journal.sqlite_store import inspect_journal  # noqa: E402
 
 
 def _limits(**overrides: int) -> JournalLimits:
@@ -277,8 +278,14 @@ def test_expired_lease_is_recovered_and_old_fence_cannot_ack(tmp_path: Path) -> 
     journal.close()
 
     with _journal(tmp_path, clock=clock) as reopened:
-        assert reopened.get_batch(batch.job_id).status is BatchStatus.PENDING  # type: ignore[union-attr]
-        second_lease = reopened.claim_batch(run_id_value=run.run_id, lease_seconds=5)
+        recovered = reopened.get_batch(batch.job_id)
+        assert recovered is not None
+        assert recovered.status is BatchStatus.RECONCILING
+        assert recovered.fencing_token is None
+        assert reopened.claim_batch(run_id_value=run.run_id) is None
+        second_lease = reopened.claim_reconciling(
+            run_id_value=run.run_id, lease_seconds=5
+        )
         assert second_lease is not None
         assert second_lease.fencing_token != first_lease.fencing_token
         with pytest.raises(StaleFenceError):
@@ -319,6 +326,37 @@ def test_expired_reconciliation_is_reclaimed_for_readback_not_execution(
             ).status
             is BatchStatus.DONE
         )
+
+
+def test_reconciliation_backoff_never_makes_ambiguous_work_executable(
+    tmp_path: Path,
+) -> None:
+    current = [datetime(2026, 8, 7, tzinfo=timezone.utc)]
+
+    with _journal(tmp_path, clock=lambda: current[0]) as journal:
+        run = journal.open_run(_metadata())
+        batch = _enqueue(journal, run.run_id)
+        lease = journal.claim_batch(run_id_value=run.run_id)
+        assert lease is not None
+        reconciliation = journal.mark_reconciling(
+            batch.job_id, lease.fencing_token or ""
+        )
+
+        retry = journal.schedule_reconciliation_retry(
+            batch.job_id,
+            reconciliation.fencing_token or "",
+            retry_at=current[0] + timedelta(seconds=5),
+            error_code=TerminalErrorCode.INVALID_TRANSITION,
+        )
+        assert retry.status is BatchStatus.RECONCILING
+        assert retry.fencing_token is None
+        assert journal.claim_batch(run_id_value=run.run_id) is None
+        assert journal.claim_reconciling(run_id_value=run.run_id) is None
+
+        current[0] += timedelta(seconds=5)
+        retried_readback = journal.claim_reconciling(run_id_value=run.run_id)
+        assert retried_readback is not None
+        assert retried_readback.job_id == batch.job_id
 
 
 def test_retry_exhaustion_dead_letters_batch_and_run(tmp_path: Path) -> None:
@@ -543,4 +581,33 @@ def test_events_contain_identifiers_and_counters_but_not_payloads(
         ]
         assert events[-1]["job_id"] == batch.job_id
         assert events[-1]["counters"]["rows"] == 1
+        assert events[-1]["parser"] == "python"
+        assert events[-1]["phase"] == "nodes"
+        assert events[-1]["operation"] == "node_upsert:v1"
+        assert events[-1]["pending"] == 1
         assert "sample" not in repr(events)
+
+
+def test_payload_free_status_reports_resume_age_bytes_and_next_action(
+    tmp_path: Path,
+) -> None:
+    current = [datetime(2026, 8, 7, tzinfo=timezone.utc)]
+    path = tmp_path / "journal.sqlite3"
+    with SQLiteJournal(path, limits=_limits(), clock=lambda: current[0]) as journal:
+        run = journal.open_run(_metadata())
+        journal.open_run(_metadata())
+        _enqueue(journal, run.run_id)
+        current[0] += timedelta(seconds=7)
+        summary = journal.status_summary(run.run_id)
+
+        assert summary["resumed"] is True
+        assert summary["oldest_unfinished_age_seconds"] == 7
+        assert summary["artifact_bytes"] > 0
+        assert summary["journal_bytes"] > 0
+        assert summary["next_action"] == "resume_consumer"
+
+    inspected = inspect_journal(path)
+    assert len(inspected) == 1
+    assert inspected[0]["run_id"] == run.run_id
+    assert inspected[0]["resumed"] is True
+    assert inspected[0]["pending"] == 1
