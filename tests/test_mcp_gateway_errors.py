@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ for path in (ROOT / "code-tiny", ROOT / "code-tiny" / "mcp"):
         sys.path.insert(0, str(path))
 
 from cortex_harness.storage import GatewayErrorCode, StoreGatewayError  # noqa: E402
+from services import explore_service as explore_module  # noqa: E402
 from services.explore_service import ExploreService  # noqa: E402
 
 
@@ -46,6 +48,7 @@ async def test_explore_retrieval_uses_named_lane() -> None:
     assert search.call_count == 1
     # The mock records the caller thread before returning.
     assert any(thread.name.startswith("cortex-retrieval") for thread in threading.enumerate())
+    service.close(wait=True)
 
 
 @pytest.mark.asyncio
@@ -57,6 +60,52 @@ async def test_explore_rejects_excessive_top_k_before_store_work() -> None:
 
     assert raised.value.code is GatewayErrorCode.REQUEST_TOO_LARGE
     assert raised.value.details["accepted_limit"] == 100
+    service.close(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_embedder_initialization_is_single_flight_on_named_lane() -> None:
+    service = ExploreService(model_name="fixture-model")
+    calls: list[str] = []
+
+    def build(model_name: str):
+        calls.append(threading.current_thread().name)
+        return lambda _text: [float(len(model_name))]
+
+    with patch.object(explore_module, "_make_embedder", side_effect=build):
+        first, second = await asyncio.gather(
+            service._get_embedder(), service._get_embedder()
+        )
+
+    assert first is second
+    assert len(calls) == 1
+    assert calls[0].startswith("cortex-retrieval")
+    service.close(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_retrieval_drain_rejects_new_work() -> None:
+    service = ExploreService()
+    service.begin_drain()
+
+    with pytest.raises(StoreGatewayError) as raised:
+        await service._run_retrieval(
+            SimpleNamespace(embedding_text="query", raw_query="query"),
+            None,
+            None,
+            "graph",
+            "collection",
+            10,
+            "semantic",
+            False,
+            None,
+            None,
+            None,
+            "demo",
+        )
+
+    assert raised.value.code is GatewayErrorCode.STORE_MAINTENANCE
+    service.close(wait=False)
 
 
 @pytest.mark.asyncio
@@ -83,6 +132,7 @@ async def test_explore_retrieval_does_not_turn_storage_failure_into_empty_succes
                 None,
                 "demo",
             )
+    service.close(wait=True)
 
 
 def test_unified_mcp_preserves_structured_gateway_error() -> None:

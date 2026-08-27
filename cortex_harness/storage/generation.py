@@ -242,7 +242,11 @@ class GenerationManager:
             temporary.unlink(missing_ok=True)
             return active
 
-    def publish(self, manifest: GenerationManifest, validate: Callable[[GenerationManifest], None]) -> GenerationManifest:
+    def publish(
+        self,
+        manifest: GenerationManifest,
+        validate: Callable[[GenerationManifest], None],
+    ) -> GenerationManifest:
         if manifest.target != self.target:
             raise ValueError("cannot publish a generation for a different physical target")
         self._validate_storage_target(manifest)

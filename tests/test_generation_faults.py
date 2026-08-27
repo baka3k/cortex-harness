@@ -169,6 +169,11 @@ async def test_drain_timeout_keeps_owner_resources_until_sync_call_returns(
     assert raised.value.code is GatewayErrorCode.DEADLINE_EXCEEDED
     assert gateway.lifecycle.value == "DRAINING"
     assert gateway._leases
+    with pytest.raises(StoreGatewayError) as rejected:
+        await gateway.submit_ingest(
+            idempotency_key="late-request", source_revision="revision-2"
+        )
+    assert rejected.value.code is GatewayErrorCode.STORE_MAINTENANCE
 
     release.set()
     await query
@@ -304,6 +309,9 @@ def test_retirement_fence_prevents_same_generation_republication(
     assert manager.load_active().generation_id == "generation-2"
     with pytest.raises(ValueError, match="retired or missing"):
         manager.publish(old, lambda _: None)
+    recovered_manager = GenerationManager(manager.root, manager.target)
+    with pytest.raises(ValueError, match="retired or missing"):
+        recovered_manager.publish(old, lambda _: None)
 
 
 def test_generation_record_failure_cannot_change_active_pointer(
@@ -324,3 +332,47 @@ def test_generation_record_failure_cannot_change_active_pointer(
         manager.publish(candidate, lambda _: None)
 
     assert manager.load_active() == first
+
+
+@pytest.mark.asyncio
+async def test_restart_requeues_preparation_and_reconciles_published_manifest(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "generations"
+    target = _target(tmp_path)
+    first = StoreGateway(target, str(root))
+    await first.start()
+    active = await first.publish(
+        first.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _: None,
+    )
+    preparing = await first.submit_ingest(
+        idempotency_key="preparing", source_revision="revision-2"
+    )
+    await first.update_job(preparing.job_id, IngestionJobState.PREPARING)
+    publishing = await first.submit_ingest(
+        idempotency_key="publishing", source_revision=active.source_revision
+    )
+    publishing = await first.update_job(
+        publishing.job_id,
+        IngestionJobState.WRITING,
+        generation_id=active.generation_id,
+    )
+    publishing = await first.update_job(
+        publishing.job_id, IngestionJobState.VALIDATING
+    )
+    await first.update_job(publishing.job_id, IngestionJobState.PUBLISHING)
+    await first.close()
+
+    second = StoreGateway(target, str(root))
+    await second.start()
+    recovered_preparing = await second.get_ingestion_status(preparing.job_id)
+    recovered_publishing = await second.get_ingestion_status(publishing.job_id)
+
+    assert recovered_preparing is not None
+    assert recovered_preparing.state is IngestionJobState.QUEUED
+    assert recovered_preparing.detail["recovery"] == "preparation_requeued_after_restart"
+    assert recovered_publishing is not None
+    assert recovered_publishing.state is IngestionJobState.COMPLETED
+    assert recovered_publishing.detail["recovery"] == "publication_reconciled"
+    await second.close()
