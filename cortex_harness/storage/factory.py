@@ -45,6 +45,7 @@ from .qdrant_remote import RemoteQdrantStore
 from .targets import (
     EffectiveStorageTarget,
     EffectiveStorageTopology,
+    environment_flag_enabled,
     local_graph_target,
     local_vector_target,
     remote_graph_target,
@@ -233,7 +234,7 @@ class StorageFactory:
     ) -> None:
         # Emergency rollback: force local even when remote is requested.
         self._requested_mode = backend_mode
-        self._forced_local = bool(os.getenv(ENV_FORCE_LOCAL))
+        self._forced_local = environment_flag_enabled(os.getenv(ENV_FORCE_LOCAL))
         if self._forced_local:
             self._mode = BackendMode.LOCAL
             self._remote: Optional[RemoteStorageConfig] = None

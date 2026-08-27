@@ -590,6 +590,86 @@ class SQLiteJournal:
                 return candidate
         return None
 
+    def quarantine_legacy_targets(
+        self,
+        metadata: RunMetadata,
+        physical_targets: Iterable[str],
+    ) -> int:
+        """Fence active runs that use a superseded target-identity format."""
+
+        targets = tuple(
+            sorted(
+                {
+                    str(target).strip()
+                    for target in physical_targets
+                    if str(target).strip() and str(target).strip() != metadata.physical_target
+                }
+            )
+        )
+        if not targets:
+            return 0
+        placeholders = ", ".join("?" for _ in targets)
+        now_value = self._now()
+        now = _iso(now_value)
+        retention_until = _iso(
+            now_value + timedelta(seconds=self.limits.retention_seconds)
+        )
+        with self._transaction():
+            rows = self._connection.execute(
+                f"""
+                SELECT run_id FROM runs
+                WHERE project_id = ? AND scope_id = ? AND parser = ?
+                  AND physical_target IN ({placeholders})
+                  AND status IN (?, ?)
+                """,
+                (
+                    metadata.project_id,
+                    metadata.scope_id,
+                    metadata.parser,
+                    *targets,
+                    *_ACTIVE_RUN_STATUSES,
+                ),
+            ).fetchall()
+            for row in rows:
+                self._connection.execute(
+                    """
+                    UPDATE runs SET status = ?, updated_at = ?, retention_until = ?,
+                        error_code = ?, error_detail = ?
+                    WHERE run_id = ?
+                    """,
+                    (
+                        RunStatus.QUARANTINED.value,
+                        now,
+                        retention_until,
+                        TerminalErrorCode.INCOMPATIBLE_SCHEMA.value,
+                        "superseded by the credential-free effective-target identity contract",
+                        row["run_id"],
+                    ),
+                )
+                self._add_event(
+                    run_id_value=row["run_id"],
+                    event_type="run_quarantined",
+                    error_code=TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+                    now=now,
+                )
+                self._connection.execute(
+                    """
+                    UPDATE batches
+                    SET status = ?, fencing_token = NULL, lease_until = NULL,
+                        retry_class = ?, error_code = ?, updated_at = ?
+                    WHERE run_id = ? AND status != ?
+                    """,
+                    (
+                        BatchStatus.BLOCKED.value,
+                        RetryClass.INCOMPATIBLE.value,
+                        TerminalErrorCode.INCOMPATIBLE_SCHEMA.value,
+                        now,
+                        row["run_id"],
+                        BatchStatus.DONE.value,
+                    ),
+                )
+        return len(rows)
+
     def create_artifact(self, run_id_value: str, rows: Iterable[Any]) -> ArtifactRef:
         run = self.get_run(run_id_value)
         if run is None or run.status is not RunStatus.OPEN:
