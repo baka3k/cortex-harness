@@ -538,7 +538,14 @@ def _storage_env_for_process(cfg: dict, project_root: Optional[Path], role: Stor
         code_collection=code_collection,
         doc_collection=doc_collection,
     )
-    return storage_overlay(resolved, owner=role)
+    return storage_overlay(
+        resolved,
+        owner=role,
+        graph_provider=_graph_provider(
+            env,
+            "DOC_GRAPH_PROVIDER" if role == StorageRole.DOCUMENT else "CODE_GRAPH_PROVIDER",
+        ),
+    )
 
 
 def _normalize_embed_device(device: str) -> str:

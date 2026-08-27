@@ -170,7 +170,26 @@ def test_falkor_defaults_ignore_legacy_neo4j_database() -> None:
             "NEO4J_DB": "must-not-leak",
         }
     )
-    assert target == "falkordb:/tmp/cortex-provider-boundary.rdb:hyper_graph"
+    assert target.startswith("storage-target:v1:")
+
+
+def test_remote_falkor_physical_target_is_uri_aware_and_credential_free() -> None:
+    from cortex_harness.storage import effective_graph_target_from_env
+    from tools.graph.journal.config import physical_target_from_env
+
+    env = {
+        "CODE_GRAPH_PROVIDER": "falkordb",
+        "FALKORDB_URI": "redis://tenant:secret@GRAPH.EXAMPLE:6379",
+        "FALKORDB_PASSWORD": "other-secret",
+        "FALKORDB_GRAPH": "hyper_graph",
+    }
+    descriptor = effective_graph_target_from_env(env)
+
+    assert descriptor.location == "redis://graph.example:6379"
+    assert descriptor.mode == "remote"
+    assert physical_target_from_env(env) == descriptor.fingerprint
+    assert "tenant" not in descriptor.canonical_json
+    assert "secret" not in descriptor.canonical_json
 
 
 def test_falkor_uses_provider_neutral_cypher_base() -> None:

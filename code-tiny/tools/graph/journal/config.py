@@ -175,16 +175,26 @@ def configure_journal_env(
 
 
 def physical_target_from_env(env: Mapping[str, str]) -> str:
-    provider = (env.get("CODE_GRAPH_PROVIDER") or env.get("GRAPH_PROVIDER") or "falkordb").casefold()
-    if provider in {"neo4j", "neo"}:
-        return f"neo4j:{env.get('NEO4J_URI', '')}:{env.get('NEO4J_DB', 'neo4j')}"
-    path = str(env.get("FALKORDB_PATH") or "embedded")
-    graph = str(
-        env.get("FALKORDB_GRAPH")
-        or env.get("FALKORDB_DATABASE")
-        or "hyper_graph"
+    """Return the effective graph-target fingerprint for journal identity.
+
+    Prefer the descriptor produced by :func:`storage_overlay`; reconstruct a
+    canonical descriptor for older callers.  Reconstruction is URI-aware, so
+    two remote servers can never collapse onto the old ``embedded`` token.
+    """
+
+    from cortex_harness.storage.targets import (
+        ENV_EFFECTIVE_GRAPH_FINGERPRINT,
+        effective_graph_target_from_env,
     )
-    return f"falkordb:{path}:{graph}"
+
+    target = effective_graph_target_from_env(env)
+    supplied = str(env.get(ENV_EFFECTIVE_GRAPH_FINGERPRINT) or "").strip()
+    if supplied and supplied != target.fingerprint:
+        raise JournalError(
+            TerminalErrorCode.INVALID_CONTRACT,
+            "effective graph target descriptor does not match its fingerprint",
+        )
+    return target.fingerprint
 
 
 def snapshot_for_paths(
