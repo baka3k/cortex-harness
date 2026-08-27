@@ -61,7 +61,10 @@ class GenerationManager:
     ) -> "GenerationManager":
         """Construct a manager fenced by the factory's effective topology."""
 
-        role_value = factory._role_value(role)
+        role_value = str(getattr(role, "value", role) or "code").casefold()
+        role_value = "doc" if role_value == "document" else role_value
+        if role_value not in {"code", "doc"}:
+            raise ValueError(f"storage role must be 'code' or 'doc'; got {role!r}")
         owner_id = (
             factory.resolved.doc_owner_id
             if role_value == "doc"
