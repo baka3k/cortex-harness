@@ -46,9 +46,13 @@ class GenerationManager:
         self.manifest_path = self.root / "active-generation.json"
         self.generations_root = self.root / "generations"
         self.compatibility_root = self.root / "generation-compatibility"
+        self.retired_root = self.root / "retired-generations"
         self._publication_lock = threading.Lock()
         self._reference_lock = threading.Lock()
         self._references: dict[str, int] = {}
+        self._retiring: set[str] = set()
+        self._active_cache: GenerationManifest | None = None
+        self._active_cache_loaded = False
         self._storage_compatibility = dict(storage_compatibility or {})
         self._storage_topology = storage_topology
 
@@ -117,26 +121,33 @@ class GenerationManager:
         if not str(reason or "").strip():
             raise ValueError("generation incompatibility requires a reason")
         path = self._compatibility_path(generation_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        payload = {
-            "schema_version": "1",
-            "generation_id": generation_id,
-            "compatible": False,
-            "reason": str(reason),
-            "provenance": str(provenance),
-        }
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        if os.name != "nt":
-            directory_fd = os.open(str(path.parent), os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+        with self._publication_lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".tmp")
+            payload = {
+                "schema_version": "1",
+                "generation_id": generation_id,
+                "compatible": False,
+                "reason": str(reason),
+                "provenance": str(provenance),
+            }
+            with temporary.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+            if os.name != "nt":
+                directory_fd = os.open(str(path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            if (
+                self._active_cache is not None
+                and self._active_cache.generation_id == generation_id
+            ):
+                self._active_cache = None
+                self._active_cache_loaded = False
         return path
 
     def incompatibility(self, generation_id: str) -> dict[str, object] | None:
@@ -156,7 +167,7 @@ class GenerationManager:
         )
         generation_root = self.generations_root / generation_id
         storage_compatibility = self._storage_compatibility_for(generation_id)
-        return GenerationManifest(
+        manifest = GenerationManifest(
             generation_id=generation_id,
             target=self.target,
             source_revision=source_revision,
@@ -169,6 +180,8 @@ class GenerationManager:
                 else {}
             ),
         )
+        self._write_generation_record(manifest)
+        return manifest
 
     def _storage_compatibility_for(self, generation_id: str) -> dict[str, object]:
         if self._storage_topology is not None:
@@ -192,10 +205,14 @@ class GenerationManager:
                 "generation manifest does not match the effective storage topology"
             )
 
-    def load_active(self) -> GenerationManifest | None:
+    def _load_active_unlocked(self) -> GenerationManifest | None:
+        if self._active_cache_loaded:
+            return self._active_cache
         try:
             payload = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
+            self._active_cache_loaded = True
+            self._active_cache = None
             return None
         manifest = GenerationManifest.from_dict(payload)
         if manifest.target != self.target or manifest.state is not GenerationState.PUBLISHED:
@@ -204,7 +221,26 @@ class GenerationManager:
         self._validate_paths(manifest)
         if self.incompatibility(manifest.generation_id) is not None:
             raise ValueError("active generation is structurally incompatible")
+        self._active_cache = manifest
+        self._active_cache_loaded = True
         return manifest
+
+    def load_active(self) -> GenerationManifest | None:
+        """Return the cached active selection under the publication boundary."""
+
+        with self._publication_lock:
+            return self._load_active_unlocked()
+
+    def recover(self) -> GenerationManifest | None:
+        """Recover the authoritative manifest and discard an abandoned temp file."""
+
+        temporary = self.manifest_path.with_suffix(".tmp")
+        with self._publication_lock:
+            self._active_cache = None
+            self._active_cache_loaded = False
+            active = self._load_active_unlocked()
+            temporary.unlink(missing_ok=True)
+            return active
 
     def publish(self, manifest: GenerationManifest, validate: Callable[[GenerationManifest], None]) -> GenerationManifest:
         if manifest.target != self.target:
@@ -230,35 +266,93 @@ class GenerationManager:
             validation=published_validation,
         )
         self._validate_storage_target(published)
-        self._write_active_manifest(published)
+        with self._publication_lock:
+            if self._retired_path(published.generation_id).is_file():
+                raise ValueError("cannot publish a retired or missing generation")
+        # Persist all diagnostic/state material before the authoritative
+        # pointer swap. A failure here leaves the previous active generation
+        # selected instead of reporting failure after a visible commit.
+        self._write_generation_record(published)
+        with self._publication_lock:
+            # Validation intentionally runs without the publication mutex.
+            # Only the final target/state recheck and durable pointer swap are
+            # serialized with readers selecting a generation.
+            self._validate_storage_target(published)
+            self._validate_paths(published)
+            if published.generation_id in self._retiring:
+                raise ValueError("cannot publish a generation while it is retiring")
+            if self._retired_path(published.generation_id).is_file():
+                raise ValueError("cannot publish a retired or missing generation")
+            if not self._generation_record_path(published).is_file():
+                raise ValueError("cannot publish a retired or missing generation")
+            if self.incompatibility(published.generation_id) is not None:
+                raise ValueError("cannot publish a structurally incompatible generation")
+            self._write_active_manifest_unlocked(published)
+            self._active_cache = published
+            self._active_cache_loaded = True
         return published
 
     def _write_active_manifest(self, manifest: GenerationManifest) -> None:
         """Atomically persist one already-validated active manifest."""
 
+        with self._publication_lock:
+            self._write_active_manifest_unlocked(manifest)
+            self._active_cache = manifest
+            self._active_cache_loaded = True
+
+    def _write_active_manifest_unlocked(self, manifest: GenerationManifest) -> None:
+        """Persist the active pointer while the caller holds publication lock."""
+
         self.root.mkdir(parents=True, exist_ok=True)
         temporary = self.manifest_path.with_suffix(".tmp")
         encoded = json.dumps(manifest.to_dict(), sort_keys=True, separators=(",", ":"))
-        with self._publication_lock:
-            with temporary.open("w", encoding="utf-8") as handle:
-                handle.write(encoded)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.manifest_path)
-            if os.name != "nt":
-                # Windows cannot open a directory with os.open(O_RDONLY); the
-                # durability sync is POSIX-only.
-                directory_fd = os.open(str(self.root), os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, self.manifest_path)
+        if os.name != "nt":
+            # Windows cannot open a directory with os.open(O_RDONLY); the
+            # durability sync is POSIX-only.
+            directory_fd = os.open(str(self.root), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+    def _write_generation_record(self, manifest: GenerationManifest) -> None:
+        generation_root = self._generation_root(manifest)
+        generation_root.mkdir(parents=True, exist_ok=True)
+        target = self._generation_record_path(manifest)
+        temporary = target.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(manifest.to_dict(), handle, sort_keys=True, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        if os.name != "nt":
+            directory_fd = os.open(str(generation_root), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+    def _generation_record_path(self, manifest: GenerationManifest) -> Path:
+        return self._generation_root(manifest) / "generation.json"
+
+    def _generation_root(self, manifest: GenerationManifest) -> Path:
+        generation_id = self._safe_generation_id(manifest.generation_id)
+        lexical_root = self.generations_root / generation_id
+        if lexical_root.is_symlink():
+            raise ValueError("generation root cannot be a symbolic link")
+        resolved_root = lexical_root.resolve()
+        resolved_generations = self.generations_root.resolve()
+        if not resolved_root.is_relative_to(resolved_generations):
+            raise ValueError("generation root must remain below the generation directory")
+        return resolved_root
 
     def _validate_paths(self, manifest: GenerationManifest) -> None:
-        generation_id = self._safe_generation_id(manifest.generation_id)
-        generation_root = (self.generations_root / generation_id).resolve()
-        if not generation_root.is_relative_to(self.generations_root.resolve()):
-            raise ValueError("generation root must remain below the generation directory")
+        generation_root = self._generation_root(manifest)
         graph_path = Path(manifest.graph_path).resolve()
         vector_path = Path(manifest.vector_path).resolve()
         if graph_path != generation_root / "graph" / "data.rdb" or vector_path != generation_root / "vector":
@@ -266,11 +360,14 @@ class GenerationManager:
 
     @contextmanager
     def pin_active(self) -> Iterator[GenerationManifest]:
-        manifest = self.load_active()
-        if manifest is None:
-            raise RuntimeError("no active generation is available")
-        with self._reference_lock:
-            self._references[manifest.generation_id] = self._references.get(manifest.generation_id, 0) + 1
+        # Publication -> reference lock order makes selection and pinning one
+        # atomic lifecycle action. Retirement uses the same order.
+        with self._publication_lock:
+            manifest = self._load_active_unlocked()
+            if manifest is None:
+                raise RuntimeError("no active generation is available")
+            with self._reference_lock:
+                self._references[manifest.generation_id] = self._references.get(manifest.generation_id, 0) + 1
         try:
             yield manifest
         finally:
@@ -287,13 +384,65 @@ class GenerationManager:
 
     def retire(self, manifest: GenerationManifest) -> bool:
         """Remove a non-active generation only after readers have drained."""
-        active = self.load_active()
-        if active is not None and active.generation_id == manifest.generation_id:
-            return False
-        with self._reference_lock:
-            if self._references.get(manifest.generation_id, 0):
+        self._validate_paths(manifest)
+        with self._publication_lock:
+            active = self._load_active_unlocked()
+            if active is not None and active.generation_id == manifest.generation_id:
                 return False
-        generation_root = Path(manifest.graph_path).parent.parent
-        if generation_root.is_relative_to(self.generations_root):
-            shutil.rmtree(generation_root, ignore_errors=True)
-        return True
+            with self._reference_lock:
+                if self._references.get(manifest.generation_id, 0):
+                    return False
+            if manifest.generation_id in self._retiring:
+                return False
+            self._write_retired_tombstone_unlocked(manifest)
+            self._retiring.add(manifest.generation_id)
+        generation_root = self._generation_root(manifest)
+        try:
+            if generation_root.exists():
+                shutil.rmtree(generation_root)
+            return True
+        finally:
+            with self._publication_lock:
+                self._retiring.discard(manifest.generation_id)
+
+    def _retired_path(self, generation_id: str) -> Path:
+        return self.retired_root / f"{self._safe_generation_id(generation_id)}.json"
+
+    def _write_retired_tombstone_unlocked(self, manifest: GenerationManifest) -> None:
+        """Fence a generation ID durably while publication is excluded."""
+
+        self.retired_root.mkdir(parents=True, exist_ok=True)
+        target = self._retired_path(manifest.generation_id)
+        temporary = target.with_suffix(".tmp")
+        payload = {
+            "schema_version": 1,
+            "generation_id": manifest.generation_id,
+            "retired_at": utc_now(),
+        }
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        if os.name != "nt":
+            directory_fd = os.open(str(self.retired_root), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+
+    def ensure_disk_capacity(self, required_bytes: int) -> None:
+        """Fail before staging when required bytes plus safety headroom do not fit."""
+
+        if required_bytes < 0:
+            raise ValueError("required_bytes cannot be negative")
+        probe = self.root if self.root.exists() else self.root.parent
+        while not probe.exists() and probe != probe.parent:
+            probe = probe.parent
+        free_bytes = shutil.disk_usage(probe).free
+        safety_bytes = int(required_bytes * 0.20)
+        total_required = required_bytes + safety_bytes
+        if free_bytes < total_required:
+            raise OSError(
+                f"insufficient staging disk: required={total_required} free={free_bytes}"
+            )
