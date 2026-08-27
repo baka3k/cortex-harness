@@ -35,6 +35,7 @@ class GenerationManager:
         *,
         retain: int = 1,
         storage_compatibility: Mapping[str, object] | None = None,
+        allow_legacy_local_migration: bool = False,
     ) -> None:
         self.root = Path(root).resolve()
         self.target = target
@@ -46,6 +47,7 @@ class GenerationManager:
         self._reference_lock = threading.Lock()
         self._references: dict[str, int] = {}
         self._storage_compatibility = dict(storage_compatibility or {})
+        self._allow_legacy_local_migration = bool(allow_legacy_local_migration)
 
     @classmethod
     def from_storage_factory(
@@ -88,6 +90,9 @@ class GenerationManager:
             target,
             retain=retain,
             storage_compatibility=topology.compatibility_metadata,
+            allow_legacy_local_migration=(
+                topology.graph.mode == "file" and topology.vector.mode == "file"
+            ),
         )
 
     @staticmethod
@@ -162,14 +167,24 @@ class GenerationManager:
             ),
         )
 
-    def _validate_storage_target(self, manifest: GenerationManifest) -> None:
+    def _validate_storage_target(
+        self,
+        manifest: GenerationManifest,
+        *,
+        migrate_legacy: bool = False,
+    ) -> GenerationManifest:
         if not self._storage_compatibility:
-            return
+            return manifest
         actual = manifest.validation.get("storage_compatibility")
+        if actual is None and migrate_legacy and self._allow_legacy_local_migration:
+            validation = dict(manifest.validation)
+            validation["storage_compatibility"] = dict(self._storage_compatibility)
+            return replace(manifest, validation=validation)
         if not isinstance(actual, Mapping) or dict(actual) != self._storage_compatibility:
             raise ValueError(
                 "generation manifest does not match the effective storage topology"
             )
+        return manifest
 
     def load_active(self) -> GenerationManifest | None:
         try:
@@ -179,11 +194,13 @@ class GenerationManager:
         manifest = GenerationManifest.from_dict(payload)
         if manifest.target != self.target or manifest.state is not GenerationState.PUBLISHED:
             raise ValueError("active generation manifest does not describe this published physical target")
-        self._validate_storage_target(manifest)
+        compatible = self._validate_storage_target(manifest, migrate_legacy=True)
         self._validate_paths(manifest)
         if self.incompatibility(manifest.generation_id) is not None:
             raise ValueError("active generation is structurally incompatible")
-        return manifest
+        if compatible is not manifest:
+            self._write_active_manifest(compatible)
+        return compatible
 
     def publish(self, manifest: GenerationManifest, validate: Callable[[GenerationManifest], None]) -> GenerationManifest:
         if manifest.target != self.target:
@@ -193,15 +210,32 @@ class GenerationManager:
         if self.incompatibility(manifest.generation_id) is not None:
             raise ValueError("cannot publish a structurally incompatible generation")
         validate(manifest)
+        # The callback is caller-controlled and ``validation`` is a mutable
+        # mapping even on a frozen dataclass. Re-check and then overwrite the
+        # reserved envelope from the manager before serialization.
+        self._validate_storage_target(manifest)
+        published_validation = dict(manifest.validation)
+        if self._storage_compatibility:
+            published_validation["storage_compatibility"] = dict(
+                self._storage_compatibility
+            )
         published = replace(
             manifest,
             state=GenerationState.PUBLISHED,
             validated_at=manifest.validated_at or utc_now(),
             published_at=utc_now(),
+            validation=published_validation,
         )
+        self._validate_storage_target(published)
+        self._write_active_manifest(published)
+        return published
+
+    def _write_active_manifest(self, manifest: GenerationManifest) -> None:
+        """Atomically persist one already-validated active manifest."""
+
         self.root.mkdir(parents=True, exist_ok=True)
         temporary = self.manifest_path.with_suffix(".tmp")
-        encoded = json.dumps(published.to_dict(), sort_keys=True, separators=(",", ":"))
+        encoded = json.dumps(manifest.to_dict(), sort_keys=True, separators=(",", ":"))
         with self._publication_lock:
             with temporary.open("w", encoding="utf-8") as handle:
                 handle.write(encoded)
@@ -216,7 +250,6 @@ class GenerationManager:
                     os.fsync(directory_fd)
                 finally:
                     os.close(directory_fd)
-        return published
 
     def _validate_paths(self, manifest: GenerationManifest) -> None:
         generation_root = (self.generations_root / manifest.generation_id).resolve()

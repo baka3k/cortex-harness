@@ -56,10 +56,19 @@ class StoreGateway:
     prevents it from silently acquiring a second client for an active target.
     """
 
-    def __init__(self, target: PhysicalTargetKey, generation_root: str, *, limits: GatewayLimits | None = None) -> None:
+    def __init__(
+        self,
+        target: PhysicalTargetKey,
+        generation_root: str,
+        *,
+        limits: GatewayLimits | None = None,
+        generation_manager: GenerationManager | None = None,
+    ) -> None:
         self.target = target
         self.limits = limits or GatewayLimits()
-        self.generations = GenerationManager(generation_root, target)
+        if generation_manager is not None and generation_manager.target != target:
+            raise ValueError("generation manager target does not match gateway target")
+        self.generations = generation_manager or GenerationManager(generation_root, target)
         self.lifecycle = OwnerLifecycleState.STARTING
         self._leases: list[StorageLease] = []
         self._jobs: dict[str, IngestionJob] = {}
@@ -77,6 +86,35 @@ class StoreGateway:
             "write": ThreadPoolExecutor(max_workers=1, thread_name_prefix="cortex-storage-write"),
             "control": ThreadPoolExecutor(max_workers=self.limits.control.concurrency, thread_name_prefix="cortex-control"),
         }
+
+    @classmethod
+    def from_storage_factory(
+        cls,
+        factory: object,
+        generation_root: str,
+        *,
+        graph_name: str,
+        collection_name: str,
+        role: object = "code",
+        project_scope: str | None = None,
+        limits: GatewayLimits | None = None,
+    ) -> "StoreGateway":
+        """Create a lease-safe gateway with topology-fenced publication."""
+
+        manager = GenerationManager.from_storage_factory(
+            Path(generation_root),
+            factory,
+            graph_name=graph_name,
+            collection_name=collection_name,
+            role=role,
+            project_scope=project_scope,
+        )
+        return cls(
+            manager.target,
+            generation_root,
+            limits=limits,
+            generation_manager=manager,
+        )
 
     async def start(self) -> None:
         if self.lifecycle is not OwnerLifecycleState.STARTING:
