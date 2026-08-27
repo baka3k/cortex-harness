@@ -77,6 +77,29 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
             ),
             patch.object(
                 incremental_sync,
+                "journal_status_from_env",
+                return_value={
+                    "run_id": "failed-run",
+                    "status": "open",
+                    "resumed": False,
+                    "produced": 1,
+                    "acked": 0,
+                    "pending": 0,
+                    "leased": 0,
+                    "retrying": 0,
+                    "reconciling": 1,
+                    "blocked": 0,
+                    "dead_letter": 0,
+                    "rows": 1,
+                    "payload_bytes": 10,
+                    "artifact_bytes": 10,
+                    "journal_bytes": 20,
+                    "oldest_unfinished_age_seconds": 1.0,
+                    "next_action": "reconcile_ambiguous_batches",
+                },
+            ),
+            patch.object(
+                incremental_sync,
                 "_run",
                 side_effect=run_side_effect,
             ),
@@ -137,6 +160,14 @@ class IncrementalSyncContinueOnErrorTests(unittest.TestCase):
         self.assertEqual(
             summary["component_failures"][0]["component"],
             "primary:python",
+        )
+        failed = next(
+            item for item in summary["primary_parsers"] if item["parser"] == "python"
+        )
+        self.assertEqual(failed["journal"]["reconciling"], 1)
+        self.assertGreaterEqual(summary["journal"]["reconciling"], 1)
+        self.assertEqual(
+            summary["journal"]["next_action"], "reconcile_ambiguous_batches"
         )
         self.assertTrue(summary["state_after"]["dirty"])
 

@@ -15,7 +15,7 @@ import traceback
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
@@ -1897,6 +1897,23 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             flush=True,
         )
 
+    def capture_journal_status(
+        info: Dict[str, object], component_env: Mapping[str, str]
+    ) -> None:
+        """Attach recovery state after success or failure without closing production."""
+
+        if isinstance(info.get("journal"), dict):
+            return
+        try:
+            journal_summary = journal_status_from_env(component_env)
+        except Exception as exc:
+            # Status reporting is best-effort and must never replace the
+            # analyzer's primary failure. Keep the diagnostic payload-free.
+            info["journal_status_error"] = type(exc).__name__
+            return
+        if journal_summary is not None:
+            info["journal"] = journal_summary
+
     if args.verbose and args.ignore_cache:
         print("[cache] ignore-cache enabled: analyzers will run with isolated cache scope")
 
@@ -2771,6 +2788,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                         parser_info["parse_quality_error"] = str(exc)
                 executed_parsers.append(parser)
             finally:
+                if journal_config is not None:
+                    capture_journal_status(parser_info, parser_env)
                 parser_info["finished_at"] = _now_iso()
                 parser_info["duration_seconds"] = round(time.time() - parser_started, 6)
 
@@ -2917,6 +2936,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 framework_info["status"] = "success"
                 executed_parsers.append(framework)
             finally:
+                if "journal_path" in framework_info:
+                    capture_journal_status(framework_info, framework_env)
                 framework_info["finished_at"] = _now_iso()
                 framework_info["duration_seconds"] = round(time.time() - framework_started, 6)
 
@@ -3047,6 +3068,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 topology_info["status"] = "success"
                 executed_parsers.append("project_topology")
             finally:
+                if "journal_path" in topology_info:
+                    capture_journal_status(topology_info, topology_env)
                 topology_info["finished_at"] = _now_iso()
                 topology_info["duration_seconds"] = round(
                     time.time() - topology_started, 6
