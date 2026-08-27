@@ -2,7 +2,7 @@
 title: "Graph ingestion write-path hardening"
 status: in_progress
 created: 2026-08-07
-scope: "Automatic schema preflight, indexable relationship writes, durable restart safety, and truthful progress"
+scope: "Automatic schema preflight, indexable relationship writes, durable node-first staging, restart safety, and truthful progress"
 blockedBy: []
 blocks:
   - 260807-0929-mcp-ingest-query-concurrency
@@ -182,6 +182,11 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
   converted or blocked before journal retry is enabled.
 - Use produced/drained node-label barriers. Relationship jobs are claimable
   only after their required endpoint barriers drain.
+- Enforce a run-level node-first publication boundary. Node batches may drain
+  while parsing continues, but every relationship/call/evidence-edge batch is
+  durably staged and remains ineligible until node production is explicitly
+  closed and every staged node batch is ACKed. Per-endpoint barriers remain a
+  secondary integrity aid; they are not the primary phase-ordering mechanism.
 - Claim with bounded leases and fencing tokens. Timeout/cancel after submission
   is ambiguous until deterministic graph readback reconciles the outcome.
 - Report parser health separately: files with errors, explicit `ERROR` nodes,
@@ -198,6 +203,7 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
    - [Phase 04B — serializable operations, producers, and barriers](phase-04b-producer-operations-and-barriers.md)
    - [Phase 04C — leased consumer, reconciliation, and resume](phase-04c-consumer-reconciliation-and-resume.md)
    - [Phase 04D — CLI, observability, validation, and rollout](phase-04d-cli-observability-validation-rollout.md)
+   - [Phase 04E — durable node-first staging and edge release](phase-04e-node-first-staging.md)
 5. [Phase 05 — correctness, query-plan, and scale gates](phase-05-tests-and-performance.md)
 6. [Phase 06 — canary, graph recovery, and rollout](phase-06-rollout-and-backfill.md)
 
@@ -251,6 +257,10 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
 - New: `code-tiny/tools/graph/journal/` for versioned operations, SQLite WAL
   state, immutable artifacts, barriers, leased execution, reconciliation, and
   safe retention.
+- Update: journal runtime/store and shared writers for a persisted run-level
+  node-production barrier, node/edge staging manifests, phase closure, and
+  edge eligibility that survives process restart without retaining payloads in
+  analyzer memory.
 - Update: `cortex_harness/dev.py` so outer retries preserve one stable compatible
   run identity and expose journal status rather than restarting anonymous work.
 - Refactor: `code-tiny/scripts/setup_constraints.py` into a thin consumer of
@@ -273,6 +283,11 @@ provisional gates, but it may not weaken the query-plan invariant.
 | Integrity | Expected = matched + explicitly unresolved; no silent relationship loss; second identical run changes no final counts. |
 | Visibility | No active database query is silent for more than 10 s; progress names the in-flight query rather than only the previous batch. |
 | Durable resume | A forced exit at every enqueue/lease/commit/ACK/barrier boundary resumes only unfinished compatible work; ACKed effects are not replayed. |
+| Node-first ordering | Zero relationship/call/evidence-edge mutation queries execute before the run-level node barrier reaches `drained`; the invariant holds across restart and across streamed analyzer buffers. |
+| Staging memory | Peak writer memory is bounded by the configured batch plus identity index overhead; graph payload volume is stored in immutable artifacts rather than one process-wide node/edge list. |
+| Row conservation | Every emitted node/edge row reaches one explicit staged, duplicate, rejected, ACKed, and graph-verified disposition; all per-producer and per-contract equations reconcile with zero unexplained loss. |
+| Endpoint binding | Every required edge endpoint resolves exactly once by project scope, label, identity property, and canonical typed value; ID-only, cross-project, and ambiguous fallback matching are absent. |
+| Exact edge parity | Final readback compares canonical edge identities and endpoints, not only totals; swapped, compensating duplicate/missing, or wrongly scoped edges fail validation. |
 | Journal safety | No graph mutation occurs without committed enqueue; disk-full/corrupt/incompatible journals fail closed; storage is bounded by configured item/byte/retention limits. |
 | Journal overhead | Record enqueue/ACK p50/p95, peak journal/artifact bytes, restart latency, and end-to-end delta. Required-mode rollout needs <=10% warm end-to-end overhead or an evidence-backed revision. |
 | Full canary | The 20k-file repository finishes without an unbounded query and within 2x the indexed warm baseline established in Phase 01. |
@@ -311,6 +326,20 @@ provisional gates, but it may not weaken the query-plan invariant.
   and restart have typed, tested, non-silent outcomes.
 - Every journal-enabled operation is serializable, deterministic, reconciled,
   and replay safe; bypass paths are migrated or explicitly rejected.
+- Every supported edge family, including repository, navigation, workflow,
+  call, evidence, framework, topology, Android, TypeScript, and C++ paths, is
+  staged before execution and cannot mutate the graph until all node jobs for
+  that run are drained.
+- Edge rows persist deterministic endpoint references containing project scope,
+  endpoint label, identity property, and identity value; no database-generated
+  ID remapping is introduced.
+- SQLite remains the durable control/accounting plane while immutable artifacts
+  hold full payloads and exact graph receipts/readback prove materialization.
+  SQLite state alone never certifies a graph as complete or semantically
+  correct.
+- Producer completion, canonical typed identities, sealed endpoint audits, and
+  row-level conservation/readback prevent silent node loss and wrong endpoint
+  binding even when aggregate counts happen to match.
 - A compatible crash/retry resumes pending work without reparsing or replaying
   ACKed batches, and an incompatible run cannot claim current work.
 - Progress and health output distinguish parsing, queueing, database execution,
@@ -334,10 +363,12 @@ provisional gates, but it may not weaken the query-plan invariant.
 
 ## Implementation status
 
-The original Phases 01-05 are implemented and validated. Phase 04A-04D now
-reopen restart safety with a durable mutation journal. Phase 06 remains blocked
-until these subphases pass and the full approximately 20k-file source canary is
-available. See [`research/durable-write-journal.md`](research/durable-write-journal.md),
+The original Phases 01-05 are implemented and validated. Phase 04A-04D reopened
+restart safety with a durable mutation journal. Phase 04E now strengthens the
+current per-batch/per-endpoint ordering into a durable run-level node-first
+boundary before Phase 06. Phase 06 remains blocked until these subphases pass
+and the full approximately 20k-file source canary is available. See
+[`research/durable-write-journal.md`](research/durable-write-journal.md),
 [`reports/durable-write-journal-red-team.md`](reports/durable-write-journal-red-team.md),
 and [`reports/durable-write-journal-validation.md`](reports/durable-write-journal-validation.md).
 

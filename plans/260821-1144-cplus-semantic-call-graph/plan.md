@@ -41,6 +41,13 @@ orchestration, faithful-context enforcement, exact-frontier query coverage, and
 the missing provider readback/rollback proof. Phase 07 cannot promote until that
 remediation finishes; the current containment decision remains authoritative.
 
+Phase 04E of
+[`260807-1202-graph-ingest-write-path-hardening`](../260807-1202-graph-ingest-write-path-hardening/phase-04e-node-first-staging.md)
+owns durable node-first delivery, full-key endpoint binding, and exact graph
+readback. Those checks prevent dropped or misbound rows but do not promote a
+lexical/weak candidate into a semantically correct callee. This plan continues
+to own resolution authority, provenance, and strong-edge eligibility.
+
 ## Overview
 
 Replace the current implicit equivalence between lexical call expressions and

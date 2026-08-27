@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Durable node-first graph staging](2026-08-27-durable-node-first-graph-staging.md)
 - [Rust relationship endpoint integrity](2026-08-25-rust-relationship-endpoint-integrity.md)
 - [C/C++ Clang containment and signature-v2 hardening](2026-08-24-cplus-clang-containment-hardening.md)
 - [C++ semantic pilot and rollout decision (Phase 07)](2026-08-21-cplus-semantic-pilot-phase07.md)

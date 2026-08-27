@@ -7,6 +7,11 @@ closure. That closure cannot be stored or replayed, and the same relationship
 state key can recur across streamed buffers. Some custom writers also report
 input length without database reconciliation or use non-idempotent increments.
 
+Phase 04E supersedes this phase's endpoint-only release policy with a stronger
+run-level node-first boundary. The serializable operation and durable barrier
+work here remains the foundation; an edge may not execute merely because its
+known endpoint batches drained while other node producers are still open.
+
 ## Requirements
 
 - Replace closure-only replay identity with a serializable, versioned operation
@@ -26,9 +31,10 @@ required barriers. The executor compiles runtime Cypher only from allowlisted
 operation specifications; it never deserializes arbitrary code or Cypher.
 
 Producers write canonical artifact segments and enqueue batch metadata. Node
-batches can drain as they are produced. Relationships remain ineligible until
-their declared endpoint-label barriers are drained. Production closes only at
-an analyzer-level lifecycle boundary, not at each `write_all()` call.
+batches can drain as they are produced. Endpoint-label barriers preserve precise
+dependency evidence, while Phase 04E additionally requires every relationship
+job to wait for the run-level node barrier. Production closes only at an
+analyzer-level lifecycle boundary, not at each `write_all()` call.
 
 ## Related Files
 
