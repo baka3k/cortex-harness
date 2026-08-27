@@ -16,6 +16,7 @@ from cortex_harness.storage import (
     GenerationManager,
     RemoteStorageConfig,
     ResolvedStorage,
+    StoreGateway,
     StorageFactory,
     effective_graph_target_from_env,
     resolve_storage,
@@ -308,6 +309,113 @@ def test_generation_manager_rejects_a_different_vector_topology(tmp_path: Path) 
     assert first_compatibility["topology_fingerprint"]
     with pytest.raises(ValueError, match="effective storage topology"):
         second.publish(manifest, lambda _: None)
+
+
+def test_generation_validator_cannot_retarget_reserved_compatibility(
+    tmp_path: Path,
+) -> None:
+    def factory(qdrant_url: str) -> StorageFactory:
+        return StorageFactory(
+            backend_mode=BackendMode.REMOTE,
+            resolved=_resolved(tmp_path),
+            remote=RemoteStorageConfig(qdrant_url=qdrant_url),
+            project_scope="demo",
+            code_graph="demo",
+            code_collection="demo",
+        )
+
+    first = GenerationManager.from_storage_factory(
+        tmp_path / "generations",
+        factory("https://qdrant-a.example:6333"),
+        graph_name="demo",
+        collection_name="demo",
+        project_scope="demo",
+    )
+    other = GenerationManager.from_storage_factory(
+        tmp_path / "other",
+        factory("https://qdrant-b.example:6333"),
+        graph_name="demo",
+        collection_name="demo",
+        project_scope="demo",
+    )
+    manifest = first.allocate("revision-1", generation_id="generation-1")
+    other_compatibility = other.allocate(
+        "revision-1", generation_id="generation-1"
+    ).validation["storage_compatibility"]
+
+    def retarget(candidate) -> None:
+        candidate.validation["storage_compatibility"] = dict(other_compatibility)
+
+    with pytest.raises(ValueError, match="effective storage topology"):
+        first.publish(manifest, retarget)
+    assert first.load_active() is None
+
+
+def test_local_factory_migrates_an_unfenced_legacy_active_manifest(
+    tmp_path: Path,
+) -> None:
+    resolved = _resolved(tmp_path)
+    factory = StorageFactory(backend_mode=BackendMode.LOCAL, resolved=resolved)
+    root = tmp_path / "generations"
+    legacy = GenerationManager.from_storage_factory(
+        root,
+        factory,
+        graph_name="demo",
+        collection_name="demo",
+        project_scope="demo",
+    )
+    unfenced = GenerationManager(root, legacy.target)
+    published = unfenced.publish(
+        unfenced.allocate("revision-1", generation_id="generation-1"),
+        lambda _: None,
+    )
+    assert "storage_compatibility" not in published.validation
+
+    migrated = legacy.load_active()
+
+    assert migrated is not None
+    compatibility = migrated.validation["storage_compatibility"]
+    assert compatibility["graph_mode"] == "file"
+    assert compatibility["vector_mode"] == "file"
+    persisted = json.loads(legacy.manifest_path.read_text(encoding="utf-8"))
+    assert persisted["validation"]["storage_compatibility"] == compatibility
+
+
+def test_gateway_factory_keeps_leases_local_and_fences_remote_topology(
+    tmp_path: Path,
+) -> None:
+    factory = StorageFactory(
+        backend_mode=BackendMode.REMOTE,
+        resolved=_resolved(tmp_path),
+        remote=RemoteStorageConfig(
+            qdrant_url="https://qdrant.example:6333",
+            falkordb_uri="redis://graph.example:6379",
+        ),
+        project_scope="demo",
+        code_graph="demo",
+        code_collection="demo",
+    )
+
+    gateway = StoreGateway.from_storage_factory(
+        factory,
+        str(tmp_path / "generations"),
+        graph_name="demo",
+        collection_name="demo",
+        project_scope="demo",
+    )
+    manifest = gateway.generations.allocate(
+        "revision-1", generation_id="generation-1"
+    )
+
+    assert gateway.target.canonical_paths == (
+        resolved_path := _resolved(tmp_path).falkordb_code_path.resolve(),
+        _resolved(tmp_path).qdrant_code_path.resolve(),
+    )
+    assert all(path.is_absolute() for path in gateway.target.canonical_paths)
+    assert resolved_path.as_posix().startswith(tmp_path.as_posix())
+    compatibility = manifest.validation["storage_compatibility"]
+    assert compatibility["graph_mode"] == "remote"
+    assert compatibility["vector_mode"] == "remote"
 
 
 def test_force_local_overlay_does_not_export_remote_runtime_targets(tmp_path: Path, monkeypatch) -> None:
