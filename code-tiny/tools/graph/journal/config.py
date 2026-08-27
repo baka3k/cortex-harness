@@ -163,6 +163,10 @@ def configure_journal_env(
     )
     if normalized_mode == "required" and path.is_file():
         with SQLiteJournal(path) as journal:
+            journal.quarantine_legacy_targets(
+                metadata,
+                (legacy_physical_target_from_env(env),),
+            )
             resumable = journal.find_resumable_run(metadata)
         if resumable is not None:
             metadata = resumable.metadata
@@ -187,7 +191,13 @@ def physical_target_from_env(env: Mapping[str, str]) -> str:
         effective_graph_target_from_env,
     )
 
-    target = effective_graph_target_from_env(env)
+    try:
+        target = effective_graph_target_from_env(env)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise JournalError(
+            TerminalErrorCode.INVALID_CONTRACT,
+            f"invalid effective graph target: {exc}",
+        ) from exc
     supplied = str(env.get(ENV_EFFECTIVE_GRAPH_FINGERPRINT) or "").strip()
     if supplied and supplied != target.fingerprint:
         raise JournalError(
@@ -195,6 +205,25 @@ def physical_target_from_env(env: Mapping[str, str]) -> str:
             "effective graph target descriptor does not match its fingerprint",
         )
     return target.fingerprint
+
+
+def legacy_physical_target_from_env(env: Mapping[str, str]) -> str:
+    """Reconstruct the pre-v1 identity only for explicit quarantine."""
+
+    provider = (
+        env.get("CODE_GRAPH_PROVIDER")
+        or env.get("GRAPH_PROVIDER")
+        or "falkordb"
+    ).casefold()
+    if provider in {"neo4j", "neo"}:
+        return f"neo4j:{env.get('NEO4J_URI', '')}:{env.get('NEO4J_DB', 'neo4j')}"
+    path = str(env.get("FALKORDB_PATH") or "embedded")
+    graph = str(
+        env.get("FALKORDB_GRAPH")
+        or env.get("FALKORDB_DATABASE")
+        or "hyper_graph"
+    )
+    return f"falkordb:{path}:{graph}"
 
 
 def snapshot_for_paths(

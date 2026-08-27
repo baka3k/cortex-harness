@@ -47,9 +47,17 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _credential_fingerprint(*values: Optional[str]) -> Optional[str]:
-    material = "\0".join(str(value or "") for value in values)
-    return f"sha256:{_digest(material)}" if material.strip("\0") else None
+def _principal_fingerprint(value: Optional[str]) -> Optional[str]:
+    """Fingerprint a non-secret principal name, never credential material."""
+
+    normalized = str(value or "").strip().casefold()
+    return f"sha256:{_digest(normalized)}" if normalized else None
+
+
+def environment_flag_enabled(value: object) -> bool:
+    """Parse an opt-in environment flag without treating ``0`` as enabled."""
+
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 def _role_value(role: object) -> str:
@@ -98,14 +106,12 @@ def canonical_remote_endpoint(value: str, *, default_scheme: str) -> tuple[str, 
         port = parsed.port
     except ValueError as exc:
         raise ValueError(f"remote storage endpoint has an invalid port: {value!r}") from exc
-    port = port or _DEFAULT_PORTS.get(scheme)
+    if port is None:
+        port = _DEFAULT_PORTS.get(scheme)
     netloc = f"{host}:{port}" if port is not None else host
     path = parsed.path.rstrip("/")
     canonical = urlunsplit((scheme, netloc, path, "", ""))
-    principal_material = "\0".join(
-        item for item in (parsed.username, parsed.password) if item is not None
-    ) or None
-    return canonical, principal_material
+    return canonical, parsed.username
 
 
 def endpoint_uses_tls(endpoint: str, *, explicit: bool = False) -> bool:
@@ -201,6 +207,17 @@ class EffectiveStorageTopology:
     def vector_fingerprint(self) -> str:
         return self.vector.fingerprint
 
+    @property
+    def compatibility_metadata(self) -> dict[str, str | int]:
+        """Manifest-safe compatibility payload containing all target fences."""
+
+        return {
+            "schema_version": self.schema_version,
+            "graph_target_fingerprint": self.graph_fingerprint,
+            "vector_target_fingerprint": self.vector_fingerprint,
+            "topology_fingerprint": self.fingerprint,
+        }
+
 
 def remote_graph_target(
     uri: str,
@@ -222,7 +239,7 @@ def remote_graph_target(
         namespace=str(graph),
         role=_role_value(role),
         tls=endpoint_uses_tls(location, explicit=ssl),
-        principal_fingerprint=_credential_fingerprint(principal or uri_principal, password),
+        principal_fingerprint=_principal_fingerprint(principal or uri_principal),
     )
 
 
@@ -253,7 +270,7 @@ def remote_vector_target(
         namespace=str(collection),
         role=_role_value(role),
         tls=endpoint_uses_tls(location),
-        principal_fingerprint=_credential_fingerprint(principal, api_key),
+        principal_fingerprint=_principal_fingerprint(principal),
     )
 
 
@@ -269,11 +286,30 @@ def local_vector_target(path: str | Path, *, collection: str, role: object) -> E
 
 
 def effective_graph_target_from_env(env: Mapping[str, str]) -> EffectiveStorageTarget:
-    """Resolve the graph target from a sanitized descriptor or legacy env shape."""
+    """Resolve and validate the graph target against the live runtime env.
+
+    A propagated descriptor is an assertion, not an override.  Later CLI or
+    config mutations of URI/path/graph/provider must fail closed rather than
+    allowing writes and journal identity to point at different targets.
+    """
 
     descriptor = str(env.get(ENV_EFFECTIVE_GRAPH_TARGET) or "").strip()
-    if descriptor:
-        return EffectiveStorageTarget.from_json(descriptor)
+    supplied = EffectiveStorageTarget.from_json(descriptor) if descriptor else None
+    runtime = _runtime_graph_target_from_env(env)
+    if supplied is not None:
+        if supplied.component != "graph":
+            raise ValueError("effective graph descriptor has the wrong component")
+        if supplied != runtime:
+            raise ValueError(
+                "effective graph target descriptor does not match runtime provider/URI/path/graph/role"
+            )
+        return supplied
+    return runtime
+
+
+def _runtime_graph_target_from_env(env: Mapping[str, str]) -> EffectiveStorageTarget:
+    """Reconstruct only from the values the graph driver will consume."""
+
     role = env.get("CORTEX_STORAGE_OWNER") or "code"
     provider = (env.get("CODE_GRAPH_PROVIDER") or env.get("GRAPH_PROVIDER") or "falkordb").casefold()
     if provider in {"neo4j", "neo"}:
@@ -311,6 +347,7 @@ __all__ = [
     "canonical_local_target",
     "canonical_remote_endpoint",
     "effective_graph_target_from_env",
+    "environment_flag_enabled",
     "endpoint_uses_tls",
     "local_graph_target",
     "local_vector_target",
