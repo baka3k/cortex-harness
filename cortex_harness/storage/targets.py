@@ -213,6 +213,8 @@ class EffectiveStorageTopology:
 
         return {
             "schema_version": self.schema_version,
+            "graph_mode": self.graph.mode,
+            "vector_mode": self.vector.mode,
             "graph_target_fingerprint": self.graph_fingerprint,
             "vector_target_fingerprint": self.vector_fingerprint,
             "topology_fingerprint": self.fingerprint,
