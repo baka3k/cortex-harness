@@ -55,6 +55,18 @@ from .qdrant_remote import (
 )
 from .errors import BackendConnectionError
 from .factory import QdrantStore, StorageFactory, create_storage
+from .targets import (
+    ENV_EFFECTIVE_GRAPH_FINGERPRINT,
+    ENV_EFFECTIVE_GRAPH_TARGET,
+    ENV_EFFECTIVE_TOPOLOGY,
+    ENV_EFFECTIVE_TOPOLOGY_FINGERPRINT,
+    ENV_EFFECTIVE_VECTOR_FINGERPRINT,
+    ENV_EFFECTIVE_VECTOR_TARGET,
+    EffectiveStorageTarget,
+    EffectiveStorageTopology,
+    canonical_remote_endpoint,
+    effective_graph_target_from_env,
+)
 from .remote_probe import (
     ProbeResult,
     ProvisionResult,
@@ -75,6 +87,14 @@ __all__ = [
     "STORAGE_SCHEMA_VERSION",
     "BackendConnectionError",
     "BackendMode",
+    "ENV_EFFECTIVE_GRAPH_FINGERPRINT",
+    "ENV_EFFECTIVE_GRAPH_TARGET",
+    "ENV_EFFECTIVE_TOPOLOGY",
+    "ENV_EFFECTIVE_TOPOLOGY_FINGERPRINT",
+    "ENV_EFFECTIVE_VECTOR_FINGERPRINT",
+    "ENV_EFFECTIVE_VECTOR_TARGET",
+    "EffectiveStorageTarget",
+    "EffectiveStorageTopology",
     "InvalidStorageIdentityError",
     "FreshnessMetadata",
     "GatewayErrorCode",
@@ -103,7 +123,9 @@ __all__ = [
     "StorageFactory",
     "assert_owner_stopped",
     "build_filter",
+    "canonical_remote_endpoint",
     "create_storage",
+    "effective_graph_target_from_env",
     "get_client",
     "get_remote_client",
     "reset_clients",

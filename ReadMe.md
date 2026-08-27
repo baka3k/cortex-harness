@@ -180,6 +180,15 @@ The CLI has **two independent command groups** serving different roles:
 > in plaintext in `.cortext-harness/config/{env}.json` — do not commit populated
 > configs to shared repos.
 
+Backend selection is per project. A remote project may configure only Qdrant
+or only FalkorDB; the missing component is resolved as an explicit local
+component before ingest starts. Runtime connection failures never cause a
+local fallback. Changing an endpoint, graph, collection, TLS mode, or backend
+requires a fresh ingest because journal compatibility is bound to the
+credential-free effective target fingerprint. See
+[`docs/DATABASE_INTEGRATION.md`](docs/DATABASE_INTEGRATION.md) for the schema,
+switching procedure, and force-local behavior.
+
 ### Sync — Source Code
 
 | Command | Description |

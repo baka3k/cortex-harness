@@ -114,6 +114,22 @@ def test_remote_credential_redaction() -> None:
     assert "redis://falkordb.internal:6379" in rendered
 
 
+def test_remote_credential_redaction_removes_uri_userinfo_and_query() -> None:
+    config = RemoteStorageConfig(
+        qdrant_url="https://tenant:q-secret@qdrant.internal:6333/?api_key=query-secret",
+        falkordb_uri="redis://tenant:f-secret@falkordb.internal:6379/0?token=query-secret",
+    )
+
+    rendered = repr(config)
+
+    assert rendered.count("tenant") == 0
+    assert "q-secret" not in rendered
+    assert "f-secret" not in rendered
+    assert "query-secret" not in rendered
+    assert "https://qdrant.internal:6333" in rendered
+    assert "redis://falkordb.internal:6379/0" in rendered
+
+
 # ---------------------------------------------------------------------------
 # resolve_storage — backend_mode plumbed through ResolvedStorage
 # ---------------------------------------------------------------------------

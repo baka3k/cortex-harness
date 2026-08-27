@@ -269,6 +269,12 @@ def test_from_targets_unknown_backend_raises(tmp_path: Path) -> None:
     assert "cloud" in str(exc.value)
 
 
+def test_from_targets_remote_without_remote_section_fails_closed(tmp_path: Path) -> None:
+    targets = _FakeTargets(project_id="bad-remote", storage_backend="remote")
+    with pytest.raises(ValueError, match="requires a 'remote' section"):
+        StorageFactory.from_targets(targets, _resolved_storage(tmp_path))
+
+
 def test_create_storage_returns_factory(tmp_path: Path, monkeypatch) -> None:
     """``create_storage`` resolves local paths and builds a factory."""
     monkeypatch.chdir(tmp_path)
