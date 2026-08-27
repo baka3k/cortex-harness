@@ -54,7 +54,15 @@ def get_remote_client(url: str, *, api_key: Optional[str] = None) -> "QdrantClie
         existing = _remote_clients.get(cache_key)
         if existing is not None:
             return existing
-        client = QdrantClient(url=url, api_key=api_key)
+        # Avoid constructor-time version probes: backend selection and target
+        # fingerprinting must complete before the first network operation.
+        # Explicit health checks and real store operations surface connection
+        # or compatibility errors at their typed boundaries.
+        client = QdrantClient(
+            url=url,
+            api_key=api_key,
+            check_compatibility=False,
+        )
         _remote_clients[cache_key] = client
         return client
 
