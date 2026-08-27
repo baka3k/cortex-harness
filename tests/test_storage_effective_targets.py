@@ -13,6 +13,7 @@ from cortex_harness.storage import (
     ENV_EFFECTIVE_GRAPH_TARGET,
     ENV_EFFECTIVE_TOPOLOGY,
     ENV_EFFECTIVE_VECTOR_FINGERPRINT,
+    GenerationManager,
     RemoteStorageConfig,
     ResolvedStorage,
     StorageFactory,
@@ -20,7 +21,13 @@ from cortex_harness.storage import (
     resolve_storage,
     storage_overlay,
 )
-from tools.graph.journal.config import JournalError, physical_target_from_env
+from tools.graph.journal import RunStatus, SQLiteJournal
+from tools.graph.journal.config import (
+    JournalError,
+    configure_journal_env,
+    legacy_physical_target_from_env,
+    physical_target_from_env,
+)
 
 
 def _resolved(tmp_path: Path) -> ResolvedStorage:
@@ -109,6 +116,21 @@ def test_force_local_creates_a_distinct_effective_topology(tmp_path: Path, monke
     assert forced.vector_fingerprint != remote.vector_fingerprint
 
 
+@pytest.mark.parametrize("value", ["", "0", "false", "no", "off"])
+def test_false_looking_force_local_values_do_not_override_remote(
+    tmp_path: Path, monkeypatch, value: str
+) -> None:
+    monkeypatch.setenv("CORTEX_STORAGE_BACKEND_FORCE_LOCAL", value)
+    factory = StorageFactory(
+        backend_mode=BackendMode.REMOTE,
+        resolved=_resolved(tmp_path),
+        remote=RemoteStorageConfig(qdrant_url="http://qdrant.example:6333"),
+    )
+
+    assert factory.forced_local is False
+    assert factory.backend_mode is BackendMode.REMOTE
+
+
 @pytest.mark.parametrize(
     ("left", "right"),
     [
@@ -158,6 +180,134 @@ def test_journal_target_prefers_factory_descriptor_and_checks_fingerprint(tmp_pa
     overlay[ENV_EFFECTIVE_GRAPH_FINGERPRINT] = "tampered"
     with pytest.raises(JournalError, match="does not match"):
         physical_target_from_env(overlay)
+
+
+def test_stale_descriptor_cannot_hide_a_later_runtime_target_override(tmp_path: Path) -> None:
+    resolved = resolve_storage(
+        tmp_path,
+        config={
+            "storage_backend": "remote",
+            "remote": {
+                "qdrant_url": "http://qdrant.example:6333",
+                "falkordb_uri": "redis://graph-a.example:6379",
+            },
+        },
+        code_graph="demo",
+        doc_graph="demo_doc",
+        code_collection="demo",
+        doc_collection="demo_doc",
+    )
+    overlay = storage_overlay(resolved, owner="code")
+    overlay["FALKORDB_URI"] = "redis://graph-b.example:6379"
+
+    with pytest.raises(JournalError, match="does not match runtime"):
+        physical_target_from_env(overlay)
+
+
+def test_explicit_zero_port_is_not_rewritten_to_default() -> None:
+    target = effective_graph_target_from_env(
+        {"FALKORDB_URI": "redis://graph.example:0", "FALKORDB_GRAPH": "demo"}
+    )
+
+    assert target.location == "redis://graph.example:0"
+
+
+def test_required_journal_quarantines_pre_v1_target_identity(tmp_path: Path) -> None:
+    env = {
+        "FALKORDB_PATH": str(tmp_path / "graph.rdb"),
+        "FALKORDB_GRAPH": "demo",
+    }
+    legacy = configure_journal_env(
+        env,
+        root=tmp_path,
+        project_id="demo",
+        parser="python",
+        source_revision="revision-1",
+        source_snapshot="snapshot-1",
+        physical_target=legacy_physical_target_from_env(env),
+        mode="required",
+        generation="generation-1",
+    )
+    with SQLiteJournal(legacy.path) as journal:
+        old_run = journal.open_run(legacy.metadata)
+
+    current = configure_journal_env(
+        env,
+        root=tmp_path,
+        project_id="demo",
+        parser="python",
+        source_revision="revision-1",
+        source_snapshot="snapshot-1",
+        physical_target=physical_target_from_env(env),
+        mode="required",
+        generation="generation-1",
+    )
+
+    with SQLiteJournal(current.path) as journal:
+        assert journal.get_run(old_run.run_id).status is RunStatus.QUARANTINED
+
+
+def test_password_and_api_key_values_never_enter_target_fingerprints(tmp_path: Path) -> None:
+    def topology(api_key: str, password: str):
+        return StorageFactory(
+            backend_mode=BackendMode.REMOTE,
+            resolved=_resolved(tmp_path),
+            remote=RemoteStorageConfig(
+                qdrant_url="https://qdrant.example:6333",
+                qdrant_api_key=api_key,
+                falkordb_uri="rediss://tenant@graph.example:6379",
+                falkordb_password=password,
+            ),
+            project_scope="demo",
+            code_graph="demo",
+            code_collection="demo",
+        ).effective_topology(generation_id="generation-1")
+
+    first = topology("weak-api-key", "weak-password")
+    second = topology("other-api-key", "other-password")
+
+    assert first.fingerprint == second.fingerprint
+    assert "weak-api-key" not in first.canonical_json
+    assert "weak-password" not in first.canonical_json
+
+
+def test_generation_manager_rejects_a_different_vector_topology(tmp_path: Path) -> None:
+    def factory(qdrant_url: str) -> StorageFactory:
+        return StorageFactory(
+            backend_mode=BackendMode.REMOTE,
+            resolved=_resolved(tmp_path),
+            remote=RemoteStorageConfig(
+                qdrant_url=qdrant_url,
+                falkordb_uri="redis://graph.example:6379",
+            ),
+            project_scope="demo",
+            code_graph="demo",
+            code_collection="demo",
+        )
+
+    first = GenerationManager.from_storage_factory(
+        tmp_path / "first",
+        factory("https://qdrant-a.example:6333"),
+        graph_name="demo",
+        collection_name="demo",
+        generation_id="generation-1",
+        project_scope="demo",
+    )
+    second = GenerationManager.from_storage_factory(
+        tmp_path / "second",
+        factory("https://qdrant-b.example:6333"),
+        graph_name="demo",
+        collection_name="demo",
+        generation_id="generation-1",
+        project_scope="demo",
+    )
+    manifest = first.allocate("revision-1", generation_id="generation-1")
+
+    assert first.target.graph_target_fingerprint == second.target.graph_target_fingerprint
+    assert first.target.vector_target_fingerprint != second.target.vector_target_fingerprint
+    assert first.target.topology_fingerprint != second.target.topology_fingerprint
+    with pytest.raises(ValueError, match="different physical target"):
+        second.publish(manifest, lambda _: None)
 
 
 def test_force_local_overlay_does_not_export_remote_runtime_targets(tmp_path: Path, monkeypatch) -> None:

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import RemoteStorageConfig
+from .targets import environment_flag_enabled
 
 
 ENV_FORCE_LOCAL = "CORTEX_STORAGE_BACKEND_FORCE_LOCAL"
@@ -22,7 +23,7 @@ ENV_FORCE_LOCAL = "CORTEX_STORAGE_BACKEND_FORCE_LOCAL"
 
 def force_local_active() -> bool:
     """Return True when the operator override forces local backends."""
-    return bool(os.getenv(ENV_FORCE_LOCAL))
+    return environment_flag_enabled(os.getenv(ENV_FORCE_LOCAL))
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from .contracts import PerformanceProfile
-from .targets import canonical_remote_endpoint
+from .targets import canonical_remote_endpoint, environment_flag_enabled
 
 
 STORAGE_SCHEMA_VERSION = "v1"
@@ -460,7 +460,7 @@ def storage_overlay(
         ENV_FALKORDB_PATH: str(falkor_selected), "CORTEX_STORAGE_OWNER": selected,
     }
     remote = resolved.remote
-    force_local = bool(os.getenv("CORTEX_STORAGE_BACKEND_FORCE_LOCAL"))
+    force_local = environment_flag_enabled(os.getenv("CORTEX_STORAGE_BACKEND_FORCE_LOCAL"))
     if resolved.backend_mode == BackendMode.REMOTE and remote is not None and not force_local:
         if remote.qdrant_url:
             overlay["QDRANT_URL"] = remote.qdrant_url
