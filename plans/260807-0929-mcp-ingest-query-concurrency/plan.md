@@ -126,6 +126,11 @@ Ingestion request ─> idempotent job queue ─> parse/embed workers
   node-first staging barrier, node/edge phase state, leases, reconciliation,
   and ACK state inside one ingestion job. StoreGateway does not release or
   publish a staging generation until both node and edge phases drain.
+- The gateway records the resolved effective graph/vector topology, not only
+  the configured `storage_backend` label. File-backed, remote, mixed, and
+  force-local generations are distinct; a transport failure cannot redirect an
+  admitted remote job to local storage, and target changes cannot reuse staged
+  generations or graph journals.
 - The gateway submits one stable run identity to the writer. It publishes only
   after `queue_drained` and graph/vector validation. It never copies graph batch
   payloads into a second request queue.

@@ -84,7 +84,25 @@ Gated by environment variable `CORTEX_TEST_REMOTE=1`:
 
 Requires Docker Compose setup (not included in default test run).
 
-### 5.6 Existing Test Preservation
+These tests become mandatory promotion gates for node-first required mode even
+though they remain opt-in during ordinary unit-test runs. They use the same
+frozen fixture and compare canonical node, edge, vector-point, and query-result
+manifests across file-backed and live remote targets.
+
+### 5.6 Effective-target and journal compatibility tests
+
+| Test | Description |
+|------|-------------|
+| `test_remote_falkordb_target_uses_uri` | Journal target identity contains the normalized credential-free remote URI and graph, never the embedded placeholder/path |
+| `test_local_and_remote_journals_are_incompatible` | Same project/snapshot cannot resume across `.rdb` and remote URI targets |
+| `test_remote_endpoints_are_isolated` | Two remote URIs or graph names cannot find/claim each other's runs |
+| `test_mixed_topology_is_explicit` | Effective graph/vector component modes and targets are visible and fingerprinted |
+| `test_force_local_creates_new_topology` | Emergency override cannot resume or publish the remote generation |
+| `test_remote_failure_never_falls_back` | Connect/auth/timeout errors leave remote work typed and do not create/mutate local storage |
+| `test_file_owner_lease_and_reopen` | File mode rejects a second owner and reopens safely after a clean/crash recovery path |
+| `test_backend_manifest_parity` | File and live remote runs produce the same canonical node/edge/point manifests and representative MCP results |
+
+### 5.7 Existing Test Preservation
 
 All existing tests must pass unchanged:
 
@@ -139,6 +157,12 @@ def doctor_remote():
 - [ ] `make doctor` validates remote connectivity for configured projects.
 - [ ] Documentation updated with backend configuration guide.
 - [ ] Integration tests (gated) pass with Docker backends.
+- [ ] Effective-target/journal isolation tests pass for local, remote, mixed,
+      force-local, endpoint, graph/collection, role, TLS, and generation changes.
+- [ ] Live remote and file-backed fixture manifests/readback are identical after
+      excluding declared provider transport metadata.
+- [ ] Remote failure injection proves there is no runtime fallback to local.
+- [ ] File lease/contention/crash/reopen tests pass.
 
 ## Test Command
 
