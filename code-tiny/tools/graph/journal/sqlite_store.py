@@ -45,6 +45,125 @@ _TERMINAL_RUN_STATUSES = {
 }
 
 
+def inspect_journal(path: Path) -> list[dict[str, Any]]:
+    """Read payload-free run summaries without mutating journal state."""
+
+    resolved = Path(path).expanduser().resolve(strict=True)
+    try:
+        connection = sqlite3.connect(f"{resolved.as_uri()}?mode=ro", uri=True)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only = ON")
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if version != JOURNAL_SCHEMA_VERSION:
+            raise JournalError(
+                TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+                f"journal schema {version} is not supported for status inspection",
+            )
+        integrity = [str(row[0]) for row in connection.execute("PRAGMA quick_check")]
+        if integrity != ["ok"]:
+            raise JournalError(
+                TerminalErrorCode.JOURNAL_CORRUPT,
+                "journal integrity check failed",
+                details={"integrity": integrity[:10]},
+            )
+        runs = connection.execute(
+            "SELECT * FROM runs ORDER BY updated_at DESC, run_id"
+        ).fetchall()
+        summaries: list[dict[str, Any]] = []
+        now = _utc_now()
+        journal_bytes = sum(
+            candidate.stat().st_size
+            for suffix in ("", "-wal", "-shm")
+            if (candidate := Path(f"{resolved}{suffix}")).is_file()
+        )
+        for run in runs:
+            observed_counts = {
+                BatchStatus(row["status"]): int(row["count"])
+                for row in connection.execute(
+                    "SELECT status, COUNT(*) AS count FROM batches "
+                    "WHERE run_id = ? GROUP BY status",
+                    (run["run_id"],),
+                )
+            }
+            counts = {status: 0 for status in BatchStatus}
+            counts.update(observed_counts)
+            totals = connection.execute(
+                "SELECT COUNT(*) AS produced, COALESCE(SUM(payload_bytes), 0) AS payload_bytes, "
+                "COALESCE(SUM(row_count), 0) AS rows, "
+                "MIN(CASE WHEN status != ? THEN created_at END) AS oldest_at "
+                "FROM batches WHERE run_id = ?",
+                (BatchStatus.DONE.value, run["run_id"]),
+            ).fetchone()
+            metadata = RunMetadata(**json.loads(run["metadata_json"]))
+            status = RunStatus(run["status"])
+            if status is RunStatus.DRAINED:
+                next_action = "none"
+            elif status in {RunStatus.BLOCKED, RunStatus.DEAD_LETTERED}:
+                next_action = "inspect_error_and_acknowledge_or_purge_after_retention"
+            elif status is RunStatus.QUARANTINED:
+                next_action = "inspect_incompatible_fingerprint"
+            elif counts[BatchStatus.RECONCILING]:
+                next_action = "reconcile_ambiguous_batches"
+            elif counts[BatchStatus.RETRY_WAIT]:
+                next_action = "wait_for_retry"
+            elif counts[BatchStatus.LEASED]:
+                next_action = "wait_for_active_consumer"
+            elif counts[BatchStatus.PENDING]:
+                next_action = "resume_consumer"
+            else:
+                next_action = "close_production"
+            oldest_at = totals["oldest_at"]
+            summaries.append(
+                {
+                    "run_id": run["run_id"],
+                    "status": status.value,
+                    "resumed": bool(
+                        connection.execute(
+                            "SELECT 1 FROM events WHERE run_id = ? AND event_type = ? LIMIT 1",
+                            (run["run_id"], "run_resumed"),
+                        ).fetchone()
+                    ),
+                    "parser": metadata.parser,
+                    "produced": int(totals["produced"]),
+                    "acked": counts[BatchStatus.DONE],
+                    "pending": counts[BatchStatus.PENDING],
+                    "leased": counts[BatchStatus.LEASED],
+                    "retrying": counts[BatchStatus.RETRY_WAIT],
+                    "reconciling": counts[BatchStatus.RECONCILING],
+                    "blocked": counts[BatchStatus.BLOCKED],
+                    "dead_letter": counts[BatchStatus.DEAD_LETTER],
+                    "rows": int(totals["rows"]),
+                    "payload_bytes": int(totals["payload_bytes"]),
+                    "artifact_bytes": int(
+                        connection.execute(
+                            "SELECT COALESCE(SUM(byte_count), 0) FROM artifacts WHERE run_id = ?",
+                            (run["run_id"],),
+                        ).fetchone()[0]
+                    ),
+                    "journal_bytes": journal_bytes,
+                    "oldest_unfinished_at": oldest_at,
+                    "oldest_unfinished_age_seconds": (
+                        max(0.0, (now - _parse_datetime(oldest_at)).total_seconds())
+                        if oldest_at
+                        else None
+                    ),
+                    "next_action": next_action,
+                    "error_code": run["error_code"],
+                }
+            )
+        return summaries
+    except JournalError:
+        raise
+    except (OSError, sqlite3.DatabaseError, ValueError, KeyError) as exc:
+        raise JournalError(
+            TerminalErrorCode.JOURNAL_CORRUPT,
+            f"cannot inspect graph-write journal: {exc}",
+        ) from exc
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -571,15 +690,24 @@ class SQLiteJournal:
             ).fetchone()
         return self._run_from_row(row) if row is not None else None
 
+    def list_runs(self) -> list[RunRecord]:
+        """List runs without exposing artifact or graph payload content."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM runs ORDER BY updated_at DESC, run_id"
+            ).fetchall()
+        return [self._run_from_row(row) for row in rows]
+
     def find_resumable_run(self, metadata: RunMetadata) -> RunRecord | None:
-        """Return the newest open run with the same non-generation contract."""
+        """Return the newest incomplete run with the same non-generation contract."""
 
         with self._lock:
             rows = self._connection.execute(
                 """
                 SELECT * FROM runs
                 WHERE project_id = ? AND scope_id = ? AND physical_target = ?
-                  AND parser = ? AND status = ?
+                  AND parser = ? AND status IN (?, ?)
                 ORDER BY created_at DESC
                 """,
                 (
@@ -588,6 +716,7 @@ class SQLiteJournal:
                     metadata.physical_target,
                     metadata.parser,
                     RunStatus.OPEN.value,
+                    RunStatus.DRAINING.value,
                 ),
             ).fetchall()
         expected = metadata.to_dict()
@@ -682,10 +811,18 @@ class SQLiteJournal:
 
     def create_artifact(self, run_id_value: str, rows: Iterable[Any]) -> ArtifactRef:
         run = self.get_run(run_id_value)
-        if run is None or run.status is not RunStatus.OPEN:
+        # A compatible analyzer replay may need to reconstruct the immutable
+        # artifact solely to deduplicate a DONE batch after the parent crashed
+        # during draining/publication. ``enqueue_batch`` still rejects any new
+        # job once production is no longer OPEN.
+        if run is None or run.status not in {
+            RunStatus.OPEN,
+            RunStatus.DRAINING,
+            RunStatus.DRAINED,
+        }:
             raise JournalError(
                 TerminalErrorCode.INVALID_TRANSITION,
-                "artifacts may only be created for an open run",
+                "artifacts may only be created for a compatible replayable run",
             )
         return self.artifacts.write_jsonl(run_id_value, rows)
 
@@ -1091,9 +1228,14 @@ class SQLiteJournal:
                 SELECT b.* FROM batches b
                 JOIN runs r ON r.run_id = b.run_id
                 WHERE b.status = ? AND b.fencing_token IS NULL
+                  AND (b.next_attempt_at IS NULL OR b.next_attempt_at <= ?)
                   AND r.status IN (?, ?)
             """
-            params: list[Any] = [BatchStatus.RECONCILING.value, *_ACTIVE_RUN_STATUSES]
+            params: list[Any] = [
+                BatchStatus.RECONCILING.value,
+                now,
+                *_ACTIVE_RUN_STATUSES,
+            ]
             if run_id_value is not None:
                 query += " AND b.run_id = ?"
                 params.append(run_id_value)
@@ -1147,9 +1289,15 @@ class SQLiteJournal:
                 JOIN runs r ON r.run_id = b.run_id
                 WHERE b.job_id = ? AND b.status = ?
                   AND b.fencing_token IS NULL
+                  AND (b.next_attempt_at IS NULL OR b.next_attempt_at <= ?)
                   AND r.status IN (?, ?)
                 """,
-                (job_id, BatchStatus.RECONCILING.value, *_ACTIVE_RUN_STATUSES),
+                (
+                    job_id,
+                    BatchStatus.RECONCILING.value,
+                    now,
+                    *_ACTIVE_RUN_STATUSES,
+                ),
             ).fetchone()
             if row is None:
                 return None
@@ -1357,6 +1505,68 @@ class SQLiteJournal:
                 job_id=job_id,
                 event_type="batch_dead_lettered" if exhausted else "retry_scheduled",
                 attempt=int(row["attempt"]),
+                error_code=terminal_code,
+                now=now,
+            )
+            if exhausted:
+                self._set_run_error_locked(
+                    row["run_id"], RunStatus.DEAD_LETTERED, terminal_code, now
+                )
+            updated = self._connection.execute(
+                "SELECT * FROM batches WHERE job_id = ?", (job_id,)
+            ).fetchone()
+            return self._batch_from_row(updated)
+
+    def schedule_reconciliation_retry(
+        self,
+        job_id: str,
+        fencing_token: str,
+        *,
+        retry_at: datetime,
+        error_code: TerminalErrorCode,
+    ) -> BatchRecord:
+        """Back off an ambiguous readback without making mutation executable."""
+
+        now = _iso(self._now())
+        with self._transaction():
+            row = self._owned_transition(job_id, fencing_token, now)
+            if row["status"] != BatchStatus.RECONCILING.value:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_TRANSITION,
+                    "only ambiguous readback work can schedule reconciliation retry",
+                )
+            next_attempt = int(row["attempt"]) + 1
+            exhausted = next_attempt >= int(row["max_attempts"])
+            status = BatchStatus.DEAD_LETTER if exhausted else BatchStatus.RECONCILING
+            terminal_code = TerminalErrorCode.MAX_ATTEMPTS if exhausted else error_code
+            self._connection.execute(
+                """
+                UPDATE batches SET status = ?, attempt = ?, fencing_token = NULL,
+                    lease_until = NULL, next_attempt_at = ?, retry_class = ?,
+                    error_code = ?, updated_at = ?
+                WHERE job_id = ? AND fencing_token = ? AND status = ?
+                """,
+                (
+                    status.value,
+                    next_attempt,
+                    None if exhausted else _iso(retry_at),
+                    RetryClass.TRANSIENT.value,
+                    terminal_code.value,
+                    now,
+                    job_id,
+                    fencing_token,
+                    BatchStatus.RECONCILING.value,
+                ),
+            )
+            self._add_event(
+                run_id_value=row["run_id"],
+                job_id=job_id,
+                event_type=(
+                    "batch_dead_lettered"
+                    if exhausted
+                    else "reconciliation_retry_scheduled"
+                ),
+                attempt=next_attempt,
                 error_code=terminal_code,
                 now=now,
             )
@@ -1605,11 +1815,13 @@ class SQLiteJournal:
         for row in rows:
             self._connection.execute(
                 """
-                UPDATE batches SET status = ?, fencing_token = NULL, lease_until = NULL, updated_at = ?
+                UPDATE batches SET status = ?, fencing_token = NULL,
+                    lease_until = NULL, retry_class = ?, updated_at = ?
                 WHERE job_id = ? AND status = ?
                 """,
                 (
-                    BatchStatus.PENDING.value,
+                    BatchStatus.RECONCILING.value,
+                    RetryClass.AMBIGUOUS.value,
                     now,
                     row["job_id"],
                     BatchStatus.LEASED.value,
@@ -1618,7 +1830,7 @@ class SQLiteJournal:
             self._add_event(
                 run_id_value=row["run_id"],
                 job_id=row["job_id"],
-                event_type="lease_recovered",
+                event_type="lease_recovered_as_ambiguous",
                 attempt=int(row["attempt"]),
                 now=now,
             )
@@ -1795,8 +2007,8 @@ class SQLiteJournal:
                 "rows": int(row["row_count"] or 0),
                 "pending": int(json.loads(row["counters_json"]).get("pending", 0)),
                 "counters": json.loads(row["counters_json"]),
-                "attempt": row["attempt"],
-                "elapsed_ms": row["elapsed_ms"],
+                "attempt": int(row["attempt"] or 0),
+                "elapsed_ms": int(row["elapsed_ms"] or 0),
                 "error_code": row["error_code"],
                 "created_at": row["created_at"],
             }

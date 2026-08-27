@@ -19,6 +19,7 @@ if str(CODE_TINY) not in sys.path:
 
 from tools.sync import incremental_sync  # noqa: E402
 from tools.common.harness_config import load_harness_config  # noqa: E402
+from tools.graph.journal.models import RunStatus  # noqa: E402
 
 
 class IncrementalSyncPhaseModeTests(unittest.TestCase):
@@ -92,7 +93,34 @@ class IncrementalSyncPhaseModeTests(unittest.TestCase):
                 "_resume_configured_journal",
                 new=AsyncMock(return_value=0),
             ),
-            patch.object(incremental_sync, "finalize_journal_from_env", return_value=None),
+            patch.object(
+                incremental_sync,
+                "finalize_journal_from_env",
+                return_value=RunStatus.DRAINED,
+            ),
+            patch.object(
+                incremental_sync,
+                "journal_status_from_env",
+                return_value={
+                    "run_id": "run-test",
+                    "status": "drained",
+                    "resumed": True,
+                    "produced": 2,
+                    "acked": 2,
+                    "pending": 0,
+                    "leased": 0,
+                    "retrying": 0,
+                    "reconciling": 0,
+                    "blocked": 0,
+                    "dead_letter": 0,
+                    "rows": 4,
+                    "payload_bytes": 20,
+                    "artifact_bytes": 20,
+                    "journal_bytes": 40,
+                    "oldest_unfinished_age_seconds": None,
+                    "next_action": "none",
+                },
+            ),
             patch.object(incremental_sync, "_run", side_effect=capture),
         ):
             result = asyncio.run(incremental_sync._run_incremental(args))
@@ -116,6 +144,10 @@ class IncrementalSyncPhaseModeTests(unittest.TestCase):
         self.assertEqual(vector_env["CORTEX_DISABLE_GRAPH"], "1")
         self.assertEqual(summary["sync_mode"], "both")
         self.assertEqual(summary["vector_embeddings"][0]["vector_status"], "success")
+        self.assertEqual(summary["journal"]["run_count"], 2)
+        self.assertTrue(summary["journal"]["resumed"])
+        self.assertEqual(summary["journal"]["produced"], 4)
+        self.assertEqual(summary["journal"]["next_action"], "none")
         graph_setup.assert_awaited_once()
         self.assertEqual(configure_journal.call_count, 2)
 
