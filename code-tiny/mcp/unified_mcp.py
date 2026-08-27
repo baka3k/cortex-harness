@@ -82,6 +82,7 @@ from tools.common.project_registry import (  # noqa: E402
     ProjectRegistryError,
     resolve_project_targets,
 )
+from cortex_harness.storage import StoreGatewayError  # noqa: E402
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
@@ -765,6 +766,8 @@ def _error_type_from_exception(exc: Exception, missing_required: List[str]) -> s
         return "invalid_parameters"
     if isinstance(exc, TypeError):
         return "invalid_parameters"
+    if isinstance(exc, StoreGatewayError):
+        return exc.code.value
     return "tool_execution_error"
 
 
@@ -778,7 +781,7 @@ def _build_tool_error(
     received = sorted(
         key for key in payload.keys() if not _is_missing_value(payload.get(key))
     )
-    return {
+    result = {
         "ok": False,
         "query_engine": query_engine_for_backend(backend_name),
         "error": {
@@ -794,6 +797,16 @@ def _build_tool_error(
             "next_step": "Call list_mcp_functions and retry with exact parameter names.",
         },
     }
+    if isinstance(exc, StoreGatewayError):
+        gateway_error = exc.to_dict()
+        result["error"].update(gateway_error)
+        result["error"]["type"] = exc.code.value
+        result["error"]["next_step"] = (
+            "Retry after the reported delay or inspect MCP storage status."
+            if exc.retryable
+            else "Inspect MCP storage status before retrying."
+        )
+    return result
 
 
 def _unsupported_parser_result(

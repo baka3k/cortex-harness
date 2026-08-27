@@ -46,13 +46,66 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from tools.graph.core.provider_contract import normalize_graph_provider_name
+from cortex_harness.storage import GatewayErrorCode, StoreGatewayError
 
 logger = logging.getLogger("project_call_graph.mcp.explore")
+
+
+class _BoundedRetrievalExecutor:
+    """One named, count-bounded lane for synchronous graph/vector retrieval."""
+
+    def __init__(self, *, workers: int = 1, queue_items: int = 32) -> None:
+        self._capacity = workers + queue_items
+        self._pending = 0
+        self._lock = threading.Lock()
+        self._executor = ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="cortex-retrieval",
+        )
+
+    async def run(self, operation: Callable[[], Any]) -> Any:
+        with self._lock:
+            if self._pending >= self._capacity:
+                raise StoreGatewayError(
+                    GatewayErrorCode.OVERLOADED,
+                    "retrieval admission queue is full",
+                    retryable=True,
+                    retry_after_ms=100,
+                    details={
+                        "queued_items": max(0, self._pending - 1),
+                        "capacity": self._capacity - 1,
+                    },
+                )
+            self._pending += 1
+
+        def execute() -> Any:
+            try:
+                return operation()
+            finally:
+                with self._lock:
+                    self._pending -= 1
+
+        future = asyncio.wrap_future(self._executor.submit(execute))
+        try:
+            return await asyncio.shield(future)
+        except asyncio.CancelledError:
+            # Retrieval may already hold embedded client state. Do not claim
+            # cancellation or free admission until the synchronous call ends.
+            try:
+                await asyncio.shield(future)
+            except Exception:
+                pass
+            raise
+
+
+_RETRIEVAL_EXECUTOR = _BoundedRetrievalExecutor()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment defaults
@@ -298,6 +351,13 @@ class ExploreService:
         query = (query or "").strip()
         if not query:
             return _empty_response(mode)
+        if not isinstance(top_k, int) or isinstance(top_k, bool) or not 1 <= top_k <= 100:
+            raise StoreGatewayError(
+                GatewayErrorCode.REQUEST_TOO_LARGE,
+                "top_k must be an integer between 1 and 100",
+                retryable=False,
+                details={"accepted_limit": 100, "requested_top_k": top_k},
+            )
 
         mode = mode if mode in _VALID_MODES else MODE_HYBRID
         search_targets = self._resolve_search_targets(
@@ -474,9 +534,9 @@ class ExploreService:
         """
         Build an ``IntelligentRetrievalEngine`` and run the search.
 
-        The engine's ``search()`` method is synchronous (uses sync graph Driver
-        and blocking HTTP).  We offload it to a thread pool to avoid blocking
-        the event loop.
+        The engine's ``search()`` method is synchronous (uses a sync graph
+        driver and blocking vector calls). It runs on the named, bounded
+        retrieval lane so bursts cannot consume the default executor.
         """
         from tools.common.intelligent_retrieval import IntelligentRetrievalEngine
 
@@ -509,12 +569,13 @@ class ExploreService:
             )
 
         try:
-            scored = await asyncio.to_thread(_run_sync)
+            return await _RETRIEVAL_EXECUTOR.run(_run_sync)
         except Exception as exc:
+            # A successful empty list is reserved for a completed zero-hit
+            # query. Storage, overload, and timeout failures stay failures so
+            # the MCP boundary can render a truthful structured response.
             logger.error("[explore] Retrieval failed: %s", exc, exc_info=True)
-            scored = []
-
-        return scored
+            raise
 
     @staticmethod
     def _pack(
