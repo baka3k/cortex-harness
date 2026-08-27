@@ -44,6 +44,16 @@ class IngestionJobState(str, Enum):
     AMBIGUOUS = "AMBIGUOUS"
     SUPERSEDED = "SUPERSEDED"
 
+    @property
+    def terminal(self) -> bool:
+        return self in {
+            self.COMPLETED,
+            self.FAILED,
+            self.CANCELLED,
+            self.AMBIGUOUS,
+            self.SUPERSEDED,
+        }
+
 
 class OwnerLifecycleState(str, Enum):
     STARTING = "STARTING"
@@ -193,12 +203,50 @@ class IngestionJob:
     queue_position: int | None = None
     generation_id: str | None = None
     detail: Mapping[str, Any] = field(default_factory=dict)
+    cancel_requested_at: str | None = None
 
     def with_state(self, state: IngestionJobState, **changes: Any) -> "IngestionJob":
         data = asdict(self)
         data.update(changes, state=state, updated_at=utc_now())
         data["target"] = self.target
         return IngestionJob(**data)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["target"] = asdict(self.target)
+        data["state"] = self.state.value
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "IngestionJob":
+        target = data.get("target")
+        if not isinstance(target, Mapping):
+            raise ValueError("ingestion job is missing a physical target")
+        return cls(
+            job_id=str(data["job_id"]),
+            target=PhysicalTargetKey(**dict(target)),
+            idempotency_key=str(data["idempotency_key"]),
+            source_revision=str(data["source_revision"]),
+            state=IngestionJobState(str(data.get("state", IngestionJobState.QUEUED.value))),
+            submitted_at=str(data["submitted_at"]),
+            updated_at=str(data["updated_at"]),
+            queue_position=(
+                int(data["queue_position"])
+                if data.get("queue_position") is not None
+                else None
+            ),
+            generation_id=(
+                str(data["generation_id"])
+                if data.get("generation_id") is not None
+                else None
+            ),
+            detail=dict(data.get("detail") or {}),
+            cancel_requested_at=(
+                str(data["cancel_requested_at"])
+                if data.get("cancel_requested_at") is not None
+                else None
+            ),
+        )
 
 
 @dataclass(frozen=True)

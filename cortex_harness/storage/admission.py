@@ -41,16 +41,31 @@ class BoundedLane:
         self._queued_items = 0
         self._queued_bytes = 0
         self._active = 0
+        self._accepted = 0
+        self._completed = 0
+        self._rejected = 0
+        self._timed_out = 0
+        self._cancelled = 0
+        self._queue_wait_seconds = 0.0
+        self._max_queue_wait_seconds = 0.0
         self._idle = asyncio.Event()
         self._idle.set()
 
     @property
-    def snapshot(self) -> dict[str, int]:
+    def snapshot(self) -> dict[str, int | float]:
         return {
             "active": self._active,
             "queued_items": self._queued_items,
             "queued_bytes": self._queued_bytes,
             "capacity": self.limits.max_queue_items,
+            "byte_capacity": self.limits.max_queue_bytes,
+            "accepted": self._accepted,
+            "completed": self._completed,
+            "rejected": self._rejected,
+            "timed_out": self._timed_out,
+            "cancelled": self._cancelled,
+            "queue_wait_seconds": self._queue_wait_seconds,
+            "max_queue_wait_seconds": self._max_queue_wait_seconds,
         }
 
     async def run(
@@ -66,6 +81,7 @@ class BoundedLane:
             if self._queued_items >= self.limits.max_queue_items or (
                 self._queued_bytes + estimated_bytes > self.limits.max_queue_bytes
             ):
+                self._rejected += 1
                 raise StoreGatewayError(
                     GatewayErrorCode.OVERLOADED,
                     f"{self.name} admission queue is full",
@@ -75,7 +91,9 @@ class BoundedLane:
                 )
             self._queued_items += 1
             self._queued_bytes += estimated_bytes
+            self._accepted += 1
             self._idle.clear()
+        queued_at = monotonic()
         acquired = False
         try:
             timeout = None if deadline is None else max(0.0, deadline - monotonic())
@@ -85,6 +103,8 @@ class BoundedLane:
                 else:
                     await asyncio.wait_for(self._semaphore.acquire(), timeout=timeout)
             except TimeoutError as exc:
+                async with self._lock:
+                    self._timed_out += 1
                 raise StoreGatewayError(
                     GatewayErrorCode.DEADLINE_EXCEEDED,
                     f"{self.name} admission deadline elapsed",
@@ -93,10 +113,24 @@ class BoundedLane:
                 ) from exc
             acquired = True
             async with self._lock:
+                waited = monotonic() - queued_at
                 self._queued_items -= 1
                 self._queued_bytes -= estimated_bytes
                 self._active += 1
-            return await operation()
+                self._queue_wait_seconds += waited
+                self._max_queue_wait_seconds = max(
+                    self._max_queue_wait_seconds, waited
+                )
+            try:
+                result = await operation()
+            except asyncio.CancelledError:
+                async with self._lock:
+                    self._cancelled += 1
+                raise
+            else:
+                async with self._lock:
+                    self._completed += 1
+                return result
         finally:
             if acquired:
                 async with self._lock:
