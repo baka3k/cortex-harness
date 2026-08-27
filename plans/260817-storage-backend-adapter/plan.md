@@ -1,8 +1,8 @@
 ---
 title: "Storage Backend Adapter — Local File ↔ Server URL Switching"
-status: active
+status: completed
 created: 2026-08-17
-updated: 2026-08-17
+updated: 2026-08-27
 mode: hi-plan --full
 scope: cortex_harness/storage, code-tiny/tools/graph, code-tiny/mcp, doc-tiny, project config schema
 relatedPlans:
@@ -309,10 +309,11 @@ See [red-team-findings.md](red-team-findings.md) for 5 critical, 6 high,
 - Remote runtime failure never mutates a local fallback; local embedded mode
   retains exclusive leases and crash-safe reopen behavior.
 
-## Implementation Handoff
+## Completion Record
 
-After review, implement with:
-
-```text
-/hi-craft plans/260817-storage-backend-adapter/plan.md
-```
+Completed on 2026-08-27. The adapter phases and effective-target amendment are
+implemented, the repository suite passes with 1,336 tests and 270 subtests,
+and the final independent review approved the result at 9.7/10 with no critical
+findings. See
+[`docs/logs/2026-08-27-storage-backend-effective-targets.md`](../../docs/logs/2026-08-27-storage-backend-effective-targets.md)
+for the implementation decisions and commit references.
