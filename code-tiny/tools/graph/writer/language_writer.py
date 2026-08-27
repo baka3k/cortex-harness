@@ -203,10 +203,20 @@ class LanguageCodeWriter:
                     applied: bool | None = None
                     if readback is not None:
                         query, parameters = readback
-                        records, _, _ = await self.driver.execute_query(
-                            query, parameters, self.database
-                        )
-                        applied = readback_count(records) == 1
+                        try:
+                            records, _, _ = await self.driver.execute_query(
+                                query, parameters, self.database
+                            )
+                            receipt_count = readback_count(records)
+                        except Exception as exc:
+                            self._journal_runtime.defer_reconciliation_error(
+                                ticket, exc
+                            )
+                            raise
+                        if receipt_count == 1:
+                            applied = True
+                        elif receipt_count == 0:
+                            applied = False
                     ticket = self._journal_runtime.resolve_reconciliation(
                         ticket, applied=applied
                     )

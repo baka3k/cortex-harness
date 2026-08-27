@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import urlsplit, urlunsplit
@@ -136,14 +136,58 @@ class EffectiveStorageTarget:
     schema_version: int = TARGET_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.component not in {"graph", "vector"}:
+        component = str(self.component or "").strip().casefold()
+        mode = str(self.mode or "").strip().casefold()
+        provider = str(self.provider or "").strip().casefold()
+        namespace = str(self.namespace or "").strip()
+        if component not in {"graph", "vector"}:
             raise ValueError("storage target component must be graph or vector")
-        if self.mode not in {"file", "remote"}:
+        if mode not in {"file", "remote"}:
             raise ValueError("storage target mode must be file or remote")
-        if not self.provider.strip() or not self.location.strip() or not self.namespace.strip():
+        if not provider or not str(self.location or "").strip() or not namespace:
             raise ValueError("storage target provider, location, and namespace must not be empty")
-        object.__setattr__(self, "provider", self.provider.strip().casefold())
+        if not isinstance(self.tls, bool):
+            raise ValueError("storage target TLS mode must be boolean")
+        if self.schema_version != TARGET_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported effective storage target schema version: {self.schema_version!r}"
+            )
+
+        principal_fingerprint = self.principal_fingerprint
+        if mode == "file":
+            location = canonical_local_target(self.location)
+            if self.tls or principal_fingerprint is not None:
+                raise ValueError("file storage targets cannot declare TLS or a remote principal")
+            tls = False
+        else:
+            default_scheme = (
+                "http"
+                if component == "vector"
+                else "bolt" if provider in {"neo", "neo4j"} else "redis"
+            )
+            location, uri_principal = canonical_remote_endpoint(
+                self.location,
+                default_scheme=default_scheme,
+            )
+            if principal_fingerprint is None and uri_principal:
+                principal_fingerprint = _principal_fingerprint(uri_principal)
+            tls = endpoint_uses_tls(location, explicit=self.tls)
+        if principal_fingerprint is not None and (
+            not isinstance(principal_fingerprint, str)
+            or not principal_fingerprint.startswith("sha256:")
+            or len(principal_fingerprint) != len("sha256:") + 64
+            or any(character not in "0123456789abcdef" for character in principal_fingerprint[7:])
+        ):
+            raise ValueError("storage principal fingerprint must be a SHA-256 digest")
+
+        object.__setattr__(self, "component", component)
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "provider", provider)
+        object.__setattr__(self, "location", location)
+        object.__setattr__(self, "namespace", namespace)
         object.__setattr__(self, "role", _role_value(self.role))
+        object.__setattr__(self, "tls", tls)
+        object.__setattr__(self, "principal_fingerprint", principal_fingerprint)
 
     def to_dict(self) -> dict[str, Any]:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -180,6 +224,38 @@ class EffectiveStorageTopology:
     generation_id: str = "unbound"
     schema_version: int = TARGET_SCHEMA_VERSION
 
+    def __post_init__(self) -> None:
+        project_scope = str(self.project_scope or "").strip()
+        requested_backend = str(self.requested_backend or "").strip().casefold()
+        generation_id = str(self.generation_id or "").strip()
+        if not project_scope:
+            raise ValueError("effective storage topology requires a project scope")
+        if requested_backend not in {"local", "remote"}:
+            raise ValueError("requested storage backend must be local or remote")
+        if not isinstance(self.forced_local, bool):
+            raise ValueError("forced-local topology state must be boolean")
+        if not generation_id:
+            raise ValueError("effective storage topology requires a generation ID")
+        if self.schema_version != TARGET_SCHEMA_VERSION:
+            raise ValueError(
+                f"unsupported effective storage topology schema version: {self.schema_version!r}"
+            )
+        if self.graph.component != "graph" or self.vector.component != "vector":
+            raise ValueError("effective storage topology components are reversed or invalid")
+        if self.graph.role != self.vector.role:
+            raise ValueError("effective graph and vector targets must have the same owner role")
+        if requested_backend == "local" and (
+            self.graph.mode != "file" or self.vector.mode != "file"
+        ):
+            raise ValueError("a local storage request cannot resolve to a remote target")
+        if self.forced_local and (
+            self.graph.mode != "file" or self.vector.mode != "file"
+        ):
+            raise ValueError("a force-local topology cannot contain a remote target")
+        object.__setattr__(self, "project_scope", project_scope)
+        object.__setattr__(self, "requested_backend", requested_backend)
+        object.__setattr__(self, "generation_id", generation_id)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
@@ -207,12 +283,21 @@ class EffectiveStorageTopology:
     def vector_fingerprint(self) -> str:
         return self.vector.fingerprint
 
+    def for_generation(self, generation_id: str) -> "EffectiveStorageTopology":
+        """Bind this resolved component pair to one staged generation."""
+
+        value = str(generation_id or "").strip()
+        if not value:
+            raise ValueError("effective storage topology requires a generation ID")
+        return replace(self, generation_id=value)
+
     @property
     def compatibility_metadata(self) -> dict[str, str | int]:
         """Manifest-safe compatibility payload containing all target fences."""
 
         return {
             "schema_version": self.schema_version,
+            "generation_id": self.generation_id,
             "graph_mode": self.graph.mode,
             "vector_mode": self.vector.mode,
             "graph_target_fingerprint": self.graph_fingerprint,

@@ -9,6 +9,7 @@ import pytest
 
 from cortex_harness.storage import (
     BackendMode,
+    EffectiveStorageTarget,
     ENV_EFFECTIVE_GRAPH_FINGERPRINT,
     ENV_EFFECTIVE_GRAPH_TARGET,
     ENV_EFFECTIVE_TOPOLOGY,
@@ -24,11 +25,72 @@ from cortex_harness.storage import (
 )
 from tools.graph.journal import RunStatus, SQLiteJournal
 from tools.graph.journal.config import (
+    AUTO_RESUME_ENV,
+    LEASE_SECONDS_ENV,
+    MAX_ATTEMPTS_ENV,
+    RETRY_BASE_SECONDS_ENV,
+    RETRY_MAX_SECONDS_ENV,
     JournalError,
     configure_journal_env,
     legacy_physical_target_from_env,
     physical_target_from_env,
 )
+
+
+def test_journal_runtime_policy_is_validated_from_environment(tmp_path: Path) -> None:
+    env = {
+        LEASE_SECONDS_ENV: "45",
+        MAX_ATTEMPTS_ENV: "7",
+        RETRY_BASE_SECONDS_ENV: "2",
+        RETRY_MAX_SECONDS_ENV: "30",
+        "CORTEX_GRAPH_JOURNAL_RETENTION_SECONDS": "120",
+        "CORTEX_GRAPH_JOURNAL_MAX_BATCHES": "99",
+    }
+    config = configure_journal_env(
+        env,
+        root=tmp_path,
+        project_id="demo",
+        parser="python",
+        source_revision="rev",
+        source_snapshot="snapshot",
+        physical_target="target",
+        cache_dir=tmp_path / "cache",
+        mode="shared-required",
+    )
+
+    assert config.lease_seconds == 45
+    assert config.max_attempts == 7
+    assert config.retry_base_seconds == 2
+    assert config.retry_max_seconds == 30
+    assert config.limits.retention_seconds == 120
+    assert config.limits.max_batches_per_run == 99
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        (LEASE_SECONDS_ENV, "0"),
+        (MAX_ATTEMPTS_ENV, "not-a-number"),
+        (AUTO_RESUME_ENV, "sometimes"),
+        (RETRY_BASE_SECONDS_ENV, "61"),
+    ],
+)
+def test_invalid_journal_runtime_policy_fails_closed(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    env = {name: value}
+    with pytest.raises(JournalError):
+        configure_journal_env(
+            env,
+            root=tmp_path,
+            project_id="demo",
+            parser="python",
+            source_revision="rev",
+            source_snapshot="snapshot",
+            physical_target="target",
+            cache_dir=tmp_path / "cache",
+            mode="shared-required",
+        )
 
 
 def _resolved(tmp_path: Path) -> ResolvedStorage:
@@ -70,6 +132,38 @@ def test_remote_falkordb_target_uses_normalized_credential_free_uri(tmp_path: Pa
     assert "tenant" not in serialized
     assert "uri-secret" not in serialized
     assert "config-secret" not in serialized
+
+
+def test_deserialized_target_canonicalizes_and_removes_uri_credentials() -> None:
+    target = EffectiveStorageTarget.from_dict(
+        {
+            "component": "GRAPH",
+            "provider": "FalkorDB",
+            "mode": "REMOTE",
+            "location": "redis://tenant:never-persist@GRAPH.EXAMPLE./?token=secret",
+            "namespace": " demo ",
+            "role": "code",
+        }
+    )
+
+    assert target.location == "redis://graph.example:6379"
+    assert target.namespace == "demo"
+    assert target.principal_fingerprint
+    assert "tenant" not in target.canonical_json
+    assert "never-persist" not in target.canonical_json
+    assert "secret" not in target.canonical_json
+
+    secure = EffectiveStorageTarget.from_dict(
+        {
+            "component": "graph",
+            "provider": "falkordb",
+            "mode": "remote",
+            "location": "rediss://graph.example",
+            "namespace": "demo",
+            "role": "code",
+        }
+    )
+    assert secure.tls is True
 
 
 def test_mixed_topology_is_explicit_and_fingerprinted(tmp_path: Path) -> None:
@@ -309,6 +403,67 @@ def test_generation_manager_rejects_a_different_vector_topology(tmp_path: Path) 
     assert first_compatibility["topology_fingerprint"]
     with pytest.raises(ValueError, match="effective storage topology"):
         second.publish(manifest, lambda _: None)
+
+
+def test_generation_topology_fingerprint_is_bound_to_generation_id(tmp_path: Path) -> None:
+    factory = StorageFactory(
+        backend_mode=BackendMode.REMOTE,
+        resolved=_resolved(tmp_path),
+        remote=RemoteStorageConfig(
+            qdrant_url="https://qdrant.example:6333",
+            falkordb_uri="rediss://graph.example:6379",
+        ),
+        project_scope="demo",
+        code_graph="demo",
+        code_collection="demo",
+    )
+    manager = GenerationManager.from_storage_factory(
+        tmp_path / "generations",
+        factory,
+        graph_name="demo",
+        collection_name="demo",
+        project_scope="demo",
+    )
+
+    first = manager.allocate("revision-1", generation_id="generation-1")
+    second = manager.allocate("revision-1", generation_id="generation-2")
+    first_compatibility = first.validation["storage_compatibility"]
+    second_compatibility = second.validation["storage_compatibility"]
+
+    assert first_compatibility["generation_id"] == "generation-1"
+    assert second_compatibility["generation_id"] == "generation-2"
+    assert (
+        first_compatibility["topology_fingerprint"]
+        != second_compatibility["topology_fingerprint"]
+    )
+    assert (
+        first_compatibility["graph_target_fingerprint"]
+        == second_compatibility["graph_target_fingerprint"]
+    )
+
+    first.validation["storage_compatibility"] = dict(second_compatibility)
+    with pytest.raises(ValueError, match="effective storage topology"):
+        manager.publish(first, lambda _: None)
+
+
+@pytest.mark.parametrize(
+    "generation_id",
+    ["../escape", "nested/path", "", ".", "..", "with space", "x" * 129],
+)
+def test_generation_manager_rejects_unsafe_generation_ids(
+    tmp_path: Path,
+    generation_id: str,
+) -> None:
+    manager = GenerationManager.from_storage_factory(
+        tmp_path / "generations",
+        StorageFactory(backend_mode=BackendMode.LOCAL, resolved=_resolved(tmp_path)),
+        graph_name="demo",
+        collection_name="demo",
+        project_scope="demo",
+    )
+
+    with pytest.raises(ValueError, match="generation ID"):
+        manager.allocate("revision-1", generation_id=generation_id)
 
 
 def test_generation_validator_cannot_retarget_reserved_compatibility(
