@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [Graph journal recovery hardening](2026-08-28-graph-journal-recovery-hardening.md)
 - [Storage backend effective targets](2026-08-27-storage-backend-effective-targets.md)
 - [Durable node-first graph staging](2026-08-27-durable-node-first-graph-staging.md)
 - [Rust relationship endpoint integrity](2026-08-25-rust-relationship-endpoint-integrity.md)

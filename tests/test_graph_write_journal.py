@@ -567,6 +567,58 @@ def test_terminal_run_purge_obeys_retention_and_removes_exact_artifacts(
         assert not journal.artifacts.path_for(batch.artifact).exists()
 
 
+def test_terminal_run_purge_retries_after_artifact_directory_fsync_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = datetime(2026, 8, 7, tzinfo=timezone.utc)
+    path = tmp_path / "journal.sqlite3"
+    limits = _limits(retention_seconds=1)
+    journal = SQLiteJournal(path, limits=limits, clock=lambda: current)
+    run = journal.open_run(_metadata())
+    batch = _enqueue(journal, run.run_id)
+    lease = journal.claim_batch(run_id_value=run.run_id)
+    assert lease is not None
+    journal.ack_batch(lease.job_id, lease.fencing_token or "")
+    assert journal.close_run_production(run.run_id).status is RunStatus.DRAINED
+
+    original_fsync_directory = artifact_module._fsync_directory
+
+    def fail_directory_fsync(_path: Path) -> None:
+        raise OSError("simulated directory fsync failure")
+
+    monkeypatch.setattr(artifact_module, "_fsync_directory", fail_directory_fsync)
+    with pytest.raises(JournalError, match="cannot remove journal artifact"):
+        journal.purge_run(
+            run.run_id,
+            ownership_confirmed=True,
+            now=current + timedelta(seconds=2),
+        )
+    assert journal.get_run(run.run_id) is not None
+    assert journal.status_summary(run.run_id)["next_action"] == "retry_purge"
+    assert not journal.artifacts.path_for(batch.artifact).exists()
+    journal.close()
+
+    # The durable purge marker suppresses normal payload verification for this
+    # terminal run, so a new process can retry after unlink succeeded but its
+    # directory fsync reported failure.
+    with SQLiteJournal(path, limits=limits, clock=lambda: current) as reopened:
+        assert reopened.get_run(run.run_id) is not None
+        assert inspect_journal(path)[0]["next_action"] == "retry_purge"
+        monkeypatch.setattr(
+            artifact_module, "_fsync_directory", original_fsync_directory
+        )
+        assert (
+            reopened.purge_run(
+                run.run_id,
+                ownership_confirmed=True,
+                now=current + timedelta(seconds=2),
+            )
+            == 1
+        )
+        assert reopened.get_run(run.run_id) is None
+
+
 def test_events_contain_identifiers_and_counters_but_not_payloads(
     tmp_path: Path,
 ) -> None:
