@@ -66,11 +66,35 @@ class GraphWriteJournalConsumer:
 
     async def _reconcile_one(self, batch: Any) -> None:
         assert batch.fencing_token
-        operation, rows = self._load(batch)
-        readback = compile_reconciliation_readback(
-            operation, rows, job_id=batch.job_id
-        )
-        assert readback is not None
+        try:
+            operation, rows = self._load(batch)
+            readback = compile_reconciliation_readback(
+                operation, rows, job_id=batch.job_id
+            )
+            if readback is None:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    f"operation {batch.operation_key} has no safe readback",
+                )
+        except JournalError as exc:
+            self.journal.block_batch(
+                batch.job_id,
+                batch.fencing_token,
+                retry_class=classify_error(exc),
+                error_code=exc.code,
+            )
+            raise
+        except (AssertionError, TypeError, ValueError) as exc:
+            self.journal.block_batch(
+                batch.job_id,
+                batch.fencing_token,
+                retry_class=RetryClass.INCOMPATIBLE,
+                error_code=TerminalErrorCode.INVALID_CONTRACT,
+            )
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                f"invalid reconciliation contract for {batch.job_id}: {exc}",
+            ) from exc
         try:
             records, _, _ = await self.driver.execute_query(
                 readback[0], readback[1], self.database
@@ -78,7 +102,7 @@ class GraphWriteJournalConsumer:
         except Exception as exc:
             retry_class = classify_error(exc)
             if retry_class is RetryClass.TRANSIENT:
-                self.journal.schedule_retry(
+                self.journal.schedule_reconciliation_retry(
                     batch.job_id,
                     batch.fencing_token,
                     retry_at=retry_at(
@@ -86,10 +110,9 @@ class GraphWriteJournalConsumer:
                         base_seconds=self.config.retry_base_seconds,
                         max_seconds=self.config.retry_max_seconds,
                     ),
-                    retry_class=retry_class,
                     error_code=TerminalErrorCode.INVALID_TRANSITION,
                 )
-                return
+                raise
             self.journal.block_batch(
                 batch.job_id,
                 batch.fencing_token,
@@ -97,9 +120,34 @@ class GraphWriteJournalConsumer:
                 error_code=TerminalErrorCode.INVALID_CONTRACT,
             )
             raise
-        if readback_count(records) == 1:
+        try:
+            receipt_count = readback_count(records)
+        except (TypeError, ValueError) as exc:
+            self.journal.block_batch(
+                batch.job_id,
+                batch.fencing_token,
+                retry_class=RetryClass.INTEGRITY,
+                error_code=TerminalErrorCode.INVALID_CONTRACT,
+            )
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                f"invalid reconciliation result for {batch.job_id}: {exc}",
+            ) from exc
+        if receipt_count == 1:
             self.journal.ack_batch(batch.job_id, batch.fencing_token)
             return
+        if receipt_count != 0:
+            self.journal.block_batch(
+                batch.job_id,
+                batch.fencing_token,
+                retry_class=RetryClass.INTEGRITY,
+                error_code=TerminalErrorCode.INVALID_CONTRACT,
+            )
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                f"reconciliation receipt cardinality for {batch.job_id} "
+                f"must be zero or one, received {receipt_count}",
+            )
         self.journal.schedule_retry(
             batch.job_id,
             batch.fencing_token,

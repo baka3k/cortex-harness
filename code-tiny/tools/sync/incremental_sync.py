@@ -3406,6 +3406,63 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 seen_parser_entries.add(id(entry))
                 aggregate_parsers.append(entry)
         summary["parsers"] = aggregate_parsers
+        journal_runs = [
+            entry["journal"]
+            for entry in aggregate_parsers
+            if isinstance(entry.get("journal"), dict)
+        ]
+        if journal_runs:
+            numeric_fields = (
+                "produced",
+                "acked",
+                "pending",
+                "leased",
+                "retrying",
+                "reconciling",
+                "blocked",
+                "dead_letter",
+                "rows",
+                "payload_bytes",
+                "artifact_bytes",
+                "journal_bytes",
+            )
+            next_actions = [
+                str(item.get("next_action"))
+                for item in journal_runs
+                if item.get("next_action") not in {None, "none"}
+            ]
+            action_priority = {
+                "inspect_error_and_acknowledge_or_purge_after_retention": 0,
+                "inspect_incompatible_fingerprint": 1,
+                "reconcile_ambiguous_batches": 2,
+                "wait_for_retry": 3,
+                "wait_for_active_consumer": 4,
+                "resume_consumer": 5,
+                "close_production": 6,
+            }
+            summary["journal"] = {
+                "run_count": len(journal_runs),
+                "run_ids": [item.get("run_id") for item in journal_runs],
+                "statuses": [item.get("status") for item in journal_runs],
+                "resumed": any(bool(item.get("resumed")) for item in journal_runs),
+                **{
+                    name: sum(int(item.get(name) or 0) for item in journal_runs)
+                    for name in numeric_fields
+                },
+                "oldest_unfinished_age_seconds": max(
+                    (
+                        float(item["oldest_unfinished_age_seconds"])
+                        for item in journal_runs
+                        if item.get("oldest_unfinished_age_seconds") is not None
+                    ),
+                    default=None,
+                ),
+                "next_action": min(
+                    next_actions,
+                    key=lambda action: action_priority.get(action, 99),
+                    default="none",
+                ),
+            }
         if run_lock and lock_acquired:
             run_lock.release()
             if args.verbose:

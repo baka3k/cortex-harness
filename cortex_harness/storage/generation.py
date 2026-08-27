@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterator, Mapping
 
 from .contracts import GenerationManifest, GenerationState, PhysicalTargetKey, utc_now
+from .targets import EffectiveStorageTopology
 
 
 if TYPE_CHECKING:
@@ -35,7 +36,10 @@ class GenerationManager:
         *,
         retain: int = 1,
         storage_compatibility: Mapping[str, object] | None = None,
+        storage_topology: EffectiveStorageTopology | None = None,
     ) -> None:
+        if storage_compatibility is not None and storage_topology is not None:
+            raise ValueError("provide storage compatibility or topology, not both")
         self.root = Path(root).resolve()
         self.target = target
         self.retain = retain
@@ -46,6 +50,7 @@ class GenerationManager:
         self._reference_lock = threading.Lock()
         self._references: dict[str, int] = {}
         self._storage_compatibility = dict(storage_compatibility or {})
+        self._storage_topology = storage_topology
 
     @classmethod
     def from_storage_factory(
@@ -87,13 +92,13 @@ class GenerationManager:
             root,
             target,
             retain=retain,
-            storage_compatibility=topology.compatibility_metadata,
+            storage_topology=topology,
         )
 
     @staticmethod
     def _safe_generation_id(generation_id: str) -> str:
         value = str(generation_id or "")
-        if not value or re.fullmatch(r"[A-Za-z0-9._-]+", value) is None:
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) is None:
             raise ValueError("generation ID is not safe for compatibility metadata")
         return value
 
@@ -146,8 +151,11 @@ class GenerationManager:
         return payload
 
     def allocate(self, source_revision: str, *, generation_id: str | None = None) -> GenerationManifest:
-        generation_id = generation_id or uuid.uuid4().hex
+        generation_id = self._safe_generation_id(
+            uuid.uuid4().hex if generation_id is None else generation_id
+        )
         generation_root = self.generations_root / generation_id
+        storage_compatibility = self._storage_compatibility_for(generation_id)
         return GenerationManifest(
             generation_id=generation_id,
             target=self.target,
@@ -156,14 +164,22 @@ class GenerationManager:
             vector_path=str(generation_root / "vector"),
             state=GenerationState.BUILDING,
             validation=(
-                {"storage_compatibility": dict(self._storage_compatibility)}
-                if self._storage_compatibility
+                {"storage_compatibility": storage_compatibility}
+                if storage_compatibility
                 else {}
             ),
         )
 
+    def _storage_compatibility_for(self, generation_id: str) -> dict[str, object]:
+        if self._storage_topology is not None:
+            return dict(
+                self._storage_topology.for_generation(generation_id).compatibility_metadata
+            )
+        return dict(self._storage_compatibility)
+
     def _validate_storage_target(self, manifest: GenerationManifest) -> None:
-        if not self._storage_compatibility:
+        expected = self._storage_compatibility_for(manifest.generation_id)
+        if not expected:
             return
         actual = manifest.validation.get("storage_compatibility")
         if actual is None:
@@ -171,7 +187,7 @@ class GenerationManager:
                 "generation manifest predates effective storage topology metadata; "
                 "re-ingest from source instead of migrating it in place"
             )
-        if not isinstance(actual, Mapping) or dict(actual) != self._storage_compatibility:
+        if not isinstance(actual, Mapping) or dict(actual) != expected:
             raise ValueError(
                 "generation manifest does not match the effective storage topology"
             )
@@ -203,10 +219,9 @@ class GenerationManager:
         # reserved envelope from the manager before serialization.
         self._validate_storage_target(manifest)
         published_validation = dict(manifest.validation)
-        if self._storage_compatibility:
-            published_validation["storage_compatibility"] = dict(
-                self._storage_compatibility
-            )
+        storage_compatibility = self._storage_compatibility_for(manifest.generation_id)
+        if storage_compatibility:
+            published_validation["storage_compatibility"] = storage_compatibility
         published = replace(
             manifest,
             state=GenerationState.PUBLISHED,
@@ -240,7 +255,10 @@ class GenerationManager:
                     os.close(directory_fd)
 
     def _validate_paths(self, manifest: GenerationManifest) -> None:
-        generation_root = (self.generations_root / manifest.generation_id).resolve()
+        generation_id = self._safe_generation_id(manifest.generation_id)
+        generation_root = (self.generations_root / generation_id).resolve()
+        if not generation_root.is_relative_to(self.generations_root.resolve()):
+            raise ValueError("generation root must remain below the generation directory")
         graph_path = Path(manifest.graph_path).resolve()
         vector_path = Path(manifest.vector_path).resolve()
         if graph_path != generation_root / "graph" / "data.rdb" or vector_path != generation_root / "vector":

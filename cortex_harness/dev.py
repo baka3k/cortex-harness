@@ -50,6 +50,13 @@ from tools.graph.journal.config import (
     physical_target_from_env,
 )
 from tools.graph.journal.models import RunStatus
+from tools.graph.journal.models import JournalError
+from tools.graph.journal.sqlite_store import SQLiteJournal, inspect_journal
+from tools.common.sync_scope import (
+    LockBusyError as JournalLockBusyError,
+    ProjectRunLock,
+    scan_scope_id,
+)
 from tools.jp1.sniff import is_jp1_file
 from tools.common.reliability import RunOutcome, RunResult, load_run_result
 
@@ -1723,6 +1730,24 @@ def _print_summary(summaries: list, total_elapsed: float) -> None:
                     quality["artifact"],
                 )
             )
+        journal_summary = s.get("journal") or {}
+        if isinstance(journal_summary, dict) and journal_summary.get("run_count"):
+            click.echo(
+                "    journal: runs=%s resumed=%s produced=%s acked=%s pending=%s "
+                "retrying=%s reconciling=%s blocked=%s bytes=%s next=%s"
+                % (
+                    journal_summary.get("run_count", 0),
+                    str(bool(journal_summary.get("resumed"))).lower(),
+                    journal_summary.get("produced", 0),
+                    journal_summary.get("acked", 0),
+                    journal_summary.get("pending", 0),
+                    journal_summary.get("retrying", 0),
+                    journal_summary.get("reconciling", 0),
+                    journal_summary.get("blocked", 0),
+                    journal_summary.get("artifact_bytes", 0),
+                    journal_summary.get("next_action", "none"),
+                )
+            )
     ok      = sum(1 for s in summaries if s.get("status") == "ok")
     skipped = sum(1 for s in summaries if s.get("status") in ("skipped", "cancelled"))
     errors  = sum(1 for s in summaries if s.get("status") == "error")
@@ -2794,6 +2819,126 @@ def status(project_dir):
 
 
 # ---------------------------------------------------------------------------
+# dev journal
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def journal():
+    """Inspect or safely purge durable graph-write journals."""
+
+
+@journal.command("status")
+@click.option(
+    "--journal-path",
+    required=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Exact journal SQLite path printed by a sync summary.",
+)
+@click.option("--json-output", is_flag=True, help="Emit machine-readable JSON.")
+def journal_status(journal_path: Path, json_output: bool):
+    """Show payload-free queue state without contacting the graph."""
+
+    resolved = journal_path.expanduser().resolve(strict=True)
+    try:
+        summaries = inspect_journal(resolved)
+    except JournalError as exc:
+        raise click.ClickException(f"journal status failed ({exc.code.value}): {exc}") from exc
+    if json_output:
+        click.echo(json.dumps({"journal_path": str(resolved), "runs": summaries}, sort_keys=True))
+        return
+    click.echo(f"Journal: {resolved}")
+    if not summaries:
+        click.echo("  no runs")
+        return
+    for item in summaries:
+        click.echo(
+            "  run=%s parser=%s status=%s resumed=%s produced=%s acked=%s "
+            "pending=%s retrying=%s reconciling=%s blocked=%s bytes=%s "
+            "oldest_age=%s next=%s"
+            % (
+                item["run_id"], item["parser"], item["status"],
+                str(item["resumed"]).lower(), item["produced"], item["acked"],
+                item["pending"], item["retrying"], item["reconciling"],
+                item["blocked"], item["artifact_bytes"],
+                item["oldest_unfinished_age_seconds"], item["next_action"],
+            )
+        )
+
+
+@journal.command("purge")
+@click.option(
+    "--journal-path",
+    required=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Exact journal SQLite path printed by a sync summary.",
+)
+@click.option("--run-id", required=True, help="Exact terminal run identifier.")
+@click.option("--project-id", required=True, help="Project identifier bound to the run.")
+@click.option(
+    "--root",
+    required=True,
+    type=click.Path(path_type=Path, file_okay=False),
+    help="Exact source root bound to the run scope.",
+)
+def journal_purge(journal_path: Path, run_id: str, project_id: str, root: Path):
+    """Purge one retained terminal run while holding its scan-scope lock."""
+
+    resolved = journal_path.expanduser().resolve(strict=True)
+    canonical_root = root.expanduser().resolve(strict=True)
+    scope_id = scan_scope_id(project_id, str(canonical_root))
+    cache_root = resolved.parent.parent.parent
+    expected_parent = (cache_root / "graph-write-journal" / scope_id).resolve()
+    if resolved.parent != expected_parent:
+        raise click.ClickException(
+            "journal path does not match the exact project/root scope"
+        )
+    lock_path = cache_root / "incremental_sync_locks" / f"{scope_id}.lock"
+    ownership = ProjectRunLock(
+        str(lock_path),
+        f"journal purge project_id={project_id}",
+        scope_id,
+        str(canonical_root),
+        timeout_seconds=0,
+    )
+    try:
+        with ownership, SQLiteJournal(resolved) as database:
+            run = database.get_run(run_id)
+            if run is None:
+                raise click.ClickException("journal run does not exist")
+            if run.metadata.project_id != project_id or run.metadata.scope_id != scope_id:
+                raise click.ClickException(
+                    "journal run metadata does not match the exact project/root scope"
+                )
+            safe_parser = "".join(
+                character if character.isalnum() or character in "-_" else "_"
+                for character in run.metadata.parser
+            )
+            if resolved.name != f"{safe_parser}.sqlite3":
+                raise click.ClickException(
+                    "journal filename does not match the run parser"
+                )
+            removed = database.purge_run(run_id, ownership_confirmed=True)
+    except JournalLockBusyError as exc:
+        raise click.ClickException(
+            "journal scope is active; wait for sync/consumer completion"
+        ) from exc
+    except JournalError as exc:
+        raise click.ClickException(f"journal purge refused ({exc.code.value}): {exc}") from exc
+    click.echo(
+        json.dumps(
+            {
+                "event_type": "journal_purged",
+                "journal_path": str(resolved),
+                "run_id": run_id,
+                "scope_id": scope_id,
+                "removed_artifacts": removed,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
 # dev sync
 # ---------------------------------------------------------------------------
 
@@ -2995,6 +3140,7 @@ def sync_code(
                 "change_sources": child_summary.get("change_sources", {}),
                 "coverage_warnings": child_summary.get("coverage_warnings", []),
                 "parse_quality": child_summary.get("parse_quality", {}),
+                "journal": child_summary.get("journal", {}),
             })
 
     _print_summary(summaries, time.time() - total_start)
@@ -3097,6 +3243,7 @@ def sync_code_all(ctx):
                 "change_sources": child_summary.get("change_sources", {}),
                 "coverage_warnings": child_summary.get("coverage_warnings", []),
                 "parse_quality": child_summary.get("parse_quality", {}),
+                "journal": child_summary.get("journal", {}),
             })
 
     _print_summary(summaries, time.time() - total_start)
