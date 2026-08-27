@@ -77,6 +77,7 @@ def test_remote_store_creation() -> None:
     assert store.url == "http://qdrant:6333"
     assert store.client is _FakeClient.instances[-1]
     assert _FakeClient.instances[-1].kwargs["url"] == "http://qdrant:6333"
+    assert _FakeClient.instances[-1].kwargs["check_compatibility"] is False
 
 
 def test_remote_store_repr_redacts_api_key() -> None:
