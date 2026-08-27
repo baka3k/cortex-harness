@@ -290,7 +290,6 @@ def test_generation_manager_rejects_a_different_vector_topology(tmp_path: Path) 
         factory("https://qdrant-a.example:6333"),
         graph_name="demo",
         collection_name="demo",
-        generation_id="generation-1",
         project_scope="demo",
     )
     second = GenerationManager.from_storage_factory(
@@ -298,15 +297,16 @@ def test_generation_manager_rejects_a_different_vector_topology(tmp_path: Path) 
         factory("https://qdrant-b.example:6333"),
         graph_name="demo",
         collection_name="demo",
-        generation_id="generation-1",
         project_scope="demo",
     )
     manifest = first.allocate("revision-1", generation_id="generation-1")
 
-    assert first.target.graph_target_fingerprint == second.target.graph_target_fingerprint
-    assert first.target.vector_target_fingerprint != second.target.vector_target_fingerprint
-    assert first.target.topology_fingerprint != second.target.topology_fingerprint
-    with pytest.raises(ValueError, match="different physical target"):
+    assert first.target == second.target
+    first_compatibility = manifest.validation["storage_compatibility"]
+    assert first_compatibility["graph_target_fingerprint"]
+    assert first_compatibility["vector_target_fingerprint"]
+    assert first_compatibility["topology_fingerprint"]
+    with pytest.raises(ValueError, match="effective storage topology"):
         second.publish(manifest, lambda _: None)
 
 
