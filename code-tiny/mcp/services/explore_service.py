@@ -64,6 +64,7 @@ class _BoundedRetrievalExecutor:
     def __init__(self, *, workers: int = 1, queue_items: int = 32) -> None:
         self._capacity = workers + queue_items
         self._pending = 0
+        self._draining = False
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(
             max_workers=workers,
@@ -72,6 +73,12 @@ class _BoundedRetrievalExecutor:
 
     async def run(self, operation: Callable[[], Any]) -> Any:
         with self._lock:
+            if self._draining:
+                raise StoreGatewayError(
+                    GatewayErrorCode.STORE_MAINTENANCE,
+                    "retrieval service is draining",
+                    retryable=True,
+                )
             if self._pending >= self._capacity:
                 raise StoreGatewayError(
                     GatewayErrorCode.OVERLOADED,
@@ -104,8 +111,13 @@ class _BoundedRetrievalExecutor:
                 pass
             raise
 
+    def begin_drain(self) -> None:
+        with self._lock:
+            self._draining = True
 
-_RETRIEVAL_EXECUTOR = _BoundedRetrievalExecutor()
+    def close(self, *, wait: bool = True) -> None:
+        self.begin_drain()
+        self._executor.shutdown(wait=wait, cancel_futures=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment defaults
@@ -299,6 +311,7 @@ class ExploreService:
         neo4j_pass:   Optional[str] = None,
         neo4j_db:     Optional[str] = None,
         graph_provider: Optional[str] = None,
+        retrieval_executor: Optional[_BoundedRetrievalExecutor] = None,
     ) -> None:
         # MCP requests cannot select arbitrary filesystem-backed stores.
         # The process owns exactly the configured code store.
@@ -313,6 +326,29 @@ class ExploreService:
             default=_DEFAULT_GRAPH_PROVIDER,
         )
         self._neo4j_db    = neo4j_db or _DEFAULT_GRAPH_DB
+        self._retrieval_executor = retrieval_executor or _BoundedRetrievalExecutor()
+        self._embedder: Optional[Callable[[str], List[float]]] = None
+        self._embedder_loaded = False
+        self._embedder_lock = asyncio.Lock()
+
+    async def _get_embedder(self) -> Optional[Callable[[str], List[float]]]:
+        """Load the configured model once on bounded retrieval capacity."""
+
+        if self._embedder_loaded:
+            return self._embedder
+        async with self._embedder_lock:
+            if not self._embedder_loaded:
+                self._embedder = await self._retrieval_executor.run(
+                    lambda: _make_embedder(self._model_name)
+                )
+                self._embedder_loaded = True
+        return self._embedder
+
+    def begin_drain(self) -> None:
+        self._retrieval_executor.begin_drain()
+
+    def close(self, *, wait: bool = True) -> None:
+        self._retrieval_executor.close(wait=wait)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -377,7 +413,7 @@ class ExploreService:
         )
 
         # 2. Build embedder + graph driver
-        embedder = _make_embedder(self._model_name)
+        embedder = await self._get_embedder()
         graph_driver = (
             await _make_graph_driver(
                 self._neo4j_uri,
@@ -569,7 +605,7 @@ class ExploreService:
             )
 
         try:
-            return await _RETRIEVAL_EXECUTOR.run(_run_sync)
+            return await self._retrieval_executor.run(_run_sync)
         except Exception as exc:
             # A successful empty list is reserved for a completed zero-hit
             # query. Storage, overload, and timeout failures stay failures so
@@ -605,6 +641,22 @@ def get_explore_service() -> ExploreService:
     if _service_singleton is None:
         _service_singleton = ExploreService()
     return _service_singleton
+
+
+def begin_explore_service_drain() -> None:
+    """Stop new retrieval admission without creating the lazy singleton."""
+
+    if _service_singleton is not None:
+        _service_singleton.begin_drain()
+
+
+def close_explore_service(*, wait: bool = True) -> None:
+    """Close the singleton's owned executor during MCP shutdown."""
+
+    global _service_singleton
+    if _service_singleton is not None:
+        _service_singleton.close(wait=wait)
+        _service_singleton = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

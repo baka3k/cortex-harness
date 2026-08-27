@@ -95,8 +95,16 @@ class GatewayLimits:
         return cls(
             graph_read=LaneLimits(profile.graph_readers, profile.max_queue_items, profile.max_queue_bytes),
             vector_read=LaneLimits(profile.vector_readers, profile.max_queue_items, profile.max_queue_bytes),
-            write=LaneLimits(profile.writer_slots, max(1, profile.max_queue_items // 4), profile.max_queue_bytes),
-            control=LaneLimits(profile.control_slots, max(1, profile.max_queue_items // 8), profile.max_queue_bytes),
+            write=LaneLimits(
+                profile.writer_slots,
+                max(1, profile.max_queue_items // 4),
+                profile.max_queue_bytes,
+            ),
+            control=LaneLimits(
+                profile.control_slots,
+                max(1, profile.max_queue_items // 8),
+                profile.max_queue_bytes,
+            ),
             drain_timeout_seconds=max(1.0, profile.request_timeout_seconds * 2),
         )
 
@@ -131,6 +139,7 @@ class StoreGateway:
         self._job_persist_lock = asyncio.Lock()
         self._jobs_path = Path(generation_root).resolve() / "ingestion-jobs.json"
         self._active_generation: GenerationManifest | None = None
+        self._accepting_jobs = False
         self._lanes = {
             "graph": BoundedLane("graph-read", self.limits.graph_read),
             "vector": BoundedLane("vector-read", self.limits.vector_read),
@@ -179,7 +188,12 @@ class StoreGateway:
             graph_path = Path(self.target.graph_path)
             for path in self.target.canonical_paths:
                 backend = "falkordb" if path == graph_path else "qdrant"
-                lease = StorageLease(path, instance_id=self.target.instance_id, owner_id=self.target.owner_id, backend=backend).acquire()
+                lease = StorageLease(
+                    path,
+                    instance_id=self.target.instance_id,
+                    owner_id=self.target.owner_id,
+                    backend=backend,
+                ).acquire()
                 acquired.append(lease)
         except Exception:
             for lease in reversed(acquired):
@@ -214,6 +228,9 @@ class StoreGateway:
             # Until an active pair exists the owner can accept a staging write,
             # but readiness remains false in ``health``.
             self.lifecycle = OwnerLifecycleState.READY
+            async with self._job_changed:
+                self._accepting_jobs = True
+                self._job_changed.notify_all()
         except Exception:
             for executor in self._executors.values():
                 executor.shutdown(wait=True, cancel_futures=True)
@@ -228,6 +245,9 @@ class StoreGateway:
         if self.lifecycle is OwnerLifecycleState.STOPPED:
             return
         self.lifecycle = OwnerLifecycleState.DRAINING
+        async with self._job_changed:
+            self._accepting_jobs = False
+            self._job_changed.notify_all()
         timeout = (
             self.limits.drain_timeout_seconds
             if timeout_seconds is None
@@ -400,18 +420,18 @@ class StoreGateway:
         source_revision: str,
         estimated_bytes: int = 0,
     ) -> IngestionJob:
-        if self.lifecycle is not OwnerLifecycleState.READY:
-            raise StoreGatewayError(
-                GatewayErrorCode.STORE_MAINTENANCE,
-                "store owner is not accepting ingestion",
-                retryable=True,
-            )
         if not idempotency_key.strip() or not source_revision.strip():
             raise ValueError("idempotency_key and source_revision are required")
         if estimated_bytes < 0:
             raise ValueError("estimated_bytes cannot be negative")
         key = (self.target.value, idempotency_key)
         async with self._job_changed:
+            if not self._accepting_jobs:
+                raise StoreGatewayError(
+                    GatewayErrorCode.STORE_MAINTENANCE,
+                    "store owner is not accepting ingestion",
+                    retryable=True,
+                )
             existing_id = self._job_keys.get(key)
             if existing_id is not None:
                 existing = self._jobs[existing_id]
@@ -463,6 +483,12 @@ class StoreGateway:
 
     async def update_job(self, job_id: str, state: IngestionJobState, **changes: Any) -> IngestionJob:
         async with self._job_changed:
+            if not self._accepting_jobs:
+                raise StoreGatewayError(
+                    GatewayErrorCode.STORE_MAINTENANCE,
+                    "store owner is draining ingestion state",
+                    retryable=True,
+                )
             job = self._jobs[job_id]
             if job.state.terminal and state is not job.state:
                 raise ValueError("terminal ingestion jobs cannot transition")
@@ -491,6 +517,12 @@ class StoreGateway:
         """Cancel queued work or record cancellation for a running sync call."""
 
         async with self._job_changed:
+            if not self._accepting_jobs:
+                raise StoreGatewayError(
+                    GatewayErrorCode.STORE_MAINTENANCE,
+                    "store owner is draining ingestion state",
+                    retryable=True,
+                )
             job = self._jobs.get(job_id)
             if job is None or job.state.terminal:
                 return job
@@ -549,7 +581,15 @@ class StoreGateway:
                     "target": self.target.value,
                     "jobs": [job.to_dict() for job in self._jobs.values()],
                 }
-            await self._run_sync("control", self._write_jobs_file, payload)
+            encoded_bytes = len(json.dumps(payload, sort_keys=True).encode("utf-8"))
+
+            async def persist() -> None:
+                await self._run_sync("control", self._write_jobs_file, payload)
+
+            await self._lanes["control"].run(
+                persist,
+                estimated_bytes=encoded_bytes,
+            )
 
     def _write_jobs_file(self, payload: dict[str, Any]) -> None:
         self._jobs_path.parent.mkdir(parents=True, exist_ok=True)
@@ -582,10 +622,34 @@ class StoreGateway:
             job = IngestionJob.from_dict(item)
             if job.target != self.target:
                 raise ValueError("ingestion job targets a different physical store")
-            if job.state in {
+            if job.state is IngestionJobState.PREPARING:
+                job = job.with_state(
+                    IngestionJobState.QUEUED,
+                    detail={**job.detail, "recovery": "preparation_requeued_after_restart"},
+                )
+            elif job.state is IngestionJobState.PUBLISHING:
+                active = self._active_generation
+                if (
+                    active is not None
+                    and job.generation_id == active.generation_id
+                    and job.source_revision == active.source_revision
+                ):
+                    job = job.with_state(
+                        IngestionJobState.COMPLETED,
+                        queue_position=None,
+                        detail={**job.detail, "recovery": "publication_reconciled"},
+                    )
+                else:
+                    job = job.with_state(
+                        IngestionJobState.AMBIGUOUS,
+                        detail={
+                            **job.detail,
+                            "recovery": "publication_not_selected_by_active_manifest",
+                        },
+                    )
+            elif job.state in {
                 IngestionJobState.WRITING,
                 IngestionJobState.VALIDATING,
-                IngestionJobState.PUBLISHING,
             }:
                 job = job.with_state(
                     IngestionJobState.AMBIGUOUS,
