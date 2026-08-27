@@ -46,6 +46,13 @@ artifacts; it does not introduce an unbounded process-memory cache.
   endpoint metadata is incomplete.
 - Preserve provider parity, idempotency, project isolation, count
   reconciliation, generation publication gates, and existing schema preflight.
+- Support both effective storage lanes: embedded/file-backed Qdrant plus
+  FalkorDBLite, and remote Qdrant plus FalkorDB/Neo4j services. Both lanes must
+  satisfy the same canonical manifests, node-first barriers, endpoint audits,
+  exact readback, and clean-publication rules.
+- Bind every journal run to the effective component targets. Changing a local
+  path, remote endpoint, graph/database, collection, TLS mode, backend override,
+  or generation makes prior work incompatible rather than replayable.
 
 ## Architecture
 
@@ -94,6 +101,76 @@ Parser/semantic coverage gates own that class of omission. SQLite begins its
 guarantee at the accepted extraction-intent boundary: once an analyzer accepts
 a node or edge row, that intent must be durably staged before the producing
 buffer may be released.
+
+### File-backed and remote storage contract
+
+“File-backed” and “remote” describe the materialization targets, not where the
+graph-write journal lives:
+
+| Lane | Graph target | Vector target | Journal/artifacts | Ownership and failure model |
+| --- | --- | --- | --- | --- |
+| File-backed | FalkorDBLite owner-specific `.rdb` file | Qdrant local directory | Owner-local SQLite WAL plus immutable JSONL | One process owns each embedded path through `StorageLease`; disk-full, lock, fsync, reopen, and file-corruption failures are local and fail closed |
+| Remote | FalkorDB server URI or existing Neo4j remote provider | Qdrant server URL | Still owner-local SQLite WAL plus immutable JSONL | The server owns database concurrency; the ingest owner owns one local journal. Auth/TLS, network loss, timeout, server restart, and ambiguous commit require remote health checks and graph reconciliation |
+| Explicit mixed mode | Each component independently resolves to file-backed or remote | Each component independently resolves to file-backed or remote | One local journal for the effective graph target; generation metadata records both graph and vector targets | Missing remote component configuration may resolve to its declared local component, but the effective topology must be visible and fingerprinted |
+
+The journal is deliberately not moved into the remote graph service and must not
+be placed on an unsafe shared/NFS path. It is a single-ingest-owner durable
+spool. Cross-host takeover is allowed only with an explicitly supported transfer
+of the complete SQLite database and every referenced immutable artifact, plus
+lock/fingerprint verification; otherwise the new host re-ingests from source.
+
+A run writes each graph/vector component to exactly one effective target. “Both
+lanes work” means independently supported and parity-tested modes, not implicit
+dual-write to local and remote copies. Switching backends is a new staged
+generation or a source re-ingest; it never copies partial journal jobs across
+targets.
+
+#### Canonical effective target identity
+
+Storage resolution must return one credential-free `EffectiveStorageTopology`
+before journal configuration. It includes:
+
+- graph provider and effective mode (`file` or `remote`);
+- canonical absolute `.rdb` path or normalized remote scheme/host/port;
+- graph/database name and owner role;
+- Qdrant effective mode, canonical directory or normalized URL, collection,
+  and owner role;
+- TLS mode, server capability/schema fingerprints, project scope, and
+  generation ID;
+- a non-secret credential/principal fingerprint only when it affects tenancy.
+
+Passwords, API keys, URI userinfo, and raw tokens are never persisted or logged.
+The topology fingerprint, graph target fingerprint, and vector target
+fingerprint are stored separately. The graph journal run identity consumes the
+graph target fingerprint; the generation/publication manifest consumes all
+three.
+
+The current implementation has a known gap: `physical_target_from_env()` uses
+`FALKORDB_PATH` for FalkorDB identity but does not include `FALKORDB_URI`.
+Phase 04E must replace environment reconstruction with the resolved effective
+target descriptor (or make the environment helper URI-aware and canonical).
+Tests must prove two remote URIs, a remote URI versus a local path, and two graph
+names cannot find or resume each other's journals.
+
+#### Backend-specific execution rules
+
+- File-backed mode acquires and retains the embedded `StorageLease` for the
+  graph/vector owner through node drain, edge drain, validation, and publication.
+  A second owner fails before mutation.
+- Remote mode performs bounded DNS/connect/auth/TLS/health and schema preflight
+  before the first staged mutation becomes eligible. Credentials remain in the
+  connection boundary and are redacted from events.
+- Remote connection failure after mutation submission is ambiguous. The job
+  remains `reconciling`; exact receipts/readback decide ACK or retry. The system
+  must never fall back to a local file after a remote connection or auth error.
+- Mixed mode fallback is resolved only before run creation when a component URI
+  is intentionally absent. It is recorded as the effective component mode and
+  emits a visible status. Runtime transport failure never changes targets.
+- `CORTEX_STORAGE_BACKEND_FORCE_LOCAL=1` creates a different effective topology
+  and generation. It cannot resume or publish the remote run's journal.
+- Provider-specific transaction syntax may differ, but enqueue-before-mutate,
+  node-first release, exact endpoint matching, receipts, and row conservation
+  remain provider-neutral invariants.
 
 SQLite metadata and artifact publication must follow enqueue-before-mutate
 ordering: fsync and hash the immutable artifact, commit its manifest and batch
@@ -244,6 +321,7 @@ blocked, dead-lettered, or unexplained optional rows.
 - `code-tiny/tools/graph/journal/models.py`
 - `code-tiny/tools/graph/journal/operation.py`
 - `code-tiny/tools/graph/journal/consumer.py`
+- `code-tiny/tools/graph/journal/config.py`
 - `code-tiny/tools/graph/writer/language_writer.py`
 - `code-tiny/tools/graph/writer/query_contract.py`
 - Specialized writers under `code-tiny/tools/graph/writer/`
@@ -252,6 +330,12 @@ blocked, dead-lettered, or unexplained optional rows.
   analyzer entry points that directly stage or execute graph mutations
 - `code-tiny/tools/sync/incremental_sync.py`
 - `cortex_harness/dev.py`
+- `cortex_harness/storage/config.py`
+- `cortex_harness/storage/factory.py`
+- `cortex_harness/storage/qdrant.py`
+- `cortex_harness/storage/qdrant_remote.py`
+- `cortex_harness/storage/lease.py`
+- `cortex_harness/storage/remote_probe.py`
 - `tests/test_graph_write_journal.py`
 - `tests/test_graph_write_journal_runtime.py`
 - Relationship and analyzer graph-contract tests under `tests/` and
@@ -263,24 +347,28 @@ blocked, dead-lettered, or unexplained optional rows.
 
 1. Version the graph-write operation and run compatibility fingerprints with a
    `node_first_v1` ordering policy.
-2. Add the run-level `phase:nodes` barrier and explicit producer lifecycle
+2. Add a canonical `EffectiveStorageTopology`/target descriptor sourced from
+   `StorageFactory`; fix remote FalkorDB physical-target identity so URI/path,
+   graph, role, TLS, and generation changes cannot share journals.
+3. Add the run-level `phase:nodes` barrier and explicit producer lifecycle
    state to the SQLite schema through an idempotent migration.
-3. Attach `produced_barriers=("phase:nodes",)` to every trusted node operation
+4. Attach `produced_barriers=("phase:nodes",)` to every trusted node operation
    and `required_barriers=("phase:nodes",)` to every trusted edge/call
    operation.
-4. Add normalized `node_manifest`, `edge_manifest`, `edge_endpoint`, and
+5. Add normalized `node_manifest`, `edge_manifest`, `edge_endpoint`, and
    `producer_completion` ledgers with compound uniqueness, foreign keys,
    canonical typed identity encoding, payload digests, and terminal
    dispositions.
-5. Add a sealed `endpoint_audit` record bound to the run, generation,
+6. Add a sealed `endpoint_audit` record bound to the run, generation,
    node-manifest digest, and node receipt set. Edge eligibility requires its
    barrier in addition to `phase:nodes`.
-6. Add SQL-derived conservation views/checks for emitted, unique, duplicate,
+7. Add SQL-derived conservation views/checks for emitted, unique, duplicate,
    rejected, ACKed, and graph-verified rows by producer/contract.
-7. Extend the relationship schema manifest with full endpoint, scope,
+8. Extend the relationship schema manifest with full endpoint, scope,
    self-loop, edge-key, and cardinality/ownership rules used by both local audit
    and Cypher compilation.
-8. Quarantine old incomplete journals whose ordering/version contract cannot be
+9. Quarantine old incomplete journals whose ordering/version or effective
+   target contract cannot be
    upgraded deterministically; never reinterpret them silently.
 
 ### 2. Separate staging from execution in the shared writer
@@ -357,7 +445,18 @@ blocked, dead-lettered, or unexplained optional rows.
 8. Measure peak RSS, staging bytes, enqueue latency, node-drain latency,
    edge-release latency, and total runtime at representative 100k/500k node
    scales and the C++/Pro*C canary.
-9. Roll out as shadow validation first, then required node-first mode on a
+9. Add a backend matrix using the same fixture and expected canonical manifests:
+   file graph/file vector, remote graph/remote vector, remote graph/file vector,
+   file graph/remote vector, and force-local override. Compare node/edge/point
+   identities, project isolation, exact readback, and representative MCP
+   results—not only adapter return types.
+10. Run disposable live-service tests for remote FalkorDB and Qdrant, plus the
+    existing Neo4j provider where enabled. Inject network loss before submit,
+    after commit/before ACK, during readback, and after server restart; verify no
+    local fallback, duplicate effect, or cross-target resume.
+11. Add file-backed restart tests for lease contention, process kill, disk full,
+    artifact corruption, `.rdb` reopen, and owner-role isolation.
+12. Roll out as shadow validation first, then required node-first mode on a
    disposable generation. Promote only after count, parity, restart, memory,
    and performance gates pass; retain the previous generation for rollback.
 
@@ -369,6 +468,15 @@ blocked, dead-lettered, or unexplained optional rows.
       node or edge disappears without a typed disposition.
 - [ ] Canonical typed identities and full project/label/property endpoint keys
       replace ambiguous ID-only binding.
+- [ ] Effective graph/vector topology is canonical, credential-free, visible,
+      and part of journal/generation compatibility.
+- [ ] Remote FalkorDB URI and local `.rdb` path produce distinct physical target
+      fingerprints; endpoint, graph, mode, TLS, role, and generation changes
+      cannot cross-resume.
+- [ ] File-backed, remote, mixed, and force-local matrices pass canonical data
+      parity, exact graph/vector readback, crash/retry, and project isolation.
+- [ ] Remote transport/auth failure never falls back to a file target after run
+      creation; file mode retains its single-owner lease through publication.
 - [ ] Accepted extraction intent is durable before producer-buffer release, and
       parser/semantic coverage separately reports source constructs that were
       never discovered.
@@ -403,6 +511,9 @@ blocked, dead-lettered, or unexplained optional rows.
 - Without staged generations, readers can observe a node-only intermediate
   graph. This phase controls write order, while atomic reader visibility remains
   owned by the ingest/query concurrency plan.
+- The local journal is a single-owner spool, not a distributed queue. Treating
+  it as shared remote state could corrupt leases or lose artifacts; cross-host
+  resume remains blocked without a supported transfer protocol.
 
 ## Success Criteria
 
@@ -419,6 +530,16 @@ blocked, dead-lettered, or unexplained optional rows.
   volume grows staging disk usage rather than process-wide node/edge lists.
 - Neo4j and FalkorDB produce equivalent node/edge counts and project-scoped
   endpoint resolution on the reviewed fixtures.
+- File-backed FalkorDBLite/Qdrant and remote FalkorDB/Qdrant produce identical
+  canonical manifests and representative query results for the same frozen
+  fixture; provider-specific metadata is excluded from parity comparison.
+- Remote network/auth/TLS failures retain the intended remote target and a typed
+  pending/reconciling/blocked outcome; no local file is created or mutated as a
+  runtime fallback.
+- Local file lock, disk, crash, reopen, and corruption cases preserve the last
+  validated generation and never permit a second embedded owner.
+- Switching local/remote, mixed component topology, force-local state, endpoint,
+  graph/collection, role, TLS, or generation invalidates journal compatibility.
 - For every producer and contract, conservation ledgers reconcile emitted,
   staged, duplicate/rejected, ACKed, and graph-verified rows with zero
   unexplained loss.

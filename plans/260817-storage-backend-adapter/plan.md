@@ -6,6 +6,7 @@ updated: 2026-08-17
 mode: hi-plan --full
 scope: cortex_harness/storage, code-tiny/tools/graph, code-tiny/mcp, doc-tiny, project config schema
 relatedPlans:
+  - 260807-1202-graph-ingest-write-path-hardening
   - 260824-1411-cplus-clang-containment-hardening
   - 260806-1648-local-file-storage
   - neo4j-to-falkordb-migration
@@ -15,9 +16,27 @@ relatedPlans:
 blockedBy: []
 blocks:
   - 260824-1411-cplus-clang-containment-hardening
+  - 260807-1202-graph-ingest-write-path-hardening
 ---
 
 # Storage Backend Adapter — Local File ↔ Server URL Switching
+
+## 2026-08-27 node-first journal compatibility amendment
+
+Phase 04E of
+[`260807-1202-graph-ingest-write-path-hardening`](../260807-1202-graph-ingest-write-path-hardening/phase-04e-node-first-staging.md)
+requires identical durable staging and integrity semantics for file-backed and
+remote targets. This plan owns canonical effective target resolution. It must
+expose credential-free graph/vector target descriptors rather than only a
+coarse `storage_backend` flag.
+
+The current factory already routes local, remote, and mixed component modes,
+but graph-journal identity reconstruction does not yet include remote
+`FALKORDB_URI`. The adapter must supply the effective target fingerprint used by
+journal/generation compatibility. Missing component URIs may resolve to an
+explicitly visible local component before run creation; connection/auth failure
+afterward must never trigger local fallback. Backend switching requires a new
+generation or source re-ingest, not dual-write or cross-target journal replay.
 
 ## Overview
 
@@ -281,6 +300,14 @@ See [red-team-findings.md](red-team-findings.md) for 5 critical, 6 high,
   trên cả hai backends.
 - `make doctor` validate cả local và remote connectivity.
 - Test suite cover factory routing, local parity, remote parity, config validation.
+- Factory exposes the effective per-component mode and credential-free canonical
+  target descriptors for journal and generation fingerprints.
+- Local path, remote URI, graph/collection, role, TLS, mixed topology, and
+  force-local changes produce incompatible target fingerprints.
+- The same frozen ingest fixture passes node/edge/point manifest parity and
+  representative MCP queries on file-backed and disposable live remote targets.
+- Remote runtime failure never mutates a local fallback; local embedded mode
+  retains exclusive leases and crash-safe reopen behavior.
 
 ## Implementation Handoff
 
