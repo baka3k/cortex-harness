@@ -13,7 +13,13 @@ from typing import Mapping, MutableMapping
 from tools.common.sync_scope import scan_scope_id
 
 from .identity import canonical_json, run_id
-from .models import JournalError, RunMetadata, RunStatus, TerminalErrorCode
+from .models import (
+    JournalError,
+    JournalLimits,
+    RunMetadata,
+    RunStatus,
+    TerminalErrorCode,
+)
 from .sqlite_store import SQLiteJournal
 
 
@@ -21,6 +27,21 @@ MODE_ENV = "CORTEX_GRAPH_JOURNAL_MODE"
 PATH_ENV = "CORTEX_GRAPH_JOURNAL_PATH"
 METADATA_ENV = "CORTEX_GRAPH_JOURNAL_METADATA"
 GENERATION_ENV = "CORTEX_GRAPH_JOURNAL_GENERATION"
+AUTO_RESUME_ENV = "CORTEX_GRAPH_JOURNAL_AUTO_RESUME"
+LEASE_SECONDS_ENV = "CORTEX_GRAPH_JOURNAL_LEASE_SECONDS"
+MAX_ATTEMPTS_ENV = "CORTEX_GRAPH_JOURNAL_MAX_ATTEMPTS"
+RETRY_BASE_SECONDS_ENV = "CORTEX_GRAPH_JOURNAL_RETRY_BASE_SECONDS"
+RETRY_MAX_SECONDS_ENV = "CORTEX_GRAPH_JOURNAL_RETRY_MAX_SECONDS"
+_LIMIT_ENV = {
+    "max_batches_per_run": "CORTEX_GRAPH_JOURNAL_MAX_BATCHES",
+    "max_payload_bytes_per_run": "CORTEX_GRAPH_JOURNAL_MAX_PAYLOAD_BYTES",
+    "max_artifact_bytes": "CORTEX_GRAPH_JOURNAL_MAX_ARTIFACT_BYTES",
+    "max_journal_bytes": "CORTEX_GRAPH_JOURNAL_MAX_DATABASE_BYTES",
+    "min_free_bytes": "CORTEX_GRAPH_JOURNAL_MIN_FREE_BYTES",
+    "retention_seconds": "CORTEX_GRAPH_JOURNAL_RETENTION_SECONDS",
+    "busy_timeout_ms": "CORTEX_GRAPH_JOURNAL_BUSY_TIMEOUT_MS",
+    "wal_autocheckpoint_pages": "CORTEX_GRAPH_JOURNAL_WAL_CHECKPOINT_PAGES",
+}
 OFF_MODES = frozenset({"", "0", "false", "off", "disabled"})
 SHADOW_MODES = frozenset({"shadow", "shared-shadow", "cplus-canary"})
 REQUIRED_MODES = frozenset({"required", "shared-required"})
@@ -31,6 +52,12 @@ class JournalConfig:
     mode: str
     path: Path
     metadata: RunMetadata
+    limits: JournalLimits = JournalLimits()
+    auto_resume: bool = True
+    lease_seconds: int = 300
+    max_attempts: int = 5
+    retry_base_seconds: int = 1
+    retry_max_seconds: int = 60
 
     @property
     def required(self) -> bool:
@@ -39,6 +66,41 @@ class JournalConfig:
     @property
     def shadow(self) -> bool:
         return self.mode == "shadow"
+
+
+def _positive_int(
+    source: Mapping[str, str], name: str, default: int
+) -> int:
+    raw = str(source.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise JournalError(
+            TerminalErrorCode.INVALID_CONTRACT,
+            f"{name} must be a positive integer",
+        ) from exc
+    if value <= 0:
+        raise JournalError(
+            TerminalErrorCode.INVALID_CONTRACT,
+            f"{name} must be a positive integer",
+        )
+    return value
+
+
+def _boolean(source: Mapping[str, str], name: str, default: bool) -> bool:
+    raw = str(source.get(name) or "").strip().casefold()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise JournalError(
+        TerminalErrorCode.INVALID_CONTRACT,
+        f"{name} must be a boolean",
+    )
 
 
 def _normalize_mode(raw: str | None) -> str:
@@ -101,7 +163,39 @@ def journal_config_from_env(
             TerminalErrorCode.INVALID_CONTRACT,
             f"invalid graph journal metadata: {exc}",
         ) from exc
-    return JournalConfig(mode=mode, path=Path(path_text), metadata=metadata)
+    defaults = JournalLimits()
+    limits = JournalLimits(
+        **{
+            field: _positive_int(source, env_name, getattr(defaults, field))
+            for field, env_name in _LIMIT_ENV.items()
+        }
+    )
+    lease_seconds = _positive_int(source, LEASE_SECONDS_ENV, 300)
+    max_attempts = _positive_int(source, MAX_ATTEMPTS_ENV, 5)
+    retry_base_seconds = _positive_int(source, RETRY_BASE_SECONDS_ENV, 1)
+    retry_max_seconds = _positive_int(source, RETRY_MAX_SECONDS_ENV, 60)
+    if retry_base_seconds > retry_max_seconds:
+        raise JournalError(
+            TerminalErrorCode.INVALID_CONTRACT,
+            f"{RETRY_BASE_SECONDS_ENV} must not exceed {RETRY_MAX_SECONDS_ENV}",
+        )
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        raise JournalError(
+            TerminalErrorCode.INVALID_CONTRACT,
+            "graph journal path must be absolute",
+        )
+    return JournalConfig(
+        mode=mode,
+        path=path.resolve(),
+        metadata=metadata,
+        limits=limits,
+        auto_resume=_boolean(source, AUTO_RESUME_ENV, True),
+        lease_seconds=lease_seconds,
+        max_attempts=max_attempts,
+        retry_base_seconds=retry_base_seconds,
+        retry_max_seconds=retry_max_seconds,
+    )
 
 
 def attach_journal_config(driver: object, args: Namespace) -> JournalConfig | None:
@@ -161,21 +255,32 @@ def configure_journal_env(
         query_shape_version="language-writer-v1",
         operation_versions={"graph-write": 1},
     )
+    env[MODE_ENV] = normalized_mode
+    env[PATH_ENV] = str(path)
+    env[GENERATION_ENV] = run_generation
+    env[METADATA_ENV] = canonical_json(metadata.to_dict()).decode("utf-8")
+    config = journal_config_from_env(env)
+    assert config is not None
     if normalized_mode == "required" and path.is_file():
-        with SQLiteJournal(path) as journal:
+        with SQLiteJournal(path, limits=config.limits) as journal:
             journal.quarantine_legacy_targets(
                 metadata,
                 (legacy_physical_target_from_env(env),),
             )
             resumable = journal.find_resumable_run(metadata)
         if resumable is not None:
+            if not config.auto_resume:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_TRANSITION,
+                    "a compatible incomplete journal exists but automatic resume is disabled",
+                )
             metadata = resumable.metadata
             run_generation = metadata.generation
-    env[MODE_ENV] = normalized_mode
-    env[PATH_ENV] = str(path)
-    env[GENERATION_ENV] = run_generation
-    env[METADATA_ENV] = canonical_json(metadata.to_dict()).decode("utf-8")
-    return JournalConfig(mode=normalized_mode, path=path, metadata=metadata)
+            env[GENERATION_ENV] = run_generation
+            env[METADATA_ENV] = canonical_json(metadata.to_dict()).decode("utf-8")
+            config = journal_config_from_env(env)
+            assert config is not None
+    return config
 
 
 def physical_target_from_env(env: Mapping[str, str]) -> str:
@@ -248,7 +353,7 @@ def finalize_journal_from_env(env: Mapping[str, str]) -> RunStatus | None:
             TerminalErrorCode.INVALID_TRANSITION,
             "required graph journal was not created by the analyzer",
         )
-    with SQLiteJournal(config.path) as journal:
+    with SQLiteJournal(config.path, limits=config.limits) as journal:
         run_id_value = run_id(config.metadata)
         if journal.get_run(run_id_value) is None:
             raise JournalError(
@@ -264,7 +369,7 @@ def journal_status_from_env(env: Mapping[str, str]) -> dict[str, object] | None:
     config = journal_config_from_env(env)
     if config is None or config.shadow or not config.path.is_file():
         return None
-    with SQLiteJournal(config.path) as journal:
+    with SQLiteJournal(config.path, limits=config.limits) as journal:
         run_id_value = run_id(config.metadata)
         if journal.get_run(run_id_value) is None:
             return None

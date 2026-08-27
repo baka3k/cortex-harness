@@ -34,7 +34,7 @@ class GraphWriteJournalRuntime:
 
     def __init__(self, config: JournalConfig) -> None:
         self.config = config
-        self.journal = SQLiteJournal(config.path)
+        self.journal = SQLiteJournal(config.path, limits=config.limits)
         self.run = self.journal.open_run(config.metadata)
         self.journal.recover_run_leases_as_ambiguous(self.run.run_id)
         self._node_barriers: dict[tuple[str, str], str] = {}
@@ -140,6 +140,7 @@ class GraphWriteJournalRuntime:
                 expected_count=len(materialized),
                 required_barriers=required_barriers,
                 produced_barriers=produced_barriers,
+                max_attempts=self.config.max_attempts,
                 operation=operation.to_dict(),
             ),
         )
@@ -178,7 +179,9 @@ class GraphWriteJournalRuntime:
                 rows=tuple(materialized),
                 reconcile=True,
             )
-        claimed = self.journal.claim_job(batch.job_id)
+        claimed = self.journal.claim_job(
+            batch.job_id, lease_seconds=self.config.lease_seconds
+        )
         if claimed is None or not claimed.fencing_token:
             current = self.journal.get_batch(batch.job_id)
             if current is not None and current.status is BatchStatus.DONE:
@@ -214,7 +217,9 @@ class GraphWriteJournalRuntime:
                 operation=ticket.operation,
                 rows=ticket.rows,
             )
-        claimed = self.journal.claim_job(ticket.batch.job_id)
+        claimed = self.journal.claim_job(
+            ticket.batch.job_id, lease_seconds=self.config.lease_seconds
+        )
         if claimed is None:
             raise JournalError(
                 TerminalErrorCode.INVALID_TRANSITION,
@@ -262,7 +267,9 @@ class GraphWriteJournalRuntime:
             retry_class=RetryClass.AMBIGUOUS,
             error_code=TerminalErrorCode.INVALID_TRANSITION,
         )
-        claimed = self.journal.claim_job(ticket.batch.job_id)
+        claimed = self.journal.claim_job(
+            ticket.batch.job_id, lease_seconds=self.config.lease_seconds
+        )
         if claimed is None:
             raise JournalError(
                 TerminalErrorCode.INVALID_TRANSITION,
@@ -295,7 +302,7 @@ class GraphWriteJournalRuntime:
             self.journal.renew_lease(
                 ticket.batch.job_id,
                 ticket.batch.fencing_token,
-                lease_seconds=300,
+                lease_seconds=self.config.lease_seconds,
             )
 
     def mark_ambiguous(self, ticket: JournalTicket) -> None:
