@@ -122,8 +122,10 @@ Ingestion request ─> idempotent job queue ─> parse/embed workers
 
 - StoreGateway queue records request admission, fairness, cancellation, source
   revision, and staging-generation lifecycle.
-- GraphWriteJournal records serializable graph mutation batches, node barriers,
-  leases, reconciliation, and ACK state inside one ingestion job.
+- GraphWriteJournal records serializable graph mutation batches, the run-level
+  node-first staging barrier, node/edge phase state, leases, reconciliation,
+  and ACK state inside one ingestion job. StoreGateway does not release or
+  publish a staging generation until both node and edge phases drain.
 - The gateway submits one stable run identity to the writer. It publishes only
   after `queue_drained` and graph/vector validation. It never copies graph batch
   payloads into a second request queue.

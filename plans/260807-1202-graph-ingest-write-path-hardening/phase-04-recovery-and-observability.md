@@ -28,8 +28,10 @@ operation state.
 Introduce run/batch envelopes containing run ID, phase, global totals, schema
 fingerprint, query-shape version, attempt, and idempotency key. Persist
 serializable operations and immutable payload artifacts through a writer-local
-SQLite WAL journal. Producers publish node-label barriers; one leased/fenced
-consumer executes eligible work and reconciles ambiguous outcomes before ACK.
+SQLite WAL journal. Producers publish node barriers; Phase 04E adds a persisted
+run-level boundary that keeps every edge ineligible until node production is
+closed and all node jobs drain. One leased/fenced consumer executes eligible
+work and reconciles ambiguous outcomes before ACK.
 The driver emits lifecycle events through the same observer and enforces
 version-aware limits where FalkorDB supports write timeouts/memory caps.
 
@@ -39,6 +41,7 @@ Detailed delivery is split into:
 - [Phase 04B — serializable operations, producers, and barriers](phase-04b-producer-operations-and-barriers.md)
 - [Phase 04C — leased consumer, reconciliation, and resume](phase-04c-consumer-reconciliation-and-resume.md)
 - [Phase 04D — CLI, observability, validation, and rollout](phase-04d-cli-observability-validation-rollout.md)
+- [Phase 04E — durable node-first staging and edge release](phase-04e-node-first-staging.md)
 
 ## Related files
 
@@ -73,8 +76,10 @@ Detailed delivery is split into:
    parser, and compile-command coverage without changing parser semantics.
 9. Replace disabled/offset-only resume with the Phase 04A-04D durable journal.
    Do not persist opaque closures; require versioned operation specifications.
-10. Gate relationships on drained endpoint-label barriers and gate baseline or
-    generation publication on a drained, validated journal.
+10. Gate relationships on drained endpoint-label barriers, then strengthen the
+    invariant in Phase 04E so all edge families require the drained run-level
+    node barrier. Gate baseline or generation publication on a drained,
+    validated journal.
 
 ## Todo
 
@@ -89,6 +94,7 @@ Detailed delivery is split into:
 - [ ] Implement Phase 04B serializable operations and producer barriers.
 - [ ] Implement Phase 04C leased execution, reconciliation, and resume.
 - [ ] Implement Phase 04D CLI/status, fault validation, and guarded rollout.
+- [ ] Implement Phase 04E durable node-first staging and edge release.
 
 ## Risks
 
