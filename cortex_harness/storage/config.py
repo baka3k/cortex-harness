@@ -13,9 +13,10 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from .contracts import PerformanceProfile
+from .targets import canonical_remote_endpoint
 
 
 STORAGE_SCHEMA_VERSION = "v1"
@@ -106,9 +107,19 @@ class RemoteStorageConfig:
     falkordb_ssl: bool = False
 
     def __repr__(self) -> str:
+        def safe_endpoint(value: Optional[str], default_scheme: str) -> Optional[str]:
+            if not value:
+                return None
+            try:
+                endpoint, _ = canonical_remote_endpoint(value, default_scheme=default_scheme)
+                return endpoint
+            except ValueError:
+                return "<invalid endpoint>"
+
         return (
-            f"RemoteStorageConfig(qdrant_url={self.qdrant_url!r}, "
-            f"qdrant_api_key=***, falkordb_uri={self.falkordb_uri!r}, "
+            f"RemoteStorageConfig(qdrant_url={safe_endpoint(self.qdrant_url, 'http')!r}, "
+            f"qdrant_api_key=***, "
+            f"falkordb_uri={safe_endpoint(self.falkordb_uri, 'redis')!r}, "
             f"falkordb_password=***, falkordb_ssl={self.falkordb_ssl})"
         )
 
@@ -431,6 +442,7 @@ def storage_overlay(
     resolved: ResolvedStorage,
     *,
     owner: StorageRole | QdrantStorageRole | str = StorageRole.CODE,
+    graph_provider: str = "falkordb",
     code_collection: Optional[str] = None,
     doc_collection: Optional[str] = None,
     code_graph: Optional[str] = None,
@@ -448,7 +460,8 @@ def storage_overlay(
         ENV_FALKORDB_PATH: str(falkor_selected), "CORTEX_STORAGE_OWNER": selected,
     }
     remote = resolved.remote
-    if resolved.backend_mode == BackendMode.REMOTE and remote is not None:
+    force_local = bool(os.getenv("CORTEX_STORAGE_BACKEND_FORCE_LOCAL"))
+    if resolved.backend_mode == BackendMode.REMOTE and remote is not None and not force_local:
         if remote.qdrant_url:
             overlay["QDRANT_URL"] = remote.qdrant_url
             if remote.qdrant_api_key:
@@ -483,6 +496,53 @@ def storage_overlay(
         overlay["DOC_FALKORDB_GRAPH"] = doc_graph or str(resolved.doc_graph)
         if selected == "doc":
             overlay["FALKORDB_GRAPH"] = overlay["DOC_FALKORDB_GRAPH"]
+
+    # Propagate the resolved, credential-free descriptors so journal setup
+    # never needs to guess a remote target from a missing local path.  Keep the
+    # legacy env reconstruction path for callers that have not yet adopted the
+    # storage overlay.
+    graph_name = overlay.get("FALKORDB_GRAPH")
+    collection_name = (
+        overlay.get("QDRANT_COLLECTION_DOC")
+        if selected == StorageRole.DOCUMENT.value
+        else overlay.get("QDRANT_COLLECTION")
+    )
+    if graph_name and collection_name and str(graph_provider).casefold() in {
+        "falkor",
+        "falkordb",
+        "local",
+        "embedded",
+    }:
+        from .factory import StorageFactory
+        from .targets import (
+            ENV_EFFECTIVE_GRAPH_FINGERPRINT,
+            ENV_EFFECTIVE_GRAPH_TARGET,
+            ENV_EFFECTIVE_TOPOLOGY,
+            ENV_EFFECTIVE_TOPOLOGY_FINGERPRINT,
+            ENV_EFFECTIVE_VECTOR_FINGERPRINT,
+            ENV_EFFECTIVE_VECTOR_TARGET,
+        )
+
+        factory = StorageFactory(
+            backend_mode=resolved.backend_mode,
+            resolved=resolved,
+            remote=remote,
+            code_graph=code_graph or resolved.code_graph,
+            doc_graph=doc_graph or resolved.doc_graph,
+            code_collection=code_collection or resolved.code_collection,
+            doc_collection=doc_collection or resolved.doc_collection,
+        )
+        topology = factory.effective_topology(
+            graph_name=graph_name,
+            collection_name=collection_name,
+            role=selected,
+        )
+        overlay[ENV_EFFECTIVE_GRAPH_TARGET] = topology.graph.canonical_json
+        overlay[ENV_EFFECTIVE_GRAPH_FINGERPRINT] = topology.graph_fingerprint
+        overlay[ENV_EFFECTIVE_VECTOR_TARGET] = topology.vector.canonical_json
+        overlay[ENV_EFFECTIVE_VECTOR_FINGERPRINT] = topology.vector_fingerprint
+        overlay[ENV_EFFECTIVE_TOPOLOGY] = topology.canonical_json
+        overlay[ENV_EFFECTIVE_TOPOLOGY_FINGERPRINT] = topology.fingerprint
     return overlay
 
 

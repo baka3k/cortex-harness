@@ -42,6 +42,14 @@ from .config import (
 )
 from .qdrant import LocalQdrantStore
 from .qdrant_remote import RemoteQdrantStore
+from .targets import (
+    EffectiveStorageTarget,
+    EffectiveStorageTopology,
+    local_graph_target,
+    local_vector_target,
+    remote_graph_target,
+    remote_vector_target,
+)
 
 
 if TYPE_CHECKING:  # pragma: no cover - circular import guard
@@ -217,15 +225,27 @@ class StorageFactory:
         backend_mode: BackendMode,
         resolved: ResolvedStorage,
         remote: Optional[RemoteStorageConfig] = None,
+        project_scope: str = "unbound",
+        code_graph: Optional[str] = None,
+        doc_graph: Optional[str] = None,
+        code_collection: Optional[str] = None,
+        doc_collection: Optional[str] = None,
     ) -> None:
         # Emergency rollback: force local even when remote is requested.
-        if os.getenv(ENV_FORCE_LOCAL):
+        self._requested_mode = backend_mode
+        self._forced_local = bool(os.getenv(ENV_FORCE_LOCAL))
+        if self._forced_local:
             self._mode = BackendMode.LOCAL
             self._remote: Optional[RemoteStorageConfig] = None
         else:
             self._mode = backend_mode
             self._remote = remote if backend_mode == BackendMode.REMOTE else None
         self._resolved = resolved
+        self._project_scope = str(project_scope or "unbound")
+        self._code_graph = code_graph or resolved.code_graph
+        self._doc_graph = doc_graph or resolved.doc_graph
+        self._code_collection = code_collection or resolved.code_collection
+        self._doc_collection = doc_collection or resolved.doc_collection
 
     @classmethod
     def from_targets(
@@ -250,9 +270,18 @@ class StorageFactory:
                 f"project {targets.project_id!r}"
             ) from exc
         remote: Optional[RemoteStorageConfig] = None
-        if mode == BackendMode.REMOTE and targets.remote_config:
+        if mode == BackendMode.REMOTE:
             _, remote = validate_backend_config("remote", targets.remote_config)
-        return cls(backend_mode=mode, resolved=resolved, remote=remote)
+        return cls(
+            backend_mode=mode,
+            resolved=resolved,
+            remote=remote,
+            project_scope=targets.project_id,
+            code_graph=getattr(targets, "code_graph", None),
+            doc_graph=getattr(targets, "doc_graph", None),
+            code_collection=getattr(targets, "code_qdrant_collection", None),
+            doc_collection=getattr(targets, "doc_qdrant_collection", None),
+        )
 
     @property
     def backend_mode(self) -> BackendMode:
@@ -262,8 +291,103 @@ class StorageFactory:
     def resolved(self) -> ResolvedStorage:
         return self._resolved
 
+    @property
+    def requested_backend_mode(self) -> BackendMode:
+        return self._requested_mode
+
+    @property
+    def forced_local(self) -> bool:
+        return self._forced_local
+
     def is_remote(self) -> bool:
         return self._mode == BackendMode.REMOTE
+
+    # ── Effective target identity ───────────────────────────────────────────
+
+    @staticmethod
+    def _role_value(role: StorageRole | QdrantStorageRole | str) -> str:
+        value = role.value if hasattr(role, "value") else str(role)
+        return "doc" if value == "document" else value
+
+    def effective_graph_target(
+        self,
+        graph_name: Optional[str] = None,
+        *,
+        role: StorageRole | QdrantStorageRole | str = StorageRole.CODE,
+    ) -> EffectiveStorageTarget:
+        """Describe the graph target selected before any connection attempt.
+
+        A missing remote URI resolves to the explicit file-backed component at
+        this boundary.  Later connection/auth failures never call this method
+        again and therefore cannot change the target.
+        """
+
+        role_value = self._role_value(role)
+        namespace = graph_name or (
+            self._doc_graph if role_value == StorageRole.DOCUMENT.value else self._code_graph
+        )
+        if not namespace:
+            raise ValueError("effective graph target requires a graph name")
+        if self._mode == BackendMode.REMOTE and self._remote and self._remote.falkordb_uri:
+            return remote_graph_target(
+                self._remote.falkordb_uri,
+                graph=namespace,
+                role=role_value,
+                password=self._remote.falkordb_password,
+                ssl=self._remote.falkordb_ssl,
+            )
+        return local_graph_target(
+            self._resolved.falkordb_path_for_role(role_value),
+            graph=namespace,
+            role=role_value,
+        )
+
+    def effective_vector_target(
+        self,
+        collection_name: Optional[str] = None,
+        *,
+        role: StorageRole | QdrantStorageRole | str = StorageRole.CODE,
+    ) -> EffectiveStorageTarget:
+        """Describe the effective Qdrant server or local directory."""
+
+        role_value = self._role_value(role)
+        namespace = collection_name or (
+            self._doc_collection if role_value == StorageRole.DOCUMENT.value else self._code_collection
+        )
+        if not namespace:
+            raise ValueError("effective vector target requires a collection name")
+        if self._mode == BackendMode.REMOTE and self._remote and self._remote.qdrant_url:
+            return remote_vector_target(
+                self._remote.qdrant_url,
+                collection=namespace,
+                role=role_value,
+                api_key=self._remote.qdrant_api_key,
+            )
+        return local_vector_target(
+            self._resolved.path_for_role(role_value),
+            collection=namespace,
+            role=role_value,
+        )
+
+    def effective_topology(
+        self,
+        *,
+        graph_name: Optional[str] = None,
+        collection_name: Optional[str] = None,
+        role: StorageRole | QdrantStorageRole | str = StorageRole.CODE,
+        generation_id: str = "unbound",
+        project_scope: Optional[str] = None,
+    ) -> EffectiveStorageTopology:
+        """Return the canonical graph/vector topology used for compatibility."""
+
+        return EffectiveStorageTopology(
+            project_scope=str(project_scope or self._project_scope),
+            requested_backend=self._requested_mode.value,
+            forced_local=self._forced_local,
+            generation_id=str(generation_id or "unbound"),
+            graph=self.effective_graph_target(graph_name, role=role),
+            vector=self.effective_vector_target(collection_name, role=role),
+        )
 
     # ── Qdrant ──────────────────────────────────────────────────────────────
 
