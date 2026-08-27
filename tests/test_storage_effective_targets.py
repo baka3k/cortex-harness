@@ -351,7 +351,7 @@ def test_generation_validator_cannot_retarget_reserved_compatibility(
     assert first.load_active() is None
 
 
-def test_local_factory_migrates_an_unfenced_legacy_active_manifest(
+def test_local_factory_rejects_an_unfenced_legacy_active_manifest(
     tmp_path: Path,
 ) -> None:
     resolved = _resolved(tmp_path)
@@ -371,14 +371,10 @@ def test_local_factory_migrates_an_unfenced_legacy_active_manifest(
     )
     assert "storage_compatibility" not in published.validation
 
-    migrated = legacy.load_active()
-
-    assert migrated is not None
-    compatibility = migrated.validation["storage_compatibility"]
-    assert compatibility["graph_mode"] == "file"
-    assert compatibility["vector_mode"] == "file"
-    persisted = json.loads(legacy.manifest_path.read_text(encoding="utf-8"))
-    assert persisted["validation"]["storage_compatibility"] == compatibility
+    original = legacy.manifest_path.read_bytes()
+    with pytest.raises(ValueError, match="re-ingest from source"):
+        legacy.load_active()
+    assert legacy.manifest_path.read_bytes() == original
 
 
 def test_gateway_factory_keeps_leases_local_and_fences_remote_topology(

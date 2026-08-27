@@ -13,6 +13,14 @@ def classify_error(error: Exception) -> RetryClass:
     return RetryClass.TERMINAL
 
 
-def retry_at(attempt: int, *, now: datetime | None = None) -> datetime:
-    delay_seconds = min(60, 2 ** max(0, attempt - 1))
+def retry_at(
+    attempt: int,
+    *,
+    now: datetime | None = None,
+    base_seconds: int = 1,
+    max_seconds: int = 60,
+) -> datetime:
+    if base_seconds <= 0 or max_seconds <= 0 or base_seconds > max_seconds:
+        raise ValueError("retry bounds must be positive and ordered")
+    delay_seconds = min(max_seconds, base_seconds * (2 ** max(0, attempt - 1)))
     return (now or datetime.now(timezone.utc)) + timedelta(seconds=delay_seconds)

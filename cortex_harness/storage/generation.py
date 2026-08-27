@@ -35,7 +35,6 @@ class GenerationManager:
         *,
         retain: int = 1,
         storage_compatibility: Mapping[str, object] | None = None,
-        allow_legacy_local_migration: bool = False,
     ) -> None:
         self.root = Path(root).resolve()
         self.target = target
@@ -47,7 +46,6 @@ class GenerationManager:
         self._reference_lock = threading.Lock()
         self._references: dict[str, int] = {}
         self._storage_compatibility = dict(storage_compatibility or {})
-        self._allow_legacy_local_migration = bool(allow_legacy_local_migration)
 
     @classmethod
     def from_storage_factory(
@@ -90,9 +88,6 @@ class GenerationManager:
             target,
             retain=retain,
             storage_compatibility=topology.compatibility_metadata,
-            allow_legacy_local_migration=(
-                topology.graph.mode == "file" and topology.vector.mode == "file"
-            ),
         )
 
     @staticmethod
@@ -167,24 +162,19 @@ class GenerationManager:
             ),
         )
 
-    def _validate_storage_target(
-        self,
-        manifest: GenerationManifest,
-        *,
-        migrate_legacy: bool = False,
-    ) -> GenerationManifest:
+    def _validate_storage_target(self, manifest: GenerationManifest) -> None:
         if not self._storage_compatibility:
-            return manifest
+            return
         actual = manifest.validation.get("storage_compatibility")
-        if actual is None and migrate_legacy and self._allow_legacy_local_migration:
-            validation = dict(manifest.validation)
-            validation["storage_compatibility"] = dict(self._storage_compatibility)
-            return replace(manifest, validation=validation)
+        if actual is None:
+            raise ValueError(
+                "generation manifest predates effective storage topology metadata; "
+                "re-ingest from source instead of migrating it in place"
+            )
         if not isinstance(actual, Mapping) or dict(actual) != self._storage_compatibility:
             raise ValueError(
                 "generation manifest does not match the effective storage topology"
             )
-        return manifest
 
     def load_active(self) -> GenerationManifest | None:
         try:
@@ -194,13 +184,11 @@ class GenerationManager:
         manifest = GenerationManifest.from_dict(payload)
         if manifest.target != self.target or manifest.state is not GenerationState.PUBLISHED:
             raise ValueError("active generation manifest does not describe this published physical target")
-        compatible = self._validate_storage_target(manifest, migrate_legacy=True)
+        self._validate_storage_target(manifest)
         self._validate_paths(manifest)
         if self.incompatibility(manifest.generation_id) is not None:
             raise ValueError("active generation is structurally incompatible")
-        if compatible is not manifest:
-            self._write_active_manifest(compatible)
-        return compatible
+        return manifest
 
     def publish(self, manifest: GenerationManifest, validate: Callable[[GenerationManifest], None]) -> GenerationManifest:
         if manifest.target != self.target:
