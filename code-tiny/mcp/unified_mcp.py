@@ -2799,6 +2799,9 @@ def main() -> None:
             print("Force quitting now.")
             os._exit(0)
         force_quit["armed"] = True
+        from services.explore_service import begin_explore_service_drain
+
+        begin_explore_service_drain()
         if signum == signal.SIGTERM:
             print("Received SIGTERM. Send again to force quit.")
         else:
@@ -2829,7 +2832,14 @@ def main() -> None:
     if transport == "streamable-http":
         kwargs["stateless_http"] = True
         kwargs["json_response"] = True
-    mcp_server.run(**kwargs)
+    try:
+        mcp_server.run(**kwargs)
+    finally:
+        from services.explore_service import close_explore_service
+
+        # Normal server teardown must not wait forever for a non-preemptive
+        # store call. Running work owns its thread until process exit.
+        close_explore_service(wait=False)
 
 
 if __name__ == "__main__":
