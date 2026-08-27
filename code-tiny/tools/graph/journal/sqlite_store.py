@@ -419,6 +419,16 @@ class SQLiteJournal:
         error_code: TerminalErrorCode | None = None,
         now: str,
     ) -> None:
+        event_counters = dict(counters or {})
+        event_counters.setdefault(
+            "pending",
+            int(
+                self._connection.execute(
+                    "SELECT COUNT(*) FROM batches WHERE run_id = ? AND status != ?",
+                    (run_id_value, BatchStatus.DONE.value),
+                ).fetchone()[0]
+            ),
+        )
         self._connection.execute(
             """
             INSERT INTO events(
@@ -430,7 +440,7 @@ class SQLiteJournal:
                 run_id_value,
                 job_id,
                 event_type,
-                canonical_json(counters or {}).decode("utf-8"),
+                canonical_json(event_counters).decode("utf-8"),
                 attempt,
                 elapsed_ms,
                 error_code.value if error_code else None,
@@ -1696,9 +1706,49 @@ class SQLiteJournal:
                 """,
                 (run_id_value, BatchStatus.DONE.value),
             ).fetchone()
+            resumed = bool(
+                self._connection.execute(
+                    "SELECT 1 FROM events WHERE run_id = ? AND event_type = ? LIMIT 1",
+                    (run_id_value, "run_resumed"),
+                ).fetchone()
+            )
+            artifact_bytes = int(
+                self._connection.execute(
+                    "SELECT COALESCE(SUM(byte_count), 0) FROM artifacts WHERE run_id = ?",
+                    (run_id_value,),
+                ).fetchone()[0]
+            )
+        oldest_at = oldest["oldest_at"]
+        oldest_age_seconds = (
+            max(0.0, (self._now() - _parse_datetime(oldest_at)).total_seconds())
+            if oldest_at
+            else None
+        )
+        if run.status is RunStatus.DRAINED:
+            next_action = "none"
+        elif run.status in {RunStatus.BLOCKED, RunStatus.DEAD_LETTERED}:
+            next_action = "inspect_error_and_acknowledge_or_purge_after_retention"
+        elif run.status is RunStatus.QUARANTINED:
+            next_action = "inspect_incompatible_fingerprint"
+        elif counts[BatchStatus.RECONCILING]:
+            next_action = "reconcile_ambiguous_batches"
+        elif counts[BatchStatus.RETRY_WAIT]:
+            next_action = "wait_for_retry"
+        elif counts[BatchStatus.LEASED]:
+            next_action = "wait_for_active_consumer"
+        elif counts[BatchStatus.PENDING]:
+            next_action = "resume_consumer"
+        else:
+            next_action = "close_production"
+        journal_bytes = sum(
+            candidate.stat().st_size
+            for suffix in ("", "-wal", "-shm")
+            if (candidate := Path(f"{self.path}{suffix}")).is_file()
+        )
         return {
             "run_id": run.run_id,
             "status": run.status.value,
+            "resumed": resumed,
             "parser": run.metadata.parser,
             "produced": int(totals["produced"]),
             "acked": counts[BatchStatus.DONE],
@@ -1710,7 +1760,11 @@ class SQLiteJournal:
             "dead_letter": counts[BatchStatus.DEAD_LETTER],
             "rows": int(totals["rows"]),
             "payload_bytes": int(totals["payload_bytes"]),
-            "oldest_unfinished_at": oldest["oldest_at"],
+            "artifact_bytes": artifact_bytes,
+            "journal_bytes": journal_bytes,
+            "oldest_unfinished_at": oldest_at,
+            "oldest_unfinished_age_seconds": oldest_age_seconds,
+            "next_action": next_action,
             "error_code": run.error_code.value if run.error_code else None,
         }
 
@@ -1718,9 +1772,14 @@ class SQLiteJournal:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT event_id, run_id, job_id, event_type, counters_json,
-                       attempt, elapsed_ms, error_code, created_at
-                FROM events WHERE run_id = ? ORDER BY event_id
+                SELECT e.event_id, e.run_id, e.job_id, e.event_type,
+                       e.counters_json, e.attempt, e.elapsed_ms, e.error_code,
+                       e.created_at, r.parser, b.phase, b.operation_key,
+                       b.row_count
+                FROM events AS e
+                JOIN runs AS r ON r.run_id = e.run_id
+                LEFT JOIN batches AS b ON b.job_id = e.job_id
+                WHERE e.run_id = ? ORDER BY e.event_id
                 """,
                 (run_id_value,),
             ).fetchall()
@@ -1730,6 +1789,11 @@ class SQLiteJournal:
                 "run_id": row["run_id"],
                 "job_id": row["job_id"],
                 "event_type": row["event_type"],
+                "parser": row["parser"],
+                "phase": row["phase"] or "run",
+                "operation": row["operation_key"] or row["event_type"],
+                "rows": int(row["row_count"] or 0),
+                "pending": int(json.loads(row["counters_json"]).get("pending", 0)),
                 "counters": json.loads(row["counters_json"]),
                 "attempt": row["attempt"],
                 "elapsed_ms": row["elapsed_ms"],

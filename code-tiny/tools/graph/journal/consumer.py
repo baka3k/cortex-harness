@@ -32,7 +32,7 @@ class GraphWriteJournalConsumer:
         self.config = config
         self.driver = driver
         self.database = getattr(driver, "database", None)
-        self.journal = SQLiteJournal(config.path)
+        self.journal = SQLiteJournal(config.path, limits=config.limits)
         self.run_id = run_id(config.metadata)
         if self.journal.get_run(self.run_id) is None:
             self.journal.close()
@@ -81,7 +81,11 @@ class GraphWriteJournalConsumer:
                 self.journal.schedule_retry(
                     batch.job_id,
                     batch.fencing_token,
-                    retry_at=retry_at(batch.attempt),
+                    retry_at=retry_at(
+                        batch.attempt,
+                        base_seconds=self.config.retry_base_seconds,
+                        max_seconds=self.config.retry_max_seconds,
+                    ),
                     retry_class=retry_class,
                     error_code=TerminalErrorCode.INVALID_TRANSITION,
                 )
@@ -155,12 +159,18 @@ class GraphWriteJournalConsumer:
     async def drain(self) -> int:
         drained = 0
         while True:
-            ambiguous = self.journal.claim_reconciling(run_id_value=self.run_id)
+            ambiguous = self.journal.claim_reconciling(
+                run_id_value=self.run_id,
+                lease_seconds=self.config.lease_seconds,
+            )
             if ambiguous is not None:
                 await self._reconcile_one(ambiguous)
                 drained += 1
                 continue
-            pending = self.journal.claim_batch(run_id_value=self.run_id)
+            pending = self.journal.claim_batch(
+                run_id_value=self.run_id,
+                lease_seconds=self.config.lease_seconds,
+            )
             if pending is None:
                 return drained
             await self._execute_one(pending)
@@ -173,7 +183,7 @@ class GraphWriteJournalConsumer:
 async def resume_journal(config: JournalConfig, driver: GraphDriver) -> int:
     if not config.required or not config.path.is_file():
         return 0
-    with SQLiteJournal(config.path) as journal:
+    with SQLiteJournal(config.path, limits=config.limits) as journal:
         if journal.get_run(run_id(config.metadata)) is None:
             return 0
     consumer = GraphWriteJournalConsumer(config, driver)
