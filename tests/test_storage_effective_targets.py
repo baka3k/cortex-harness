@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from cortex_harness.storage import (
     ResolvedStorage,
     StoreGateway,
     StorageFactory,
+    canonical_remote_endpoint,
     effective_graph_target_from_env,
     resolve_storage,
     storage_overlay,
@@ -164,6 +166,60 @@ def test_deserialized_target_canonicalizes_and_removes_uri_credentials() -> None
         }
     )
     assert secure.tls is True
+
+
+@pytest.mark.parametrize(
+    ("value", "reason", "diagnostic"),
+    [
+        (
+            "redis://raw-user:raw-password@?access_token=raw-query#raw-fragment",  # sensitive-guard:allow
+            "has no host",
+            "redis://<missing-host>",
+        ),
+        (
+            "redis://raw-user:raw-password@DB.EXAMPLE:notaport/raw-path-secret"  # sensitive-guard:allow
+            "?access_token=raw-query#raw-fragment",
+            "has an invalid port",
+            "redis://db.example:<invalid-port>",
+        ),
+        (
+            "redis://raw-user:raw-password@[broken/0"  # sensitive-guard:allow
+            "?access_token=raw-query#raw-fragment",
+            "is malformed",
+            "redis://<invalid-host>",
+        ),
+        (
+            "redis://raw-user:raw-password@exam／ple/0"  # sensitive-guard:allow
+            "?access_token=raw-query#raw-fragment",
+            "is malformed",
+            "redis://<invalid-host>",
+        ),
+        (
+            "://raw-user:raw-password@host/0"
+            "?access_token=raw-query#raw-fragment",
+            "has no scheme",
+            "<missing-scheme>://<redacted>",
+        ),
+    ],
+)
+def test_malformed_remote_endpoint_errors_are_credential_free(
+    value: str, reason: str, diagnostic: str
+) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        canonical_remote_endpoint(value, default_scheme="redis")
+
+    rendered = "".join(traceback.format_exception(exc_info.value))
+    assert reason in rendered
+    assert diagnostic in rendered
+    for sensitive in (
+        "raw-user",
+        "raw-password",
+        "access_token",
+        "raw-query",
+        "raw-fragment",
+        "raw-path-secret",
+    ):
+        assert sensitive not in rendered
 
 
 def test_mixed_topology_is_explicit_and_fingerprinted(tmp_path: Path) -> None:

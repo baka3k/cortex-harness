@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Mapping, MutableMapping
 
 from tools.common.sync_scope import scan_scope_id
+from tools.graph.schema import CODE_GRAPH_SCHEMA
 
 from .identity import canonical_json, run_id
 from .models import (
@@ -251,7 +252,7 @@ def configure_journal_env(
         generation=run_generation,
         parser=parser,
         parser_version="1",
-        schema_fingerprint="shared-graph-schema-v1",
+        schema_fingerprint=CODE_GRAPH_SCHEMA.fingerprint,
         query_shape_version="language-writer-v1",
         operation_versions={"graph-write": 1},
     )

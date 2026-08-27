@@ -11,6 +11,7 @@ from typing import Any
 
 from tools.graph.core.base import GraphDriver, GraphProvider
 from tools.graph.core.factory import GraphDriverFactory
+from tools.graph.schema import CODE_GRAPH_SCHEMA
 
 from .config import JournalConfig, journal_config_from_env
 from .executor import compile_persisted_mutation, result_count
@@ -23,12 +24,26 @@ from .retry import classify_error, retry_at
 from .sqlite_store import SQLiteJournal
 
 
+_SCHEMA_READY = object()
+
+
 class GraphWriteJournalConsumer:
     """Drain one run using only its persisted descriptor and immutable artifact."""
 
-    def __init__(self, config: JournalConfig, driver: GraphDriver) -> None:
+    def __init__(
+        self,
+        config: JournalConfig,
+        driver: GraphDriver,
+        *,
+        _schema_ready: object | None = None,
+    ) -> None:
         if not config.required:
             raise ValueError("the autonomous consumer is only valid in required mode")
+        if _schema_ready is not _SCHEMA_READY:
+            raise JournalError(
+                TerminalErrorCode.INVALID_TRANSITION,
+                "journal consumer construction requires completed canonical schema preflight",
+            )
         self.config = config
         self.driver = driver
         self.database = getattr(driver, "database", None)
@@ -228,13 +243,47 @@ class GraphWriteJournalConsumer:
         self.journal.close()
 
 
+async def _ensure_recovery_schema(config: JournalConfig, driver: GraphDriver) -> None:
+    """Fail closed before recovery can inspect receipts or recover leases."""
+
+    expected_fingerprint = CODE_GRAPH_SCHEMA.fingerprint
+    if config.metadata.schema_fingerprint != expected_fingerprint:
+        raise JournalError(
+            TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+            "journal schema fingerprint is incompatible with the canonical graph schema: "
+            f"expected {expected_fingerprint}, received "
+            f"{config.metadata.schema_fingerprint}",
+        )
+    ensure_schema = getattr(driver, "ensure_schema", None)
+    if not callable(ensure_schema):
+        raise JournalError(
+            TerminalErrorCode.INVALID_CONTRACT,
+            "journal recovery driver does not implement required schema preflight",
+        )
+    database = getattr(driver, "database", None)
+    with journaled_mutation():
+        result = await ensure_schema(CODE_GRAPH_SCHEMA, database=database)
+    actual_fingerprint = getattr(result, "fingerprint", None)
+    if actual_fingerprint != expected_fingerprint:
+        raise JournalError(
+            TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+            "journal recovery schema preflight did not verify the canonical manifest: "
+            f"expected {expected_fingerprint}, received {actual_fingerprint}",
+        )
+
+
 async def resume_journal(config: JournalConfig, driver: GraphDriver) -> int:
     if not config.required or not config.path.is_file():
         return 0
     with SQLiteJournal(config.path, limits=config.limits) as journal:
         if journal.get_run(run_id(config.metadata)) is None:
             return 0
-    consumer = GraphWriteJournalConsumer(config, driver)
+    await _ensure_recovery_schema(config, driver)
+    consumer = GraphWriteJournalConsumer(
+        config,
+        driver,
+        _schema_ready=_SCHEMA_READY,
+    )
     try:
         return await consumer.drain()
     finally:

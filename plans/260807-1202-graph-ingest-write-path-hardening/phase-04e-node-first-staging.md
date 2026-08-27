@@ -468,14 +468,14 @@ blocked, dead-lettered, or unexplained optional rows.
       node or edge disappears without a typed disposition.
 - [ ] Canonical typed identities and full project/label/property endpoint keys
       replace ambiguous ID-only binding.
-- [ ] Effective graph/vector topology is canonical, credential-free, visible,
+- [x] Effective graph/vector topology is canonical, credential-free, visible,
       and part of journal/generation compatibility.
-- [ ] Remote FalkorDB URI and local `.rdb` path produce distinct physical target
+- [x] Remote FalkorDB URI and local `.rdb` path produce distinct physical target
       fingerprints; endpoint, graph, mode, TLS, role, and generation changes
       cannot cross-resume.
 - [ ] File-backed, remote, mixed, and force-local matrices pass canonical data
       parity, exact graph/vector readback, crash/retry, and project isolation.
-- [ ] Remote transport/auth failure never falls back to a file target after run
+- [x] Remote transport/auth failure never falls back to a file target after run
       creation; file mode retains its single-owner lease through publication.
 - [ ] Accepted extraction intent is durable before producer-buffer release, and
       parser/semantic coverage separately reports source constructs that were

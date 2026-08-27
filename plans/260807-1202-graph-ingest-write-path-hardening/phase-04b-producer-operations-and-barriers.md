@@ -70,10 +70,10 @@ analyzer-level lifecycle boundary, not at each `write_all()` call.
 
 - [ ] Mutation-path inventory is complete and scope is truthful.
 - [ ] Serializable operation contracts replace opaque replay closures.
-- [ ] Non-idempotent/reconciliation-weak operations are converted or blocked.
+- [x] Non-idempotent/reconciliation-weak operations are converted or blocked.
 - [ ] Analyzer-level barrier lifecycle is implemented.
-- [ ] C++ and shared writer producers durably enqueue before releasing memory.
-- [ ] Direct/custom writers are migrated or explicitly rejected in journal mode.
+- [x] C++ and shared writer producers durably enqueue before releasing memory.
+- [x] Direct/custom writers are migrated or explicitly rejected in journal mode.
 
 ## Risks
 

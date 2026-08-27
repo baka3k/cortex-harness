@@ -76,6 +76,23 @@ def canonical_local_target(path: str | Path) -> str:
     return str(Path(path).expanduser().resolve())
 
 
+def _safe_endpoint_scheme_hint(candidate: str, default_scheme: str) -> str:
+    """Return only a syntactically valid scheme for redacted diagnostics."""
+
+    hint = candidate.partition("://")[0] if "://" in candidate else default_scheme
+    ascii_letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if not hint or hint[0] not in ascii_letters:
+        return "<invalid-scheme>"
+    if any(
+        character not in ascii_letters
+        and not ("0" <= character <= "9")
+        and character not in "+-."
+        for character in hint[1:]
+    ):
+        return "<invalid-scheme>"
+    return hint.casefold()
+
+
 def canonical_remote_endpoint(value: str, *, default_scheme: str) -> tuple[str, Optional[str]]:
     """Normalize an endpoint and remove userinfo, query strings, and fragments.
 
@@ -87,25 +104,53 @@ def canonical_remote_endpoint(value: str, *, default_scheme: str) -> tuple[str, 
     if not raw:
         raise ValueError("remote storage endpoint must not be empty")
     candidate = raw if "://" in raw else f"{default_scheme}://{raw}"
-    parsed = urlsplit(candidate)
+    scheme_hint = _safe_endpoint_scheme_hint(candidate, default_scheme)
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError:
+        diagnostic = f"{scheme_hint}://<invalid-host>"
+        raise ValueError(
+            "remote storage endpoint is malformed "
+            f"(redacted endpoint: {diagnostic!r})"
+        ) from None
     scheme = parsed.scheme.casefold()
     if not scheme:
-        raise ValueError(f"remote storage endpoint has no scheme: {value!r}")
+        raise ValueError(
+            "remote storage endpoint has no scheme "
+            "(redacted endpoint: '<missing-scheme>://<redacted>')"
+        )
     if scheme == "unix":
         if not parsed.path:
             raise ValueError("unix storage endpoint requires an absolute socket path")
         return urlunsplit((scheme, "", canonical_local_target(parsed.path), "", "")), parsed.username
 
-    hostname = parsed.hostname
+    try:
+        hostname = parsed.hostname
+    except ValueError:
+        diagnostic = f"{scheme}://<invalid-host>"
+        raise ValueError(
+            "remote storage endpoint is malformed "
+            f"(redacted endpoint: {diagnostic!r})"
+        ) from None
     if not hostname:
-        raise ValueError(f"remote storage endpoint has no host: {value!r}")
+        diagnostic = f"{scheme}://<missing-host>"
+        raise ValueError(
+            "remote storage endpoint has no host "
+            f"(redacted endpoint: {diagnostic!r})"
+        )
     host = hostname.casefold().rstrip(".")
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
     try:
         port = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"remote storage endpoint has an invalid port: {value!r}") from exc
+    except ValueError:
+        # Paths can themselves contain bearer material. An invalid authority
+        # is never allowed to echo any unvalidated remainder of the endpoint.
+        diagnostic = f"{scheme}://{host}:<invalid-port>"
+        raise ValueError(
+            "remote storage endpoint has an invalid port "
+            f"(redacted endpoint: {diagnostic!r})"
+        ) from None
     if port is None:
         port = _DEFAULT_PORTS.get(scheme)
     netloc = f"{host}:{port}" if port is not None else host

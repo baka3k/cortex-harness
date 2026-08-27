@@ -36,6 +36,7 @@ from .models import (
 
 
 _ACTIVE_RUN_STATUSES = (RunStatus.OPEN.value, RunStatus.DRAINING.value)
+_PURGE_STARTED_EVENT = "run_purge_started"
 _TERMINAL_RUN_STATUSES = {
     RunStatus.BLOCKED,
     RunStatus.DRAINED,
@@ -77,6 +78,12 @@ def inspect_journal(path: Path) -> list[dict[str, Any]]:
             if (candidate := Path(f"{resolved}{suffix}")).is_file()
         )
         for run in runs:
+            purge_pending = bool(
+                connection.execute(
+                    "SELECT 1 FROM events WHERE run_id = ? AND event_type = ? LIMIT 1",
+                    (run["run_id"], _PURGE_STARTED_EVENT),
+                ).fetchone()
+            )
             observed_counts = {
                 BatchStatus(row["status"]): int(row["count"])
                 for row in connection.execute(
@@ -96,7 +103,9 @@ def inspect_journal(path: Path) -> list[dict[str, Any]]:
             ).fetchone()
             metadata = RunMetadata(**json.loads(run["metadata_json"]))
             status = RunStatus(run["status"])
-            if status is RunStatus.DRAINED:
+            if purge_pending:
+                next_action = "retry_purge"
+            elif status is RunStatus.DRAINED:
                 next_action = "none"
             elif status in {RunStatus.BLOCKED, RunStatus.DEAD_LETTERED}:
                 next_action = "inspect_error_and_acknowledge_or_purge_after_retention"
@@ -1862,7 +1871,16 @@ class SQLiteJournal:
     def verify_referenced_artifacts(self) -> None:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT sha256, relative_path, byte_count, row_count FROM artifacts WHERE ref_count > 0"
+                """
+                SELECT a.sha256, a.relative_path, a.byte_count, a.row_count
+                FROM artifacts AS a
+                WHERE a.ref_count > 0
+                  AND NOT EXISTS (
+                      SELECT 1 FROM events AS e
+                      WHERE e.run_id = a.run_id AND e.event_type = ?
+                  )
+                """,
+                (_PURGE_STARTED_EVENT,),
             ).fetchall()
         for row in rows:
             self.artifacts.verify(
@@ -1930,13 +1948,21 @@ class SQLiteJournal:
                     (run_id_value,),
                 ).fetchone()[0]
             )
+            purge_pending = bool(
+                self._connection.execute(
+                    "SELECT 1 FROM events WHERE run_id = ? AND event_type = ? LIMIT 1",
+                    (run_id_value, _PURGE_STARTED_EVENT),
+                ).fetchone()
+            )
         oldest_at = oldest["oldest_at"]
         oldest_age_seconds = (
             max(0.0, (self._now() - _parse_datetime(oldest_at)).total_seconds())
             if oldest_at
             else None
         )
-        if run.status is RunStatus.DRAINED:
+        if purge_pending:
+            next_action = "retry_purge"
+        elif run.status is RunStatus.DRAINED:
             next_action = "none"
         elif run.status in {RunStatus.BLOCKED, RunStatus.DEAD_LETTERED}:
             next_action = "inspect_error_and_acknowledge_or_purge_after_retention"
@@ -2077,11 +2103,23 @@ class SQLiteJournal:
                 )
                 for row in rows
             ]
+            purge_started = self._connection.execute(
+                "SELECT 1 FROM events WHERE run_id = ? AND event_type = ? LIMIT 1",
+                (run_id_value, _PURGE_STARTED_EVENT),
+            ).fetchone()
+            if purge_started is None:
+                self._add_event(
+                    run_id_value=run_id_value,
+                    event_type=_PURGE_STARTED_EVENT,
+                    counters={"artifacts": len(refs)},
+                    now=_iso(now_value),
+                )
+        for ref in refs:
+            self.artifacts.remove(ref)
+        with self._transaction():
             self._connection.execute(
                 "DELETE FROM runs WHERE run_id = ?", (run_id_value,)
             )
-        for ref in refs:
-            self.artifacts.remove(ref)
         return len(refs)
 
     def cleanup_orphan_artifacts(

@@ -52,6 +52,17 @@ class GraphSchemaPreflightTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "duplicate indexes"):
             GraphSchemaManifest("bad", 1, (duplicate, duplicate))
 
+    def test_canonical_manifest_indexes_journal_receipt_identity(self) -> None:
+        self.assertTrue(CODE_GRAPH_SCHEMA.has_identity_index("GraphWriteReceipt"))
+        self.assertEqual(
+            [
+                index
+                for index in CODE_GRAPH_SCHEMA.indexes
+                if index.label == "GraphWriteReceipt"
+            ],
+            [SchemaIndex("GraphWriteReceipt", ("id",))],
+        )
+
     async def test_preflight_creates_verifies_and_caches_required_indexes(self) -> None:
         driver = _PreflightDriver()
         first = await ensure_schema(driver, CODE_GRAPH_SCHEMA, database="code")
