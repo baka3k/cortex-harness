@@ -11,9 +11,13 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import TYPE_CHECKING, Callable, Iterator, Mapping
 
 from .contracts import GenerationManifest, GenerationState, PhysicalTargetKey, utc_now
+
+
+if TYPE_CHECKING:
+    from .factory import StorageFactory
 
 
 class GenerationManager:
@@ -24,7 +28,14 @@ class GenerationManager:
     cleanup until all pins for that pair have been released.
     """
 
-    def __init__(self, root: Path, target: PhysicalTargetKey, *, retain: int = 1) -> None:
+    def __init__(
+        self,
+        root: Path,
+        target: PhysicalTargetKey,
+        *,
+        retain: int = 1,
+        storage_compatibility: Mapping[str, object] | None = None,
+    ) -> None:
         self.root = Path(root).resolve()
         self.target = target
         self.retain = retain
@@ -34,6 +45,47 @@ class GenerationManager:
         self._publication_lock = threading.Lock()
         self._reference_lock = threading.Lock()
         self._references: dict[str, int] = {}
+        self._storage_compatibility = dict(storage_compatibility or {})
+
+    @classmethod
+    def from_storage_factory(
+        cls,
+        root: Path,
+        factory: "StorageFactory",
+        *,
+        graph_name: str,
+        collection_name: str,
+        role: object = "code",
+        project_scope: str | None = None,
+        retain: int = 1,
+    ) -> "GenerationManager":
+        """Construct a manager fenced by the factory's effective topology."""
+
+        role_value = factory._role_value(role)
+        owner_id = (
+            factory.resolved.doc_owner_id
+            if role_value == "doc"
+            else factory.resolved.code_owner_id
+        )
+        target = PhysicalTargetKey.from_paths(
+            instance_id=factory.resolved.instance_id,
+            owner_id=owner_id,
+            graph_path=factory.resolved.falkordb_path_for_role(role_value),
+            vector_path=factory.resolved.path_for_role(role_value),
+        )
+        topology = factory.effective_topology(
+            graph_name=graph_name,
+            collection_name=collection_name,
+            role=role_value,
+            generation_id="unbound",
+            project_scope=project_scope,
+        )
+        return cls(
+            root,
+            target,
+            retain=retain,
+            storage_compatibility=topology.compatibility_metadata,
+        )
 
     @staticmethod
     def _safe_generation_id(generation_id: str) -> str:
@@ -100,7 +152,21 @@ class GenerationManager:
             graph_path=str(generation_root / "graph" / "data.rdb"),
             vector_path=str(generation_root / "vector"),
             state=GenerationState.BUILDING,
+            validation=(
+                {"storage_compatibility": dict(self._storage_compatibility)}
+                if self._storage_compatibility
+                else {}
+            ),
         )
+
+    def _validate_storage_target(self, manifest: GenerationManifest) -> None:
+        if not self._storage_compatibility:
+            return
+        actual = manifest.validation.get("storage_compatibility")
+        if not isinstance(actual, Mapping) or dict(actual) != self._storage_compatibility:
+            raise ValueError(
+                "generation manifest does not match the effective storage topology"
+            )
 
     def load_active(self) -> GenerationManifest | None:
         try:
@@ -110,6 +176,7 @@ class GenerationManager:
         manifest = GenerationManifest.from_dict(payload)
         if manifest.target != self.target or manifest.state is not GenerationState.PUBLISHED:
             raise ValueError("active generation manifest does not describe this published physical target")
+        self._validate_storage_target(manifest)
         self._validate_paths(manifest)
         if self.incompatibility(manifest.generation_id) is not None:
             raise ValueError("active generation is structurally incompatible")
@@ -118,6 +185,7 @@ class GenerationManager:
     def publish(self, manifest: GenerationManifest, validate: Callable[[GenerationManifest], None]) -> GenerationManifest:
         if manifest.target != self.target:
             raise ValueError("cannot publish a generation for a different physical target")
+        self._validate_storage_target(manifest)
         self._validate_paths(manifest)
         if self.incompatibility(manifest.generation_id) is not None:
             raise ValueError("cannot publish a structurally incompatible generation")
