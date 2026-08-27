@@ -12,9 +12,12 @@ blocks:
   - 260821-1144-cplus-semantic-call-graph
   - 260824-1411-cplus-clang-containment-hardening
 phaseBlockedBy:
+  phase-04e:
+    - 260817-storage-backend-adapter
   phase-06:
     - original-20186-file-source-root-not-mounted
 relatedPlans:
+  - 260817-storage-backend-adapter
   - 260824-1411-cplus-clang-containment-hardening
   - 260821-1144-cplus-semantic-call-graph
   - 260807-2103-toolchain-reliability-hardening
@@ -215,6 +218,13 @@ Replace generic unlabeled endpoint lookup with one safe query builder:
   remains the graph-write authority; the semantic plan owns which call
   evidence is eligible for each graph view.
 
+- `260817-storage-backend-adapter` owns resolution of the effective file-backed
+  or remote graph/vector targets. Phase 04E consumes a credential-free canonical
+  target descriptor and must pass the same node-first, journal, integrity, and
+  readback contract against FalkorDBLite files and remote graph services. A
+  backend switch creates an incompatible run/generation; journal work is never
+  replayed onto a different effective target.
+
 - `260807-2103-toolchain-reliability-hardening` consumes this plan's schema,
   mutation journal, reconciliation, barrier, and integrity contracts for its
   end-to-end outcome model and certification gates. This plan remains the owner
@@ -288,6 +298,8 @@ provisional gates, but it may not weaken the query-plan invariant.
 | Row conservation | Every emitted node/edge row reaches one explicit staged, duplicate, rejected, ACKed, and graph-verified disposition; all per-producer and per-contract equations reconcile with zero unexplained loss. |
 | Endpoint binding | Every required edge endpoint resolves exactly once by project scope, label, identity property, and canonical typed value; ID-only, cross-project, and ambiguous fallback matching are absent. |
 | Exact edge parity | Final readback compares canonical edge identities and endpoints, not only totals; swapped, compensating duplicate/missing, or wrongly scoped edges fail validation. |
+| Backend parity | The same canonical fixture produces identical node/edge manifests, project-scoped readback, and representative query results on file-backed FalkorDBLite and remote FalkorDB; the existing Neo4j remote provider passes the provider-neutral graph contract where enabled. |
+| Target isolation | Journal fingerprints bind the effective backend kind, credential-free canonical endpoint/path, graph/database, project, and generation; local/remote, mixed-mode, force-local, or endpoint changes cannot share resumable work. |
 | Journal safety | No graph mutation occurs without committed enqueue; disk-full/corrupt/incompatible journals fail closed; storage is bounded by configured item/byte/retention limits. |
 | Journal overhead | Record enqueue/ACK p50/p95, peak journal/artifact bytes, restart latency, and end-to-end delta. Required-mode rollout needs <=10% warm end-to-end overhead or an evidence-backed revision. |
 | Full canary | The 20k-file repository finishes without an unbounded query and within 2x the indexed warm baseline established in Phase 01. |
@@ -340,6 +352,9 @@ provisional gates, but it may not weaken the query-plan invariant.
 - Producer completion, canonical typed identities, sealed endpoint audits, and
   row-level conservation/readback prevent silent node loss and wrong endpoint
   binding even when aggregate counts happen to match.
+- File-backed and remote lanes use the same operation/artifact/manifest
+  contract. Backend-specific transport, lease, timeout, and reconciliation
+  policies may differ, but neither lane may weaken ordering or integrity.
 - A compatible crash/retry resumes pending work without reparsing or replaying
   ACKed batches, and an incompatible run cannot claim current work.
 - Progress and health output distinguish parsing, queueing, database execution,
