@@ -31,6 +31,12 @@ def journaled_mutation(
 
 
 def _receipt_query(query: str, *, returns_count: bool) -> str:
+    # Receipts are the durable proof used after an ambiguous remote submit.
+    # Never delete them by age on the mutation path: the current journal purge
+    # API owns only SQLite/artifacts and cannot atomically prove that an exact
+    # graph job ID is inactive. Safe bounding therefore remains the journal's
+    # retention-expired, exact-scope lifecycle; graph cleanup must wait for a
+    # graph-aware purge that deletes those exact IDs rather than an age range.
     source = query.strip().rstrip(";")
     if returns_count:
         source, replacements = re.subn(

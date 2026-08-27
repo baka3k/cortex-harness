@@ -191,6 +191,7 @@ CODE_GRAPH_SCHEMA = GraphSchemaManifest(
                 "GradleModule",
                 "GrpcEndpoint",
                 "GrpcService",
+                "GraphWriteReceipt",
                 "HttpEndpoint",
                 "HttpHandler",
                 "HttpModule",

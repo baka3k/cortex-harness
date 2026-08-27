@@ -85,14 +85,14 @@ Detailed delivery is split into:
 
 - [x] Define run, batch, checkpoint, and lifecycle event contracts.
 - [x] Emit single-sink global progress and in-flight heartbeats.
-- [ ] Add version-aware database limits and ambiguous-write reconciliation.
+- [x] Add version-aware database limits and ambiguous-write reconciliation.
 - [x] Prevent incomplete runs from publishing or advancing baselines.
 - [x] Reject incompatible resume fingerprints.
 - [x] Replace false buffer-local resume offsets or disable resume fail-closed.
 - [x] Separate parser-quality and graph-write health reporting.
-- [ ] Implement Phase 04A durable journal storage and artifact contract.
+- [x] Implement Phase 04A durable journal storage and artifact contract.
 - [ ] Implement Phase 04B serializable operations and producer barriers.
-- [ ] Implement Phase 04C leased execution, reconciliation, and resume.
+- [x] Implement Phase 04C leased execution, reconciliation, and resume.
 - [ ] Implement Phase 04D CLI/status, fault validation, and guarded rollout.
 - [ ] Implement Phase 04E durable node-first staging and edge release.
 

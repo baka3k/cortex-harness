@@ -5,8 +5,10 @@ import os
 import subprocess
 import sys
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +32,10 @@ from tools.graph.journal.guard import journaled_mutation  # noqa: E402
 from tools.graph.journal.operation import operation_for_custom_query  # noqa: E402
 from tools.graph.journal.retry import classify_error, retry_at  # noqa: E402
 from tools.graph.journal.runtime import GraphWriteJournalRuntime  # noqa: E402
+from tools.graph.schema import (  # noqa: E402
+    CODE_GRAPH_SCHEMA,
+    GraphSchemaManifest,
+)
 from tools.graph.writer.language_writer import LanguageCodeWriter  # noqa: E402
 
 
@@ -59,6 +65,12 @@ class _ConsumerDriver(_Driver):
     def __init__(self) -> None:
         super().__init__()
         self.receipts: set[str] = set()
+
+    async def ensure_schema(self, manifest=None, database=None):
+        self.calls.append(("SCHEMA_PREFLIGHT", {"database": database}))
+        return SimpleNamespace(
+            fingerprint=(manifest or CODE_GRAPH_SCHEMA).fingerprint
+        )
 
     async def execute_query(self, query, parameters=None, database=None):
         values = dict(parameters or {})
@@ -325,6 +337,45 @@ async def test_autonomous_consumer_replays_artifact_without_producer_closure(
 
 
 @pytest.mark.asyncio
+async def test_autonomous_consumer_preflights_before_receipt_readback_or_mutation(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.close()
+
+    driver = _ConsumerDriver()
+    await resume_journal(config, driver)
+
+    assert driver.calls[0][0] == "SCHEMA_PREFLIGHT"
+    graph_queries = [query for query, _parameters in driver.calls[1:]]
+    assert graph_queries
+    assert graph_queries[0].startswith("MATCH (receipt:GraphWriteReceipt")
+    assert any("MERGE (n:File" in query for query in graph_queries)
+
+
+@pytest.mark.asyncio
+async def test_autonomous_consumer_rejects_driver_without_schema_preflight(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path)
+    runtime = GraphWriteJournalRuntime(config)
+    ticket = runtime.prepare(label="files", rows=[{"id": "a.py"}], sequence=0)
+    runtime.close()
+    driver = _Driver(config)
+
+    with pytest.raises(JournalError, match="does not implement required schema preflight"):
+        await resume_journal(config, driver)
+
+    assert driver.calls == []
+    with SQLiteJournal(config.path) as journal:
+        batch = journal.get_batch(ticket.batch.job_id)
+        assert batch is not None
+        assert batch.status is BatchStatus.LEASED
+
+
+@pytest.mark.asyncio
 async def test_autonomous_consumer_acks_exact_receipt_without_replay(
     tmp_path: Path,
 ) -> None:
@@ -492,6 +543,16 @@ async def test_atomic_receipt_round_trip_on_embedded_falkordb(tmp_path: Path) ->
     driver = FalkorDBDriver(
         path=tmp_path / "graph.rdb", graph="journal_test", owner_id="journal-test"
     )
+    receipt_indexes = tuple(
+        index
+        for index in CODE_GRAPH_SCHEMA.indexes
+        if index.label == "GraphWriteReceipt"
+    )
+    receipt_manifest = GraphSchemaManifest("journal_receipt", 1, receipt_indexes)
+    result = await driver.ensure_schema(
+        receipt_manifest, database="journal_test", timeout_seconds=20
+    )
+    assert result.verified_count == 1
     install_required_write_guard(driver)
     try:
         with journaled_mutation("job-1", "graph-write/v1/nodes/files"):
@@ -510,10 +571,33 @@ async def test_atomic_receipt_round_trip_on_embedded_falkordb(tmp_path: Path) ->
             {"id": "job-1"},
             "journal_test",
         )
+        receipt_plan = str(
+            driver.graph.explain(
+                "MATCH (r:GraphWriteReceipt {id: $id}) "
+                "RETURN r.row_count AS count",
+                params={"id": "job-1"},
+            )
+        )
     finally:
         driver.close()
     assert records == [{"count": 2}]
     assert receipt == [{"count": 2}]
+    assert "Node By Index Scan | (r:GraphWriteReceipt)" in receipt_plan
+    assert "All Node Scan" not in receipt_plan
+
+
+def test_receipt_write_records_retention_evidence_without_unsafe_age_cleanup() -> None:
+    from tools.graph.journal.guard import _receipt_query
+
+    query = _receipt_query(
+        "UNWIND $rows AS row MERGE (n:File {id: row.id}) "
+        "RETURN count(n) AS count",
+        returns_count=True,
+    )
+
+    assert "receipt.applied_at = datetime()" in query
+    assert "DELETE receipt" not in query
+    assert "DETACH DELETE receipt" not in query
 
 
 @pytest.mark.asyncio
@@ -579,6 +663,48 @@ def test_config_reuses_only_compatible_open_generation(tmp_path: Path) -> None:
         generation="attempt-2",
     )
     assert resumed.metadata.generation == "attempt-1"
+
+
+@pytest.mark.asyncio
+async def test_legacy_schema_fingerprint_is_rejected_then_quarantined(
+    tmp_path: Path,
+) -> None:
+    env, current_config = _config(tmp_path)
+    legacy_metadata = replace(
+        current_config.metadata,
+        schema_fingerprint="shared-graph-schema-v1",
+    )
+    legacy_config = replace(current_config, metadata=legacy_metadata)
+    legacy_runtime = GraphWriteJournalRuntime(legacy_config)
+    legacy_runtime.prepare(label="files", rows=[{"id": "legacy.py"}], sequence=0)
+    legacy_run_id = legacy_runtime.run.run_id
+    legacy_runtime.close()
+
+    legacy_driver = _ConsumerDriver()
+    with pytest.raises(JournalError, match="schema fingerprint is incompatible"):
+        await resume_journal(legacy_config, legacy_driver)
+    assert legacy_driver.calls == []
+
+    next_env: dict[str, str] = {}
+    replacement_config = configure_journal_env(
+        next_env,
+        root=tmp_path / "source",
+        project_id="demo",
+        parser="python",
+        source_revision="revision-1",
+        source_snapshot="snapshot-1",
+        physical_target=f"falkordb:{tmp_path}/code.rdb:demo",
+        cache_dir=tmp_path / "cache",
+        generation="replacement",
+    )
+    assert replacement_config.metadata.schema_fingerprint == CODE_GRAPH_SCHEMA.fingerprint
+    replacement_runtime = GraphWriteJournalRuntime(replacement_config)
+    replacement_runtime.close()
+
+    with SQLiteJournal(replacement_config.path) as journal:
+        legacy_run = journal.get_run(legacy_run_id)
+        assert legacy_run is not None
+        assert legacy_run.status is RunStatus.QUARANTINED
 
 
 def test_trusted_replay_preserves_nested_property_projection() -> None:
