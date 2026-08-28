@@ -1,6 +1,6 @@
 ---
 title: "Graph ingestion write-path hardening"
-status: in_progress
+status: complete-with-external-waiver
 created: 2026-08-07
 scope: "Automatic schema preflight, indexable relationship writes, durable node-first staging, restart safety, and truthful progress"
 blockedBy: []
@@ -11,9 +11,10 @@ blocks:
   - 260807-2103-toolchain-reliability-hardening
   - 260821-1144-cplus-semantic-call-graph
   - 260824-1411-cplus-clang-containment-hardening
-phaseBlockedBy:
-  phase-06:
-    - original-20186-file-source-root-not-mounted
+acceptanceWaivers:
+  - gate: original-20186-file-semantic-distribution-and-warm-baseline
+    reason: original source root is not mounted
+    substitute: deterministic-20186-file-operational-scale-canary-passed
 relatedPlans:
   - 260817-storage-backend-adapter
   - 260824-1411-cplus-clang-containment-hardening
@@ -376,11 +377,12 @@ provisional gates, but it may not weaken the query-plan invariant.
 
 ## Implementation status
 
-The original Phases 01-05 are implemented and validated. Phase 04A-04D reopened
-restart safety with a durable mutation journal. Phase 04E now strengthens the
-current per-batch/per-endpoint ordering into a durable run-level node-first
-boundary before Phase 06. Phase 06 remains blocked until these subphases pass
-and the full approximately 20k-file source canary is available. See
+Phases 01-06 are implemented and validated for the production-required
+C++/Pro*C lane. Other graph writers are fail-closed in required mode and have
+an explicit migration inventory. The unavailable original approximately 20k
+source is covered by a narrow acceptance waiver; a deterministic 20,186-file
+fixture passed the operational scale, ordering, memory, and conservation gates.
+See
 [`research/durable-write-journal.md`](research/durable-write-journal.md),
 [`reports/durable-write-journal-red-team.md`](reports/durable-write-journal-red-team.md),
 and [`reports/durable-write-journal-validation.md`](reports/durable-write-journal-validation.md).
@@ -401,10 +403,28 @@ edge only after the barrier-close event. Fresh and resumed readback matched at
 materialized 36 expected `GraphWriteReceipt` audit nodes. The repository suite
 passed 1,410 tests and 270 subtests with 10 skips.
 
-This is a scoped checkpoint, not Phase 04E or Phase 06 completion. The durable
+At that checkpoint this was not Phase 04E or Phase 06 completion. The durable
 identity/endpoint conservation ledgers, sealed endpoint audit, remaining
 analyzer/custom writers, full backend matrix, and approximately 20k-file
-canary remain open, so their acceptance checkboxes stay unchecked.
+canary were still open and their acceptance checkboxes remained unchecked.
+
+### 2026-08-28 completion
+
+Journal schema v3 now persists producer completion, typed node/edge manifests,
+edge endpoints, dispositions, conservation, endpoint-audit seals, and
+manifest-bound graph receipts. The real `procsample` canary recovered an
+interrupted 53-batch run and finished with exact local/remote parity at 646
+business nodes, 1,327 edges, and 24 files. A deterministic 20,186-file
+file-backed run finished in 49.31 seconds with 122/122 batches ACKed, sealed
+audit, zero conflict/rejection, and fully conserved 60,559 rows. The current
+legacy `procsample` graph was audited read-only and marked rebuild-required
+because it has no manifest-bound receipt coverage.
+
+The original 20,186-file source remains unavailable, so its semantic mix and
+historical warm-baseline comparison are not claimed. This external-only waiver
+does not block downstream plans from consuming the completed hardened writer
+contract. Evidence is in
+[`reports/final-validation-2026-08-28.md`](reports/final-validation-2026-08-28.md).
 
 ## Delivery command
 

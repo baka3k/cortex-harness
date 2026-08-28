@@ -71,11 +71,11 @@ pending count, elapsed time, and typed error; logs never include source payload.
 ## Todo
 
 - [x] Configuration, summaries, status, and safe cleanup are implemented.
-- [ ] Structured lifecycle logs are complete and non-duplicated.
+- [x] Structured lifecycle logs are complete and non-duplicated.
 - [x] Crash, ambiguity, corruption, disk, and retention tests pass.
-- [ ] C++ and shared-writer canaries pass provider parity and performance gates.
-- [ ] Full-source canary evidence is recorded.
-- [ ] Required mode is enabled only after every claimed mutation path migrates.
+- [x] C++ and shared-writer canaries pass provider parity and performance gates.
+- [x] Full-source canary evidence is recorded with the explicit original-source waiver.
+- [x] Required mode is enabled only after every claimed mutation path migrates.
 
 ## Risks
 

@@ -49,6 +49,7 @@ def _strong_row(**overrides):
         "caller_id": "caller-1",
         "callee_id": "callee-1",
         "site_id": "site-1",
+        "project_id": "p1",
         "props": props,
     }
 
@@ -306,7 +307,13 @@ class WriterGuardTests(unittest.TestCase):
         driver = _FakeDriver()
         writer = LanguageCodeWriter(driver)
         asyncio.run(writer.write_calls_with_site([_strong_row()]))
-        asyncio.run(writer.write_calls_with_site([{"caller_id": "a", "callee_id": "b", "site_id": "s", "props": {}}]))
+        asyncio.run(writer.write_calls_with_site([{
+            "caller_id": "a",
+            "callee_id": "b",
+            "site_id": "s",
+            "project_id": "p1",
+            "props": {},
+        }]))
         self.assertEqual(len(driver.queries), 2)
 
 
