@@ -23,6 +23,52 @@ from tools.graph.journal.models import RunStatus  # noqa: E402
 
 
 class IncrementalSyncPhaseModeTests(unittest.TestCase):
+    def test_default_journal_mode_requires_only_cplus(self):
+        self.assertEqual(
+            incremental_sync._journal_mode_for_lane({}, "cplus"),
+            "shared-required",
+        )
+        self.assertEqual(
+            incremental_sync._journal_mode_for_lane({}, "python"),
+            "shared-shadow",
+        )
+        self.assertEqual(
+            incremental_sync._journal_mode_for_lane(
+                {"CORTEX_GRAPH_JOURNAL_MODE": "off"}, "cplus"
+            ),
+            "off",
+        )
+
+    def test_mid_node_recovery_is_not_ready_for_fast_finalize(self):
+        config = SimpleNamespace(
+            required=True,
+            metadata=SimpleNamespace(
+                query_shape_version="language-writer-node-first-v1"
+            ),
+        )
+        summary = {
+            "produced": 3,
+            "pending": 0,
+            "leased": 0,
+            "retrying": 0,
+            "reconciling": 0,
+            "blocked": 0,
+            "dead_letter": 0,
+            "endpoint_audit": None,
+            "conservation": {
+                "conserved": True,
+                "producers": {"open": 1},
+            },
+        }
+        self.assertFalse(
+            incremental_sync._node_first_recovery_can_finalize(config, summary)
+        )
+        summary["endpoint_audit"] = "sealed"
+        summary["conservation"]["producers"]["open"] = 0
+        self.assertTrue(
+            incremental_sync._node_first_recovery_can_finalize(config, summary)
+        )
+
     def test_required_writer_rollout_is_fail_closed_outside_cplus(self):
         required = SimpleNamespace(required=True)
         shadow = SimpleNamespace(required=False)

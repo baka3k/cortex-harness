@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -241,7 +242,11 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(config["graph"], "cortext")
                 return driver
 
-            with patch.object(
+            with patch.dict(
+                os.environ,
+                {"CORTEX_GRAPH_JOURNAL_MODE": "shared-shadow"},
+                clear=False,
+            ), patch.object(
                 incremental_sync.GraphDriverFactory,
                 "create_driver",
                 side_effect=fake_create_driver,
@@ -274,11 +279,15 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
         query, params, database = driver.queries[0]
         self.assertIn("MERGE (p:Project", query)
         self.assertEqual(params["project_id"], "cortext")
+        self.assertEqual(params["project_id_normalized"], "cortext")
         self.assertEqual(params["project_slug"], "cortext-project")
         self.assertEqual(params["repo_name"], f"Cortext Project/{os.path.basename(root)}")
+        self.assertEqual(
+            set(re.findall(r"\$([A-Za-z_]\w*)", query)), set(params)
+        )
         self.assertEqual(database, "cortext")
 
-    async def test_preflight_does_not_require_parser_journal_metadata(self):
+    async def test_required_preflight_defers_project_mutation_to_analyzer_journal(self):
         driver = FakeGraphDriver()
         with tempfile.TemporaryDirectory() as root:
             args = argparse.Namespace(
@@ -310,7 +319,7 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(driver.closed)
         self.assertFalse(hasattr(driver, "journal_config"))
-        self.assertTrue(driver.queries)
+        self.assertEqual(driver.queries, [])
 
     async def test_neo4j_uses_the_same_preflight_before_project_mutation(self):
         driver = FakeGraphDriver()

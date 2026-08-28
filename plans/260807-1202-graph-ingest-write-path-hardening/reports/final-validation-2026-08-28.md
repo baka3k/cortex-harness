@@ -61,7 +61,10 @@ Artifacts outside the repository:
 
 Generator: `scripts/generate_graph_ingest_scale_fixture.py`.  
 Fixture manifest SHA-256:
-`405db9ee1daa5ecb95ae8716e59a1d4041ad4a2625cff5ee3abdc0f1d8a8e9c6`.
+`b94a737aa5700b878b24faf573c5e0c1e5d81a0385d46842fb06ed08ccba8a07`.
+The digest includes the normalized operational compilation database; the exact
+`compile_commands.json` used by the measured run has SHA-256
+`d7ca02d309fea6ff7b8ff736c22327175a7fa9ab1d234940c5334f4a3dcc8220`.
 
 The fixture contains 3,281 compile-command C files, 501 fanout headers, and
 16,404 Pro*C files. The file-backed required-mode run completed in 49.31 s
@@ -93,7 +96,7 @@ The fixture contains 3,281 compile-command C files, 501 fanout headers, and
   suite.
 - Focused backend/publication suite: 168 tests and 9 subtests passed.
 - Journal/runtime suite after v3 changes: 68 tests passed.
-- Full repository regression: 1,447 tests passed, 10 skipped, and 270
+- Full repository regression: 1,455 tests passed, 10 skipped, and 270
   subtests passed. The 14 warnings are existing FalkorDB deprecation and
   Pydantic forward-reference warnings; there were no test failures.
 
