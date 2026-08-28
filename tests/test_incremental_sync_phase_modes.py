@@ -23,6 +23,17 @@ from tools.graph.journal.models import RunStatus  # noqa: E402
 
 
 class IncrementalSyncPhaseModeTests(unittest.TestCase):
+    def test_required_writer_rollout_is_fail_closed_outside_cplus(self):
+        required = SimpleNamespace(required=True)
+        shadow = SimpleNamespace(required=False)
+
+        incremental_sync._enforce_required_graph_writer_rollout("cplus", required)
+        incremental_sync._enforce_required_graph_writer_rollout("python", shadow)
+        with self.assertRaisesRegex(RuntimeError, "blocked.*required mode"):
+            incremental_sync._enforce_required_graph_writer_rollout(
+                "python", required
+            )
+
     def test_graph_phase_empty_vector_sentinel_survives_project_config_loading(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
