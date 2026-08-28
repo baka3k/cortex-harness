@@ -649,6 +649,9 @@ def test_receipt_write_records_retention_evidence_without_unsafe_age_cleanup() -
     )
 
     assert "receipt.applied_at = datetime()" in query
+    assert "receipt.artifact_sha256 = $__journal_artifact_sha256" in query
+    assert "receipt.run_id = $__journal_run_id" in query
+    assert "receipt.generation = $__journal_generation" in query
     assert "DELETE receipt" not in query
     assert "DETACH DELETE receipt" not in query
 
@@ -657,7 +660,13 @@ def test_receipt_write_records_retention_evidence_without_unsafe_age_cleanup() -
 async def test_no_return_mutation_counts_surviving_rows_and_binds_operation_key() -> None:
     driver = _ConsumerDriver()
     install_required_write_guard(driver)
-    with journaled_mutation("job-2", "graph-write/v1/custom/calls-api"):
+    with journaled_mutation(
+        "job-2",
+        "graph-write/v1/custom/calls-api",
+        artifact_sha256="a" * 64,
+        run_id="run-2",
+        generation="generation-2",
+    ):
         records, _, _ = await driver.execute_query(
             "UNWIND $rows AS row "
             "MATCH (source:Function {id: row.source_id}) "
@@ -670,6 +679,9 @@ async def test_no_return_mutation_counts_surviving_rows_and_binds_operation_key(
     assert parameters["__journal_operation_key"] == (
         "graph-write/v1/custom/calls-api"
     )
+    assert parameters["__journal_artifact_sha256"] == "a" * 64
+    assert parameters["__journal_run_id"] == "run-2"
+    assert parameters["__journal_generation"] == "generation-2"
     assert records == [{"count": 1}]
 
 
