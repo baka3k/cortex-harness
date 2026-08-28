@@ -2807,7 +2807,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                         )
                     )
                     if (
-                        journal_config.required
+                        getattr(journal_config, "required", False)
+                        and getattr(journal_config, "metadata", None) is not None
                         and journal_config.metadata.query_shape_version
                         == "language-writer-node-first-v1"
                         and unfinished == 0
