@@ -6,6 +6,7 @@ import sys
 import json
 import fnmatch
 import hashlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -1761,7 +1762,132 @@ def _print_summary(summaries: list, total_elapsed: float) -> None:
 # MCP process helpers
 # ---------------------------------------------------------------------------
 
-def _mcp_pids(pattern: str) -> list:
+# Legacy override: when set to "0", the dev lifecycle stops every MCP
+# process that matches the pattern regardless of instance id. Used as a
+# rollback path while Phase 04 rollout gates are open.
+LEGACY_PAUSE_BY_INSTANCE_ENV = "CORTEX_MCP_PAUSE_BY_INSTANCE"
+
+
+def _legacy_pause_by_instance_disabled() -> bool:
+    return os.environ.get(LEGACY_PAUSE_BY_INSTANCE_ENV, "").strip() == "0"
+
+
+def _resolve_storage_instance(process_env: dict) -> str:
+    """Return the ``CORTEX_STORAGE_INSTANCE`` for the current command.
+
+    Falls back to ``"default"`` when unset so the legacy single-instance
+    workflow keeps working.
+    """
+    raw = process_env.get("CORTEX_STORAGE_INSTANCE") if process_env else None
+    if raw is None:
+        raw = os.environ.get("CORTEX_STORAGE_INSTANCE")
+    value = str(raw or "").strip()
+    return value or "default"
+
+
+def _mcp_pid_sidecar_path(name: str, instance_id: str) -> Path:
+    return MCP_LOG_DIR / f"dev-mcp-{name}-{instance_id}.pid"
+
+
+def _mcp_pid_sidecar_recorded_pid(path: Path) -> Optional[int]:
+    """Return the PID recorded in a sidecar pid file, or None on miss."""
+    try:
+        if not path.is_file():
+            return None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("pid="):
+                return int(stripped.split("=", 1)[1].strip())
+        # Legacy format: file contains a single int.
+        return int(path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_instance_id(pid: int) -> Optional[str]:
+    """Best-effort lookup of the ``CORTEX_STORAGE_INSTANCE`` for ``pid``.
+
+    Walks every sidecar file in :data:`MCP_LOG_DIR` to find one whose
+    recorded PID matches; if none, falls back to reading the process
+    environment on POSIX (``/proc/<pid>/environ`` / ``ps eww``) and on
+    Win32 (PowerShell ``Get-CimInstance``).
+
+    Returns ``None`` when the lookup cannot determine the value. Callers
+    treat ``None`` as "instance unknown" and either drop the PID (when
+    filtering by instance) or pass it through (legacy behavior).
+    """
+    if pid <= 0:
+        return None
+    try:
+        for path in MCP_LOG_DIR.glob("dev-mcp-*-*.pid"):
+            recorded = _mcp_pid_sidecar_recorded_pid(path)
+            if recorded == pid:
+                stem = path.stem  # e.g. "dev-mcp-code-tiny-alpha"
+                parts = stem.split("-")
+                if len(parts) >= 2:
+                    # The instance id is the trailing segment; the rest
+                    # is the service name. Keep the trailing segment only.
+                    return parts[-1]
+    except OSError:
+        pass
+    return _read_instance_from_process_env(pid)
+
+
+def _read_instance_from_process_env(pid: int) -> Optional[str]:
+    """Read ``CORTEX_STORAGE_INSTANCE=...`` from a live process env block.
+
+    POSIX: try ``/proc/<pid>/environ`` first, then ``ps eww -p <pid>``.
+    Windows: use PowerShell to inspect ``Win32_Process.CommandLine``.
+    """
+    if sys.platform == "win32":
+        powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+        if not powershell:
+            return None
+        command = (
+            f"Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' | "
+            "ForEach-Object { $_.CommandLine }"
+        )
+        try:
+            r = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            for line in r.stdout.splitlines():
+                match = re.search(
+                    r"CORTEX_STORAGE_INSTANCE=([^\s\"']+)", line
+                )
+                if match:
+                    return match.group(1)
+        except Exception:
+            return None
+        return None
+    proc_environ = Path(f"/proc/{pid}/environ")
+    if proc_environ.is_file():
+        try:
+            data = proc_environ.read_bytes()
+            for chunk in data.split(b"\x00"):
+                if chunk.startswith(b"CORTEX_STORAGE_INSTANCE="):
+                    return chunk.split(b"=", 1)[1].decode("utf-8", "replace").strip() or None
+        except OSError:
+            pass
+    try:
+        r = subprocess.run(
+            ["ps", "eww", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        match = re.search(r"CORTEX_STORAGE_INSTANCE=([^\s]+)", r.stdout)
+        if match:
+            return match.group(1)
+    except Exception:
+        return None
+    return None
+
+
+def _mcp_pids(pattern: str, *, instance_id: Optional[str] = None) -> list:
     if sys.platform == "win32":
         powershell = shutil.which("powershell.exe") or shutil.which("powershell")
         if not powershell:
@@ -1779,31 +1905,39 @@ def _mcp_pids(pattern: str) -> list:
                 capture_output=True,
                 text=True,
             )
-            return [int(p) for p in r.stdout.split() if p.strip().isdigit()]
+            pids = [int(p) for p in r.stdout.split() if p.strip().isdigit()]
         except Exception:
             return []
-    try:
-        r = subprocess.run(
-            ["ps", "-ax", "-o", "pid=,command="], capture_output=True, text=True
-        )
-        pids: list[int] = []
-        for line in r.stdout.splitlines():
-            parts = line.strip().split(None, 1)
-            if len(parts) != 2 or not parts[0].isdigit():
-                continue
-            pid, command = int(parts[0]), parts[1]
-            try:
-                command_parts = shlex.split(command)
-                executable = Path(command_parts[0]).name.casefold()
-            except ValueError:
-                continue
-            if "python" in executable and any(
-                Path(argument).name == pattern for argument in command_parts[1:]
-            ):
-                pids.append(pid)
+    else:
+        try:
+            r = subprocess.run(
+                ["ps", "-ax", "-o", "pid=,command="], capture_output=True, text=True
+            )
+            pids = []
+            for line in r.stdout.splitlines():
+                parts = line.strip().split(None, 1)
+                if len(parts) != 2 or not parts[0].isdigit():
+                    continue
+                pid, command = int(parts[0]), parts[1]
+                try:
+                    command_parts = shlex.split(command)
+                    executable = Path(command_parts[0]).name.casefold()
+                except ValueError:
+                    continue
+                if "python" in executable and any(
+                    Path(argument).name == pattern for argument in command_parts[1:]
+                ):
+                    pids.append(pid)
+        except Exception:
+            return []
+
+    if instance_id is None or _legacy_pause_by_instance_disabled():
         return pids
-    except Exception:
-        return []
+    filtered: list[int] = []
+    for pid in pids:
+        if _pid_instance_id(pid) == instance_id:
+            filtered.append(pid)
+    return filtered
 
 
 def _mcp_uptime(pid: int) -> str:
@@ -1815,8 +1949,8 @@ def _mcp_uptime(pid: int) -> str:
         return "?"
 
 
-def _mcp_stop_pattern(pattern: str) -> int:
-    pids = _mcp_pids(pattern)
+def _mcp_stop_pattern(pattern: str, *, instance_id: Optional[str] = None) -> int:
+    pids = _mcp_pids(pattern, instance_id=instance_id)
     for pid in pids:
         try:
             command = (
@@ -1830,7 +1964,7 @@ def _mcp_stop_pattern(pattern: str) -> int:
     deadline = time.monotonic() + 5.0
     remaining = list(pids)
     while pids and time.monotonic() < deadline:
-        remaining = _mcp_pids(pattern)
+        remaining = _mcp_pids(pattern, instance_id=instance_id)
         if not remaining:
             break
         time.sleep(0.1)
@@ -1895,6 +2029,8 @@ def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
     MCP_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_file = MCP_LOG_DIR / f"dev-mcp-{name}.log"
     pid_file = MCP_LOG_DIR / f"dev-mcp-{name}.pid"
+    instance_id = _resolve_storage_instance(env)
+    sidecar_pid_file = _mcp_pid_sidecar_path(name, instance_id)
 
     with open(log_file, "a") as lf:
         proc = subprocess.Popen(
@@ -1905,6 +2041,12 @@ def _mcp_start_one(name: str, svc: dict, extra_env: dict | None = None) -> dict:
             start_new_session=True,
         )
     pid_file.write_text(str(proc.pid))
+    # Phase 03: per-instance sidecar carries both PID and the resolved
+    # instance id so the pause-by-instance lifecycle can filter without
+    # inspecting process env.
+    sidecar_pid_file.write_text(
+        f"pid={proc.pid}\ninstance_id={instance_id}\n"
+    )
     return {
         "name": name, "status": "started", "pid": proc.pid,
         "url": svc["url"], "log": str(log_file),
@@ -1926,6 +2068,10 @@ def _pause_mcp_for_sync(
     analyzers acquire the same lease as they write the store.  Remote Neo4j,
     remote FalkorDB (FALKORDB_URI), and dry-runs do not need this lifecycle
     transition — the server arbitrates concurrency.
+
+    When multiple MCP processes run for different instances, only the
+    process that owns the target ``CORTEX_STORAGE_INSTANCE`` is paused.
+    Other instances keep serving queries.
     """
     provider_key = "CODE_GRAPH_PROVIDER" if owner == "code" else "DOC_GRAPH_PROVIDER"
     if not enabled or _graph_provider(process_env, provider_key) != "falkordb":
@@ -1940,7 +2086,8 @@ def _pause_mcp_for_sync(
     service = MCP_SERVICES[service_name]
     configured_path = str(process_env.get("FALKORDB_PATH") or "").strip()
     db_path = Path(configured_path) if configured_path else None
-    was_running = bool(_mcp_pids(service["pattern"]))
+    instance_id = _resolve_storage_instance(process_env)
+    was_running = bool(_mcp_pids(service["pattern"], instance_id=instance_id))
     orphan_running = bool(db_path and _embedded_falkordb_pids(db_path))
     if not was_running and not orphan_running:
         yield
@@ -1948,14 +2095,15 @@ def _pause_mcp_for_sync(
 
     if was_running:
         click.echo(
-            f"[sync] Pausing {owner} MCP to acquire the embedded FalkorDB lease"
+            f"[sync] Pausing {owner} MCP (instance={instance_id}) "
+            f"to acquire the embedded FalkorDB lease"
         )
-        _mcp_stop_pattern(service["pattern"])
+        _mcp_stop_pattern(service["pattern"], instance_id=instance_id)
     else:
         click.echo("[sync] Stopping orphaned embedded FalkorDB before sync")
     if db_path is not None:
         _stop_embedded_falkordb(db_path)
-    if _mcp_pids(service["pattern"]):
+    if _mcp_pids(service["pattern"], instance_id=instance_id):
         raise click.ClickException(
             "Could not stop the code MCP process; sync was not started. "
             "Stop the MCP server manually and retry."
@@ -2421,6 +2569,37 @@ def stop(name: Optional[str]):
 def doctor():
     """Check Python 3.12, local storage backends, paths, and MCP ports."""
     _run_lifecycle("doctor")
+
+
+@cli.command(name="mcp-gates")
+def mcp_gates():
+    """Print the active per-instance MCP isolation gate values.
+
+    Useful for confirming whether a process is running with the new
+    per-instance isolation in effect or the legacy global behavior. See
+    plans/260828-1428-instance-isolated-mcp-locks for context.
+    """
+    legacy_leases = (
+        os.environ.get("CORTEX_MCP_SCOPE_LEASES", "").strip() == "0"
+    )
+    legacy_pause = _legacy_pause_by_instance_disabled()
+    cross_query = os.environ.get("CROSS_INSTANCE_QUERY", "").strip()
+    storage_instance = _resolve_storage_instance(os.environ.copy())
+    click.echo("Per-instance MCP isolation gates")
+    click.echo("─" * 40)
+    click.echo(f"  CORTEX_STORAGE_INSTANCE        = {storage_instance}")
+    click.echo(
+        "  CORTEX_MCP_SCOPE_LEASES         = "
+        f"{'0 (legacy: lease every sibling)' if legacy_leases else 'unset (per-instance scope on)'}"
+    )
+    click.echo(
+        "  CORTEX_MCP_PAUSE_BY_INSTANCE    = "
+        f"{'0 (legacy: pause by pattern)' if legacy_pause else 'unset (pause by instance on)'}"
+    )
+    click.echo(
+        "  CROSS_INSTANCE_QUERY            = "
+        f"{cross_query or 'unset (gate closed)'}"
+    )
 
 
 # ---------------------------------------------------------------------------
