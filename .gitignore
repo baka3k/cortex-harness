@@ -137,3 +137,6 @@ compile_commands.json
 .cortex/flutter/dart-facts.json
 .cortext-harness/config/dev.json
 .qwen/tmp/**
+.mimosa/
+.mimosa/**
+.cortext-harness/sync-state/sync-code.lock
