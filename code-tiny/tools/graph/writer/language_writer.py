@@ -130,14 +130,15 @@ class LanguageCodeWriter:
         provider = getattr(self.driver, "provider", "graph")
         return str(getattr(provider, "value", provider))
 
-    @staticmethod
-    def _require_call_project_scope(calls: List[Dict[str, Any]]) -> None:
+    def _require_call_project_scope(self, calls: List[Dict[str, Any]]) -> None:
         """Normalize call endpoint scope and reject ambiguous unscoped rows."""
 
         for position, row in enumerate(calls):
             project_id = row.get("project_id") or (row.get("props") or {}).get(
                 "project_id"
             )
+            if project_id is None and self._journal_config is not None:
+                project_id = self._journal_config.metadata.project_id
             normalized = project_id_lookup_key(project_id)
             if normalized is None:
                 raise ValueError(
