@@ -212,7 +212,7 @@ class StoreGateway:
                     backend=backend,
                 ).acquire()
                 acquired.append(lease)
-        except Exception:
+        except BaseException:
             for lease in reversed(acquired):
                 lease.release()
             raise
@@ -253,10 +253,20 @@ class StoreGateway:
             from .runtime import register_gateway
 
             register_gateway(self)
-        except Exception:
+        except BaseException as startup_error:
             from .runtime import unregister_gateway
 
+            self.begin_drain()
             unregister_gateway(self)
+            resource_error = await self._close_owned_resources()
+            if resource_error is not None:
+                # A possibly-live backend handle must remain fenced. Keep its
+                # lane executors and process leases so close() can be retried.
+                self.lifecycle = OwnerLifecycleState.DRAINING
+                from .runtime import register_gateway
+
+                register_gateway(self)
+                raise resource_error from startup_error
             for executor in self._executors.values():
                 executor.shutdown(wait=True, cancel_futures=True)
             self._executors.clear()
@@ -303,20 +313,22 @@ class StoreGateway:
                 retryable=False,
                 details={"lifecycle": self.lifecycle.value},
             ) from exc
-        await self._persist_jobs()
         close_error: BaseException | None = None
-        with self._resource_lock:
-            resources = list(self._resources.values())
-            self._resources.clear()
-        for lane, resource in reversed(resources):
-            close_resource = getattr(resource, "close", None)
-            if not callable(close_resource):
-                continue
-            try:
-                await self._run_sync(lane, close_resource)
-            except BaseException as exc:  # finish cleanup before surfacing close failure
-                if close_error is None:
-                    close_error = exc
+        try:
+            await self._persist_jobs()
+        except BaseException as exc:
+            # Persistence failure must not turn graceful teardown into a
+            # lease/resource leak. Recovery will reconcile from the last
+            # durable job snapshot on the next owner start.
+            close_error = exc
+        resource_error = await self._close_owned_resources()
+        if resource_error is not None:
+            # Do not release process ownership while a backend handle may
+            # still be open. The operator can retry close or force-exit.
+            self.lifecycle = OwnerLifecycleState.DRAINING
+            if close_error is not None:
+                raise resource_error from close_error
+            raise resource_error
         for executor in self._executors.values():
             executor.shutdown(wait=True, cancel_futures=True)
         self._executors.clear()
@@ -329,6 +341,26 @@ class StoreGateway:
         unregister_gateway(self)
         if close_error is not None:
             raise close_error
+
+    async def _close_owned_resources(self) -> BaseException | None:
+        """Close resources on their lanes, retaining failed handles for retry."""
+
+        with self._resource_lock:
+            resources = list(self._resources.items())
+        first_error: BaseException | None = None
+        for key, (lane, resource) in reversed(resources):
+            close_resource = getattr(resource, "close", None)
+            if callable(close_resource):
+                try:
+                    await self._run_sync(lane, close_resource)
+                except BaseException as exc:
+                    if first_error is None:
+                        first_error = exc
+                    continue
+            with self._resource_lock:
+                if self._resources.get(key) == (lane, resource):
+                    self._resources.pop(key, None)
+        return first_error
 
     async def _run_sync(self, lane: str, operation: Callable[..., T], *args: Any) -> T:
         """Run a non-preemptive store call without releasing ownership early."""
@@ -517,9 +549,40 @@ class StoreGateway:
                     candidate, self._graph_probe, self._vector_probe
                 )
 
-        published = await self.write(
-            lambda: self.generations.publish(manifest, validate_candidate)
-        )
+        try:
+            published = await self.write(
+                lambda: self.generations.publish(manifest, validate_candidate)
+            )
+        except BaseException as publication_error:
+            # The native publication is non-preemptive and `_run_sync` waits
+            # for it before surfacing interruption. Re-read the authoritative
+            # pointer for every failure because os.replace() can succeed before
+            # a later directory fsync reports an error.
+            try:
+                active = await self._run_sync("control", self.generations.recover)
+            except BaseException:
+                self._active_generation = None
+                self._probe_generation = None
+                self._probe_error = "PublicationReconciliationError"
+                raise publication_error
+            self._active_generation = active
+            if (
+                active is not None
+                and active.generation_id == manifest.generation_id
+                and self._graph_probe is not None
+            ):
+                self._probe_generation = (
+                    active.generation_id
+                    if isinstance(publication_error, asyncio.CancelledError)
+                    else None
+                )
+                self._last_probe_at = self._timestamp()
+                self._probe_error = (
+                    None
+                    if isinstance(publication_error, asyncio.CancelledError)
+                    else type(publication_error).__name__
+                )
+            raise publication_error
         self._active_generation = published
         if self._graph_probe is not None:
             self._probe_generation = published.generation_id
@@ -838,14 +901,12 @@ class StoreGateway:
 
     def health(self) -> StoreHealth:
         active = self._active_generation
-        probes_required = self._graph_probe is not None
         probes_ready = (
-            not probes_required
-            or (
-                active is not None
-                and self._probe_generation == active.generation_id
-                and self._probe_error is None
-            )
+            self._graph_probe is not None
+            and self._vector_probe is not None
+            and active is not None
+            and self._probe_generation == active.generation_id
+            and self._probe_error is None
         )
         return StoreHealth(
             target=self.target,
