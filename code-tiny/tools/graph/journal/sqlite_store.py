@@ -14,7 +14,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Iterator
 
 from .artifacts import ArtifactStore, ensure_safe_local_directory
-from .identity import canonical_json, deterministic_job_id, run_fingerprint, run_id
+from .identity import (
+    canonical_json,
+    deterministic_job_id,
+    run_fingerprint,
+    run_id,
+    sha256_hex,
+)
 from .models import (
     JOURNAL_SCHEMA_VERSION,
     ArtifactRef,
@@ -23,9 +29,12 @@ from .models import (
     BatchRecord,
     BatchSpec,
     BatchStatus,
+    EndpointAuditStatus,
     JournalError,
     JournalLimits,
+    ManifestDisposition,
     OperationPhase,
+    ProducerStatus,
     RetryClass,
     RunMetadata,
     RunRecord,
@@ -191,6 +200,165 @@ def _enum_values(enum_type: type[Any]) -> str:
     return ",".join(f"'{item.value}'" for item in enum_type)
 
 
+def _typed_identity(value: Any) -> tuple[str, str]:
+    if value is None or isinstance(value, (dict, list)):
+        raise ValueError("graph identity must be a non-null JSON scalar")
+    if isinstance(value, bool):
+        identity_type = "boolean"
+    elif isinstance(value, int):
+        identity_type = "integer"
+    elif isinstance(value, float):
+        identity_type = "number"
+    elif isinstance(value, str):
+        identity_type = "string"
+    else:
+        raise ValueError("graph identity must be a JSON scalar")
+    return identity_type, canonical_json(value).decode("utf-8")
+
+
+def _manifest_candidates(
+    *,
+    run: RunRecord,
+    spec: BatchSpec,
+    rows: list[Any],
+    job_id: str,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Derive payload-free canonical identities from a persisted operation."""
+
+    operation = dict(spec.operation)
+    if not operation:
+        # Low-level journal callers predate replay descriptors. They remain
+        # usable, but do not falsely claim row-level conservation coverage.
+        return None, []
+    producer_id = str(operation.get("producer_id") or operation.get("label") or spec.operation_key)
+    reconciliation = str(operation.get("reconciliation") or "unsupported")
+    scope_default = run.metadata.project_id
+    candidates: list[dict[str, Any]] = []
+
+    def base(row: Any, ordinal: int, kind: str) -> dict[str, Any]:
+        payload_digest = sha256_hex(canonical_json(row))
+        return {
+            "kind": kind,
+            "manifest_id": sha256_hex(
+                canonical_json({"job_id": job_id, "kind": kind, "row": ordinal})
+            ),
+            "producer_id": producer_id,
+            "row_ordinal": ordinal,
+            "payload_digest": payload_digest,
+            "disposition": ManifestDisposition.STAGED_UNIQUE.value,
+            "endpoints": [],
+        }
+
+    for ordinal, raw in enumerate(rows):
+        row = raw if isinstance(raw, dict) else {}
+        scope = str(
+            row.get("project_id_normalized")
+            or row.get("project_id")
+            or scope_default
+        )
+        if reconciliation == "node_identity" and operation.get("mutation_kind", "merge") == "merge":
+            candidate = base(raw, ordinal, "node")
+            candidate.update(
+                scope=scope,
+                node_label=str(operation.get("node_label") or ""),
+                identity_property=str(operation.get("identity_property") or ""),
+            )
+            try:
+                row_property = str(operation.get("row_identity_property") or "id")
+                candidate["identity_type"], candidate["identity_json"] = _typed_identity(
+                    row[row_property]
+                )
+                if not candidate["node_label"] or not candidate["identity_property"]:
+                    raise ValueError("node identity descriptor is incomplete")
+                # C/C++ emits one external Type observation per referring
+                # source file.  The file path is provenance of the
+                # observation, not part of the Type payload identity.  Treat
+                # those rows as declared duplicates while retaining strict
+                # conflict detection for definitions and every other label.
+                if (
+                    candidate["node_label"] == "Type"
+                    and str(row.get("kind") or "").casefold() == "external"
+                ):
+                    semantic_row = dict(row)
+                    semantic_row.pop("file_path", None)
+                    candidate["payload_digest"] = sha256_hex(
+                        canonical_json(semantic_row)
+                    )
+            except (KeyError, ValueError, TypeError):
+                candidate.update(
+                    identity_type="invalid",
+                    identity_json="null",
+                    disposition=ManifestDisposition.REJECTED.value,
+                )
+            candidates.append(candidate)
+            continue
+        if reconciliation in {"file_cleanup", "orphan_unknown_cleanup"}:
+            continue
+
+        candidate = base(raw, ordinal, "edge")
+        try:
+            if reconciliation in {"typed_relationship", "evidence_edge"}:
+                source_label = str(row["source_label"])
+                target_label = str(row["target_label"])
+                source_property = str(row.get("source_property") or "id")
+                target_property = str(row.get("target_property") or "id")
+                source_value = row["source_id"]
+                target_value = row["target_id"]
+                relationship_type = str(row["rel_type"])
+                edge_property = str(row.get("edge_property") or "")
+                edge_value = row.get("edge_id") if edge_property else None
+                if edge_property and edge_value in {None, ""}:
+                    raise ValueError("keyed edge is missing its identity")
+            elif reconciliation == "repository_file":
+                source_label, source_property, source_value = "Repository", "name", row["repo"]
+                target_label, target_property, target_value = "File", "id", row["id"]
+                relationship_type, edge_property, edge_value = "HAS_FILE", "", None
+            elif reconciliation in {"call_edge", "call_site", "possible_call_site"}:
+                source_label, source_property, source_value = "Function", "id", row["caller_id"]
+                target_label, target_property, target_value = "Function", "id", row["callee_id"]
+                relationship_type = (
+                    "POSSIBLE_CALLS" if reconciliation == "possible_call_site" else "CALLS"
+                )
+                edge_property = "site_id" if reconciliation != "call_edge" else ""
+                edge_value = row.get("site_id") if edge_property else None
+                if edge_property and edge_value in {None, ""}:
+                    raise ValueError("site edge is missing site_id")
+            else:
+                raise ValueError("unsupported manifest operation")
+            if not source_label or not target_label or not relationship_type:
+                raise ValueError("edge descriptor is incomplete")
+            source_type, source_json = _typed_identity(source_value)
+            target_type, target_json = _typed_identity(target_value)
+            edge_key: dict[str, Any] = {
+                "source": [source_label, source_property, source_type, source_json],
+                "relationship": relationship_type,
+                "target": [target_label, target_property, target_type, target_json],
+            }
+            if edge_property:
+                edge_type, edge_json = _typed_identity(edge_value)
+                edge_key["edge"] = [edge_property, edge_type, edge_json]
+            candidate.update(
+                scope=scope,
+                relationship_type=relationship_type,
+                identity_type="edge_key",
+                identity_json=canonical_json(edge_key).decode("utf-8"),
+                endpoints=[
+                    ("source", source_label, source_property, source_type, source_json),
+                    ("target", target_label, target_property, target_type, target_json),
+                ],
+            )
+        except (KeyError, ValueError, TypeError):
+            candidate.update(
+                scope=scope,
+                relationship_type=str(row.get("rel_type") or "invalid"),
+                identity_type="invalid",
+                identity_json="null",
+                disposition=ManifestDisposition.REJECTED.value,
+            )
+        candidates.append(candidate)
+    return producer_id, candidates
+
+
 def _schema_statements() -> tuple[str, ...]:
     return (
         f"""
@@ -280,10 +448,104 @@ def _schema_statements() -> tuple[str, ...]:
             created_at TEXT NOT NULL
         ) STRICT
         """,
-        "CREATE INDEX batches_claim_idx ON batches(status, next_attempt_at, sequence, created_at)",
-        "CREATE INDEX batches_run_status_idx ON batches(run_id, status)",
-        "CREATE INDEX events_run_idx ON events(run_id, event_id)",
-        "CREATE INDEX runs_scope_idx ON runs(scope_id, physical_target, parser, status)",
+        f"""
+        CREATE TABLE IF NOT EXISTS producer_completion (
+            run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            producer_id TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ({_enum_values(ProducerStatus)})),
+            node_emitted INTEGER NOT NULL DEFAULT 0 CHECK (node_emitted >= 0),
+            node_unique INTEGER NOT NULL DEFAULT 0 CHECK (node_unique >= 0),
+            node_duplicate INTEGER NOT NULL DEFAULT 0 CHECK (node_duplicate >= 0),
+            node_conflict INTEGER NOT NULL DEFAULT 0 CHECK (node_conflict >= 0),
+            node_rejected INTEGER NOT NULL DEFAULT 0 CHECK (node_rejected >= 0),
+            edge_emitted INTEGER NOT NULL DEFAULT 0 CHECK (edge_emitted >= 0),
+            edge_unique INTEGER NOT NULL DEFAULT 0 CHECK (edge_unique >= 0),
+            edge_duplicate INTEGER NOT NULL DEFAULT 0 CHECK (edge_duplicate >= 0),
+            edge_conflict INTEGER NOT NULL DEFAULT 0 CHECK (edge_conflict >= 0),
+            edge_rejected INTEGER NOT NULL DEFAULT 0 CHECK (edge_rejected >= 0),
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, producer_id)
+        ) STRICT
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS node_manifest (
+            run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            manifest_id TEXT NOT NULL,
+            job_id TEXT NOT NULL REFERENCES batches(job_id) ON DELETE CASCADE,
+            producer_id TEXT NOT NULL,
+            row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 0),
+            scope TEXT NOT NULL,
+            node_label TEXT NOT NULL,
+            identity_property TEXT NOT NULL,
+            identity_type TEXT NOT NULL,
+            identity_json TEXT NOT NULL,
+            payload_digest TEXT NOT NULL,
+            disposition TEXT NOT NULL CHECK (disposition IN ({_enum_values(ManifestDisposition)})),
+            acked INTEGER NOT NULL DEFAULT 0 CHECK (acked IN (0, 1)),
+            graph_verified INTEGER NOT NULL DEFAULT 0 CHECK (graph_verified IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, manifest_id),
+            UNIQUE (job_id, row_ordinal)
+        ) STRICT
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS edge_manifest (
+            run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            manifest_id TEXT NOT NULL,
+            job_id TEXT NOT NULL REFERENCES batches(job_id) ON DELETE CASCADE,
+            producer_id TEXT NOT NULL,
+            row_ordinal INTEGER NOT NULL CHECK (row_ordinal >= 0),
+            scope TEXT NOT NULL,
+            relationship_type TEXT NOT NULL,
+            identity_type TEXT NOT NULL,
+            identity_json TEXT NOT NULL,
+            payload_digest TEXT NOT NULL,
+            disposition TEXT NOT NULL CHECK (disposition IN ({_enum_values(ManifestDisposition)})),
+            acked INTEGER NOT NULL DEFAULT 0 CHECK (acked IN (0, 1)),
+            graph_verified INTEGER NOT NULL DEFAULT 0 CHECK (graph_verified IN (0, 1)),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, manifest_id),
+            UNIQUE (job_id, row_ordinal)
+        ) STRICT
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS edge_endpoint (
+            run_id TEXT NOT NULL,
+            edge_manifest_id TEXT NOT NULL,
+            role TEXT NOT NULL CHECK (role IN ('source', 'target')),
+            scope TEXT NOT NULL,
+            node_label TEXT NOT NULL,
+            identity_property TEXT NOT NULL,
+            identity_type TEXT NOT NULL,
+            identity_json TEXT NOT NULL,
+            required INTEGER NOT NULL DEFAULT 1 CHECK (required IN (0, 1)),
+            PRIMARY KEY (run_id, edge_manifest_id, role),
+            FOREIGN KEY (run_id, edge_manifest_id)
+                REFERENCES edge_manifest(run_id, manifest_id) ON DELETE CASCADE
+        ) STRICT
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS endpoint_audit (
+            run_id TEXT PRIMARY KEY REFERENCES runs(run_id) ON DELETE CASCADE,
+            status TEXT NOT NULL CHECK (status IN ({_enum_values(EndpointAuditStatus)})),
+            manifest_digest TEXT NOT NULL,
+            receipt_count INTEGER NOT NULL CHECK (receipt_count >= 0),
+            sealed_at TEXT NOT NULL
+        ) STRICT
+        """,
+        "CREATE INDEX IF NOT EXISTS batches_claim_idx ON batches(status, next_attempt_at, sequence, created_at)",
+        "CREATE INDEX IF NOT EXISTS batches_run_status_idx ON batches(run_id, status)",
+        "CREATE INDEX IF NOT EXISTS events_run_idx ON events(run_id, event_id)",
+        "CREATE INDEX IF NOT EXISTS runs_scope_idx ON runs(scope_id, physical_target, parser, status)",
+        "CREATE INDEX IF NOT EXISTS node_manifest_identity_idx ON node_manifest(run_id, scope, node_label, identity_property, identity_type, identity_json)",
+        "CREATE INDEX IF NOT EXISTS node_manifest_job_idx ON node_manifest(job_id, disposition)",
+        "CREATE INDEX IF NOT EXISTS edge_manifest_identity_idx ON edge_manifest(run_id, scope, relationship_type, identity_type, identity_json)",
+        "CREATE INDEX IF NOT EXISTS edge_manifest_job_idx ON edge_manifest(job_id, disposition)",
+        "CREATE INDEX IF NOT EXISTS edge_endpoint_identity_idx ON edge_endpoint(run_id, scope, node_label, identity_property, identity_type, identity_json)",
+        "CREATE INDEX IF NOT EXISTS producer_completion_status_idx ON producer_completion(run_id, status)",
     )
 
 
@@ -420,7 +682,7 @@ class SQLiteJournal:
                     f"PRAGMA user_version = {JOURNAL_SCHEMA_VERSION}"
                 )
             return
-        if version == 1:
+        if version in {1, 2}:
             with self._transaction():
                 active = self._connection.execute(
                     "SELECT COUNT(*) FROM batches WHERE status != ?",
@@ -429,12 +691,16 @@ class SQLiteJournal:
                 if active is not None and int(active[0]) > 0:
                     raise JournalError(
                         TerminalErrorCode.INCOMPATIBLE_SCHEMA,
-                        "schema v1 has active batches without replay descriptors",
+                        f"schema v{version} has active batches without durable manifests",
                     )
-                self._connection.execute(
-                    "ALTER TABLE batches ADD COLUMN operation_json "
-                    "TEXT NOT NULL DEFAULT '{}'"
-                )
+                if version == 1:
+                    self._connection.execute(
+                        "ALTER TABLE batches ADD COLUMN operation_json "
+                        "TEXT NOT NULL DEFAULT '{}'"
+                    )
+                statements = _schema_statements()
+                for statement in statements[5:]:
+                    self._connection.execute(statement)
                 self._connection.execute(
                     f"PRAGMA user_version = {JOURNAL_SCHEMA_VERSION}"
                 )
@@ -850,6 +1116,7 @@ class SQLiteJournal:
                 "artifact does not belong to the target run",
             )
         self.artifacts.verify(spec.artifact)
+        artifact_rows = self.artifacts.read_jsonl(spec.artifact)
         job_id = deterministic_job_id(
             run_fingerprint_value=run.fingerprint,
             phase=spec.phase,
@@ -857,7 +1124,14 @@ class SQLiteJournal:
             sequence=spec.sequence,
             payload_sha256=spec.artifact.sha256,
         )
+        producer_id, manifest_candidates = _manifest_candidates(
+            run=run,
+            spec=spec,
+            rows=artifact_rows,
+            job_id=job_id,
+        )
         now = _iso(self._now())
+        manifest_failure: dict[str, int] = {}
         with self._transaction():
             duplicate = self._connection.execute(
                 "SELECT * FROM batches WHERE job_id = ?", (job_id,)
@@ -952,7 +1226,36 @@ class SQLiteJournal:
                     now,
                 ),
             )
-            for barrier_name in produced:
+            if producer_id is not None:
+                manifest_failure = self._stage_manifests_locked(
+                    run_id_value=run_id_value,
+                    job_id=job_id,
+                    producer_id=producer_id,
+                    candidates=manifest_candidates,
+                    now=now,
+                )
+            if manifest_failure:
+                self._connection.execute(
+                    """
+                    UPDATE batches SET status = ?, retry_class = ?, error_code = ?,
+                        error_detail = ?, updated_at = ? WHERE job_id = ?
+                    """,
+                    (
+                        BatchStatus.BLOCKED.value,
+                        RetryClass.INTEGRITY.value,
+                        TerminalErrorCode.INVALID_CONTRACT.value,
+                        canonical_json(manifest_failure).decode("utf-8"),
+                        now,
+                        job_id,
+                    ),
+                )
+                self._set_run_error_locked(
+                    run_id_value,
+                    RunStatus.BLOCKED,
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    now,
+                )
+            for barrier_name in (() if manifest_failure else produced):
                 barrier = self._connection.execute(
                     "SELECT status FROM barriers WHERE run_id = ? AND name = ?",
                     (run_id_value, barrier_name),
@@ -982,17 +1285,171 @@ class SQLiteJournal:
             self._add_event(
                 run_id_value=run_id_value,
                 job_id=job_id,
-                event_type="batch_enqueued",
+                event_type="batch_manifest_rejected" if manifest_failure else "batch_enqueued",
                 counters={
                     "bytes": spec.artifact.byte_count,
                     "rows": spec.artifact.row_count,
+                    **manifest_failure,
                 },
+                error_code=(
+                    TerminalErrorCode.INVALID_CONTRACT if manifest_failure else None
+                ),
                 now=now,
             )
             row = self._connection.execute(
                 "SELECT * FROM batches WHERE job_id = ?", (job_id,)
             ).fetchone()
-            return self._batch_from_row(row)
+            result = self._batch_from_row(row)
+        if manifest_failure:
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                "batch manifest contains conflicting or rejected graph identities",
+                details={"job_id": job_id, **manifest_failure},
+            )
+        return result
+
+    def _stage_manifests_locked(
+        self,
+        *,
+        run_id_value: str,
+        job_id: str,
+        producer_id: str,
+        candidates: list[dict[str, Any]],
+        now: str,
+    ) -> dict[str, int]:
+        producer = self._connection.execute(
+            "SELECT status FROM producer_completion WHERE run_id = ? AND producer_id = ?",
+            (run_id_value, producer_id),
+        ).fetchone()
+        if producer is not None and producer["status"] != ProducerStatus.OPEN.value:
+            raise JournalError(
+                TerminalErrorCode.INVALID_TRANSITION,
+                f"producer {producer_id} is already complete",
+            )
+        self._connection.execute(
+            """
+            INSERT INTO producer_completion(run_id, producer_id, status, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(run_id, producer_id) DO UPDATE SET updated_at = excluded.updated_at
+            """,
+            (run_id_value, producer_id, ProducerStatus.OPEN.value, now),
+        )
+        counts = {
+            "node_emitted": 0,
+            "node_unique": 0,
+            "node_duplicate": 0,
+            "node_conflict": 0,
+            "node_rejected": 0,
+            "edge_emitted": 0,
+            "edge_unique": 0,
+            "edge_duplicate": 0,
+            "edge_conflict": 0,
+            "edge_rejected": 0,
+        }
+        for candidate in candidates:
+            kind = candidate["kind"]
+            counts[f"{kind}_emitted"] += 1
+            disposition = ManifestDisposition(candidate["disposition"])
+            table = f"{kind}_manifest"
+            shape_column = "node_label" if kind == "node" else "relationship_type"
+            shape_value = candidate[shape_column]
+            if disposition is ManifestDisposition.STAGED_UNIQUE:
+                existing = self._connection.execute(
+                    f"""
+                    SELECT payload_digest FROM {table}
+                    WHERE run_id = ? AND scope = ? AND {shape_column} = ?
+                      {"AND identity_property = ?" if kind == "node" else ""}
+                      AND identity_type = ? AND identity_json = ?
+                      AND disposition IN (?, ?)
+                    LIMIT 1
+                    """,
+                    (
+                        run_id_value,
+                        candidate["scope"],
+                        shape_value,
+                        *(
+                            (candidate["identity_property"],)
+                            if kind == "node"
+                            else ()
+                        ),
+                        candidate["identity_type"],
+                        candidate["identity_json"],
+                        ManifestDisposition.STAGED_UNIQUE.value,
+                        ManifestDisposition.DECLARED_DUPLICATE.value,
+                    ),
+                ).fetchone()
+                if existing is not None:
+                    disposition = (
+                        ManifestDisposition.DECLARED_DUPLICATE
+                        if existing["payload_digest"] == candidate["payload_digest"]
+                        else ManifestDisposition.CONFLICT
+                    )
+            suffix = disposition.value.removeprefix("staged_").removeprefix("declared_")
+            counts[f"{kind}_{suffix}"] += 1
+            if kind == "node":
+                self._connection.execute(
+                    """
+                    INSERT INTO node_manifest(
+                        run_id, manifest_id, job_id, producer_id, row_ordinal, scope,
+                        node_label, identity_property, identity_type, identity_json,
+                        payload_digest, disposition, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id_value, candidate["manifest_id"], job_id, producer_id,
+                        candidate["row_ordinal"], candidate["scope"],
+                        candidate["node_label"], candidate["identity_property"],
+                        candidate["identity_type"], candidate["identity_json"],
+                        candidate["payload_digest"], disposition.value, now, now,
+                    ),
+                )
+            else:
+                self._connection.execute(
+                    """
+                    INSERT INTO edge_manifest(
+                        run_id, manifest_id, job_id, producer_id, row_ordinal, scope,
+                        relationship_type, identity_type, identity_json, payload_digest,
+                        disposition, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        run_id_value, candidate["manifest_id"], job_id, producer_id,
+                        candidate["row_ordinal"], candidate["scope"],
+                        candidate["relationship_type"], candidate["identity_type"],
+                        candidate["identity_json"], candidate["payload_digest"],
+                        disposition.value, now, now,
+                    ),
+                )
+                for role, label, prop, identity_type, identity_json in candidate["endpoints"]:
+                    self._connection.execute(
+                        """
+                        INSERT INTO edge_endpoint(
+                            run_id, edge_manifest_id, role, scope, node_label,
+                            identity_property, identity_type, identity_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run_id_value, candidate["manifest_id"], role,
+                            candidate["scope"], label, prop, identity_type, identity_json,
+                        ),
+                    )
+        self._connection.execute(
+            """
+            UPDATE producer_completion SET
+                node_emitted = node_emitted + ?, node_unique = node_unique + ?,
+                node_duplicate = node_duplicate + ?, node_conflict = node_conflict + ?,
+                node_rejected = node_rejected + ?, edge_emitted = edge_emitted + ?,
+                edge_unique = edge_unique + ?, edge_duplicate = edge_duplicate + ?,
+                edge_conflict = edge_conflict + ?, edge_rejected = edge_rejected + ?,
+                updated_at = ? WHERE run_id = ? AND producer_id = ?
+            """,
+            (*counts.values(), now, run_id_value, producer_id),
+        )
+        return {
+            key: value
+            for key, value in counts.items()
+            if value and (key.endswith("_conflict") or key.endswith("_rejected"))
+        }
 
     def open_barrier(self, run_id_value: str, name: str) -> BarrierRecord:
         if not name.strip():
@@ -1393,6 +1850,14 @@ class SQLiteJournal:
                     fencing_token,
                 ),
             )
+            for table in ("node_manifest", "edge_manifest"):
+                self._connection.execute(
+                    f"""
+                    UPDATE {table} SET acked = 1, graph_verified = 1, updated_at = ?
+                    WHERE job_id = ? AND disposition = ?
+                    """,
+                    (now, job_id, ManifestDisposition.STAGED_UNIQUE.value),
+                )
             for name in json.loads(row["produced_barriers_json"]):
                 barrier = self._connection.execute(
                     "SELECT * FROM barriers WHERE run_id = ? AND name = ?",
@@ -1664,6 +2129,220 @@ class SQLiteJournal:
             raise StaleFenceError(job_id)
         return row
 
+    def list_open_producers(self, run_id_value: str) -> list[str]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT producer_id FROM producer_completion
+                WHERE run_id = ? AND status = ? ORDER BY producer_id
+                """,
+                (run_id_value, ProducerStatus.OPEN.value),
+            ).fetchall()
+        return [str(row["producer_id"]) for row in rows]
+
+    def complete_producers(self, run_id_value: str) -> int:
+        """Atomically close all registered producers once manifests are clean."""
+
+        now = _iso(self._now())
+        with self._transaction():
+            run = self._connection.execute(
+                "SELECT status FROM runs WHERE run_id = ?", (run_id_value,)
+            ).fetchone()
+            if run is None or run["status"] != RunStatus.OPEN.value:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_TRANSITION,
+                    "producers may only complete for an open run",
+                )
+            conflicts = int(
+                self._connection.execute(
+                    """
+                    SELECT
+                      (SELECT COUNT(*) FROM node_manifest WHERE run_id = ? AND disposition IN (?, ?)) +
+                      (SELECT COUNT(*) FROM edge_manifest WHERE run_id = ? AND disposition IN (?, ?))
+                    """,
+                    (
+                        run_id_value,
+                        ManifestDisposition.CONFLICT.value,
+                        ManifestDisposition.REJECTED.value,
+                        run_id_value,
+                        ManifestDisposition.CONFLICT.value,
+                        ManifestDisposition.REJECTED.value,
+                    ),
+                ).fetchone()[0]
+            )
+            if conflicts:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    "manifest conflicts or rejected rows prevent producer completion",
+                    details={"invalid_rows": conflicts},
+                )
+            result = self._connection.execute(
+                """
+                UPDATE producer_completion SET status = ?, completed_at = ?, updated_at = ?
+                WHERE run_id = ? AND status = ?
+                """,
+                (
+                    ProducerStatus.COMPLETE.value,
+                    now,
+                    now,
+                    run_id_value,
+                    ProducerStatus.OPEN.value,
+                ),
+            )
+            self._add_event(
+                run_id_value=run_id_value,
+                event_type="producers_completed",
+                counters={"producers": int(result.rowcount)},
+                now=now,
+            )
+            return int(result.rowcount)
+
+    def conservation_summary(self, run_id_value: str) -> dict[str, Any]:
+        def totals(table: str) -> dict[str, int | bool]:
+            row = self._connection.execute(
+                f"""
+                SELECT COUNT(*) AS emitted,
+                  SUM(CASE WHEN disposition = ? THEN 1 ELSE 0 END) AS staged_unique,
+                  SUM(CASE WHEN disposition = ? THEN 1 ELSE 0 END) AS declared_duplicate,
+                  SUM(CASE WHEN disposition = ? THEN 1 ELSE 0 END) AS conflict,
+                  SUM(CASE WHEN disposition = ? THEN 1 ELSE 0 END) AS rejected,
+                  SUM(acked) AS acked, SUM(graph_verified) AS graph_verified
+                FROM {table} WHERE run_id = ?
+                """,
+                (
+                    ManifestDisposition.STAGED_UNIQUE.value,
+                    ManifestDisposition.DECLARED_DUPLICATE.value,
+                    ManifestDisposition.CONFLICT.value,
+                    ManifestDisposition.REJECTED.value,
+                    run_id_value,
+                ),
+            ).fetchone()
+            result = {key: int(row[key] or 0) for key in row.keys()}
+            result["conserved"] = (
+                result["emitted"]
+                == result["staged_unique"]
+                + result["declared_duplicate"]
+                + result["conflict"]
+                + result["rejected"]
+                and result["staged_unique"] == result["acked"]
+                and result["acked"] == result["graph_verified"]
+            )
+            return result
+
+        with self._lock:
+            node = totals("node_manifest")
+            edge = totals("edge_manifest")
+            producers = self._connection.execute(
+                """
+                SELECT COUNT(*) AS total,
+                  SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS open
+                FROM producer_completion WHERE run_id = ?
+                """,
+                (ProducerStatus.OPEN.value, run_id_value),
+            ).fetchone()
+            manifest_rows = self._connection.execute(
+                """
+                SELECT scope, node_label, identity_property, identity_type,
+                       identity_json, payload_digest, disposition
+                FROM node_manifest WHERE run_id = ?
+                ORDER BY scope, node_label, identity_property, identity_type,
+                         identity_json, payload_digest, manifest_id
+                """,
+                (run_id_value,),
+            ).fetchall()
+        manifest_digest = sha256_hex(
+            canonical_json([dict(row) for row in manifest_rows])
+        )
+        return {
+            "node": node,
+            "edge": edge,
+            "producers": {
+                "total": int(producers["total"] or 0),
+                "open": int(producers["open"] or 0),
+            },
+            "node_manifest_digest": manifest_digest,
+            "conserved": bool(node["conserved"] and edge["conserved"]),
+        }
+
+    def seal_endpoint_audit(
+        self,
+        run_id_value: str,
+        manifest_digest: str | None = None,
+        receipt_count: int | None = None,
+        *,
+        audited_rows: int | None = None,
+    ) -> str:
+        if audited_rows is not None and audited_rows < 0:
+            raise ValueError("audited_rows must be non-negative")
+        now = _iso(self._now())
+        with self._transaction():
+            existing = self._connection.execute(
+                "SELECT * FROM endpoint_audit WHERE run_id = ?", (run_id_value,)
+            ).fetchone()
+            if existing is not None:
+                if manifest_digest is not None and existing["manifest_digest"] != manifest_digest:
+                    raise JournalError(
+                        TerminalErrorCode.INVALID_CONTRACT,
+                        "sealed endpoint audit is immutable",
+                    )
+                if receipt_count is not None and int(existing["receipt_count"]) != receipt_count:
+                    raise JournalError(
+                        TerminalErrorCode.INVALID_CONTRACT,
+                        "sealed endpoint audit is immutable",
+                    )
+                return str(existing["status"])
+            summary = self.conservation_summary(run_id_value)
+            if summary["producers"]["open"]:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_TRANSITION,
+                    "endpoint audit cannot seal while producers are open",
+                )
+            if not summary["node"]["conserved"] or (
+                summary["node"]["conflict"] or summary["node"]["rejected"]
+            ):
+                raise JournalError(
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    "endpoint audit cannot seal an unconserved node manifest",
+                )
+            resolved_digest = manifest_digest or str(summary["node_manifest_digest"])
+            resolved_receipts = (
+                int(receipt_count)
+                if receipt_count is not None
+                else int(summary["node"]["graph_verified"])
+            )
+            if resolved_digest != summary["node_manifest_digest"]:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    "endpoint audit manifest digest does not match the durable node manifest",
+                )
+            if resolved_receipts != summary["node"]["graph_verified"]:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    "endpoint audit receipt count does not match graph-verified nodes",
+                )
+            self._connection.execute(
+                """
+                INSERT INTO endpoint_audit(
+                    run_id, status, manifest_digest, receipt_count, sealed_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id_value,
+                    EndpointAuditStatus.SEALED.value,
+                    resolved_digest,
+                    resolved_receipts,
+                    now,
+                ),
+            )
+            return EndpointAuditStatus.SEALED.value
+
+    def endpoint_audit_status(self, run_id_value: str) -> str | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM endpoint_audit WHERE run_id = ?", (run_id_value,)
+            ).fetchone()
+        return str(row["status"]) if row is not None else None
+
     def close_run_production(self, run_id_value: str) -> RunRecord:
         now = _iso(self._now())
         with self._transaction():
@@ -1898,6 +2577,19 @@ class SQLiteJournal:
                 "SELECT * FROM batches WHERE job_id = ?", (job_id,)
             ).fetchone()
         return self._batch_from_row(row) if row is not None else None
+
+    def list_batches(self, run_id_value: str) -> list[BatchRecord]:
+        """Return a run's durable batches in deterministic production order."""
+
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT * FROM batches WHERE run_id = ?
+                ORDER BY sequence, created_at, job_id
+                """,
+                (run_id_value,),
+            ).fetchall()
+        return [self._batch_from_row(row) for row in rows]
 
     def status_counts(self, run_id_value: str) -> dict[BatchStatus, int]:
         with self._lock:

@@ -207,6 +207,16 @@ def group_evidence_edges(
                 f"and rel_type (row {position})"
             )
         row = dict(edge)
+        project_id = row.get("project_id") or (row.get("props") or {}).get(
+            "project_id"
+        )
+        normalized_scope = project_id_lookup_key(project_id)
+        if normalized_scope is None:
+            raise ValueError(
+                f"evidence edge row requires project_id (row {position})"
+            )
+        row["project_id"] = str(project_id).strip()
+        row["project_id_normalized"] = normalized_scope
         edge_property = str(edge.get("edge_property") or "")
         edge_id = str(edge.get("edge_id") or "")
         if edge_property and not edge_id:
@@ -241,10 +251,12 @@ def compile_evidence_edge_upsert(group: EvidenceEdgeGroup) -> str:
     return (
         "UNWIND $rows AS row "
         f"MATCH (a:{group.source_label} "
-        f"{{{group.source_property}: row.source_id}}) "
+        f"{{{group.source_property}: row.source_id, "
+        "project_id_normalized: row.project_id_normalized}) "
         "WITH row, a "
         f"MATCH (b:{group.target_label} "
-        f"{{{group.target_property}: row.target_id}}) "
+        f"{{{group.target_property}: row.target_id, "
+        "project_id_normalized: row.project_id_normalized}) "
         + edge_pattern +
         "SET r += coalesce(row.props, {}), "
         "r.project_id = row.project_id, "
@@ -261,13 +273,35 @@ def compile_evidence_edge_readback(group: EvidenceEdgeGroup) -> str:
         if group.edge_property
         else f"-[r:{group.relationship_type}]->"
     )
+
+
+def compile_evidence_endpoint_audit(group: EvidenceEdgeGroup) -> str:
+    """Compile a read-only cardinality audit for evidence-edge endpoints."""
+
     return (
         "UNWIND $rows AS row "
         f"OPTIONAL MATCH (a:{group.source_label} "
-        f"{{{group.source_property}: row.source_id}}) "
+        f"{{{group.source_property}: row.source_id, "
+        "project_id_normalized: row.project_id_normalized}) "
+        "WITH row, count(a) AS source_matches "
+        f"OPTIONAL MATCH (b:{group.target_label} "
+        f"{{{group.target_property}: row.target_id, "
+        "project_id_normalized: row.project_id_normalized}) "
+        "WITH row, source_matches, count(b) AS target_matches "
+        "WHERE source_matches <> 1 OR target_matches <> 1 "
+        "RETURN row.source_id AS source_id, row.target_id AS target_id, "
+        "row.project_id_normalized AS project_id_normalized, "
+        "source_matches, target_matches LIMIT 20"
+    )
+    return (
+        "UNWIND $rows AS row "
+        f"OPTIONAL MATCH (a:{group.source_label} "
+        f"{{{group.source_property}: row.source_id, "
+        "project_id_normalized: row.project_id_normalized}}) "
         + edge_match +
         f"(b:{group.target_label} "
-        f"{{{group.target_property}: row.target_id}}) "
+        f"{{{group.target_property}: row.target_id, "
+        "project_id_normalized: row.project_id_normalized}}) "
         "RETURN count(r) AS count"
     )
 
@@ -277,6 +311,7 @@ __all__ = [
     "RelationshipGroup",
     "compile_evidence_edge_readback",
     "compile_evidence_edge_upsert",
+    "compile_evidence_endpoint_audit",
     "compile_relationship_endpoint_audit",
     "compile_relationship_upsert",
     "group_evidence_edges",

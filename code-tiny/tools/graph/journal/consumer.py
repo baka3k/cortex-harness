@@ -19,8 +19,13 @@ from .guard import install_required_write_guard, journaled_mutation
 from .identity import run_id
 from .models import JournalError, RetryClass, TerminalErrorCode
 from .operation import GraphWriteOperation
-from .reconcile import compile_reconciliation_readback, readback_count
+from .reconcile import (
+    compile_endpoint_audit,
+    compile_reconciliation_readback,
+    readback_count,
+)
 from .retry import classify_error, retry_at
+from .runtime import ENDPOINT_AUDIT_BARRIER, NODE_PHASE_BARRIER
 from .sqlite_store import SQLiteJournal
 
 
@@ -84,7 +89,12 @@ class GraphWriteJournalConsumer:
         try:
             operation, rows = self._load(batch)
             readback = compile_reconciliation_readback(
-                operation, rows, job_id=batch.job_id
+                operation,
+                rows,
+                job_id=batch.job_id,
+                artifact_sha256=batch.artifact.sha256,
+                run_id=batch.run_id,
+                generation=self.config.metadata.generation,
             )
             if readback is None:
                 raise JournalError(
@@ -187,7 +197,13 @@ class GraphWriteJournalConsumer:
         parameters["__journal_operation_key"] = operation.operation_key
         started = time.monotonic()
         try:
-            with journaled_mutation(batch.job_id, operation.operation_key):
+            with journaled_mutation(
+                batch.job_id,
+                operation.operation_key,
+                artifact_sha256=batch.artifact.sha256,
+                run_id=batch.run_id,
+                generation=self.config.metadata.generation,
+            ):
                 records, _, _ = await self.driver.execute_query(
                     query, parameters, self.database
                 )
@@ -220,6 +236,7 @@ class GraphWriteJournalConsumer:
             raise
 
     async def drain(self) -> int:
+        await self._seal_endpoint_audit_if_ready()
         drained = 0
         while True:
             ambiguous = self.journal.claim_reconciling(
@@ -238,6 +255,38 @@ class GraphWriteJournalConsumer:
                 return drained
             await self._execute_one(pending)
             drained += 1
+
+    async def _seal_endpoint_audit_if_ready(self) -> None:
+        """Validate every staged endpoint before the first edge can be leased."""
+
+        if self.config.metadata.query_shape_version != "language-writer-node-first-v1":
+            return
+        if self.journal.endpoint_audit_status(self.run_id) == "sealed":
+            self.journal.close_barrier(self.run_id, ENDPOINT_AUDIT_BARRIER)
+            return
+        node_barrier = self.journal.get_barrier(self.run_id, NODE_PHASE_BARRIER)
+        if node_barrier is None or node_barrier.status.value != "drained":
+            return
+        audited_rows = 0
+        for batch in self.journal.list_batches(self.run_id):
+            if batch.phase.value not in {"relationships", "calls"}:
+                continue
+            operation, rows = self._load(batch)
+            audit = compile_endpoint_audit(operation, rows)
+            if audit is None:
+                continue
+            records, _, _ = await self.driver.execute_query(
+                audit[0], audit[1], self.database
+            )
+            if records:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    "sealed endpoint audit found missing or ambiguous endpoints",
+                    details={"job_id": batch.job_id, "rows": records[:20]},
+                )
+            audited_rows += len(rows)
+        self.journal.seal_endpoint_audit(self.run_id, audited_rows=audited_rows)
+        self.journal.close_barrier(self.run_id, ENDPOINT_AUDIT_BARRIER)
 
     def close(self) -> None:
         self.journal.close()

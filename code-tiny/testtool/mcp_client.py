@@ -133,17 +133,31 @@ class MCPClient:
         }
         status, headers, text = self._post(body)
         result = self._unwrap(self._parse_response(status, headers, text))
-        # tools/call result: {"content": [...], "isError": bool}
+        # tools/call result: {"content": [...], "structuredContent": ..., "isError": bool}
         if isinstance(result, dict) and "content" in result:
             content = result["content"]
+            parts = []
             if isinstance(content, list):
-                parts = []
                 for item in content:
                     if isinstance(item, dict) and item.get("type") == "text":
                         parts.append(item.get("text", ""))
                     else:
                         parts.append(json.dumps(item, ensure_ascii=False))
-                combined = "\n".join(parts)
+            elif content is not None:
+                parts.append(str(content))
+
+            combined = "\n".join(part for part in parts if part)
+            if result.get("isError"):
+                if not combined and result.get("structuredContent") is not None:
+                    combined = json.dumps(
+                        result["structuredContent"], ensure_ascii=False
+                    )
+                raise MCPError(combined or "Tool returned isError=true")
+
+            if result.get("structuredContent") is not None:
+                return result["structuredContent"]
+
+            if isinstance(content, list):
                 try:
                     return json.loads(combined)
                 except json.JSONDecodeError:

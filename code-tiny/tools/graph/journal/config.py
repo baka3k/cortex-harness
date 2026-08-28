@@ -369,6 +369,20 @@ def finalize_journal_from_env(env: Mapping[str, str]) -> RunStatus | None:
                 TerminalErrorCode.INVALID_TRANSITION,
                 "required graph journal run was not opened by the analyzer",
             )
+        if config.metadata.query_shape_version == "language-writer-node-first-v1":
+            conservation = journal.conservation_summary(run_id_value)
+            audit_status = journal.endpoint_audit_status(run_id_value)
+            if audit_status != "sealed":
+                raise JournalError(
+                    TerminalErrorCode.INVALID_TRANSITION,
+                    "node-first journal cannot publish before endpoint audit seal",
+                )
+            if conservation["producers"]["open"] or not conservation["conserved"]:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_CONTRACT,
+                    "node-first journal row conservation gate failed",
+                    details={"conservation": conservation},
+                )
         return journal.close_run_production(run_id_value).status
 
 

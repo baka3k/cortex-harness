@@ -71,8 +71,10 @@ def compile_persisted_mutation(
     if operation.reconciliation == "repository_file":
         return (
             "UNWIND $rows AS row "
-            "MATCH (repository:Repository {name: row.repo}) "
-            "MATCH (file:File {id: row.id}) "
+            "MATCH (repository:Repository {name: row.repo, "
+            "project_id_normalized: row.project_id_normalized}) "
+            "MATCH (file:File {id: row.id, "
+            "project_id_normalized: row.project_id_normalized}) "
             "MERGE (repository)-[edge:HAS_FILE]->(file) "
             "RETURN count(edge) AS count",
             {"rows": materialized},
@@ -80,8 +82,10 @@ def compile_persisted_mutation(
     if operation.reconciliation == "call_edge":
         return (
             "UNWIND $rows AS row "
-            "MATCH (caller:Function {id: row.caller_id}) "
-            "MATCH (callee:Function {id: row.callee_id}) "
+            "MATCH (caller:Function {id: row.caller_id, "
+            "project_id_normalized: row.project_id_normalized}) "
+            "MATCH (callee:Function {id: row.callee_id, "
+            "project_id_normalized: row.project_id_normalized}) "
             "MERGE (caller)-[edge:CALLS]->(callee) "
             "SET edge.count = row.count, edge.call_type = row.call_type, "
             "edge.project_id = row.project_id, "
@@ -93,8 +97,10 @@ def compile_persisted_mutation(
     if operation.reconciliation == "call_site":
         return (
             "UNWIND $rows AS row "
-            "MATCH (caller:Function {id: row.caller_id}) "
-            "MATCH (callee:Function {id: row.callee_id}) "
+            "MATCH (caller:Function {id: row.caller_id, "
+            "project_id_normalized: row.project_id_normalized}) "
+            "MATCH (callee:Function {id: row.callee_id, "
+            "project_id_normalized: row.project_id_normalized}) "
             "MERGE (caller)-[edge:CALLS {site_id: row.site_id}]->(callee) "
             "SET edge += coalesce(row.props, {}) "
             "RETURN count(edge) AS count",
@@ -103,8 +109,10 @@ def compile_persisted_mutation(
     if operation.reconciliation == "possible_call_site":
         return (
             "UNWIND $rows AS row "
-            "MATCH (caller:Function {id: row.caller_id}) "
-            "MATCH (callee:Function {id: row.callee_id}) "
+            "MATCH (caller:Function {id: row.caller_id, "
+            "project_id_normalized: row.project_id_normalized}) "
+            "MATCH (callee:Function {id: row.callee_id, "
+            "project_id_normalized: row.project_id_normalized}) "
             "MERGE (caller)-[edge:POSSIBLE_CALLS {site_id: row.site_id}]->(callee) "
             "SET edge += coalesce(row.props, {}) "
             "RETURN count(edge) AS count",

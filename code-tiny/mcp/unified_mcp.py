@@ -551,9 +551,6 @@ def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[s
             "query_engine": query_engine_for_backend(capability.backend),
             "support_level": capability.support_level,
             "support": dict(capability.support),
-            "features": sorted(capability.features),
-            "labels": sorted(capability.labels),
-            "searchable_properties": list(capability.searchable_properties),
         }
     summary: Dict[str, Any] = {
         "requested_parser": parser,
@@ -566,9 +563,6 @@ def _capability_summary(parser_type: Optional[str], backend_name: str) -> Dict[s
             "endpoints": "none",
             "database": "none",
         },
-        "features": [],
-        "labels": [],
-        "searchable_properties": [],
     }
     if parser:
         # Caller passed an explicit parser that we don't recognize. Warn so

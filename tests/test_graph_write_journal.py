@@ -663,3 +663,264 @@ def test_payload_free_status_reports_resume_age_bytes_and_next_action(
     assert inspected[0]["run_id"] == run.run_id
     assert inspected[0]["resumed"] is True
     assert inspected[0]["pending"] == 1
+
+
+def test_v3_node_manifest_tracks_typed_identity_conservation_and_audit_seal(
+    tmp_path: Path,
+) -> None:
+    operation = {
+        "label": "functions",
+        "phase": "nodes",
+        "version": 1,
+        "reconciliation": "node_identity",
+        "node_label": "Function",
+        "identity_property": "id",
+        "row_identity_property": "id",
+        "mutation_kind": "merge",
+    }
+    rows = [{"id": 7, "name": "same"}, {"id": 7, "name": "same"}]
+    with _journal(tmp_path) as journal:
+        run = journal.open_run(_metadata())
+        artifact = journal.create_artifact(run.run_id, rows)
+        batch = journal.enqueue_batch(
+            run.run_id,
+            BatchSpec(
+                OperationPhase.NODES,
+                "graph-write/v1/nodes/functions",
+                0,
+                artifact,
+                2,
+                operation=operation,
+            ),
+        )
+
+        manifests = journal._connection.execute(
+            """
+            SELECT identity_type, identity_json, disposition, acked, graph_verified
+            FROM node_manifest WHERE job_id = ? ORDER BY row_ordinal
+            """,
+            (batch.job_id,),
+        ).fetchall()
+        assert [row["disposition"] for row in manifests] == [
+            "staged_unique",
+            "declared_duplicate",
+        ]
+        assert {(row["identity_type"], row["identity_json"]) for row in manifests} == {
+            ("integer", "7")
+        }
+        assert journal.list_open_producers(run.run_id) == ["functions"]
+
+        lease = journal.claim_batch(run_id_value=run.run_id)
+        assert lease is not None
+        journal.ack_batch(lease.job_id, lease.fencing_token or "")
+        summary = journal.conservation_summary(run.run_id)
+        assert summary["node"] == {
+            "emitted": 2,
+            "staged_unique": 1,
+            "declared_duplicate": 1,
+            "conflict": 0,
+            "rejected": 0,
+            "acked": 1,
+            "graph_verified": 1,
+            "conserved": True,
+        }
+        assert journal.complete_producers(run.run_id) == 1
+        audit = journal.seal_endpoint_audit(
+            run.run_id,
+            summary["node_manifest_digest"],
+            receipt_count=1,
+        )
+        assert audit == "sealed"
+        assert journal.endpoint_audit_status(run.run_id) == audit
+
+
+def test_v3_edge_manifest_persists_both_typed_endpoints(tmp_path: Path) -> None:
+    operation = {
+        "label": "relations:owns",
+        "phase": "relationships",
+        "version": 1,
+        "reconciliation": "typed_relationship",
+    }
+    row = {
+        "source_label": "Project",
+        "source_id": "demo",
+        "target_label": "File",
+        "target_id": 9,
+        "rel_type": "OWNS",
+        "project_id_normalized": "demo",
+        "properties": {},
+    }
+    with _journal(tmp_path) as journal:
+        run = journal.open_run(_metadata())
+        artifact = journal.create_artifact(run.run_id, [row])
+        batch = journal.enqueue_batch(
+            run.run_id,
+            BatchSpec(
+                OperationPhase.RELATIONSHIPS,
+                "graph-write/v1/relationships/relations:owns",
+                0,
+                artifact,
+                1,
+                operation=operation,
+            ),
+        )
+
+        endpoints = journal._connection.execute(
+            """
+            SELECT role, node_label, identity_property, identity_type, identity_json
+            FROM edge_endpoint WHERE edge_manifest_id =
+              (SELECT manifest_id FROM edge_manifest WHERE job_id = ?)
+            ORDER BY role
+            """,
+            (batch.job_id,),
+        ).fetchall()
+        assert [tuple(endpoint) for endpoint in endpoints] == [
+            ("source", "Project", "id", "string", '"demo"'),
+            ("target", "File", "id", "integer", "9"),
+        ]
+
+
+def test_v3_external_type_observations_are_declared_duplicates(tmp_path: Path) -> None:
+    operation = {
+        "label": "types",
+        "phase": "nodes",
+        "version": 1,
+        "reconciliation": "node_identity",
+        "node_label": "Type",
+        "identity_property": "id",
+        "row_identity_property": "id",
+        "mutation_kind": "merge",
+    }
+    rows = [
+        {
+            "id": "AppError",
+            "kind": "external",
+            "code": "AppError",
+            "project_id": "demo",
+            "file_path": path,
+        }
+        for path in ("src/a.pc", "src/b.pc")
+    ]
+    with _journal(tmp_path) as journal:
+        run = journal.open_run(_metadata())
+        artifact = journal.create_artifact(run.run_id, rows)
+        batch = journal.enqueue_batch(
+            run.run_id,
+            BatchSpec(
+                OperationPhase.NODES,
+                "graph-write/v1/nodes/types",
+                0,
+                artifact,
+                2,
+                operation=operation,
+            ),
+        )
+        dispositions = journal._connection.execute(
+            "SELECT disposition FROM node_manifest WHERE job_id = ? "
+            "ORDER BY row_ordinal",
+            (batch.job_id,),
+        ).fetchall()
+        assert [row["disposition"] for row in dispositions] == [
+            "staged_unique",
+            "declared_duplicate",
+        ]
+
+
+def test_v3_conflicting_node_payload_is_durable_and_blocks_run(tmp_path: Path) -> None:
+    operation = {
+        "label": "functions",
+        "phase": "nodes",
+        "version": 1,
+        "reconciliation": "node_identity",
+        "node_label": "Function",
+        "identity_property": "id",
+        "row_identity_property": "id",
+        "mutation_kind": "merge",
+    }
+    with _journal(tmp_path) as journal:
+        run = journal.open_run(_metadata())
+        first = journal.create_artifact(run.run_id, [{"id": "f", "name": "first"}])
+        journal.enqueue_batch(
+            run.run_id,
+            BatchSpec(OperationPhase.NODES, "functions", 0, first, 1, operation=operation),
+        )
+        second = journal.create_artifact(run.run_id, [{"id": "f", "name": "changed"}])
+        with pytest.raises(JournalError) as conflict:
+            journal.enqueue_batch(
+                run.run_id,
+                BatchSpec(
+                    OperationPhase.NODES,
+                    "functions",
+                    1,
+                    second,
+                    1,
+                    operation=operation,
+                ),
+            )
+        assert conflict.value.code is TerminalErrorCode.INVALID_CONTRACT
+        assert conflict.value.details["node_conflict"] == 1
+        assert journal.get_run(run.run_id).status is RunStatus.BLOCKED  # type: ignore[union-attr]
+        assert [
+            row[0]
+            for row in journal._connection.execute(
+                "SELECT disposition FROM node_manifest ORDER BY created_at, rowid"
+            )
+        ] == ["staged_unique", "conflict"]
+        assert journal.status_counts(run.run_id)[BatchStatus.BLOCKED] == 1
+
+
+def test_v2_migration_adds_v3_ledgers_but_refuses_active_batches(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "completed.sqlite3"
+    with SQLiteJournal(path, limits=_limits()):
+        pass
+    connection = sqlite3.connect(path)
+    for table in (
+        "endpoint_audit",
+        "edge_endpoint",
+        "edge_manifest",
+        "node_manifest",
+        "producer_completion",
+    ):
+        connection.execute(f"DROP TABLE {table}")
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+    connection.close()
+
+    with SQLiteJournal(path, limits=_limits()) as migrated:
+        assert migrated._connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert {
+            row[0]
+            for row in migrated._connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }.issuperset(
+            {
+                "producer_completion",
+                "node_manifest",
+                "edge_manifest",
+                "edge_endpoint",
+                "endpoint_audit",
+            }
+        )
+
+    active_path = tmp_path / "active.sqlite3"
+    with SQLiteJournal(active_path, limits=_limits()) as journal:
+        run = journal.open_run(_metadata())
+        _enqueue(journal, run.run_id)
+    connection = sqlite3.connect(active_path)
+    for table in (
+        "endpoint_audit",
+        "edge_endpoint",
+        "edge_manifest",
+        "node_manifest",
+        "producer_completion",
+    ):
+        connection.execute(f"DROP TABLE {table}")
+    connection.execute("PRAGMA user_version = 2")
+    connection.commit()
+    connection.close()
+    with pytest.raises(JournalError) as incompatible:
+        SQLiteJournal(active_path, limits=_limits())
+    assert incompatible.value.code is TerminalErrorCode.INCOMPATIBLE_SCHEMA

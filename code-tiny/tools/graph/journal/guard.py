@@ -11,7 +11,9 @@ from typing import Any, Iterator
 from .models import JournalError, TerminalErrorCode
 
 
-_JOURNALED_MUTATION: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+_JOURNALED_MUTATION: contextvars.ContextVar[
+    tuple[str, str, str, str, str] | None
+] = contextvars.ContextVar(
     "graph_journaled_mutation", default=None
 )
 _MUTATION_PATTERN = re.compile(
@@ -21,9 +23,22 @@ _MUTATION_PATTERN = re.compile(
 
 @contextmanager
 def journaled_mutation(
-    job_id: str | None = None, operation_key: str = "schema"
+    job_id: str | None = None,
+    operation_key: str = "schema",
+    *,
+    artifact_sha256: str = "",
+    run_id: str = "",
+    generation: str = "",
 ) -> Iterator[None]:
-    token = _JOURNALED_MUTATION.set((job_id or "schema", operation_key))
+    token = _JOURNALED_MUTATION.set(
+        (
+            job_id or "schema",
+            operation_key,
+            artifact_sha256,
+            run_id,
+            generation,
+        )
+    )
     try:
         yield
     finally:
@@ -56,6 +71,9 @@ def _receipt_query(query: str, *, returns_count: bool) -> str:
             "MERGE (receipt:GraphWriteReceipt {id: $__journal_job_id}) "
             "SET receipt.operation_key = $__journal_operation_key, "
             "receipt.row_count = __journal_count, "
+            "receipt.artifact_sha256 = $__journal_artifact_sha256, "
+            "receipt.run_id = $__journal_run_id, "
+            "receipt.generation = $__journal_generation, "
             "receipt.applied_at = datetime() "
             "RETURN __journal_count AS count"
         )
@@ -84,7 +102,7 @@ def install_required_write_guard(driver: object) -> None:
                 "direct graph mutation bypassed the required write journal",
             )
         if is_mutation and mutation is not None and mutation[0] != "schema":
-            job_id, operation_key = mutation
+            job_id, operation_key, artifact_sha256, run_id, generation = mutation
             positional = list(args)
             if positional:
                 parameters = dict(positional[0] or {})
@@ -102,6 +120,9 @@ def install_required_write_guard(driver: object) -> None:
                 )
             parameters["__journal_operation_key"] = operation_key
             parameters["__journal_expected_count"] = expected_count
+            parameters["__journal_artifact_sha256"] = artifact_sha256
+            parameters["__journal_run_id"] = run_id
+            parameters["__journal_generation"] = generation
             returns_count = bool(
                 re.search(
                     r"\bRETURN\b[\s\S]*\bAS\s+count\b",
