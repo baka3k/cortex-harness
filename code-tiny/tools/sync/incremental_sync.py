@@ -1355,20 +1355,25 @@ def _build_analyzer_cmd(
 _PROJECT_REPOSITORY_SETUP_QUERY = """
 MERGE (p:Project {project_id: $project_id})
 ON CREATE SET
-    p.name       = $project_name,
-    p.slug       = $project_slug,
-    p.created_at = timestamp()
+    p.name                  = $project_name,
+    p.slug                  = $project_slug,
+    p.project_id_normalized = $project_id_normalized,
+    p.created_at            = timestamp()
 ON MATCH SET
-    p.name       = $project_name,
-    p.slug       = $project_slug
+    p.name                  = $project_name,
+    p.slug                  = $project_slug,
+    p.project_id_normalized = $project_id_normalized
 WITH p
 MERGE (r:Repository {name: $repo_name})
 ON CREATE SET
-    r.id          = $repo_name,
-    r.project_id  = $project_id,
-    r.created_at  = timestamp()
+    r.id                    = $repo_name,
+    r.project_id            = $project_id,
+    r.project_id_normalized = $project_id_normalized,
+    r.created_at            = timestamp()
 ON MATCH SET
-    r.id          = $repo_name
+    r.id                    = $repo_name,
+    r.project_id            = $project_id,
+    r.project_id_normalized = $project_id_normalized
 WITH p, r
 MERGE (p)-[:HAS_REPOSITORY]->(r)
 """
@@ -2784,14 +2789,47 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 _enforce_required_graph_writer_rollout(parser, journal_config)
                 parser_info["journal_path"] = str(journal_config.path)
             try:
+                recovered_complete = False
                 if journal_config is not None:
                     recovered = await _resume_configured_journal(args, journal_config)
                     if recovered:
                         parser_info["journal_recovered_batches"] = recovered
-                analyzer_output = _run(
-                    cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=parser_env
-                )
-                journal_status = finalize_journal_from_env(parser_env)
+                    recovered_summary = journal_status_from_env(parser_env) or {}
+                    unfinished = sum(
+                        int(recovered_summary.get(key) or 0)
+                        for key in (
+                            "pending",
+                            "leased",
+                            "retrying",
+                            "reconciling",
+                            "blocked",
+                            "dead_letter",
+                        )
+                    )
+                    if (
+                        journal_config.required
+                        and journal_config.metadata.query_shape_version
+                        == "language-writer-node-first-v1"
+                        and unfinished == 0
+                        and int(recovered_summary.get("produced") or 0) > 0
+                    ):
+                        # A prior analyzer may have completed extraction and
+                        # closed node production before its parent died during
+                        # edge drain.  Once persisted replay reaches zero
+                        # unfinished jobs, the integrity-aware finalizer can
+                        # publish that run without reparsing and attempting to
+                        # reopen completed producers.
+                        journal_status = finalize_journal_from_env(parser_env)
+                        recovered_complete = journal_status is RunStatus.DRAINED
+                        if recovered_complete:
+                            parser_info["journal_recovered_without_reparse"] = True
+                if recovered_complete:
+                    analyzer_output = ""
+                else:
+                    analyzer_output = _run(
+                        cmd, cwd=_ROOT_DIR, verbose=args.verbose, env=parser_env
+                    )
+                    journal_status = finalize_journal_from_env(parser_env)
                 if journal_status is not None:
                     parser_info["journal_status"] = journal_status.value
                     parser_info["journal"] = journal_status_from_env(parser_env)
