@@ -111,9 +111,14 @@ def compile_persisted_mutation(
             {"rows": materialized},
         )
     if operation.reconciliation == "file_cleanup":
+        if operation.version != 2:
+            raise _unsupported(operation)
+        if not operation.node_label:
+            raise _unsupported(operation)
+        validate_cypher_identifier(operation.node_label, kind="node label")
         return (
             "UNWIND $rows AS row "
-            "OPTIONAL MATCH (n) "
+            f"OPTIONAL MATCH (n:{operation.node_label}) "
             "WHERE n.project_id = row.project_id "
             "AND (coalesce(n.file_path, '') IN row.paths "
             "OR coalesce(n.path, '') IN row.paths "
@@ -124,10 +129,13 @@ def compile_persisted_mutation(
             {"rows": materialized},
         )
     if operation.reconciliation == "orphan_unknown_cleanup":
+        if operation.version != 2:
+            raise _unsupported(operation)
         return (
             "UNWIND $rows AS row "
             "OPTIONAL MATCH (u:UnknownFunction) "
-            "WHERE NOT ()-[:UNKNOWN_CALL]->(u) "
+            "WHERE u.project_id = row.project_id "
+            "AND NOT ()-[:UNKNOWN_CALL]->(u) "
             "WITH row, collect(u) AS nodes "
             "FOREACH (node IN nodes | DETACH DELETE node) "
             "RETURN count(*) AS count",
