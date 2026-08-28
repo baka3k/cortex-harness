@@ -74,6 +74,7 @@ from tools.graph.cli import (
     create_graph_driver_from_args,
     normalize_graph_provider,
     prepare_graph_args,
+    resolved_falkordb_uri,
 )
 from tools.graph.schema import CODE_GRAPH_SCHEMA, ensure_schema
 from tools.graph.journal.config import (
@@ -879,6 +880,7 @@ async def _query_impacted_files(
     neo4j_password: str,
     neo4j_db: Optional[str],
     falkordb_path: Optional[str] = None,
+    falkordb_uri: Optional[str] = None,
     project_id: str,
     changed_paths: Sequence[str],
 ) -> Set[str]:
@@ -887,7 +889,10 @@ async def _query_impacted_files(
     provider = normalize_graph_provider(graph_provider)
     config: Dict[str, Any]
     if provider == GraphProvider.FALKORDB:
-        falkordb_uri = (os.environ.get("FALKORDB_URI") or "").strip()
+        falkordb_uri = (
+            os.environ.get("FALKORDB_URI") if falkordb_uri is None else falkordb_uri
+        )
+        falkordb_uri = (falkordb_uri or "").strip()
         if falkordb_uri:
             config = {
                 "uri": falkordb_uri,
@@ -987,9 +992,7 @@ async def _project_topology_bootstrap_needed(
         }
     else:
         graph_name = getattr(args, "falkordb_graph", None) or database
-        falkordb_uri = (
-            getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
-        ).strip()
+        falkordb_uri = resolved_falkordb_uri(args)
         if falkordb_uri:
             config = {
                 "uri": falkordb_uri,
@@ -1050,9 +1053,7 @@ async def _resume_configured_journal(args: argparse.Namespace, config: Any) -> i
             "database": database,
         }
     else:
-        falkordb_uri = (
-            getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
-        ).strip()
+        falkordb_uri = resolved_falkordb_uri(args)
         if falkordb_uri:
             driver_config = {
                 "uri": falkordb_uri,
@@ -2508,6 +2509,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 neo4j_password=args.neo4j_password,
                 neo4j_db=args.neo4j_db,
                 falkordb_path=getattr(args, "falkordb_path", None),
+                falkordb_uri=resolved_falkordb_uri(args),
                 project_id=project_id,
                 changed_paths=sorted(changed_paths),
             )

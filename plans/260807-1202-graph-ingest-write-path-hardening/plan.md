@@ -385,6 +385,27 @@ and the full approximately 20k-file source canary is available. See
 [`reports/durable-write-journal-red-team.md`](reports/durable-write-journal-red-team.md),
 and [`reports/durable-write-journal-validation.md`](reports/durable-write-journal-validation.md).
 
+### 2026-08-28 C++/Pro*C checkpoint
+
+The C++/Pro*C writer now uses the versioned `phase:nodes` journal barrier for
+generic, call, possible-call, evidence, include, and repository-file edges.
+Specialized Pro*C, unknown-call, and parse-run nodes use trusted node
+operations, and the sync parent pins child analyzers to its resolved FalkorDB
+path/URI and graph instead of allowing project configuration to reroute them.
+
+The 24-file `procsample` canary passed fresh local ingest and a forced kill
+after six node batches. The compatible restart skipped those ACKed batches,
+finished 36/36 batches, drained `phase:nodes` at 12/12, and leased its first
+edge only after the barrier-close event. Fresh and resumed readback matched at
+646 business nodes, 1,327 edges, and 24 files; required mode additionally
+materialized 36 expected `GraphWriteReceipt` audit nodes. The repository suite
+passed 1,399 tests and 270 subtests with 10 skips.
+
+This is a scoped checkpoint, not Phase 04E or Phase 06 completion. The durable
+identity/endpoint conservation ledgers, sealed endpoint audit, remaining
+analyzer/custom writers, full backend matrix, and approximately 20k-file
+canary remain open, so their acceptance checkboxes stay unchecked.
+
 ## Delivery command
 
 After approval, implement with:
