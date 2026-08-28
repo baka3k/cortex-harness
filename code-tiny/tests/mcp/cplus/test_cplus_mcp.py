@@ -78,9 +78,69 @@ class CPlusMCPTests(unittest.IsolatedAsyncioTestCase):
                 falkordb_discovery.os.environ,
                 {"CORTEX_DATA_HOME": str(data_home)},
             ):
-                discovered = falkordb_discovery.discover_falkordb_data_files()
+                # Default boot path returns only the current instance.
+                # No CORTEX_STORAGE_INSTANCE set ⇒ no primary file ⇒ empty list.
+                self.assertEqual(falkordb_discovery.discover_falkordb_data_files(), [])
 
-        self.assertEqual(discovered, [first, second])
+                # When the current instance matches one of the siblings, only
+                # that file is returned — even with siblings present.
+                with patch.dict(
+                    falkordb_discovery.os.environ,
+                    {"CORTEX_DATA_HOME": str(data_home),
+                     "CORTEX_STORAGE_INSTANCE": "alpha"},
+                ):
+                    self.assertEqual(
+                        falkordb_discovery.discover_falkordb_data_files(),
+                        [first],
+                    )
+
+                # Legacy escape hatch restores the "every sibling" behavior.
+                with patch.dict(
+                    falkordb_discovery.os.environ,
+                    {"CORTEX_DATA_HOME": str(data_home),
+                     "CORTEX_STORAGE_INSTANCE": "alpha",
+                     "CORTEX_MCP_SCOPE_LEASES": "0"},
+                ):
+                    self.assertEqual(
+                        falkordb_discovery.discover_falkordb_data_files(),
+                        [first, second],
+                    )
+
+    def test_discovery_siblings_exclude_self_by_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_home = Path(directory)
+            self_path = data_home / "v1" / "instances" / "alpha" / "falkordb" / "code" / "data.rdb"
+            sibling = data_home / "v1" / "instances" / "beta" / "falkordb" / "code" / "data.rdb"
+            for path in (self_path, sibling):
+                path.parent.mkdir(parents=True)
+                path.touch()
+            with patch.dict(
+                falkordb_discovery.os.environ,
+                {"CORTEX_DATA_HOME": str(data_home),
+                 "CORTEX_STORAGE_INSTANCE": "alpha"},
+            ):
+                discovered = falkordb_discovery.discover_falkordb_data_files(
+                    include_siblings=True, exclude_self=True
+                )
+        self.assertEqual(discovered, [sibling])
+
+    def test_discovery_siblings_include_self_when_exclude_self_false(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data_home = Path(directory)
+            self_path = data_home / "v1" / "instances" / "alpha" / "falkordb" / "code" / "data.rdb"
+            sibling = data_home / "v1" / "instances" / "beta" / "falkordb" / "code" / "data.rdb"
+            for path in (self_path, sibling):
+                path.parent.mkdir(parents=True)
+                path.touch()
+            with patch.dict(
+                falkordb_discovery.os.environ,
+                {"CORTEX_DATA_HOME": str(data_home),
+                 "CORTEX_STORAGE_INSTANCE": "alpha"},
+            ):
+                discovered = falkordb_discovery.discover_falkordb_data_files(
+                    include_siblings=True, exclude_self=False
+                )
+        self.assertEqual(discovered, [self_path, sibling])
 
     def test_unregistered_project_id_remains_the_scoped_graph_candidate(self):
         project_id = "unregistered-project"
@@ -140,20 +200,14 @@ class CPlusMCPTests(unittest.IsolatedAsyncioTestCase):
 
         run_cypher.assert_not_awaited()
 
-    async def test_graph_driver_receives_all_discovered_instance_files(self):
+    async def test_graph_driver_receives_no_sibling_paths_by_default(self):
         primary_path = Path("/tmp/_default_test_data.rdb")
-        sibling_path = Path("/tmp/_hyperpack_test_data.rdb")
         driver = SimpleNamespace()
         create_driver = AsyncMock(return_value=driver)
 
         with (
             patch.object(cplus_mcp, "DEFAULT_GRAPH_PROVIDER", "falkordb"),
             patch.dict(cplus_mcp.os.environ, {"FALKORDB_PATH": str(primary_path)}),
-            patch.object(
-                cplus_mcp,
-                "discover_falkordb_data_files",
-                return_value=[primary_path, sibling_path],
-            ),
             patch.object(cplus_mcp, "get_shared_graph_driver", create_driver),
         ):
             cplus_mcp._graph_driver = None
@@ -161,7 +215,9 @@ class CPlusMCPTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(resolved, driver)
         config = create_driver.await_args.args[1]
-        self.assertEqual(config["additional_paths"], [primary_path, sibling_path])
+        # Phase 02: boot path passes no sibling paths so MCP A does not
+        # lease instance B's file.
+        self.assertEqual(config["additional_paths"], [])
         cplus_mcp._graph_driver = None
 
     async def test_graph_driver_prefers_explicit_remote_uri(self):
