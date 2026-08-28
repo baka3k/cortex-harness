@@ -1224,9 +1224,7 @@ def _graph_target_cli_args(args: argparse.Namespace) -> List[str]:
     if provider == GraphProvider.FALKORDB:
         falkordb_uri = (getattr(args, "falkordb_uri", None) or "").strip()
         falkordb_path = str(getattr(args, "falkordb_path", None) or "").strip()
-        if falkordb_uri:
-            result.extend(["--falkordb-uri", falkordb_uri])
-        elif falkordb_path:
+        if not falkordb_uri and falkordb_path:
             result.extend(["--falkordb-path", falkordb_path])
         graph = str(getattr(args, "falkordb_graph", None) or "").strip()
         if graph:
