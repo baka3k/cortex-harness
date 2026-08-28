@@ -196,6 +196,40 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(params["repo_name"], f"Cortext Project/{os.path.basename(root)}")
         self.assertEqual(database, "cortext")
 
+    async def test_preflight_does_not_require_parser_journal_metadata(self):
+        driver = FakeGraphDriver()
+        with tempfile.TemporaryDirectory() as root:
+            args = argparse.Namespace(
+                graph_provider="falkordb",
+                falkordb_path=os.path.join(root, "code", "data.rdb"),
+                falkordb_graph="cortext",
+                neo4j_db="cortext",
+            )
+
+            async def fake_create_driver(provider, config):
+                self.assertEqual(provider, GraphProvider.FALKORDB)
+                return driver
+
+            with patch.dict(
+                os.environ,
+                {"CORTEX_GRAPH_JOURNAL_MODE": "shared-required"},
+                clear=True,
+            ), patch.object(
+                incremental_sync.GraphDriverFactory,
+                "create_driver",
+                side_effect=fake_create_driver,
+            ):
+                await incremental_sync._ensure_project_repository_graph(
+                    args=args,
+                    root=root,
+                    project_id="cortext",
+                    project_name="Cortext Project",
+                )
+
+        self.assertTrue(driver.closed)
+        self.assertFalse(hasattr(driver, "journal_config"))
+        self.assertTrue(driver.queries)
+
     async def test_neo4j_uses_the_same_preflight_before_project_mutation(self):
         driver = FakeGraphDriver()
         with tempfile.TemporaryDirectory() as root:
