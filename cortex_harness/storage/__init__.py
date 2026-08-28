@@ -79,6 +79,13 @@ from .remote_probe import (
     render_provision_line,
     setup_remote_falkordb_schema,
 )
+from .runtime import (
+    ENV_STORE_GATEWAY_ENABLED,
+    active_gateways,
+    begin_gateway_drain,
+    storage_runtime_status,
+    store_gateway_enabled,
+)
 
 __all__ = [
     "DEFAULT_FALKORDB_PATH",
@@ -93,6 +100,7 @@ __all__ = [
     "ENV_EFFECTIVE_TOPOLOGY_FINGERPRINT",
     "ENV_EFFECTIVE_VECTOR_FINGERPRINT",
     "ENV_EFFECTIVE_VECTOR_TARGET",
+    "ENV_STORE_GATEWAY_ENABLED",
     "EffectiveStorageTarget",
     "EffectiveStorageTopology",
     "InvalidStorageIdentityError",
@@ -122,6 +130,8 @@ __all__ = [
     "QdrantStore",
     "StorageFactory",
     "assert_owner_stopped",
+    "active_gateways",
+    "begin_gateway_drain",
     "build_filter",
     "canonical_remote_endpoint",
     "create_storage",
@@ -137,6 +147,8 @@ __all__ = [
     "manifest_payload",
     "migrate_legacy_layout",
     "storage_overlay",
+    "storage_runtime_status",
+    "store_gateway_enabled",
     "validate_backend_config",
     "validate_storage_identity",
     "ProbeResult",

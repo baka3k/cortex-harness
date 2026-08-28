@@ -115,6 +115,16 @@ class _BoundedRetrievalExecutor:
         with self._lock:
             self._draining = True
 
+    @property
+    def snapshot(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "initialized": True,
+                "draining": self._draining,
+                "active_or_queued": self._pending,
+                "capacity": self._capacity,
+            }
+
     def close(self, *, wait: bool = True) -> None:
         self.begin_drain()
         self._executor.shutdown(wait=wait, cancel_futures=True)
@@ -657,6 +667,19 @@ def close_explore_service(*, wait: bool = True) -> None:
     if _service_singleton is not None:
         _service_singleton.close(wait=wait)
         _service_singleton = None
+
+
+def explore_service_status() -> Dict[str, Any]:
+    """Return a cheap snapshot without initializing models or storage."""
+
+    if _service_singleton is None:
+        return {
+            "initialized": False,
+            "draining": False,
+            "active_or_queued": 0,
+            "capacity": 0,
+        }
+    return _service_singleton._retrieval_executor.snapshot
 
 
 # ─────────────────────────────────────────────────────────────────────────────
