@@ -17,8 +17,12 @@ if str(CODE_TINY) not in sys.path:
     sys.path.insert(0, str(CODE_TINY))
 
 from tools.graph.driver.falkordb_driver import FalkorDBDriver  # noqa: E402
+from tools.graph.journal.identity import canonical_json, sha256_hex  # noqa: E402
 from tools.graph.journal.sqlite_store import inspect_journal  # noqa: E402
 from tools.graph.schema import CODE_GRAPH_SCHEMA  # noqa: E402
+
+
+_PRODUCERS_COMPLETE_ID = "__journal_all_producers_complete__"
 
 
 def _manifest_totals(connection: sqlite3.Connection, table: str, run_id: str) -> dict[str, int | bool]:
@@ -65,13 +69,49 @@ def _load_journal_evidence(path: Path, requested_run_id: str | None) -> tuple[li
             producer_row = connection.execute(
                 "SELECT COUNT(*) AS total, "
                 "SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open "
-                "FROM producer_completion WHERE run_id = ?",
-                (run_id,),
+                "FROM producer_completion "
+                "WHERE run_id = ? AND producer_id != ?",
+                (run_id, _PRODUCERS_COMPLETE_ID),
+            ).fetchone()
+            production_complete = connection.execute(
+                "SELECT 1 FROM producer_completion "
+                "WHERE run_id = ? AND producer_id = ? AND status = 'complete'",
+                (run_id, _PRODUCERS_COMPLETE_ID),
             ).fetchone()
             audit_row = connection.execute(
-                "SELECT status FROM endpoint_audit WHERE run_id = ?",
+                "SELECT status, manifest_digest, receipt_count "
+                "FROM endpoint_audit WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
+            endpoint_rows = connection.execute(
+                """
+                SELECT em.manifest_id, em.job_id, em.producer_id, em.row_ordinal,
+                       em.scope, em.relationship_type, em.identity_type,
+                       em.identity_json, em.payload_digest, em.disposition,
+                       ep.role, ep.scope AS endpoint_scope, ep.node_label,
+                       ep.identity_property,
+                       ep.identity_type AS endpoint_identity_type,
+                       ep.identity_json AS endpoint_identity_json, ep.required
+                FROM edge_manifest AS em
+                LEFT JOIN edge_endpoint AS ep
+                  ON ep.run_id = em.run_id
+                 AND ep.edge_manifest_id = em.manifest_id
+                WHERE em.run_id = ?
+                ORDER BY em.manifest_id, ep.role
+                """,
+                (run_id,),
+            ).fetchall()
+            endpoint_manifest_digest = sha256_hex(
+                canonical_json([dict(row) for row in endpoint_rows])
+            )
+            endpoint_audit_valid = bool(
+                audit_row
+                and audit_row["status"] == "sealed"
+                and production_complete is not None
+                and int(producer_row["open"] or 0) == 0
+                and audit_row["manifest_digest"] == endpoint_manifest_digest
+                and int(audit_row["receipt_count"]) == int(edge["emitted"])
+            )
             item["conservation"] = {
                 "node": node,
                 "edge": edge,
@@ -82,6 +122,12 @@ def _load_journal_evidence(path: Path, requested_run_id: str | None) -> tuple[li
                 "conserved": bool(node["conserved"] and edge["conserved"]),
             }
             item["endpoint_audit"] = str(audit_row["status"]) if audit_row else None
+            item["endpoint_audit_evidence"] = {
+                "valid": endpoint_audit_valid,
+                "manifest_digest": endpoint_manifest_digest,
+                "audited_rows": int(edge["emitted"]),
+                "production_complete": production_complete is not None,
+            }
             metadata = json.loads(
                 connection.execute(
                     "SELECT metadata_json FROM runs WHERE run_id = ?", (run_id,)
@@ -116,6 +162,7 @@ def _journal_is_valid(item: dict[str, object]) -> bool:
     return bool(
         item.get("status") == "drained"
         and item.get("endpoint_audit") == "sealed"
+        and (item.get("endpoint_audit_evidence") or {}).get("valid") is True
         and conservation.get("conserved")
         and not node.get("conflict")
         and not node.get("rejected")

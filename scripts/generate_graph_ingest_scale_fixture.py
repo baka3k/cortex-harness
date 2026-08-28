@@ -15,13 +15,20 @@ FANOUT_HEADERS = 501
 PROC_FILES = TOTAL_FILES - COMPILED_FILES - FANOUT_HEADERS
 
 
-def _write(root: Path, path: Path, content: str, digest: hashlib._Hash) -> None:
+def _write(
+    root: Path,
+    path: Path,
+    content: str,
+    digest: hashlib._Hash,
+    *,
+    digest_content: str | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     relative = path.relative_to(root).as_posix()
     digest.update(relative.encode("utf-8"))
     digest.update(b"\0")
-    digest.update(content.encode("utf-8"))
+    digest.update((content if digest_content is None else digest_content).encode("utf-8"))
     digest.update(b"\0")
 
 
@@ -85,7 +92,16 @@ def generate(output: Path) -> dict[str, object]:
 
     compile_path = output / "compile_commands.json"
     compile_content = json.dumps(compile_commands, indent=2, sort_keys=True) + "\n"
-    _write(output, compile_path, compile_content, digest)
+    normalized_compile_content = compile_content.replace(
+        str(output), "${FIXTURE_ROOT}"
+    )
+    _write(
+        output,
+        compile_path,
+        compile_content,
+        digest,
+        digest_content=normalized_compile_content,
+    )
     manifest = {
         "schema_version": 1,
         "total_source_files": TOTAL_FILES,
@@ -93,6 +109,9 @@ def generate(output: Path) -> dict[str, object]:
         "fanout_headers": FANOUT_HEADERS,
         "proc_files": PROC_FILES,
         "content_manifest_sha256": digest.hexdigest(),
+        "compile_commands_sha256": hashlib.sha256(
+            compile_content.encode("utf-8")
+        ).hexdigest(),
     }
     (output / "fixture-manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",

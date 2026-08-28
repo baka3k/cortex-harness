@@ -921,6 +921,63 @@ async def test_cplus_node_first_stages_edges_until_global_node_drain(
 
 
 @pytest.mark.asyncio
+async def test_required_project_repository_setup_is_fully_journaled(
+    tmp_path: Path,
+) -> None:
+    env, config = _config(tmp_path, parser="cplus")
+    driver = _ConsumerDriver()
+    driver.journal_config = config
+    writer = LanguageCodeWriter(driver, batch_size=10)
+
+    assert await writer.write_project_repository_setup(
+        project_id="demo",
+        project_name="Demo Project",
+        project_slug="demo-project",
+        repository_name="Demo Project/source",
+    ) == {"projects": 1, "repositories": 1, "relationships": 1}
+
+    runtime = writer._journal_runtime
+    assert runtime is not None
+    summary = runtime.journal.conservation_summary(runtime.run.run_id)
+    assert summary["node"]["emitted"] == 2
+    assert summary["node"]["graph_verified"] == 2
+    assert summary["edge"]["emitted"] == 1
+    assert summary["edge"]["graph_verified"] == 0
+    assert not any("HAS_REPOSITORY" in query for query, _ in driver.calls)
+
+    assert await writer.close_node_production_and_drain_edges() == 1
+    assert any("HAS_REPOSITORY" in query for query, _ in driver.calls)
+    assert finalize_journal_from_env(env) is RunStatus.DRAINED
+
+
+@pytest.mark.asyncio
+async def test_consumer_rechecks_endpoint_audit_after_final_node_ack(
+    tmp_path: Path,
+) -> None:
+    env, config = _config(tmp_path, parser="cplus")
+    runtime = GraphWriteJournalRuntime(config)
+    runtime.prepare(
+        label="files",
+        rows=[
+            {
+                "id": "a.c",
+                "project_id": "demo",
+                "project_id_normalized": "demo",
+            }
+        ],
+        sequence=0,
+    )
+    runtime.close_node_production()
+    runtime.close()
+
+    driver = _ConsumerDriver()
+    assert await resume_journal(config, driver) == 2
+    with SQLiteJournal(config.path) as journal:
+        assert journal.endpoint_audit_status(runtime.run.run_id) == "sealed"
+    assert finalize_journal_from_env(env) is RunStatus.DRAINED
+
+
+@pytest.mark.asyncio
 async def test_serialization_failure_prevents_graph_mutation(tmp_path: Path) -> None:
     _env, config = _config(tmp_path)
     writer = LanguageCodeWriter(_Driver(config))

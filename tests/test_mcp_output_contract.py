@@ -43,10 +43,73 @@ def test_error_envelope_converts_legacy_type_to_stable_code_and_details():
         "code": "capability_unavailable",
         "message": "NAVIGATE is unavailable",
         "retryable": False,
-        "details": {
-            "missing_relationships": ["NAVIGATE"],
-            "context": {"query_engine": "graph_generic"},
+        "details": {"missing_relationships": ["NAVIGATE"]},
+    }
+
+
+def test_capability_error_omits_internal_schema_catalog_and_parameter_help():
+    legacy = {
+        "ok": False,
+        "query_engine": "graph_generic",
+        "error": {
+            "type": "capability_unavailable",
+            "tool": "get_endpoints",
+            "query_engine": "graph_generic",
+            "message": (
+                "Parser 'proc' cannot execute 'get_endpoints' on the active "
+                "provider. Missing required relationships: EXPOSES_ENDPOINT."
+            ),
+            "missing_required_params": [],
+            "required_params": ["project_id", "parser_type"],
+            "accepted_params": ["project_id", "protocol", "parser_type"],
+            "received_params": ["parser_type", "project_id"],
+            "example": "get_endpoints(project_id='shop', parser_type='proc')",
+            "next_step": "Call list_mcp_functions and retry.",
         },
+        "capability": {
+            "requested_parser": "proc",
+            "canonical_parser": "cplus",
+            "query_engine": "graph_generic",
+        },
+        "capability_diagnostics": {
+            "missing_required_relationships": ["EXPOSES_ENDPOINT"],
+            "available_relationships": ["CALLS", "READS_FROM", "WRITES_TO"],
+            "available_labels": ["Function", "ProjectModule", "SqlStatement"],
+        },
+    }
+
+    result = normalize_error(legacy)
+
+    assert result["error"]["details"] == {
+        "parser": "proc",
+        "missing_relationships": ["EXPOSES_ENDPOINT"],
+    }
+    serialized = str(result)
+    assert "available_relationships" not in serialized
+    assert "available_labels" not in serialized
+    assert "accepted_params" not in serialized
+    assert "required_params" not in serialized
+
+
+def test_missing_parameter_error_keeps_only_actionable_missing_names():
+    result = normalize_error(
+        {
+            "ok": False,
+            "query_engine": "graph_generic",
+            "error": {
+                "type": "missing_required_parameters",
+                "message": "project_id is required",
+                "missing_required_params": ["project_id"],
+                "required_params": ["project_id", "parser_type"],
+                "accepted_params": ["project_id", "parser_type", "limit"],
+                "received_params": ["parser_type"],
+                "example": "search_functions(project_id='shop')",
+            },
+        }
+    )
+
+    assert result["error"]["details"] == {
+        "missing_parameters": ["project_id"]
     }
 
 
