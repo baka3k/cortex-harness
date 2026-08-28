@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import sys
 from pathlib import Path
@@ -154,3 +155,29 @@ def test_unified_mcp_preserves_structured_gateway_error() -> None:
     assert payload["error"]["retry_after_ms"] == 100
     assert payload["error"]["capacity"] == 32
     assert payload["error"]["correlation_id"] == "request-1"
+
+
+@pytest.mark.asyncio
+async def test_unified_health_keeps_liveness_separate_from_readiness() -> None:
+    from unified_mcp import health_check, readiness_check
+
+    storage = {
+        "mode": "generation_gateway",
+        "feature_requested": True,
+        "liveness": True,
+        "readiness": False,
+        "state": "owner_missing",
+        "gateway_count": 0,
+        "gateways": [],
+    }
+    with patch("unified_mcp.storage_runtime_status", return_value=storage):
+        live_response = await health_check(None)
+        ready_response = await readiness_check(None)
+
+    live_payload = json.loads(live_response.body)
+    ready_payload = json.loads(ready_response.body)
+    assert live_response.status_code == 200
+    assert live_payload["status"] == "healthy"
+    assert live_payload["readiness"] is False
+    assert ready_response.status_code == 503
+    assert ready_payload["status"] == "not_ready"
