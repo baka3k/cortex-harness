@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from tools.graph.core.base import GraphProvider
 from tools.graph.core.cypher_driver import CypherGraphDriver
 from tools.common.project_scope import prepare_project_scope_parameters
-from cortex_harness.storage.lease import StorageLease, StorageLeaseConflictError
+from cortex_harness.storage.lease import StorageLease
 from cortex_harness.storage.admission import BoundedLane, LaneLimits
 
 
@@ -245,7 +245,9 @@ class FalkorDBDriver(CypherGraphDriver):
         self._path: Optional[Path] = Path(path).resolve() if path is not None else None
         self._storage_lease: Optional[StorageLease] = None
         self._additional_clients: List[Any] = []
-        self._additional_storage_leases: List[StorageLease] = []
+        # Sibling stores are opened read-only with no application lease; this
+        # list keeps the resolved paths for diagnostics / cleanup.
+        self._additional_open_paths: List[Path] = []
         self._graph_clients: Dict[str, Any] = {}
         self._query_lane = BoundedLane(
             "falkordb-query", LaneLimits(concurrency=1, max_queue_items=32)
@@ -395,12 +397,16 @@ class FalkorDBDriver(CypherGraphDriver):
         *,
         owner_id: str,
     ) -> None:
-        """Own and index sibling embedded stores for cross-instance reads.
+        """Open sibling embedded stores for read-only fan-out.
 
-        Each sibling is protected by the same application lease as the
-        primary store. If another process already owns it, this driver skips
-        that store instead of bypassing the lease with a raw short-lived
-        client. The primary file wins when duplicate graph names exist.
+        Sibling stores are opened without acquiring an application lease;
+        the writer on the sibling instance owns its own exclusive
+        ``StorageLease`` independently of this reader, so concurrent ingests
+        on those instances are not blocked. Concurrent writes are
+        serialized by falkordblite's append-only AOF + atomic-rename RDB
+        rewrite — the reader sees either the previous complete snapshot or
+        the new one, never a torn write. The primary file wins when
+        duplicate graph names exist.
         """
         if self._path is None:
             return
@@ -412,26 +418,11 @@ class FalkorDBDriver(CypherGraphDriver):
                 continue
             seen.add(candidate)
             try:
-                instance_id = candidate.parents[2].name
-            except IndexError:
-                instance_id = "default"
-            lease = StorageLease(
-                candidate,
-                instance_id=instance_id,
-                owner_id=owner_id,
-                backend="falkordb",
-            )
-            try:
-                lease.acquire()
                 client = _open_local_falkordb(candidate)
-            except StorageLeaseConflictError as exc:
-                logger.warning("Skipping owned FalkorDB instance %s: %s", candidate, exc)
-                continue
             except Exception as exc:
-                lease.release()
                 logger.warning("Skipping unreadable FalkorDB instance %s: %s", candidate, exc)
                 continue
-            self._additional_storage_leases.append(lease)
+            self._additional_open_paths.append(candidate)
             self._additional_clients.append(client)
             self._register_client_graphs(client)
 
@@ -491,9 +482,7 @@ class FalkorDBDriver(CypherGraphDriver):
                 except Exception as exc:  # pragma: no cover - best-effort close
                     logger.debug("Additional FalkorDB close() raised: %s", exc)
             self._additional_clients.clear()
-            for lease in reversed(self._additional_storage_leases):
-                lease.release()
-            self._additional_storage_leases.clear()
+            self._additional_open_paths.clear()
             if self._storage_lease is not None:
                 self._storage_lease.release()
                 self._storage_lease = None

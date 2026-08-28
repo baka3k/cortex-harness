@@ -1,20 +1,21 @@
-"""End-to-end lease surface test for per-instance MCP isolation.
+"""End-to-end lease surface test for the multi-instance fan-out default.
 
 Proves the four claims of the
-``plans/260828-1428-instance-isolated-mcp-locks`` plan:
+``plans/260828-1508-multi-instance-fanout-default`` plan:
 
-1. A MCP boot path with ``CORTEX_STORAGE_INSTANCE=A`` opens only the
-   primary ``data.rdb`` of A — no siblings.
+1. A MCP boot path with ``CORTEX_STORAGE_INSTANCE=A`` discovers every
+   sibling ``data.rdb`` by default — fan-out is the default again.
 2. ``_mcp_stop_pattern(pattern, instance_id="B")`` does not signal any
-   PID whose recorded instance id is A.
-3. A second MCP process for B does not conflict with MCP A's lease.
-4. The legacy ``CORTEX_MCP_SCOPE_LEASES=0`` escape hatch restores the
-   pre-isolation behavior.
+   PID whose recorded instance id is A (carried over from
+   ``plans/260828-1428-instance-isolated-mcp-locks``).
+3. An ingest of B succeeds while MCP A holds the lease on A.
+4. Sibling stores are opened by the driver without acquiring a
+   ``StorageLease`` (verified separately by
+   ``tests/test_mcp_sibling_no_lease.py``).
 
-The test exercises the discovery and cross-instance gate modules
-directly rather than spawning real MCP subprocesses — both exercise
-the same contract that the boot path uses, and the in-process model
-avoids platform flakiness.
+The test exercises the discovery helper directly rather than spawning
+real MCP subprocesses — both exercise the same contract that the boot
+path uses, and the in-process model avoids platform flakiness.
 """
 
 import importlib.util
@@ -45,9 +46,6 @@ if str(_MCP_DIR) not in sys.path:
     sys.path.insert(0, str(_MCP_DIR))
 falkordb_discovery = _load_module(
     "falkordb_discovery_under_test", _MCP_DIR / "falkordb_discovery.py"
-)
-cross_instance = _load_module(
-    "cross_instance_under_test", _MCP_DIR / "cross_instance.py"
 )
 
 
@@ -86,8 +84,8 @@ class LeaseSurfaceTests(unittest.TestCase):
         self._leases.append(lease)
         return lease
 
-    def test_alpha_driver_owns_only_alpha_lease(self):
-        """MCP A's primary lease is the only lease it acquires."""
+    def test_default_discovery_returns_every_sibling(self):
+        """Boot-path default returns every instance's ``data.rdb``."""
         with mock.patch.dict(
             os.environ,
             {"CORTEX_DATA_HOME": str(self.data_home),
@@ -95,19 +93,45 @@ class LeaseSurfaceTests(unittest.TestCase):
         ):
             paths = falkordb_discovery.discover_falkordb_data_files()
 
-        self.assertEqual(paths, [self.alpha])
+        self.assertEqual(paths, [self.alpha, self.beta])
 
-        # Both files are accessible; A's lease on alpha does not block
-        # an external party from acquiring beta.
-        self._acquire(self.alpha, "alpha")
-        external_lease = StorageLease(
-            self.beta,
-            instance_id="beta",
-            owner_id="code",
-            backend="falkordb",
-        )
-        external_lease.acquire()
-        external_lease.release()
+    def test_alpha_driver_includes_every_sibling(self):
+        """An MCP boot path with ``CORTEX_STORAGE_INSTANCE=alpha`` sees every sibling."""
+        with mock.patch.dict(
+            os.environ,
+            {"CORTEX_DATA_HOME": str(self.data_home),
+             "CORTEX_STORAGE_INSTANCE": "alpha"},
+        ):
+            primary = falkordb_discovery.discover_falkordb_data_files(
+                include_siblings=False, exclude_self=False
+            )
+            siblings = falkordb_discovery.discover_falkordb_data_files(
+                include_siblings=True, exclude_self=True
+            )
+
+        self.assertEqual(primary, [self.alpha])
+        self.assertEqual(siblings, [self.beta])
+
+    def test_explicit_kwargs_filter_siblings(self):
+        """``exclude_self=True`` drops the current instance; ``include_siblings=False`` keeps only the primary."""
+        with mock.patch.dict(
+            os.environ,
+            {"CORTEX_DATA_HOME": str(self.data_home),
+             "CORTEX_STORAGE_INSTANCE": "alpha"},
+        ):
+            with_self = falkordb_discovery.discover_falkordb_data_files(
+                include_siblings=True, exclude_self=False
+            )
+            without_self = falkordb_discovery.discover_falkordb_data_files(
+                include_siblings=True, exclude_self=True
+            )
+            only_primary = falkordb_discovery.discover_falkordb_data_files(
+                include_siblings=False, exclude_self=False
+            )
+
+        self.assertEqual(with_self, [self.alpha, self.beta])
+        self.assertEqual(without_self, [self.beta])
+        self.assertEqual(only_primary, [self.alpha])
 
     def test_ingest_of_beta_succeeds_while_mcp_alpha_holds_alpha(self):
         """An ingest of B does not collide with MCP A's lease on A."""
@@ -126,7 +150,7 @@ class LeaseSurfaceTests(unittest.TestCase):
             )
         ingest_lease.release()
 
-    def test_ingest_of_alpha_fails_when_mcp_alpha_holds_it(self):
+    def test_ingest_of_alpha_still_conflicts(self):
         """Sanity: same-instance still conflicts (this is the lease's job)."""
         self._acquire(self.alpha, "alpha")
         colliding_lease = StorageLease(
@@ -137,62 +161,6 @@ class LeaseSurfaceTests(unittest.TestCase):
         )
         with self.assertRaises(StorageLeaseConflictError):
             colliding_lease.acquire()
-
-    def test_legacy_escape_hatch_returns_every_sibling(self):
-        """``CORTEX_MCP_SCOPE_LEASES=0`` reverts to the legacy behavior."""
-        with mock.patch.dict(
-            os.environ,
-            {"CORTEX_DATA_HOME": str(self.data_home),
-             "CORTEX_STORAGE_INSTANCE": "alpha",
-             "CORTEX_MCP_SCOPE_LEASES": "0"},
-        ):
-            paths = falkordb_discovery.discover_falkordb_data_files()
-
-        # The legacy mode returns every instance including self.
-        self.assertEqual(paths, [self.alpha, self.beta])
-
-
-class CrossInstanceGateTests(unittest.TestCase):
-    def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.data_home = Path(self._tmp.name)
-        self.alpha = _make_instance(self.data_home, "alpha")
-        self.beta = _make_instance(self.data_home, "beta")
-
-    def test_gate_closed_by_default(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertFalse(cross_instance.enabled())
-            self.assertFalse(cross_instance.is_allowed("analyze_workflow_impact"))
-            self.assertEqual(cross_instance.sibling_paths_if_allowed("analyze_workflow_impact"), [])
-
-    def test_gate_open_with_opt_in_env(self):
-        with mock.patch.dict(
-            os.environ,
-            {"CORTEX_DATA_HOME": str(self.data_home),
-             "CORTEX_STORAGE_INSTANCE": "alpha",
-             "CROSS_INSTANCE_QUERY": "1"},
-        ):
-            self.assertTrue(cross_instance.enabled())
-            self.assertTrue(cross_instance.is_allowed("analyze_workflow_impact"))
-            self.assertTrue(cross_instance.is_allowed("explore_graph"))
-            self.assertFalse(cross_instance.is_allowed("not_on_allowlist"))
-
-            paths = cross_instance.sibling_paths_if_allowed("analyze_workflow_impact")
-            self.assertEqual(paths, [self.beta])
-
-            combined = cross_instance.self_and_allowed_siblings_paths("analyze_workflow_impact")
-            self.assertEqual(combined, [self.alpha, self.beta])
-
-    def test_gate_open_but_tool_not_allowlisted(self):
-        with mock.patch.dict(
-            os.environ,
-            {"CORTEX_DATA_HOME": str(self.data_home),
-             "CORTEX_STORAGE_INSTANCE": "alpha",
-             "CROSS_INSTANCE_QUERY": "1"},
-        ):
-            self.assertFalse(cross_instance.is_allowed("some_unlisted_tool"))
-            self.assertEqual(cross_instance.sibling_paths_if_allowed("some_unlisted_tool"), [])
 
 
 if __name__ == "__main__":
