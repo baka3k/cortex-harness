@@ -1,0 +1,574 @@
+{
+  "name": "procsample-all-tools",
+  "project": "procsample",
+  "parser": "proc",
+  "servers": [
+    {
+      "name": "graph_mcp",
+      "endpoint": "http://127.0.0.1:8788/mcp",
+      "require_full_inventory": true,
+      "cases": [
+        {
+          "tool": "find_path_between_module",
+          "input": {
+            "source_modules": [
+              "src/app"
+            ],
+            "target_modules": [
+              "src/core"
+            ],
+            "max_depth": 8,
+            "direction": "out",
+            "parser_type": "proc",
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_up_entrypoint",
+          "input": {
+            "modules": [
+              "src/app"
+            ],
+            "limit": 50,
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_ipc_message",
+          "input": {
+            "sender": "batch_job_run",
+            "receiver": "batch_control_finish",
+            "project_id": "procsample"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "plan_dependency_order",
+          "input": {
+            "modules": [
+              "src/app",
+              "src/core"
+            ],
+            "parser_type": "proc",
+            "project_id": "procsample",
+            "edge_semantics": "depends_on",
+            "on_cycle": "auto_condense_scc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_symbol",
+          "input": {
+            "node_id": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb",
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_qdrant_collections",
+          "input": {
+            "include_vectors": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "listup_symbols_matching_file_path",
+          "input": {
+            "modules": [
+              "src/core"
+            ],
+            "node_types": [
+              "Function",
+              "Type",
+              "Field"
+            ],
+            "max_depth": 2,
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "compute_scc",
+          "input": {
+            "nodes": [
+              "cplus-function-v2::main::737ec442680400bc5ca5a050",
+              "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb"
+            ],
+            "edges": [
+              {
+                "from": "cplus-function-v2::main::737ec442680400bc5ca5a050",
+                "to": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb"
+              }
+            ],
+            "parser_type": "proc",
+            "edge_semantics": "depends_on",
+            "include_singletons": true
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_node_details",
+          "input": {
+            "node_ids": [
+              "cplus-function-v2::main::737ec442680400bc5ca5a050",
+              "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb"
+            ],
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "search_by_code",
+          "input": {
+            "query": "batch_checkpoint_load",
+            "limit": 20,
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "search_functions",
+          "input": {
+            "query": "batch_job_run|run_step|main",
+            "limit": 20,
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_databases",
+          "input": {},
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "find_screen_workflows",
+          "input": {
+            "project_id": "procsample",
+            "node_a": "batch_job_run",
+            "direction": "outbound",
+            "max_hops": 8,
+            "max_paths": 20,
+            "include_entry_function": false,
+            "include_api_calls": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "capability_unavailable"
+        },
+        {
+          "tool": "query_subgraph",
+          "input": {
+            "function_id": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb",
+            "direction": "all",
+            "max_depth": 2,
+            "include_possible": true,
+            "include_fp": true,
+            "parser_type": "proc",
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "listup_class_matching_path",
+          "input": {
+            "class_names": [
+              "StepDefinition"
+            ],
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "plan_file_dependency_order",
+          "input": {
+            "modules": [
+              "src/app",
+              "src/core"
+            ],
+            "parser_type": "proc",
+            "project_id": "procsample",
+            "edge_semantics": "depends_on",
+            "on_cycle": "auto_condense_scc",
+            "include_cross_module": true,
+            "max_files_per_module": 100
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_possible_calls",
+          "input": {
+            "limit": 50,
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "plan_function_dependency_order",
+          "input": {
+            "modules": [
+              "src/app",
+              "src/core"
+            ],
+            "parser_type": "proc",
+            "project_id": "procsample",
+            "edge_semantics": "depends_on",
+            "on_cycle": "auto_condense_scc",
+            "include_cross_module": true,
+            "include_lambdas": false,
+            "max_functions_per_module": 200
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "annotate_node",
+          "input": {
+            "node_id": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb",
+            "note": "MCP smoke test 2026-08-28 (project procsample)",
+            "tags": "mcp-smoke-test",
+            "severity": "info",
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "topological_sort",
+          "input": {
+            "nodes": [
+              "src/app",
+              "src/core"
+            ],
+            "edges": [
+              {
+                "from": "src/app",
+                "to": "src/core"
+              }
+            ],
+            "parser_type": "proc",
+            "edge_semantics": "depends_on",
+            "output_mode": "both",
+            "on_cycle": "auto_condense_scc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "trace_flow",
+          "input": {
+            "start_id": "cplus-function-v2::main::737ec442680400bc5ca5a050",
+            "end_id": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb",
+            "parser_type": "proc",
+            "max_depth": 6,
+            "direction": "out",
+            "limit": 50,
+            "debug": false,
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "trace_flow_between_module",
+          "input": {
+            "source_modules": [
+              "src/app"
+            ],
+            "target_modules": [
+              "src/core"
+            ],
+            "parser_type": "proc",
+            "max_depth": 8,
+            "direction": "out",
+            "limit": 50,
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "semantic_search",
+          "input": {
+            "query": "batch job checkpoint commit restart",
+            "mode": "combined",
+            "top_k": 5,
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "show_snippet": false,
+            "show_comment": false,
+            "expand_graph": false,
+            "graph_depth": 2,
+            "graph_direction": "both",
+            "graph_limit": 20,
+            "project_id": "procsample"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "find_paths",
+          "input": {
+            "start_function_id": "cplus-function-v2::main::737ec442680400bc5ca5a050",
+            "end_function_id": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb",
+            "max_depth": 8,
+            "include_possible": true,
+            "include_fp": true,
+            "parser_type": "proc",
+            "project_id": "procsample",
+            "content_mode": "summary",
+            "include_raw_fields": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_mcp_functions",
+          "input": {},
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_parsers",
+          "input": {
+            "detail_level": "summary"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "inspect_parser_capabilities",
+          "input": {
+            "parser_type": "proc",
+            "project_id": "procsample"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "explore_graph",
+          "input": {
+            "query": "batch job checkpoint commit restart",
+            "mode": "hybrid",
+            "top_k": 5,
+            "debug": false,
+            "parser_type": "proc",
+            "project_id": "procsample"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "reconstruct_flow",
+          "input": {
+            "entry_context_json": "{\"type\": \"batch\", \"entry_point\": \"main\", \"entry_node_id\": \"cplus-function-v2::main::737ec442680400bc5ca5a050\", \"screen\": null, \"trigger\": \"cli\"}",
+            "paths_json": "[{\"path_id\": \"main_to_batch_job_run\", \"nodes\": [{\"node_id\": \"cplus-function-v2::main::737ec442680400bc5ca5a050\", \"name\": \"main\", \"mapped_type\": \"function\", \"location\": {\"file\": \"src/app/batch_main.c\", \"line\": 141}}, {\"node_id\": \"cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb\", \"name\": \"batch_job_run\", \"mapped_type\": \"function\", \"location\": {\"file\": \"src/core/batch_job.c\", \"line\": 100}}], \"edges\": [{\"source\": \"cplus-function-v2::main::737ec442680400bc5ca5a050\", \"target\": \"cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb\", \"type\": \"CALLS\"}]}]"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_project_modules",
+          "input": {
+            "project_id": "procsample",
+            "include_dependencies": true,
+            "offset": 0,
+            "limit": 50,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_public_apis",
+          "input": {
+            "project_id": "procsample",
+            "language": "c",
+            "include_inferred": false,
+            "offset": 0,
+            "limit": 50,
+            "parser_type": "proc"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "capability_unavailable"
+        },
+        {
+          "tool": "get_endpoints",
+          "input": {
+            "project_id": "procsample",
+            "protocol": "http",
+            "offset": 0,
+            "limit": 50,
+            "parser_type": "proc"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "capability_unavailable"
+        },
+        {
+          "tool": "get_module_architecture_summary",
+          "input": {
+            "project_id": "procsample",
+            "all_modules": true,
+            "detail_level": "summary",
+            "item_limit": 20,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_project_special_files",
+          "input": {
+            "project_id": "procsample",
+            "include_generated": false,
+            "offset": 0,
+            "limit": 50,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_framework_context",
+          "input": {
+            "project_id": "procsample",
+            "framework": "proc",
+            "dimensions": [
+              "persistence",
+              "runtime"
+            ],
+            "offset": 0,
+            "limit": 50,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "find_callers_of_endpoint",
+          "input": {
+            "endpoint_path": "/batch/run",
+            "http_method": "POST",
+            "project_id": "procsample",
+            "parser_type": "proc"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "capability_unavailable"
+        },
+        {
+          "tool": "get_api_call_chain",
+          "input": {
+            "component_name": "batch_job_run",
+            "endpoint_path": "/batch/run",
+            "project_id": "procsample",
+            "max_depth": "5",
+            "parser_type": "proc"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "capability_unavailable"
+        },
+        {
+          "tool": "analyze_workflow_impact",
+          "input": {
+            "function_id": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb",
+            "project_id": "procsample",
+            "direction": "downstream",
+            "max_depth": 4,
+            "parser_type": "proc"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "find_workflows_containing",
+          "input": {
+            "function_id": "cplus-function-v2::batch_job_run::eefd107607f42313aa5bf0eb",
+            "project_id": "procsample",
+            "include_indirect": true,
+            "max_depth": 4,
+            "parser_type": "proc"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "capability_unavailable"
+        }
+      ]
+    },
+    {
+      "name": "mind_mcp",
+      "endpoint": "http://127.0.0.1:8789/mcp",
+      "require_full_inventory": true,
+      "cases": [
+        {
+          "tool": "list_source_ids",
+          "input": {
+            "limit": 50,
+            "project_id": "procsample"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_qdrant_collections",
+          "input": {
+            "project_id": "procsample"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "semantic_search",
+          "input": {
+            "query": "batch job checkpoint commit restart",
+            "top_k": 5,
+            "project_id": "procsample",
+            "max_passage_chars": 500,
+            "include_entity_ids": true,
+            "include_entity_mentions": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "query_graph_rag_langextract",
+          "input": {
+            "query": "batch job checkpoint commit restart behavior",
+            "top_k": 5,
+            "project_id": "procsample",
+            "include_entities": true,
+            "include_relations": true,
+            "expand_related": true,
+            "related_k": 50,
+            "graph_depth": 1,
+            "max_passage_chars": 500,
+            "rerank": false
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_paragraph_text",
+          "input": {
+            "source_id": "260825-1538-port-batch-main__plan.md",
+            "paragraph_id": 13,
+            "project_id": "procsample"
+          },
+          "expected_status": "SUCCESS"
+        }
+      ]
+    }
+  ]
+}

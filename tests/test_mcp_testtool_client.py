@@ -64,3 +64,20 @@ def test_call_tool_keeps_json_text_fallback_for_unstructured_results():
         result = client.call_tool("legacy_tool", {})
 
     assert result == {"ok": True}
+
+
+def test_call_tool_raw_preserves_complete_jsonrpc_response():
+    client = MCPClient()
+    response = _rpc_response(
+        {
+            "content": [{"type": "text", "text": "Success."}],
+            "structuredContent": {"ok": True, "data": {"ids": ["n1"]}, "error": None},
+            "isError": False,
+        }
+    )
+
+    with patch.object(client, "_post", return_value=response):
+        result = client.call_tool_raw("get_node_details", {"node_ids": ["n1"]})
+
+    assert result["jsonrpc"] == "2.0"
+    assert result["result"]["structuredContent"]["data"] == {"ids": ["n1"]}

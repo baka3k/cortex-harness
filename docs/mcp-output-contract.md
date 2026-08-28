@@ -157,6 +157,15 @@ Quy tắc:
 - `error.message` MUST ngắn, an toàn và có thể hành động được.
 - `error.retryable` MUST là boolean.
 - `error.details` MUST là object, kể cả khi rỗng.
+- `error.details` MUST nhỏ và chỉ chứa dữ liệu giúp client xử lý request hiện
+  tại, ví dụ `parser`, `missing_relationships`, `missing_labels`,
+  `missing_parameters`, `retry_after_ms` hoặc `correlation_id`.
+- Error response MUST NOT nhúng catalog/schema chẩn đoán như
+  `available_labels`, `available_relationships`, `accepted_params`,
+  `required_params`, `received_params`, `supported_parsers`,
+  `supported_aliases`, `capability_diagnostics` hoặc context backend đầy đủ.
+  Client dùng `list_mcp_functions`, `list_parsers` hoặc
+  `inspect_parser_capabilities` khi cần dữ liệu discovery chi tiết.
 - Không trả `warning` thay cho error nếu request không thể thực hiện.
 - Unknown tool, malformed JSON-RPC và lỗi protocol vẫn dùng JSON-RPC error;
   không ép chúng vào tool envelope.
