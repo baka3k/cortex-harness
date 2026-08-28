@@ -10,7 +10,18 @@ The journal now opens a versioned global `phase:nodes` barrier: node operations 
 
 Preflight writes can omit parser-scoped journal attachment, while explicit FalkorDB path/URI selection is mutually exclusive and propagated to analyzer children. The follow-up routing review fix centralized effective URI resolution across driver creation, topology bootstrap, journal resume, and impact expansion, preventing an explicit local path from being redirected by inherited `FALKORDB_URI` (`code-tiny/tools/graph/cli.py:43-60`, `code-tiny/tools/graph/cli.py:214-252`, `code-tiny/tools/sync/incremental_sync.py:984-1013`, `code-tiny/tools/sync/incremental_sync.py:1041-1075`, `code-tiny/tools/sync/incremental_sync.py:2503-2515`).
 
-Validation passed the full suite with 1,399 tests, 270 subtests, 10 skips. A fresh local 24-file `procsample` ingest read back 646 business nodes and 1,327 edges. Required-journal replay added only the expected 36 `GraphWriteReceipt` audit nodes. A forced kill after six node batches resumed to 36/36 batches with `phase:nodes` at 12/12; journal event 76 was the barrier close and the first edge lease followed at event 77. The persisted claim predicate requires every referenced barrier to be drained before emitting `batch_leased` (`code-tiny/tools/graph/journal/sqlite_store.py:1024-1063`, `code-tiny/tools/graph/journal/sqlite_store.py:1078-1150`).
+The review follow-up also moved C++ incremental deletion behind version-2,
+receipt-backed node-phase jobs. File-owned facts are cleaned through 16
+allowlisted label-specific queries, orphan `UnknownFunction` cleanup is scoped
+by `project_id`, and legacy version-1 cleanup payloads fail closed instead of
+being acknowledged under changed semantics
+(`code-tiny/tools/graph/writer/language_writer.py:1754`,
+`code-tiny/tools/graph/journal/executor.py:113`, commit
+`2805fb578994fc1ae396df8d5ae1c605546104b8`). Remote FalkorDB URI userinfo stays
+in the child environment and is never copied into argv or persisted command
+artifacts (`code-tiny/tools/sync/incremental_sync.py:1219`).
+
+Validation passed the full suite with 1,402 tests, 270 subtests, 10 skips. A fresh local 24-file `procsample` ingest read back 646 business nodes and 1,327 edges. Required-journal replay added only the expected 36 `GraphWriteReceipt` audit nodes. A forced kill after six node batches resumed to 36/36 batches with `phase:nodes` at 12/12; journal event 76 was the barrier close and the first edge lease followed at event 77. The persisted claim predicate requires every referenced barrier to be drained before emitting `batch_leased` (`code-tiny/tools/graph/journal/sqlite_store.py:1024-1063`, `code-tiny/tools/graph/journal/sqlite_store.py:1078-1150`).
 
 ## Impact
 
@@ -27,5 +38,6 @@ Retain the durable global node barrier, trusted indexed node operations, and exp
 - Durable node-first C++/Pro*C writer: `9133e58c0853d2a6ce65e513afc8ce70a255888f`
 - Explicit FalkorDB target selection: `23d88efb8126b6c019cf406a7dfa001f65fab7b0`
 - Target-routing review fix: `db3937a86145c99ef6e560d930470415963edfe2`
+- Incremental cleanup review hardening: `2805fb578994fc1ae396df8d5ae1c605546104b8`
 - Node-first and trusted-operation coverage: `tests/test_graph_write_journal_runtime.py:165-209`, `tests/test_graph_write_journal_runtime.py:830-895`
 - Explicit target and preflight coverage: `tests/test_incremental_sync_graph_setup.py:61-109`, `tests/test_incremental_sync_graph_setup.py:194-270`
