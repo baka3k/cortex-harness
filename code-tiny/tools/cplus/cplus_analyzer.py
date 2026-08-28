@@ -63,7 +63,7 @@ from tools.common.analyzer_cache import (
     write_parse_cache,
 )
 from tools.common.git_diff import load_manifest_paths
-from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
+from tools.common.incremental_cleanup import cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
 from tools.common.project_scope import enrich_project_scope
 from tools.graph import GraphDriverFactory, GraphProvider
@@ -3788,12 +3788,9 @@ async def build_call_graph(
     # No store is modified until every candidate payload has passed scan-wide preflight.
     if incremental and cleanup_targets:
         if code_writer:
-            await cleanup_neo4j_for_files(
-                driver=code_writer.driver,
-                database=code_writer.database,
+            await code_writer.cleanup_incremental_files(
                 project_id=project_id,
                 file_paths=cleanup_targets,
-                verbose=verbose,
             )
         if qdrant_writer:
             cleanup_qdrant_with_writer(

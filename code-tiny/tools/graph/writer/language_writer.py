@@ -1732,6 +1732,64 @@ class LanguageCodeWriter:
             key, rows, write_batch, state, state_writer, operation
         )
 
+    async def cleanup_incremental_files(
+        self,
+        *,
+        project_id: str,
+        file_paths: List[str],
+    ) -> Dict[str, int]:
+        """Delete stale file-owned facts through replay-safe node-phase jobs."""
+
+        paths = sorted(
+            {str(path).replace("\\", "/") for path in file_paths if path}
+        )
+        if not paths:
+            return {"file_cleanup_jobs": 0, "orphan_cleanup_jobs": 0}
+
+        async def execute(
+            operation: GraphWriteOperation,
+            rows: List[Dict[str, Any]],
+        ) -> int:
+            query, parameters = compile_persisted_mutation(operation, rows)
+            records, _, _ = await self.driver.execute_query(
+                query, parameters, self.database
+            )
+            return int(records[0]["count"]) if records else 0
+
+        file_operation = GraphWriteOperation.for_incremental_cleanup(
+            "cplus:incremental_file_cleanup",
+            reconciliation="file_cleanup",
+        )
+
+        async def cleanup_files(batch: List[Dict[str, Any]]) -> int:
+            return await execute(file_operation, batch)
+
+        file_jobs = await self.write_batches(
+            file_operation.label,
+            [{"project_id": project_id, "paths": paths}],
+            cleanup_files,
+            operation=file_operation,
+        )
+
+        orphan_operation = GraphWriteOperation.for_incremental_cleanup(
+            "cplus:incremental_orphan_cleanup",
+            reconciliation="orphan_unknown_cleanup",
+        )
+
+        async def cleanup_orphans(batch: List[Dict[str, Any]]) -> int:
+            return await execute(orphan_operation, batch)
+
+        orphan_jobs = await self.write_batches(
+            orphan_operation.label,
+            [{"scope": project_id}],
+            cleanup_orphans,
+            operation=orphan_operation,
+        )
+        return {
+            "file_cleanup_jobs": file_jobs,
+            "orphan_cleanup_jobs": orphan_jobs,
+        }
+
     async def enqueue_deferred_relations(
         self,
         relations: List[Dict[str, Any]],
