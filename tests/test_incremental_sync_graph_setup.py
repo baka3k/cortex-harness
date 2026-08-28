@@ -108,6 +108,38 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
                 ]
             )
 
+    def test_remote_uri_credentials_stay_out_of_child_argv(self):
+        uri = "redis://alice:secret@graph.internal:6379"
+        args = incremental_sync.parse_args(
+            [
+                "--root",
+                ".",
+                "--project-id",
+                "demo",
+                "--falkordb-uri",
+                uri,
+                "--falkordb-graph",
+                "demo-canary",
+            ]
+        )
+        self.assertTrue(prepare_graph_args(args))
+
+        child_env = incremental_sync._build_analyzer_env(args)
+        child_argv = incremental_sync._graph_target_cli_args(args)
+
+        self.assertEqual(child_env["FALKORDB_URI"], uri)
+        self.assertNotIn("--falkordb-uri", child_argv)
+        self.assertFalse(any("secret" in value for value in child_argv))
+        self.assertEqual(
+            child_argv,
+            [
+                "--graph-provider",
+                "falkordb",
+                "--falkordb-graph",
+                "demo-canary",
+            ],
+        )
+
     def test_no_graph_sanitizes_analyzer_environment(self):
         args = incremental_sync.parse_args(
             ["--root", ".", "--project-id", "demo", "--no-graph"]

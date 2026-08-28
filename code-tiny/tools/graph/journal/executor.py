@@ -110,6 +110,29 @@ def compile_persisted_mutation(
             "RETURN count(edge) AS count",
             {"rows": materialized},
         )
+    if operation.reconciliation == "file_cleanup":
+        return (
+            "UNWIND $rows AS row "
+            "OPTIONAL MATCH (n) "
+            "WHERE n.project_id = row.project_id "
+            "AND (coalesce(n.file_path, '') IN row.paths "
+            "OR coalesce(n.path, '') IN row.paths "
+            "OR (n:File AND n.id IN row.paths)) "
+            "WITH row, collect(DISTINCT n) AS nodes "
+            "FOREACH (node IN nodes | DETACH DELETE node) "
+            "RETURN count(*) AS count",
+            {"rows": materialized},
+        )
+    if operation.reconciliation == "orphan_unknown_cleanup":
+        return (
+            "UNWIND $rows AS row "
+            "OPTIONAL MATCH (u:UnknownFunction) "
+            "WHERE NOT ()-[:UNKNOWN_CALL]->(u) "
+            "WITH row, collect(u) AS nodes "
+            "FOREACH (node IN nodes | DETACH DELETE node) "
+            "RETURN count(*) AS count",
+            {"rows": materialized},
+        )
     raise _unsupported(operation)
 
 

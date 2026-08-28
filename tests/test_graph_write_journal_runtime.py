@@ -29,7 +29,10 @@ from tools.graph.journal import (  # noqa: E402
 from tools.graph.journal.consumer import resume_journal  # noqa: E402
 from tools.graph.journal.executor import compile_persisted_mutation  # noqa: E402
 from tools.graph.journal.guard import journaled_mutation  # noqa: E402
-from tools.graph.journal.operation import operation_for_custom_query  # noqa: E402
+from tools.graph.journal.operation import (  # noqa: E402
+    GraphWriteOperation,
+    operation_for_custom_query,
+)
 from tools.graph.journal.retry import classify_error, retry_at  # noqa: E402
 from tools.graph.journal.runtime import GraphWriteJournalRuntime  # noqa: E402
 from tools.graph.schema import (  # noqa: E402
@@ -993,3 +996,42 @@ async def test_required_guard_rejects_direct_mutation_but_allows_writer(
     ) == 1
     writer.close_journal()
     assert finalize_journal_from_env(env) is RunStatus.DRAINED
+
+
+@pytest.mark.asyncio
+async def test_required_incremental_cleanup_is_journaled_node_work(
+    tmp_path: Path,
+) -> None:
+    env, config = _config(tmp_path, parser="cplus")
+    driver = _Driver(config)
+    install_required_write_guard(driver)
+    writer = LanguageCodeWriter(driver)
+
+    assert await writer.cleanup_incremental_files(
+        project_id="demo",
+        file_paths=["src/old.pc", "src/old.pc"],
+    ) == {"file_cleanup_jobs": 1, "orphan_cleanup_jobs": 1}
+
+    mutation_queries = [query for query, _ in driver.calls if "DETACH DELETE" in query]
+    assert len(mutation_queries) == 2
+    runtime = writer._journal_runtime
+    assert runtime is not None
+    assert runtime.journal.status_counts(runtime.run.run_id)[BatchStatus.DONE] == 2
+    assert await writer.close_node_production_and_drain_edges() == 0
+    assert finalize_journal_from_env(env) is RunStatus.DRAINED
+
+
+def test_incremental_cleanup_compiler_uses_one_replay_row_per_job() -> None:
+    operation = GraphWriteOperation.for_incremental_cleanup(
+        "cplus:incremental_file_cleanup",
+        reconciliation="file_cleanup",
+    )
+    query, parameters = compile_persisted_mutation(
+        operation,
+        [{"project_id": "demo", "paths": ["src/old.pc"]}],
+    )
+
+    assert operation.phase.value == "nodes"
+    assert "DETACH DELETE node" in query
+    assert query.endswith("RETURN count(*) AS count")
+    assert parameters["rows"][0]["paths"] == ["src/old.pc"]

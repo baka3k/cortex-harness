@@ -193,6 +193,21 @@ class GraphWriteOperation:
         )
 
     @classmethod
+    def for_incremental_cleanup(
+        cls, label: str, *, reconciliation: str
+    ) -> "GraphWriteOperation":
+        """Declare an allowlisted, idempotent cleanup that runs in node phase."""
+
+        if reconciliation not in {"file_cleanup", "orphan_unknown_cleanup"}:
+            raise ValueError("unsupported incremental cleanup contract")
+        return cls(
+            label=label,
+            phase=OperationPhase.NODES,
+            reconciliation=reconciliation,
+            mutation_kind="match",
+        )
+
+    @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "GraphWriteOperation":
         """Restore a validated operation descriptor without stored executable text."""
 
