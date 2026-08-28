@@ -93,7 +93,9 @@ The fixture contains 3,281 compile-command C files, 501 fanout headers, and
   suite.
 - Focused backend/publication suite: 168 tests and 9 subtests passed.
 - Journal/runtime suite after v3 changes: 68 tests passed.
-- Full repository regression is recorded in the completion log/commit receipt.
+- Full repository regression: 1,447 tests passed, 10 skipped, and 270
+  subtests passed. The 14 warnings are existing FalkorDB deprecation and
+  Pydantic forward-reference warnings; there were no test failures.
 
 ## Operator commands
 
@@ -112,4 +114,3 @@ Audit without mutating a remote graph:
 
 Exit code 0 means eligible for the remaining publication validators; exit code
 2 means incomplete/rebuild is recommended.
-
