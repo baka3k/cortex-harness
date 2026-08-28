@@ -21,6 +21,8 @@ Files
   configured tool and writes full Markdown evidence.
 - `suites/*.json` — ordered server/tool cases with fixed inputs and expected
   outcomes.
+- `mcp-batch-report-guide.md` — hướng dẫn batch test đầy đủ, suite format,
+  input mẫu, cách đọc report và checklist bảo trì MCP.
 
 Batch Markdown report
 
@@ -46,6 +48,8 @@ or an exact `.md` path. The report contains:
 Exit code is `0` only when inventory, expected outcomes, and the common MCP
 output contract all pass; the Markdown file is still written when a case
 fails. Edit or copy a suite JSON to define another project's fixed inputs.
+See [`mcp-batch-report-guide.md`](mcp-batch-report-guide.md) for the complete
+Vietnamese guide and copy-ready input samples.
 
 Quick start
 
