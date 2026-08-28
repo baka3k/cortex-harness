@@ -210,10 +210,9 @@ async def _get_graph_driver() -> GraphDriver:
             "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
         }
         if not remote_uri:
-            # Boot path: per-instance isolation (Phase 02). See cplus_mcp
-            # for the rationale; sibling reads are gated for tool-level
-            # callers via ``code_tiny.mcp.cross_instance``.
-            config["additional_paths"] = []
+            # Boot path: default fan-out across every sibling ``data.rdb``
+            # under the configured ``CORTEX_DATA_HOME``; see cplus_mcp.
+            config["additional_paths"] = discover_falkordb_data_files()
         _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
         return _graph_driver
     if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
