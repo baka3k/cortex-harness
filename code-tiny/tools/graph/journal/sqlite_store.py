@@ -2684,6 +2684,7 @@ class SQLiteJournal:
             for suffix in ("", "-wal", "-shm")
             if (candidate := Path(f"{self.path}{suffix}")).is_file()
         )
+        conservation = self.conservation_summary(run_id_value)
         return {
             "run_id": run.run_id,
             "status": run.status.value,
@@ -2701,6 +2702,8 @@ class SQLiteJournal:
             "payload_bytes": int(totals["payload_bytes"]),
             "artifact_bytes": artifact_bytes,
             "journal_bytes": journal_bytes,
+            "endpoint_audit": self.endpoint_audit_status(run_id_value),
+            "conservation": conservation,
             "oldest_unfinished_at": oldest_at,
             "oldest_unfinished_age_seconds": oldest_age_seconds,
             "next_action": next_action,

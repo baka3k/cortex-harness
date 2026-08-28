@@ -13,6 +13,20 @@ from typing import Any, Mapping
 MCP_CONTRACT_NAME = "cortex.mcp.tool-result"
 MCP_CONTRACT_VERSION = "1.0"
 
+_ERROR_CODE_ALIASES = {
+    "unsupported_capability": "capability_unavailable",
+    "value_error": "invalid_parameters",
+    "type_error": "invalid_parameters",
+    "lookup_error": "collection_unavailable",
+    "project_not_registered_error": "project_not_registered",
+}
+
+
+def _canonical_error_code(value: Any) -> str:
+    raw = str(value or "tool_execution_error").strip().lower()
+    normalized = raw.replace("-", "_").replace(" ", "_")
+    return _ERROR_CODE_ALIASES.get(normalized, normalized)
+
 
 def normalize_success(data: Any) -> dict[str, Any]:
     """Return the canonical success envelope without copying ``data``."""
@@ -22,6 +36,16 @@ def normalize_success(data: Any) -> dict[str, Any]:
 
 def _exception_code(exc: BaseException) -> str:
     name = type(exc).__name__
+    stable_codes = {
+        "ValueError": "invalid_parameters",
+        "TypeError": "invalid_parameters",
+        "LookupError": "collection_unavailable",
+        "ProjectNotRegisteredError": "project_not_registered",
+        "TimeoutError": "storage_unavailable",
+        "ConnectionError": "storage_unavailable",
+    }
+    if name in stable_codes:
+        return stable_codes[name]
     words: list[str] = []
     current = ""
     for character in name:
@@ -54,6 +78,10 @@ def normalize_error(
     if isinstance(value, BaseException):
         resolved_code = resolved_code or _exception_code(value)
         resolved_message = resolved_message or str(value) or type(value).__name__
+        if resolved_retryable is None and isinstance(
+            value, (TimeoutError, ConnectionError)
+        ):
+            resolved_retryable = True
     elif isinstance(value, Mapping):
         raw_error = value.get("error")
         legacy_context = {
@@ -62,7 +90,7 @@ def normalize_error(
             if key not in {"ok", "data", "error"}
         }
         if isinstance(raw_error, Mapping):
-            resolved_code = resolved_code or str(
+            resolved_code = resolved_code or _canonical_error_code(
                 raw_error.get("code")
                 or raw_error.get("type")
                 or "tool_execution_error"
@@ -88,7 +116,7 @@ def normalize_error(
         "ok": False,
         "data": None,
         "error": {
-            "code": resolved_code or "tool_execution_error",
+            "code": _canonical_error_code(resolved_code),
             "message": resolved_message or "Tool execution failed.",
             "retryable": bool(resolved_retryable),
             "details": merged_details,
