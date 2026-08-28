@@ -21,7 +21,7 @@ being acknowledged under changed semantics
 in the child environment and is never copied into argv or persisted command
 artifacts (`code-tiny/tools/sync/incremental_sync.py:1219`).
 
-Validation passed the full suite with 1,402 tests, 270 subtests, 10 skips. A fresh local 24-file `procsample` ingest read back 646 business nodes and 1,327 edges. Required-journal replay added only the expected 36 `GraphWriteReceipt` audit nodes. A forced kill after six node batches resumed to 36/36 batches with `phase:nodes` at 12/12; journal event 76 was the barrier close and the first edge lease followed at event 77. The persisted claim predicate requires every referenced barrier to be drained before emitting `batch_leased` (`code-tiny/tools/graph/journal/sqlite_store.py:1024-1063`, `code-tiny/tools/graph/journal/sqlite_store.py:1078-1150`).
+Validation passed the full suite with 1,410 tests, 270 subtests, 10 skips. A fresh local 24-file `procsample` ingest read back 646 business nodes and 1,327 edges. Required-journal replay added only the expected 36 `GraphWriteReceipt` audit nodes. A forced kill after six node batches resumed to 36/36 batches with `phase:nodes` at 12/12; journal event 76 was the barrier close and the first edge lease followed at event 77. The persisted claim predicate requires every referenced barrier to be drained before emitting `batch_leased` (`code-tiny/tools/graph/journal/sqlite_store.py:1024-1063`, `code-tiny/tools/graph/journal/sqlite_store.py:1078-1150`).
 
 ## Impact
 
