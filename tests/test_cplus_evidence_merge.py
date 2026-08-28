@@ -390,14 +390,24 @@ class StagingWriterTest(unittest.TestCase):
                         "site_id": site.site_id,
                         "callee_id": "f2",
                         "evidence_id": observation["evidence_id"],
+                        "project_id": "p1",
                         "props": {"resolution_class": observation["resolution_class"]},
                     }
                     for observation in site.observations
                 ],
                 build_configurations=[
-                    {"config_fingerprint": "cf1", "site_id": site.site_id, "props": {"compiler": "gcc"}}
+                    {
+                        "config_fingerprint": "cf1",
+                        "site_id": site.site_id,
+                        "project_id": "p1",
+                        "props": {"compiler": "gcc"},
+                    }
                 ],
-                semantic_coverage=[{"fingerprint": "cov1", "props": {"status": "complete", "tu_key": "a.c"}}],
+                semantic_coverage=[{
+                    "fingerprint": "cov1",
+                    "project_id": "p1",
+                    "props": {"status": "complete", "tu_key": "a.c"},
+                }],
             )
         )
         self.assertEqual(counts["call_evidence_sites"], 1)
@@ -416,10 +426,12 @@ class StagingWriterTest(unittest.TestCase):
             self.writer.write_all(
                 proc_function_joins=[
                     {"function_id": "sem1", "statement_id": "sql1",
+                     "project_id": "p1",
                      "props": {"join_quality": "unique", "is_dynamic_sql": False}}
                 ],
                 proc_host_declarations=[
                     {"host_variable_id": "hv1", "declaration_id": "d1",
+                     "project_id": "p1",
                      "declaration_kind": "variable",
                      "props": {"join_quality": "unique", "is_indicator": False}}
                 ],

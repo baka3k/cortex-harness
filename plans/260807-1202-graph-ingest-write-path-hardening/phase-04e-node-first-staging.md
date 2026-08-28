@@ -462,37 +462,37 @@ blocked, dead-lettered, or unexplained optional rows.
 
 ## Todo
 
-- [ ] Run-level node-production lifecycle and persisted barrier are versioned.
-- [ ] Node identity manifest and explicit edge endpoint contract are durable.
-- [ ] Producer completion and row-conservation ledgers prove that no emitted
+- [x] Run-level node-production lifecycle and persisted barrier are versioned.
+- [x] Node identity manifest and explicit edge endpoint contract are durable.
+- [x] Producer completion and row-conservation ledgers prove that no emitted
       node or edge disappears without a typed disposition.
-- [ ] Canonical typed identities and full project/label/property endpoint keys
+- [x] Canonical typed identities and full project/label/property endpoint keys
       replace ambiguous ID-only binding.
 - [x] Effective graph/vector topology is canonical, credential-free, visible,
       and part of journal/generation compatibility.
 - [x] Remote FalkorDB URI and local `.rdb` path produce distinct physical target
       fingerprints; endpoint, graph, mode, TLS, role, and generation changes
       cannot cross-resume.
-- [ ] File-backed, remote, mixed, and force-local matrices pass canonical data
+- [x] File-backed, remote, mixed, and force-local matrices pass canonical data
       parity, exact graph/vector readback, crash/retry, and project isolation.
 - [x] Remote transport/auth failure never falls back to a file target after run
       creation; file mode retains its single-owner lease through publication.
-- [ ] Accepted extraction intent is durable before producer-buffer release, and
+- [x] Accepted extraction intent is durable before producer-buffer release, and
       parser/semantic coverage separately reports source constructs that were
       never discovered.
-- [ ] Relationship label-pair, scope, self-loop, stable-key, and
+- [x] Relationship label-pair, scope, self-loop, stable-key, and
       cardinality/ownership invariants are enforced over the full manifest.
-- [ ] A sealed local-plus-graph endpoint audit gates the first edge mutation.
-- [ ] Exact per-row edge readback detects swapped, duplicate, omitted, and
+- [x] A sealed local-plus-graph endpoint audit gates the first edge mutation.
+- [x] Exact per-row edge readback detects swapped, duplicate, omitted, and
       cross-project bindings even when aggregate counts match.
-- [ ] Shared writer stages every edge family until the node barrier drains.
-- [ ] Process-local deferred closures are removed from the recovery path.
-- [ ] All direct/custom graph writers are migrated, blocked, or explicitly
+- [x] Shared writer stages every edge family until the node barrier drains.
+- [x] Process-local deferred closures are removed from the recovery path.
+- [x] All direct/custom graph writers are migrated, blocked, or explicitly
       inventoried with an owner and deadline.
-- [ ] Sync clean/publication gates require node drain, edge drain, and integrity
+- [x] Sync clean/publication gates require node drain, edge drain, and integrity
       validation.
-- [ ] Cross-provider ordering, crash/restart, memory, and scale gates pass.
-- [ ] Full C++/Pro*C canary proves zero edge mutation before all nodes drain.
+- [x] Cross-provider ordering, crash/restart, memory, and scale gates pass.
+- [x] Full C++/Pro*C canary proves zero edge mutation before all nodes drain.
 
 ## Risks
 

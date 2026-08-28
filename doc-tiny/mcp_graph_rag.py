@@ -596,8 +596,16 @@ def _standard_tool(mcp: FastMCP):
                 _meta=result_meta(function.__name__),
             )
 
+        # Keep typed inputs, but do not let the legacy SDK infer an output
+        # model from the business function's original return annotation.  The
+        # wrapper returns a complete CallToolResult with the shared envelope.
+        wrapped.__annotations__ = {
+            key: value
+            for key, value in function.__annotations__.items()
+            if key != "return"
+        }
         wrapped.__signature__ = inspect.signature(function).replace(
-            return_annotation=Dict[str, Any]
+            return_annotation=inspect.Signature.empty
         )
         return mcp.tool()(wrapped)
 
@@ -865,7 +873,7 @@ def register_tools(mcp: FastMCP) -> None:
         paragraph_id = int(paragraph_id) if paragraph_id is not None else 0
         
         if not source_id:
-            return {"warning": "source_id is required."}
+            raise ValueError("source_id is required.")
         record = fetch_paragraph_by_source(
             source_id, paragraph_id, project_id=project_id
         )
@@ -874,9 +882,9 @@ def register_tools(mcp: FastMCP) -> None:
                 "source_id": source_id,
                 "paragraph_id": paragraph_id,
                 "text": None,
-                "warning": "Paragraph not found.",
+                "found": False,
             }
-        return record
+        return {**record, "found": True}
 
 
 if __name__ == "__main__":

@@ -91,10 +91,10 @@ Detailed delivery is split into:
 - [x] Replace false buffer-local resume offsets or disable resume fail-closed.
 - [x] Separate parser-quality and graph-write health reporting.
 - [x] Implement Phase 04A durable journal storage and artifact contract.
-- [ ] Implement Phase 04B serializable operations and producer barriers.
+- [x] Implement Phase 04B serializable operations and producer barriers.
 - [x] Implement Phase 04C leased execution, reconciliation, and resume.
-- [ ] Implement Phase 04D CLI/status, fault validation, and guarded rollout.
-- [ ] Implement Phase 04E durable node-first staging and edge release.
+- [x] Implement Phase 04D CLI/status, fault validation, and guarded rollout.
+- [x] Implement Phase 04E durable node-first staging and edge release.
 
 ## Risks
 
