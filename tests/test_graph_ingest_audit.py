@@ -58,6 +58,11 @@ def test_journal_rejects_conflicts_and_open_producers() -> None:
     assert not audit_graph_ingest._journal_is_valid(
         _journal(conservation=conservation)
     )
+    conservation["node"]["conflict"] = 0
+    conservation["producers"]["open"] = 1
+    assert not audit_graph_ingest._journal_is_valid(
+        _journal(conservation=conservation)
+    )
 
 
 def test_loaded_audit_rejects_post_seal_endpoint_drift(tmp_path: Path) -> None:
@@ -162,8 +167,3 @@ def test_loaded_audit_rejects_post_seal_endpoint_drift(tmp_path: Path) -> None:
     tampered, _, _ = audit_graph_ingest._load_journal_evidence(path, run.run_id)
     assert tampered[0]["endpoint_audit_evidence"]["valid"] is False
     assert not audit_graph_ingest._journal_is_valid(tampered[0])
-    conservation["node"]["conflict"] = 0
-    conservation["producers"]["open"] = 1
-    assert not audit_graph_ingest._journal_is_valid(
-        _journal(conservation=conservation)
-    )
