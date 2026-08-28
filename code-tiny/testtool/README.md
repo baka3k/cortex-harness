@@ -17,6 +17,35 @@ Files
 - `mcp_client.py` — minimal client for MCP streamable-http protocol (initialize, tools/list, tools/call).
 - `tool_defaults.py` — default JSON payloads per tool. Edit to match your common test inputs.
 - `mcp_tester.py` — interactive CLI menu to pick a tool, load/edit payload, run and save results.
+- `mcp_batch_report.py` — non-interactive fixed-suite runner; calls every
+  configured tool and writes full Markdown evidence.
+- `suites/*.json` — ordered server/tool cases with fixed inputs and expected
+  outcomes.
+
+Batch Markdown report
+
+Run the checked-in `procsample` suite (39 graph tools and 5 mind tools):
+
+```bash
+./.venv/bin/python code-tiny/testtool/mcp_batch_report.py \
+  --suite code-tiny/testtool/suites/procsample-all-tools.json \
+  --output /Users/hieplq1.aip/Migration/procsample/output_porting
+```
+
+The `--output` value can be a directory (timestamped filename is generated)
+or an exact `.md` path. The report contains:
+
+- live tool inventory and advertised input/output schemas;
+- exact input sent for each tool;
+- complete parsed JSON-RPC output, including `isError=true` responses;
+- duration, normalized status/error code, expected outcome, and contract result;
+- automatic rejection of verbose internal error diagnostics such as
+  `available_labels`, `available_relationships`, `accepted_params`, and
+  `capability_diagnostics`.
+
+Exit code is `0` only when inventory, expected outcomes, and the common MCP
+output contract all pass; the Markdown file is still written when a case
+fails. Edit or copy a suite JSON to define another project's fixed inputs.
 
 Quick start
 

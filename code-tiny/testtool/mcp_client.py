@@ -125,14 +125,8 @@ class MCPClient:
         return []
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Any:
-        body = {
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": "tools/call",
-            "params": {"name": name, "arguments": arguments},
-        }
-        status, headers, text = self._post(body)
-        result = self._unwrap(self._parse_response(status, headers, text))
+        payload = self.call_tool_raw(name, arguments)
+        result = self._unwrap(payload)
         # tools/call result: {"content": [...], "structuredContent": ..., "isError": bool}
         if isinstance(result, dict) and "content" in result:
             content = result["content"]
@@ -164,3 +158,21 @@ class MCPClient:
                     return combined
             return content
         return result
+
+    def call_tool_raw(self, name: str, arguments: Dict[str, Any]) -> Any:
+        """Call a tool and return the complete parsed JSON-RPC response.
+
+        Batch diagnostics need the protocol envelope, ``isError`` flag,
+        metadata, concise content, and structured payload.  The interactive
+        client continues to use :meth:`call_tool`, which unwraps this raw
+        response for convenience and raises on tool errors.
+        """
+
+        body = {
+            "jsonrpc": "2.0",
+            "id": self._next_id(),
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+        status, headers, text = self._post(body)
+        return self._parse_response(status, headers, text)
