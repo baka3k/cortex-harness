@@ -273,6 +273,17 @@ def compile_evidence_edge_readback(group: EvidenceEdgeGroup) -> str:
         if group.edge_property
         else f"-[r:{group.relationship_type}]->"
     )
+    return (
+        "UNWIND $rows AS row "
+        f"OPTIONAL MATCH (a:{group.source_label} "
+        f"{{{group.source_property}: row.source_id, "
+        "project_id_normalized: row.project_id_normalized}) "
+        + edge_match +
+        f"(b:{group.target_label} "
+        f"{{{group.target_property}: row.target_id, "
+        "project_id_normalized: row.project_id_normalized}) "
+        "RETURN count(r) AS count"
+    )
 
 
 def compile_evidence_endpoint_audit(group: EvidenceEdgeGroup) -> str:
@@ -292,17 +303,6 @@ def compile_evidence_endpoint_audit(group: EvidenceEdgeGroup) -> str:
         "RETURN row.source_id AS source_id, row.target_id AS target_id, "
         "row.project_id_normalized AS project_id_normalized, "
         "source_matches, target_matches LIMIT 20"
-    )
-    return (
-        "UNWIND $rows AS row "
-        f"OPTIONAL MATCH (a:{group.source_label} "
-        f"{{{group.source_property}: row.source_id, "
-        "project_id_normalized: row.project_id_normalized}}) "
-        + edge_match +
-        f"(b:{group.target_label} "
-        f"{{{group.target_property}: row.target_id, "
-        "project_id_normalized: row.project_id_normalized}}) "
-        "RETURN count(r) AS count"
     )
 
 
