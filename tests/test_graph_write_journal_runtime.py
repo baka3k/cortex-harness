@@ -162,6 +162,54 @@ async def test_required_writer_enqueues_before_mutation_and_parent_drains(
 
 
 @pytest.mark.asyncio
+async def test_specialized_node_batch_uses_the_trusted_replay_compiler(
+    tmp_path: Path,
+) -> None:
+    env, config = _config(tmp_path, parser="cplus")
+    driver = _ConsumerDriver()
+    driver.journal_config = config
+    writer = LanguageCodeWriter(driver, batch_size=10)
+
+    assert await writer.write_node_properties_batch(
+        "SqlStatement",
+        "SqlStatement",
+        [
+            {
+                "id": "sql-1",
+                "name": "SELECT",
+                "node_type": "code",
+                "project_id": "demo",
+            }
+        ],
+    ) == 1
+    await writer.close_node_production_and_drain_edges()
+    writer.close_journal()
+
+    mutation = next(query for query, _parameters in driver.calls if "SqlStatement" in query)
+    assert "MERGE (n:SqlStatement {id: row.id})" in mutation
+    assert "SET n += row, n.updated_at = datetime()" in mutation
+    assert finalize_journal_from_env(env) is RunStatus.DRAINED
+
+
+@pytest.mark.asyncio
+async def test_specialized_node_batch_rejects_unindexed_identity(
+    tmp_path: Path,
+) -> None:
+    _env, config = _config(tmp_path, parser="cplus")
+    driver = _Driver(config)
+    writer = LanguageCodeWriter(driver)
+
+    with pytest.raises(ValueError, match="has no required 'id' identity index"):
+        await writer.write_node_properties_batch(
+            "custom",
+            "UnregisteredNode",
+            [{"id": "unsafe"}],
+        )
+    assert driver.calls == []
+    writer.close_journal()
+
+
+@pytest.mark.asyncio
 async def test_done_batch_is_skipped_on_identical_outer_replay(tmp_path: Path) -> None:
     env, config = _config(tmp_path)
     calls = 0
@@ -796,12 +844,55 @@ async def test_relationship_waits_on_both_501_file_endpoint_barriers(
         "SELECT required_barriers_json FROM batches WHERE phase = 'relationships'"
     ).fetchone()
     required = json.loads(row["required_barriers_json"])
-    assert len(required) == 2
+    assert len(required) == 3
+    assert "phase:nodes" in required
     statuses = connection.execute(
-        "SELECT status FROM barriers WHERE name IN (?, ?) ORDER BY name", required
+        "SELECT name, status FROM barriers WHERE name IN (?, ?, ?) ORDER BY name",
+        required,
     ).fetchall()
-    assert [item["status"] for item in statuses] == ["drained", "drained"]
+    status_by_name = {item["name"]: item["status"] for item in statuses}
+    assert status_by_name["phase:nodes"] == "open"
+    assert set(status_by_name.values()) == {"open", "drained"}
     writer.close_journal()
+
+
+@pytest.mark.asyncio
+async def test_cplus_node_first_stages_edges_until_global_node_drain(
+    tmp_path: Path,
+) -> None:
+    env, config = _config(tmp_path, parser="cplus")
+    assert config.metadata.query_shape_version == "language-writer-node-first-v1"
+    assert config.metadata.operation_versions["node-first"] == 1
+    driver = _ConsumerDriver()
+    driver.journal_config = config
+    writer = LanguageCodeWriter(driver, batch_size=10)
+
+    assert await writer.write_node_properties_batch(
+        "files", "File", [{"id": "a.c", "repo": "Demo/project"}]
+    ) == 1
+    calls_before_edge = len(driver.calls)
+    assert await writer.write_repo_file_edges(
+        [{"id": "a.c", "repo": "Demo/project"}]
+    ) == 1
+    assert len(driver.calls) == calls_before_edge
+
+    runtime = writer._journal_runtime
+    assert runtime is not None
+    barrier = runtime.journal.get_barrier(runtime.run.run_id, "phase:nodes")
+    assert barrier is not None and barrier.status.value == "open"
+    assert runtime.journal.status_counts(runtime.run.run_id)[BatchStatus.PENDING] == 1
+
+    assert await writer.close_node_production_and_drain_edges() == 1
+    node_index = next(
+        index for index, (query, _parameters) in enumerate(driver.calls)
+        if "MERGE (n:File" in query
+    )
+    edge_index = next(
+        index for index, (query, _parameters) in enumerate(driver.calls)
+        if "MATCH (repository:Repository" in query
+    )
+    assert node_index < edge_index
+    assert finalize_journal_from_env(env) is RunStatus.DRAINED
 
 
 @pytest.mark.asyncio

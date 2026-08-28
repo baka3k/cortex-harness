@@ -1203,6 +1203,12 @@ def _embedding_phase_env(base_env: Dict[str, str]) -> Dict[str, str]:
     return env
 
 
+def _repository_name(project_name: str, root: str) -> str:
+    """Return the one repository identity shared by preflight and analyzers."""
+
+    return f"{project_name}/{os.path.basename(os.path.normpath(root))}"
+
+
 def _build_analyzer_cmd(
     *,
     python_bin: str,
@@ -1253,6 +1259,7 @@ def _build_analyzer_cmd(
         if mapping_ledger:
             cmd.extend(["--program-mapping-ledger", mapping_ledger])
     if analyzer.parser == "cplus":
+        cmd.extend(["--repo", _repository_name(project_name, root)])
         cmd.extend(["--parse-quality", parse_quality])
         if parse_quality in {"report", "repair"}:
             cmd.append("--disable-compile-db-bootstrap")
@@ -1353,7 +1360,7 @@ async def _ensure_project_repository_graph(
     project_name: str,
 ) -> None:
     provider = normalize_graph_provider(getattr(args, "graph_provider", None))
-    repo_name = f"{project_name}/{os.path.basename(root)}"
+    repo_name = _repository_name(project_name, root)
 
     driver = await create_graph_driver_from_args(args, attach_journal=False)
     resolved_graph = (

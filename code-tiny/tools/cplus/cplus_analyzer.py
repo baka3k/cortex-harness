@@ -4738,16 +4738,55 @@ SET s.node_type = 'code',
             nonlocal buf_relations, buf_calls, buf_possible_calls, buf_unknown_calls
             nonlocal _files_in_buf, _total_files_written, _total_calls_written, _total_unknown_calls_written
             if buf_resources:
-                await code_writer.write_nodes_batch("resources", _RESOURCES_CYPHER, buf_resources)
+                if isinstance(code_writer, LanguageCodeWriter):
+                    await code_writer.write_node_properties_batch(
+                        "resources",
+                        "Resource",
+                        enrich_project_scope(
+                            [{**row, "node_type": "code"} for row in buf_resources]
+                        ),
+                    )
+                else:
+                    await code_writer.write_nodes_batch(
+                        "resources", _RESOURCES_CYPHER, buf_resources
+                    )
             if buf_resource_elements:
-                await code_writer.write_nodes_batch(
-                    "resource_elements", _RESOURCE_ELEMENTS_CYPHER, buf_resource_elements
-                )
+                if isinstance(code_writer, LanguageCodeWriter):
+                    await code_writer.write_node_properties_batch(
+                        "resource_elements",
+                        "UIControl",
+                        enrich_project_scope(
+                            [
+                                {**row, "node_type": "code"}
+                                for row in buf_resource_elements
+                            ]
+                        ),
+                    )
+                else:
+                    await code_writer.write_nodes_batch(
+                        "resource_elements",
+                        _RESOURCE_ELEMENTS_CYPHER,
+                        buf_resource_elements,
+                    )
             for _label, _rows in list(buf_proc_sql_statements.items()):
                 if _rows:
                     _cypher = _PROC_NODE_CYPHER.get(_label)
                     if _cypher is not None:
-                        await code_writer.write_nodes_batch(_label, _cypher, _rows)
+                        if isinstance(code_writer, LanguageCodeWriter):
+                            await code_writer.write_node_properties_batch(
+                                _label,
+                                _label,
+                                enrich_project_scope(
+                                    [
+                                        {**row, "node_type": "code"}
+                                        for row in _rows
+                                    ]
+                                ),
+                            )
+                        else:
+                            await code_writer.write_nodes_batch(
+                                _label, _cypher, _rows
+                            )
             has_nodes = any([buf_files, buf_namespaces, buf_types, buf_function_types,
                              buf_functions, buf_fields, buf_aliases, buf_templates,
                              buf_resources, buf_resource_elements,
@@ -4789,10 +4828,38 @@ SET s.node_type = 'code',
                 code_writer.batch_size = _unk_bs
                 try:
                     if isinstance(code_writer, LanguageCodeWriter):
-                        await code_writer.write_nodes_batch(
-                            "cplus:unknown_calls",
-                            _UNKNOWN_CALLS_CYPHER,
-                            buf_unknown_calls,
+                        unknown_nodes_by_id = {
+                            str(row["unknown_id"]): {
+                                "id": row["unknown_id"],
+                                "name": row.get("props", {}).get("callee_name"),
+                                "node_type": "code",
+                                "project_id": project_id,
+                            }
+                            for row in buf_unknown_calls
+                        }
+                        await code_writer.write_node_properties_batch(
+                            "cplus:unknown_functions",
+                            "UnknownFunction",
+                            enrich_project_scope(list(unknown_nodes_by_id.values())),
+                        )
+                        unknown_edges = [
+                            {
+                                "source_label": "Function",
+                                "source_property": "id",
+                                "source_id": row["caller_id"],
+                                "target_label": "UnknownFunction",
+                                "target_property": "id",
+                                "target_id": row["unknown_id"],
+                                "rel_type": "UNKNOWN_CALL",
+                                "edge_property": "site_id",
+                                "edge_id": row["site_id"],
+                                "props": row.get("props", {}),
+                                "project_id": project_id,
+                            }
+                            for row in buf_unknown_calls
+                        ]
+                        await code_writer.write_evidence_edges(
+                            enrich_project_scope(unknown_edges)
                         )
                     else:
                         for _off in range(0, len(buf_unknown_calls), _unk_bs):
@@ -5721,7 +5788,7 @@ SET s.node_type = 'code',
                 r.updated_at = datetime()
             """
         parse_run_rows = [{
-            "parse_run_id": parse_run_id,
+            "id": parse_run_id,
             "project_id": project_id,
             "project_name": project_name,
             "language": language,
@@ -5730,13 +5797,18 @@ SET s.node_type = 'code',
             "commit_sha": commit_sha,
         }]
         if isinstance(code_writer, LanguageCodeWriter):
-            await code_writer.write_nodes_batch(
-                "cplus:parse_run", parse_run_query, parse_run_rows
+            await code_writer.write_node_properties_batch(
+                "cplus:parse_run",
+                "ParseRun",
+                enrich_project_scope(parse_run_rows),
             )
         else:
+            legacy_parse_run_rows = [
+                {**row, "parse_run_id": row["id"]} for row in parse_run_rows
+            ]
             await code_writer.driver.execute_query(
                 parse_run_query,
-                {"rows": parse_run_rows},
+                {"rows": legacy_parse_run_rows},
                 database=code_writer.database,
             )
 
@@ -5757,6 +5829,15 @@ SET s.node_type = 'code',
                 relations=tail_and_inferred or None,
                 use_full_writers=True,
             )
+
+        if isinstance(code_writer, LanguageCodeWriter):
+            drained_edges = await code_writer.close_node_production_and_drain_edges()
+            if verbose and drained_edges:
+                print(
+                    "[graph] node_phase=drained staged_edge_batches_released=%d"
+                    % drained_edges,
+                    flush=True,
+                )
 
         if verbose:
             unresolved = call_stats_total - call_stats_resolved
@@ -6282,10 +6363,21 @@ async def main(argv: Optional[List[str]] = None) -> int:
 
     neo4j_state_path = None
     if args.verbose:
+        journal_mode = os.getenv("CORTEX_GRAPH_JOURNAL_MODE", "").casefold()
+        durable_resume = journal_mode in {"required", "shared-required"}
         print(
-            "[state] C++ graph resume mode=full-idempotent-replay "
-            "checkpoint=disabled persistent_retry_queue=false; interrupted work "
-            "restarts on the next analyzer attempt",
+            "[state] C++ graph resume mode=%s checkpoint=%s "
+            "persistent_retry_queue=%s; interrupted work %s"
+            % (
+                "durable-node-first" if durable_resume else "full-idempotent-replay",
+                "sqlite-wal" if durable_resume else "disabled",
+                str(durable_resume).lower(),
+                (
+                    "resumes compatible staged batches"
+                    if durable_resume
+                    else "restarts on the next analyzer attempt"
+                ),
+            ),
             flush=True,
         )
     print(
