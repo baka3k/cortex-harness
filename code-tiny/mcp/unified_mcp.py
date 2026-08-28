@@ -89,6 +89,12 @@ from cortex_harness.storage import (  # noqa: E402
     close_active_gateways,
     storage_runtime_status,
 )
+from cortex_harness.mcp_contract import (  # noqa: E402
+    normalize_error,
+    normalize_success,
+    result_meta,
+    result_summary,
+)
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
@@ -984,7 +990,24 @@ class _ProxyMiddleware(Middleware):
     """
 
     @staticmethod
-    def _wrap_dispatch_result(result: Any) -> Any:
+    def _content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        parts: List[str] = []
+        if isinstance(content, list):
+            for block in content:
+                text = getattr(block, "text", None)
+                if isinstance(text, str) and text:
+                    parts.append(text)
+        return "\n".join(parts)
+
+    @classmethod
+    def _wrap_dispatch_result(
+        cls,
+        result: Any,
+        *,
+        tool_name: Optional[str] = None,
+    ) -> ToolResult:
         """Wrap a dispatch dict as a ``ToolResult`` so FastMCP's outer
         ``_mcp_call_tool`` can call ``.to_mcp_result()`` on it.
 
@@ -992,35 +1015,46 @@ class _ProxyMiddleware(Middleware):
         triggers ``AttributeError: 'dict' object has no attribute
         'to_mcp_result'`` at the protocol boundary.
         """
+        existing_meta: Dict[str, Any] = {}
+        is_error = False
         if isinstance(result, ToolResult):
+            existing_meta = dict(result.meta or {})
             structured = result.structured_content
-            if (
-                isinstance(structured, dict)
-                and structured.get("ok") is False
-                and not result.is_error
-            ):
-                return ToolResult(
-                    content=result.content,
-                    structured_content=structured,
-                    meta=result.meta,
-                    is_error=True,
-                )
-            return result
-        if result is None:
-            return ToolResult(content="")
-        # Errors come back as ``{"ok": False, "error": {...}}``; surface them
-        # as tool errors so the LLM sees a structured message.
-        if isinstance(result, dict) and result.get("ok") is False:
-            error = result.get("error") or {}
-            message = error.get("message") if isinstance(error, dict) else str(error)
+            is_error = bool(result.is_error) or (
+                isinstance(structured, dict) and structured.get("ok") is False
+            )
+            if structured is not None:
+                payload = structured
+            else:
+                raw_text = cls._content_text(result.content)
+                try:
+                    payload = json.loads(raw_text)
+                except (TypeError, json.JSONDecodeError):
+                    payload = raw_text or None
+        else:
+            payload = result
+            is_error = isinstance(payload, dict) and payload.get("ok") is False
+
+        meta = {**existing_meta, **result_meta(tool_name)}
+        if is_error:
+            envelope = normalize_error(payload)
+            message = envelope["error"]["message"]
             return ToolResult(
-                content=message or "Tool execution failed.",
-                structured_content=result,
+                content=result_summary(None, ok=False, message=message),
+                structured_content=envelope,
+                meta=meta,
                 is_error=True,
             )
-        if isinstance(result, dict):
-            return ToolResult(content="", structured_content=result)
-        return ToolResult(content=str(result))
+
+        if isinstance(payload, dict) and payload.get("ok") is True:
+            payload = {key: value for key, value in payload.items() if key != "ok"}
+        envelope = normalize_success(payload)
+        return ToolResult(
+            content=result_summary(payload, ok=True),
+            structured_content=envelope,
+            meta=meta,
+            is_error=False,
+        )
 
     async def on_call_tool(
         self,
@@ -1036,8 +1070,8 @@ class _ProxyMiddleware(Middleware):
                 result = await _dispatch_planner_tool(name, arguments)
             else:
                 result = await _dispatch_tool(name, arguments)
-            return self._wrap_dispatch_result(result)
-        return self._wrap_dispatch_result(await call_next(context))
+            return self._wrap_dispatch_result(result, tool_name=name)
+        return self._wrap_dispatch_result(await call_next(context), tool_name=name)
 
 
 _proxy_middleware = _ProxyMiddleware()
@@ -1512,11 +1546,30 @@ async def tool_list_mcp_functions() -> str:
 
 
 @mcp_server.tool(name="list_parsers", description="List available parser types supported by unified MCP.", output_schema=None)
-async def tool_list_parsers() -> Dict[str, Any]:
-    capabilities = list(capability_catalog())
+async def tool_list_parsers(detail_level: str = "summary") -> Dict[str, Any]:
+    normalized_detail = str(detail_level or "summary").strip().lower()
+    if normalized_detail not in {"summary", "full"}:
+        raise ValueError("detail_level must be 'summary' or 'full'.")
+    full_capabilities = list(capability_catalog())
+    if normalized_detail == "full":
+        capabilities = full_capabilities
+    else:
+        summary_fields = (
+            "canonical_parser",
+            "aliases",
+            "query_engine",
+            "support_level",
+            "support",
+            "generation_scoped",
+        )
+        capabilities = [
+            {key: capability[key] for key in summary_fields if key in capability}
+            for capability in full_capabilities
+        ]
     return {
         "parsers": sorted(parser_aliases()),
         "capabilities": capabilities,
+        "detail_level": normalized_detail,
         "capability_contract_version": CAPABILITY_CONTRACT_VERSION,
         "default_query_engine": query_engine_for_backend(DEFAULT_BACKEND),
         # ``active_parser_type`` is always None now — the stateful default has

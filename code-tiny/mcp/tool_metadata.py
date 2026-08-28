@@ -591,11 +591,14 @@ _FULL_CATALOG: List[Dict[str, Any]] = [
     },
     {
         "name": "list_parsers",
-        "description": "List canonical parser profiles, aliases, query engines, dimensional support, and features.",
+        "description": "List canonical parser profiles, aliases, query engines, and dimensional support. Defaults to a compact summary; request full only for diagnostics.",
         "use_cases": ["Check supported languages", "Discover parser options", "Inspect support boundaries"],
-        "inputs": [],
+        "inputs": [
+            {"name": "detail_level", "type": "str", "required": False,
+             "description": "summary (default) or full diagnostic capability details"},
+        ],
         "output": "Parser aliases, canonical capabilities, active capability, and default query engine",
-        "example": "list_parsers()",
+        "example": "list_parsers(detail_level='summary')",
     },
     {
         "name": "inspect_parser_capabilities",
