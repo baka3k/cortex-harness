@@ -580,7 +580,7 @@ def _standard_tool(mcp: FastMCP):
                     ],
                     structuredContent=envelope,
                     isError=True,
-                    meta=result_meta(function.__name__),
+                    _meta=result_meta(function.__name__),
                 )
 
             envelope = normalize_success(data)
@@ -593,7 +593,7 @@ def _standard_tool(mcp: FastMCP):
                 ],
                 structuredContent=envelope,
                 isError=False,
-                meta=result_meta(function.__name__),
+                _meta=result_meta(function.__name__),
             )
 
         wrapped.__signature__ = inspect.signature(function).replace(
