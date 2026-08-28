@@ -2579,26 +2579,14 @@ def mcp_gates():
     per-instance isolation in effect or the legacy global behavior. See
     plans/260828-1428-instance-isolated-mcp-locks for context.
     """
-    legacy_leases = (
-        os.environ.get("CORTEX_MCP_SCOPE_LEASES", "").strip() == "0"
-    )
     legacy_pause = _legacy_pause_by_instance_disabled()
-    cross_query = os.environ.get("CROSS_INSTANCE_QUERY", "").strip()
     storage_instance = _resolve_storage_instance(os.environ.copy())
     click.echo("Per-instance MCP isolation gates")
     click.echo("─" * 40)
     click.echo(f"  CORTEX_STORAGE_INSTANCE        = {storage_instance}")
     click.echo(
-        "  CORTEX_MCP_SCOPE_LEASES         = "
-        f"{'0 (legacy: lease every sibling)' if legacy_leases else 'unset (per-instance scope on)'}"
-    )
-    click.echo(
         "  CORTEX_MCP_PAUSE_BY_INSTANCE    = "
         f"{'0 (legacy: pause by pattern)' if legacy_pause else 'unset (pause by instance on)'}"
-    )
-    click.echo(
-        "  CROSS_INSTANCE_QUERY            = "
-        f"{cross_query or 'unset (gate closed)'}"
     )
 
 
