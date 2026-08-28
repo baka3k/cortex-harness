@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import signal
 import threading
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -178,6 +179,41 @@ async def test_unified_health_keeps_liveness_separate_from_readiness() -> None:
     ready_payload = json.loads(ready_response.body)
     assert live_response.status_code == 200
     assert live_payload["status"] == "healthy"
-    assert live_payload["readiness"] is False
+    assert set(live_payload) == {"status", "service", "liveness"}
     assert ready_response.status_code == 503
     assert ready_payload["status"] == "not_ready"
+    assert set(ready_payload) == {
+        "status",
+        "service",
+        "readiness",
+        "storage_state",
+    }
+
+
+@pytest.mark.asyncio
+async def test_mcp_lifespan_awaits_gateway_close() -> None:
+    from unified_mcp import _mcp_lifespan
+
+    with patch("unified_mcp.begin_gateway_drain") as begin_drain, patch(
+        "unified_mcp.close_active_gateways", new_callable=AsyncMock
+    ) as close_gateways:
+        async with _mcp_lifespan(None):
+            pass
+
+    begin_drain.assert_called_once_with()
+    close_gateways.assert_awaited_once_with()
+
+
+def test_first_shutdown_signal_starts_drain_and_unwinds_server() -> None:
+    from unified_mcp import _handle_shutdown_signal
+
+    force_quit = {"armed": False}
+    with patch("unified_mcp.begin_gateway_drain") as begin_drain, patch(
+        "services.explore_service.begin_explore_service_drain"
+    ) as begin_retrieval_drain:
+        with pytest.raises(KeyboardInterrupt):
+            _handle_shutdown_signal(signal.SIGTERM, None, force_quit)
+
+    assert force_quit["armed"] is True
+    begin_retrieval_drain.assert_called_once_with()
+    begin_drain.assert_called_once_with()

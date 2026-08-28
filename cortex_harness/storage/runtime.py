@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-import weakref
 from typing import TYPE_CHECKING, Any, Mapping
 
 
@@ -22,7 +21,8 @@ if TYPE_CHECKING:  # pragma: no cover - import-cycle guard
 ENV_STORE_GATEWAY_ENABLED = "CORTEX_STORE_GATEWAY_ENABLED"
 
 _registry_lock = threading.RLock()
-_gateways: weakref.WeakSet[StoreGateway] = weakref.WeakSet()
+_gateways: set[Any] = set()
+_gateway_mode_activated = False
 
 
 def _flag_enabled(value: object) -> bool:
@@ -39,8 +39,10 @@ def store_gateway_enabled(env: Mapping[str, object] | None = None) -> bool:
 def register_gateway(gateway: StoreGateway) -> None:
     """Publish an already-started gateway to process health consumers."""
 
+    global _gateway_mode_activated
     with _registry_lock:
         _gateways.add(gateway)
+        _gateway_mode_activated = True
 
 
 def unregister_gateway(gateway: StoreGateway) -> None:
@@ -51,7 +53,7 @@ def unregister_gateway(gateway: StoreGateway) -> None:
 
 
 def active_gateways() -> tuple[StoreGateway, ...]:
-    """Return a stable snapshot without keeping gateways alive indefinitely."""
+    """Return a stable snapshot of strongly owned process gateways."""
 
     with _registry_lock:
         return tuple(_gateways)
@@ -63,6 +65,23 @@ def begin_gateway_drain() -> int:
     gateways = active_gateways()
     for gateway in gateways:
         gateway.begin_drain()
+    return len(gateways)
+
+
+async def close_active_gateways(*, timeout_seconds: float | None = None) -> int:
+    """Drain and close every registered owner on its running event loop."""
+
+    gateways = active_gateways()
+    failures: list[BaseException] = []
+    for gateway in sorted(gateways, key=lambda item: item.target.value):
+        try:
+            await gateway.close(timeout_seconds=timeout_seconds)
+        except BaseException as exc:
+            failures.append(exc)
+    if failures:
+        if len(failures) == 1:
+            raise failures[0]
+        raise BaseExceptionGroup("multiple store gateways failed to close", failures)
     return len(gateways)
 
 
@@ -81,9 +100,11 @@ def storage_runtime_status(
     committed active generation.
     """
 
-    gateways = active_gateways()
+    with _registry_lock:
+        gateways = tuple(_gateways)
+        activated = _gateway_mode_activated
     requested = store_gateway_enabled(env)
-    effective = requested or bool(gateways)
+    effective = requested or activated
     snapshots: list[dict[str, Any]] = []
     for gateway in sorted(gateways, key=lambda item: item.target.value):
         health = gateway.health()
@@ -130,3 +151,13 @@ def storage_runtime_status(
         "gateway_count": len(snapshots),
         "gateways": snapshots,
     }
+
+
+def _reset_runtime_state_for_tests() -> None:
+    """Reset an idle registry; production code must never call this helper."""
+
+    global _gateway_mode_activated
+    with _registry_lock:
+        if _gateways:
+            raise RuntimeError("cannot reset runtime state while gateways are active")
+        _gateway_mode_activated = False

@@ -83,6 +83,7 @@ from .runtime import (
     ENV_STORE_GATEWAY_ENABLED,
     active_gateways,
     begin_gateway_drain,
+    close_active_gateways,
     storage_runtime_status,
     store_gateway_enabled,
 )
@@ -134,6 +135,7 @@ __all__ = [
     "begin_gateway_drain",
     "build_filter",
     "canonical_remote_endpoint",
+    "close_active_gateways",
     "create_storage",
     "effective_graph_target_from_env",
     "get_client",

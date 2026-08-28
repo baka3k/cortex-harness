@@ -258,10 +258,10 @@ class StoreHealth:
     queued_reads: int
     queued_writes: int
     ready: bool
+    updated_at: str = field(default_factory=utc_now)
     probe_generation: str | None = None
     last_probe_at: str | None = None
     probe_error: str | None = None
-    updated_at: str = field(default_factory=utc_now)
 
 
 class StoreGatewayError(RuntimeError):

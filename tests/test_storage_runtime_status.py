@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import threading
 
 import pytest
 
 from cortex_harness.storage import (
+    GatewayErrorCode,
     PhysicalTargetKey,
     StoreGateway,
+    StoreGatewayError,
     begin_gateway_drain,
+    close_active_gateways,
     storage_runtime_status,
 )
+from cortex_harness.storage.runtime import _reset_runtime_state_for_tests
+
+
+@pytest.fixture(autouse=True)
+def _isolated_runtime_registry():
+    _reset_runtime_state_for_tests()
+    yield
+    _reset_runtime_state_for_tests()
 
 
 def _target(root: Path) -> PhysicalTargetKey:
@@ -41,7 +53,12 @@ def test_requested_gateway_fails_readiness_without_an_owner() -> None:
 
 @pytest.mark.asyncio
 async def test_active_gateway_status_is_sanitized_and_drains(tmp_path: Path) -> None:
-    gateway = StoreGateway(_target(tmp_path), str(tmp_path / "owner"))
+    gateway = StoreGateway(
+        _target(tmp_path),
+        str(tmp_path / "owner"),
+        graph_probe=lambda _manifest: None,
+        vector_probe=lambda _manifest: None,
+    )
     await gateway.start()
     await gateway.publish(
         gateway.generations.allocate("revision-1", generation_id="generation-1"),
@@ -65,7 +82,10 @@ async def test_active_gateway_status_is_sanitized_and_drains(tmp_path: Path) -> 
     assert drained["readiness"] is False
 
     await gateway.close()
-    assert storage_runtime_status({})["gateway_count"] == 0
+    stopped = storage_runtime_status({})
+    assert stopped["gateway_count"] == 0
+    assert stopped["state"] == "owner_missing"
+    assert stopped["readiness"] is False
 
 
 @pytest.mark.asyncio
@@ -193,3 +213,295 @@ async def test_gateway_owns_adapter_resource_until_lane_drain(
         ("open", "cortex-graph-read_0"),
         ("close", "cortex-graph-read_0"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_start_cancellation_releases_executors_and_leases(
+    tmp_path: Path,
+) -> None:
+    gateway = StoreGateway(_target(tmp_path), str(tmp_path / "owner"))
+    entered = asyncio.Event()
+
+    async def blocked_load() -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    gateway._load_jobs = blocked_load  # type: ignore[method-assign]
+    start = asyncio.create_task(gateway.start())
+    await entered.wait()
+    start.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await start
+
+    assert gateway.lifecycle.value == "STOPPED"
+    assert gateway._executors == {}
+    assert gateway._leases == []
+
+    replacement = StoreGateway(_target(tmp_path), str(tmp_path / "replacement"))
+    await replacement.start()
+    await replacement.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_publication_reconciles_gateway_health(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = StoreGateway(
+        _target(tmp_path),
+        str(tmp_path / "owner"),
+        graph_probe=lambda _manifest: None,
+        vector_probe=lambda _manifest: None,
+    )
+    await gateway.start()
+    await gateway.publish(
+        gateway.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _manifest: None,
+    )
+    candidate = gateway.generations.allocate(
+        "revision-2", generation_id="generation-2"
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    original_publish = gateway.generations.publish
+
+    def blocked_publish(manifest, validate):
+        result = original_publish(manifest, validate)
+        entered.set()
+        release.wait(timeout=5)
+        return result
+
+    monkeypatch.setattr(gateway.generations, "publish", blocked_publish)
+    publication = asyncio.create_task(
+        gateway.publish(candidate, lambda _manifest: None)
+    )
+    assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
+    publication.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await publication
+
+    assert gateway.generations.load_active().generation_id == "generation-2"
+    assert gateway.health().active_generation == "generation-2"
+    assert gateway.health().ready is True
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_close_persistence_failure_still_releases_owned_resources(
+    tmp_path: Path,
+) -> None:
+    closed: list[bool] = []
+
+    class Resource:
+        def close(self) -> None:
+            closed.append(True)
+
+    gateway = StoreGateway(_target(tmp_path), str(tmp_path / "owner"))
+    await gateway.start()
+    await gateway.publish(
+        gateway.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _manifest: None,
+    )
+    await gateway.query(
+        lambda _manifest: gateway.get_or_create_resource(
+            "graph:generation-1", Resource, lane="graph"
+        )
+    )
+
+    async def fail_persist() -> None:
+        raise OSError("simulated job-store failure")
+
+    gateway._persist_jobs = fail_persist  # type: ignore[method-assign]
+    with pytest.raises(OSError, match="job-store failure"):
+        await gateway.close()
+
+    assert closed == [True]
+    assert gateway.lifecycle.value == "STOPPED"
+    assert gateway._executors == {}
+    assert gateway._leases == []
+
+
+@pytest.mark.asyncio
+async def test_start_cancellation_after_resource_open_closes_before_lease_release(
+    tmp_path: Path,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    closed: list[bool] = []
+
+    class Resource:
+        def close(self) -> None:
+            closed.append(True)
+
+    gateway = StoreGateway(
+        _target(tmp_path),
+        str(tmp_path / "owner"),
+        graph_probe=lambda manifest: (
+            gateway.get_or_create_resource("probe", Resource, lane="control"),
+            entered.set(),
+            release.wait(timeout=5),
+        ),
+        vector_probe=lambda _manifest: None,
+    )
+    gateway.generations.publish(
+        gateway.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _manifest: None,
+    )
+    start = asyncio.create_task(gateway.start())
+    assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
+    start.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await start
+
+    assert closed == [True]
+    assert gateway._resources == {}
+    assert gateway._executors == {}
+    assert gateway._leases == []
+
+
+@pytest.mark.asyncio
+async def test_failed_startup_resource_close_retains_owner_but_rejects_ingest(
+    tmp_path: Path,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+    fail_close = True
+
+    class Resource:
+        def close(self) -> None:
+            if fail_close:
+                raise RuntimeError("probe handle still open")
+
+    gateway = StoreGateway(
+        _target(tmp_path),
+        str(tmp_path / "owner"),
+        graph_probe=lambda manifest: (
+            gateway.get_or_create_resource("probe", Resource, lane="control"),
+            entered.set(),
+            release.wait(timeout=5),
+        ),
+        vector_probe=lambda _manifest: None,
+    )
+    gateway.generations.publish(
+        gateway.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _manifest: None,
+    )
+    start = asyncio.create_task(gateway.start())
+    assert await asyncio.get_running_loop().run_in_executor(None, entered.wait, 5)
+    start.cancel()
+    release.set()
+    with pytest.raises(RuntimeError, match="probe handle still open"):
+        await start
+
+    assert gateway.lifecycle.value == "DRAINING"
+    assert gateway._accepting_jobs is False
+    assert gateway._resources
+    assert gateway._executors
+    assert gateway._leases
+    with pytest.raises(StoreGatewayError) as rejected:
+        await gateway.submit_ingest(
+            idempotency_key="must-not-enter", source_revision="revision-2"
+        )
+    assert rejected.value.code is GatewayErrorCode.STORE_MAINTENANCE
+
+    fail_close = False
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_resource_close_failure_retains_lease_for_retry(tmp_path: Path) -> None:
+    fail_close = True
+
+    class Resource:
+        def close(self) -> None:
+            if fail_close:
+                raise RuntimeError("still open")
+
+    gateway = StoreGateway(_target(tmp_path), str(tmp_path / "owner"))
+    await gateway.start()
+    await gateway.publish(
+        gateway.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _manifest: None,
+    )
+    await gateway.query(
+        lambda _manifest: gateway.get_or_create_resource("graph", Resource, lane="graph")
+    )
+
+    with pytest.raises(RuntimeError, match="still open"):
+        await gateway.close()
+    assert gateway.lifecycle.value == "DRAINING"
+    assert gateway._resources
+    assert gateway._executors
+    assert gateway._leases
+
+    fail_close = False
+    await gateway.close()
+    assert gateway.lifecycle.value == "STOPPED"
+    assert gateway._leases == []
+
+
+@pytest.mark.asyncio
+async def test_non_cancelled_post_pointer_failure_reconciles_and_fails_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = StoreGateway(
+        _target(tmp_path),
+        str(tmp_path / "owner"),
+        graph_probe=lambda _manifest: None,
+        vector_probe=lambda _manifest: None,
+    )
+    await gateway.start()
+    await gateway.publish(
+        gateway.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _manifest: None,
+    )
+    candidate = gateway.generations.allocate(
+        "revision-2", generation_id="generation-2"
+    )
+    original_write = gateway.generations._write_active_manifest_unlocked
+
+    def committed_then_failed(manifest) -> None:
+        original_write(manifest)
+        raise OSError("directory fsync failed after replace")
+
+    monkeypatch.setattr(
+        gateway.generations, "_write_active_manifest_unlocked", committed_then_failed
+    )
+    with pytest.raises(OSError, match="after replace"):
+        await gateway.publish(candidate, lambda _manifest: None)
+
+    assert gateway.generations.load_active().generation_id == "generation-2"
+    health = gateway.health()
+    assert health.active_generation == "generation-2"
+    assert health.ready is False
+    assert health.probe_error == "OSError"
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_close_active_gateways_closes_resource_before_releasing_lease(
+    tmp_path: Path,
+) -> None:
+    observations: list[tuple[bool, bool]] = []
+    gateway = StoreGateway(_target(tmp_path), str(tmp_path / "owner"))
+    await gateway.start()
+    await gateway.publish(
+        gateway.generations.allocate("revision-1", generation_id="generation-1"),
+        lambda _manifest: None,
+    )
+
+    class Resource:
+        def close(self) -> None:
+            observations.append((bool(gateway._executors), bool(gateway._leases)))
+
+    await gateway.query(
+        lambda _manifest: gateway.get_or_create_resource("graph", Resource, lane="graph")
+    )
+    assert await close_active_gateways() == 1
+
+    assert observations == [(True, True)]
+    assert gateway._executors == {}
+    assert gateway._leases == []
