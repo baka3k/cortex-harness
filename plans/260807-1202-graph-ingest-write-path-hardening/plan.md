@@ -399,7 +399,7 @@ finished 36/36 batches, drained `phase:nodes` at 12/12, and leased its first
 edge only after the barrier-close event. Fresh and resumed readback matched at
 646 business nodes, 1,327 edges, and 24 files; required mode additionally
 materialized 36 expected `GraphWriteReceipt` audit nodes. The repository suite
-passed 1,402 tests and 270 subtests with 10 skips.
+passed 1,410 tests and 270 subtests with 10 skips.
 
 This is a scoped checkpoint, not Phase 04E or Phase 06 completion. The durable
 identity/endpoint conservation ledgers, sealed endpoint audit, remaining
