@@ -1,4 +1,6 @@
 import argparse
+import functools
+import inspect
 import logging
 import os
 import signal
@@ -6,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
@@ -24,6 +27,12 @@ from project_contract import (
     resolve_project_targets,
 )
 from cortex_harness.storage import StorageRole
+from cortex_harness.mcp_contract import (
+    normalize_error,
+    normalize_success,
+    result_meta,
+    result_summary,
+)
 
 
 MCP_NAME = os.getenv("MCP_SERVER_NAME", "mind_mcp")
@@ -548,11 +557,61 @@ def fetch_paragraph_by_source(
     return None
 
 
+def _standard_tool(mcp: FastMCP):
+    """Register a Mind tool with the shared Cortex MCP result contract."""
+
+    def decorate(function):
+        @functools.wraps(function)
+        def wrapped(*args, **kwargs):
+            try:
+                data = function(*args, **kwargs)
+            except Exception as exc:
+                envelope = normalize_error(exc)
+                return CallToolResult(
+                    content=[
+                        TextContent(
+                            type="text",
+                            text=result_summary(
+                                None,
+                                ok=False,
+                                message=envelope["error"]["message"],
+                            ),
+                        )
+                    ],
+                    structuredContent=envelope,
+                    isError=True,
+                    meta=result_meta(function.__name__),
+                )
+
+            envelope = normalize_success(data)
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text",
+                        text=result_summary(data, ok=True),
+                    )
+                ],
+                structuredContent=envelope,
+                isError=False,
+                meta=result_meta(function.__name__),
+            )
+
+        wrapped.__signature__ = inspect.signature(function).replace(
+            return_annotation=Dict[str, Any]
+        )
+        return mcp.tool()(wrapped)
+
+    return decorate
+
+
 
 
 def register_tools(mcp: FastMCP) -> None:
-    @mcp.tool()
-    def list_source_ids(limit=50, project_id=None) -> List[str]:
+    @_standard_tool(mcp)
+    def list_source_ids(
+        limit: int = 50,
+        project_id: Optional[str] = None,
+    ) -> List[str]:
         """List available source_id values from Neo4j (Paragraph nodes)."""
         limit_val = max(0, int(limit))
         source_ids: List[str] = []
@@ -585,8 +644,10 @@ def register_tools(mcp: FastMCP) -> None:
                     store.close()
         return source_ids[:limit_val]
 
-    @mcp.tool()
-    def list_qdrant_collections(project_id=None) -> List[str]:
+    @_standard_tool(mcp)
+    def list_qdrant_collections(
+        project_id: Optional[str] = None,
+    ) -> List[str]:
         """List Qdrant collections.
 
         Per the unified ingest/query contract:
@@ -603,17 +664,17 @@ def register_tools(mcp: FastMCP) -> None:
         expected = _resolve_doc_collection(project_id)
         return [name for name in names if name == expected]
 
-    @mcp.tool()
+    @_standard_tool(mcp)
     def semantic_search(
-        query,
-        top_k=5,
-        source_id=None,
-        collection=None,
-        project_id=None,
-        max_passage_chars=None,
-        include_entity_ids=True,
-        include_entity_mentions=False,
-    ):
+        query: str,
+        top_k: int = 5,
+        source_id: Optional[str] = None,
+        collection: Optional[str] = None,
+        project_id: Optional[str] = None,
+        max_passage_chars: Optional[int] = None,
+        include_entity_ids: bool = True,
+        include_entity_mentions: bool = False,
+    ) -> Dict[str, Any]:
         """Vector-only search in Qdrant. Returns passages without graph expansion.
 
         Per Phase 05 of the unified ingest/query contract plan, ``project_id``
@@ -666,28 +727,28 @@ def register_tools(mcp: FastMCP) -> None:
             "passages": passages,
         }
 
-    @mcp.tool()
+    @_standard_tool(mcp)
     def query_graph_rag_langextract(
-        query,
-        top_k=5,
-        source_id=None,
-        collection=None,
-        include_entities=True,
-        include_relations=True,
-        expand_related=True,
-        related_k=50,
-        graph_depth=1,
-        entity_types=None,
-        max_passage_chars=None,
-        min_score_to_expand=None,
-        min_entity_occurrences=None,
-        rerank=False,
-        rerank_entity_weight=0.05,
-        rerank_type_weight=0.1,
-        rerank_confidence_weight=0.3,
-        rerank_length_penalty=0.0002,
-        project_id=None,
-    ):
+        query: str,
+        top_k: int = 5,
+        source_id: Optional[str] = None,
+        collection: Optional[str] = None,
+        include_entities: bool = True,
+        include_relations: bool = True,
+        expand_related: bool = True,
+        related_k: int = 50,
+        graph_depth: int = 1,
+        entity_types: Optional[List[str] | str] = None,
+        max_passage_chars: Optional[int] = None,
+        min_score_to_expand: Optional[float] = None,
+        min_entity_occurrences: Optional[int] = None,
+        rerank: bool = False,
+        rerank_entity_weight: float = 0.05,
+        rerank_type_weight: float = 0.1,
+        rerank_confidence_weight: float = 0.3,
+        rerank_length_penalty: float = 0.0002,
+        project_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Query Qdrant for top-k passages with entity_ids payload, then fetch related
         entity context from Neo4j. Returns context only (no LLM generation).
@@ -792,12 +853,12 @@ def register_tools(mcp: FastMCP) -> None:
             "relations": relations,
         }
 
-    @mcp.tool()
+    @_standard_tool(mcp)
     def get_paragraph_text(
-        source_id,
-        paragraph_id,
-        project_id=None,
-    ):
+        source_id: str,
+        paragraph_id: int,
+        project_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Fetch a paragraph's text by source_id + paragraph_id from Neo4j."""
         # Type coercion to handle n8n passing strings
         source_id = str(source_id) if source_id else None
