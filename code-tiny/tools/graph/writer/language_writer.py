@@ -17,6 +17,7 @@ from tools.graph.operations.class_ops import ClassNodeOperations
 from tools.graph.operations.namespace_ops import NamespaceNodeOperations
 from tools.graph.operations.type_ops import TypeNodeOperations
 from tools.graph.operations.function_ops import FunctionNodeOperations
+from tools.graph.schema import CODE_GRAPH_SCHEMA
 from tools.graph.writer.query_contract import (
     compile_evidence_edge_upsert,
     compile_relationship_endpoint_audit,
@@ -25,7 +26,12 @@ from tools.graph.writer.query_contract import (
     group_typed_relations,
 )
 from tools.graph.journal.identity import canonical_json
-from tools.graph.journal.runtime import GraphWriteJournalRuntime, JournalTicket
+from tools.graph.journal.executor import compile_persisted_mutation
+from tools.graph.journal.runtime import (
+    GraphWriteJournalRuntime,
+    JournalTicket,
+    NODE_PHASE_BARRIER,
+)
 from tools.graph.journal.reconcile import (
     compile_reconciliation_readback,
     readback_count,
@@ -228,13 +234,21 @@ class LanguageCodeWriter:
                         if state_writer:
                             state_writer(state)
                     self._emit_progress(
-                        "batch_skipped",
+                        (
+                            "batch_skipped"
+                            if ticket.batch.status is BatchStatus.DONE
+                            else "batch_staged"
+                        ),
                         label,
                         offset=offset,
                         size=len(batch),
                         completed=next_index,
                         total=total,
-                        reason="journal_done",
+                        reason=(
+                            "journal_done"
+                            if ticket.batch.status is BatchStatus.DONE
+                            else "node_phase_open"
+                        ),
                     )
                     continue
 
@@ -381,6 +395,25 @@ class LanguageCodeWriter:
         if self._journal_runtime is not None:
             self._journal_runtime.close()
             self._journal_runtime = None
+
+    async def close_node_production_and_drain_edges(self) -> int:
+        """Close the durable node phase and replay every eligible staged edge."""
+
+        runtime = self._journal_runtime
+        if runtime is None or not runtime.node_first:
+            return 0
+        config = self._journal_config
+        assert config is not None
+        runtime.close_node_production()
+        barrier = runtime.journal.get_barrier(runtime.run.run_id, NODE_PHASE_BARRIER)
+        if barrier is None or barrier.status.value != "drained":
+            raise RuntimeError("node production closed before all node batches drained")
+        runtime.close()
+        self._journal_runtime = None
+        self._deferred_journal_writes.clear()
+        from tools.graph.journal.consumer import resume_journal
+
+        return await resume_journal(config, self.driver)
     
     async def write_packages(
         self,
@@ -1657,6 +1690,48 @@ class LanguageCodeWriter:
             key, rows, write_batch, state, state_writer, operation
         )
 
+    async def write_node_properties_batch(
+        self,
+        key: str,
+        node_label: str,
+        rows: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+        *,
+        identity_property: str = "id",
+        row_identity_property: str = "id",
+        row_properties_property: Optional[str] = None,
+    ) -> int:
+        """Write a specialized node batch through the trusted replay compiler."""
+
+        if not rows:
+            return 0
+        if not CODE_GRAPH_SCHEMA.has_identity_index(
+            node_label, identity_property
+        ):
+            raise ValueError(
+                f"specialized node label {node_label!r} has no required "
+                f"{identity_property!r} identity index"
+            )
+        operation = GraphWriteOperation.for_node_contract(
+            key,
+            node_label=node_label,
+            identity_property=identity_property,
+            row_identity_property=row_identity_property,
+            row_properties_property=row_properties_property,
+        )
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query, parameters = compile_persisted_mutation(operation, batch)
+            records, _, _ = await self.driver.execute_query(
+                query, parameters, self.database
+            )
+            return int(records[0]["count"]) if records else 0
+
+        return await self.write_batches(
+            key, rows, write_batch, state, state_writer, operation
+        )
+
     async def enqueue_deferred_relations(
         self,
         relations: List[Dict[str, Any]],
@@ -1714,6 +1789,9 @@ class LanguageCodeWriter:
                 remaining.append((ticket, write_fn))
                 continue
             claimed = self._journal_runtime.claim_deferred(ticket)
+            if not claimed.execute and claimed.batch.status is not BatchStatus.DONE:
+                remaining.append((ticket, write_fn))
+                continue
             if not claimed.execute:
                 written += claimed.batch.expected_count
                 continue
