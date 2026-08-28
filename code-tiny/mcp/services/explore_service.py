@@ -262,10 +262,7 @@ async def _make_graph_driver(
                     os.environ.get("FALKORDB_PATH")
                     or str(resolve_storage(Path.cwd()).falkordb_code_path)
                 )
-                from cross_instance import self_and_allowed_siblings_paths  # noqa: PLC0415
-                config["additional_paths"] = self_and_allowed_siblings_paths(
-                    "explore_graph"
-                )
+                config["additional_paths"] = discover_falkordb_data_files()
             return await get_shared_graph_driver(GraphProvider.FALKORDB, config)
 
         return await get_shared_graph_driver(

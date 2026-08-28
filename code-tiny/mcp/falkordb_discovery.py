@@ -1,19 +1,15 @@
 """Shared FalkorDB instance discovery helpers used by every MCP backend.
 
-The MCP backends (cplus, android, java) each instantiate ONE
+The MCP backends (cplus, android, java, fastmcp) each instantiate one
 ``GraphDriver`` against the storage instance derived from the current
-working directory and ``CORTEX_STORAGE_INSTANCE``. That single driver
-sees only the graphs stored in its own ``data.rdb``; sibling instances
-under ``<data_home>/v1/instances/*/falkordb/code/data.rdb`` are invisible
-to introspection tools like :func:`list_databases`.
+working directory and ``CORTEX_STORAGE_INSTANCE``. By default that driver
+sees every ``data.rdb`` under ``<data_home>/v1/instances/*/falkordb/code``,
+so unscoped queries (e.g. ``_list_databases`` followed by fan-out via
+``_run_cypher_first``) cover every registered project across instances.
 
-Per the per-instance MCP lease isolation plan
-(``plans/260828-1428-instance-isolated-mcp-locks``), the default boot
-path leases only the resolved instance. Cross-instance reads are an
-opt-in via :data:`code_tiny.mcp.cross_instance.CROSS_INSTANCE_OPT_IN`.
-The shared FalkorDB driver opens sibling paths only when the call site
-explicitly passes them, and respects the normal owner lease — sibling
-paths already in use by another process are skipped, never bypassed.
+The driver's primary lease protects only the path passed as ``path``;
+siblings are opened read-only without acquiring an application lease, so
+concurrent ingests on those instances are not blocked by the read fan-out.
 """
 
 from __future__ import annotations
@@ -21,22 +17,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import List, Optional
-
-
-# Legacy override: when this env var is set to "0", the discovery helper
-# returns every sibling's ``data.rdb`` regardless of the per-instance
-# filter. The default rollout keeps the legacy behavior off; flipping the
-# default happens after Phase 04 gates pass.
-LEGACY_INCLUDE_SIBLINGS_ENV = "CORTEX_MCP_SCOPE_LEASES"
-
-
-def _legacy_include_siblings() -> bool:
-    """Return True when the legacy "lease every sibling" mode is forced on.
-
-    Honours ``CORTEX_MCP_SCOPE_LEASES=0`` (any other value, including
-    unset, leaves the new behavior in place).
-    """
-    return os.environ.get(LEGACY_INCLUDE_SIBLINGS_ENV, "").strip() == "0"
 
 
 def _data_root() -> Path:
@@ -48,25 +28,25 @@ def _data_root() -> Path:
 
 def discover_falkordb_data_files(
     *,
-    include_siblings: bool = False,
-    exclude_self: bool = True,
+    include_siblings: bool = True,
+    exclude_self: bool = False,
     current_instance: Optional[str] = None,
     data_home: Optional[Path] = None,
 ) -> List[Path]:
-    """Return ``data.rdb`` files per the requested visibility scope.
+    """Return every ``data.rdb`` under the configured ``CORTEX_DATA_HOME``.
 
     Parameters
     ----------
     include_siblings:
-        When ``False`` (default), the result contains only the current
-        instance's ``data.rdb`` — MCP boot paths use this to ensure they
-        lease exactly one instance. When ``True``, every sibling under
+        When ``True`` (default), every instance's ``data.rdb`` under
         ``data_home/v1/instances/*/falkordb/code/data.rdb`` is returned
-        subject to ``exclude_self``.
+        subject to ``exclude_self``. When ``False``, only the current
+        instance's file is returned (if it exists).
     exclude_self:
-        When ``True`` (default) and ``include_siblings`` is ``True``,
-        drop the current instance from the list. Ignored when
-        ``include_siblings`` is ``False``.
+        When ``True`` and ``include_siblings`` is ``True``, drop the
+        current instance from the list. Ignored when ``include_siblings``
+        is ``False``. Defaults to ``False`` so the result is "every
+        instance, including self".
     current_instance:
         Override the current ``CORTEX_STORAGE_INSTANCE``. When unset, the
         environment variable is read.
@@ -75,14 +55,19 @@ def discover_falkordb_data_files(
         variable is read; if still unset, the default
         ``~/.cortext-harness`` is used.
 
-    The ``CORTEX_MCP_SCOPE_LEASES=0`` escape hatch restores the legacy
-    behavior (return every sibling, self included) so operators can roll
-    back without code changes.
-    """
-    if _legacy_include_siblings():
-        include_siblings = True
-        exclude_self = False
+    Examples
+    --------
+    Boot-path callers use the default args and receive every ``data.rdb``
+    (self + siblings)::
 
+        paths = discover_falkordb_data_files()
+        # [Path("~/.cortext-harness/v1/instances/alpha/.../data.rdb"),
+        #  Path("~/.cortext-harness/v1/instances/beta/.../data.rdb"), ...]
+
+    To get only siblings (drop self)::
+
+        discover_falkordb_data_files(exclude_self=True)
+    """
     root = data_home if data_home is not None else _data_root()
     instances_root = root / "v1" / "instances"
     if not instances_root.is_dir():
