@@ -1,12 +1,15 @@
 ---
 title: "Per-instance isolated MCP leases and lifecycle scoping"
-status: pending
+status: superseded
 created: 2026-08-28
 mode: hi-plan --full
 scope: "falkordb cross-instance discovery, lease surface per MCP process, dev.py pause-by-instance, targeted regression tests"
+supersededBy: 260828-1508-multi-instance-fanout-default
+supersededReason: "User revised requirements on 2026-08-28 to keep multi-instance fan-out as the default query behavior. The dev.py pause-by-instance portion remains valid and is carried forward into 260828-1508."
 blockedBy: []
 blocks: []
 relatedPlans:
+  - 260828-1508-multi-instance-fanout-default
   - 260807-0929-mcp-ingest-query-concurrency
   - 260806-1648-local-file-storage
   - 260728-0000-unified-ingest-query-contract
