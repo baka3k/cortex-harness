@@ -11,6 +11,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from tools.common.call_evidence import enforce_strong_call_row
+from tools.common.project_scope import project_id_lookup_key
 from tools.graph.core.base import GraphDriver
 from tools.graph.operations.package_ops import PackageNodeOperations
 from tools.graph.operations.class_ops import ClassNodeOperations
@@ -129,6 +130,26 @@ class LanguageCodeWriter:
         provider = getattr(self.driver, "provider", "graph")
         return str(getattr(provider, "value", provider))
 
+    @staticmethod
+    def _require_call_project_scope(calls: List[Dict[str, Any]]) -> None:
+        """Normalize call endpoint scope and reject ambiguous unscoped rows."""
+
+        for position, row in enumerate(calls):
+            project_id = row.get("project_id") or (row.get("props") or {}).get(
+                "project_id"
+            )
+            normalized = project_id_lookup_key(project_id)
+            if normalized is None:
+                raise ValueError(
+                    f"call row requires project_id (row {position})"
+                )
+            row["project_id"] = str(project_id).strip()
+            row["project_id_normalized"] = normalized
+            props = row.get("props")
+            if isinstance(props, dict):
+                props["project_id"] = row["project_id"]
+                props["project_id_normalized"] = normalized
+
     def _emit_progress(self, event: str, label: str, **fields: Any) -> None:
         """Emit one visible, flushed progress event for verbose CLI runs."""
 
@@ -224,6 +245,13 @@ class LanguageCodeWriter:
                         ticket.operation,
                         ticket.rows,
                         job_id=ticket.batch.job_id,
+                        artifact_sha256=ticket.batch.artifact.sha256,
+                        run_id=ticket.batch.run_id,
+                        generation=(
+                            self._journal_config.metadata.generation
+                            if self._journal_config is not None
+                            else ""
+                        ),
                     )
                     applied: bool | None = None
                     if readback is not None:
@@ -283,6 +311,15 @@ class LanguageCodeWriter:
             with journaled_mutation(
                 ticket.batch.job_id if ticket is not None else None,
                 ticket.operation.operation_key if ticket is not None else "schema",
+                artifact_sha256=(
+                    ticket.batch.artifact.sha256 if ticket is not None else ""
+                ),
+                run_id=ticket.batch.run_id if ticket is not None else "",
+                generation=(
+                    self._journal_config.metadata.generation
+                    if ticket is not None and self._journal_config is not None
+                    else ""
+                ),
             ):
                 write_task = asyncio.create_task(write_fn(batch))
             try:
@@ -552,8 +589,10 @@ class LanguageCodeWriter:
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
             UNWIND $rows AS row
-            MATCH (r:Repository {name: row.repo})
-            MATCH (f:File {id: row.id})
+            MATCH (r:Repository {name: row.repo,
+                                 project_id_normalized: row.project_id_normalized})
+            MATCH (f:File {id: row.id,
+                           project_id_normalized: row.project_id_normalized})
             MERGE (r)-[:HAS_FILE]->(f)
             RETURN count(f) AS count
             """
@@ -668,6 +707,7 @@ class LanguageCodeWriter:
         """Write function call relationships in batches"""
         if not calls:
             return 0
+        self._require_call_project_scope(calls)
 
         # Collapse duplicate observations before journaling. Replays then set
         # the same absolute count instead of incrementing an existing edge.
@@ -701,8 +741,10 @@ class LanguageCodeWriter:
             # returns CALLS edges alongside the nodes they connect.
             query = """
             UNWIND $rows AS row
-            MATCH (caller:Function {id: row.caller_id})
-            MATCH (callee:Function {id: row.callee_id})
+            MATCH (caller:Function {id: row.caller_id,
+                                    project_id_normalized: row.project_id_normalized})
+            MATCH (callee:Function {id: row.callee_id,
+                                    project_id_normalized: row.project_id_normalized})
             MERGE (caller)-[r:CALLS]->(callee)
             SET r.count                = row.count,
                 r.call_type            = row.call_type,
@@ -1170,7 +1212,12 @@ class LanguageCodeWriter:
             SET t.name = row.name,
                 t.qualified_name = row.qualified_name,
                 t.kind = row.kind,
-                t.file_path = row.file_path,
+                t.file_path = CASE
+                    WHEN coalesce(t.file_path, '') = '' THEN row.file_path
+                    WHEN coalesce(row.file_path, '') = '' THEN t.file_path
+                    WHEN row.file_path < t.file_path THEN row.file_path
+                    ELSE t.file_path
+                END,
                 t.start_line = row.start_line,
                 t.end_line = row.end_line,
                 t.code = row.code,
@@ -1855,7 +1902,10 @@ class LanguageCodeWriter:
                     additional_required_barriers=(barrier,),
                     defer=True,
                 )
-                if ticket.batch.status is not BatchStatus.DONE:
+                if (
+                    not self._journal_runtime.node_first
+                    and ticket.batch.status is not BatchStatus.DONE
+                ):
                     self._deferred_journal_writes.append((ticket, write_batch))
                 enqueued += len(batch)
         return enqueued
@@ -1866,6 +1916,13 @@ class LanguageCodeWriter:
         if self._journal_runtime is None:
             raise RuntimeError("deferred durable relations require journal mode")
         self._journal_runtime.close_barrier(barrier)
+        # Node-first consumers rebuild mutations solely from the durable
+        # operation descriptor and immutable artifact.  Per-barrier closure is
+        # diagnostic only until the global node and endpoint-audit barriers
+        # drain, so retaining process-local callables would create a second,
+        # non-recoverable execution path.
+        if self._journal_runtime.node_first:
+            return 0
         written = 0
         remaining = []
         for ticket, write_fn in self._deferred_journal_writes:
@@ -1882,7 +1939,15 @@ class LanguageCodeWriter:
             started = time.monotonic()
             try:
                 with journaled_mutation(
-                    claimed.batch.job_id, claimed.operation.operation_key
+                    claimed.batch.job_id,
+                    claimed.operation.operation_key,
+                    artifact_sha256=claimed.batch.artifact.sha256,
+                    run_id=claimed.batch.run_id,
+                    generation=(
+                        self._journal_config.metadata.generation
+                        if self._journal_config is not None
+                        else ""
+                    ),
                 ):
                     count = int(await write_fn(list(claimed.rows)))
                 self._journal_runtime.acknowledge(
@@ -1913,6 +1978,7 @@ class LanguageCodeWriter:
         """
         if not calls:
             return 0
+        self._require_call_project_scope(calls)
         for row in calls:
             enforce_strong_call_row(row)
 
@@ -1921,13 +1987,15 @@ class LanguageCodeWriter:
             UNWIND $rows AS row
             CALL {
                 WITH row
-                MATCH (caller:Function {id: row.caller_id})
+                MATCH (caller:Function {id: row.caller_id,
+                                        project_id_normalized: row.project_id_normalized})
                 RETURN caller
                 LIMIT 1
             }
             CALL {
                 WITH row
-                MATCH (callee:Function {id: row.callee_id})
+                MATCH (callee:Function {id: row.callee_id,
+                                        project_id_normalized: row.project_id_normalized})
                 RETURN callee
                 LIMIT 1
             }
@@ -1960,6 +2028,7 @@ class LanguageCodeWriter:
         """
         if not calls:
             return 0
+        self._require_call_project_scope(calls)
         for row in calls:
             enforce_strong_call_row(row)
 
@@ -1968,13 +2037,15 @@ class LanguageCodeWriter:
             UNWIND $rows AS row
             CALL {
                 WITH row
-                MATCH (caller:Function {id: row.caller_id})
+                MATCH (caller:Function {id: row.caller_id,
+                                        project_id_normalized: row.project_id_normalized})
                 RETURN caller
                 LIMIT 1
             }
             CALL {
                 WITH row
-                MATCH (callee:Function {id: row.callee_id})
+                MATCH (callee:Function {id: row.callee_id,
+                                        project_id_normalized: row.project_id_normalized})
                 RETURN callee
                 LIMIT 1
             }

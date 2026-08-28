@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 
-JOURNAL_SCHEMA_VERSION = 2
+JOURNAL_SCHEMA_VERSION = 3
 CONTRACT_VERSION = 1
 
 
@@ -43,6 +43,22 @@ class BarrierStatus(str, Enum):
     OPEN = "open"
     PRODUCED = "produced"
     DRAINED = "drained"
+
+
+class ProducerStatus(str, Enum):
+    OPEN = "open"
+    COMPLETE = "complete"
+
+
+class ManifestDisposition(str, Enum):
+    STAGED_UNIQUE = "staged_unique"
+    DECLARED_DUPLICATE = "declared_duplicate"
+    CONFLICT = "conflict"
+    REJECTED = "rejected"
+
+
+class EndpointAuditStatus(str, Enum):
+    SEALED = "sealed"
 
 
 class RetryClass(str, Enum):
