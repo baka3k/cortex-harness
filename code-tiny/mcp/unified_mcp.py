@@ -82,7 +82,11 @@ from tools.common.project_registry import (  # noqa: E402
     ProjectRegistryError,
     resolve_project_targets,
 )
-from cortex_harness.storage import StoreGatewayError  # noqa: E402
+from cortex_harness.storage import (  # noqa: E402
+    StoreGatewayError,
+    begin_gateway_drain,
+    storage_runtime_status,
+)
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
@@ -380,7 +384,37 @@ mcp_server = FastMCP(
 
 @mcp_server.custom_route("/health", methods=["GET"])
 async def health_check(request: Request):
-    return JSONResponse({"status": "healthy", "service": "fastmcp-server"})
+    from services.explore_service import explore_service_status
+
+    storage = storage_runtime_status()
+    return JSONResponse(
+        {
+            "status": "healthy" if storage["liveness"] else "unhealthy",
+            "service": "fastmcp-server",
+            "liveness": storage["liveness"],
+            "readiness": storage["readiness"],
+            "storage": storage,
+            "retrieval": explore_service_status(),
+        }
+    )
+
+
+@mcp_server.custom_route("/ready", methods=["GET"])
+async def readiness_check(request: Request):
+    from services.explore_service import explore_service_status
+
+    storage = storage_runtime_status()
+    ready = bool(storage["readiness"])
+    return JSONResponse(
+        {
+            "status": "ready" if ready else "not_ready",
+            "service": "fastmcp-server",
+            "readiness": ready,
+            "storage": storage,
+            "retrieval": explore_service_status(),
+        },
+        status_code=200 if ready else 503,
+    )
 
 
 
@@ -2802,6 +2836,7 @@ def main() -> None:
         from services.explore_service import begin_explore_service_drain
 
         begin_explore_service_drain()
+        begin_gateway_drain()
         if signum == signal.SIGTERM:
             print("Received SIGTERM. Send again to force quit.")
         else:
