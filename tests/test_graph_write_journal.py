@@ -826,6 +826,53 @@ def test_v3_external_type_observations_are_declared_duplicates(tmp_path: Path) -
         ]
 
 
+def test_v3_typed_edge_ignores_internal_grouping_ordinal_for_dedup(
+    tmp_path: Path,
+) -> None:
+    operation = {
+        "label": "relations:Function:POINTER_TO:Type",
+        "phase": "relationships",
+        "version": 1,
+        "reconciliation": "typed_relationship",
+    }
+    base_row = {
+        "source_label": "Function",
+        "source_id": "function-1",
+        "target_label": "Type",
+        "target_id": "char",
+        "rel_type": "POINTER_TO",
+        "project_id_normalized": "demo",
+        "properties": {"kind": "pointer"},
+    }
+    rows = [
+        {**base_row, "_contract_row_position": position}
+        for position in (3, 9)
+    ]
+    with _journal(tmp_path) as journal:
+        run = journal.open_run(_metadata())
+        artifact = journal.create_artifact(run.run_id, rows)
+        batch = journal.enqueue_batch(
+            run.run_id,
+            BatchSpec(
+                OperationPhase.RELATIONSHIPS,
+                "graph-write/v1/relationships/relations:Function:POINTER_TO:Type",
+                0,
+                artifact,
+                2,
+                operation=operation,
+            ),
+        )
+        dispositions = journal._connection.execute(
+            "SELECT disposition FROM edge_manifest WHERE job_id = ? "
+            "ORDER BY row_ordinal",
+            (batch.job_id,),
+        ).fetchall()
+        assert [row["disposition"] for row in dispositions] == [
+            "staged_unique",
+            "declared_duplicate",
+        ]
+
+
 def test_v3_conflicting_node_payload_is_durable_and_blocks_run(tmp_path: Path) -> None:
     operation = {
         "label": "functions",
