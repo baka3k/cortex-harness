@@ -677,6 +677,9 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("backend", result)
         self.assertEqual(result["capability"]["canonical_parser"], "spring")
         self.assertEqual(result["capability"]["support_level"], "full")
+        self.assertNotIn("labels", result["capability"])
+        self.assertNotIn("searchable_properties", result["capability"])
+        self.assertNotIn("features", result["capability"])
 
     async def test_dispatch_keeps_parser_profile_separate_from_framework_filter(self):
         captured = {}
@@ -767,6 +770,18 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(profiles["perl"]["support_level"], "generic")
         self.assertIn("asp.net-framework", result["parsers"])
+        self.assertNotIn("labels", profiles["spring"])
+        self.assertNotIn("relationships", profiles["spring"])
+        self.assertNotIn("searchable_properties", profiles["spring"])
+        self.assertNotIn("default_query_profiles", profiles["spring"])
+
+        full_result = await tool(detail_level="full")
+        full_profiles = {
+            item["canonical_parser"]: item
+            for item in full_result["capabilities"]
+        }
+        self.assertIn("labels", full_profiles["spring"])
+        self.assertIn("relationships", full_profiles["spring"])
 
     async def test_public_tool_catalog_is_provider_neutral_and_exposes_inspector(self):
         tool = getattr(

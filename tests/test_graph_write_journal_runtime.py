@@ -78,6 +78,8 @@ class _ConsumerDriver(_Driver):
     async def execute_query(self, query, parameters=None, database=None):
         values = dict(parameters or {})
         self.calls.append((query, values))
+        if "source_matches" in query and "target_matches" in query:
+            return ([], [], None)
         job_id = values.get("job_id")
         if query.lstrip().startswith("MATCH (receipt:GraphWriteReceipt"):
             return ([{"count": int(job_id in self.receipts)}], [], None)
@@ -341,7 +343,7 @@ def test_schema_v1_migrates_persisted_operation_contract(tmp_path: Path) -> None
             row[1]
             for row in journal._connection.execute("PRAGMA table_info(batches)")
         }
-    assert version == 2
+    assert version == 3
     assert "operation_json" in columns
 
 
@@ -826,7 +828,14 @@ async def test_relationship_waits_on_both_501_file_endpoint_barriers(
     async def write_nodes(batch):
         return len(batch)
 
-    files = [{"id": f"file-{index}"} for index in range(501)]
+    files = [
+        {
+            "id": f"file-{index}",
+            "project_id": "fixture-project",
+            "project_id_normalized": "fixture-project",
+        }
+        for index in range(501)
+    ]
     assert await writer.write_batches("files", files, write_nodes) == 501
     assert await writer.write_relations_typed(
         [
@@ -847,10 +856,11 @@ async def test_relationship_waits_on_both_501_file_endpoint_barriers(
         "SELECT required_barriers_json FROM batches WHERE phase = 'relationships'"
     ).fetchone()
     required = json.loads(row["required_barriers_json"])
-    assert len(required) == 3
+    assert len(required) == 4
+    assert "audit:endpoints" in required
     assert "phase:nodes" in required
     statuses = connection.execute(
-        "SELECT name, status FROM barriers WHERE name IN (?, ?, ?) ORDER BY name",
+        "SELECT name, status FROM barriers WHERE name IN (?, ?, ?, ?) ORDER BY name",
         required,
     ).fetchall()
     status_by_name = {item["name"]: item["status"] for item in statuses}

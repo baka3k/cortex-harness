@@ -15,6 +15,77 @@ from cplus import cplus_mcp
 
 
 class FrameworkMcpSearchTests(unittest.IsolatedAsyncioTestCase):
+    def test_compact_node_output_does_not_leak_raw_note_source(self):
+        node = {
+            "id": "file-1",
+            "labels": ["File"],
+            "name": "batch_job.c",
+            "summary": "Batch orchestration source file",
+            "note": "Code:\n#include <stdio.h>\nint main(void) { return 0; }",
+            "code": "#include <stdio.h>\nint main(void) { return 0; }",
+        }
+
+        result = cplus_mcp._record_node(
+            node, content_mode="summary", include_raw_fields=False
+        )
+
+        properties = result["properties"]
+        self.assertEqual(properties["content"], "Batch orchestration source file")
+        self.assertNotIn("note", properties)
+        self.assertNotIn("code", properties)
+
+    async def test_cplus_symbol_search_excludes_container_file_nodes(self):
+        calls = []
+
+        async def fake_run(query, params, dbs):
+            calls.append(query)
+            return dbs[0], []
+
+        tool = getattr(
+            cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions
+        )
+        with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
+            await tool(
+                query="batch_job_run",
+                project_id="procsample",
+                payload={"parser_type": "proc"},
+            )
+
+        self.assertTrue(calls)
+        self.assertIn("node:Function", calls[0])
+        self.assertNotIn("node:File", calls[0])
+
+    async def test_search_result_keeps_labels_and_compact_name_fallback(self):
+        async def fake_run(query, params, dbs):
+            return dbs[0], [
+                {
+                    "n": {
+                        "id": "function-1",
+                        "name": "batch_job_run",
+                        "summary": "",
+                        "code": "int batch_job_run(void) { return 0; }",
+                    },
+                    "labels": ["Function"],
+                }
+            ]
+
+        tool = getattr(
+            cplus_mcp.tool_search_functions, "fn", cplus_mcp.tool_search_functions
+        )
+        with patch.object(cplus_mcp, "_run_cypher_first", side_effect=fake_run):
+            result = await tool(
+                query="batch_job_run",
+                project_id="procsample",
+                content_mode="summary",
+                payload={"parser_type": "proc"},
+            )
+
+        node = result["results"][0]
+        self.assertEqual(node["labels"], ["Function"])
+        self.assertEqual(node["properties"]["content"], "batch_job_run")
+        self.assertNotIn("id", node["properties"])
+        self.assertNotIn("code", node["properties"])
+
     async def test_parser_profile_applies_labels_without_inventing_framework_filter(self):
         calls = []
 

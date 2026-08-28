@@ -349,10 +349,15 @@ def _merge_payload(
 # unscoped direct calls; fan-out calls OR it with the per-backend label union
 # so a single parser-less dispatch does not silently drop profile labels.
 _LEGACY_SEARCH_LABELS: Tuple[str, ...] = (
-    "Function", "Type", "Namespace", "File", "Field", "Alias", "Template",
-    "FunctionType", "Event", "Project", "Resource", "UIControl",
+    "Function", "Type", "Namespace", "Field", "Alias", "Template",
+    "FunctionType", "Event", "Resource", "UIControl",
 )
 _LEGACY_SEARCH_FRAMEWORKS: Tuple[str, ...] = ("spring", "servlet_jsp", "mybatis")
+_NON_SYMBOL_SEARCH_LABELS = frozenset({
+    "BuildConfiguration", "BuildDescriptor", "CallSite", "Dependency", "File",
+    "FrameworkInstance", "Project", "ProjectModule", "Repository",
+    "SemanticCoverage",
+})
 
 
 def _search_label_predicate(
@@ -658,6 +663,7 @@ def _prune_content_fields(properties: Dict[str, Any]) -> None:
     properties.pop("summary", None)
     properties.pop("comment", None)
     properties.pop("code", None)
+    properties.pop("note", None)
 
 
 def _select_content(properties: Dict[str, Any], node_id: Optional[str], mode: str) -> str:
@@ -668,7 +674,7 @@ def _select_content(properties: Dict[str, Any], node_id: Optional[str], mode: st
     comment_text = comment if isinstance(comment, str) else ""
     code_text = code if isinstance(code, str) else ""
     if mode == "summary":
-        return summary_text
+        return summary_text if summary_text.strip() else _fallback_node_name(properties, node_id)
     if mode == "comment":
         return comment_text
     if mode == "code":
@@ -692,7 +698,7 @@ def _record_node(
         node_id = node.get("id")
         props = {
             key: value for key, value in node.items()
-            if key not in {"labels", "_graph_id"}
+            if key not in {"id", "labels", "_graph_id"}
         }
         content = _select_content(props, node_id, mode)
         if not include_raw_fields:
@@ -717,6 +723,21 @@ def _record_node(
         "labels": list(getattr(node, "labels", [])),
         "properties": properties,
     }
+
+
+def _record_query_node(
+    row: Dict[str, Any],
+    key: str,
+    content_mode: str,
+    include_raw_fields: bool,
+) -> Dict[str, Any]:
+    """Preserve labels returned separately by provider-neutral drivers."""
+
+    node = row[key]
+    labels = row.get("labels")
+    if isinstance(node, dict) and labels:
+        node = {**node, "labels": list(labels)}
+    return _record_node(node, content_mode, include_raw_fields)
 
 
 def _record_rel(
@@ -3253,7 +3274,15 @@ async def tool_search_functions(
     _require(db_candidates[0] if db_candidates else None, "db")
     qs = [t.lower().strip() for t in query.split("|") if t.strip()]
     fanout = bool(payload.get("_fanout"))
-    profile_labels = searchable_labels(capability.name) if capability else ()
+    profile_labels = (
+        tuple(
+            label
+            for label in searchable_labels(capability.name)
+            if label not in _NON_SYMBOL_SEARCH_LABELS
+        )
+        if capability
+        else ()
+    )
     profile_properties = (
         backend_text_property_union("cplus")
         if fanout and not profile_labels
@@ -3275,7 +3304,7 @@ async def tool_search_functions(
         "AND ($framework IS NULL OR n.framework = $framework OR n.framework IS NULL) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR n.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('n')} "
-        "RETURN n LIMIT $limit"
+        "RETURN n, labels(n) AS labels LIMIT $limit"
     )
     fulltext_query = " OR ".join(qs)
     node_label_predicate = _search_label_predicate("node", profile_labels, fanout=fanout)
@@ -3287,7 +3316,7 @@ async def tool_search_functions(
         "AND ($framework IS NULL OR node.framework = $framework) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR node.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('node')} "
-        "RETURN node AS n ORDER BY score DESC LIMIT $limit"
+        "RETURN node AS n, labels(node) AS labels ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
@@ -3303,11 +3332,11 @@ async def tool_search_functions(
             )
             used_db = used_db or fallback_db
             by_id = {
-                str(_record_node(row.get("n"), "auto", False).get("id") or index): row
+                str(_record_query_node(row, "n", "auto", False).get("id") or index): row
                 for index, row in enumerate(results)
             }
             for index, row in enumerate(fallback_results, start=len(by_id)):
-                key = str(_record_node(row.get("n"), "auto", False).get("id") or index)
+                key = str(_record_query_node(row, "n", "auto", False).get("id") or index)
                 by_id.setdefault(key, row)
             results = list(by_id.values())[: int(limit)]
     except Exception:
@@ -3317,7 +3346,10 @@ async def tool_search_functions(
             db_candidates,
         )
     mode = _normalize_content_mode(content_mode)
-    nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
+    nodes = [
+        _record_query_node(row, "n", mode, include_raw_fields)
+        for row in results
+    ]
     ids = [node.get("id") for node in nodes if node.get("id")]
     return {"db": used_db, "results": nodes, "ids": ids}
 
@@ -3364,12 +3396,12 @@ async def tool_search_by_code(
     if not isinstance(query, str) or not query.strip():
         raise ValueError("query is required.")
     qs = [t.strip() for t in query.split("|") if t.strip()]
-    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) RETURN n LIMIT $limit"
+    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) RETURN n, labels(n) AS labels LIMIT $limit"
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
         "WHERE ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized) "
-        "RETURN node AS n ORDER BY score DESC LIMIT $limit"
+        "RETURN node AS n, labels(node) AS labels ORDER BY score DESC LIMIT $limit"
     )
     try:
         used_db, results = await _run_cypher_first(
@@ -3390,7 +3422,10 @@ async def tool_search_by_code(
             db_candidates,
         )
     mode = _normalize_content_mode(content_mode)
-    nodes = [_record_node(row["n"], mode, include_raw_fields) for row in results]
+    nodes = [
+        _record_query_node(row, "n", mode, include_raw_fields)
+        for row in results
+    ]
     return {"db": used_db, "results": nodes}
 
 

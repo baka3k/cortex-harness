@@ -243,6 +243,22 @@ FRAMEWORK_ANALYZERS: Dict[str, FrameworkAnalyzerConfig] = {
     ),
 }
 
+
+def _enforce_required_graph_writer_rollout(parser: str, journal_config) -> None:
+    """Fail closed for required-mode writers not yet on node-first v3.
+
+    Shadow mode remains available to collect serialization evidence.  C++ and
+    Pro*C share the ``cplus`` lane and are the first production-required lane;
+    every other registered writer is explicitly inventoried and cannot bypass
+    the durable node-first contract by executing its legacy direct mutations.
+    """
+
+    if getattr(journal_config, "required", False) and parser.casefold() != "cplus":
+        raise RuntimeError(
+            f"parser '{parser}' is blocked in graph-journal required mode; "
+            "use shared-shadow until its node-first writer migration is complete"
+        )
+
 _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
     "spring": {".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml", ".json", ".gradle"},
     "servlet_jsp": {".java", ".jsp", ".jspx", ".jspf", ".tag", ".tagx", ".xml", ".properties", ".gradle"},
@@ -2765,6 +2781,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     ),
                     generation=artifact_token,
                 )
+                _enforce_required_graph_writer_rollout(parser, journal_config)
                 parser_info["journal_path"] = str(journal_config.path)
             try:
                 if journal_config is not None:
@@ -2938,6 +2955,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     ),
                     generation=artifact_token,
                 )
+                _enforce_required_graph_writer_rollout(
+                    framework, framework_journal
+                )
                 framework_info["journal_path"] = str(framework_journal.path)
             framework_started = time.time()
             try:
@@ -3059,6 +3079,9 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                         "CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"
                     ),
                     generation=artifact_token,
+                )
+                _enforce_required_graph_writer_rollout(
+                    "project_topology", topology_journal
                 )
                 topology_info["journal_path"] = str(topology_journal.path)
             topology_mode = (

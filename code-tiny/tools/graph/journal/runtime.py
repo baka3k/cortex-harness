@@ -24,6 +24,7 @@ from .sqlite_store import SQLiteJournal
 
 NODE_FIRST_QUERY_SHAPE = "language-writer-node-first-v1"
 NODE_PHASE_BARRIER = "phase:nodes"
+ENDPOINT_AUDIT_BARRIER = "audit:endpoints"
 
 
 @dataclass(frozen=True)
@@ -43,12 +44,13 @@ class GraphWriteJournalRuntime:
         self.journal = SQLiteJournal(config.path, limits=config.limits)
         self.run = self.journal.open_run(config.metadata)
         self.journal.recover_run_leases_as_ambiguous(self.run.run_id)
-        self._node_barriers: dict[tuple[str, str], str] = {}
+        self._node_barriers: dict[tuple[str, str, str, bytes], str] = {}
         self.node_first = (
             config.metadata.query_shape_version == NODE_FIRST_QUERY_SHAPE
         )
         if self.node_first:
             self.journal.open_barrier(self.run.run_id, NODE_PHASE_BARRIER)
+            self.journal.open_barrier(self.run.run_id, ENDPOINT_AUDIT_BARRIER)
 
     def _barrier_contract(
         self,
@@ -71,21 +73,50 @@ class GraphWriteJournalRuntime:
             for row in rows:
                 identity = row.get(operation.row_identity_property)
                 if identity is not None:
-                    self._node_barriers[(operation.node_label, str(identity))] = barrier
+                    scope = str(
+                        row.get("project_id_normalized")
+                        or row.get("project_id")
+                        or self.run.metadata.project_id.casefold()
+                    )
+                    self._node_barriers[
+                        (
+                            scope,
+                            operation.node_label,
+                            operation.identity_property,
+                            canonical_json(identity),
+                        )
+                    ] = barrier
         elif operation.reconciliation == "typed_relationship":
             for row in rows:
-                for label_key, identity_key in (
-                    ("source_label", "source_id"),
-                    ("target_label", "target_id"),
+                scope = str(
+                    row.get("project_id_normalized")
+                    or row.get("project_id")
+                    or self.run.metadata.project_id.casefold()
+                )
+                for label_key, property_key, identity_key in (
+                    ("source_label", "source_property", "source_id"),
+                    ("target_label", "target_property", "target_id"),
                 ):
                     dependency = self._node_barriers.get(
-                        (str(row.get(label_key)), str(row.get(identity_key)))
+                        (
+                            scope,
+                            str(row.get(label_key)),
+                            str(row.get(property_key) or "id"),
+                            canonical_json(row.get(identity_key)),
+                        )
                     )
                     if dependency:
                         required.add(dependency)
         elif operation.reconciliation == "repository_file":
             for row in rows:
-                dependency = self._node_barriers.get(("File", str(row.get("id"))))
+                scope = str(
+                    row.get("project_id_normalized")
+                    or row.get("project_id")
+                    or self.run.metadata.project_id.casefold()
+                )
+                dependency = self._node_barriers.get(
+                    (scope, "File", "id", canonical_json(row.get("id")))
+                )
                 if dependency:
                     required.add(dependency)
         elif operation.reconciliation == "evidence_edge":
@@ -93,20 +124,44 @@ class GraphWriteJournalRuntime:
             # are whatever node planes produced those identities, regardless
             # of the physical identity property (``id`` or ``site_id``).
             for row in rows:
-                for label_key, value_key in (
-                    ("source_label", "source_id"),
-                    ("target_label", "target_id"),
+                scope = str(
+                    row.get("project_id_normalized")
+                    or row.get("project_id")
+                    or self.run.metadata.project_id.casefold()
+                )
+                for label_key, property_key, value_key in (
+                    ("source_label", "source_property", "source_id"),
+                    ("target_label", "target_property", "target_id"),
                 ):
                     dependency = self._node_barriers.get(
-                        (str(row.get(label_key)), str(row.get(value_key)))
+                        (
+                            scope,
+                            str(row.get(label_key)),
+                            str(row.get(property_key) or "id"),
+                            canonical_json(row.get(value_key)),
+                        )
                     )
                     if dependency:
                         required.add(dependency)
-        elif operation.reconciliation in {"call_edge", "call_site"}:
+        elif operation.reconciliation in {
+            "call_edge",
+            "call_site",
+            "possible_call_site",
+        }:
             for row in rows:
+                scope = str(
+                    row.get("project_id_normalized")
+                    or row.get("project_id")
+                    or self.run.metadata.project_id.casefold()
+                )
                 for identity_key in ("caller_id", "callee_id"):
                     dependency = self._node_barriers.get(
-                        ("Function", str(row.get(identity_key)))
+                        (
+                            scope,
+                            "Function",
+                            "id",
+                            canonical_json(row.get(identity_key)),
+                        )
                     )
                     if dependency:
                         required.add(dependency)
@@ -115,6 +170,7 @@ class GraphWriteJournalRuntime:
                 produced = tuple(sorted(set(produced).union({NODE_PHASE_BARRIER})))
             else:
                 required.add(NODE_PHASE_BARRIER)
+                required.add(ENDPOINT_AUDIT_BARRIER)
         return tuple(sorted(required)), produced
 
     def prepare(
@@ -235,6 +291,7 @@ class GraphWriteJournalRuntime:
 
         if not self.node_first:
             return
+        self.journal.complete_producers(self.run.run_id)
         self.journal.close_barrier(self.run.run_id, NODE_PHASE_BARRIER)
 
     def claim_deferred(self, ticket: JournalTicket) -> JournalTicket:
