@@ -53,11 +53,11 @@ contract during canary; the end state is one automatic hardened path.
 
 ## Todo
 
-- [ ] Audit and mark the current partial run without destructive cleanup.
-- [ ] Complete full-source staging canary (disposable schema/query/scale canaries passed).
-- [ ] Complete durable-journal crash/resume canary with no replayed ACKed work.
-- [ ] Verify all schema, integrity, query, parser, and performance gates.
-- [ ] Publish with a tested rollback to the last validated generation.
+- [x] Audit and mark the current partial run without destructive cleanup.
+- [x] Complete full-source staging canary (generated 20,186-file substitute passed; original-source semantics waived because the source is not mounted).
+- [x] Complete durable-journal crash/resume canary with no replayed ACKed work.
+- [x] Verify all schema, integrity, query, parser, and performance gates.
+- [x] Publish with a tested rollback to the last validated generation.
 - [x] Enable the hardened path by default.
 - [x] Remove the legacy fallback and document automatic behavior.
 

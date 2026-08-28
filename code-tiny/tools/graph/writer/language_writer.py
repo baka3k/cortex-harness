@@ -151,6 +151,32 @@ class LanguageCodeWriter:
                 props["project_id"] = row["project_id"]
                 props["project_id_normalized"] = normalized
 
+    def _require_evidence_project_scope(
+        self,
+        rows: List[Dict[str, Any]],
+        *,
+        row_kind: str,
+    ) -> None:
+        """Bind staging nodes and edges to one explicit project scope."""
+
+        for position, row in enumerate(rows):
+            props = row.get("props")
+            if not isinstance(props, dict):
+                props = {}
+                row["props"] = props
+            project_id = row.get("project_id") or props.get("project_id")
+            if project_id is None and self._journal_config is not None:
+                project_id = self._journal_config.metadata.project_id
+            normalized = project_id_lookup_key(project_id)
+            if normalized is None:
+                raise ValueError(
+                    f"{row_kind} row requires project_id (row {position})"
+                )
+            row["project_id"] = str(project_id).strip()
+            row["project_id_normalized"] = normalized
+            props["project_id"] = row["project_id"]
+            props["project_id_normalized"] = normalized
+
     def _emit_progress(self, event: str, label: str, **fields: Any) -> None:
         """Emit one visible, flushed progress event for verbose CLI runs."""
 
@@ -2120,6 +2146,9 @@ class LanguageCodeWriter:
 
         if not sites:
             return 0
+        self._require_evidence_project_scope(
+            sites, row_kind="call evidence site"
+        )
 
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
@@ -2142,7 +2171,7 @@ class LanguageCodeWriter:
             if not str(row.get("site_id") or "").strip():
                 raise ValueError("call evidence site rows require site_id")
             base = {
-                "project_id": str((row.get("props") or {}).get("project_id") or ""),
+                "project_id": row["project_id"],
                 "props": {
                     key: value
                     for key, value in (row.get("props") or {}).items()
@@ -2207,6 +2236,9 @@ class LanguageCodeWriter:
 
         if not observations:
             return 0
+        self._require_evidence_project_scope(
+            observations, row_kind="call evidence observation"
+        )
         edges: List[Dict[str, Any]] = []
         for row in observations:
             callee_id = str(row.get("callee_id") or row.get("callee_symbol_id") or "")
@@ -2277,6 +2309,9 @@ class LanguageCodeWriter:
 
         if not configurations:
             return 0
+        self._require_evidence_project_scope(
+            configurations, row_kind="build configuration"
+        )
 
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
@@ -2308,7 +2343,7 @@ class LanguageCodeWriter:
                     "target_property": "config_fingerprint",
                     "target_id": str(row["config_fingerprint"]),
                     "rel_type": "IN_CONFIGURATION",
-                    "project_id": str((row.get("props") or {}).get("project_id") or ""),
+                    "project_id": row["project_id"],
                     "props": {},
                 }
             )
@@ -2325,6 +2360,9 @@ class LanguageCodeWriter:
 
         if not records_in:
             return 0
+        self._require_evidence_project_scope(
+            records_in, row_kind="semantic coverage"
+        )
 
         async def write_batch(batch: List[Dict[str, Any]]) -> int:
             query = """
@@ -2363,8 +2401,16 @@ class LanguageCodeWriter:
         required endpoints.
         """
 
+        function_rows = function_joins or []
+        host_rows = host_declarations or []
+        self._require_evidence_project_scope(
+            function_rows, row_kind="proc function join"
+        )
+        self._require_evidence_project_scope(
+            host_rows, row_kind="proc host declaration"
+        )
         edges: List[Dict[str, Any]] = []
-        for join in function_joins or []:
+        for join in function_rows:
             if not str(join.get("function_id") or "").strip() or not str(
                 join.get("statement_id") or ""
             ).strip():
@@ -2393,7 +2439,7 @@ class LanguageCodeWriter:
                     },
                 }
             )
-        for host in host_declarations or []:
+        for host in host_rows:
             if not str(host.get("host_variable_id") or "").strip():
                 raise ValueError("proc host declaration joins require host_variable_id")
             declaration_id = str(host.get("declaration_id") or "")

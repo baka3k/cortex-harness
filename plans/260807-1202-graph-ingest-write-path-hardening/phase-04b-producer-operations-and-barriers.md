@@ -68,10 +68,10 @@ analyzer-level lifecycle boundary, not at each `write_all()` call.
 
 ## Todo
 
-- [ ] Mutation-path inventory is complete and scope is truthful.
-- [ ] Serializable operation contracts replace opaque replay closures.
+- [x] Mutation-path inventory is complete and scope is truthful.
+- [x] Serializable operation contracts replace opaque replay closures.
 - [x] Non-idempotent/reconciliation-weak operations are converted or blocked.
-- [ ] Analyzer-level barrier lifecycle is implemented.
+- [x] Analyzer-level barrier lifecycle is implemented.
 - [x] C++ and shared writer producers durably enqueue before releasing memory.
 - [x] Direct/custom writers are migrated or explicitly rejected in journal mode.
 

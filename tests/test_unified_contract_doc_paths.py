@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from mcp.server.fastmcp import FastMCP
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -165,6 +166,27 @@ def test_mind_tools_use_the_same_success_envelope_as_graph_tools():
     assert "structuredContent.data" in result.content[0].text
 
 
+@pytest.mark.asyncio
+async def test_mind_sdk_protocol_boundary_does_not_rewrap_standard_envelope():
+    mcp = FastMCP("mind-contract-test")
+    mcp_graph_rag.register_tools(mcp)
+
+    qdrant = SimpleNamespace(list_collection_names=lambda: ["procsample_doc"])
+    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=qdrant), mock.patch.object(
+        mcp_graph_rag, "_resolve_doc_collection", return_value="procsample_doc"
+    ):
+        result = await mcp.call_tool(
+            "list_qdrant_collections", {"project_id": "procsample"}
+        )
+
+    assert result.isError is False
+    assert result.structuredContent == {
+        "ok": True,
+        "data": ["procsample_doc"],
+        "error": None,
+    }
+
+
 def test_mind_tool_execution_errors_are_structured_and_actionable():
     fake = _FakeMcp()
     mcp_graph_rag.register_tools(fake)
@@ -179,10 +201,46 @@ def test_mind_tool_execution_errors_are_structured_and_actionable():
     assert result.isError is True
     assert result.structuredContent["ok"] is False
     assert result.structuredContent["data"] is None
-    assert result.structuredContent["error"]["code"] == "lookup_error"
+    assert result.structuredContent["error"]["code"] == "collection_unavailable"
     assert result.structuredContent["error"]["message"] == (
         "procsample_doc is unavailable"
     )
+
+
+def test_missing_paragraph_is_an_empty_success_without_warning_shape():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    with mock.patch.object(
+        mcp_graph_rag, "fetch_paragraph_by_source", return_value=None
+    ):
+        result = fake.tools["get_paragraph_text"](
+            source_id="missing.md",
+            paragraph_id=7,
+            project_id="procsample",
+        )
+
+    assert result.isError is False
+    assert result.structuredContent["data"] == {
+        "source_id": "missing.md",
+        "paragraph_id": 7,
+        "text": None,
+        "found": False,
+    }
+
+
+def test_blank_paragraph_source_id_is_an_input_error():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    result = fake.tools["get_paragraph_text"](
+        source_id="",
+        paragraph_id=7,
+        project_id="procsample",
+    )
+
+    assert result.isError is True
+    assert result.structuredContent["error"]["code"] == "invalid_parameters"
 
 
 def test_mind_qdrant_search_resolves_collection_and_filter_from_project():

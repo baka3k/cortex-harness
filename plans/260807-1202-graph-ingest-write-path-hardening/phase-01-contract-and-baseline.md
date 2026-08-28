@@ -54,7 +54,7 @@ state. Do not benchmark against a registered user graph.
 - [x] Publish the complete label/identity/relationship matrix.
 - [x] List every unlabeled endpoint query and its owning writer.
 - [x] Capture reproducible pre-fix explain plans and latency data.
-- [ ] Audit current graph duplicate identities and unresolved endpoints read-only.
+- [x] Audit current graph duplicate identities and unresolved endpoints read-only.
 - [x] Freeze typed error and optional-edge policies.
 - [x] Record parser diagnostics independently of database timings.
 

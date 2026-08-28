@@ -66,3 +66,32 @@ def test_result_summary_is_concise_and_never_embeds_raw_payload():
 
     assert summary == "Success: 1 result. Read structuredContent.data."
     assert len(summary) < 100
+
+
+def test_known_exceptions_map_to_stable_api_error_codes():
+    project_error = type("ProjectNotRegisteredError", (Exception,), {})
+
+    assert normalize_error(ValueError("bad limit"))["error"]["code"] == (
+        "invalid_parameters"
+    )
+    assert normalize_error(LookupError("collection missing"))["error"]["code"] == (
+        "collection_unavailable"
+    )
+    assert normalize_error(project_error("missing project"))["error"]["code"] == (
+        "project_not_registered"
+    )
+
+
+def test_legacy_error_code_aliases_are_canonicalized_at_the_wire_boundary():
+    assert normalize_error(
+        {
+            "ok": False,
+            "error": {
+                "type": "unsupported_capability",
+                "message": "NAVIGATE unavailable",
+            },
+        }
+    )["error"]["code"] == "capability_unavailable"
+    assert normalize_error(
+        {"ok": False, "error": {"code": "OVERLOADED", "message": "busy"}}
+    )["error"]["code"] == "overloaded"
