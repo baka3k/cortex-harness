@@ -1355,7 +1355,7 @@ async def _ensure_project_repository_graph(
     provider = normalize_graph_provider(getattr(args, "graph_provider", None))
     repo_name = f"{project_name}/{os.path.basename(root)}"
 
-    driver = await create_graph_driver_from_args(args)
+    driver = await create_graph_driver_from_args(args, attach_journal=False)
     resolved_graph = (
         getattr(args, "neo4j_db", None)
         if provider == GraphProvider.NEO4J

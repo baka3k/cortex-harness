@@ -214,8 +214,16 @@ def prepare_graph_args(args: Namespace) -> bool:
     return True
 
 
-async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver]:
-    """Create the selected graph driver, returning None when graph writes are disabled."""
+async def create_graph_driver_from_args(
+    args: Namespace,
+    *,
+    attach_journal: bool = True,
+) -> Optional[GraphDriver]:
+    """Create the selected graph driver, returning None when graph writes are disabled.
+
+    ``attach_journal=False`` is reserved for orchestrator preflight writes that
+    happen before parser-scoped journal metadata exists.
+    """
 
     # Callers may use this helper directly rather than calling
     # ``prepare_graph_args`` first. Keep the boundary self-contained so the
@@ -236,12 +244,13 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
             password=password,
             database=getattr(args, "neo4j_db", None),
         )
-        from tools.graph.journal.config import attach_journal_config
-        from tools.graph.journal.consumer import resume_journal
+        if attach_journal:
+            from tools.graph.journal.config import attach_journal_config
+            from tools.graph.journal.consumer import resume_journal
 
-        journal_config = attach_journal_config(driver, args)
-        if journal_config is not None and journal_config.required:
-            await resume_journal(journal_config, driver)
+            journal_config = attach_journal_config(driver, args)
+            if journal_config is not None and journal_config.required:
+                await resume_journal(journal_config, driver)
         return driver
 
     graph_name = (
@@ -279,10 +288,11 @@ async def create_graph_driver_from_args(args: Namespace) -> Optional[GraphDriver
                 "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
             },
         )
-    from tools.graph.journal.config import attach_journal_config
-    from tools.graph.journal.consumer import resume_journal
+    if attach_journal:
+        from tools.graph.journal.config import attach_journal_config
+        from tools.graph.journal.consumer import resume_journal
 
-    journal_config = attach_journal_config(driver, args)
-    if journal_config is not None and journal_config.required:
-        await resume_journal(journal_config, driver)
+        journal_config = attach_journal_config(driver, args)
+        if journal_config is not None and journal_config.required:
+            await resume_journal(journal_config, driver)
     return driver
