@@ -21,7 +21,8 @@ not waive schema, ordering, recovery, integrity, backend, or scale gates.
 ## C++/Pro*C real-sample canary
 
 Source: `/Users/hieplq1.aip/Migration/procsample` (24 files).  
-Remote target: FalkorDB `localhost:6379`, graph `procsample_v3_canary`.  
+Remote target: FalkorDB `localhost:6379`, graph
+`procsample_v3_canary_final`.
 Local parity target: `/tmp/procsample-v3-local.rdb`, graph
 `procsample_v3_local`.
 
@@ -30,17 +31,19 @@ silent: external type observations were misclassified as conflicts, internal
 grouping ordinals polluted edge digests, unscoped possible-call rows were
 rejected, and the repository node lacked normalized project scope. After the
 contract fixes, the compatible interrupted run resumed without reparsing its
-ACKed work.
+ACKed work. A final clean run on the completed contract then added the durable
+all-producers-complete sentinel and exact audit digest/cardinality validation.
 
 | Evidence | Result |
 | --- | ---: |
-| Journal batches | 53 produced / 53 ACKed |
-| Journal rows | 2,115 |
-| Node conservation | 739 emitted = 644 unique + 95 declared duplicate |
-| Edge conservation | 1,359 emitted = 1,326 unique + 33 declared duplicate |
+| Journal batches | 56 produced / 56 ACKed |
+| Journal rows | 2,118 |
+| Node conservation | 741 emitted = 646 unique + 95 declared duplicate |
+| Edge conservation | 1,360 emitted = 1,327 unique + 33 declared duplicate |
 | Conflicted/rejected rows | 0 / 0 |
-| Endpoint audit | sealed |
-| Node barrier close / first edge lease | event 255 / event 257 |
+| Producer completion | durable sentinel present; 51 producers / 0 open |
+| Endpoint audit | sealed; digest/cardinality revalidated read-only |
+| Node barrier close / first edge lease | event 618 / event 620 |
 | Business nodes / relationships / files | 646 / 1,327 / 24 |
 | Local/remote count parity | exact |
 | Parse-quality errors / missing files | 0 / 0 |
@@ -53,8 +56,8 @@ receipts; the audit made no graph mutation.
 Artifacts outside the repository:
 
 - `/tmp/procsample-current-audit.json`
-- `/tmp/procsample-v3-canary-audit.json`
-- `/tmp/procsample-v3-summary-5.json`
+- `/tmp/procsample-v3-final-audit.json`
+- `/tmp/procsample-v3-final-summary.json`
 - `/tmp/procsample-v3-local-summary.json`
 
 ## Deterministic 20,186-file scale gate
@@ -96,7 +99,7 @@ The fixture contains 3,281 compile-command C files, 501 fanout headers, and
   suite.
 - Focused backend/publication suite: 168 tests and 9 subtests passed.
 - Journal/runtime suite after v3 changes: 68 tests passed.
-- Full repository regression: 1,455 tests passed, 10 skipped, and 270
+- Full repository regression: 1,458 tests passed, 10 skipped, and 270
   subtests passed. The 14 warnings are existing FalkorDB deprecation and
   Pydantic forward-reference warnings; there were no test failures.
 
