@@ -194,7 +194,11 @@ class GraphWriteOperation:
 
     @classmethod
     def for_incremental_cleanup(
-        cls, label: str, *, reconciliation: str
+        cls,
+        label: str,
+        *,
+        reconciliation: str,
+        node_label: str | None = None,
     ) -> "GraphWriteOperation":
         """Declare an allowlisted, idempotent cleanup that runs in node phase."""
 
@@ -203,7 +207,9 @@ class GraphWriteOperation:
         return cls(
             label=label,
             phase=OperationPhase.NODES,
+            version=2,
             reconciliation=reconciliation,
+            node_label=node_label,
             mutation_kind="match",
         )
 
