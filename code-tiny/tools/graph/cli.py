@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import argparse
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import Optional
@@ -39,6 +40,26 @@ def _has_option(parser: ArgumentParser, option: str) -> bool:
     return any(option in action.option_strings for action in parser._actions)
 
 
+class _ExplicitFalkorTargetAction(argparse.Action):
+    """Remember whether the caller explicitly selected local or remote FalkorDB.
+
+    Project configuration is loaded before argument parsing, so both an embedded
+    path and a remote URI can otherwise be present even when the command line
+    deliberately supplied one target.  The explicit selector must win.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        target = "path" if self.dest == "falkordb_path" else "uri"
+        previous = getattr(namespace, "_explicit_falkordb_target", None)
+        if previous and previous != target:
+            raise argparse.ArgumentError(
+                self,
+                "--falkordb-path and --falkordb-uri are mutually exclusive",
+            )
+        setattr(namespace, self.dest, values)
+        setattr(namespace, "_explicit_falkordb_target", target)
+
+
 def add_graph_provider_args(parser: ArgumentParser) -> None:
     """Add provider-neutral graph options while preserving existing Neo4j flags."""
 
@@ -52,12 +73,14 @@ def add_graph_provider_args(parser: ArgumentParser) -> None:
     if not _has_option(parser, "--falkordb-path"):
         parser.add_argument(
             "--falkordb-path",
+            action=_ExplicitFalkorTargetAction,
             default=os.getenv("FALKORDB_PATH"),
             help="Owner-specific FalkorDBLite .rdb path (derived when omitted).",
         )
     if not _has_option(parser, "--falkordb-uri"):
         parser.add_argument(
             "--falkordb-uri",
+            action=_ExplicitFalkorTargetAction,
             default=os.getenv("FALKORDB_URI"),
             help=(
                 "Remote FalkorDB server URI (scheme://host:port or host:port). "
@@ -188,7 +211,12 @@ def prepare_graph_args(args: Namespace) -> bool:
             and getattr(args, "neo4j_password", None)
         )
 
-    falkordb_uri = getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI")
+    explicit_target = getattr(args, "_explicit_falkordb_target", None)
+    if explicit_target == "path":
+        falkordb_uri = None
+        args.falkordb_uri = None
+    else:
+        falkordb_uri = getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI")
     if falkordb_uri:
         # Remote FalkorDB project: never synthesize an embedded local path —
         # FalkorDBLite may not even be installable on this platform (win32).
