@@ -1003,7 +1003,8 @@ async def test_required_incremental_cleanup_is_journaled_node_work(
     tmp_path: Path,
 ) -> None:
     env, config = _config(tmp_path, parser="cplus")
-    driver = _Driver(config)
+    driver = _ConsumerDriver()
+    driver.journal_config = config
     install_required_write_guard(driver)
     writer = LanguageCodeWriter(driver)
 
