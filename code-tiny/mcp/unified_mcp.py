@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastmcp import FastMCP
+from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import Tool
 from fastmcp.tools.tool import ToolResult
@@ -85,6 +86,7 @@ from tools.common.project_registry import (  # noqa: E402
 from cortex_harness.storage import (  # noqa: E402
     StoreGatewayError,
     begin_gateway_drain,
+    close_active_gateways,
     storage_runtime_status,
 )
 
@@ -376,33 +378,45 @@ Input contract:
 - Empty string values are treated as "not provided".
 """
 
+@lifespan
+async def _mcp_lifespan(_server):
+    try:
+        yield {}
+    finally:
+        from services.explore_service import (
+            begin_explore_service_drain,
+            close_explore_service,
+        )
+
+        begin_explore_service_drain()
+        begin_gateway_drain()
+        try:
+            await close_active_gateways()
+        finally:
+            close_explore_service(wait=False)
+
+
 mcp_server = FastMCP(
     name=MCP_NAME,
     version="1.2.0",
     instructions=INSTRUCTIONS,
+    lifespan=_mcp_lifespan,
 )
 
 @mcp_server.custom_route("/health", methods=["GET"])
 async def health_check(request: Request):
-    from services.explore_service import explore_service_status
-
     storage = storage_runtime_status()
     return JSONResponse(
         {
             "status": "healthy" if storage["liveness"] else "unhealthy",
             "service": "fastmcp-server",
             "liveness": storage["liveness"],
-            "readiness": storage["readiness"],
-            "storage": storage,
-            "retrieval": explore_service_status(),
         }
     )
 
 
 @mcp_server.custom_route("/ready", methods=["GET"])
 async def readiness_check(request: Request):
-    from services.explore_service import explore_service_status
-
     storage = storage_runtime_status()
     ready = bool(storage["readiness"])
     return JSONResponse(
@@ -410,8 +424,7 @@ async def readiness_check(request: Request):
             "status": "ready" if ready else "not_ready",
             "service": "fastmcp-server",
             "readiness": ready,
-            "storage": storage,
-            "retrieval": explore_service_status(),
+            "storage_state": storage["state"],
         },
         status_code=200 if ready else 503,
     )
@@ -2825,22 +2838,29 @@ def parse_args() -> argparse.Namespace:
 _sync_catalog_inputs_with_registered_tools()
 
 
+def _handle_shutdown_signal(signum, _frame, force_quit: Dict[str, bool]) -> None:
+    if force_quit["armed"]:
+        print("Force quitting now.")
+        os._exit(0)
+    force_quit["armed"] = True
+    from services.explore_service import begin_explore_service_drain
+
+    begin_explore_service_drain()
+    begin_gateway_drain()
+    if signum == signal.SIGTERM:
+        print("Received SIGTERM. Send again to force quit.")
+    else:
+        print("Received SIGINT. Press Ctrl+C again to force quit.")
+    # Unwind FastMCP.run so its active lifespan can close resources on the
+    # same event loop. A second signal remains the explicit force-exit path.
+    raise KeyboardInterrupt
+
+
 def main() -> None:
     force_quit = {"armed": False}
 
-    def _handle_sigint(signum, _frame) -> None:
-        if force_quit["armed"]:
-            print("Force quitting now.")
-            os._exit(0)
-        force_quit["armed"] = True
-        from services.explore_service import begin_explore_service_drain
-
-        begin_explore_service_drain()
-        begin_gateway_drain()
-        if signum == signal.SIGTERM:
-            print("Received SIGTERM. Send again to force quit.")
-        else:
-            print("Received SIGINT. Press Ctrl+C again to force quit.")
+    def _handle_sigint(signum, frame) -> None:
+        _handle_shutdown_signal(signum, frame, force_quit)
 
     signal.signal(signal.SIGINT, _handle_sigint)
     signal.signal(signal.SIGTERM, _handle_sigint)
@@ -2869,6 +2889,10 @@ def main() -> None:
         kwargs["json_response"] = True
     try:
         mcp_server.run(**kwargs)
+    except KeyboardInterrupt:
+        # The first shutdown signal deliberately unwinds the server so its
+        # lifespan can drain and close owners on the active event loop.
+        pass
     finally:
         from services.explore_service import close_explore_service
 
