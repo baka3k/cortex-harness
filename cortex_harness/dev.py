@@ -1504,7 +1504,8 @@ def _run_analyzer(
             source_snapshot=snapshot,
             physical_target=physical_target_from_env(child_env),
             cache_dir=child_env.get("QDRANT_CACHE_DIR"),
-            mode=child_env.get("CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"),
+            mode=child_env.get("CORTEX_GRAPH_JOURNAL_MODE")
+            or ("shared-required" if lang == "cplus" else "shared-shadow"),
             generation=uuid.uuid4().hex,
         )
 

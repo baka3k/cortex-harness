@@ -727,8 +727,8 @@ def test_v3_node_manifest_tracks_typed_identity_conservation_and_audit_seal(
         assert journal.complete_producers(run.run_id) == 1
         audit = journal.seal_endpoint_audit(
             run.run_id,
-            summary["node_manifest_digest"],
-            receipt_count=1,
+            summary["endpoint_manifest_digest"],
+            audited_rows=0,
         )
         assert audit == "sealed"
         assert journal.endpoint_audit_status(run.run_id) == audit
@@ -920,8 +920,13 @@ def test_v2_migration_adds_v3_ledgers_but_refuses_active_batches(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "completed.sqlite3"
-    with SQLiteJournal(path, limits=_limits()):
-        pass
+    with SQLiteJournal(path, limits=_limits()) as journal:
+        legacy_run = journal.open_run(_metadata())
+        _enqueue(journal, legacy_run.run_id)
+        lease = journal.claim_batch(run_id_value=legacy_run.run_id)
+        assert lease is not None
+        journal.ack_batch(lease.job_id, lease.fencing_token or "")
+        assert journal.close_run_production(legacy_run.run_id).status is RunStatus.DRAINED
     connection = sqlite3.connect(path)
     for table in (
         "endpoint_audit",
@@ -951,6 +956,14 @@ def test_v2_migration_adds_v3_ledgers_but_refuses_active_batches(
                 "endpoint_audit",
             }
         )
+        migrated_run = migrated.get_run(legacy_run.run_id)
+        assert migrated_run is not None
+        assert migrated_run.status is RunStatus.QUARANTINED
+        assert migrated_run.error_code is TerminalErrorCode.INCOMPATIBLE_SCHEMA
+        assert migrated.conservation_summary(legacy_run.run_id)["conserved"] is False
+        with pytest.raises(JournalError) as legacy_resume:
+            migrated.open_run(_metadata())
+        assert legacy_resume.value.code is TerminalErrorCode.INCOMPATIBLE_SCHEMA
 
     active_path = tmp_path / "active.sqlite3"
     with SQLiteJournal(active_path, limits=_limits()) as journal:
@@ -971,3 +984,103 @@ def test_v2_migration_adds_v3_ledgers_but_refuses_active_batches(
     with pytest.raises(JournalError) as incompatible:
         SQLiteJournal(active_path, limits=_limits())
     assert incompatible.value.code is TerminalErrorCode.INCOMPATIBLE_SCHEMA
+
+
+def test_endpoint_audit_binds_exact_edge_snapshot_and_completion_boundary(
+    tmp_path: Path,
+) -> None:
+    node_operation = {
+        "label": "files",
+        "phase": "nodes",
+        "version": 1,
+        "reconciliation": "node_identity",
+        "node_label": "File",
+        "identity_property": "id",
+        "row_identity_property": "id",
+        "mutation_kind": "merge",
+    }
+    edge_operation = {
+        "label": "relations:includes",
+        "phase": "relationships",
+        "version": 1,
+        "reconciliation": "typed_relationship",
+    }
+    edge_row = {
+        "source_label": "File",
+        "source_id": "a.c",
+        "target_label": "File",
+        "target_id": "b.h",
+        "rel_type": "INCLUDES",
+        "project_id_normalized": "demo",
+        "properties": {},
+    }
+    with _journal(tmp_path) as journal:
+        run = journal.open_run(_metadata())
+        node_artifact = journal.create_artifact(
+            run.run_id,
+            [{"id": "a.c"}, {"id": "b.h"}],
+        )
+        node_batch = journal.enqueue_batch(
+            run.run_id,
+            BatchSpec(
+                OperationPhase.NODES,
+                "files",
+                0,
+                node_artifact,
+                2,
+                operation=node_operation,
+            ),
+        )
+        lease = journal.claim_job(node_batch.job_id)
+        assert lease is not None
+        journal.ack_batch(lease.job_id, lease.fencing_token or "")
+        edge_artifact = journal.create_artifact(run.run_id, [edge_row])
+        journal.enqueue_batch(
+            run.run_id,
+            BatchSpec(
+                OperationPhase.RELATIONSHIPS,
+                "relations:includes",
+                1,
+                edge_artifact,
+                1,
+                operation=edge_operation,
+            ),
+        )
+        assert journal.complete_producers(run.run_id) == 2
+        summary = journal.conservation_summary(run.run_id)
+
+        with pytest.raises(JournalError, match="row count"):
+            journal.seal_endpoint_audit(run.run_id, audited_rows=0)
+        assert (
+            journal.seal_endpoint_audit(
+                run.run_id,
+                summary["endpoint_manifest_digest"],
+                audited_rows=1,
+            )
+            == "sealed"
+        )
+
+        late_artifact = journal.create_artifact(run.run_id, [{"id": "late.c"}])
+        with pytest.raises(JournalError, match="after producer completion"):
+            journal.enqueue_batch(
+                run.run_id,
+                BatchSpec(
+                    OperationPhase.NODES,
+                    "late-files",
+                    2,
+                    late_artifact,
+                    1,
+                    operation={**node_operation, "label": "late-files"},
+                ),
+            )
+        assert journal.endpoint_audit_status(run.run_id) == "sealed"
+
+        journal._connection.execute(
+            """
+            UPDATE edge_endpoint SET identity_json = ?
+            WHERE run_id = ? AND role = 'target'
+            """,
+            ('"tampered"', run.run_id),
+        )
+        with pytest.raises(JournalError, match="no longer matches"):
+            journal.endpoint_audit_status(run.run_id)

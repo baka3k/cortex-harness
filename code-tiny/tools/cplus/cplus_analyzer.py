@@ -6416,6 +6416,17 @@ async def main(argv: Optional[List[str]] = None) -> int:
             else:
                 print(f"Dry run: {len(files)} C/C++ files found")
             return 0
+        journal_config = getattr(driver, "journal_config", None)
+        if code_writer is not None and getattr(journal_config, "required", False):
+            project_slug = re.sub(
+                r"[^a-z0-9]+", "-", project_name.strip().lower()
+            ).strip("-") or "project"
+            await code_writer.write_project_repository_setup(
+                project_id=project_id,
+                project_name=project_name,
+                project_slug=project_slug,
+                repository_name=repo,
+            )
         await build_call_graph(
             args.root,
             code_writer=code_writer,

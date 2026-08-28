@@ -78,6 +78,7 @@ from tools.graph.cli import (
 )
 from tools.graph.schema import CODE_GRAPH_SCHEMA, ensure_schema
 from tools.graph.journal.config import (
+    REQUIRED_MODES,
     configure_journal_env,
     finalize_journal_from_env,
     journal_status_from_env,
@@ -258,6 +259,45 @@ def _enforce_required_graph_writer_rollout(parser: str, journal_config) -> None:
             f"parser '{parser}' is blocked in graph-journal required mode; "
             "use shared-shadow until its node-first writer migration is complete"
         )
+
+
+def _node_first_recovery_can_finalize(
+    journal_config: object,
+    summary: Mapping[str, object],
+) -> bool:
+    """Return true only when durable production and endpoint audit are complete."""
+
+    if not getattr(journal_config, "required", False):
+        return False
+    metadata = getattr(journal_config, "metadata", None)
+    if (
+        metadata is None
+        or metadata.query_shape_version != "language-writer-node-first-v1"
+    ):
+        return False
+    unfinished = sum(
+        int(summary.get(key) or 0)
+        for key in (
+            "pending",
+            "leased",
+            "retrying",
+            "reconciling",
+            "blocked",
+            "dead_letter",
+        )
+    )
+    conservation = summary.get("conservation")
+    if not isinstance(conservation, Mapping):
+        return False
+    producers = conservation.get("producers")
+    return bool(
+        unfinished == 0
+        and int(summary.get("produced") or 0) > 0
+        and summary.get("endpoint_audit") == "sealed"
+        and isinstance(producers, Mapping)
+        and int(producers.get("open") or 0) == 0
+        and conservation.get("conserved") is True
+    )
 
 _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
     "spring": {".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml", ".json", ".gradle"},
@@ -1447,16 +1487,21 @@ async def _ensure_project_repository_graph(
                     schema_result.verified_count,
                 )
             )
-        await driver.execute_query(
-            _PROJECT_REPOSITORY_SETUP_QUERY,
-            {
-                "project_id": project_id,
-                "project_name": project_name,
-                "project_slug": _normalize_slug(project_name),
-                "repo_name": repo_name,
-            },
-            database=resolved_graph,
-        )
+        required_mode = str(
+            os.environ.get("CORTEX_GRAPH_JOURNAL_MODE") or ""
+        ).strip().casefold() in REQUIRED_MODES
+        if not required_mode:
+            await driver.execute_query(
+                _PROJECT_REPOSITORY_SETUP_QUERY,
+                {
+                    "project_id": project_id,
+                    "project_id_normalized": project_id_lookup_key(project_id),
+                    "project_name": project_name,
+                    "project_slug": _normalize_slug(project_name),
+                    "repo_name": repo_name,
+                },
+                database=resolved_graph,
+            )
     finally:
         close_result = driver.close()
         if hasattr(close_result, "__await__"):
@@ -2795,24 +2840,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     if recovered:
                         parser_info["journal_recovered_batches"] = recovered
                     recovered_summary = journal_status_from_env(parser_env) or {}
-                    unfinished = sum(
-                        int(recovered_summary.get(key) or 0)
-                        for key in (
-                            "pending",
-                            "leased",
-                            "retrying",
-                            "reconciling",
-                            "blocked",
-                            "dead_letter",
-                        )
-                    )
-                    if (
-                        getattr(journal_config, "required", False)
-                        and getattr(journal_config, "metadata", None) is not None
-                        and journal_config.metadata.query_shape_version
-                        == "language-writer-node-first-v1"
-                        and unfinished == 0
-                        and int(recovered_summary.get("produced") or 0) > 0
+                    if _node_first_recovery_can_finalize(
+                        journal_config, recovered_summary
                     ):
                         # A prior analyzer may have completed extraction and
                         # closed node production before its parent died during
