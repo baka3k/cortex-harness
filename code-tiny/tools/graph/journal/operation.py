@@ -171,6 +171,28 @@ class GraphWriteOperation:
         return cls(label=label, phase=phase_for_label(label))
 
     @classmethod
+    def for_node_contract(
+        cls,
+        label: str,
+        *,
+        node_label: str,
+        identity_property: str = "id",
+        row_identity_property: str = "id",
+        row_properties_property: str | None = None,
+    ) -> "GraphWriteOperation":
+        """Declare an explicit replay-safe node upsert for specialized writers."""
+
+        return cls(
+            label=label,
+            phase=OperationPhase.NODES,
+            reconciliation="node_identity",
+            node_label=node_label,
+            identity_property=identity_property,
+            row_identity_property=row_identity_property,
+            row_properties_property=row_properties_property,
+        )
+
+    @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "GraphWriteOperation":
         """Restore a validated operation descriptor without stored executable text."""
 

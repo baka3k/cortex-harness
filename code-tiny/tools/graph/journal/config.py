@@ -243,6 +243,11 @@ def configure_journal_env(
     )
     path = journal_root / f"{safe_parser}.sqlite3"
     run_generation = generation or env.get(GENERATION_ENV) or source_snapshot
+    query_shape_version = (
+        "language-writer-node-first-v1"
+        if parser.casefold() == "cplus"
+        else "language-writer-v1"
+    )
     metadata = RunMetadata(
         project_id=project_id,
         scope_id=scope_id,
@@ -253,8 +258,11 @@ def configure_journal_env(
         parser=parser,
         parser_version="1",
         schema_fingerprint=CODE_GRAPH_SCHEMA.fingerprint,
-        query_shape_version="language-writer-v1",
-        operation_versions={"graph-write": 1},
+        query_shape_version=query_shape_version,
+        operation_versions={
+            "graph-write": 1,
+            **({"node-first": 1} if parser.casefold() == "cplus" else {}),
+        },
     )
     env[MODE_ENV] = normalized_mode
     env[PATH_ENV] = str(path)

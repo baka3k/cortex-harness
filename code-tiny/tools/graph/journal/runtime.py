@@ -13,12 +13,17 @@ from .models import (
     BatchSpec,
     BatchStatus,
     JournalError,
+    OperationPhase,
     RetryClass,
     TerminalErrorCode,
 )
 from .operation import GraphWriteOperation
 from .retry import classify_error, retry_at
 from .sqlite_store import SQLiteJournal
+
+
+NODE_FIRST_QUERY_SHAPE = "language-writer-node-first-v1"
+NODE_PHASE_BARRIER = "phase:nodes"
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,11 @@ class GraphWriteJournalRuntime:
         self.run = self.journal.open_run(config.metadata)
         self.journal.recover_run_leases_as_ambiguous(self.run.run_id)
         self._node_barriers: dict[tuple[str, str], str] = {}
+        self.node_first = (
+            config.metadata.query_shape_version == NODE_FIRST_QUERY_SHAPE
+        )
+        if self.node_first:
+            self.journal.open_barrier(self.run.run_id, NODE_PHASE_BARRIER)
 
     def _barrier_contract(
         self,
@@ -100,6 +110,11 @@ class GraphWriteJournalRuntime:
                     )
                     if dependency:
                         required.add(dependency)
+        if self.node_first:
+            if operation.phase is OperationPhase.NODES:
+                produced = tuple(sorted(set(produced).union({NODE_PHASE_BARRIER})))
+            else:
+                required.add(NODE_PHASE_BARRIER)
         return tuple(sorted(required)), produced
 
     def prepare(
@@ -146,7 +161,11 @@ class GraphWriteJournalRuntime:
             ),
         )
         for barrier in produced_barriers:
-            self.journal.close_barrier(self.run.run_id, barrier)
+            if barrier != NODE_PHASE_BARRIER:
+                self.journal.close_barrier(self.run.run_id, barrier)
+        defer = defer or (
+            self.node_first and operation.phase is not OperationPhase.NODES
+        )
         if defer and batch.status is not BatchStatus.DONE:
             return JournalTicket(
                 batch=batch,
@@ -211,6 +230,13 @@ class GraphWriteJournalRuntime:
     def close_barrier(self, name: str) -> None:
         self.journal.close_barrier(self.run.run_id, name)
 
+    def close_node_production(self) -> None:
+        """Persist the global node-production boundary for node-first runs."""
+
+        if not self.node_first:
+            return
+        self.journal.close_barrier(self.run.run_id, NODE_PHASE_BARRIER)
+
     def claim_deferred(self, ticket: JournalTicket) -> JournalTicket:
         current = self.journal.get_batch(ticket.batch.job_id)
         if current is not None and current.status is BatchStatus.DONE:
@@ -224,6 +250,17 @@ class GraphWriteJournalRuntime:
             ticket.batch.job_id, lease_seconds=self.config.lease_seconds
         )
         if claimed is None:
+            current = self.journal.get_batch(ticket.batch.job_id)
+            if current is not None and current.status in {
+                BatchStatus.PENDING,
+                BatchStatus.RETRY_WAIT,
+            }:
+                return JournalTicket(
+                    batch=current,
+                    execute=False,
+                    operation=ticket.operation,
+                    rows=ticket.rows,
+                )
             raise JournalError(
                 TerminalErrorCode.INVALID_TRANSITION,
                 f"deferred batch {ticket.batch.job_id} is not eligible",

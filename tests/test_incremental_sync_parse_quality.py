@@ -59,6 +59,8 @@ class IncrementalSyncParseQualityTests(unittest.TestCase):
         self.assertIn("--parse-quality", cplus_cmd)
         self.assertIn("--parse-quality-report", cplus_cmd)
         self.assertIn("--disable-compile-db-bootstrap", cplus_cmd)
+        repo_index = cplus_cmd.index("--repo")
+        self.assertEqual(cplus_cmd[repo_index + 1], "Demo/project")
 
         shell_cmd = incremental_sync._build_analyzer_cmd(
             analyzer=incremental_sync.ANALYZERS["shell"],
