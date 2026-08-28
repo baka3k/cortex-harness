@@ -58,6 +58,56 @@ class FakeGraphDriver:
 
 
 class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
+    def test_explicit_local_target_overrides_remote_project_environment(self):
+        with patch.dict(
+            os.environ,
+            {"FALKORDB_URI": "localhost:6379"},
+            clear=False,
+        ):
+            args = incremental_sync.parse_args(
+                [
+                    "--root",
+                    ".",
+                    "--project-id",
+                    "demo",
+                    "--falkordb-path",
+                    "/tmp/demo.rdb",
+                    "--falkordb-graph",
+                    "demo-canary",
+                ]
+            )
+            self.assertTrue(prepare_graph_args(args))
+            child_env = incremental_sync._build_analyzer_env(args)
+
+        self.assertIsNone(args.falkordb_uri)
+        self.assertEqual(args.falkordb_path, "/tmp/demo.rdb")
+        self.assertNotIn("FALKORDB_URI", child_env)
+        self.assertEqual(child_env["FALKORDB_PATH"], "/tmp/demo.rdb")
+        self.assertEqual(
+            incremental_sync._graph_target_cli_args(args),
+            [
+                "--graph-provider",
+                "falkordb",
+                "--falkordb-path",
+                "/tmp/demo.rdb",
+                "--falkordb-graph",
+                "demo-canary",
+            ],
+        )
+
+    def test_explicit_local_and_remote_targets_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            incremental_sync.parse_args(
+                [
+                    "--root",
+                    ".",
+                    "--falkordb-path",
+                    "/tmp/demo.rdb",
+                    "--falkordb-uri",
+                    "localhost:6379",
+                ]
+            )
+
     def test_no_graph_sanitizes_analyzer_environment(self):
         args = incremental_sync.parse_args(
             ["--root", ".", "--project-id", "demo", "--no-graph"]

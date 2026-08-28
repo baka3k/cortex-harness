@@ -1127,9 +1127,12 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
         env["NEO4J_PASS"] = args.neo4j_password
     if args.neo4j_db:
         env["NEO4J_DB"] = args.neo4j_db
-    falkordb_uri = (
-        getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
-    ).strip()
+    explicit_falkordb_target = getattr(args, "_explicit_falkordb_target", None)
+    falkordb_uri = ""
+    if explicit_falkordb_target != "path":
+        falkordb_uri = (
+            getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
+        ).strip()
     if falkordb_uri:
         # Remote FalkorDB: children must not fall back to the embedded path
         # (FalkorDBLite is unavailable on win32).
@@ -1144,6 +1147,9 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
             env["FALKORDB_SSL"] = "1"
     elif getattr(args, "falkordb_path", None):
         env["FALKORDB_PATH"] = str(args.falkordb_path)
+        env.pop("FALKORDB_URI", None)
+        env.pop("FALKORDB_PASSWORD", None)
+        env.pop("FALKORDB_SSL", None)
     if getattr(args, "falkordb_graph", None):
         env["FALKORDB_GRAPH"] = str(args.falkordb_graph)
     if args.qdrant_url:
@@ -1209,6 +1215,24 @@ def _repository_name(project_name: str, root: str) -> str:
     return f"{project_name}/{os.path.basename(os.path.normpath(root))}"
 
 
+def _graph_target_cli_args(args: argparse.Namespace) -> List[str]:
+    """Pin child analyzers to the physical graph target chosen by the parent."""
+
+    provider = normalize_graph_provider(getattr(args, "graph_provider", None))
+    result = ["--graph-provider", provider.value]
+    if provider == GraphProvider.FALKORDB:
+        falkordb_uri = (getattr(args, "falkordb_uri", None) or "").strip()
+        falkordb_path = str(getattr(args, "falkordb_path", None) or "").strip()
+        if falkordb_uri:
+            result.extend(["--falkordb-uri", falkordb_uri])
+        elif falkordb_path:
+            result.extend(["--falkordb-path", falkordb_path])
+        graph = str(getattr(args, "falkordb_graph", None) or "").strip()
+        if graph:
+            result.extend(["--falkordb-graph", graph])
+    return result
+
+
 def _build_analyzer_cmd(
     *,
     python_bin: str,
@@ -1238,6 +1262,7 @@ def _build_analyzer_cmd(
     parse_quality_workers: int = 1,
     parse_quality_max_records: int = 10000,
     parse_quality_max_bytes: int = 8 * 1024 * 1024,
+    graph_target_args: Sequence[str] = (),
 ) -> List[str]:
     cmd = [
         python_bin,
@@ -1254,6 +1279,7 @@ def _build_analyzer_cmd(
         after_sha,
     ]
     cmd.extend(analyzer.extra_args)
+    cmd.extend(graph_target_args)
     if analyzer.parser == "shell":
         mapping_ledger = os.environ.get("SHELL_PROGRAM_MAPPING_LEDGER", "").strip()
         if mapping_ledger:
@@ -2571,6 +2597,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         env["CORTEX_CORRELATION_ID"] = correlation_id
         graph_env = _graph_phase_env(env)
         embedding_env = _embedding_phase_env(env)
+        graph_target_args = _graph_target_cli_args(args)
         run_graph_pass = bool(graph_selected and graph_ready)
         run_embedding_pass = bool(
             embedding_selected
@@ -2687,6 +2714,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     parse_quality_workers=args.parse_quality_workers,
                     parse_quality_max_records=args.parse_quality_max_records,
                     parse_quality_max_bytes=args.parse_quality_max_bytes,
+                    graph_target_args=graph_target_args,
                 )
             else:
                 reason = "requested" if full_scan else "fallback"
@@ -2715,6 +2743,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     parse_quality_workers=args.parse_quality_workers,
                     parse_quality_max_records=args.parse_quality_max_records,
                     parse_quality_max_bytes=args.parse_quality_max_bytes,
+                    graph_target_args=graph_target_args,
                 )
             parser_info["command"] = cmd
             parser_env = dict(graph_env)
@@ -2888,6 +2917,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 incremental=not full_scan or recovery_full_scan,
                 verbose=args.verbose,
                 ignore_cache=bool(args.ignore_cache),
+                graph_target_args=graph_target_args,
             )
             framework_info["command"] = cmd
             framework_env = dict(graph_env)
@@ -3009,6 +3039,7 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 incremental=not full_scan or recovery_full_scan,
                 verbose=args.verbose,
                 ignore_cache=bool(args.ignore_cache),
+                graph_target_args=graph_target_args,
             )
             topology_info["command"] = cmd
             topology_env = dict(graph_env)
