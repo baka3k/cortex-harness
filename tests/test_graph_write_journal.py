@@ -1077,6 +1077,34 @@ def test_endpoint_audit_binds_exact_edge_snapshot_and_completion_boundary(
 
         journal._connection.execute(
             """
+            INSERT INTO producer_completion(run_id, producer_id, status, updated_at)
+            VALUES (?, 'fault-injected-open-producer', 'open', ?)
+            """,
+            (run.run_id, datetime.now(timezone.utc).isoformat()),
+        )
+        with pytest.raises(JournalError, match="producer-completion boundary"):
+            journal.endpoint_audit_status(run.run_id)
+        journal._connection.execute(
+            """
+            DELETE FROM producer_completion
+            WHERE run_id = ? AND producer_id = 'fault-injected-open-producer'
+            """,
+            (run.run_id,),
+        )
+
+        journal._connection.execute(
+            "UPDATE node_manifest SET graph_verified = 0 WHERE run_id = ?",
+            (run.run_id,),
+        )
+        with pytest.raises(JournalError, match="unconserved manifest"):
+            journal.endpoint_audit_status(run.run_id)
+        journal._connection.execute(
+            "UPDATE node_manifest SET graph_verified = 1 WHERE run_id = ?",
+            (run.run_id,),
+        )
+
+        journal._connection.execute(
+            """
             UPDATE edge_endpoint SET identity_json = ?
             WHERE run_id = ? AND role = 'target'
             """,

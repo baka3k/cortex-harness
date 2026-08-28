@@ -21,6 +21,26 @@ _ERROR_CODE_ALIASES = {
     "project_not_registered_error": "project_not_registered",
 }
 
+# These fields describe server internals or duplicate information available
+# from discovery tools.  They are useful in logs and capability inspectors,
+# but make ordinary tool errors unstable and unnecessarily large.
+_INTERNAL_ERROR_DETAIL_KEYS = {
+    "accepted_params",
+    "available_labels",
+    "available_relationships",
+    "capability",
+    "capability_diagnostics",
+    "context",
+    "example",
+    "next_step",
+    "query_engine",
+    "received_params",
+    "required_params",
+    "supported_aliases",
+    "supported_parsers",
+    "tool",
+}
+
 
 def _canonical_error_code(value: Any) -> str:
     raw = str(value or "tool_execution_error").strip().lower()
@@ -59,6 +79,92 @@ def _exception_code(exc: BaseException) -> str:
     return "_".join(words) or "tool_execution_error"
 
 
+def _non_empty(value: Any) -> bool:
+    return value is not None and value != "" and value != [] and value != {}
+
+
+def _sanitized_details(details: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Keep intentional details while excluding catalog-sized diagnostics."""
+
+    return {
+        str(key): item
+        for key, item in (details or {}).items()
+        if str(key) not in _INTERNAL_ERROR_DETAIL_KEYS and _non_empty(item)
+    }
+
+
+def _compact_legacy_details(
+    error_code: str,
+    raw_error: Mapping[str, Any],
+    outer: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Extract only stable, actionable fields from a legacy error payload.
+
+    Legacy graph errors carry parameter help plus complete provider schemas.
+    Those catalogs belong in discovery/inspection tools, not every failed
+    response.  This boundary deliberately uses an allowlist instead of
+    copying unknown fields.
+    """
+
+    compact: dict[str, Any] = {}
+    embedded_details = raw_error.get("details")
+    if isinstance(embedded_details, Mapping):
+        compact.update(_sanitized_details(embedded_details))
+    elif isinstance(embedded_details, list) and embedded_details:
+        compact["violations"] = embedded_details
+
+    if error_code == "capability_unavailable":
+        capability = outer.get("capability")
+        diagnostics = outer.get("capability_diagnostics")
+        capability = capability if isinstance(capability, Mapping) else {}
+        diagnostics = diagnostics if isinstance(diagnostics, Mapping) else {}
+
+        parser = raw_error.get("parser_type") or capability.get("requested_parser")
+        missing_relationships = (
+            raw_error.get("missing_relationships")
+            or raw_error.get("missing_required_relationships")
+            or diagnostics.get("missing_required_relationships")
+        )
+        missing_labels = (
+            raw_error.get("missing_labels")
+            or raw_error.get("missing_required_labels")
+            or diagnostics.get("missing_required_labels")
+        )
+        if _non_empty(parser):
+            compact["parser"] = parser
+        if _non_empty(missing_relationships):
+            compact["missing_relationships"] = missing_relationships
+        if _non_empty(missing_labels):
+            compact["missing_labels"] = missing_labels
+
+    if error_code == "unsupported_parser":
+        parser = raw_error.get("parser_type")
+        if _non_empty(parser):
+            compact["parser"] = parser
+
+    missing_parameters = raw_error.get("missing_required_params")
+    if _non_empty(missing_parameters):
+        compact["missing_parameters"] = missing_parameters
+
+    # Small operational fields let clients decide whether/how to retry while
+    # avoiding the full backend state snapshot.
+    for key in (
+        "retry_after_ms",
+        "correlation_id",
+        "capacity",
+        "accepted_limit",
+        "project_id",
+        "collection",
+        "parameter",
+        "field",
+    ):
+        item = raw_error.get(key)
+        if _non_empty(item):
+            compact[key] = item
+
+    return compact
+
+
 def normalize_error(
     value: Any = None,
     *,
@@ -69,7 +175,6 @@ def normalize_error(
 ) -> dict[str, Any]:
     """Convert legacy errors or exceptions to the canonical error envelope."""
 
-    legacy_context: dict[str, Any] = {}
     legacy_details: dict[str, Any] = {}
     resolved_code = code
     resolved_message = message
@@ -84,11 +189,6 @@ def normalize_error(
             resolved_retryable = True
     elif isinstance(value, Mapping):
         raw_error = value.get("error")
-        legacy_context = {
-            str(key): item
-            for key, item in value.items()
-            if key not in {"ok", "data", "error"}
-        }
         if isinstance(raw_error, Mapping):
             resolved_code = resolved_code or _canonical_error_code(
                 raw_error.get("code")
@@ -100,17 +200,13 @@ def normalize_error(
             )
             if resolved_retryable is None:
                 resolved_retryable = bool(raw_error.get("retryable", False))
-            legacy_details = {
-                str(key): item
-                for key, item in raw_error.items()
-                if key not in {"code", "type", "message", "retryable"}
-            }
+            legacy_details = _compact_legacy_details(
+                _canonical_error_code(resolved_code), raw_error, value
+            )
         elif raw_error is not None:
             resolved_message = resolved_message or str(raw_error)
 
-    merged_details = {**legacy_details, **dict(details or {})}
-    if legacy_context:
-        merged_details["context"] = legacy_context
+    merged_details = {**legacy_details, **_sanitized_details(details)}
 
     return {
         "ok": False,
