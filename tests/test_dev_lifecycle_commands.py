@@ -337,7 +337,7 @@ class DevLifecycleCommandTests(unittest.TestCase):
             ):
                 pass
 
-        stop.assert_called_once_with("unified_mcp.py")
+        stop.assert_called_once_with("unified_mcp.py", instance_id="default")
         stop_falkor.assert_called_once_with(Path("/tmp/code.rdb"))
         start.assert_called_once()
         self.assertEqual(pids.call_count, 2)
