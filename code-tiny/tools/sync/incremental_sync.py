@@ -299,6 +299,16 @@ def _node_first_recovery_can_finalize(
         and conservation.get("conserved") is True
     )
 
+
+def _journal_mode_for_lane(env: Mapping[str, str], lane: str) -> str:
+    """Default only the migrated C++ lane to publication-grade journaling."""
+
+    configured = str(env.get("CORTEX_GRAPH_JOURNAL_MODE") or "").strip()
+    if configured:
+        return configured
+    return "shared-required" if lane.casefold() == "cplus" else "shared-shadow"
+
+
 _FRAMEWORK_CANDIDATE_EXTENSIONS: Dict[str, Set[str]] = {
     "spring": {".java", ".kt", ".kts", ".xml", ".properties", ".yml", ".yaml", ".json", ".gradle"},
     "servlet_jsp": {".java", ".jsp", ".jspx", ".jspf", ".tag", ".tagx", ".xml", ".properties", ".gradle"},
@@ -1444,7 +1454,8 @@ async def _ensure_project_repository_graph(
     root: str,
     project_id: str,
     project_name: str,
-) -> None:
+    required_mode: bool | None = None,
+) -> bool:
     provider = normalize_graph_provider(getattr(args, "graph_provider", None))
     repo_name = _repository_name(project_name, root)
 
@@ -1454,6 +1465,7 @@ async def _ensure_project_repository_graph(
         if provider == GraphProvider.NEO4J
         else getattr(args, "falkordb_graph", None) or getattr(args, "neo4j_db", None)
     )
+    project_setup_mutated = False
     try:
         if provider == GraphProvider.NEO4J:
             duplicates, _, _ = await driver.execute_query(
@@ -1487,9 +1499,10 @@ async def _ensure_project_repository_graph(
                     schema_result.verified_count,
                 )
             )
-        required_mode = str(
-            os.environ.get("CORTEX_GRAPH_JOURNAL_MODE") or ""
-        ).strip().casefold() in REQUIRED_MODES
+        if required_mode is None:
+            required_mode = str(
+                os.environ.get("CORTEX_GRAPH_JOURNAL_MODE") or ""
+            ).strip().casefold() in REQUIRED_MODES
         if not required_mode:
             await driver.execute_query(
                 _PROJECT_REPOSITORY_SETUP_QUERY,
@@ -1502,10 +1515,12 @@ async def _ensure_project_repository_graph(
                 },
                 database=resolved_graph,
             )
+            project_setup_mutated = True
     finally:
         close_result = driver.close()
         if hasattr(close_result, "__await__"):
             await close_result
+    return project_setup_mutated
 
 
 def _now_iso() -> str:
@@ -2191,21 +2206,6 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             if args.verbose:
                 print("[bootstrap] no trustworthy content baseline; scanning all source files")
 
-        if graph_ready:
-            try:
-                await _ensure_project_repository_graph(
-                    args=args,
-                    root=root,
-                    project_id=project_id,
-                    project_name=project_name,
-                )
-                if args.verbose:
-                    print("[setup] Project+Repository nodes ensured")
-            except Exception as exc:
-                raise RuntimeError(
-                    f"graph schema/project setup failed before streaming: {exc}"
-                ) from exc
-
         if args.strict:
             missing: List[str] = []
             if graph_selected and not graph_ready:
@@ -2521,6 +2521,38 @@ async def _run_incremental(args: argparse.Namespace) -> int:
         summary["before_sha"] = before_sha
         summary["after_sha"] = after_sha
 
+        if graph_ready:
+            try:
+                configured_journal_mode = str(
+                    os.environ.get("CORTEX_GRAPH_JOURNAL_MODE") or ""
+                ).strip().casefold()
+                selected_for_setup, _ = _selected_parsers(args.parsers)
+                cplus_paths = _group_paths_by_parser(
+                    changed_paths | deleted_paths, root=root
+                ).get("cplus", set())
+                setup_is_required = configured_journal_mode in REQUIRED_MODES or (
+                    not configured_journal_mode
+                    and "cplus" in selected_for_setup
+                    and bool(cplus_paths)
+                )
+                setup_mutated = await _ensure_project_repository_graph(
+                    args=args,
+                    root=root,
+                    project_id=project_id,
+                    project_name=project_name,
+                    required_mode=setup_is_required,
+                )
+                if args.verbose:
+                    print(
+                        "[setup] Project+Repository nodes ensured"
+                        if setup_mutated
+                        else "[setup] Project+Repository mutation deferred to required journal"
+                    )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"graph schema/project setup failed before streaming: {exc}"
+                ) from exc
+
         if not changed_paths and not deleted_paths and not recovery_full_scan:
             validate_inventory_unchanged(root, current_inventory, force_hash_paths)
             unchanged_paths = _normalize_project_paths(root, _walk_all_source_files(root))
@@ -2827,7 +2859,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     physical_target=physical_target_from_env(parser_env),
                     cache_dir=control_cache_dir,
                     mode=parser_env.get(
-                        "CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"
+                        "CORTEX_GRAPH_JOURNAL_MODE",
+                        _journal_mode_for_lane(parser_env, parser),
                     ),
                     generation=artifact_token,
                 )
@@ -3019,7 +3052,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     physical_target=physical_target_from_env(framework_env),
                     cache_dir=control_cache_dir,
                     mode=framework_env.get(
-                        "CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"
+                        "CORTEX_GRAPH_JOURNAL_MODE",
+                        _journal_mode_for_lane(framework_env, framework),
                     ),
                     generation=artifact_token,
                 )
@@ -3144,7 +3178,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     physical_target=physical_target_from_env(topology_env),
                     cache_dir=control_cache_dir,
                     mode=topology_env.get(
-                        "CORTEX_GRAPH_JOURNAL_MODE", "shared-shadow"
+                        "CORTEX_GRAPH_JOURNAL_MODE",
+                        _journal_mode_for_lane(topology_env, "project_topology"),
                     ),
                     generation=artifact_token,
                 )
