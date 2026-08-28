@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -20,7 +21,119 @@ from tools.graph.journal.sqlite_store import inspect_journal  # noqa: E402
 from tools.graph.schema import CODE_GRAPH_SCHEMA  # noqa: E402
 
 
+def _manifest_totals(connection: sqlite3.Connection, table: str, run_id: str) -> dict[str, int | bool]:
+    row = connection.execute(
+        f"""
+        SELECT COUNT(*) AS emitted,
+          SUM(CASE WHEN disposition = 'staged_unique' THEN 1 ELSE 0 END) AS staged_unique,
+          SUM(CASE WHEN disposition = 'declared_duplicate' THEN 1 ELSE 0 END) AS declared_duplicate,
+          SUM(CASE WHEN disposition = 'conflict' THEN 1 ELSE 0 END) AS conflict,
+          SUM(CASE WHEN disposition = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+          SUM(acked) AS acked, SUM(graph_verified) AS graph_verified
+        FROM {table} WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    totals = {key: int(row[key] or 0) for key in row.keys()}
+    totals["conserved"] = bool(
+        totals["emitted"]
+        == totals["staged_unique"]
+        + totals["declared_duplicate"]
+        + totals["conflict"]
+        + totals["rejected"]
+        and totals["staged_unique"] == totals["acked"]
+        and totals["acked"] == totals["graph_verified"]
+    )
+    return totals
+
+
+def _load_journal_evidence(path: Path, requested_run_id: str | None) -> tuple[list[dict[str, object]], set[tuple[object, ...]], bool]:
+    summaries = inspect_journal(path)
+    selected = [
+        item for item in summaries
+        if requested_run_id is None or item.get("run_id") == requested_run_id
+    ]
+    requested_run_missing = bool(requested_run_id and not selected)
+    expected_receipts: set[tuple[object, ...]] = set()
+    connection = sqlite3.connect(f"{path.expanduser().resolve().as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    try:
+        for item in selected:
+            run_id = str(item["run_id"])
+            node = _manifest_totals(connection, "node_manifest", run_id)
+            edge = _manifest_totals(connection, "edge_manifest", run_id)
+            producer_row = connection.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) AS open "
+                "FROM producer_completion WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            audit_row = connection.execute(
+                "SELECT status FROM endpoint_audit WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            item["conservation"] = {
+                "node": node,
+                "edge": edge,
+                "producers": {
+                    "total": int(producer_row["total"] or 0),
+                    "open": int(producer_row["open"] or 0),
+                },
+                "conserved": bool(node["conserved"] and edge["conserved"]),
+            }
+            item["endpoint_audit"] = str(audit_row["status"]) if audit_row else None
+            metadata = json.loads(
+                connection.execute(
+                    "SELECT metadata_json FROM runs WHERE run_id = ?", (run_id,)
+                ).fetchone()[0]
+            )
+            generation = str(metadata.get("generation") or "")
+            for batch in connection.execute(
+                "SELECT job_id, operation_key, expected_count, artifact_sha256 "
+                "FROM batches WHERE run_id = ? AND status = 'done'",
+                (run_id,),
+            ):
+                expected_receipts.add(
+                    (
+                        str(batch["job_id"]),
+                        str(batch["operation_key"]),
+                        int(batch["expected_count"]),
+                        str(batch["artifact_sha256"]),
+                        run_id,
+                        generation,
+                    )
+                )
+    finally:
+        connection.close()
+    return selected, expected_receipts, requested_run_missing
+
+
+def _journal_is_valid(item: dict[str, object]) -> bool:
+    conservation = item.get("conservation") or {}
+    node = conservation.get("node") or {}
+    edge = conservation.get("edge") or {}
+    producers = conservation.get("producers") or {}
+    return bool(
+        item.get("status") == "drained"
+        and item.get("endpoint_audit") == "sealed"
+        and conservation.get("conserved")
+        and not node.get("conflict")
+        and not node.get("rejected")
+        and not edge.get("conflict")
+        and not edge.get("rejected")
+        and not producers.get("open")
+    )
+
+
 async def audit(args: argparse.Namespace) -> dict[str, object]:
+    journals: list[dict[str, object]] = []
+    expected_receipts: set[tuple[object, ...]] = set()
+    requested_run_missing = False
+    if args.journal:
+        journals, expected_receipts, requested_run_missing = _load_journal_evidence(
+            Path(args.journal), args.run_id
+        )
+
     driver = FalkorDBDriver(
         path=Path(args.path).resolve() if args.path else None,
         uri=args.uri,
@@ -76,23 +189,52 @@ async def audit(args: argparse.Namespace) -> dict[str, object]:
                 }
                 for record in records
             )
+
+        actual_receipts: set[tuple[object, ...]] = set()
+        if journals:
+            records, _, _ = await driver.execute_query(
+                "MATCH (receipt:GraphWriteReceipt) "
+                "WHERE receipt.run_id IN $run_ids "
+                "RETURN receipt.id AS job_id, "
+                "receipt.operation_key AS operation_key, "
+                "receipt.row_count AS row_count, "
+                "receipt.artifact_sha256 AS artifact_sha256, "
+                "receipt.run_id AS run_id, receipt.generation AS generation",
+                {"run_ids": [str(item["run_id"]) for item in journals]},
+                args.graph,
+            )
+            actual_receipts = {
+                (
+                    str(record.get("job_id") or ""),
+                    str(record.get("operation_key") or ""),
+                    int(record.get("row_count") or 0),
+                    str(record.get("artifact_sha256") or ""),
+                    str(record.get("run_id") or ""),
+                    str(record.get("generation") or ""),
+                )
+                for record in records
+            }
     finally:
         driver.close()
 
-    journals = inspect_journal(Path(args.journal)) if args.journal else []
-    if args.run_id:
-        journals = [item for item in journals if item.get("run_id") == args.run_id]
-    incomplete_journals = [
-        item for item in journals if item.get("status") != "drained"
-    ]
+    invalid_journals = [item for item in journals if not _journal_is_valid(item)]
+    missing_receipts = sorted(expected_receipts - actual_receipts)
+    unexpected_receipts = sorted(actual_receipts - expected_receipts)
     missing_receipt_coverage = bool(
-        counts["business_nodes"] > 0 and counts["receipts"] == 0
+        counts["business_nodes"] > 0
+        and (
+            not journals
+            or requested_run_missing
+            or missing_receipts
+            or unexpected_receipts
+        )
     )
     incomplete = bool(
         duplicates
         or counts["invalid_receipts"]
         or missing_receipt_coverage
-        or incomplete_journals
+        or invalid_journals
+        or requested_run_missing
     )
     return {
         "schema_version": 1,
@@ -102,6 +244,13 @@ async def audit(args: argparse.Namespace) -> dict[str, object]:
         "counts": counts,
         "duplicate_identities": duplicates,
         "missing_receipt_coverage": missing_receipt_coverage,
+        "requested_run_missing": requested_run_missing,
+        "receipt_coverage": {
+            "expected": len(expected_receipts),
+            "matched": len(expected_receipts & actual_receipts),
+            "missing": len(missing_receipts),
+            "unexpected": len(unexpected_receipts),
+        },
         "journals": journals,
         "incomplete": incomplete,
         "recommendation": "rebuild" if incomplete else "eligible_for_validation",

@@ -252,7 +252,16 @@ class GraphWriteJournalConsumer:
                 lease_seconds=self.config.lease_seconds,
             )
             if pending is None:
-                return drained
+                # A closed node barrier may have become drained only after the
+                # final node ACK above. Re-evaluate the durable audit before
+                # concluding that no edge work is eligible.
+                await self._seal_endpoint_audit_if_ready()
+                pending = self.journal.claim_batch(
+                    run_id_value=self.run_id,
+                    lease_seconds=self.config.lease_seconds,
+                )
+                if pending is None:
+                    return drained
             await self._execute_one(pending)
             drained += 1
 

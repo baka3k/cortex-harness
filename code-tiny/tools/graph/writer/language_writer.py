@@ -636,6 +636,74 @@ class LanguageCodeWriter:
             state_writer,
         )
 
+    async def write_project_repository_setup(
+        self,
+        *,
+        project_id: str,
+        project_name: str,
+        project_slug: str,
+        repository_name: str,
+    ) -> Dict[str, int]:
+        """Stage the C++ project/repository topology through trusted contracts."""
+
+        normalized_scope = project_id_lookup_key(project_id)
+        if normalized_scope is None:
+            raise ValueError("project setup requires a non-empty project_id")
+        project_rows = [
+            {
+                "project_id": project_id,
+                "name": project_name,
+                "slug": project_slug,
+                "project_id_normalized": normalized_scope,
+            }
+        ]
+        repository_rows = [
+            {
+                "name": repository_name,
+                "id": repository_name,
+                "project_id": project_id,
+                "project_id_normalized": normalized_scope,
+            }
+        ]
+        projects = await self.write_node_properties_batch(
+            "cplus:project_setup",
+            "Project",
+            project_rows,
+            identity_property="project_id",
+            row_identity_property="project_id",
+        )
+        repositories = await self.write_node_properties_batch(
+            "cplus:repository_setup",
+            "Repository",
+            repository_rows,
+            identity_property="name",
+            row_identity_property="name",
+        )
+        relationships = await self.write_evidence_edges(
+            [
+                {
+                    "source_label": "Project",
+                    "source_property": "project_id",
+                    "source_id": project_id,
+                    "target_label": "Repository",
+                    "target_property": "name",
+                    "target_id": repository_name,
+                    "rel_type": "HAS_REPOSITORY",
+                    "project_id": project_id,
+                    "project_id_normalized": normalized_scope,
+                    "props": {
+                        "project_id": project_id,
+                        "project_id_normalized": normalized_scope,
+                    },
+                }
+            ]
+        )
+        return {
+            "projects": projects,
+            "repositories": repositories,
+            "relationships": relationships,
+        }
+
     async def write_classes(
         self,
         classes: List[Dict[str, Any]],

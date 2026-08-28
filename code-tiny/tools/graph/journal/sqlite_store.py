@@ -46,6 +46,7 @@ from .models import (
 
 _ACTIVE_RUN_STATUSES = (RunStatus.OPEN.value, RunStatus.DRAINING.value)
 _PURGE_STARTED_EVENT = "run_purge_started"
+_PRODUCERS_COMPLETE_ID = "__journal_all_producers_complete__"
 _TERMINAL_RUN_STATUSES = {
     RunStatus.BLOCKED,
     RunStatus.DRAINED,
@@ -710,6 +711,29 @@ class SQLiteJournal:
                 statements = _schema_statements()
                 for statement in statements[5:]:
                     self._connection.execute(statement)
+                now = _iso(self._now())
+                legacy_runs = self._connection.execute(
+                    "SELECT run_id FROM runs"
+                ).fetchall()
+                self._connection.execute(
+                    """
+                    UPDATE runs SET status = ?, error_code = ?, error_detail = ?,
+                        updated_at = ?
+                    """,
+                    (
+                        RunStatus.QUARANTINED.value,
+                        TerminalErrorCode.INCOMPATIBLE_SCHEMA.value,
+                        f"schema v{version} run has no reconstructible v3 manifests",
+                        now,
+                    ),
+                )
+                for legacy_run in legacy_runs:
+                    self._add_event(
+                        run_id_value=legacy_run["run_id"],
+                        event_type="run_quarantined",
+                        error_code=TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+                        now=now,
+                    )
                 self._connection.execute(
                     f"PRAGMA user_version = {JOURNAL_SCHEMA_VERSION}"
                 )
@@ -876,6 +900,16 @@ class SQLiteJournal:
                     raise JournalError(
                         TerminalErrorCode.INCOMPATIBLE_SCHEMA,
                         "run identity collision has incompatible metadata",
+                    )
+                if (
+                    existing["status"] == RunStatus.QUARANTINED.value
+                    and existing["error_code"]
+                    == TerminalErrorCode.INCOMPATIBLE_SCHEMA.value
+                ):
+                    raise JournalError(
+                        TerminalErrorCode.INCOMPATIBLE_SCHEMA,
+                        "quarantined legacy run cannot be resumed as a v3 manifest run",
+                        details={"run_id": run_id_value},
                     )
                 self._add_event(
                     run_id_value=run_id_value,
@@ -1142,6 +1176,23 @@ class SQLiteJournal:
         now = _iso(self._now())
         manifest_failure: dict[str, int] = {}
         with self._transaction():
+            production_complete = self._connection.execute(
+                """
+                SELECT 1 FROM producer_completion
+                WHERE run_id = ? AND producer_id = ? AND status = ?
+                """,
+                (
+                    run_id_value,
+                    _PRODUCERS_COMPLETE_ID,
+                    ProducerStatus.COMPLETE.value,
+                ),
+            ).fetchone()
+            if production_complete is not None:
+                raise JournalError(
+                    TerminalErrorCode.INVALID_TRANSITION,
+                    "batches cannot be enqueued after producer completion",
+                    details={"run_id": run_id_value},
+                )
             duplicate = self._connection.execute(
                 "SELECT * FROM batches WHERE job_id = ?", (job_id,)
             ).fetchone()
@@ -2143,9 +2194,14 @@ class SQLiteJournal:
             rows = self._connection.execute(
                 """
                 SELECT producer_id FROM producer_completion
-                WHERE run_id = ? AND status = ? ORDER BY producer_id
+                WHERE run_id = ? AND status = ? AND producer_id != ?
+                ORDER BY producer_id
                 """,
-                (run_id_value, ProducerStatus.OPEN.value),
+                (
+                    run_id_value,
+                    ProducerStatus.OPEN.value,
+                    _PRODUCERS_COMPLETE_ID,
+                ),
             ).fetchall()
         return [str(row["producer_id"]) for row in rows]
 
@@ -2185,6 +2241,19 @@ class SQLiteJournal:
                     "manifest conflicts or rejected rows prevent producer completion",
                     details={"invalid_rows": conflicts},
                 )
+            completed = self._connection.execute(
+                """
+                SELECT 1 FROM producer_completion
+                WHERE run_id = ? AND producer_id = ? AND status = ?
+                """,
+                (
+                    run_id_value,
+                    _PRODUCERS_COMPLETE_ID,
+                    ProducerStatus.COMPLETE.value,
+                ),
+            ).fetchone()
+            if completed is not None:
+                return 0
             result = self._connection.execute(
                 """
                 UPDATE producer_completion SET status = ?, completed_at = ?, updated_at = ?
@@ -2196,6 +2265,20 @@ class SQLiteJournal:
                     now,
                     run_id_value,
                     ProducerStatus.OPEN.value,
+                ),
+            )
+            self._connection.execute(
+                """
+                INSERT INTO producer_completion(
+                    run_id, producer_id, status, completed_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id_value,
+                    _PRODUCERS_COMPLETE_ID,
+                    ProducerStatus.COMPLETE.value,
+                    now,
+                    now,
                 ),
             )
             self._add_event(
@@ -2245,9 +2328,14 @@ class SQLiteJournal:
                 """
                 SELECT COUNT(*) AS total,
                   SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS open
-                FROM producer_completion WHERE run_id = ?
+                FROM producer_completion
+                WHERE run_id = ? AND producer_id != ?
                 """,
-                (ProducerStatus.OPEN.value, run_id_value),
+                (
+                    ProducerStatus.OPEN.value,
+                    run_id_value,
+                    _PRODUCERS_COMPLETE_ID,
+                ),
             ).fetchone()
             manifest_rows = self._connection.execute(
                 """
@@ -2259,8 +2347,40 @@ class SQLiteJournal:
                 """,
                 (run_id_value,),
             ).fetchall()
+            edge_endpoint_rows = self._connection.execute(
+                """
+                SELECT em.manifest_id, em.job_id, em.producer_id, em.row_ordinal,
+                       em.scope, em.relationship_type, em.identity_type,
+                       em.identity_json, em.payload_digest, em.disposition,
+                       ep.role, ep.scope AS endpoint_scope, ep.node_label,
+                       ep.identity_property, ep.identity_type AS endpoint_identity_type,
+                       ep.identity_json AS endpoint_identity_json, ep.required
+                FROM edge_manifest AS em
+                LEFT JOIN edge_endpoint AS ep
+                  ON ep.run_id = em.run_id
+                 AND ep.edge_manifest_id = em.manifest_id
+                WHERE em.run_id = ?
+                ORDER BY em.manifest_id, ep.role
+                """,
+                (run_id_value,),
+            ).fetchall()
+            run = self._connection.execute(
+                "SELECT status, error_code FROM runs WHERE run_id = ?",
+                (run_id_value,),
+            ).fetchone()
         manifest_digest = sha256_hex(
             canonical_json([dict(row) for row in manifest_rows])
+        )
+        endpoint_manifest_digest = sha256_hex(
+            canonical_json([dict(row) for row in edge_endpoint_rows])
+        )
+        v3_eligible = bool(
+            run is not None
+            and not (
+                run["status"] == RunStatus.QUARANTINED.value
+                and run["error_code"]
+                == TerminalErrorCode.INCOMPATIBLE_SCHEMA.value
+            )
         )
         return {
             "node": node,
@@ -2270,8 +2390,67 @@ class SQLiteJournal:
                 "open": int(producers["open"] or 0),
             },
             "node_manifest_digest": manifest_digest,
-            "conserved": bool(node["conserved"] and edge["conserved"]),
+            "endpoint_manifest_digest": endpoint_manifest_digest,
+            "auditable_edge_rows": int(edge["emitted"]),
+            "v3_eligible": v3_eligible,
+            "conserved": bool(
+                v3_eligible and node["conserved"] and edge["conserved"]
+            ),
         }
+
+    def _validate_endpoint_audit_boundary_locked(
+        self,
+        run_id_value: str,
+        *,
+        sealed: sqlite3.Row | None = None,
+    ) -> dict[str, Any]:
+        summary = self.conservation_summary(run_id_value)
+        production_complete = self._connection.execute(
+            """
+            SELECT 1 FROM producer_completion
+            WHERE run_id = ? AND producer_id = ? AND status = ?
+            """,
+            (
+                run_id_value,
+                _PRODUCERS_COMPLETE_ID,
+                ProducerStatus.COMPLETE.value,
+            ),
+        ).fetchone()
+        if production_complete is None or summary["producers"]["open"]:
+            raise JournalError(
+                TerminalErrorCode.INVALID_TRANSITION,
+                "endpoint audit requires the durable producer-completion boundary",
+            )
+        edge = summary["edge"]
+        edge_classified = edge["emitted"] == (
+            edge["staged_unique"]
+            + edge["declared_duplicate"]
+            + edge["conflict"]
+            + edge["rejected"]
+        )
+        if (
+            not summary["v3_eligible"]
+            or not summary["node"]["conserved"]
+            or not edge_classified
+            or summary["node"]["conflict"]
+            or summary["node"]["rejected"]
+            or edge["conflict"]
+            or edge["rejected"]
+        ):
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                "endpoint audit cannot seal an ineligible or unconserved manifest",
+            )
+        if sealed is not None and (
+            sealed["manifest_digest"] != summary["endpoint_manifest_digest"]
+            or int(sealed["receipt_count"]) != summary["auditable_edge_rows"]
+        ):
+            raise JournalError(
+                TerminalErrorCode.INVALID_CONTRACT,
+                "sealed endpoint audit no longer matches the durable edge manifest",
+                details={"run_id": run_id_value},
+            )
+        return summary
 
     def seal_endpoint_audit(
         self,
@@ -2283,51 +2462,55 @@ class SQLiteJournal:
     ) -> str:
         if audited_rows is not None and audited_rows < 0:
             raise ValueError("audited_rows must be non-negative")
+        if receipt_count is not None and receipt_count < 0:
+            raise ValueError("receipt_count must be non-negative")
         now = _iso(self._now())
         with self._transaction():
             existing = self._connection.execute(
                 "SELECT * FROM endpoint_audit WHERE run_id = ?", (run_id_value,)
             ).fetchone()
+            summary = self._validate_endpoint_audit_boundary_locked(
+                run_id_value,
+                sealed=existing,
+            )
             if existing is not None:
-                if manifest_digest is not None and existing["manifest_digest"] != manifest_digest:
+                if (
+                    manifest_digest is not None
+                    and existing["manifest_digest"] != manifest_digest
+                ):
                     raise JournalError(
                         TerminalErrorCode.INVALID_CONTRACT,
                         "sealed endpoint audit is immutable",
                     )
-                if receipt_count is not None and int(existing["receipt_count"]) != receipt_count:
+                supplied_count = audited_rows if audited_rows is not None else receipt_count
+                if (
+                    supplied_count is not None
+                    and int(existing["receipt_count"]) != supplied_count
+                ):
                     raise JournalError(
                         TerminalErrorCode.INVALID_CONTRACT,
                         "sealed endpoint audit is immutable",
                     )
                 return str(existing["status"])
-            summary = self.conservation_summary(run_id_value)
-            if summary["producers"]["open"]:
-                raise JournalError(
-                    TerminalErrorCode.INVALID_TRANSITION,
-                    "endpoint audit cannot seal while producers are open",
-                )
-            if not summary["node"]["conserved"] or (
-                summary["node"]["conflict"] or summary["node"]["rejected"]
-            ):
-                raise JournalError(
-                    TerminalErrorCode.INVALID_CONTRACT,
-                    "endpoint audit cannot seal an unconserved node manifest",
-                )
-            resolved_digest = manifest_digest or str(summary["node_manifest_digest"])
-            resolved_receipts = (
-                int(receipt_count)
-                if receipt_count is not None
-                else int(summary["node"]["graph_verified"])
+            resolved_digest = manifest_digest or str(
+                summary["endpoint_manifest_digest"]
             )
-            if resolved_digest != summary["node_manifest_digest"]:
+            resolved_audited_rows = (
+                int(audited_rows)
+                if audited_rows is not None
+                else int(receipt_count)
+                if receipt_count is not None
+                else int(summary["auditable_edge_rows"])
+            )
+            if resolved_digest != summary["endpoint_manifest_digest"]:
                 raise JournalError(
                     TerminalErrorCode.INVALID_CONTRACT,
-                    "endpoint audit manifest digest does not match the durable node manifest",
+                    "endpoint audit digest does not match the durable edge/endpoint manifest",
                 )
-            if resolved_receipts != summary["node"]["graph_verified"]:
+            if resolved_audited_rows != summary["auditable_edge_rows"]:
                 raise JournalError(
                     TerminalErrorCode.INVALID_CONTRACT,
-                    "endpoint audit receipt count does not match graph-verified nodes",
+                    "endpoint audit row count does not match staged edge rows",
                 )
             self._connection.execute(
                 """
@@ -2339,7 +2522,7 @@ class SQLiteJournal:
                     run_id_value,
                     EndpointAuditStatus.SEALED.value,
                     resolved_digest,
-                    resolved_receipts,
+                    resolved_audited_rows,
                     now,
                 ),
             )
@@ -2350,6 +2533,11 @@ class SQLiteJournal:
             row = self._connection.execute(
                 "SELECT * FROM endpoint_audit WHERE run_id = ?", (run_id_value,)
             ).fetchone()
+            if row is not None:
+                self._validate_endpoint_audit_boundary_locked(
+                    run_id_value,
+                    sealed=row,
+                )
         return str(row["status"]) if row is not None else None
 
     def close_run_production(self, run_id_value: str) -> RunRecord:
