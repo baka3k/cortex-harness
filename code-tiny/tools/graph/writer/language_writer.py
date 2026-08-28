@@ -44,6 +44,25 @@ _OPTIONAL_EXTERNAL_RELATION_TYPES = frozenset(
     {"EXTENDS", "IMPLEMENTS", "INHERITS_FROM", "MIXES_IN"}
 )
 
+_CPLUS_FILE_OWNED_NODE_LABELS = (
+    "Alias",
+    "DatabaseTable",
+    "Field",
+    "File",
+    "Function",
+    "FunctionType",
+    "Namespace",
+    "ParseRun",
+    "Resource",
+    "SqlCursor",
+    "SqlDirective",
+    "SqlHostVariable",
+    "SqlStatement",
+    "Template",
+    "Type",
+    "UIControl",
+)
+
 # Graph labels for host/indicator declaration joins.  A join may also carry
 # an explicit ``target_label``; this mapping covers the standard kinds the
 # Pro*C host-declaration resolver emits.
@@ -1756,24 +1775,31 @@ class LanguageCodeWriter:
             )
             return int(records[0]["count"]) if records else 0
 
-        file_operation = GraphWriteOperation.for_incremental_cleanup(
-            "cplus:incremental_file_cleanup",
-            reconciliation="file_cleanup",
-        )
+        file_jobs = 0
+        for node_label in _CPLUS_FILE_OWNED_NODE_LABELS:
+            file_operation = GraphWriteOperation.for_incremental_cleanup(
+                f"cplus:incremental_file_cleanup:{node_label}",
+                reconciliation="file_cleanup",
+                node_label=node_label,
+            )
 
-        async def cleanup_files(batch: List[Dict[str, Any]]) -> int:
-            return await execute(file_operation, batch)
+            async def cleanup_files(
+                batch: List[Dict[str, Any]],
+                operation: GraphWriteOperation = file_operation,
+            ) -> int:
+                return await execute(operation, batch)
 
-        file_jobs = await self.write_batches(
-            file_operation.label,
-            [{"project_id": project_id, "paths": paths}],
-            cleanup_files,
-            operation=file_operation,
-        )
+            file_jobs += await self.write_batches(
+                file_operation.label,
+                [{"project_id": project_id, "paths": paths}],
+                cleanup_files,
+                operation=file_operation,
+            )
 
         orphan_operation = GraphWriteOperation.for_incremental_cleanup(
             "cplus:incremental_orphan_cleanup",
             reconciliation="orphan_unknown_cleanup",
+            node_label="UnknownFunction",
         )
 
         async def cleanup_orphans(batch: List[Dict[str, Any]]) -> int:
@@ -1781,7 +1807,7 @@ class LanguageCodeWriter:
 
         orphan_jobs = await self.write_batches(
             orphan_operation.label,
-            [{"scope": project_id}],
+            [{"project_id": project_id}],
             cleanup_orphans,
             operation=orphan_operation,
         )
