@@ -236,7 +236,16 @@ def _manifest_candidates(
     candidates: list[dict[str, Any]] = []
 
     def base(row: Any, ordinal: int, kind: str) -> dict[str, Any]:
-        payload_digest = sha256_hex(canonical_json(row))
+        digest_row = (
+            {
+                key: value
+                for key, value in row.items()
+                if not str(key).startswith("_contract_")
+            }
+            if isinstance(row, dict)
+            else row
+        )
+        payload_digest = sha256_hex(canonical_json(digest_row))
         return {
             "kind": kind,
             "manifest_id": sha256_hex(
