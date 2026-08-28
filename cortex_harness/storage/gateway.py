@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import os
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -124,6 +125,8 @@ class StoreGateway:
         *,
         limits: GatewayLimits | None = None,
         generation_manager: GenerationManager | None = None,
+        graph_probe: Callable[[GenerationManifest], Any] | None = None,
+        vector_probe: Callable[[GenerationManifest], Any] | None = None,
     ) -> None:
         self.target = target
         self.limits = limits or GatewayLimits()
@@ -139,6 +142,13 @@ class StoreGateway:
         self._job_persist_lock = asyncio.Lock()
         self._jobs_path = Path(generation_root).resolve() / "ingestion-jobs.json"
         self._active_generation: GenerationManifest | None = None
+        if (graph_probe is None) != (vector_probe is None):
+            raise ValueError("graph and vector readiness probes must be configured together")
+        self._graph_probe = graph_probe
+        self._vector_probe = vector_probe
+        self._probe_generation: str | None = None
+        self._last_probe_at: str | None = None
+        self._probe_error: str | None = None
         self._accepting_jobs = False
         self._lanes = {
             "graph": BoundedLane("graph-read", self.limits.graph_read),
@@ -150,6 +160,9 @@ class StoreGateway:
         # backend resource is created. This also makes partial startup unwind
         # deterministic when the second physical target is already owned.
         self._executors: dict[str, ThreadPoolExecutor] = {}
+        self._resource_lock = threading.Lock()
+        self._resources: dict[str, tuple[str, Any]] = {}
+        self._execution_context = threading.local()
 
     @classmethod
     def from_storage_factory(
@@ -162,6 +175,8 @@ class StoreGateway:
         role: object = "code",
         project_scope: str | None = None,
         limits: GatewayLimits | None = None,
+        graph_probe: Callable[[GenerationManifest], Any] | None = None,
+        vector_probe: Callable[[GenerationManifest], Any] | None = None,
     ) -> "StoreGateway":
         """Create a lease-safe gateway with topology-fenced publication."""
 
@@ -178,6 +193,8 @@ class StoreGateway:
             generation_root,
             limits=limits,
             generation_manager=manager,
+            graph_probe=graph_probe,
+            vector_probe=vector_probe,
         )
 
     async def start(self) -> None:
@@ -231,7 +248,15 @@ class StoreGateway:
             async with self._job_changed:
                 self._accepting_jobs = True
                 self._job_changed.notify_all()
+            if self._active_generation is not None and self._graph_probe is not None:
+                await self.refresh_readiness(self._graph_probe, self._vector_probe)
+            from .runtime import register_gateway
+
+            register_gateway(self)
         except Exception:
+            from .runtime import unregister_gateway
+
+            unregister_gateway(self)
             for executor in self._executors.values():
                 executor.shutdown(wait=True, cancel_futures=True)
             self._executors.clear()
@@ -241,10 +266,18 @@ class StoreGateway:
             self.lifecycle = OwnerLifecycleState.STOPPED
             raise
 
-    async def close(self, *, timeout_seconds: float | None = None) -> None:
+    def begin_drain(self) -> None:
+        """Synchronously stop admission for first-signal shutdown handling."""
+
         if self.lifecycle is OwnerLifecycleState.STOPPED:
             return
         self.lifecycle = OwnerLifecycleState.DRAINING
+        self._accepting_jobs = False
+
+    async def close(self, *, timeout_seconds: float | None = None) -> None:
+        if self.lifecycle is OwnerLifecycleState.STOPPED:
+            return
+        self.begin_drain()
         async with self._job_changed:
             self._accepting_jobs = False
             self._job_changed.notify_all()
@@ -271,6 +304,19 @@ class StoreGateway:
                 details={"lifecycle": self.lifecycle.value},
             ) from exc
         await self._persist_jobs()
+        close_error: BaseException | None = None
+        with self._resource_lock:
+            resources = list(self._resources.values())
+            self._resources.clear()
+        for lane, resource in reversed(resources):
+            close_resource = getattr(resource, "close", None)
+            if not callable(close_resource):
+                continue
+            try:
+                await self._run_sync(lane, close_resource)
+            except BaseException as exc:  # finish cleanup before surfacing close failure
+                if close_error is None:
+                    close_error = exc
         for executor in self._executors.values():
             executor.shutdown(wait=True, cancel_futures=True)
         self._executors.clear()
@@ -278,6 +324,11 @@ class StoreGateway:
             lease.release()
         self._leases.clear()
         self.lifecycle = OwnerLifecycleState.STOPPED
+        from .runtime import unregister_gateway
+
+        unregister_gateway(self)
+        if close_error is not None:
+            raise close_error
 
     async def _run_sync(self, lane: str, operation: Callable[..., T], *args: Any) -> T:
         """Run a non-preemptive store call without releasing ownership early."""
@@ -285,7 +336,16 @@ class StoreGateway:
         executor = self._executors.get(lane)
         if executor is None:
             raise RuntimeError("store gateway executor is not running")
-        future = asyncio.get_running_loop().run_in_executor(executor, operation, *args)
+
+        def invoke() -> T:
+            previous = getattr(self._execution_context, "lane", None)
+            self._execution_context.lane = lane
+            try:
+                return operation(*args)
+            finally:
+                self._execution_context.lane = previous
+
+        future = asyncio.get_running_loop().run_in_executor(executor, invoke)
         try:
             result = await asyncio.shield(future)
         except asyncio.CancelledError:
@@ -303,6 +363,55 @@ class StoreGateway:
                 close()
             raise TypeError("gateway store operations must be synchronous callables")
         return result
+
+    def get_or_create_resource(
+        self,
+        key: str,
+        factory: Callable[[], T],
+        *,
+        lane: str,
+    ) -> T:
+        """Return one gateway-owned adapter handle and close it during drain.
+
+        The factory runs outside the registry lock so opening a backend never
+        violates the leaf-lock rule. Callers invoke this from the matching
+        serialized gateway lane; a defensive duplicate check closes a raced
+        handle instead of leaking it.
+        """
+
+        if not str(key or "").strip():
+            raise ValueError("gateway resource key is required")
+        if lane not in self._executors:
+            raise ValueError(f"gateway resource lane is not running: {lane}")
+        if getattr(self._execution_context, "lane", None) != lane:
+            raise RuntimeError(
+                "gateway resources must be opened from their named executor lane"
+            )
+        with self._resource_lock:
+            existing = self._resources.get(key)
+        if existing is not None:
+            existing_lane, resource = existing
+            if existing_lane != lane:
+                raise ValueError("gateway resource key is already bound to another lane")
+            return resource
+
+        created = factory()
+        with self._resource_lock:
+            existing = self._resources.setdefault(key, (lane, created))
+        existing_lane, resource = existing
+        if resource is not created:
+            close_created = getattr(created, "close", None)
+            if callable(close_created):
+                close_created()
+        if existing_lane != lane:
+            if resource is created:
+                with self._resource_lock:
+                    self._resources.pop(key, None)
+                close_created = getattr(created, "close", None)
+                if callable(close_created):
+                    close_created()
+            raise ValueError("gateway resource key is already bound to another lane")
+        return resource
 
     async def query(
         self,
@@ -400,11 +509,69 @@ class StoreGateway:
         self, manifest: GenerationManifest, validate: Callable[[GenerationManifest], None]
     ) -> GenerationManifest:
         """Validate and atomically make one staged graph/vector pair active."""
+
+        def validate_candidate(candidate: GenerationManifest) -> None:
+            validate(candidate)
+            if self._graph_probe is not None and self._vector_probe is not None:
+                self._run_readiness_probes_sync(
+                    candidate, self._graph_probe, self._vector_probe
+                )
+
         published = await self.write(
-            lambda: self.generations.publish(manifest, validate)
+            lambda: self.generations.publish(manifest, validate_candidate)
         )
         self._active_generation = published
+        if self._graph_probe is not None:
+            self._probe_generation = published.generation_id
+            self._last_probe_at = self._timestamp()
+            self._probe_error = None
         return published
+
+    @staticmethod
+    def _run_readiness_probes_sync(
+        manifest: GenerationManifest,
+        graph_probe: Callable[[GenerationManifest], Any],
+        vector_probe: Callable[[GenerationManifest], Any],
+    ) -> None:
+        for probe in (graph_probe, vector_probe):
+            result = probe(manifest)
+            if inspect.isawaitable(result):
+                close = getattr(result, "close", None)
+                if callable(close):
+                    close()
+                raise TypeError("gateway readiness probes must be synchronous")
+
+    async def refresh_readiness(
+        self,
+        graph_probe: Callable[[GenerationManifest], Any],
+        vector_probe: Callable[[GenerationManifest], Any] | None,
+    ) -> StoreHealth:
+        """Refresh cached representative graph/vector probes on control capacity.
+
+        Probe failures do not roll back an already durable publication. They
+        fail readiness closed and preserve the previous generation as the
+        manifest authority so operators can choose rollback explicitly.
+        """
+
+        if vector_probe is None:
+            raise ValueError("a vector readiness probe is required")
+
+        try:
+            _, freshness = await self.query(
+                lambda manifest: self._run_readiness_probes_sync(
+                    manifest, graph_probe, vector_probe
+                ),
+                lane="control",
+            )
+        except Exception as exc:
+            self._probe_generation = None
+            self._last_probe_at = self._timestamp()
+            self._probe_error = type(exc).__name__
+        else:
+            self._probe_generation = freshness.served_generation
+            self._last_probe_at = self._timestamp()
+            self._probe_error = None
+        return self.health()
 
     async def retire(self, manifest: GenerationManifest) -> bool:
         """Retire only a non-active generation with no pinned readers."""
@@ -671,6 +838,15 @@ class StoreGateway:
 
     def health(self) -> StoreHealth:
         active = self._active_generation
+        probes_required = self._graph_probe is not None
+        probes_ready = (
+            not probes_required
+            or (
+                active is not None
+                and self._probe_generation == active.generation_id
+                and self._probe_error is None
+            )
+        )
         return StoreHealth(
             target=self.target,
             lifecycle=self.lifecycle,
@@ -685,7 +861,14 @@ class StoreGateway:
                 )
             ),
             queued_writes=int(self._lanes["write"].snapshot["queued_items"]),
-            ready=self.lifecycle is OwnerLifecycleState.READY and active is not None,
+            ready=(
+                self.lifecycle is OwnerLifecycleState.READY
+                and active is not None
+                and probes_ready
+            ),
+            probe_generation=self._probe_generation,
+            last_probe_at=self._last_probe_at,
+            probe_error=self._probe_error,
         )
 
     def metrics(self) -> dict[str, Any]:
@@ -698,6 +881,10 @@ class StoreGateway:
                 if self._active_generation
                 else None
             ),
+            "ready": self.health().ready,
+            "probe_generation": self._probe_generation,
+            "last_probe_at": self._last_probe_at,
+            "probe_error": self._probe_error,
             "lanes": {name: lane.snapshot for name, lane in self._lanes.items()},
             "jobs": {
                 state.value: sum(1 for job in self._jobs.values() if job.state is state)
