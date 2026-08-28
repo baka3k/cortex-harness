@@ -1011,21 +1011,26 @@ async def test_required_incremental_cleanup_is_journaled_node_work(
     assert await writer.cleanup_incremental_files(
         project_id="demo",
         file_paths=["src/old.pc", "src/old.pc"],
-    ) == {"file_cleanup_jobs": 1, "orphan_cleanup_jobs": 1}
+    ) == {"file_cleanup_jobs": 16, "orphan_cleanup_jobs": 1}
 
     mutation_queries = [query for query, _ in driver.calls if "DETACH DELETE" in query]
-    assert len(mutation_queries) == 2
+    assert len(mutation_queries) == 17
+    assert all("OPTIONAL MATCH (n)" not in query for query in mutation_queries)
+    assert any(
+        "u.project_id = row.project_id" in query for query in mutation_queries
+    )
     runtime = writer._journal_runtime
     assert runtime is not None
-    assert runtime.journal.status_counts(runtime.run.run_id)[BatchStatus.DONE] == 2
+    assert runtime.journal.status_counts(runtime.run.run_id)[BatchStatus.DONE] == 17
     assert await writer.close_node_production_and_drain_edges() == 0
     assert finalize_journal_from_env(env) is RunStatus.DRAINED
 
 
 def test_incremental_cleanup_compiler_uses_one_replay_row_per_job() -> None:
     operation = GraphWriteOperation.for_incremental_cleanup(
-        "cplus:incremental_file_cleanup",
+        "cplus:incremental_file_cleanup:File",
         reconciliation="file_cleanup",
+        node_label="File",
     )
     query, parameters = compile_persisted_mutation(
         operation,
@@ -1033,6 +1038,35 @@ def test_incremental_cleanup_compiler_uses_one_replay_row_per_job() -> None:
     )
 
     assert operation.phase.value == "nodes"
+    assert operation.version == 2
+    assert "OPTIONAL MATCH (n:File)" in query
     assert "DETACH DELETE node" in query
     assert query.endswith("RETURN count(*) AS count")
     assert parameters["rows"][0]["paths"] == ["src/old.pc"]
+
+
+@pytest.mark.parametrize(
+    ("reconciliation", "row", "node_label"),
+    [
+        ("file_cleanup", {"project_id": "demo", "paths": ["old.pc"]}, "File"),
+        (
+            "orphan_unknown_cleanup",
+            {"scope": "demo"},
+            "UnknownFunction",
+        ),
+    ],
+)
+def test_legacy_v1_incremental_cleanup_replay_fails_closed(
+    reconciliation: str,
+    row: dict,
+    node_label: str,
+) -> None:
+    current = GraphWriteOperation.for_incremental_cleanup(
+        f"cplus:{reconciliation}",
+        reconciliation=reconciliation,
+        node_label=node_label,
+    )
+    legacy = replace(current, version=1)
+
+    with pytest.raises(JournalError, match="no trusted replay compiler"):
+        compile_persisted_mutation(legacy, [row])
