@@ -145,6 +145,46 @@ def test_every_registered_mind_tool_exposes_project_id():
         assert "project_id" in inspect.signature(fake.tools[name]).parameters
 
 
+def test_mind_tools_use_the_same_success_envelope_as_graph_tools():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    qdrant = SimpleNamespace(list_collection_names=lambda: ["procsample_doc"])
+    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=qdrant), mock.patch.object(
+        mcp_graph_rag, "_resolve_doc_collection", return_value="procsample_doc"
+    ):
+        result = fake.tools["list_qdrant_collections"](project_id="procsample")
+
+    assert result.isError is False
+    assert result.structuredContent == {
+        "ok": True,
+        "data": ["procsample_doc"],
+        "error": None,
+    }
+    assert result.meta["tool"] == "list_qdrant_collections"
+    assert "structuredContent.data" in result.content[0].text
+
+
+def test_mind_tool_execution_errors_are_structured_and_actionable():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    with mock.patch.object(
+        mcp_graph_rag,
+        "get_qdrant",
+        side_effect=LookupError("procsample_doc is unavailable"),
+    ):
+        result = fake.tools["list_qdrant_collections"](project_id="procsample")
+
+    assert result.isError is True
+    assert result.structuredContent["ok"] is False
+    assert result.structuredContent["data"] is None
+    assert result.structuredContent["error"]["code"] == "lookup_error"
+    assert result.structuredContent["error"]["message"] == (
+        "procsample_doc is unavailable"
+    )
+
+
 def test_mind_qdrant_search_resolves_collection_and_filter_from_project():
     captured = {}
 

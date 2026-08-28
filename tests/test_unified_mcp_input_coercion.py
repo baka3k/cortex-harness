@@ -783,6 +783,51 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("labels", full_profiles["spring"])
         self.assertIn("relationships", full_profiles["spring"])
 
+    def test_protocol_wrapper_uses_one_success_envelope_for_all_graph_tools(self):
+        result = unified_mcp._ProxyMiddleware._wrap_dispatch_result(
+            {
+                "db": "procsample",
+                "results": [{"id": "function-1"}],
+                "ids": ["function-1"],
+                "ok": True,
+            },
+            tool_name="search_functions",
+        )
+
+        assert result.is_error is False
+        assert result.structured_content == {
+            "ok": True,
+            "data": {
+                "db": "procsample",
+                "results": [{"id": "function-1"}],
+                "ids": ["function-1"],
+            },
+            "error": None,
+        }
+        assert result.meta["tool"] == "search_functions"
+        assert "structuredContent.data" in str(result.content)
+
+    def test_protocol_wrapper_marks_graph_error_and_keeps_it_structured(self):
+        result = unified_mcp._ProxyMiddleware._wrap_dispatch_result(
+            {
+                "ok": False,
+                "error": {
+                    "type": "capability_unavailable",
+                    "message": "NAVIGATE is unavailable",
+                    "missing_relationships": ["NAVIGATE"],
+                },
+            },
+            tool_name="find_screen_workflows",
+        )
+
+        assert result.is_error is True
+        assert result.structured_content["ok"] is False
+        assert result.structured_content["data"] is None
+        assert result.structured_content["error"]["code"] == "capability_unavailable"
+        assert result.structured_content["error"]["details"] == {
+            "missing_relationships": ["NAVIGATE"]
+        }
+
     async def test_public_tool_catalog_is_provider_neutral_and_exposes_inspector(self):
         tool = getattr(
             unified_mcp.tool_list_mcp_functions,
