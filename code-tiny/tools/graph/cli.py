@@ -242,6 +242,16 @@ def prepare_graph_args(args: Namespace) -> bool:
     return True
 
 
+def resolved_falkordb_uri(args: Namespace) -> str:
+    """Return the remote URI unless an explicit local path disabled it."""
+
+    if getattr(args, "_explicit_falkordb_target", None) == "path":
+        return ""
+    return str(
+        getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI") or ""
+    ).strip()
+
+
 async def create_graph_driver_from_args(
     args: Namespace,
     *,
@@ -287,7 +297,7 @@ async def create_graph_driver_from_args(
         or "hyper_graph"
     )
     setattr(args, "neo4j_db", graph_name)
-    falkordb_uri = getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI")
+    falkordb_uri = resolved_falkordb_uri(args)
     if falkordb_uri:
         driver = await GraphDriverFactory.create_driver(
             GraphProvider.FALKORDB,
