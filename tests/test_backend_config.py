@@ -62,13 +62,13 @@ def test_remote_full_config() -> None:
         "qdrant_url": "http://qdrant:6333",
         "qdrant_api_key": "secret-key",
         "falkordb_uri": "redis://falkordb:6379",
-        "falkordb_password": "secret-pass",
+        "falkordb_password": "secret-pass",  # sensitive-guard:allow -- local test fixture
         "falkordb_ssl": True,
     }
     mode, remote = validate_backend_config("remote", remote_dict)
     assert mode is BackendMode.REMOTE
     assert remote.qdrant_api_key == "secret-key"
-    assert remote.falkordb_password == "secret-pass"
+    assert remote.falkordb_password == "secret-pass"  # sensitive-guard:allow -- local test fixture
     assert remote.falkordb_ssl is True
 
 
@@ -100,9 +100,9 @@ def test_remote_credential_redaction() -> None:
     """__repr__ must mask API keys and passwords."""
     config = RemoteStorageConfig(
         qdrant_url="http://qdrant.internal:6333",
-        qdrant_api_key="super-secret",
+        qdrant_api_key="super-secret",  # sensitive-guard:allow -- local test fixture
         falkordb_uri="redis://falkordb.internal:6379",
-        falkordb_password="ultra-secret",
+        falkordb_password="ultra-secret",  # sensitive-guard:allow -- local test fixture
         falkordb_ssl=True,
     )
     rendered = repr(config)

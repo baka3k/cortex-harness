@@ -203,7 +203,7 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
             graph_provider="neo4j",
             neo4j_uri="bolt://configured-db",
             neo4j_user="neo4j",
-            neo4j_password="secret",
+            neo4j_password="secret",  # sensitive-guard:allow -- local test fixture
             neo4j_db="code",
             project_id=None,
         )
@@ -328,7 +328,7 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
                 graph_provider="neo4j",
                 neo4j_uri="bolt://localhost:7687",
                 neo4j_user="neo4j",
-                neo4j_password="secret",
+                neo4j_password="secret",  # sensitive-guard:allow -- local test fixture
                 neo4j_db="cortext",
                 falkordb_graph="ignored",
             )
@@ -405,7 +405,7 @@ class IncrementalSyncGraphSetupTests(unittest.IsolatedAsyncioTestCase):
                 graph_provider="neo4j",
                 neo4j_uri="bolt://localhost:7687",
                 neo4j_user="neo4j",
-                neo4j_password="secret",
+                neo4j_password="secret",  # sensitive-guard:allow -- local test fixture
                 neo4j_db="cortext",
                 falkordb_graph="ignored",
             )

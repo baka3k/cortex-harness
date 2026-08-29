@@ -88,7 +88,7 @@ class PerlParserTest(unittest.TestCase):
     def test_budgets_and_secret_redaction_are_deterministic(self):
         with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as cache:
             root = Path(directory)
-            source = "# password=supersecret\npackage Secret;\nsub reveal { my $password = 'supersecret'; }\n"
+            source = "# password=supersecret\npackage Secret;\nsub reveal { my $password = 'supersecret'; }\n"  # sensitive-guard:allow -- local test fixture
             (root / "Secret.pm").write_text(source, encoding="utf-8")
             result = run_perl_analysis(
                 str(root),
