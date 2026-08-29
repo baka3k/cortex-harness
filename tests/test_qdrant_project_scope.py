@@ -19,6 +19,7 @@ from android import android_mcp  # noqa: E402
 from cplus import cplus_mcp  # noqa: E402
 from java import java_mcp  # noqa: E402
 from tools.common import intelligent_retrieval, local_qdrant  # noqa: E402
+from tools.common import qdrant_layout_cache  # noqa: E402
 from tools.common.project_registry import ProjectNotRegisteredError  # noqa: E402
 from cortex_harness.storage import QdrantStore  # noqa: E402
 
@@ -83,6 +84,7 @@ class QdrantProjectScopeTests(unittest.IsolatedAsyncioTestCase):
     async def test_collection_helpers_use_current_qdrant_store(self):
         for backend in (fastmcp_server, cplus_mcp, android_mcp, java_mcp):
             store = MagicMock()
+            store.list_collection_names.return_value = ["symbols"]
             with self.subTest(backend=backend.__name__), patch.object(
                 backend, "get_code_qdrant_store", return_value=store,
             ) as get_store, patch.object(
@@ -94,9 +96,14 @@ class QdrantProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                 "collection_info_payload",
                 return_value={"result": {}},
             ):
-                await backend._fetch_qdrant_collections("ignored")
-                await backend._fetch_qdrant_collection_info("symbols", "ignored")
-
+                qdrant_layout_cache.reset_cache()
+                try:
+                    payload = await backend._fetch_qdrant_collections("ignored")
+                    await backend._fetch_qdrant_collection_info("symbols", "ignored")
+                finally:
+                    qdrant_layout_cache.reset_cache()
+                self.assertEqual(payload["collections"], ["symbols"])
+                # list (cold, through the layout cache loader) + live info read
                 self.assertEqual(
                     get_store.call_args_list,
                     [

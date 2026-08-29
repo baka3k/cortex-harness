@@ -2148,7 +2148,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", 4000)))
     parser.add_argument("--chunk-embed", action="store_true")
     parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "auto"))
-    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", 4))) # for embedding - 4 function 1 turn embedding
+    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", 8))) # for embedding - 4 function 1 turn embedding
     parser.add_argument("--neo4j-batch-size", type=int, default=1000)
     parser.add_argument("--neo4j-state", default=os.environ.get("NEO4J_STATE_PATH"))
     parser.add_argument("--disable-neo4j-resume", action="store_true")

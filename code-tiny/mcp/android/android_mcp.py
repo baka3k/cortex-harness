@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import signal
 from pathlib import Path
 
@@ -14,9 +15,7 @@ import logging
 
 import httpx
 import mcp.types as mcp_types
-import torch
 from fastmcp import FastMCP
-from transformers import AutoModel, AutoTokenizer
 
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -34,6 +33,8 @@ from tools.graph.core.provider_contract import (
 )
 from tools.graph.core.shared_runtime import get_shared_graph_driver
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
+from tools.common import embed_runtime
+from tools.common import qdrant_query_support
 from tools.common.local_qdrant import (
     collection_info_payload,
     collections_payload,
@@ -183,8 +184,12 @@ mcp_server = FastMCP(
 # tool call. See docs/PROJECT_REGISTRY.md for the new contract.
 
 _graph_driver: Optional[GraphDriver] = None
-_embedder_cache: Dict[Tuple[str, str], Tuple[Any, Any, torch.device]] = {}
 logger = logging.getLogger("project_call_graph.mcp.server")
+
+
+def _search_timing_enabled() -> bool:
+    raw = os.environ.get("MCP_SEARCH_TIMING", "1")
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
 async def _get_graph_driver() -> GraphDriver:
@@ -532,27 +537,16 @@ def _prune_content_fields(properties: Dict[str, Any]) -> None:
 
 
 def _select_content(properties: Dict[str, Any], node_id: Optional[str], mode: str) -> str:
-    summary = properties.get("summary")
-    comment = properties.get("comment")
-    code = properties.get("code")
-    summary_text = summary if isinstance(summary, str) else ""
-    comment_text = comment if isinstance(comment, str) else ""
-    code_text = code if isinstance(code, str) else ""
-    if mode == "summary":
-        return summary_text
-    if mode == "comment":
-        return comment_text
-    if mode == "code":
-        return code_text
-    if mode == "name":
-        return _fallback_node_name(properties, node_id)
-    if summary_text.strip():
-        return summary_text
-    if comment_text.strip():
-        return comment_text
-    return _fallback_node_name(properties, node_id)
+    return qdrant_query_support.select_content_with_fallback(
+        properties, node_id, mode, _fallback_node_name
+    )
 
 
+def _lazy_fetch_missing_payload_text(results: Dict[str, Any], mode: str) -> None:
+    """Top-k lazy text fetch for narrowed hits (shared helper)."""
+    qdrant_query_support.lazy_fetch_missing(
+        results, mode, store_loader=get_code_qdrant_store
+    )
 def _record_node(
     node: Any,
     content_mode: str = "auto",
@@ -672,116 +666,39 @@ def _paths_to_graph(
 
 
 def _should_trust_remote_code(model_name: str) -> bool:
-    jina_path = os.environ.get("JINA_MODEL_PATH")
-    if jina_path and os.path.normpath(jina_path) == os.path.normpath(model_name):
-        return True
-    return "jina" in model_name.lower()
+    return embed_runtime._should_trust_remote_code(model_name)
 
 
 def _is_embed_cpu_fallback_enabled() -> bool:
-    raw = os.environ.get("EMBED_FALLBACK_TO_CPU", "1")
-    return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return embed_runtime._is_embed_cpu_fallback_enabled()
 
 
 def _is_cuda_runtime_error(exc: RuntimeError) -> bool:
-    message = str(exc).lower()
-    return "cuda" in message and (
-        "no kernel image is available for execution on the device" in message
-        or "invalid device function" in message
-        or "no cuda kernels are available" in message
-        or "cuda error" in message
-    )
+    return embed_runtime.is_cuda_runtime_error(exc)
 
 
-def _resolve_embed_device(device_name: Optional[str] = None) -> torch.device:
-    raw_device = (device_name or os.environ.get("EMBED_DEVICE", "cpu") or "cpu").strip()
-    if not raw_device:
-        raw_device = "cpu"
-    normalized = raw_device.lower()
-    if normalized.startswith("cuda") and not torch.cuda.is_available():
-        logger.warning("[embed] CUDA requested but unavailable; falling back to CPU.")
-        return torch.device("cpu")
-    if normalized.startswith("mps"):
-        mps_backend = getattr(torch.backends, "mps", None)
-        if mps_backend is None or not mps_backend.is_available():
-            logger.warning("[embed] MPS requested but unavailable; falling back to CPU.")
-            return torch.device("cpu")
-    return torch.device(raw_device)
+def _resolve_embed_device(device_name: Optional[str] = None) -> Any:
+    return embed_runtime.resolve_device(device_name)
 
 
 def _get_embedder(model_name: str, device_name: Optional[str] = None) -> Tuple[Any, Any, Any]:
-    device = _resolve_embed_device(device_name)
-    cache_key = (model_name, str(device))
-    if cache_key in _embedder_cache:
-        return _embedder_cache[cache_key]
-    trust_remote_code = _should_trust_remote_code(model_name)
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-    model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-    try:
-        model.to(device)
-    except RuntimeError as exc:
-        if str(device).startswith("cuda") and _is_cuda_runtime_error(exc) and _is_embed_cpu_fallback_enabled():
-            logger.warning("[embed] CUDA model load failed (%s). Retrying on CPU.", exc)
-            device = torch.device("cpu")
-            model.to(device)
-            cache_key = (model_name, str(device))
-        else:
-            raise
-    model.eval()
-    _embedder_cache[cache_key] = (tokenizer, model, device)
-    return tokenizer, model, device
+    return embed_runtime.get_embedder(model_name, device_name)
 
 
 def _mean_pool(last_hidden: Any, mask: Any) -> Any:
-    mask = mask.unsqueeze(-1).type_as(last_hidden)
-    summed = (last_hidden * mask).sum(dim=1)
-    counts = mask.sum(dim=1).clamp(min=1)
-    return summed / counts
+    return embed_runtime.mean_pool(last_hidden, mask)
 
 
 def _encode_texts(model: Any, texts: List[str], device: Any) -> Optional[List[List[float]]]:
-    if not hasattr(model, "encode"):
-        return None
-    try:
-        encoded = model.encode(texts, device=str(device))
-    except TypeError:
-        encoded = model.encode(texts)
-    if isinstance(encoded, torch.Tensor):
-        return encoded.detach().cpu().tolist()
-    if hasattr(encoded, "tolist"):
-        return encoded.tolist()
-    return [list(vec) for vec in encoded]
+    return embed_runtime.encode_texts(model, texts, device)
 
 
 def _embed_query_with_model(tokenizer: Any, model: Any, device: Any, text: str) -> List[float]:
-    encoded = _encode_texts(model, [text], device)
-    if encoded is not None:
-        return encoded[0]
-    with torch.no_grad():
-        encoded = tokenizer(
-            [text],
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_tensors="pt",
-        )
-        encoded = {key: value.to(device) for key, value in encoded.items()}
-        outputs = model(**encoded)
-        embedding = _mean_pool(outputs.last_hidden_state, encoded["attention_mask"]).cpu().tolist()[0]
-    return embedding
+    return embed_runtime.embed_query_with_model(tokenizer, model, device, text)
 
 
 def _embed_query(text: str, model_name: str) -> List[float]:
-    tokenizer, model, device = _get_embedder(model_name)
-    try:
-        return _embed_query_with_model(tokenizer, model, device, text)
-    except RuntimeError as exc:
-        if str(device).startswith("cuda") and _is_cuda_runtime_error(exc) and _is_embed_cpu_fallback_enabled():
-            logger.warning("[embed] CUDA inference failed (%s). Retrying on CPU.", exc)
-            _embedder_cache.pop((model_name, str(device)), None)
-            tokenizer_cpu, model_cpu, device_cpu = _get_embedder(model_name, device_name="cpu")
-            return _embed_query_with_model(tokenizer_cpu, model_cpu, device_cpu, text)
-        raise
+    return embed_runtime.embed_query(text, model_name)
 
 
 def _is_preload_enabled(raw: Optional[str]) -> bool:
@@ -798,45 +715,37 @@ def _preload_embedder_on_startup() -> None:
     if not model_name:
         print("[embed] startup preload skipped: empty model name.")
         return
-    device_name = os.environ.get("EMBED_DEVICE", "cpu")
+    # Unset env → auto-detect, matching the query path exactly; a "cpu"
+    # default here would cache a second copy of the model on accelerator
+    # hosts and pay the full load at first query instead of boot.
+    device_name = os.environ.get("EMBED_DEVICE") or "auto"
     print(f"[embed] preloading model at startup: model={model_name}, device={device_name}")
-    _, _, resolved_device = _get_embedder(model_name, device_name=device_name)
+    try:
+        _, _, resolved_device = embed_runtime.get_embedder(model_name, device_name=device_name)
+    except Exception as exc:  # noqa: BLE001 - boot must survive a broken model/device
+        print(f"[embed] startup preload failed (server continues; embed will retry on call): {exc}")
+        return
     print(f"[embed] preload completed on device={resolved_device}.")
 
 
 def _qdrant_search(
-    collection: str,
+        collection: str,
     vector: List[float],
     top_k: int,
     qdrant_url: str,
     vector_name: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Vector search via the local Qdrant query API.
+    """Narrowed, provenance-tagged vector search via the shared helper.
 
-    Kept byte-identical with the same function in ``fastmcp_server.py``,
-    ``mcp/cplus/cplus_mcp.py`` and ``mcp/java/java_mcp.py`` — every
-    backend ships its own copy and they all need the same v1/v2 routing
-    contract. When changing this body, update those siblings too.
-
-    See ``cplus_mcp.py`` for the full rationale on why this migrated
-    away from the legacy search operation (named-vector
-    payload format was easy to malform and caused
-    ``unified_mcp.semantic_search`` to return Qdrant 400 on v2 summary
-    collections).
+    Payload comes back without ``text`` (Exclude selector) and every hit is
+    tagged ``_collection`` so lazy full-payload fetch can group by source
+    after the cross-collection merge. Response shape is unchanged.
     """
-    project_filter = qdrant_project_filter(project_id)
-    hits = query_points(
-        get_code_qdrant_store(),
-        collection,
-        vector,
-        limit=top_k,
-        vector_name=vector_name,
-        query_filter=project_filter,
+    hits = qdrant_query_support.search_collection(
+        get_code_qdrant_store(), collection, vector, vector_name, top_k, project_id
     )
     return {"result": hits, "status": "ok"}
-
-
 def _normalize_collections(value: Optional[Any]) -> List[str]:
     if value is None:
         return []
@@ -917,32 +826,16 @@ async def _resolve_base_collections(
 
 
 def _merge_qdrant_results(
-    collections: List[Tuple[str, Optional[str]]],
+        collections: List[Tuple[str, Optional[str]]],
     vector: List[float],
     top_k: int,
     qdrant_url: str,
     project_id: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-    combined: Dict[str, Dict[str, Any]] = {}
-    errors: List[Dict[str, str]] = []
-    for col, vector_name in collections:
-        try:
-            payload = _qdrant_search(
-                col, vector, top_k, qdrant_url, vector_name, project_id
-            )
-        except Exception as exc:
-            errors.append({"collection": col, "error": str(exc)})
-            continue
-        for item in payload.get("result", []) or []:
-            point_id = str(item.get("id"))
-            score = item.get("score", 0)
-            existing = combined.get(point_id)
-            if existing is None or score > existing.get("score", 0):
-                combined[point_id] = item
-    results = sorted(combined.values(), key=lambda x: x.get("score", 0), reverse=True)[:top_k]
-    return results, errors
-
-
+    """Cross-collection merge with ``_collection`` provenance (shared helper)."""
+    return qdrant_query_support.merge_collections(
+        get_code_qdrant_store(), collections, vector, top_k, project_id
+    )
 def _parse_qdrant_collections(payload: Dict[str, Any]) -> List[str]:
     collections = payload.get("result", {}).get("collections", [])
     names: List[str] = []
@@ -957,42 +850,14 @@ async def _fetch_qdrant_collections(
     qdrant_url: str,
     include_vectors: bool = False,
 ) -> Dict[str, Any]:
-    return collections_payload(
-        get_code_qdrant_store(),
-        include_vectors=include_vectors,
+    if include_vectors:
+        # Vector-size listing is a cold diagnostic path; no cache.
+        return collections_payload(get_code_qdrant_store(), include_vectors=True)
+    return qdrant_query_support.cached_collections_payload(
+        qdrant_url, get_code_qdrant_store
     )
-
-
 async def _fetch_qdrant_collection_info(collection: str, qdrant_url: str) -> Dict[str, Any]:
     return collection_info_payload(get_code_qdrant_store(), collection)
-
-
-def _collect_vector_sizes(vectors_config: Any) -> Dict[str, int]:
-    sizes: Dict[str, int] = {}
-    if not isinstance(vectors_config, dict):
-        return sizes
-    if "size" in vectors_config:
-        size = vectors_config.get("size")
-        if isinstance(size, (int, float)):
-            sizes["default"] = int(size)
-        return sizes
-    for name, cfg in vectors_config.items():
-        if not isinstance(cfg, dict):
-            continue
-        size = cfg.get("size")
-        if isinstance(size, (int, float)):
-            sizes[str(name)] = int(size)
-    return sizes
-
-
-def _select_vector_name(vectors_config: Any, vector_len: int) -> Optional[str]:
-    if not isinstance(vectors_config, dict) or "size" in vectors_config:
-        return None
-    if isinstance(vectors_config, dict):
-        for name, cfg in vectors_config.items():
-            if isinstance(cfg, dict) and cfg.get("size") == vector_len:
-                return str(name)
-    return None
 
 
 async def _filter_collections_for_vector(
@@ -1000,54 +865,10 @@ async def _filter_collections_for_vector(
     vector_len: int,
     qdrant_url: str,
 ) -> Tuple[List[Tuple[str, Optional[str]]], List[Dict[str, str]]]:
-    errors: List[Dict[str, str]] = []
-    if not collections:
-        return [], errors
-    tasks = [asyncio.create_task(_fetch_qdrant_collection_info(col, qdrant_url)) for col in collections]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    selected: List[Tuple[str, Optional[str]]] = []
-    for col, result in zip(collections, results):
-        if isinstance(result, Exception):
-            errors.append({"collection": col, "error": str(result)})
-            continue
-        vectors_cfg = (
-            result.get("result", {})
-            .get("config", {})
-            .get("params", {})
-            .get("vectors")
-        )
-        vector_name = _select_vector_name(vectors_cfg, vector_len)
-        if isinstance(vectors_cfg, dict) and "size" in vectors_cfg:
-            if vectors_cfg.get("size") == vector_len:
-                selected.append((col, None))
-            else:
-                actual_size = vectors_cfg.get("size")
-                errors.append(
-                    {
-                        "collection": col,
-                        "error": (
-                            f"Vector size mismatch (expected {vector_len}, "
-                            f"got {actual_size})"
-                        ),
-                    }
-                )
-            continue
-        if vector_name is not None:
-            selected.append((col, vector_name))
-        else:
-            sizes = _collect_vector_sizes(vectors_cfg)
-            if sizes:
-                errors.append(
-                    {
-                        "collection": col,
-                        "error": f"No matching vector size (expected {vector_len}); available: {sizes}",
-                    }
-                )
-            else:
-                errors.append({"collection": col, "error": "No matching vector size."})
-    return selected, errors
-
-
+    """Cached collection filtering (shared helper + layout cache)."""
+    return qdrant_query_support.filter_collections_for_vector(
+        get_code_qdrant_store(), collections, vector_len, qdrant_url
+    )
 def _is_db_not_found(exc: Exception) -> bool:
     return is_database_not_found_error(exc)
 
@@ -1505,7 +1326,9 @@ async def tool_semantic_search(
         raise ValueError("query is required.")
     model_name = model_path or DEFAULT_MODEL
     qdrant_url = qdrant_url or DEFAULT_QDRANT_PATH
+    _timing_t0 = time.perf_counter()
     vector = _embed_query(query, model_name)
+    _timing_embed = time.perf_counter() - _timing_t0
     vector_len = len(vector)
     logger.info("[semantic_search] model=%s vector_len=%s", model_name, vector_len)
     print(f"[semantic_search] model={model_name} vector_len={vector_len}", flush=True)
@@ -1542,14 +1365,18 @@ async def tool_semantic_search(
         )
     else:
         code_collections, code_errors = filtered_base, base_errors
+    _timing_resolve = time.perf_counter() - _timing_t0 - _timing_embed
     selected_mode = _normalize_content_mode(content_mode)
     results: Dict[str, Any] = {"mode": mode, "query": query, "results": [], "content_mode": selected_mode}
     if mode == "comment":
+        _timing_tq = time.perf_counter()
         items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url, project_id)
+        _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = comment_errors + errors
         if merged_errors:
             results["errors"] = merged_errors
+        _lazy_fetch_missing_payload_text(results, selected_mode)
         for item in results["results"]:
             payload_item = item.get("payload")
             if isinstance(payload_item, dict):
@@ -1558,6 +1385,7 @@ async def tool_semantic_search(
                 payload_item["content"] = _select_content(payload_item, node_id, selected_mode)
                 if not include_raw_fields:
                     _prune_content_fields(payload_item)
+                    payload_item.pop("text", None)
         await expand_semantic_results(
             results,
             run_cypher_first=_run_cypher_first,
@@ -1569,13 +1397,23 @@ async def tool_semantic_search(
             graph_limit=graph_limit,
             project_id=project_id,
         )
+        if _search_timing_enabled():
+            logger.info(
+                "semantic_search timing[android]: embed=%.3f resolve=%.3f qdrant=%.3f expand=%.3f total=%.3f",
+                _timing_embed, _timing_resolve, _timing_qdrant,
+                time.perf_counter() - _timing_tq - _timing_qdrant,
+                time.perf_counter() - _timing_t0,
+            )
         return results
     if mode == "code":
+        _timing_tq = time.perf_counter()
         items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url, project_id)
+        _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = code_errors + errors
         if merged_errors:
             results["errors"] = merged_errors
+        _lazy_fetch_missing_payload_text(results, selected_mode)
         for item in results["results"]:
             payload_item = item.get("payload")
             if isinstance(payload_item, dict):
@@ -1584,6 +1422,7 @@ async def tool_semantic_search(
                 payload_item["content"] = _select_content(payload_item, node_id, selected_mode)
                 if not include_raw_fields:
                     _prune_content_fields(payload_item)
+                    payload_item.pop("text", None)
         await expand_semantic_results(
             results,
             run_cypher_first=_run_cypher_first,
@@ -1595,16 +1434,26 @@ async def tool_semantic_search(
             graph_limit=graph_limit,
             project_id=project_id,
         )
+        if _search_timing_enabled():
+            logger.info(
+                "semantic_search timing[android]: embed=%.3f resolve=%.3f qdrant=%.3f expand=%.3f total=%.3f",
+                _timing_embed, _timing_resolve, _timing_qdrant,
+                time.perf_counter() - _timing_tq - _timing_qdrant,
+                time.perf_counter() - _timing_t0,
+            )
         return results
     combined_map = {(col, name) for col, name in filtered_base}
     combined_map.update(comment_collections)
     combined_map.update(code_collections)
     combined_collections = list(combined_map)
+    _timing_tq = time.perf_counter()
     items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url, project_id)
+    _timing_qdrant = time.perf_counter() - _timing_tq
     results["results"] = items
     merged_errors = base_errors + comment_errors + code_errors + errors
     if merged_errors:
         results["errors"] = merged_errors
+    _lazy_fetch_missing_payload_text(results, selected_mode)
     for item in results["results"]:
         payload = item.get("payload")
         if isinstance(payload, dict):
@@ -1613,6 +1462,7 @@ async def tool_semantic_search(
             payload["content"] = _select_content(payload, node_id, selected_mode)
             if not include_raw_fields:
                 _prune_content_fields(payload)
+                payload.pop("text", None)
     await expand_semantic_results(
         results,
         run_cypher_first=_run_cypher_first,
@@ -1624,6 +1474,13 @@ async def tool_semantic_search(
         graph_limit=graph_limit,
         project_id=project_id,
     )
+    if _search_timing_enabled():
+        logger.info(
+            "semantic_search timing[android]: embed=%.3f resolve=%.3f qdrant=%.3f expand=%.3f total=%.3f",
+            _timing_embed, _timing_resolve, _timing_qdrant,
+            time.perf_counter() - _timing_tq - _timing_qdrant,
+            time.perf_counter() - _timing_t0,
+        )
     return results
 
 
@@ -3017,6 +2874,7 @@ def _install_global_tool_error_wrapper() -> None:
 
     mcp_server._call_tool_mcp = _safe_call_tool_mcp
     setattr(mcp_server, "_safe_tool_wrapper_installed", True)
+
 
 @mcp_server.tool(
     name="list_mcp_functions",

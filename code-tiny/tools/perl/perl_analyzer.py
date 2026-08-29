@@ -362,7 +362,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--qdrant-collection", default=os.environ.get("QDRANT_COLLECTION", "perl_functions"))
     parser.add_argument("--embed-model", default=os.environ.get("CODE_EMBEDDING_MODEL", ""))
     parser.add_argument("--device", default=os.environ.get("EMBED_DEVICE", "cpu"))
-    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", "4")))
+    parser.add_argument("--batch-size", type=int, default=int(os.environ.get("EMBED_BATCH_SIZE", "8")))
     parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", "4000")))
     parser.add_argument("--qdrant-batch-size", type=int, default=int(os.environ.get("QDRANT_BATCH_SIZE", "128")))
     parser.add_argument("--qdrant-timeout", type=float, default=float(os.environ.get("QDRANT_TIMEOUT", "300")))

@@ -54,13 +54,13 @@ import math
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from tools.common import qdrant_layout_cache
 from tools.common.graph_expander import GraphExpander, GraphNode
 from tools.common.local_qdrant import (
     default_local_qdrant_path,
     get_code_qdrant_store,
     model_to_dict,
     query_points,
-    vector_sizes,
 )
 from tools.common.project_scope import (
     matches_project_scope,
@@ -103,11 +103,6 @@ DEFAULT_TOP_K        = 10
 # ``hyper_pack_core.qdrant_search.DEFAULT_NAMED_VECTOR``.
 _DEFAULT_NAMED_VECTOR = "semantic"
 
-# Cache: (qdrant_url, collection) -> Optional[str]
-#   None  → single unnamed vector layout
-#   str   → use this named vector in queries
-_VECTOR_LAYOUT_CACHE: Dict[tuple, Optional[str]] = {}
-
 
 def _resolve_vector_layout(
     qdrant_url: str,
@@ -116,25 +111,26 @@ def _resolve_vector_layout(
 ) -> Optional[str]:
     """Return the named vector to query, or ``None`` for single-vector.
 
-    Cached per ``(qdrant_url, collection)``. Falls back to ``None`` on
-    any error — the caller's ``_qdrant_search`` will then issue a
-    legacy-style query that works for v1 collections; v2 misses will
+    Resolution goes through the shared TTL layout cache: error values are
+    never cached (the old dict cached ``None`` forever) and recreated
+    collections age out via TTL / sync-time invalidation. Falls back to
+    ``None`` on any error — the caller's ``_qdrant_search`` will then
+    issue a legacy-style query that works for v1 collections; v2 misses
     appear as empty results rather than crashes.
     """
-    key = (qdrant_url, collection)
-    if key in _VECTOR_LAYOUT_CACHE:
-        return _VECTOR_LAYOUT_CACHE[key]
-
+    del timeout
     try:
-        del timeout
-        sizes = vector_sizes(get_code_qdrant_store(qdrant_url).get_collection_info(collection))
+        sizes = qdrant_layout_cache.get_collection_meta(
+            qdrant_url,
+            collection,
+            loader=lambda: get_code_qdrant_store(qdrant_url),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "[intelligent_retrieval] get_collection(%s) failed: %s",
             collection,
             exc,
         )
-        _VECTOR_LAYOUT_CACHE[key] = None
         return None
 
     chosen: Optional[str]
@@ -145,8 +141,6 @@ def _resolve_vector_layout(
             chosen = sorted(sizes)[0]
     else:
         chosen = None
-
-    _VECTOR_LAYOUT_CACHE[key] = chosen
     return chosen
 
 
