@@ -59,7 +59,7 @@ def test_driver_warns_when_network_and_path_are_both_supplied(tmp_path: Path) ->
                 host="legacy.example",
                 port=6379,
                 user="u",
-                password="p",
+                password="p",  # sensitive-guard:allow -- local test fixture
                 ssl=True,
             )
     deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]

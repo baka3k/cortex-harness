@@ -105,7 +105,7 @@ def test_cleanup_defaults_to_local_provider_and_preserves_scope():
             repo_name="org/repo",
             neo4j_uri="",
             neo4j_user="",
-            neo4j_password="",
+            neo4j_password="",  # sensitive-guard:allow -- local default neo4j credential
             neo4j_db="project-a-graph",
         )
 
@@ -128,7 +128,7 @@ def test_cleanup_neo4j_rollback_mode_requires_credentials():
             repo_name="org/repo",
             neo4j_uri="bolt://localhost:7687",
             neo4j_user="neo4j",
-            neo4j_password="",
+            neo4j_password="",  # sensitive-guard:allow -- local default neo4j credential
             neo4j_db="neo4j",
             graph_provider="neo4j",
         )

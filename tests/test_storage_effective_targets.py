@@ -114,7 +114,7 @@ def _resolved(tmp_path: Path) -> ResolvedStorage:
 def test_remote_falkordb_target_uses_normalized_credential_free_uri(tmp_path: Path) -> None:
     remote = RemoteStorageConfig(
         falkordb_uri="redis://tenant:uri-secret@DB.EXAMPLE./",
-        falkordb_password="config-secret",
+        falkordb_password="config-secret",  # sensitive-guard:allow -- local test fixture
         falkordb_ssl=True,
     )
     factory = StorageFactory(

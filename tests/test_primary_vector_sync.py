@@ -130,13 +130,13 @@ class PrimaryVectorSyncTests(unittest.TestCase):
         )
 
     def test_redaction_covers_quoted_json_yaml_shell_and_multiline_values(self):
-        source = "\n".join(
+        source = "\n".join(  # sensitive-guard:allow -- local redaction test fixtures
             (
-                "password='secret value'",
-                '\"api_key\": \"json secret\"',
-                "access_token: yaml-secret",
-                'export AUTH_TOKEN="shell secret"',
-                'secret="first line\nsecond line"',
+                "password='secret value'",  # sensitive-guard:allow -- local redaction test fixture
+                '\"api_key\": \"json secret\"',  # sensitive-guard:allow -- local redaction test fixture
+                "access_token: yaml-secret",  # sensitive-guard:allow -- local redaction test fixture
+                'export AUTH_TOKEN="shell secret"',  # sensitive-guard:allow -- local redaction test fixture
+                'secret="first line\nsecond line"',  # sensitive-guard:allow -- local redaction test fixture
             )
         )
 
