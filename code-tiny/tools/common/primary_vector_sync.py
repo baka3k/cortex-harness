@@ -17,6 +17,8 @@ from tools.common.project_scope import (
 )
 import uuid
 
+from tools.common import embed_runtime
+from tools.common import qdrant_layout_cache
 from tools.common.local_qdrant import (
     delete_by_filter,
     ensure_collection,
@@ -194,6 +196,17 @@ def _ensure_collection(
     ensure_collection(store, collection, vector_size)
 
 
+# Fields the stale-point filter (``_delete_stale``) matches on; all of
+# them get a payload index so scoped cleanup stays a filtered lookup
+# instead of a full scan (remote-mode value; local mode no-ops indexes).
+SCOPE_INDEX_FIELDS = (
+    PROJECT_ID_NORMALIZED_FIELD,
+    "parser",
+    "root_scope",
+    "file_path",
+)
+
+
 def _ensure_project_scope_index(
     store: Any,
     *,
@@ -204,7 +217,10 @@ def _ensure_project_scope_index(
     retry_sleep: float,
 ) -> None:
     del url, timeout, retries, retry_sleep
-    store.create_payload_index(collection, PROJECT_ID_NORMALIZED_FIELD, wait=True)
+    for field in SCOPE_INDEX_FIELDS:
+        # create_payload_index is idempotent server-side; repeat syncs
+        # and existing collections are safe.
+        store.create_payload_index(collection, field, wait=True)
 
 
 def _delete_stale(
@@ -284,11 +300,9 @@ def sync_vector_documents(
         if not model_name.strip():
             raise ValueError("An embedding model is required when Qdrant is configured")
         if embedder_factory is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-            except ImportError as exc:  # pragma: no cover - dependency environment
-                raise RuntimeError("Qdrant indexing requires sentence-transformers") from exc
-            embedder_factory = SentenceTransformer
+            # Process-wide reuse (phase 06): sync-heavy tooling no longer
+            # reloads the model on every call; keyed by (model, device).
+            embedder_factory = embed_runtime.get_sentence_transformer
         model = embedder_factory(
             model_name,
             device=device,
@@ -329,7 +343,13 @@ def sync_vector_documents(
             points.append({"id": document.id, "vector": values, "payload": document.payload})
         size = max(1, qdrant_batch_size)
         for start in range(0, len(points), size):
-            store.upsert(collection, points[start:start + size], wait=True)
+            # Only the final batch waits: the flush at the function boundary
+            # is the durability contract. A crash mid-sync leaves partial
+            # points visible either way (upserts target the live
+            # collection); the next sync self-heals via _delete_stale +
+            # re-upsert, so per-batch waiting would only add latency.
+            is_last_batch = start + size >= len(points)
+            store.upsert(collection, points[start:start + size], wait=is_last_batch)
 
     _delete_stale(
         store,
@@ -345,4 +365,9 @@ def sync_vector_documents(
         retries=retries,
         retry_sleep=retry_sleep,
     )
+    # Collection layout may have changed (recreate/size bump) — drop all
+    # cached metadata: reader-side cache keys use each backend's own url
+    # token, which need not equal this sync's ``url`` string, so a
+    # token-scoped drop could miss them.
+    qdrant_layout_cache.invalidate()
     return len(documents)

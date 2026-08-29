@@ -174,8 +174,13 @@ def _make_embedder(model_name: str) -> Optional[Callable[[str], List[float]]]:
     if not model_name:
         return None
     try:
-        from sentence_transformers import SentenceTransformer  # type: ignore
-        _model = SentenceTransformer(model_name)
+        from tools.common import embed_runtime
+
+        # Shared process-wide cache: if an MCP backend already loaded this
+        # (model, device) pair, reuse it instead of a second full load.
+        _model = embed_runtime.get_sentence_transformer(
+            model_name, device=embed_runtime.resolve_device()
+        )
         def _embed(text: str) -> List[float]:
             return _model.encode([text])[0].tolist()  # type: ignore[return-value]
         return _embed

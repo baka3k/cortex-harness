@@ -3815,7 +3815,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--embed-batch-size",
         type=int,
-        default=int(os.environ.get("EMBED_BATCH_SIZE", "4")),
+        default=int(os.environ.get("EMBED_BATCH_SIZE", "8")),
     )
     parser.add_argument(
         "--max-embed-chars",

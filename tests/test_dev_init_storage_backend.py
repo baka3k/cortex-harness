@@ -67,6 +67,21 @@ class DevInitStorageBackendTests(unittest.TestCase):
                 result.output,
             )
 
+    def test_blank_input_defaults_batch8_and_auto_device(self):
+        """Phase 06/03: fresh init defaults BATCH_SIZE=8 and device=auto."""
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_path = Path(temp_dir)
+            result = runner.invoke(cli, ["init", str(project_path)], input="\n" * 60)
+
+            self.assertEqual(result.exit_code, 0, result.output)
+            cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
+            self.assertEqual(cfg["code"]["env"]["BATCH_SIZE"], "8")
+            self.assertEqual(cfg["doc"]["env"]["BATCH_SIZE"], "8")
+            # device resolves inside dev.py before any analyzer sees it
+            self.assertEqual(cfg["code"]["env"]["device"], "auto")
+
     # ---------------------------------------------------------------------
     # Remote full configuration
     # ---------------------------------------------------------------------
