@@ -4728,5 +4728,178 @@ def _uninstall_ubuntu_context_menu(local: bool, project_path: Path):
     click.echo("  [success] Context menu removed successfully")
 
 
+# ---------------------------------------------------------------------------
+# dev db-transfer (local-only export / import of Qdrant + FalkorDB files)
+# ---------------------------------------------------------------------------
+
+@cli.command("export-db")
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Destination .cortexdb archive path. Defaults to outputs/db/<project_id>-<ts>.cortexdb.",
+)
+@click.option(
+    "--project-id",
+    "project_id",
+    default=None,
+    help="Override the project_id embedded in the bundle manifest.",
+)
+@click.option(
+    "--role",
+    type=click.Choice(["code", "doc", "both"]),
+    default="both",
+    show_default=True,
+    help="Which storage lanes to bundle.",
+)
+@click.option("--project-dir", default=".", show_default=True)
+def export_db(output: Optional[Path], project_id: Optional[str], role: str, project_dir: str):
+    """Bundle the active project's local Qdrant + FalkorDB files into a .cortexdb archive."""
+    from cortex_harness.db_transfer import DbTransferError, export_project
+
+    try:
+        export_project(
+            Path(project_dir).resolve(),
+            output=output,
+            project_id_override=project_id,
+            role=role,
+        )
+    except DbTransferError as exc:
+        click.echo(f"[error] {exc}", err=True)
+        sys.exit(1)
+
+
+@cli.command("import-db")
+@click.option(
+    "--archive",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="Path to a .cortexdb archive produced by 'dev export-db'.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Back up and replace any existing destination data instead of refusing.",
+)
+@click.option(
+    "--role",
+    type=click.Choice(["code", "doc", "both"]),
+    default="both",
+    show_default=True,
+    help="Which storage lanes to restore from the archive.",
+)
+@click.option("--project-dir", default=".", show_default=True)
+def import_db(archive: Path, overwrite: bool, role: str, project_dir: str):
+    """Restore a .cortexdb archive into the local CORTEX_DATA_HOME tree (local mode only)."""
+    from cortex_harness.db_transfer import DbTransferError, import_project
+
+    try:
+        import_project(
+            Path(project_dir).resolve(),
+            archive,
+            overwrite=overwrite,
+            role=role,
+        )
+    except DbTransferError as exc:
+        click.echo(f"[error] {exc}", err=True)
+        sys.exit(1)
+
+
+# Short natural-language aliases: ``dev export`` / ``dev import``.
+#
+# Both commands read the active ``.cortext-harness/config/dev.json`` to derive
+# the project_id, storage owners, graph names and collection names so the
+# operator does not have to restate them on the command line.
+#
+#   dev export [--output path] [--project-id ID] [--role code|doc|both]
+#   dev import <archive-path> [--overwrite] [--role code|doc|both]
+@cli.command("export")
+@click.argument(
+    "project_id_arg",
+    metavar="PROJECT_ID",
+    required=False,
+    default=None,
+)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Destination .cortexdb archive path. Defaults to outputs/db/<project_id>-<ts>.cortexdb.",
+)
+@click.option(
+    "--project-id",
+    "project_id_opt",
+    default=None,
+    help="Override the project_id embedded in the bundle manifest (alternative to the positional arg).",
+)
+@click.option(
+    "--role",
+    type=click.Choice(["code", "doc", "both"]),
+    default="both",
+    show_default=True,
+    help="Which storage lanes to bundle.",
+)
+@click.option("--project-dir", default=".", show_default=True)
+def export_alias(
+    project_id_arg: Optional[str],
+    output: Optional[Path],
+    project_id_opt: Optional[str],
+    role: str,
+    project_dir: str,
+):
+    """Export the active project's local DB (.cortexdb). Reads .cortext-harness/config/dev.json."""
+    from cortex_harness.db_transfer import DbTransferError, export_project
+
+    project_id = project_id_opt or project_id_arg
+    try:
+        export_project(
+            Path(project_dir).resolve(),
+            output=output,
+            project_id_override=project_id,
+            role=role,
+        )
+    except DbTransferError as exc:
+        click.echo(f"[error] {exc}", err=True)
+        sys.exit(1)
+
+
+@cli.command("import")
+@click.argument(
+    "archive",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    help="Back up and replace any existing destination data instead of refusing.",
+)
+@click.option(
+    "--role",
+    type=click.Choice(["code", "doc", "both"]),
+    default="both",
+    show_default=True,
+    help="Which storage lanes to restore from the archive.",
+)
+@click.option("--project-dir", default=".", show_default=True)
+def import_alias(archive: Path, overwrite: bool, role: str, project_dir: str):
+    """Import a .cortexdb archive into the local CORTEX_DATA_HOME. Reads dev.json for destination targets."""
+    from cortex_harness.db_transfer import DbTransferError, import_project
+
+    try:
+        import_project(
+            Path(project_dir).resolve(),
+            archive,
+            overwrite=overwrite,
+            role=role,
+        )
+    except DbTransferError as exc:
+        click.echo(f"[error] {exc}", err=True)
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()

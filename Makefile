@@ -11,7 +11,7 @@ UV ?= uv
 export UV
 DEV := $(PYTHON) cortex_harness/dev.py
 
-.PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup doctor start stop sync code doc sync-code-stop sync-doc-stop
+.PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc sync-code-stop sync-doc-stop
 
 help:
 	@$(LIFECYCLE) help
@@ -42,6 +42,24 @@ storage-migrate-layout:
 
 storage-backup:
 	$(LIFECYCLE) storage-backup $(OWNER_OPTION) $(or $(OWNER),code)
+
+export-db:
+	$(DEV) export-db $(if $(OUTPUT),--output $(OUTPUT)) $(if $(PROJECT_ID),--project-id $(PROJECT_ID)) $(if $(ROLE),--role $(ROLE))
+
+export:
+	$(DEV) export $(PROJECT_ID) $(if $(OUTPUT),--output $(OUTPUT)) $(if $(ROLE),--role $(ROLE))
+
+import-db:
+ifndef ARCHIVE
+	$(error Usage: make import-db ARCHIVE=/path/to/project.cortexdb [OVERWRITE=1] [ROLE=code|doc|both])
+endif
+	$(DEV) import-db --archive $(ARCHIVE) $(if $(filter 1 true yes,$(OVERWRITE)),--overwrite) $(if $(ROLE),--role $(ROLE))
+
+import:
+ifndef ARCHIVE
+	$(error Usage: make import ARCHIVE=/path/to/project.cortexdb [OVERWRITE=1] [ROLE=code|doc|both])
+endif
+	$(DEV) import $(ARCHIVE) $(if $(filter 1 true yes,$(OVERWRITE)),--overwrite) $(if $(ROLE),--role $(ROLE))
 
 doctor:
 	$(LIFECYCLE) doctor
