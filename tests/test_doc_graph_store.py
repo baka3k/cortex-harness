@@ -71,12 +71,12 @@ class DocGraphStoreTests(unittest.TestCase):
             falkordb_host="localhost",
             falkordb_port=6379,
             falkordb_user=None,
-            falkordb_pass="",
+            falkordb_pass="",  # sensitive-guard:allow -- local default falkordb credential
             falkordb_graph="docs",
             falkordb_ssl=False,
             neo4j_uri="bolt://localhost:7687",
             neo4j_user="neo4j",
-            neo4j_pass="password",
+            neo4j_pass="password",  # sensitive-guard:allow -- local default neo4j credential
         )
 
         with patch("graph_store.FalkorDBDriver", return_value=FakeDriver()) as driver:
@@ -90,13 +90,13 @@ class DocGraphStoreTests(unittest.TestCase):
         args = Namespace(
             graph_provider="falkordb",
             falkordb_uri="localhost:6379",
-            falkordb_password="test-secret",
+            falkordb_password="test-secret",  # sensitive-guard:allow -- local test fixture
             falkordb_path="/unused/local/data.rdb",
             falkordb_graph="docs",
             falkordb_ssl=True,
             neo4j_uri="bolt://localhost:7687",
             neo4j_user="neo4j",
-            neo4j_pass="password",
+            neo4j_pass="password",  # sensitive-guard:allow -- local default neo4j credential
         )
 
         with patch("graph_store.FalkorDBDriver", return_value=FakeDriver()) as driver:
