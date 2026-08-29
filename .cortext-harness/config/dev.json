@@ -14,14 +14,14 @@
       "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
-      "device": "cpu"
+      "device": "mps"
     },
     "source": {
       "projects": [
         {
           "git": "",
           "folder": [
-            "C:\\ai\\cortex-harness\\"
+            "/Users/hieplq1.aip/AI/cortex-harness"
           ]
         }
       ]
@@ -35,7 +35,7 @@
       "EMBEDDING_MODEL": "BAAI/bge-m3",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
-      "device": "cpu"
+      "device": "mps"
     },
     "source": {
       "projects": [
@@ -47,6 +47,8 @@
     }
   },
   "remote": {
-    "falkordb_uri": "redis://127.0.0.1:6379"
+    "qdrant_url": "http://localhost:6333",
+    "falkordb_uri": "redis://127.0.0.1:6379",
+    "falkordb_ssl": false
   }
 }

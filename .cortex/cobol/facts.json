@@ -1,0 +1,4265 @@
+{
+  "diagnostics": [
+    {
+      "code": "COBOL_COPYBOOK_CYCLE",
+      "details": {
+        "chain": [
+          "tests/fixtures/cobol-application/cycle-b.copy",
+          "tests/fixtures/cobol-application/cycle-a.copy",
+          "tests/fixtures/cobol-application/cycle-b.copy"
+        ]
+      },
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "message": "copybook cycle: tests/fixtures/cobol-application/cycle-b.copy -> tests/fixtures/cobol-application/cycle-a.copy -> tests/fixtures/cobol-application/cycle-b.copy",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_COPYBOOK_CYCLE",
+      "details": {
+        "chain": [
+          "tests/fixtures/cobol-application/cycle-a.copy",
+          "tests/fixtures/cobol-application/cycle-b.copy",
+          "tests/fixtures/cobol-application/cycle-a.copy"
+        ]
+      },
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "message": "copybook cycle: tests/fixtures/cobol-application/cycle-a.copy -> tests/fixtures/cobol-application/cycle-b.copy -> tests/fixtures/cobol-application/cycle-a.copy",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 206,
+        "end_column": 12,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 179,
+        "end_column": 40,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 178,
+        "start_column": 39,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 179,
+        "end_column": 40,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 178,
+        "start_column": 39,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 54,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 192,
+        "start_column": 53,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 54,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 192,
+        "start_column": 53,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 257,
+        "end_column": 20,
+        "end_line": 9,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 248,
+        "start_column": 11,
+        "start_line": 9
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 535,
+        "end_column": 26,
+        "end_line": 18,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 527,
+        "start_column": 18,
+        "start_line": 18
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_DYNAMIC_CALL",
+      "details": {
+        "target": "WS-PROGRAM"
+      },
+      "evidence": {
+        "end_byte": 719,
+        "end_column": 31,
+        "end_line": 24,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 689,
+        "start_column": 1,
+        "start_line": 24
+      },
+      "message": "call target WS-PROGRAM is dynamic",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 791,
+        "end_column": 54,
+        "end_line": 26,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 762,
+        "start_column": 25,
+        "start_line": 26
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 1196,
+        "end_column": 19,
+        "end_line": 41,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1185,
+        "start_column": 8,
+        "start_line": 41
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 174,
+        "end_column": 27,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_UNBALANCED_DELIMITER",
+      "details": {},
+      "evidence": {
+        "end_byte": 147,
+        "end_column": 32,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 116,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "message": "source contains unbalanced parentheses",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 173,
+        "end_column": 26,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 155,
+        "start_column": 8,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 262,
+        "end_column": 36,
+        "end_line": 9,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 205,
+        "start_column": 12,
+        "start_line": 8
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_COPYBOOK_NOT_FOUND",
+      "details": {
+        "copybook": "DOES-NOT-EXIST"
+      },
+      "evidence": {
+        "end_byte": 144,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 117,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "message": "copybook DOES-NOT-EXIST was not found",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 14,
+        "end_column": 15,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 33,
+        "end_column": 9,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 32,
+        "start_column": 8,
+        "start_line": 2
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 67,
+        "end_column": 19,
+        "end_line": 3,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 59,
+        "start_column": 11,
+        "start_line": 3
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 93,
+        "end_column": 13,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 90,
+        "start_column": 10,
+        "start_line": 5
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 8,
+        "end_column": 9,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 23,
+        "end_column": 24,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 9,
+        "start_column": 10,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 15,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 31,
+        "start_column": 8,
+        "start_line": 2
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 57,
+        "end_column": 9,
+        "end_line": 3,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 56,
+        "start_column": 8,
+        "start_line": 3
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 90,
+        "end_column": 19,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 82,
+        "start_column": 11,
+        "start_line": 4
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 121,
+        "end_column": 18,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 116,
+        "start_column": 13,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 117,
+        "end_column": 14,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 116,
+        "start_column": 13,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 121,
+        "end_column": 18,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 120,
+        "start_column": 17,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 135,
+        "end_column": 13,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 132,
+        "start_column": 10,
+        "start_line": 7
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 15,
+        "end_column": 16,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 11,
+        "start_column": 12,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 23,
+        "end_column": 24,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 18,
+        "end_column": 19,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 17,
+        "start_column": 18,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 23,
+        "end_column": 24,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 22,
+        "start_column": 23,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 15,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 31,
+        "start_column": 8,
+        "start_line": 2
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 57,
+        "end_column": 9,
+        "end_line": 3,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 56,
+        "start_column": 8,
+        "start_line": 3
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 89,
+        "end_column": 19,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 81,
+        "start_column": 11,
+        "start_line": 4
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 121,
+        "end_column": 19,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 110,
+        "start_column": 8,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 116,
+        "end_column": 14,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 115,
+        "start_column": 13,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 128,
+        "end_column": 26,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 127,
+        "start_column": 25,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 128,
+        "end_column": 26,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 127,
+        "start_column": 25,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    }
+  ],
+  "edges": [
+    {
+      "confidence": 0.5,
+      "dynamic": true,
+      "evidence": {
+        "end_byte": 1117,
+        "end_column": 49,
+        "end_line": 37,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1069,
+        "start_column": 1,
+        "start_line": 37
+      },
+      "id": "cobol:edge:58d64821a315715e57a72fd8",
+      "properties": {
+        "altered_source": "STEP-B",
+        "project_id": "cortext"
+      },
+      "relationship": "ALTERS",
+      "source_id": "cobol:cobolparagraph:f5ce3023c936e235521568f1",
+      "target_id": "cobol:cobolparagraph:a8ec510b14f4773d397ba7eb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 672,
+        "end_column": 46,
+        "end_line": 22,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 627,
+        "start_column": 1,
+        "start_line": 22
+      },
+      "id": "cobol:edge:756687052be026cdf51ac355",
+      "properties": {
+        "project_id": "cortext",
+        "target_name": "SUBPROG"
+      },
+      "relationship": "CALLS",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:cobolprogram:1fd06e24e1b963d8bec57064"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 626,
+        "end_column": 28,
+        "end_line": 21,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 599,
+        "start_column": 1,
+        "start_line": 21
+      },
+      "id": "cobol:edge:d068c6288890d0fe19daed1c",
+      "properties": {
+        "branch": "IF",
+        "project_id": "cortext"
+      },
+      "relationship": "CONDITIONAL",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 688,
+        "end_column": 16,
+        "end_line": 23,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 673,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:e1a5ea32e7dde6a95f5ad5ef",
+      "properties": {
+        "branch": "ELSE",
+        "project_id": "cortext"
+      },
+      "relationship": "CONDITIONAL",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:619778784a304521c3e9d652",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:5abf35337b8624b7f0cc608c",
+      "target_id": "cobol:coboldataitem:5e602a0f42a5d028f546c707"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:bcc05821eb4fae67d1f05b8d",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:5f426a184046df69dd238bfc",
+      "target_id": "cobol:coboldataitem:0840e47ae662b9a5424c087c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 92,
+        "end_column": 38,
+        "end_line": 3,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 55,
+        "start_column": 1,
+        "start_line": 3
+      },
+      "id": "cobol:edge:3ea597d57e17a3c10b30b079",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:5f426a184046df69dd238bfc",
+      "target_id": "cobol:coboldataitem:dd4116fa3c31d0b11be69675"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 54,
+        "end_column": 32,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 23,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:b4699e38f14a84d4480534fb",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:5f426a184046df69dd238bfc",
+      "target_id": "cobol:coboldataitem:f4e4baad3f4f25f336918c8c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:c2d1312394693a69cfb66491",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:7c2009598bf19aaee77b2b79",
+      "target_id": "cobol:coboldataitem:3aeb5961c3378d98d9d127c0"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:0672ed8929d066131014225c",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:ba4a967bab65c9e89d078e95",
+      "target_id": "cobol:coboldataitem:b55fae195e25e40c479b3043"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1018,
+        "end_column": 55,
+        "end_line": 33,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 964,
+        "start_column": 1,
+        "start_line": 33
+      },
+      "id": "cobol:edge:fe795f2323cd809e3409920a",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a",
+      "target_id": "cobol:cobolcicscommand:e51c116a6921f2b24a36651a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 963,
+        "end_column": 20,
+        "end_line": 32,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 869,
+        "start_column": 1,
+        "start_line": 30
+      },
+      "id": "cobol:edge:0ee24ea9e3a015944af038bc",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a",
+      "target_id": "cobol:cobolsqlstatement:4460c46fd6b42ee79954f935"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:21a911d3bebc5f3b1f94c6ab",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:1fd06e24e1b963d8bec57064",
+      "target_id": "cobol:coboldataitem:e1784873db26be792974191e"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:918717801edaa654586b75e9",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:1fd06e24e1b963d8bec57064",
+      "target_id": "cobol:cobolsection:f8654aca8774177a27e76087"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 102,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 91,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:b9ff862ab2ca836291c9004d",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:53086720f9701c4336c6f981",
+      "target_id": "cobol:cobolparagraph:cf197c27cdaa54a7ac5b0269"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 103,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 92,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:bdcff87854e5e3aadfd267d7",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:6f1f34dec7e1589c073ca80b",
+      "target_id": "cobol:cobolparagraph:6fe4e7254332d8b4e13ca31c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 123,
+        "end_column": 19,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 105,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:1ad568b44659bae88c2fa14c",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:79d3ae5017aeadf483c33d1a",
+      "target_id": "cobol:cobolparagraph:9bab794e8fa72e11d84b1e83"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 80,
+        "end_column": 12,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 69,
+        "start_column": 1,
+        "start_line": 4
+      },
+      "id": "cobol:edge:12047d21d09330b07cc59878",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:88715e232aec9d575982de0c",
+      "target_id": "cobol:cobolparagraph:f75da376fd85ad07ab9617c7"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:919c4c5c24b91bef3a963afa",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:b3dc2a1c327d8c4ab095f096",
+      "target_id": "cobol:cobolparagraph:eddfc7d78427e143c4b42ad2"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:0101e4a22d0a3e0d4e3d7e92",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:b3dc2a1c327d8c4ab095f096",
+      "target_id": "cobol:cobolsection:dcdd2f7b8802bb3326aef99f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 288,
+        "end_column": 30,
+        "end_line": 10,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 259,
+        "start_column": 1,
+        "start_line": 10
+      },
+      "id": "cobol:edge:ee0be9f2ad0c9720ebb96ccc",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:36808f8e1037b20f279d4a84"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 509,
+        "end_column": 32,
+        "end_line": 17,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 478,
+        "start_column": 1,
+        "start_line": 17
+      },
+      "id": "cobol:edge:76c8669eaf1825ec10bb40ad",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:3c490c8f49b04f2cf57eb35a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 453,
+        "end_column": 36,
+        "end_line": 15,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 418,
+        "start_column": 1,
+        "start_line": 15
+      },
+      "id": "cobol:edge:957a13a3ceab68ee124bab7d",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:59a0f01baf7e010444a635f3"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 387,
+        "end_column": 47,
+        "end_line": 13,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 341,
+        "start_column": 1,
+        "start_line": 13
+      },
+      "id": "cobol:edge:425c3a80392d2f9514f9bd5e",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:5e153383b1d4d9b9a963419c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 194,
+        "end_column": 55,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 140,
+        "start_column": 1,
+        "start_line": 6
+      },
+      "id": "cobol:edge:df21bbf86b493aef049fe49a",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolfile:df97b9c339a21c72e11a126f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 810,
+        "end_column": 18,
+        "end_line": 27,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 793,
+        "start_column": 1,
+        "start_line": 27
+      },
+      "id": "cobol:edge:dbf3da819bd3436d6e25bf57",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1036,
+        "end_column": 18,
+        "end_line": 34,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1019,
+        "start_column": 1,
+        "start_line": 34
+      },
+      "id": "cobol:edge:57e4bbc38a4122d2c1a6ee99",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolparagraph:a8ec510b14f4773d397ba7eb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1068,
+        "end_column": 15,
+        "end_line": 36,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1054,
+        "start_column": 1,
+        "start_line": 36
+      },
+      "id": "cobol:edge:20eac4113e691f4712ce3cfa",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolparagraph:f5ce3023c936e235521568f1"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1132,
+        "end_column": 15,
+        "end_line": 38,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1118,
+        "start_column": 1,
+        "start_line": 38
+      },
+      "id": "cobol:edge:0d6e4970fa08a6f004cb4e21",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolparagraph:fc76979f346ea670bda611dc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:ebe8bcedbde75a55c29ef41d",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:334a2c36c6dd424c1105d393",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolsection:1ea22526fe14233082b93a33"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:f9ef5f29a2111a5f475fec17",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolsection:908bddd2730bd288e8fd1ad0"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:c7730cf52ef9f6fe624bc1f9",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolsection:b6af13a8f0d7884e8b10fa29"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:d972be7bb1ee4f535f469428",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolsection:f0b61167e0d34f204ac8a88f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:33cd28ef77fbeb57498a8782",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolsection:fc539b400dbe1f9d6dfa247a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 147,
+        "end_column": 32,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 116,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:00d677cb5eb2f4c0a9e3f8cb",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:fdbd195872304a708433ed19",
+      "target_id": "cobol:coboldataitem:8bd80a31bece013d5f56e470"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:15d13b2f74eb015c4d6cb4e1",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:fdbd195872304a708433ed19",
+      "target_id": "cobol:cobolparagraph:5a1d92d1e731758bcd7ef2d6"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:a8d6ee6401da845559dcd67d",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:fdbd195872304a708433ed19",
+      "target_id": "cobol:cobolsection:ca5e10293ffc215178eb4f6d"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:ee8aaaa8c0786936d1422529",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:1a87ec5766fa3a8670e40c70",
+      "target_id": "cobol:cobolcopybook:5f426a184046df69dd238bfc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:6de6710822660acc8653b1c9",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:3b5349bb06990b002036b2ab",
+      "target_id": "cobol:cobolprogram:f8814b490855664e776dae4b"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:0ba9a183a2f99ae8cba8ed30",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:65ebbb02d8a6328ddfe47f97",
+      "target_id": "cobol:cobolprogram:1fd06e24e1b963d8bec57064"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:fe9617dc269a4df698ec9753",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:6e2235ffc5baa33906349e16",
+      "target_id": "cobol:cobolcopybook:5abf35337b8624b7f0cc608c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:32d0826fdd3afd6debebe761",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:78394ae4e778d2a7687c4fa0",
+      "target_id": "cobol:cobolprogram:b3dc2a1c327d8c4ab095f096"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 123,
+        "end_column": 19,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 105,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:e164f84049bb8a611b08fbb9",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:86d8861753defe975770ecfe",
+      "target_id": "cobol:cobolprogram:79d3ae5017aeadf483c33d1a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:24c7c7e513d6e4b095327787",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:8cf1751a666867161c6eb7d6",
+      "target_id": "cobol:cobolprogram:fdbd195872304a708433ed19"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:934057bb2d257ef30bc851ca",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:c5b4b15c8dfc8fe2a274f15a",
+      "target_id": "cobol:cobolcopybook:ba4a967bab65c9e89d078e95"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:a492a77ed9bcff9922f30e01",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:da321d0d1e94ae091be95415",
+      "target_id": "cobol:cobolcopybook:7c2009598bf19aaee77b2b79"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 80,
+        "end_column": 12,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 69,
+        "start_column": 1,
+        "start_line": 4
+      },
+      "id": "cobol:edge:96091c98132e19ec56de4425",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:e0c1e014e4a42e4dbb6c8be5",
+      "target_id": "cobol:cobolprogram:88715e232aec9d575982de0c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 102,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 91,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:4ac37704418fe02a80a0653d",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:eee2458eb127de0edfcef101",
+      "target_id": "cobol:cobolprogram:53086720f9701c4336c6f981"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 103,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 92,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:6ba348923068948300e02163",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:f46351f576114a950e64555c",
+      "target_id": "cobol:cobolprogram:6f1f34dec7e1589c073ca80b"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 136,
+        "end_column": 14,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 123,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:6d6d3f8444333d1c272bfcf5",
+      "properties": {
+        "project_id": "cortext",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:6fe4e7254332d8b4e13ca31c",
+      "target_id": "cobol:cobolprogram:6f1f34dec7e1589c073ca80b"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 170,
+        "end_column": 21,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 150,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:e0e13e09f3a1c52038262fd2",
+      "properties": {
+        "project_id": "cortext",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:9bab794e8fa72e11d84b1e83",
+      "target_id": "cobol:cobolprogram:79d3ae5017aeadf483c33d1a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1053,
+        "end_column": 17,
+        "end_line": 35,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1037,
+        "start_column": 1,
+        "start_line": 35
+      },
+      "id": "cobol:edge:09ed7832c8ebebf5566bcbd9",
+      "properties": {
+        "project_id": "cortext",
+        "terminal": false
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:a8ec510b14f4773d397ba7eb",
+      "target_id": "cobol:cobolprogram:f8814b490855664e776dae4b"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 141,
+        "end_column": 12,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 130,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:3ba3701f09a9b6e69c5d98b7",
+      "properties": {
+        "project_id": "cortext",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:cf197c27cdaa54a7ac5b0269",
+      "target_id": "cobol:cobolprogram:53086720f9701c4336c6f981"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 211,
+        "end_column": 21,
+        "end_line": 8,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 191,
+        "start_column": 1,
+        "start_line": 8
+      },
+      "id": "cobol:edge:8b6277bec79b3b5f94233c60",
+      "properties": {
+        "project_id": "cortext",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:eddfc7d78427e143c4b42ad2",
+      "target_id": "cobol:cobolprogram:b3dc2a1c327d8c4ab095f096"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 94,
+        "end_column": 14,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 81,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:ee8235ec4f12ff09da856adb",
+      "properties": {
+        "project_id": "cortext",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:f75da376fd85ad07ab9617c7",
+      "target_id": "cobol:cobolprogram:88715e232aec9d575982de0c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1177,
+        "end_column": 19,
+        "end_line": 40,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1159,
+        "start_column": 1,
+        "start_line": 40
+      },
+      "id": "cobol:edge:ffc257ae8310a9705f268fd7",
+      "properties": {
+        "project_id": "cortext",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:fc76979f346ea670bda611dc",
+      "target_id": "cobol:cobolprogram:f8814b490855664e776dae4b"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1018,
+        "end_column": 55,
+        "end_line": 33,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 964,
+        "start_column": 1,
+        "start_line": 33
+      },
+      "id": "cobol:edge:7261f65cb87fe1891fa8f87c",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a",
+      "target_id": "cobol:cobolparagraph:a8ec510b14f4773d397ba7eb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1053,
+        "end_column": 17,
+        "end_line": 35,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1037,
+        "start_column": 1,
+        "start_line": 35
+      },
+      "id": "cobol:edge:98f2efb650310ff6a1947bdd",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:a8ec510b14f4773d397ba7eb",
+      "target_id": "cobol:cobolparagraph:f5ce3023c936e235521568f1"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1117,
+        "end_column": 49,
+        "end_line": 37,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1069,
+        "start_column": 1,
+        "start_line": 37
+      },
+      "id": "cobol:edge:9001a13f09ec2e9c6f257813",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:f5ce3023c936e235521568f1",
+      "target_id": "cobol:cobolparagraph:fc76979f346ea670bda611dc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:c8994f3fee89121e75a27751",
+      "properties": {
+        "project_id": "cortext"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": true,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:7cc461eb218bbbe9f74a70d0",
+      "properties": {
+        "project_id": "cortext",
+        "selector": "WS-STATUS"
+      },
+      "relationship": "GOES_TO_DYNAMIC",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:cobolparagraph:f5ce3023c936e235521568f1"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": true,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:b42711f71e47e1664da5e491",
+      "properties": {
+        "project_id": "cortext",
+        "selector": "WS-STATUS"
+      },
+      "relationship": "GOES_TO_DYNAMIC",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:cobolparagraph:fc76979f346ea670bda611dc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:08231ee95edb804605a498a9",
+      "properties": {
+        "project_id": "cortext",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolcopybook:5abf35337b8624b7f0cc608c",
+      "target_id": "cobol:cobolcopybook:ba4a967bab65c9e89d078e95"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 112,
+        "end_column": 20,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 93,
+        "start_column": 1,
+        "start_line": 4
+      },
+      "id": "cobol:edge:83e727d37ba5b16a775f2310",
+      "properties": {
+        "project_id": "cortext",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolcopybook:5f426a184046df69dd238bfc",
+      "target_id": "cobol:cobolcopybook:7c2009598bf19aaee77b2b79"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:0809b82dfe5993d13cdf5776",
+      "properties": {
+        "project_id": "cortext",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolcopybook:ba4a967bab65c9e89d078e95",
+      "target_id": "cobol:cobolcopybook:5abf35337b8624b7f0cc608c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 340,
+        "end_column": 20,
+        "end_line": 12,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 321,
+        "start_column": 1,
+        "start_line": 12
+      },
+      "id": "cobol:edge:85d60f69a31c2a23eae1849c",
+      "properties": {
+        "project_id": "cortext",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:cobolcopybook:5f426a184046df69dd238bfc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 598,
+        "end_column": 44,
+        "end_line": 20,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 555,
+        "start_column": 1,
+        "start_line": 20
+      },
+      "id": "cobol:edge:561489f095eec7fd9a6d97d5",
+      "properties": {
+        "loop": "",
+        "project_id": "cortext",
+        "through": "INIT-EXIT"
+      },
+      "relationship": "PERFORMS_THRU",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 842,
+        "end_column": 32,
+        "end_line": 28,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 811,
+        "start_column": 1,
+        "start_line": 28
+      },
+      "id": "cobol:edge:1462f169184541ad170f5077",
+      "properties": {
+        "mode": "INPUT",
+        "operation": "OPEN",
+        "project_id": "cortext"
+      },
+      "relationship": "READS",
+      "source_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a",
+      "target_id": "cobol:cobolfile:df97b9c339a21c72e11a126f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 868,
+        "end_column": 26,
+        "end_line": 29,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 843,
+        "start_column": 1,
+        "start_line": 29
+      },
+      "id": "cobol:edge:e3712524eac8bb9cde8d34ce",
+      "properties": {
+        "mode": "",
+        "operation": "READ",
+        "project_id": "cortext"
+      },
+      "relationship": "READS",
+      "source_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a",
+      "target_id": "cobol:cobolfile:df97b9c339a21c72e11a126f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:fcd675da18ea5e59b51ee4b2",
+      "properties": {
+        "copybook_path": "tests/fixtures/cobol-application/cycle-a.copy",
+        "imported": true,
+        "project_id": "cortext"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolcopybook:5abf35337b8624b7f0cc608c",
+      "target_id": "cobol:coboldataitem:b55fae195e25e40c479b3043"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:af9276c89d341b255d8b25dc",
+      "properties": {
+        "copybook_path": "tests/fixtures/cobol-application/nested.copy",
+        "imported": true,
+        "project_id": "cortext"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolcopybook:5f426a184046df69dd238bfc",
+      "target_id": "cobol:coboldataitem:3aeb5961c3378d98d9d127c0"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:a1a363627bbdec1e31ec4929",
+      "properties": {
+        "copybook_path": "tests/fixtures/cobol-application/cycle-b.copy",
+        "imported": true,
+        "project_id": "cortext"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolcopybook:ba4a967bab65c9e89d078e95",
+      "target_id": "cobol:coboldataitem:5e602a0f42a5d028f546c707"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 262,
+        "end_column": 36,
+        "end_line": 9,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 227,
+        "start_column": 1,
+        "start_line": 9
+      },
+      "id": "cobol:edge:03e1a3f8bfef7f1311256b97",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:5a1d92d1e731758bcd7ef2d6",
+      "target_id": "cobol:coboldataitem:8bd80a31bece013d5f56e470"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 226,
+        "end_column": 33,
+        "end_line": 8,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 194,
+        "start_column": 1,
+        "start_line": 8
+      },
+      "id": "cobol:edge:aa249b0d9ccb7ffba6ddc8bd",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "conditional"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:5a1d92d1e731758bcd7ef2d6",
+      "target_id": "cobol:coboldataitem:8bd80a31bece013d5f56e470"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 963,
+        "end_column": 20,
+        "end_line": 32,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 869,
+        "start_column": 1,
+        "start_line": 30
+      },
+      "id": "cobol:edge:f54236ea62c32dba46b462d7",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "sql"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a",
+      "target_id": "cobol:coboldataitem:f4e4baad3f4f25f336918c8c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1158,
+        "end_column": 26,
+        "end_line": 39,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1133,
+        "start_column": 1,
+        "start_line": 39
+      },
+      "id": "cobol:edge:9aaca72a517b9683ff5ac1d6",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "io"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:fc76979f346ea670bda611dc",
+      "target_id": "cobol:coboldataitem:36808f8e1037b20f279d4a84"
+    },
+    {
+      "confidence": 0.6,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 719,
+        "end_column": 31,
+        "end_line": 24,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 689,
+        "start_column": 1,
+        "start_line": 24
+      },
+      "id": "cobol:edge:9d14727798b76e125e1d91c5",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "call"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:coboldataitem:5e153383b1d4d9b9a963419c"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:12cdc28d1f8329b30345b4e9",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "goto"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:coboldataitem:dd4116fa3c31d0b11be69675"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 672,
+        "end_column": 46,
+        "end_line": 22,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 627,
+        "start_column": 1,
+        "start_line": 22
+      },
+      "id": "cobol:edge:31fe675fc3d7450c3e8ffb3e",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "call"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:coboldataitem:dd4116fa3c31d0b11be69675"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 626,
+        "end_column": 28,
+        "end_line": 21,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 599,
+        "start_column": 1,
+        "start_line": 21
+      },
+      "id": "cobol:edge:790f1eba4cca8ab142c52857",
+      "properties": {
+        "access": "read",
+        "project_id": "cortext",
+        "statement_kind": "conditional"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "target_id": "cobol:coboldataitem:dd4116fa3c31d0b11be69675"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:25143f9473afb747329a6542",
+      "properties": {
+        "copybook_path": "tests/fixtures/cobol-application/common.cpy",
+        "imported": true,
+        "project_id": "cortext"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:0840e47ae662b9a5424c087c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:f1778f50fd64035266cf37c3",
+      "properties": {
+        "copybook_path": "tests/fixtures/cobol-application/nested.copy",
+        "imported": true,
+        "project_id": "cortext"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:3aeb5961c3378d98d9d127c0"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 92,
+        "end_column": 38,
+        "end_line": 3,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 55,
+        "start_column": 1,
+        "start_line": 3
+      },
+      "id": "cobol:edge:9f3e40c866c20a32e6e0cf9a",
+      "properties": {
+        "copybook_path": "tests/fixtures/cobol-application/common.cpy",
+        "imported": true,
+        "project_id": "cortext"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:dd4116fa3c31d0b11be69675"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 54,
+        "end_column": 32,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 23,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:51752057052f4c61431bb724",
+      "properties": {
+        "copybook_path": "tests/fixtures/cobol-application/common.cpy",
+        "imported": true,
+        "project_id": "cortext"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "target_id": "cobol:coboldataitem:f4e4baad3f4f25f336918c8c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 598,
+        "end_column": 44,
+        "end_line": 20,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 555,
+        "start_column": 1,
+        "start_line": 20
+      },
+      "id": "cobol:edge:a95783cabf07a45c1b9605e8",
+      "properties": {
+        "caller": "MAIN-PARA",
+        "continuation_line": 20,
+        "project_id": "cortext"
+      },
+      "relationship": "RETURNS",
+      "source_id": "cobol:cobolparagraph:a8ec510b14f4773d397ba7eb",
+      "target_id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1158,
+        "end_column": 26,
+        "end_line": 39,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1133,
+        "start_column": 1,
+        "start_line": 39
+      },
+      "id": "cobol:edge:fffb60b5be030ddbcf573348",
+      "properties": {
+        "mode": "",
+        "operation": "WRITE",
+        "project_id": "cortext"
+      },
+      "relationship": "WRITES",
+      "source_id": "cobol:cobolparagraph:fc76979f346ea670bda611dc",
+      "target_id": "cobol:cobolfile:df97b9c339a21c72e11a126f"
+    }
+  ],
+  "nodes": [
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1018,
+        "end_column": 55,
+        "end_line": 33,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 964,
+        "start_column": 1,
+        "start_line": 33
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolcicscommand:e51c116a6921f2b24a36651a",
+      "label": "CobolCicsCommand",
+      "name": "LINK",
+      "properties": {
+        "end_line": 33,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "host_variables": [],
+        "language": "cobol",
+        "name": "LINK",
+        "operation": "LINK",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "LINK",
+        "raw_text": "EXEC CICS LINK PROGRAM('SUBPROG') END-EXEC.",
+        "start_line": 33,
+        "targets": [
+          "SUBPROG"
+        ]
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "tests/fixtures/cobol-application/common.cpy",
+      "id": "cobol:cobolcopybook:5f426a184046df69dd238bfc",
+      "label": "CobolCopybook",
+      "name": "COMMON",
+      "properties": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/cobol-application/common.cpy",
+        "language": "cobol",
+        "name": "COMMON",
+        "path": "tests/fixtures/cobol-application/common.cpy",
+        "project_id": "cortext",
+        "qualified_name": "COMMON",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "tests/fixtures/cobol-application/cycle-a.copy",
+      "id": "cobol:cobolcopybook:ba4a967bab65c9e89d078e95",
+      "label": "CobolCopybook",
+      "name": "CYCLE-A",
+      "properties": {
+        "end_line": 2,
+        "file_path": "tests/fixtures/cobol-application/cycle-a.copy",
+        "language": "cobol",
+        "name": "CYCLE-A",
+        "path": "tests/fixtures/cobol-application/cycle-a.copy",
+        "project_id": "cortext",
+        "qualified_name": "CYCLE-A",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "tests/fixtures/cobol-application/cycle-b.copy",
+      "id": "cobol:cobolcopybook:5abf35337b8624b7f0cc608c",
+      "label": "CobolCopybook",
+      "name": "CYCLE-B",
+      "properties": {
+        "end_line": 2,
+        "file_path": "tests/fixtures/cobol-application/cycle-b.copy",
+        "language": "cobol",
+        "name": "CYCLE-B",
+        "path": "tests/fixtures/cobol-application/cycle-b.copy",
+        "project_id": "cortext",
+        "qualified_name": "CYCLE-B",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "tests/fixtures/cobol-application/nested.copy",
+      "id": "cobol:cobolcopybook:7c2009598bf19aaee77b2b79",
+      "label": "CobolCopybook",
+      "name": "NESTED",
+      "properties": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/cobol-application/nested.copy",
+        "language": "cobol",
+        "name": "NESTED",
+        "path": "tests/fixtures/cobol-application/nested.copy",
+        "project_id": "cortext",
+        "qualified_name": "NESTED",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "tests/fixtures/cobol-application/common.cpy",
+      "id": "cobol:coboldataitem:0840e47ae662b9a5424c087c",
+      "label": "CobolDataItem",
+      "name": "WS-CUSTOMER",
+      "properties": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/cobol-application/common.cpy",
+        "language": "cobol",
+        "level": 1,
+        "name": "WS-CUSTOMER",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/common.cpy",
+        "picture": "",
+        "project_id": "cortext",
+        "qualified_name": "COMMON.COPYBOOK.WS-CUSTOMER",
+        "redefines": "",
+        "start_line": 1,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 92,
+        "end_column": 38,
+        "end_line": 3,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 55,
+        "start_column": 1,
+        "start_line": 3
+      },
+      "file_path": "tests/fixtures/cobol-application/common.cpy",
+      "id": "cobol:coboldataitem:dd4116fa3c31d0b11be69675",
+      "label": "CobolDataItem",
+      "name": "WS-STATUS",
+      "properties": {
+        "end_line": 3,
+        "file_path": "tests/fixtures/cobol-application/common.cpy",
+        "language": "cobol",
+        "level": 5,
+        "name": "WS-STATUS",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/common.cpy",
+        "picture": "9",
+        "project_id": "cortext",
+        "qualified_name": "COMMON.COPYBOOK.WS-STATUS",
+        "redefines": "",
+        "start_line": 3,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": "0"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 54,
+        "end_column": 32,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 23,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "tests/fixtures/cobol-application/common.cpy",
+      "id": "cobol:coboldataitem:f4e4baad3f4f25f336918c8c",
+      "label": "CobolDataItem",
+      "name": "WS-NAME",
+      "properties": {
+        "end_line": 2,
+        "file_path": "tests/fixtures/cobol-application/common.cpy",
+        "language": "cobol",
+        "level": 5,
+        "name": "WS-NAME",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/common.cpy",
+        "picture": "X(40)",
+        "project_id": "cortext",
+        "qualified_name": "COMMON.COPYBOOK.WS-NAME",
+        "redefines": "",
+        "start_line": 2,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "tests/fixtures/cobol-application/cycle-a.copy",
+      "id": "cobol:coboldataitem:b55fae195e25e40c479b3043",
+      "label": "CobolDataItem",
+      "name": "CYCLE-A-FIELD",
+      "properties": {
+        "end_line": 2,
+        "file_path": "tests/fixtures/cobol-application/cycle-a.copy",
+        "language": "cobol",
+        "level": 1,
+        "name": "CYCLE-A-FIELD",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/cycle-a.copy",
+        "picture": "X",
+        "project_id": "cortext",
+        "qualified_name": "CYCLE-A.COPYBOOK.CYCLE-A-FIELD",
+        "redefines": "",
+        "start_line": 2,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "tests/fixtures/cobol-application/cycle-b.copy",
+      "id": "cobol:coboldataitem:5e602a0f42a5d028f546c707",
+      "label": "CobolDataItem",
+      "name": "CYCLE-B-FIELD",
+      "properties": {
+        "end_line": 2,
+        "file_path": "tests/fixtures/cobol-application/cycle-b.copy",
+        "language": "cobol",
+        "level": 1,
+        "name": "CYCLE-B-FIELD",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/cycle-b.copy",
+        "picture": "X",
+        "project_id": "cortext",
+        "qualified_name": "CYCLE-B.COPYBOOK.CYCLE-B-FIELD",
+        "redefines": "",
+        "start_line": 2,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 288,
+        "end_column": 30,
+        "end_line": 10,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 259,
+        "start_column": 1,
+        "start_line": 10
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:coboldataitem:36808f8e1037b20f279d4a84",
+      "label": "CobolDataItem",
+      "name": "CUST-REC",
+      "properties": {
+        "end_line": 10,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "CUST-REC",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "picture": "X(80)",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.FILE.CUST-REC",
+        "redefines": "",
+        "start_line": 10,
+        "storage": "FILE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 509,
+        "end_column": 32,
+        "end_line": 17,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 478,
+        "start_column": 1,
+        "start_line": 17
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:coboldataitem:3c490c8f49b04f2cf57eb35a",
+      "label": "CobolDataItem",
+      "name": "LINK-VALUE",
+      "properties": {
+        "end_line": 17,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "LINK-VALUE",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "picture": "X(10)",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.LINKAGE.LINK-VALUE",
+        "redefines": "",
+        "start_line": 17,
+        "storage": "LINKAGE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 453,
+        "end_column": 36,
+        "end_line": 15,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 418,
+        "start_column": 1,
+        "start_line": 15
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:coboldataitem:59a0f01baf7e010444a635f3",
+      "label": "CobolDataItem",
+      "name": "LOCAL-FLAG",
+      "properties": {
+        "end_line": 15,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "LOCAL-FLAG",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "picture": "9",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.LOCAL-STORAGE.LOCAL-FLAG",
+        "redefines": "",
+        "start_line": 15,
+        "storage": "LOCAL-STORAGE",
+        "usage": "",
+        "value": "0"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 387,
+        "end_column": 47,
+        "end_line": 13,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 341,
+        "start_column": 1,
+        "start_line": 13
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:coboldataitem:5e153383b1d4d9b9a963419c",
+      "label": "CobolDataItem",
+      "name": "WS-PROGRAM",
+      "properties": {
+        "end_line": 13,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "WS-PROGRAM",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "picture": "X(8)",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.WORKING-STORAGE.WS-PROGRAM",
+        "redefines": "",
+        "start_line": 13,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": "\"DYNAMIC\""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 147,
+        "end_column": 32,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 116,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+      "id": "cobol:coboldataitem:8bd80a31bece013d5f56e470",
+      "label": "CobolDataItem",
+      "name": "BROKEN-FIELD",
+      "properties": {
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "BROKEN-FIELD",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/malformed.cbl",
+        "picture": "X(10",
+        "project_id": "cortext",
+        "qualified_name": "MALFORMED.WORKING-STORAGE.BROKEN-FIELD",
+        "redefines": "",
+        "start_line": 5,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "tests/fixtures/cobol-application/nested.copy",
+      "id": "cobol:coboldataitem:3aeb5961c3378d98d9d127c0",
+      "label": "CobolDataItem",
+      "name": "WS-COUNTER",
+      "properties": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/cobol-application/nested.copy",
+        "language": "cobol",
+        "level": 1,
+        "name": "WS-COUNTER",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/nested.copy",
+        "picture": "9(4)",
+        "project_id": "cortext",
+        "qualified_name": "NESTED.COPYBOOK.WS-COUNTER",
+        "redefines": "",
+        "start_line": 1,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": "0"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-application/subprog.cob",
+      "id": "cobol:coboldataitem:e1784873db26be792974191e",
+      "label": "CobolDataItem",
+      "name": "ARG-STATUS",
+      "properties": {
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-application/subprog.cob",
+        "language": "cobol",
+        "level": 1,
+        "name": "ARG-STATUS",
+        "occurs": "",
+        "path": "tests/fixtures/cobol-application/subprog.cob",
+        "picture": "9",
+        "project_id": "cortext",
+        "qualified_name": "SUBPROG.LINKAGE.ARG-STATUS",
+        "redefines": "",
+        "start_line": 5,
+        "storage": "LINKAGE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 194,
+        "end_column": 55,
+        "end_line": 6,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 140,
+        "start_column": 1,
+        "start_line": 6
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolfile:df97b9c339a21c72e11a126f",
+      "label": "CobolFile",
+      "name": "CUST-FILE",
+      "properties": {
+        "assignment": "customers.dat",
+        "end_line": 6,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "has_description": true,
+        "language": "cobol",
+        "name": "CUST-FILE",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.CUST-FILE",
+        "start_line": 6
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 810,
+        "end_column": 18,
+        "end_line": 27,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 793,
+        "start_column": 1,
+        "start_line": 27
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolparagraph:9607abed27d924aa6b8ff80a",
+      "label": "CobolParagraph",
+      "name": "INIT-PARA",
+      "properties": {
+        "code": "OPEN INPUT CUST-FILE\nREAD CUST-FILE\nEXEC SQL\n        SELECT NAME INTO :WS-NAME FROM CUSTOMER\n    END-EXEC\nEXEC CICS LINK PROGRAM('SUBPROG') END-EXEC.",
+        "end_line": 27,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "INIT-PARA",
+        "ordinal": 1,
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.INIT-PARA",
+        "section": "",
+        "start_line": 27
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1036,
+        "end_column": 18,
+        "end_line": 34,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1019,
+        "start_column": 1,
+        "start_line": 34
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolparagraph:a8ec510b14f4773d397ba7eb",
+      "label": "CobolParagraph",
+      "name": "INIT-EXIT",
+      "properties": {
+        "code": "EXIT.",
+        "end_line": 34,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "INIT-EXIT",
+        "ordinal": 2,
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.INIT-EXIT",
+        "section": "",
+        "start_line": 34
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1068,
+        "end_column": 15,
+        "end_line": 36,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1054,
+        "start_column": 1,
+        "start_line": 36
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolparagraph:f5ce3023c936e235521568f1",
+      "label": "CobolParagraph",
+      "name": "STEP-A",
+      "properties": {
+        "code": "ALTER STEP-B TO PROCEED TO INIT-EXIT.",
+        "end_line": 36,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "STEP-A",
+        "ordinal": 3,
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.STEP-A",
+        "section": "",
+        "start_line": 36
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1132,
+        "end_column": 15,
+        "end_line": 38,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 1118,
+        "start_column": 1,
+        "start_line": 38
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolparagraph:fc76979f346ea670bda611dc",
+      "label": "CobolParagraph",
+      "name": "STEP-B",
+      "properties": {
+        "code": "WRITE CUST-REC\nGOBACK.\nEND PROGRAM MAINPROG.",
+        "end_line": 38,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "STEP-B",
+        "ordinal": 4,
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.STEP-B",
+        "section": "",
+        "start_line": 38
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolparagraph:fe011862cd9bbd40d7fcd0f4",
+      "label": "CobolParagraph",
+      "name": "MAIN-PARA",
+      "properties": {
+        "code": "PERFORM INIT-PARA THRU INIT-EXIT\nIF WS-STATUS = 0\nCALL \"SUBPROG\" USING WS-STATUS\nELSE\nCALL WS-PROGRAM\nEND-IF\nGO TO STEP-A STEP-B DEPENDING ON WS-STATUS.",
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "MAIN-PARA",
+        "ordinal": 0,
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.MAIN-PARA",
+        "section": "",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+      "id": "cobol:cobolparagraph:5a1d92d1e731758bcd7ef2d6",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "IF BROKEN-FIELD = \"X\"\nDISPLAY BROKEN-FIELD",
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "tests/fixtures/cobol-application/malformed.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MALFORMED.START-PARA",
+        "section": "",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+      "id": "cobol:cobolparagraph:eddfc7d78427e143c4b42ad2",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "STOP RUN.",
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MISSINGCPY.START-PARA",
+        "section": "",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 80,
+        "end_column": 12,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 69,
+        "start_column": 1,
+        "start_line": 4
+      },
+      "file_path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+      "id": "cobol:cobolparagraph:f75da376fd85ad07ab9617c7",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "STOP RUN.",
+        "end_line": 4,
+        "file_path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "project_id": "cortext",
+        "qualified_name": "ANSIFORMAT.START-PARA",
+        "section": "",
+        "start_line": 4
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 103,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 92,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+      "id": "cobol:cobolparagraph:6fe4e7254332d8b4e13ca31c",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "DISPLAY \"GNU\".\nSTOP RUN.",
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "project_id": "cortext",
+        "qualified_name": "GNUFORMAT.START-PARA",
+        "section": "",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 123,
+        "end_column": 19,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 105,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+      "id": "cobol:cobolparagraph:9bab794e8fa72e11d84b1e83",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "DISPLAY \"IBM\".\nSTOP RUN.",
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "project_id": "cortext",
+        "qualified_name": "IBMFORMAT.START-PARA",
+        "section": "",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 102,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 91,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+      "id": "cobol:cobolparagraph:cf197c27cdaa54a7ac5b0269",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "DISPLAY \"MICRO FOCUS\".\nGOBACK.",
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "project_id": "cortext",
+        "qualified_name": "MFFORMAT.START-PARA",
+        "section": "",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolprogram:f8814b490855664e776dae4b",
+      "label": "CobolProgram",
+      "name": "MAINPROG",
+      "properties": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "MAINPROG",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+      "id": "cobol:cobolprogram:fdbd195872304a708433ed19",
+      "label": "CobolProgram",
+      "name": "MALFORMED",
+      "properties": {
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+        "language": "cobol",
+        "name": "MALFORMED",
+        "path": "tests/fixtures/cobol-application/malformed.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MALFORMED",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+      "id": "cobol:cobolprogram:b3dc2a1c327d8c4ab095f096",
+      "label": "CobolProgram",
+      "name": "MISSINGCPY",
+      "properties": {
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "language": "cobol",
+        "name": "MISSINGCPY",
+        "path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MISSINGCPY",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-application/subprog.cob",
+      "id": "cobol:cobolprogram:1fd06e24e1b963d8bec57064",
+      "label": "CobolProgram",
+      "name": "SUBPROG",
+      "properties": {
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-application/subprog.cob",
+        "language": "cobol",
+        "name": "SUBPROG",
+        "path": "tests/fixtures/cobol-application/subprog.cob",
+        "project_id": "cortext",
+        "qualified_name": "SUBPROG",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 80,
+        "end_column": 12,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 69,
+        "start_column": 1,
+        "start_line": 4
+      },
+      "file_path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+      "id": "cobol:cobolprogram:88715e232aec9d575982de0c",
+      "label": "CobolProgram",
+      "name": "ANSIFORMAT",
+      "properties": {
+        "end_line": 4,
+        "file_path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "language": "cobol",
+        "name": "ANSIFORMAT",
+        "path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "project_id": "cortext",
+        "qualified_name": "ANSIFORMAT",
+        "start_line": 4
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 103,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 92,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+      "id": "cobol:cobolprogram:6f1f34dec7e1589c073ca80b",
+      "label": "CobolProgram",
+      "name": "GNUFORMAT",
+      "properties": {
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "language": "cobol",
+        "name": "GNUFORMAT",
+        "path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "project_id": "cortext",
+        "qualified_name": "GNUFORMAT",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 123,
+        "end_column": 19,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 105,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+      "id": "cobol:cobolprogram:79d3ae5017aeadf483c33d1a",
+      "label": "CobolProgram",
+      "name": "IBMFORMAT",
+      "properties": {
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "language": "cobol",
+        "name": "IBMFORMAT",
+        "path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "project_id": "cortext",
+        "qualified_name": "IBMFORMAT",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 102,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 91,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+      "id": "cobol:cobolprogram:53086720f9701c4336c6f981",
+      "label": "CobolProgram",
+      "name": "MFFORMAT",
+      "properties": {
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "language": "cobol",
+        "name": "MFFORMAT",
+        "path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "project_id": "cortext",
+        "qualified_name": "MFFORMAT",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolsection:1ea22526fe14233082b93a33",
+      "label": "CobolSection",
+      "name": "FILE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "FILE",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.FILE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolsection:908bddd2730bd288e8fd1ad0",
+      "label": "CobolSection",
+      "name": "LINKAGE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "LINKAGE",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.LINKAGE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolsection:b6af13a8f0d7884e8b10fa29",
+      "label": "CobolSection",
+      "name": "INPUT-OUTPUT",
+      "properties": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "INPUT-OUTPUT",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.INPUT-OUTPUT",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolsection:f0b61167e0d34f204ac8a88f",
+      "label": "CobolSection",
+      "name": "LOCAL-STORAGE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "LOCAL-STORAGE",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.LOCAL-STORAGE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolsection:fc539b400dbe1f9d6dfa247a",
+      "label": "CobolSection",
+      "name": "WORKING-STORAGE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "WORKING-STORAGE",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MAINPROG.WORKING-STORAGE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+      "id": "cobol:cobolsection:ca5e10293ffc215178eb4f6d",
+      "label": "CobolSection",
+      "name": "WORKING-STORAGE",
+      "properties": {
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+        "language": "cobol",
+        "name": "WORKING-STORAGE",
+        "path": "tests/fixtures/cobol-application/malformed.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MALFORMED.WORKING-STORAGE",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+      "id": "cobol:cobolsection:dcdd2f7b8802bb3326aef99f",
+      "label": "CobolSection",
+      "name": "WORKING-STORAGE",
+      "properties": {
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "language": "cobol",
+        "name": "WORKING-STORAGE",
+        "path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "project_id": "cortext",
+        "qualified_name": "MISSINGCPY.WORKING-STORAGE",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-application/subprog.cob",
+      "id": "cobol:cobolsection:f8654aca8774177a27e76087",
+      "label": "CobolSection",
+      "name": "LINKAGE",
+      "properties": {
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-application/subprog.cob",
+        "language": "cobol",
+        "name": "LINKAGE",
+        "path": "tests/fixtures/cobol-application/subprog.cob",
+        "project_id": "cortext",
+        "qualified_name": "SUBPROG.LINKAGE",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 963,
+        "end_column": 20,
+        "end_line": 32,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 869,
+        "start_column": 1,
+        "start_line": 30
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:cobolsqlstatement:4460c46fd6b42ee79954f935",
+      "label": "CobolSqlStatement",
+      "name": "SELECT",
+      "properties": {
+        "end_line": 32,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "host_variables": [
+          "WS-NAME"
+        ],
+        "language": "cobol",
+        "name": "SELECT",
+        "operation": "SELECT",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "SELECT",
+        "raw_text": "EXEC SQL\n        SELECT NAME INTO :WS-NAME FROM CUSTOMER\n    END-EXEC",
+        "start_line": 30,
+        "targets": [
+          "CUSTOMER"
+        ]
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "tests/fixtures/cobol-application/common.cpy",
+      "id": "cobol:file:1a87ec5766fa3a8670e40c70",
+      "label": "File",
+      "name": "common.cpy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 1,
+        "file_path": "tests/fixtures/cobol-application/common.cpy",
+        "language": "cobol",
+        "name": "common.cpy",
+        "path": "tests/fixtures/cobol-application/common.cpy",
+        "project_id": "cortext",
+        "qualified_name": "common.cpy",
+        "source_format": "fixed",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "tests/fixtures/cobol-application/cycle-a.copy",
+      "id": "cobol:file:c5b4b15c8dfc8fe2a274f15a",
+      "label": "File",
+      "name": "cycle-a.copy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 2,
+        "file_path": "tests/fixtures/cobol-application/cycle-a.copy",
+        "language": "cobol",
+        "name": "cycle-a.copy",
+        "path": "tests/fixtures/cobol-application/cycle-a.copy",
+        "project_id": "cortext",
+        "qualified_name": "cycle-a.copy",
+        "source_format": "fixed",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "tests/fixtures/cobol-application/cycle-b.copy",
+      "id": "cobol:file:6e2235ffc5baa33906349e16",
+      "label": "File",
+      "name": "cycle-b.copy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 2,
+        "file_path": "tests/fixtures/cobol-application/cycle-b.copy",
+        "language": "cobol",
+        "name": "cycle-b.copy",
+        "path": "tests/fixtures/cobol-application/cycle-b.copy",
+        "project_id": "cortext",
+        "qualified_name": "cycle-b.copy",
+        "source_format": "fixed",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "tests/fixtures/cobol-application/main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "tests/fixtures/cobol-application/main.cbl",
+      "id": "cobol:file:3b5349bb06990b002036b2ab",
+      "label": "File",
+      "name": "main.cbl",
+      "properties": {
+        "dialect": "ibm-enterprise",
+        "encoding": "utf-8-sig",
+        "end_line": 19,
+        "file_path": "tests/fixtures/cobol-application/main.cbl",
+        "language": "cobol",
+        "name": "main.cbl",
+        "path": "tests/fixtures/cobol-application/main.cbl",
+        "project_id": "cortext",
+        "qualified_name": "main.cbl",
+        "source_format": "fixed",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+      "id": "cobol:file:8cf1751a666867161c6eb7d6",
+      "label": "File",
+      "name": "malformed.cbl",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/malformed.cbl",
+        "language": "cobol",
+        "name": "malformed.cbl",
+        "path": "tests/fixtures/cobol-application/malformed.cbl",
+        "project_id": "cortext",
+        "qualified_name": "malformed.cbl",
+        "source_format": "fixed",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+      "id": "cobol:file:78394ae4e778d2a7687c4fa0",
+      "label": "File",
+      "name": "missing-copy.cbl",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 7,
+        "file_path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "language": "cobol",
+        "name": "missing-copy.cbl",
+        "path": "tests/fixtures/cobol-application/missing-copy.cbl",
+        "project_id": "cortext",
+        "qualified_name": "missing-copy.cbl",
+        "source_format": "fixed",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "tests/fixtures/cobol-application/nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "tests/fixtures/cobol-application/nested.copy",
+      "id": "cobol:file:da321d0d1e94ae091be95415",
+      "label": "File",
+      "name": "nested.copy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 1,
+        "file_path": "tests/fixtures/cobol-application/nested.copy",
+        "language": "cobol",
+        "name": "nested.copy",
+        "path": "tests/fixtures/cobol-application/nested.copy",
+        "project_id": "cortext",
+        "qualified_name": "nested.copy",
+        "source_format": "free",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-application/subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-application/subprog.cob",
+      "id": "cobol:file:65ebbb02d8a6328ddfe47f97",
+      "label": "File",
+      "name": "subprog.cob",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-application/subprog.cob",
+        "language": "cobol",
+        "name": "subprog.cob",
+        "path": "tests/fixtures/cobol-application/subprog.cob",
+        "project_id": "cortext",
+        "qualified_name": "subprog.cob",
+        "source_format": "fixed",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 80,
+        "end_column": 12,
+        "end_line": 4,
+        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "start_byte": 69,
+        "start_column": 1,
+        "start_line": 4
+      },
+      "file_path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+      "id": "cobol:file:e0c1e014e4a42e4dbb6c8be5",
+      "label": "File",
+      "name": "ansi-free.cbl",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 4,
+        "file_path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "language": "cobol",
+        "name": "ansi-free.cbl",
+        "path": "tests/fixtures/cobol-dialects/ansi-free.cbl",
+        "project_id": "cortext",
+        "qualified_name": "ansi-free.cbl",
+        "source_format": "free",
+        "start_line": 4
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 103,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "start_byte": 92,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+      "id": "cobol:file:f46351f576114a950e64555c",
+      "label": "File",
+      "name": "gnucobol-free.cob",
+      "properties": {
+        "dialect": "gnucobol",
+        "encoding": "utf-8-sig",
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "language": "cobol",
+        "name": "gnucobol-free.cob",
+        "path": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
+        "project_id": "cortext",
+        "qualified_name": "gnucobol-free.cob",
+        "source_format": "free",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 123,
+        "end_column": 19,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "start_byte": 105,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+      "id": "cobol:file:86d8861753defe975770ecfe",
+      "label": "File",
+      "name": "ibm-fixed.cbl",
+      "properties": {
+        "dialect": "ibm-enterprise",
+        "encoding": "utf-8-sig",
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "language": "cobol",
+        "name": "ibm-fixed.cbl",
+        "path": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
+        "project_id": "cortext",
+        "qualified_name": "ibm-fixed.cbl",
+        "source_format": "fixed",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 102,
+        "end_column": 12,
+        "end_line": 5,
+        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "start_byte": 91,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+      "id": "cobol:file:eee2458eb127de0edfcef101",
+      "label": "File",
+      "name": "micro-focus.cob",
+      "properties": {
+        "dialect": "micro-focus",
+        "encoding": "utf-8-sig",
+        "end_line": 5,
+        "file_path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "language": "cobol",
+        "name": "micro-focus.cob",
+        "path": "tests/fixtures/cobol-dialects/micro-focus.cob",
+        "project_id": "cortext",
+        "qualified_name": "micro-focus.cob",
+        "source_format": "free",
+        "start_line": 5
+      }
+    }
+  ],
+  "project_id": "cortext",
+  "root": "/Users/hieplq1.aip/AI/cortex-harness",
+  "summary": {
+    "analyzer_version": "1.0.0",
+    "diagnostic_count": 42,
+    "edge_count": 87,
+    "invalidated_files": 0,
+    "node_count": 58,
+    "processed_files": 12,
+    "runtime": {
+      "architecture": "arm64",
+      "grammar_abi": 14,
+      "library_path": "/Users/hieplq1.aip/AI/cortex-harness/code-tiny/tools/cobol/lib/cobol.cpython-310-darwin.so",
+      "library_sha256": "6f1a2c69976a3669383d3f529129ae2e58fe7acd32edd5094d67b3d076d8bcc6",
+      "platform": "Darwin",
+      "provider": "native-library",
+      "tree_sitter_version": "0.26.0"
+    },
+    "schema_version": "1",
+    "syntax_error_count": 38
+  }
+}
