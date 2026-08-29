@@ -270,5 +270,99 @@ class PrimaryVectorSyncTests(unittest.TestCase):
         self.assertFalse(any(call[0] == "delete" for call in store.calls))
 
 
+class UpsertWaitPolicyTests(unittest.TestCase):
+    """Phase 06 contract: only the final batch waits."""
+
+    def _sync(self, documents, batch_size, store):
+        return sync_vector_documents(
+            documents,
+            url="local-code-store",
+            collection="project_rust",
+            model_name="fixture-model",
+            device="cpu",
+            embed_batch_size=2,
+            qdrant_batch_size=batch_size,
+            parser="rust",
+            project_id="project-a",
+            root_scope="org/repo",
+            embedder_factory=_Embedder,
+            store=store,
+        )
+
+    def _upsert_waits(self, store):
+        return [
+            (len(call[2]["points"]), call[2]["wait"])
+            for call in store.calls
+            if call[0] == "upsert"
+        ]
+
+    def test_intermediate_batches_do_not_wait_last_does(self):
+        store = _LocalStore()
+        self._sync(_documents(5), batch_size=2, store=store)
+        # batches: 2, 2, 1 → wait flags False, False, True
+        self.assertEqual(
+            self._upsert_waits(store),
+            [(2, False), (2, False), (1, True)],
+        )
+
+    def test_single_batch_waits(self):
+        store = _LocalStore()
+        self._sync(_documents(3), batch_size=8, store=store)
+        self.assertEqual(self._upsert_waits(store), [(3, True)])
+
+    def test_default_embedder_factory_uses_shared_runtime(self):
+        # Without an injected factory the sync must reuse the shared
+        # process-wide SentenceTransformer cache (phase 06).
+        import tools.common.primary_vector_sync as pvs
+
+        calls = []
+
+        def fake_factory(model_name, device=None, trust_remote_code=None):
+            calls.append((model_name, device, trust_remote_code))
+            return _Embedder(model_name, device=device)
+
+        store = _LocalStore()
+        with patch.object(pvs.embed_runtime, "get_sentence_transformer", fake_factory):
+            sync_vector_documents(
+                _documents(1),
+                url="local-code-store",
+                collection="project_rust",
+                model_name="fixture-model",
+                device="cpu",
+                embed_batch_size=2,
+                qdrant_batch_size=1,
+                parser="rust",
+                project_id="project-a",
+                root_scope="org/repo",
+                store=store,
+            )
+        self.assertEqual(calls, [("fixture-model", "cpu", False)])
+        # injected factory still wins over the default
+        inject_calls = []
+
+        def inject_factory(model_name, device=None, trust_remote_code=None):
+            inject_calls.append(model_name)
+            return _Embedder(model_name, device=device)
+
+        store2 = _LocalStore()
+        self._sync_store = None
+        sync_vector_documents(
+            _documents(1),
+            url="local-code-store",
+            collection="project_rust",
+            model_name="fixture-model",
+            device="cpu",
+            embed_batch_size=2,
+            qdrant_batch_size=1,
+            parser="rust",
+            project_id="project-a",
+            root_scope="org/repo",
+            embedder_factory=inject_factory,
+            store=store2,
+        )
+        self.assertEqual(inject_calls, ["fixture-model"])
+        self.assertEqual(calls, [("fixture-model", "cpu", False)])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -563,8 +563,26 @@ def _normalize_embed_device(device: str) -> str:
     must not crash sentence-transformers on another (e.g. a CPU-only torch on
     Windows). Falls back to cuda when available, else cpu; any other value
     passes through untouched so explicit ``cpu`` never changes.
+
+    ``"auto"`` never leaves the launcher: it is resolved here into a
+    concrete device (macOS: MPS when available; elsewhere: CUDA when
+    available; otherwise CPU) so analyzer CLIs that cannot interpret
+    ``auto`` never receive it raw.
     """
     value = str(device).strip().lower()
+    if value == "auto":
+        try:
+            import torch
+        except Exception:
+            return "cpu"
+        if sys.platform == "darwin":
+            mps_backend = getattr(torch.backends, "mps", None)
+            if mps_backend is not None and mps_backend.is_available():
+                return "mps"
+            return "cpu"
+        if torch.cuda.is_available():
+            return "cuda"
+        return "cpu"
     if value not in {"mps", "cuda"}:
         return str(device)
     try:
@@ -583,6 +601,16 @@ def _normalize_embed_device(device: str) -> str:
     if torch.cuda.is_available():
         return "cuda"
     return "cpu"
+
+
+def _embed_device_cli_arg(env: dict) -> str:
+    """Concrete embed device for analyzer CLIs — ``"auto"`` never leaks raw.
+
+    Most analyzer entrypoints pass ``--device`` straight into
+    ``SentenceTransformer(device=...)`` and cannot resolve ``auto``;
+    resolving here keeps sync working on every analyzer.
+    """
+    return _normalize_embed_device(str(env.get("device", "cpu")))
 
 
 def _active_config_path_for_process(project_root: Optional[Path]) -> Optional[Path]:
@@ -1082,7 +1110,7 @@ def _sync_doc_folder(
         "--collection",          collection,
         "--entity-provider",     entity_provider,
         "--embedding-model",     env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
-        "--embedding-device",    env.get("device", "cpu"),
+        "--embedding-device",    _embed_device_cli_arg(env),
         "--max-paragraph-chars", env.get("MAX_PARAGRAPH_CHARS", "500"),
         "--gliner-model-name",   env.get("GLINER_MODEL_NAME", "urchade/gliner_large-v2.1"),
         "--gliner-labels",       env.get("GLINER_LABELS", "PERSON,ORG,PRODUCT,GPE,DATE,TECH,CRYPTO,STANDARD"),
@@ -1516,7 +1544,7 @@ def _run_analyzer(
         *_neo4j_args_code(env),
         "--qdrant-collection", qdrant_collection,
         "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
-        "--device",            env.get("device", "cpu"),
+        "--device",            _embed_device_cli_arg(env),
         "--batch-size",        env.get("BATCH_SIZE", "1"),
         "--max-embed-chars",   env.get("MAX_EMBED_CHARS", "800"),
         "--language",          lang,
@@ -2798,9 +2826,9 @@ def init(env, project_dir, path):
     code_provider, code_graph_env = _prompt_graph_env("code", "CODE_GRAPH_PROVIDER", project_code)
     code_qdrant_collection = _p("QDRANT_COLLECTION", ["code", "env", "QDRANT_COLLECTION"], project_code)
     code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], "jinaai/jina-embeddings-v3")
-    code_batch_size  = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],      "1")
+    code_batch_size  = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],      "8")
     code_max_chars   = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
-    code_device      = _p("device",          ["code", "env", "device"],          "cpu")
+    code_device      = _p("device",          ["code", "env", "device"],          "auto")
 
     click.echo("\n─── Doc — Graph + Qdrant + Embedding ───────")
     _, doc_graph_env = _prompt_graph_env(
@@ -2810,7 +2838,7 @@ def init(env, project_dir, path):
         provider_default=code_provider,
     )
     doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], "BAAI/bge-m3")
-    doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],      "1")
+    doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],      "8")
     doc_max_chars   = _p("MAX_EMBED_CHARS", ["doc", "env", "MAX_EMBED_CHARS"], "500")
     doc_device      = _p("device",          ["doc", "env", "device"],          code_device)
 
