@@ -83,7 +83,7 @@ def test_remote_store_creation() -> None:
 def test_remote_store_repr_redacts_api_key() -> None:
     from cortex_harness.storage import RemoteQdrantStore
 
-    store = RemoteQdrantStore(url="http://qdrant:6333", api_key="super-secret")
+    store = RemoteQdrantStore(url="http://qdrant:6333", api_key="super-secret")  # sensitive-guard:allow -- local test fixture
     rendered = repr(store)
     assert "super-secret" not in rendered
     assert "***" in rendered
@@ -92,7 +92,7 @@ def test_remote_store_repr_redacts_api_key() -> None:
 def test_remote_store_passes_api_key_to_client() -> None:
     from cortex_harness.storage import RemoteQdrantStore
 
-    RemoteQdrantStore(url="http://qdrant:6333", api_key="secret")
+    RemoteQdrantStore(url="http://qdrant:6333", api_key="secret")  # sensitive-guard:allow -- local test fixture
     assert _FakeClient.instances[-1].kwargs.get("api_key") == "secret"
 
 
@@ -113,8 +113,8 @@ def test_remote_client_caching() -> None:
 def test_remote_client_cache_key_includes_api_key() -> None:
     from cortex_harness.storage import RemoteQdrantStore
 
-    a = RemoteQdrantStore(url="http://qdrant:6333", api_key="key-a")
-    b = RemoteQdrantStore(url="http://qdrant:6333", api_key="key-b")
+    a = RemoteQdrantStore(url="http://qdrant:6333", api_key="key-a")  # sensitive-guard:allow -- local test fixture
+    b = RemoteQdrantStore(url="http://qdrant:6333", api_key="key-b")  # sensitive-guard:allow -- local test fixture
     assert a.client is not b.client
     assert len(_FakeClient.instances) == 2
 
