@@ -139,7 +139,44 @@ def test_storage_env_for_process_reads_top_level_backend() -> None:
 
 def test_normalize_embed_device_passthrough_cpu() -> None:
     assert dev_module._normalize_embed_device("cpu") == "cpu"
-    assert dev_module._normalize_embed_device("auto") == "auto"
+
+
+def test_normalize_embed_device_resolves_auto_to_concrete_device() -> None:
+    # "auto" must never leave the launcher raw: analyzer CLIs that cannot
+    # interpret it would crash sync.
+    value = dev_module._normalize_embed_device("auto")
+    assert value in {"cpu", "cuda", "mps"}
+    if sys.platform == "darwin":
+        try:
+            import torch
+
+            expected = (
+                "mps"
+                if getattr(torch.backends, "mps", None) is not None
+                and torch.backends.mps.is_available()
+                else "cpu"
+            )
+        except Exception:
+            expected = "cpu"
+        assert value == expected
+    else:
+        try:
+            import torch
+
+            expected = "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            expected = "cpu"
+        assert value == expected
+
+
+def test_embed_device_cli_arg_never_auto() -> None:
+    # Both analyzer plumbing call sites (code --device, doc --embedding-device)
+    # route through this helper, so a config value of "auto" is resolved
+    # into a concrete device before any analyzer sees it.
+    assert dev_module._embed_device_cli_arg({"device": "auto"}) in {"cpu", "cuda", "mps"}
+    assert dev_module._embed_device_cli_arg({"device": "mps"}) in {"cpu", "cuda", "mps"}
+    assert dev_module._embed_device_cli_arg({}) == "cpu"
+    assert dev_module._embed_device_cli_arg({"device": "cpu"}) == "cpu"
 
 
 def test_normalize_embed_device_drops_unavailable_mps() -> None:

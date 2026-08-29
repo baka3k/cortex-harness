@@ -164,6 +164,57 @@ def vector_sizes(info: Any) -> dict[str, int]:
     return {"default": int(size)} if isinstance(size, (int, float)) else {}
 
 
+_INERT_TUNING_WARNED = False
+
+
+def _tuning_kwargs(store: QdrantStore) -> dict[str, Any]:
+    """Optional collection tuning from env (remote-mode value).
+
+    ``QDRANT_HNSW_M`` / ``QDRANT_HNSW_EF_CONSTRUCT`` → ``HnswConfigDiff``;
+    ``QDRANT_SCALAR_QUANT=1`` → int8 scalar quantization with
+    ``always_ram=True``. Unset env (the default) sends nothing. Local-mode
+    clients silently swallow these kwargs, so a one-time warning keeps the
+    no-op from masquerading as a real tuning.
+    """
+    global _INERT_TUNING_WARNED
+    hnsw_m = str(os.environ.get("QDRANT_HNSW_M", "")).strip()
+    ef_construct = str(os.environ.get("QDRANT_HNSW_EF_CONSTRUCT", "")).strip()
+    scalar_quant = str(os.environ.get("QDRANT_SCALAR_QUANT", "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if not hnsw_m and not ef_construct and not scalar_quant:
+        return {}
+    kwargs: dict[str, Any] = {}
+    if hnsw_m or ef_construct:
+        hnsw: dict[str, Any] = {}
+        try:
+            if hnsw_m:
+                hnsw["m"] = int(hnsw_m)
+            if ef_construct:
+                hnsw["ef_construct"] = int(ef_construct)
+        except ValueError as exc:
+            raise ValueError(
+                "QDRANT_HNSW_M / QDRANT_HNSW_EF_CONSTRUCT must be integers, got "
+                f"m={hnsw_m!r} ef_construct={ef_construct!r}"
+            ) from exc
+        kwargs["hnsw_config"] = qmodels.HnswConfigDiff(**hnsw)
+    if scalar_quant:
+        kwargs["quantization_config"] = qmodels.ScalarQuantization(
+            scalar=qmodels.ScalarQuantizationConfig(
+                type=qmodels.ScalarType.INT8,
+                quantile=0.99,
+                always_ram=True,
+            )
+        )
+    if isinstance(store, LocalQdrantStore) and not _INERT_TUNING_WARNED:
+        _INERT_TUNING_WARNED = True
+        print(
+            "[qdrant] collection tuning kwargs are inert on local mode "
+            "(HNSW/quantization apply only to a Qdrant server)."
+        )
+    return kwargs
+
+
 def ensure_collection(
     store: QdrantStore,
     collection: str,
@@ -185,6 +236,7 @@ def ensure_collection(
     store.create_collection(
         collection,
         vectors_config=qmodels.VectorParams(size=int(vector_size), distance=qmodels.Distance.COSINE),
+        **_tuning_kwargs(store),
     )
 
 
@@ -217,6 +269,7 @@ def query_points(
     limit: int,
     vector_name: Optional[str] = None,
     query_filter: Any = None,
+    with_payload: Any = True,
 ) -> list[dict[str, Any]]:
     kwargs: dict[str, Any] = {}
     if vector_name:
@@ -226,7 +279,7 @@ def query_points(
         query=list(vector),
         limit=int(limit),
         query_filter=normalize_filter(query_filter),
-        with_payload=True,
+        with_payload=with_payload,
         with_vectors=False,
         **kwargs,
     )
