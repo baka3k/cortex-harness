@@ -14,6 +14,7 @@ relatedPlans:
   - 260728-0000-unified-ingest-query-contract
   - 260807-1202-graph-ingest-write-path-hardening
   - make-mcp-lifecycle
+  - 260829-2322-vector-search-query-optimization (shares fastmcp_server.py; its query-latency work leaves fan-out semantics untouched)
 ---
 
 # Multi-instance unscoped fan-out as the default MCP query behavior

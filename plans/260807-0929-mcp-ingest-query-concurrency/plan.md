@@ -20,6 +20,7 @@ relatedPlans:
   - 260728-0000-unified-ingest-query-contract
   - 260807-1202-graph-ingest-write-path-hardening
   - 260807-1329-parser-quality-recovery
+  - 260829-2322-vector-search-query-optimization (its Phase 06 touches primary_vector_sync wait policy within the staged-write contract defined here)
 ---
 # MCP ingest/query concurrency with a single embedded-store owner
 

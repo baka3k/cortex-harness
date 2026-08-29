@@ -13,6 +13,7 @@ relatedPlans:
   - 260820-dev-init-backend-selection
   - 260820-doctor-caller-config
   - 260821-2115-dev-sync-code-windows (consumes local Docker FalkorDB for Windows sync)
+  - 260829-2322-vector-search-query-optimization (its benchmark has a --live mode over remote Qdrant configured via this plan's lifecycle)
 blockedBy: []
 blocks: []
 ---
