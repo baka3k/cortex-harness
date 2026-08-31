@@ -1,0 +1,117 @@
+{
+  "name": "cortext-data-sample",
+  "project": "cortext",
+  "parser": "python",
+  "servers": [
+    {
+      "name": "graph_mcp",
+      "endpoint": "http://127.0.0.1:8788/mcp",
+      "require_full_inventory": false,
+      "cases": [
+        {
+          "tool": "search_functions",
+          "input": {
+            "query": "render_markdown",
+            "limit": 5,
+            "project_id": "cortext",
+            "parser_type": "python",
+            "content_mode": "summary",
+            "include_raw_fields": false
+          },
+          "expected_status": "SUCCESS_DATA"
+        },
+        {
+          "tool": "list_databases",
+          "input": {},
+          "expected_status": "SUCCESS_DATA"
+        },
+        {
+          "tool": "list_parsers",
+          "input": {
+            "detail_level": "summary"
+          },
+          "expected_status": "SUCCESS_DATA"
+        },
+        {
+          "tool": "get_project_modules",
+          "input": {
+            "project_id": "cortext",
+            "include_dependencies": true,
+            "offset": 0,
+            "limit": 50,
+            "parser_type": "python"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "get_symbol",
+          "input": {
+            "node_id": "main/1@code-tiny/testtool/mcp_batch_report.py",
+            "project_id": "cortext",
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "parser_type": "python"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_mcp_functions",
+          "input": {},
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "semantic_search",
+          "input": {
+            "query": "mcp batch report markdown evidence suite",
+            "mode": "combined",
+            "top_k": 5,
+            "content_mode": "summary",
+            "include_raw_fields": false,
+            "show_snippet": false,
+            "show_comment": false,
+            "expand_graph": false,
+            "graph_depth": 2,
+            "graph_direction": "both",
+            "graph_limit": 20,
+            "project_id": "cortext"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "explore_graph",
+          "input": {
+            "query": "mcp batch report markdown evidence suite",
+            "mode": "hybrid",
+            "top_k": 5,
+            "debug": false,
+            "parser_type": "python",
+            "project_id": "cortext"
+          },
+          "expected_status": "SUCCESS"
+        }
+      ]
+    },
+    {
+      "name": "mind_mcp",
+      "endpoint": "http://127.0.0.1:8789/mcp",
+      "require_full_inventory": false,
+      "cases": [
+        {
+          "tool": "list_source_ids",
+          "input": {
+            "limit": 10,
+            "project_id": "cortext"
+          },
+          "expected_status": "SUCCESS"
+        },
+        {
+          "tool": "list_qdrant_collections",
+          "input": {
+            "project_id": "cortext"
+          },
+          "expected_status": "SUCCESS"
+        }
+      ]
+    }
+  ]
+}

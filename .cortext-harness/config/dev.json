@@ -4,9 +4,10 @@
     "code": "cortext",
     "name": "cortext"
   },
-  "storage_backend": "remote",
+  "storage_backend": "local",
   "code": {
     "env": {
+      "CORTEX_STORAGE_INSTANCE": "cortex",
       "GRAPH_PROVIDER": "falkordb",
       "CODE_GRAPH_PROVIDER": "falkordb",
       "FALKORDB_GRAPH": "cortext",
@@ -29,6 +30,7 @@
   },
   "doc": {
     "env": {
+      "CORTEX_STORAGE_INSTANCE": "cortex",
       "GRAPH_PROVIDER": "falkordb",
       "DOC_GRAPH_PROVIDER": "falkordb",
       "FALKORDB_GRAPH": "cortext_doc",
@@ -45,10 +47,5 @@
         }
       ]
     }
-  },
-  "remote": {
-    "qdrant_url": "http://localhost:6333",
-    "falkordb_uri": "redis://127.0.0.1:6379",
-    "falkordb_ssl": false
   }
 }
