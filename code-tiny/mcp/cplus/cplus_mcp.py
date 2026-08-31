@@ -1203,9 +1203,6 @@ async def _resolve_rel_types_with_diagnostics(
         return requested, {
             "schema_status": "unavailable",
             "requested_relationships": requested,
-            "used_relationships": requested,
-            "omitted_relationships": [],
-            "explicit_request": explicit,
             "message": "Provider relationship schema could not be inspected; requested relationships were retained.",
         }
 
@@ -1213,15 +1210,29 @@ async def _resolve_rel_types_with_diagnostics(
     used = [item for item in requested if item in available_set]
     omitted = [item for item in requested if item not in available_set]
     status = "supported" if not omitted else ("partial" if used else "unsupported")
-    return used, {
+    # When the provider advertises none of the requested relationship types
+    # (typically an empty or different-language shard), keep the requested
+    # names so the caller's traversal still runs and returns an empty result
+    # instead of failing the whole tool with capability_unavailable.
+    applied = used or requested
+    # Keep the diagnostics quiet when everything matched — the requested /
+    # available name lists only help a caller when the provider's schema
+    # diverges from what the parser profile asked for.
+    diagnostics: Dict[str, Any] = {
         "schema_status": "available",
         "support_status": status,
-        "requested_relationships": requested,
-        "used_relationships": used,
-        "omitted_relationships": omitted,
-        "available_relationships": available,
         "explicit_request": explicit,
     }
+    if omitted:
+        diagnostics.update({
+            "requested_relationships": requested,
+            "available_relationships": available,
+        })
+        if used:
+            # Partial match: name exactly which types dropped out. On a full
+            # miss ``omitted`` would equal ``requested`` — redundant.
+            diagnostics["omitted_relationships"] = omitted
+    return applied, diagnostics
 
 
 def _unsupported_relationship_result(
@@ -1906,12 +1917,19 @@ async def tool_get_symbol(
             node = await driver.find_node_by_id(node_id, project_id=project_id, database=db_candidate)
             if node:
                 mode = _normalize_content_mode(content_mode)
-                return {"db": db_candidate, "node": _record_node(node, mode, include_raw_fields)}
+                return {"db": db_candidate, "found": True, "node": _record_node(node, mode, include_raw_fields)}
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
             raise
-    raise RuntimeError(f"Node {node_id} not found in any db.")
+    # A miss is a result, not a failure: report it structurally so callers
+    # (and fan-out merges) treat it as an empty hit instead of an error.
+    return {
+        "db": None,
+        "found": False,
+        "node": None,
+        "message": f"Node {node_id} not found in any db.",
+    }
 
 
 @mcp_server.tool(
@@ -2275,7 +2293,15 @@ async def tool_find_paths(
             if _is_db_not_found(exc):
                 continue
             raise
-    raise RuntimeError("No path found in any db.")
+    # No connecting path is an empty result, not an error — the attached
+    # diagnostics explain the traversal scope when the shard diverges.
+    return {
+        "db": candidates[0] if candidates else None,
+        "nodes": [],
+        "edges": [],
+        "reason": "no_path_found",
+        "capability_diagnostics": capability_diagnostics,
+    }
 
 
 @mcp_server.tool(
@@ -2874,18 +2900,18 @@ async def tool_trace_flow(
             candidates,
         )
         if not result:
-            if debug:
-                return {
-                    "db": used_db,
-                    "nodes": [],
-                    "edges": [],
-                    "direction": direction,
-                    "rel_types": rel_types,
-                    "max_depth": depth,
-                    "reason": "no_path",
-                    "capability_diagnostics": capability_diagnostics,
-                }
-            raise RuntimeError("No path found in any db.")
+            # Same graceful contract as the no-end-id branch: an unconnected
+            # pair is an empty result, not a tool failure.
+            return {
+                "db": used_db,
+                "nodes": [],
+                "edges": [],
+                "direction": direction,
+                "rel_types": rel_types,
+                "max_depth": depth,
+                "reason": "no_path",
+                "capability_diagnostics": capability_diagnostics,
+            }
         paths = [row["p"] for row in result]
     else:
         query = (
@@ -3336,9 +3362,18 @@ async def tool_annotate_node(
         db_candidates,
     )
     if not result:
-        raise RuntimeError(f"Unable to annotate node {node_id}.")
+        # The operation completed; the node simply does not exist in the
+        # scoped shard. Report that structurally instead of raising.
+        return {
+            "db": None,
+            "node": None,
+            "node_id": node_id,
+            "annotated": False,
+            "reason": "node_not_found",
+            "message": f"Node {node_id} not found; nothing was annotated.",
+        }
     mode = _normalize_content_mode(content_mode)
-    return {"db": used_db, "node": _record_node(result[0]["n"], mode, include_raw_fields)}
+    return {"db": used_db, "found": True, "annotated": True, "node": _record_node(result[0]["n"], mode, include_raw_fields)}
 
 
 _CPLUS_TOOL_NAMES: frozenset = frozenset({
