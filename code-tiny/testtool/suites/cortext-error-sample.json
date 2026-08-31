@@ -1,0 +1,52 @@
+{
+  "name": "cortext-error-sample",
+  "project": "cortext",
+  "parser": "python",
+  "servers": [
+    {
+      "name": "graph_mcp",
+      "endpoint": "http://127.0.0.1:8788/mcp",
+      "require_full_inventory": false,
+      "cases": [
+        {
+          "tool": "get_symbol",
+          "input": {
+            "project_id": "cortext",
+            "parser_type": "python"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "missing_required_parameters"
+        },
+        {
+          "tool": "trace_flow",
+          "input": {
+            "project_id": "cortext",
+            "parser_type": "python"
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "missing_required_parameters"
+        }
+      ]
+    },
+    {
+      "name": "mind_mcp",
+      "endpoint": "http://127.0.0.1:8789/mcp",
+      "require_full_inventory": false,
+      "cases": [
+        {
+          "tool": "semantic_search",
+          "input": {
+            "query": "vector search latency optimization",
+            "top_k": 5,
+            "project_id": "cortext",
+            "max_passage_chars": 500,
+            "include_entity_ids": true,
+            "include_entity_mentions": false
+          },
+          "expected_status": "TOOL_ERROR",
+          "expected_error_code": "collection_unavailable"
+        }
+      ]
+    }
+  ]
+}

@@ -155,10 +155,12 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requested, ["CALLS_API", "MATCHES"])
         self.assertEqual(relationships, ["CALLS_API", "MATCHES"])
         self.assertEqual(routing["canonical_parser"], "spring")
-        self.assertIs(returned_diagnostics, diagnostics)
+        # The context enriches the resolver diagnostics with the label-scope
+        # advisory fields, so compare by content rather than identity.
+        self.assertEqual(returned_diagnostics["support_status"], diagnostics["support_status"])
         self.assertIsNone(error)
 
-    async def test_direct_context_rejects_missing_mandatory_relationship(self):
+    async def test_direct_context_records_missing_mandatory_relationship_advisory(self):
         diagnostics = {
             "schema_status": "available",
             "support_status": "partial",
@@ -174,21 +176,29 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
                 "_list_node_labels",
                 AsyncMock(return_value=["ApiEndpoint", "ApiCall"]),
             ):
-                *_, error = await unified_mcp._resolve_direct_capability_context(
-                    "find_callers_of_endpoint",
-                    "spring",
-                    "graph",
-                    required_relationships=("CALLS_API", "MATCHES"),
-                    required_labels=("ApiEndpoint", "ApiCall"),
+                *_, routing, returned_diagnostics, error = (
+                    await unified_mcp._resolve_direct_capability_context(
+                        "find_callers_of_endpoint",
+                        "spring",
+                        "graph",
+                        required_relationships=("CALLS_API", "MATCHES"),
+                        required_labels=("ApiEndpoint", "ApiCall"),
+                    )
                 )
 
-        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        # A provider that lacks a required relationship no longer fails the
+        # tool: the query runs and simply contributes no rows. The gap is
+        # reported as advisory diagnostics instead.
+        self.assertIsNone(error)
         self.assertEqual(
-            error["capability_diagnostics"]["missing_required_relationships"],
+            returned_diagnostics["missing_required_relationships"],
             ["MATCHES"],
         )
+        # The capability routing summary stays lean — the full relationship
+        # name lists live in the (mismatch-only) diagnostics.
+        self.assertNotIn("default_relationships_applied", routing)
 
-    async def test_direct_context_rejects_missing_required_endpoint_label(self):
+    async def test_direct_context_records_missing_required_endpoint_label_advisory(self):
         diagnostics = {
             "schema_status": "available",
             "support_status": "supported",
@@ -203,21 +213,26 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_list_node_labels",
             AsyncMock(return_value=["Function", "ApiCall"]),
         ):
-            *_, error = await unified_mcp._resolve_direct_capability_context(
-                "find_callers_of_endpoint",
-                "typescript",
-                "graph",
-                required_relationships=("CALLS_API", "MATCHES"),
-                required_labels=("ApiEndpoint", "ApiCall"),
+            *_, routing, returned_diagnostics, error = (
+                await unified_mcp._resolve_direct_capability_context(
+                    "find_callers_of_endpoint",
+                    "typescript",
+                    "graph",
+                    required_relationships=("CALLS_API", "MATCHES"),
+                    required_labels=("ApiEndpoint", "ApiCall"),
+                )
             )
 
-        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        self.assertIsNone(error)
         self.assertEqual(
-            error["capability_diagnostics"]["missing_required_labels"],
+            returned_diagnostics["missing_required_labels"],
             ["ApiEndpoint"],
         )
+        self.assertTrue(
+            any("ApiEndpoint" in warning for warning in returned_diagnostics["warnings"])
+        )
 
-    async def test_direct_context_fails_closed_when_label_schema_is_unavailable(self):
+    async def test_direct_context_warns_when_label_schema_is_unavailable(self):
         diagnostics = {
             "schema_status": "available",
             "support_status": "supported",
@@ -232,21 +247,23 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_list_node_labels",
             AsyncMock(return_value=None),
         ):
-            *_, error = await unified_mcp._resolve_direct_capability_context(
-                "get_api_call_chain",
-                "typescript",
-                "graph",
-                required_relationships=("HANDLES",),
-                required_labels=("ApiEndpoint",),
+            *_, returned_diagnostics, error = (
+                await unified_mcp._resolve_direct_capability_context(
+                    "get_api_call_chain",
+                    "typescript",
+                    "graph",
+                    required_relationships=("HANDLES",),
+                    required_labels=("ApiEndpoint",),
+                )
             )
 
-        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        self.assertIsNone(error)
         self.assertEqual(
-            error["capability_diagnostics"]["label_schema_status"],
+            returned_diagnostics["label_schema_status"],
             "unavailable",
         )
 
-    async def test_direct_context_fails_closed_when_relationship_schema_is_unavailable(self):
+    async def test_direct_context_warns_when_relationship_schema_is_unavailable(self):
         diagnostics = {
             "schema_status": "unavailable",
             "support_status": "unknown",
@@ -261,47 +278,74 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_list_node_labels",
             AsyncMock(return_value=["ApiEndpoint"]),
         ):
-            *_, error = await unified_mcp._resolve_direct_capability_context(
-                "get_api_call_chain",
-                "spring",
-                "graph",
-                required_relationships=("HANDLES",),
-                required_labels=("ApiEndpoint",),
+            *_, returned_diagnostics, error = (
+                await unified_mcp._resolve_direct_capability_context(
+                    "get_api_call_chain",
+                    "spring",
+                    "graph",
+                    required_relationships=("HANDLES",),
+                    required_labels=("ApiEndpoint",),
+                )
             )
 
-        self.assertEqual(error["error"]["type"], "capability_unavailable")
-        self.assertIn("relationship schema", error["error"]["message"])
+        self.assertIsNone(error)
+        self.assertEqual(returned_diagnostics["schema_status"], "unavailable")
 
-    async def test_direct_context_fails_closed_when_no_parser_for_project_context_tool(self):
-        *_, routing, _diagnostics, error = (
-            await unified_mcp._resolve_direct_capability_context(
-                "get_public_apis",
-                None,
-                "",
-                required_relationships=("EXPOSES_API",),
-                required_labels=("ProjectModule",),
-                error_payload={"project_id": "cortext"},
+    async def test_direct_context_allows_missing_parser_for_project_context_tool(self):
+        # Mirrors the project_id contract: an omitted parser_type means
+        # "query every parser" — the context resolves with the cross-parser
+        # core relationships and never fails.
+        diagnostics = {
+            "schema_status": "available",
+            "support_status": "partial",
+            "available_relationships": ["CALLS", "EXPOSES_API"],
+        }
+        with patch.object(
+            unified_mcp.cplus_backend,
+            "_resolve_rel_types_with_diagnostics",
+            AsyncMock(return_value=(["CALLS", "EXPOSES_API"], diagnostics)),
+        ) as resolver, patch.object(
+            unified_mcp.cplus_backend,
+            "_list_node_labels",
+            AsyncMock(return_value=["ProjectModule"]),
+        ):
+            *_, routing, returned_diagnostics, error = (
+                await unified_mcp._resolve_direct_capability_context(
+                    "get_public_apis",
+                    None,
+                    "",
+                    required_relationships=("EXPOSES_API",),
+                    required_labels=("ProjectModule",),
+                    error_payload={"project_id": "cortext"},
+                )
             )
-        )
 
-        self.assertIsNotNone(error)
-        self.assertFalse(error["ok"])
-        self.assertEqual(error["error"]["type"], "capability_unavailable")
+        self.assertIsNone(error)
         self.assertIsNone(routing["canonical_parser"])
-        self.assertIn("No parser selected", error["error"]["message"])
-        self.assertIn("parser_type", error["error"]["message"])
+        requested = resolver.await_args.args[0]
+        self.assertIn("EXPOSES_API", requested)
+        self.assertIn("CALLS", requested)
+        self.assertEqual(returned_diagnostics["missing_required_labels"], [])
 
-    async def test_public_apis_returns_capability_error_when_no_parser_active(self):
+    async def test_public_apis_returns_empty_success_when_no_parser_active(self):
         tool = getattr(unified_mcp.tool_get_public_apis, "fn", unified_mcp.tool_get_public_apis)
         bridge = AsyncMock(return_value=[])
-        with patch.object(unified_mcp, "_run_bridge_query", bridge):
+        context = (
+            None,
+            ["CALLS", "EXPOSES_API"],
+            {"canonical_parser": None},
+            {"schema_status": "available"},
+            None,
+        )
+        with patch.object(
+            unified_mcp, "_resolve_direct_capability_context", AsyncMock(return_value=context)
+        ), patch.object(unified_mcp, "_run_bridge_query", bridge):
             result = await tool(project_id="cortext", limit=50)
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"]["type"], "capability_unavailable")
-        self.assertIn("No parser selected", result["error"]["message"])
-        self.assertIsNone(result["capability"]["canonical_parser"])
-        bridge.assert_not_called()
+        self.assertTrue(result.get("ok", True))
+        self.assertIsNotNone(result.get("capability"))
+        self.assertEqual(result.get("error"), None)
+        bridge.assert_awaited()
 
     def test_capability_summary_no_warning_when_parser_omitted(self):
         # Mirrors the project_id contract: omitting parser_type means "search
@@ -727,8 +771,14 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(used, ["CALLS"])
         self.assertEqual(partial["support_status"], "partial")
         self.assertEqual(partial["omitted_relationships"], ["SEMANTIC_OF"])
-        self.assertEqual(missing, [])
+        # Unsupported requests keep the requested names so the caller's
+        # traversal still runs (and returns an empty result) instead of
+        # failing with capability_unavailable.
+        self.assertEqual(missing, ["SEMANTIC_OF"])
         self.assertEqual(unsupported["support_status"], "unsupported")
+        # On a full miss the omitted list would duplicate the requested one,
+        # so it is only reported for partial matches.
+        self.assertNotIn("omitted_relationships", unsupported)
 
     async def test_provider_relationship_filter_distinguishes_unknown_from_empty_schema(self):
         resolver = unified_mcp.cplus_backend._resolve_rel_types_with_diagnostics
@@ -745,15 +795,19 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
             "_list_relationship_types",
             AsyncMock(return_value=[]),
         ):
-            omitted, empty = await resolver(
+            kept, empty = await resolver(
                 ["CALLS"], "python", ["graph"], explicit=False,
             )
 
         self.assertEqual(retained, ["CALLS"])
         self.assertEqual(unknown["schema_status"], "unavailable")
-        self.assertEqual(omitted, [])
+        # An empty provider schema (no relationship types at all) keeps the
+        # requested names with support_status=unsupported: queries run and
+        # return empty results rather than erroring.
+        self.assertEqual(kept, ["CALLS"])
         self.assertEqual(empty["schema_status"], "available")
         self.assertEqual(empty["support_status"], "unsupported")
+        self.assertEqual(empty["available_relationships"], [])
 
     async def test_list_parsers_returns_canonical_capability_catalog(self):
         tool = getattr(unified_mcp.tool_list_parsers, "fn", unified_mcp.tool_list_parsers)

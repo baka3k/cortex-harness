@@ -174,8 +174,7 @@
             "include_api_calls": false,
             "parser_type": "proc"
           },
-          "expected_status": "TOOL_ERROR",
-          "expected_error_code": "capability_unavailable"
+          "expected_status": "SUCCESS"
         },
         {
           "tool": "query_subgraph",
@@ -411,8 +410,7 @@
             "limit": 50,
             "parser_type": "proc"
           },
-          "expected_status": "TOOL_ERROR",
-          "expected_error_code": "capability_unavailable"
+          "expected_status": "SUCCESS"
         },
         {
           "tool": "get_endpoints",
@@ -423,8 +421,7 @@
             "limit": 50,
             "parser_type": "proc"
           },
-          "expected_status": "TOOL_ERROR",
-          "expected_error_code": "capability_unavailable"
+          "expected_status": "SUCCESS"
         },
         {
           "tool": "get_module_architecture_summary",
@@ -471,8 +468,7 @@
             "project_id": "procsample",
             "parser_type": "proc"
           },
-          "expected_status": "TOOL_ERROR",
-          "expected_error_code": "capability_unavailable"
+          "expected_status": "SUCCESS"
         },
         {
           "tool": "get_api_call_chain",
@@ -483,8 +479,7 @@
             "max_depth": "5",
             "parser_type": "proc"
           },
-          "expected_status": "TOOL_ERROR",
-          "expected_error_code": "capability_unavailable"
+          "expected_status": "SUCCESS"
         },
         {
           "tool": "analyze_workflow_impact",
@@ -506,8 +501,7 @@
             "max_depth": 4,
             "parser_type": "proc"
           },
-          "expected_status": "TOOL_ERROR",
-          "expected_error_code": "capability_unavailable"
+          "expected_status": "SUCCESS"
         }
       ]
     },
