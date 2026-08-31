@@ -1537,12 +1537,19 @@ async def tool_get_symbol(
             node = await driver.find_node_by_id(node_id, project_id=project_id, database=db_candidate)
             if node:
                 mode = _normalize_content_mode(content_mode)
-                return {"db": db_candidate, "node": _record_node(node, mode, include_raw_fields)}
+                return {"db": db_candidate, "found": True, "node": _record_node(node, mode, include_raw_fields)}
         except Exception as exc:
             if _is_db_not_found(exc):
                 continue
             raise
-    raise RuntimeError(f"Node {node_id} not found in any db.")
+    # A miss is a result, not a failure: report it structurally so callers
+    # (and fan-out merges) treat it as an empty hit instead of an error.
+    return {
+        "db": None,
+        "found": False,
+        "node": None,
+        "message": f"Node {node_id} not found in any db.",
+    }
 
 
 @mcp_server.tool(
@@ -1831,7 +1838,13 @@ async def tool_find_paths(
         )
         graph["db"] = used_db
         return graph
-    raise RuntimeError("No path found in any db.")
+    # No connecting path is an empty result, not an error.
+    return {
+        "db": used_db,
+        "nodes": [],
+        "edges": [],
+        "reason": "no_path_found",
+    }
 
 
 @mcp_server.tool(
@@ -2370,17 +2383,17 @@ async def tool_trace_flow(
             candidates,
         )
         if not result:
-            if debug:
-                return {
-                    "db": used_db,
-                    "nodes": [],
-                    "edges": [],
-                    "direction": direction,
-                    "rel_types": rel_types,
-                    "max_depth": depth,
-                    "reason": "no_path",
-                }
-            raise RuntimeError("No path found in any db.")
+            # Same graceful contract as the no-end-id branch: an unconnected
+            # pair is an empty result, not a tool failure.
+            return {
+                "db": used_db,
+                "nodes": [],
+                "edges": [],
+                "direction": direction,
+                "rel_types": rel_types,
+                "max_depth": depth,
+                "reason": "no_path",
+            }
         paths = [row["p"] for row in result]
     else:
         query = (
@@ -2755,9 +2768,18 @@ async def tool_annotate_node(
         db_candidates,
     )
     if not result:
-        raise RuntimeError(f"Unable to annotate node {node_id}.")
+        # The operation completed; the node simply does not exist in the
+        # scoped shard. Report that structurally instead of raising.
+        return {
+            "db": None,
+            "node": None,
+            "node_id": node_id,
+            "annotated": False,
+            "reason": "node_not_found",
+            "message": f"Node {node_id} not found; nothing was annotated.",
+        }
     mode = _normalize_content_mode(content_mode)
-    return {"db": used_db, "node": _record_node(result[0]["n"], mode, include_raw_fields)}
+    return {"db": used_db, "found": True, "annotated": True, "node": _record_node(result[0]["n"], mode, include_raw_fields)}
 
 
 _ANDROID_TOOL_NAMES: frozenset = frozenset({

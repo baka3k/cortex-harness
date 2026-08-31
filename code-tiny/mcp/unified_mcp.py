@@ -67,6 +67,7 @@ fast_backend = _load_module("fast_backend", ROOT_DIR / "fastmcp_server.py")
 from tool_metadata import build_catalog  # noqa: E402
 from framework_registry import (  # noqa: E402
     CAPABILITY_CONTRACT_VERSION,
+    CORE_RELATIONSHIPS,
     capability_catalog,
     capability_for_parser,
     default_relationships,
@@ -144,9 +145,10 @@ _UNIFIED_TOOL_NAMES: frozenset = frozenset(
 # Mirrors the project_id contract: omit parser_type to search every engine;
 # pass parser_type to scope to one. Fan-out breadth is per query engine
 # (BACKENDS), not per parser alias — results are deduplicated by node id in
-# the merge step. Project-context tools (which require a parser) are
-# intentionally excluded — they keep their fail-closed "parser required"
-# error.
+# the merge step. Project-context tools are excluded from fan-out because
+# their Cypher reads the cplus engine's label schema across every graph
+# shard directly (``_run_bridge_query`` fans out per project), so an
+# omitted ``parser_type`` already searches all parsers' data for them.
 _FANOUT_SEARCH_TOOLS: frozenset = frozenset(
     {
         "search_functions",
@@ -208,7 +210,6 @@ _FANOUT_DIAGNOSTIC_KEYS: frozenset = frozenset(
         "rel_types",
         "direction",
         "max_depth",
-        "default_relationships_applied",
         "support_status",
         "support_statuses",
         "matched_node_count",
@@ -591,10 +592,19 @@ async def _resolve_direct_capability_context(
 ) -> Tuple[
     Optional[str], List[str], Dict[str, Any], Optional[Dict[str, Any]], Optional[Dict[str, Any]]
 ]:
-    selected_parser = (
-        _normalize_parser_type(parser_type)
-        or _normalize_parser_type(parser_type)
-    )
+    """Resolve the parser/relationship context for a direct tool call.
+
+    Contract (mirrors the ``project_id`` rules): an omitted ``parser_type``
+    means "query every parser" — never an error. Required labels or
+    relationships the active provider lacks are recorded as advisory
+    diagnostics (``missing_required_relationships`` /
+    ``missing_required_labels`` plus a human-readable ``warnings`` list) and
+    the query still runs: a shard that cannot answer the question simply
+    contributes zero rows instead of failing the whole tool. The only fatal
+    case left here is an explicitly named parser that is not registered
+    (a caller typo).
+    """
+    selected_parser = _normalize_parser_type(parser_type)
     backend_name = _resolve_backend_name(selected_parser)
     routing = _capability_summary(selected_parser, backend_name)
     capability = capability_for_parser(selected_parser)
@@ -605,99 +615,67 @@ async def _resolve_direct_capability_context(
             selected_parser,
         )
         return selected_parser, [], routing, None, error
-    if not selected_parser and (required_relationships or required_labels):
-        required = list(dict.fromkeys(required_relationships or ()))
-        labels_required = list(dict.fromkeys(required_labels or ()))
-        error = _build_tool_error(
-            tool_name,
-            {"parser_type": selected_parser, **(error_payload or {})},
-            ValueError(
-                f"No parser selected. '{tool_name}' requires a parser profile "
-                f"(labels={labels_required}, relationships={required}). "
-                f"Pass parser_type on this call — see list_parsers for supported values."
-            ),
-            backend_name=backend_name,
-        )
-        error["error"]["type"] = "capability_unavailable"
-        error["capability"] = routing
-        error["error"]["next_step"] = (
-            "Call list_parsers to see supported parsers, then retry with "
-            "parser_type set to one that supports this tool."
-        )
-        return selected_parser, [], routing, None, error
-    relationships: List[str] = []
-    diagnostics: Optional[Dict[str, Any]] = None
+    required = list(dict.fromkeys(required_relationships or ()))
+    labels_required = list(dict.fromkeys(required_labels or ()))
     if capability and backend_name != "android":
-        db_candidates = cplus_backend._resolve_db_candidates(db or None)
-        relationships, diagnostics = await cplus_backend._resolve_rel_types_with_diagnostics(
-            list(default_relationships(capability.name, tool_name)),
-            selected_parser,
-            db_candidates,
-            explicit=False,
+        default_rels = list(default_relationships(capability.name, tool_name))
+    else:
+        # Parser-less calls search every parser's data: start from the
+        # cross-parser core set plus whatever this specific tool needs, so
+        # the diagnostics describe the full traversal scope.
+        default_rels = list(dict.fromkeys((*CORE_RELATIONSHIPS, *required)))
+    requested_rels = list(dict.fromkeys((*default_rels, *required)))
+    db_candidates = cplus_backend._resolve_db_candidates(db or None)
+    relationships, diagnostics = await cplus_backend._resolve_rel_types_with_diagnostics(
+        requested_rels,
+        selected_parser,
+        db_candidates,
+        explicit=False,
+    )
+    missing_required = [value for value in required if value not in relationships]
+    available_labels = (
+        await cplus_backend._list_node_labels(db_candidates)
+        if labels_required else []
+    )
+    label_schema_available = available_labels is not None
+    missing_labels = (
+        [value for value in labels_required if value not in set(available_labels or [])]
+        if label_schema_available else []
+    )
+    warnings: List[str] = []
+    if missing_required:
+        warnings.append(
+            "Provider does not expose required relationships: "
+            + ", ".join(missing_required)
+            + " — the query runs anyway and simply contributes no rows."
         )
-        routing["default_relationships_applied"] = relationships
-        required = list(dict.fromkeys(required_relationships or ()))
-        missing_required = [value for value in required if value not in relationships]
-        labels_required = list(dict.fromkeys(required_labels or ()))
-        available_labels = (
-            await cplus_backend._list_node_labels(db_candidates)
-            if labels_required else []
+    if labels_required and not label_schema_available:
+        warnings.append("Provider label schema could not be inspected.")
+    elif missing_labels:
+        warnings.append(
+            "Provider does not expose required labels: "
+            + ", ".join(missing_labels)
+            + " — the query runs anyway and simply contributes no rows."
         )
-        label_schema_available = available_labels is not None
-        missing_labels = (
-            [value for value in labels_required if value not in set(available_labels or [])]
-            if label_schema_available else []
-        )
-        schema_available = diagnostics.get("schema_status") == "available" if diagnostics else False
-        if diagnostics is not None:
+    if diagnostics is not None:
+        diagnostics = dict(diagnostics)
+        # Only attach the fields that carry signal: an empty required set or
+        # a clean label match would just be noise on every response.
+        if required:
             diagnostics["required_relationships"] = required
-            diagnostics["missing_required_relationships"] = missing_required if schema_available else []
+            diagnostics["missing_required_relationships"] = missing_required
+        if labels_required:
             diagnostics["required_labels"] = labels_required
-            diagnostics["available_labels"] = available_labels or []
             diagnostics["missing_required_labels"] = missing_labels
             diagnostics["label_schema_status"] = (
                 "available" if label_schema_available else "unavailable"
             )
-        label_gate_failed = bool(
-            labels_required and (not label_schema_available or missing_labels)
-        )
-        relationship_gate_failed = bool(
-            required and (not schema_available or missing_required)
-        )
-        if not relationships or relationship_gate_failed or label_gate_failed:
-            missing_text = (
-                " Missing required relationships: " + ", ".join(missing_required) + "."
-                if missing_required else ""
-            )
-            missing_label_text = (
-                " Missing required labels: " + ", ".join(missing_labels) + "."
-                if missing_labels else ""
-            )
-            inspection_text = (
-                " Provider label schema could not be inspected."
-                if labels_required and not label_schema_available else ""
-            )
-            relationship_inspection_text = (
-                " Provider relationship schema could not be inspected."
-                if required and not schema_available else ""
-            )
-            error = _build_tool_error(
-                tool_name,
-                {
-                    "parser_type": selected_parser,
-                    **(error_payload or {}),
-                },
-                ValueError(
-                    f"Parser '{selected_parser}' cannot execute '{tool_name}' on the active provider."
-                    + missing_text + missing_label_text + inspection_text
-                    + relationship_inspection_text
-                ),
-                backend_name=backend_name,
-            )
-            error["error"]["type"] = "capability_unavailable"
-            error["capability"] = routing
-            error["capability_diagnostics"] = diagnostics
-            return selected_parser, relationships, routing, diagnostics, error
+            if missing_labels:
+                diagnostics["available_labels"] = available_labels or []
+        if warnings:
+            diagnostics["warnings"] = warnings
+    elif warnings:
+        diagnostics = {"warnings": warnings}
     return selected_parser, relationships, routing, diagnostics, None
 
 
@@ -1487,7 +1465,6 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
         return result
     backend_name = _resolve_backend_name(selected_parser)
     framework = framework_for_parser(merged.get("parser_type"))
-    relationships_applied: List[str] = []
     if capability and backend_name != "android":
         relationship_defaults = list(default_relationships(capability.name, tool_name))
         if tool_name in {
@@ -1499,15 +1476,12 @@ async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
                 merged["relationship_types"] = relationship_defaults
                 merged["rel_types"] = relationship_defaults
                 merged["_capability_default_relationships"] = True
-                relationships_applied = relationship_defaults
         if tool_name == "semantic_search" and not merged.get("graph_rel_types"):
             merged["graph_rel_types"] = ",".join(relationship_defaults)
             merged["_capability_default_relationships"] = True
-            relationships_applied = relationship_defaults
             if framework and "expand_graph" not in merged:
                 merged["expand_graph"] = True
     routing = _capability_summary(merged.get("parser_type"), backend_name)
-    routing["default_relationships_applied"] = relationships_applied
     backend = BACKENDS[backend_name]
     fn = _unwrap_tool_callable(getattr(backend.module, f"tool_{tool_name}", None))
     if fn is None:
