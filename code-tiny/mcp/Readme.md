@@ -7,35 +7,33 @@ AI client ask questions such as:
 - "Which functions call this function?"
 - "How does this screen reach the backend and database?"
 - "Which workflows may break if I edit this symbol?"
-- "Which specification sections are linked to this code?"
 - "In what order should these modules be migrated?"
 
-The default local runtime reads code-graph and Living Docs data from FalkorDB
-and semantic embeddings from Qdrant. Neo4j remains available as compatibility
-mode. Most tools are read-only. `annotate_node` is the notable write operation
+The default local runtime reads code-graph data from FalkorDB and semantic
+embeddings from Qdrant. Neo4j remains available as a compatibility provider.
+Most tools are read-only. `annotate_node` is the notable write operation
 because it adds or updates graph annotations.
 
-The normal entry point is `unified_mcp.py`. It exposes one MCP server named
-`graph_mcp` and routes each call to the appropriate backend. The current unified
-server exposes **40 tools**.
+The normal entry point is `unified_mcp.py` in this directory. It exposes one
+MCP server named `graph_mcp` and routes each call to the appropriate backend.
+The current unified server exposes **39 tools**: 15 registered directly on the
+unified server, 19 proxied to the parser-routed graph backends, and 5
+dependency-planning tools proxied to the planning backend.
 
-## Project context tools
+Core input contract (this supersedes older guidance):
 
-Six bounded aggregate tools expose indexed architecture context:
+- **Every call passes `parser_type` and `project_id` explicitly.** There is no
+  `activate_project` tool and no session-level parser/database state.
+- **`project_id` is the only scope key.** It resolves, through the Project
+  Registry, to the FalkorDB graph shard and the Qdrant collection for that
+  project. There is no separate `database_name`/`db` public parameter (`db` is
+  accepted only as a legacy alias that is merged into `project_id`).
+- **Omitting `project_id` means "query every registered project"** (unscoped
+  fan-out). Omitting `parser_type` on a search tool fans the query out across
+  all query engines and merges the results.
 
-| Tool | Purpose |
-| --- | --- |
-| `get_project_modules` | Canonical modules, descriptors, and internal/external dependencies |
-| `get_public_apis` | Strict source-level public/exported declarations; inferred C/C++ headers are opt-in |
-| `get_endpoints` | Normalized HTTP, route, service, page, and gRPC endpoint inventory |
-| `get_module_architecture_summary` | Counts and bounded samples from the indexed graph; no filesystem rescan |
-| `get_project_special_files` | Descriptor roles, parse depth, diagnostics, freshness, and redaction-safe summaries |
-| `get_framework_context` | Framework instances and independently reported context dimensions |
-
-All six require `project_id`, use deterministic ordering and limits, and return
-capability diagnostics when the active provider schema lacks required topology
-labels or relationships. `get_module_architecture_summary` additionally
-requires `module_id` or explicit `all_modules=true`.
+See `docs/PROJECT_REGISTRY.md` and `docs/UNIFIED_INGEST_QUERY_CONTRACT.md` at
+the repository root for the authoritative contract documents.
 
 ## How To Use This Guide
 
@@ -46,7 +44,7 @@ Use the shortest route that matches what you already know:
 | Start the server and make a first call                 | [Quick Start](#quick-start)                     |
 | Pick the correct tool for a question                   | [Choose A Tool By Task](#choose-a-tool-by-task) |
 | Look up a tool by name                                 | [Complete Tool Index](#complete-tool-index)     |
-| Understand IDs, project scope, lists, and number types | [Input Guide](#input-guide)                     |
+| Understand `project_id`, scope, and fan-out            | [The project_id Contract](#the-project_id-contract) |
 | Understand common response shapes                      | [Output Guide](#output-guide)                   |
 | See every field for one tool                           | [Tool Reference](#tool-reference)               |
 | Follow copy-ready multi-step examples                  | [Practical Recipes](#practical-recipes)         |
@@ -79,105 +77,120 @@ most common follow-up call.
 | I start from an API endpoint and need frontend callers                | [`find_callers_of_endpoint`](#find_callers_of_endpoint)                                                 | `get_api_call_chain`                    |
 | I need screen-to-database fullstack trace                             | [`get_api_call_chain`](#get_api_call_chain)                                                             | Inspect returned symbols                |
 | I need sender/receiver IPC relationships                              | [`get_ipc_message`](#get_ipc_message)                                                                   | `trace_flow`                            |
-| I need to find dependency cycles in supplied nodes/edges              | [`compute_scc`](#compute_scc)                                                                           | `topological_sort`                      |
+| I need dependency cycles in supplied nodes/edges                      | [`compute_scc`](#compute_scc)                                                                           | `topological_sort`                      |
 | I need a linear order or parallel waves for supplied nodes/edges      | [`topological_sort`](#topological_sort)                                                                 | Execute returned waves                  |
 | I need module/file/function order directly from indexed `CALLS` edges | [`plan_dependency_order`](#plan_dependency_order)                                                       | File/function planner                   |
-| I need code linked to a specification document                        | [`livingdoc_get_links_for_document`](#livingdoc_get_links_for_document)                                 | `get_symbol`                            |
-| I need documents linked to one code symbol                            | [`livingdoc_get_links_for_symbol`](#livingdoc_get_links_for_symbol)                                     | Open returned document anchors          |
-| I need to know whether documents were ingested but not linked         | [`livingdoc_list_ingested_documents`](#livingdoc_list_ingested_documents)                               | Compare with `livingdoc_list_documents` |
-| I need Living Docs health and orphan statistics                       | [`livingdoc_get_link_stats`](#livingdoc_get_link_stats)                                                 | `livingdoc_validate_links`              |
+| I need canonical modules, public APIs, or endpoints                   | [`get_project_modules`](#get_project_modules)                                                           | `get_public_apis` / `get_endpoints`     |
+| I need an aggregate architecture summary or special files             | [`get_module_architecture_summary`](#get_module_architecture_summary)                                   | `get_project_special_files`             |
 
 ## Complete Tool Index
 
+The unified server advertises exactly 39 tools. `list_mcp_functions` returns
+the live catalog; this index mirrors it.
+
 ### Session And Discovery
 
-| Tool                                                  | Main purpose                                  | Minimum useful input             |
-| ----------------------------------------------------- | --------------------------------------------- | -------------------------------- |
-| [`list_mcp_functions`](#list_mcp_functions)           | Return the live catalog of tools and schemas  | `{}`                             |
-| [`list_parsers`](#list_parsers)                       | Show parser aliases and active parser context | `{}`                             |
-| [`activate_project`](#activate_project)               | Set session defaults for parser and database  | `parser_type` or `database_name` |
-| [`list_databases`](#list_databases)                   | List available graph names/databases          | `{}`                             |
-| [`list_qdrant_collections`](#list_qdrant_collections) | List semantic-search collections              | `{}`                             |
+| Tool | Main purpose | Minimum useful input |
+| --- | --- | --- |
+| [`list_mcp_functions`](#list_mcp_functions) | Return the live catalog of tools and schemas | `{}` |
+| [`list_parsers`](#list_parsers) | Show parser aliases and capability profiles | `{}` |
+| [`inspect_parser_capabilities`](#inspect_parser_capabilities) | Compare advertised vs observed graph schema support | optional `parser_type` |
+| [`list_databases`](#list_databases) | List graph shards visible to the backend | optional `parser_type` |
+| [`list_qdrant_collections`](#list_qdrant_collections) | List semantic-search collections | optional `parser_type` |
 
 ### Search And Discovery
 
-| Tool                                    | Main purpose                                      | Minimum useful input |
-| --------------------------------------- | ------------------------------------------------- | -------------------- |
-| [`explore_graph`](#explore_graph)       | Natural-language hybrid search plus graph context | `query`              |
-| [`semantic_search`](#semantic_search)   | Vector similarity search                          | `query`              |
-| [`search_functions`](#search_functions) | Search symbol names and qualified names           | `query`              |
-| [`search_by_code`](#search_by_code)     | Search implementation text and literals           | `query`              |
+| Tool | Main purpose | Minimum useful input |
+| --- | --- | --- |
+| [`explore_graph`](#explore_graph) | Natural-language hybrid search plus graph context | `query` |
+| [`semantic_search`](#semantic_search) | Vector similarity search with optional graph expansion | `query` |
+| [`search_functions`](#search_functions) | Search symbol names and qualified names | `query` |
+| [`search_by_code`](#search_by_code) | Search implementation text and literals | `query` |
 
 ### Symbols And Call Graph
 
-| Tool                                                                      | Main purpose                                | Minimum useful input                   |
-| ------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------- |
-| [`get_symbol`](#get_symbol)                                               | Fetch one symbol by node ID                 | `node_id`                              |
-| [`get_node_details`](#get_node_details)                                   | Fetch several nodes in one call             | `node_ids`                             |
-| [`query_subgraph`](#query_subgraph)                                       | Get callers/callees around a function       | `function_id`                          |
-| [`find_paths`](#find_paths)                                               | Find paths between two functions            | `start_function_id`, `end_function_id` |
-| [`find_path_between_module`](#find_path_between_module)                   | Find paths between module/file tokens       | `source_module`, `target_module`       |
-| [`listup_symbols_matching_file_path`](#listup_symbols_matching_file_path) | Inventory symbols by path token             | `file_path` or `modules`               |
-| [`listup_class_matching_path`](#listup_class_matching_path)               | List methods for a class/type name          | `class_name`                           |
-| [`list_up_entrypoint`](#list_up_entrypoint)                               | Find functions called from outside a module | `modules` or `module`                  |
-| [`list_possible_calls`](#list_possible_calls)                             | Find indirect/dynamic call candidates       | Optional `function_id`                 |
-| [`annotate_node`](#annotate_node)                                         | Write notes and tags to a graph node        | `node_id`                              |
+| Tool | Main purpose | Minimum useful input |
+| --- | --- | --- |
+| [`get_symbol`](#get_symbol) | Fetch one symbol by node ID | `node_id` |
+| [`get_node_details`](#get_node_details) | Fetch several nodes in one call | `node_ids` |
+| [`query_subgraph`](#query_subgraph) | Get callers/callees around a function | `function_id` |
+| [`find_paths`](#find_paths) | Find paths between two functions | `start_function_id`, `end_function_id` |
+| [`find_path_between_module`](#find_path_between_module) | Find paths between module/file tokens | `source_module`, `target_module` |
+| [`listup_symbols_matching_file_path`](#listup_symbols_matching_file_path) | Inventory symbols by path token | `file_path` or `modules` |
+| [`listup_class_matching_path`](#listup_class_matching_path) | List methods for a class/type name | `class_name` |
+| [`list_up_entrypoint`](#list_up_entrypoint) | Find functions called from outside a module | `modules` |
+| [`list_possible_calls`](#list_possible_calls) | Find indirect/dynamic call candidates | optional `function_id` |
+| [`annotate_node`](#annotate_node) | Write notes and tags to a graph node | `node_id` |
 
 ### Flows And Dependency Planning
 
-| Tool                                                                | Main purpose                                  | Minimum useful input               |
-| ------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------- |
-| [`trace_flow`](#trace_flow)                                         | Trace inbound/outbound flow from one node     | `start_id`                         |
-| [`trace_flow_between_module`](#trace_flow_between_module)           | Trace flow between module tokens              | `source_module`, `target_module`   |
-| [`reconstruct_flow`](#reconstruct_flow)                             | Turn raw paths into ordered explainable flows | `entry_context_json`, `paths_json` |
-| [`compute_scc`](#compute_scc)                                       | Detect strongly connected components/cycles   | `nodes`, `edges`                   |
-| [`topological_sort`](#topological_sort)                             | Produce dependency order and execution waves  | `nodes`, `edges`                   |
-| [`plan_dependency_order`](#plan_dependency_order)                   | Plan module order from indexed calls          | `modules`                          |
-| [`plan_file_dependency_order`](#plan_file_dependency_order)         | Plan file order inside modules                | `modules`                          |
-| [`plan_function_dependency_order`](#plan_function_dependency_order) | Plan function order inside modules            | `modules`                          |
+| Tool | Main purpose | Minimum useful input |
+| --- | --- | --- |
+| [`trace_flow`](#trace_flow) | Trace inbound/outbound flow from one node | `start_id` |
+| [`trace_flow_between_module`](#trace_flow_between_module) | Trace flow between module tokens | `source_module`, `target_module` |
+| [`reconstruct_flow`](#reconstruct_flow) | Turn raw paths into ordered explainable flows | `entry_context_json`, `paths_json` |
+| [`compute_scc`](#compute_scc) | Detect strongly connected components/cycles | `nodes`, `edges` |
+| [`topological_sort`](#topological_sort) | Produce dependency order and execution waves | `nodes`, `edges` |
+| [`plan_dependency_order`](#plan_dependency_order) | Plan module order from indexed calls | `modules` |
+| [`plan_file_dependency_order`](#plan_file_dependency_order) | Plan file order inside modules | `modules` |
+| [`plan_function_dependency_order`](#plan_function_dependency_order) | Plan function order inside modules | `modules` |
 
 ### Workflows, IPC, And Fullstack
 
-| Tool                                                      | Main purpose                                    | Minimum useful input                |
-| --------------------------------------------------------- | ----------------------------------------------- | ----------------------------------- |
-| [`find_screen_workflows`](#find_screen_workflows)         | Discover React/TS navigation workflows          | `project_id`, `node_a`              |
-| [`find_workflows_containing`](#find_workflows_containing) | Find workflows that contain a function          | `function_id`                       |
-| [`analyze_workflow_impact`](#analyze_workflow_impact)     | Score workflow impact of a function change      | `function_id`                       |
-| [`get_ipc_message`](#get_ipc_message)                     | Query sender/receiver IPC messages              | `sender` or `receiver`              |
-| [`find_callers_of_endpoint`](#find_callers_of_endpoint)   | Find frontend callers of a backend endpoint     | `endpoint_path`                     |
-| [`get_api_call_chain`](#get_api_call_chain)               | Trace component/endpoint through backend layers | `component_name` or `endpoint_path` |
+| Tool | Main purpose | Minimum useful input |
+| --- | --- | --- |
+| [`find_screen_workflows`](#find_screen_workflows) | Discover screen navigation workflows | `project_id`, `node_a` |
+| [`find_workflows_containing`](#find_workflows_containing) | Find workflows that contain a function | `function_id` |
+| [`analyze_workflow_impact`](#analyze_workflow_impact) | Score workflow impact of a function change | `function_id` |
+| [`get_ipc_message`](#get_ipc_message) | Query sender/receiver IPC messages | `sender` or `receiver` |
+| [`find_callers_of_endpoint`](#find_callers_of_endpoint) | Find frontend callers of a backend endpoint | `endpoint_path` |
+| [`get_api_call_chain`](#get_api_call_chain) | Trace component/endpoint through backend layers | `component_name` or `endpoint_path` |
 
-### Living Docs V2
+### Project Context
 
-| Tool                                                                      | Main purpose                                      | Minimum useful input          |
-| ------------------------------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
-| [`livingdoc_get_links_by_anchor`](#livingdoc_get_links_by_anchor)         | Get all links touching one anchor                 | `anchor_id`                   |
-| [`livingdoc_get_links_for_symbol`](#livingdoc_get_links_for_symbol)       | Find docs linked to a code symbol                 | `node_id` or `qualified_name` |
-| [`livingdoc_get_links_for_document`](#livingdoc_get_links_for_document)   | Find code linked to a document                    | `source_file`                 |
-| [`livingdoc_list_documents`](#livingdoc_list_documents)                   | List documents that already have code links       | `{}`                          |
-| [`livingdoc_list_ingested_documents`](#livingdoc_list_ingested_documents) | List persisted documents, including unlinked ones | `{}`                          |
-| [`livingdoc_get_link_stats`](#livingdoc_get_link_stats)                   | Summarize link health, status, and orphans        | `{}`                          |
-| [`livingdoc_trace_path`](#livingdoc_trace_path)                           | Walk code-document links across multiple hops     | `start_node_id`               |
-| [`livingdoc_derive_anchors_for_file`](#livingdoc_derive_anchors_for_file) | Rebuild/debug anchors for one file                | `source_file`                 |
-| [`livingdoc_validate_links`](#livingdoc_validate_links)                   | Revalidate a sample of existing links             | `{}`                          |
+| Tool | Main purpose | Minimum useful input |
+| --- | --- | --- |
+| [`get_project_modules`](#get_project_modules) | Canonical modules, descriptors, and internal/external dependencies | `project_id` |
+| [`get_public_apis`](#get_public_apis) | Strict source-level public/exported declarations | `project_id` |
+| [`get_endpoints`](#get_endpoints) | Normalized HTTP, route, service, page, and gRPC endpoint inventory | `project_id` |
+| [`get_module_architecture_summary`](#get_module_architecture_summary) | Counts and bounded samples from the indexed graph; no filesystem rescan | `project_id` plus `module_id` or `all_modules=true` |
+| [`get_project_special_files`](#get_project_special_files) | Descriptor roles, parse depth, diagnostics, and redaction-safe summaries | `project_id` |
+| [`get_framework_context`](#get_framework_context) | Framework instances and independently reported context dimensions | `project_id` |
+
+All six project-context tools use deterministic ordering and limits and return
+`capability_diagnostics` when the active provider schema lacks required labels
+or relationships. They fan out per project graph directly, so an omitted
+`parser_type` already searches every parser's data for them.
+
+### Removed Tools
+
+The following tools existed in earlier releases and are **no longer exposed**:
+`activate_project` (session state was removed; pass `parser_type` +
+`project_id` on every call) and the entire `livingdoc_*` family
+(`livingdoc_get_links_by_anchor`, `livingdoc_get_links_for_symbol`,
+`livingdoc_get_links_for_document`, `livingdoc_list_documents`,
+`livingdoc_list_ingested_documents`, `livingdoc_get_link_stats`,
+`livingdoc_trace_path`, `livingdoc_derive_anchors_for_file`,
+`livingdoc_validate_links`).
 
 ## Source Files
 
-| File                     | Role                                                                                                                                      |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `unified_mcp.py`         | Main MCP server. Use this for normal operation. It exposes a single endpoint and routes each tool call to the correct backend.            |
-| `tool_metadata.py`       | Shared catalog for `list_mcp_functions`: descriptions, use cases, input fields, outputs, and examples.                                    |
-| `fastmcp_server.py`      | Generic graph backend plus dependency-planning, workflow, and Living Docs tools.                                                          |
-| `android/android_mcp.py` | Android-oriented backend. Used when `parser_type` is `android`, `android-kotlin`, or `kotlin-android`.                                    |
-| `framework_registry.py`  | Canonical capability registry for parser aliases, backend assignment, support level, graph profiles, and feature discovery.              |
-| `cplus/cplus_mcp.py`     | Generic graph backend used by C/C++, JVM, COBOL, framework, Flutter, ASP.NET, Perl, and other compatible capability profiles.           |
-| `java/java_mcp.py`       | Standalone Java backend implementation. It is present in this directory, but the current unified router does not add it to `BACKENDS`.    |
-| `services/*`             | Shared services for symbol lookup, graph exploration, flow reconstruction, workflow discovery, and impact analysis.                       |
+| File | Role |
+| --- | --- |
+| `unified_mcp.py` | Main MCP server (`graph_mcp`). Registers 15 tools directly, proxies the other 24, implements fan-out dispatch/merge, and routes each tool call to the correct backend. |
+| `tool_metadata.py` | Shared catalog behind `list_mcp_functions`: descriptions, use cases, input fields, outputs, and examples. |
+| `framework_registry.py` | Canonical capability registry for 27 parser profiles: aliases, backend assignment, support level, labels, relationships, and feature flags. |
+| `fastmcp_server.py` | Generic graph backend plus the five dependency-planning tools. Also hosts backend-only workflow tools (`list_workflows`, `get_workflow_steps`, `search_workflows`) that are not exposed through the unified server. |
+| `cplus/cplus_mcp.py` | Graph backend used by C/C++, JVM, Python, JS/TS, PHP, C#, SQL, COBOL, framework profiles (Spring, MyBatis, Struts, Servlet/JSP, Flutter, ASP.NET), and other compatible capability profiles. Implements `find_screen_workflows` and `analyze_proc_data_impact` (the latter is backend-only). |
+| `android/android_mcp.py` | Android-oriented backend, selected when `parser_type` is `android`, `android-kotlin`, or `kotlin-android`. |
+| `java/java_mcp.py` | Standalone Java backend implementation. Present in this directory but **not** registered in the unified router's `BACKENDS`. |
+| `falkordb_discovery.py` | Discovers sibling FalkorDB instances' `data.rdb` files under `CORTEX_DATA_HOME` so unscoped queries can read every registered project across instances. |
+| `semantic_graph_expansion.py` | Graph-expands semantic search hits: multi-hop traversal returning `hop_distance`, `graph_proximity`, seeds, and edges in a `graph_expansion` block. |
+| `services/*` | Shared services: `explore_service.py` (explore_graph orchestration), `project_context_service.py` (project-context aggregates), `workflow_service.py` (find_screen_workflows), `flow_reconstructor.py` (reconstruct_flow), `graph_service.py`, `impact_service.py`, `symbol_service.py` (legacy FastAPI-era paths). |
+| `../tools/common/embed_runtime.py` | Process-wide embedder/vector cache shared by all backends (`MCP_QUERY_EMBED_CACHE`, device auto-detect). |
+| `../tools/common/project_registry.py` | The Project Registry: `resolve_project_targets(project_id)` mapping each project to its graph shard and Qdrant collections. |
 
 ## Quick Start
-
-This walkthrough starts the server, confirms the live catalog, selects a
-backend, finds a symbol, and inspects its local call graph.
 
 ### 1. Start FalkorDB And Qdrant
 
@@ -185,26 +198,35 @@ The default service endpoints are:
 
 | Service  | Default URL                           | Used by                                                  |
 | -------- | ------------------------------------- | -------------------------------------------------------- |
-| FalkorDB | `127.0.0.1:6380`, graph `hyper_graph` | Symbol, call graph, workflow, API, and Living Docs tools |
+| FalkorDB | `127.0.0.1:6380`                      | Symbol, call graph, workflow, API, and project-context tools |
 | Qdrant   | `http://localhost:6333`               | `semantic_search` and semantic parts of `explore_graph`  |
 
-FalkorDB is the default graph provider in the current local runtime. Qdrant is
-only required for semantic/vector queries. Neo4j can be selected explicitly for
-legacy compatibility; see [Graph Provider Configuration](#graph-provider-configuration).
+Each project's graph shard is named after its `project_id` (naming rule; see
+[The project_id Contract](#the-project_id-contract)). Qdrant is only required
+for semantic/vector queries. Neo4j can be selected explicitly for legacy
+compatibility; see [Graph Provider Configuration](#graph-provider-configuration).
 
 ### 2. Start `graph_mcp`
 
+Preferred: use the harness launcher, which sets provider, storage, and
+embedding environment for you:
+
 ```bash
-cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
-source .venv/bin/activate
-GRAPH_PROVIDER=falkordb \
-FALKORDB_HOST=127.0.0.1 \
-FALKORDB_PORT=6380 \
-FALKORDB_GRAPH=hyper_graph \
-python mcp/unified_mcp.py --transport streamable-http --host 127.0.0.1 --port 8788 --path /mcp
+cd /Users/hieplq1.aip/AI/cortex-harness
+python cortex_harness/dev.py code-tiny   # serves http://127.0.0.1:8788/mcp
 ```
 
-The client endpoint is `http://127.0.0.1:8788/mcp`.
+Or start the server directly from the repository root:
+
+```bash
+cd /Users/hieplq1.aip/AI/cortex-harness
+python code-tiny/mcp/unified_mcp.py --transport streamable-http \
+  --host 127.0.0.1 --port 8788 --path /mcp
+```
+
+The client endpoint is `http://127.0.0.1:8788/mcp`. The doc-side sibling
+server (`mind_mcp`) runs on port 8789 and is configured in
+`cortex_harness/dev.py`.
 
 ### 3. Confirm The Live Tool Catalog
 
@@ -218,7 +240,7 @@ Expected top-level output shape:
 
 ```json
 {
-  "total_count": 42,
+  "total_count": 39,
   "functions": [
     {
       "name": "search_functions",
@@ -232,53 +254,26 @@ Expected top-level output shape:
 }
 ```
 
-The return value is currently a JSON string, so some clients display it as text
-that contains JSON. Parse the text once if your client does not do that
+The return value is a JSON string, so some clients display it as text that
+contains JSON. Parse the text once if your client does not do that
 automatically.
 
-### 4. Set Session Defaults
+### 4. Find A Symbol
 
-Select tool `activate_project` and send:
-
-```json
-{
-  "parser_type": "cplus",
-  "database_name": "hyper_graph"
-}
-```
-
-Use `android` for the Android backend. Java, Kotlin, C/C++, Pro*C (`.pc`/`.pcc`),
-Delphi, Pascal, and VB-family aliases currently route through the `cplus` backend.
-Pro*C aliases (`proc`, `pro*c`, `pro-c`) canonicalize to `cplus`.
-
-`parser_type` selects a capability profile, not a separate MCP server. Call
-`list_parsers` to inspect each canonical parser's aliases, physical backend,
-support level (`full`, `partial`, or `generic`), labels, relationships,
-searchable properties, and feature flags. `activate_project` returns the same
-capability summary for the selected alias. Android remains on its specialized
-backend; compatible language and framework profiles share `cplus` while using
-their own query defaults.
-
-When the active graph provider exposes only part of a profile's relationship
-set, graph results include `capability_diagnostics` with used and omitted
-relationships. If none of the requested relationships exist, the tool returns
-an `unsupported_capability` error instead of an unexplained empty result.
-
-### 5. Find A Symbol
-
-Select tool `search_functions` and send:
+Select tool `search_functions` and send. Note that `parser_type` and
+`project_id` are passed on every call — there is no session activation step:
 
 ```json
 {
   "query": "AuthManager|validateToken",
-  "project_id": "hyper_graph",
-  "limit": "20",
-  "project_id": "hypergraph"
+  "parser_type": "cplus",
+  "project_id": "cortext",
+  "limit": 20
 }
 ```
 
-Copy the returned `id`, `node_id`, or `symbol_id`. Exact field names can vary by
-backend, but that value is the graph ID needed by the next call.
+Copy the returned `id`, `node_id`, or `symbol_id`. Exact field names can vary
+by backend, but that value is the graph ID needed by the next call.
 
 Representative result:
 
@@ -296,18 +291,18 @@ Representative result:
 }
 ```
 
-### 6. Inspect Callers And Callees
+### 5. Inspect Callers And Callees
 
 Select tool `query_subgraph` and replace `function_id` with the ID returned in
-step 5:
+step 4:
 
 ```json
 {
   "function_id": "validateToken/1@src/auth/AuthManager.java",
-  "project_id": "hyper_graph",
+  "parser_type": "cplus",
+  "project_id": "cortext",
   "direction": "all",
-  "max_depth": 2,
-  "project_id": "hypergraph"
+  "max_depth": 2
 }
 ```
 
@@ -337,10 +332,10 @@ shape examples, not fixed snapshots of your data.
 
 ## Prerequisites
 
-Install dependencies from the Hyper Graph root:
+Install dependencies from the repository root:
 
 ```bash
-cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
+cd /Users/hieplq1.aip/AI/cortex-harness
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -350,7 +345,7 @@ Required services:
 
 | Service     | Default                                            |
 | ----------- | -------------------------------------------------- |
-| FalkorDB    | Host `127.0.0.1`, port `6380`, graph `hyper_graph` |
+| FalkorDB    | Host `127.0.0.1`, port `6380`                      |
 | Qdrant HTTP | `http://localhost:6333`                            |
 
 Useful environment variables:
@@ -359,11 +354,16 @@ Useful environment variables:
 export GRAPH_PROVIDER=falkordb
 export FALKORDB_HOST=127.0.0.1
 export FALKORDB_PORT=6380
-export FALKORDB_GRAPH=hyper_graph
 export QDRANT_URL=http://localhost:6333
 export CODE_EMBEDDING_MODEL=jinaai/jina-embeddings-v3
-export EMBED_DEVICE=cpu
+export EMBED_DEVICE=auto
 ```
+
+`EMBED_DEVICE` accepts `auto`, `mps`, `cuda`, or `cpu`. `auto` resolves at
+startup to MPS on macOS, then CUDA, then CPU, with automatic CPU fallback when
+the accelerator fails (`EMBED_FALLBACK_TO_CPU=1` by default). The shared
+embedder cache is controlled by `MCP_QUERY_EMBED_CACHE` (LRU size, default
+`512`; `0`/`false`/`off` disables it).
 
 Optional FalkorDB authentication:
 
@@ -372,49 +372,82 @@ export FALKORDB_USERNAME=your_username
 export FALKORDB_PASSWORD=your_password
 ```
 
+## The project_id Contract
+
+`project_id` is the single scope key for every project-scoped operation. Both
+`graph_mcp` (this server) and `mind_mcp` resolve it through the shared Project
+Registry (`code-tiny/tools/common/project_registry.py`).
+
+### Resolution And Naming Rule
+
+| Concept | Rule |
+| --- | --- |
+| `project_id` raw | Preserved as identity/display; canonicalised to the registered form when a config entry matches. |
+| `project_id_normalized` | `str(value).strip().casefold()` — the comparison key. Lookup is case-insensitive and whitespace-trimmed. |
+| Code graph | `== project_id` |
+| Code Qdrant collection | `== project_id` |
+| Doc graph | `== f"{project_id}_doc"` (owned by `mind_mcp`; disjoint label space) |
+| Doc Qdrant collection | `== f"{project_id}_doc"` |
+
+Resolution precedence (lowest to highest): naming rule, env vars, config-file
+values, per-call overrides. Env vars only contribute when no config file
+describes any project.
+
+### Registry Input
+
+Every `*.json` file under `.cortext-harness/config/` is a registry entry,
+reusing the `dev.json` shape:
+
+```json
+{
+  "active": true,
+  "project": {"code": "cortext", "name": "cortext"},
+  "code": {"env": {"FALKORDB_GRAPH": "cortext", "QDRANT_COLLECTION": "cortext"}},
+  "doc":  {"env": {"FALKORDB_GRAPH": "cortext_doc", "QDRANT_COLLECTION": "cortext_doc"}}
+}
+```
+
+`project.code` is the registry key and becomes the canonical raw `project_id`.
+Omitted graph/collection fields fall back to the naming rule.
+
+### Scope Semantics Per Tool
+
+- **`project_id` provided** — the query is pinned to that project's graph
+  shard and Qdrant payload filter. Case-insensitive.
+- **`project_id` omitted** — the query fans out across every registered
+  project's graph (plus sibling FalkorDB instances discovered by
+  `falkordb_discovery.py`), merging results. Use this only on trusted
+  single-tenant setups.
+- **`fe_project_id` / `be_project_id`** (fullstack tools) — independent
+  frontend/backend project scopes. On `find_callers_of_endpoint` and
+  `get_api_call_chain`, `project_id` is optional when either of these is set.
+- **`db`** — accepted only as a legacy alias; the router merges it into
+  `project_id`. New clients must not send it.
+
 ## Graph Provider Configuration
 
 ### FalkorDB: Current Default
 
-The Hyper Pack runtime launchers set these defaults:
+The harness launchers set these defaults:
 
 ```bash
 export GRAPH_PROVIDER=${GRAPH_PROVIDER:-falkordb}
 export FALKORDB_HOST=${FALKORDB_HOST:-127.0.0.1}
 export FALKORDB_PORT=${FALKORDB_PORT:-6380}
-export FALKORDB_GRAPH=${FALKORDB_GRAPH:-hyper_graph}
 ```
 
-Set these variables **before** the Python process starts. The backend reads the
-provider during module import. A bare `python mcp/unified_mcp.py ...` command
-without provider variables defaults to FalkorDB and graph `hyper_graph`, matching
-the service launcher.
+Set these variables **before** the Python process starts; the backend reads
+the provider during module import.
 
-Use the `project_id` field to scope to a project's graph shard. Omit
-`project_id` to query across all projects in the env-default graph:
-
-```json
-{
-  "project_id": "hyper_graph"
-}
-```
-
-The `db` parameter has been removed; pass `project_id` only. Direct
-workflow and bridge calls resolve the active graph through the same provider-neutral
-database contract as search and expansion tools.
-
-Unified MCP graph tools use the shared graph-driver abstraction. Neo4j remains
-an explicit compatibility provider rather than a hidden fallback:
-
-| Tool family                                                                      | FalkorDB default runtime                                                                             | Neo4j compatibility mode |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------ |
-| `cplus`/generic search, symbol, path, trace, IPC, and annotation tools           | Supported                                                                                            | Supported                |
-| Dependency planners and Living Docs tools dispatched through `fastmcp_server.py` | Supported                                                                                            | Supported                |
-| `semantic_search` and `list_qdrant_collections`                                  | Qdrant-backed; graph expansion depends on selected backend                                           | Supported                |
-| `explore_graph`                                                                  | Provider-aware semantic, keyword, and graph-expanded retrieval; bounded timeouts may return partial expansion | Supported          |
-| `find_callers_of_endpoint`, `get_api_call_chain`                                 | Provider-aware through the shared graph driver; schema-gated                                          | Supported                |
-| `find_workflows_containing` and workflow layer of `analyze_workflow_impact`      | Supported through the shared graph driver                                                             | Supported                |
-| `android` backend                                                                | Supported through the shared graph driver                                                             | Supported                |
+Unified MCP graph tools use a shared, provider-neutral graph-driver
+abstraction (`CypherGraphDriver`). Neo4j remains an explicit compatibility
+provider rather than a hidden fallback. All tool families in this guide —
+search, symbol, path, trace, IPC, annotation, planners, workflow, and
+fullstack bridge tools — work on both providers; several tools check the
+active graph's labels/relationships first and return
+`capability_diagnostics` or a structured `unsupported_capability` /
+`capability_unavailable` error instead of an unexplained empty result when the
+schema lacks required topology.
 
 ### Neo4j: Compatibility Mode
 
@@ -428,18 +461,15 @@ export NEO4J_PASS=your_password
 export NEO4J_DB=neo4j
 ```
 
-Then use `project_id: "neo4j"` in calls.
+Then pass the matching `project_id` on every call (the registry maps the
+project to its graph/DB per `code.env.GRAPH_PROVIDER`).
 
 ## Start The Unified MCP Server
 
 ```bash
-cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
-source .venv/bin/activate
-GRAPH_PROVIDER=falkordb \
-FALKORDB_HOST=127.0.0.1 \
-FALKORDB_PORT=6380 \
-FALKORDB_GRAPH=hyper_graph \
-python mcp/unified_mcp.py --transport streamable-http --host 127.0.0.1 --port 8788 --path /mcp
+cd /Users/hieplq1.aip/AI/cortex-harness
+python code-tiny/mcp/unified_mcp.py --transport streamable-http \
+  --host 127.0.0.1 --port 8788 --path /mcp
 ```
 
 The default endpoint is:
@@ -476,22 +506,44 @@ export FASTMCP_TRANSPORT=streamable-http
 export FASTMCP_HOST=127.0.0.1
 export FASTMCP_PORT=8788
 export FASTMCP_STREAMABLE_HTTP_PATH=/mcp
+export MCP_SERVER_NAME=graph_mcp
 ```
+
+The server name defaults to `graph_mcp` (override with `MCP_SERVER_NAME`).
+
+### Health And Readiness Endpoints
+
+Beyond the MCP endpoint, the HTTP transports expose two operational routes:
+
+| Route | Meaning |
+| --- | --- |
+| `GET /health` | Liveness probe. `200` with `{"status": "healthy", "liveness": true}` while the process is up. |
+| `GET /ready` | Readiness probe. `200 {"status": "ready"}` when storage gateways can serve reads; `503 {"status": "not_ready", "storage_state": ...}` while gateways are warming/draining or no committed generation is active. |
+
+### Generation-Isolated Storage
+
+When gateway mode is enabled (`CORTEX_STORE_GATEWAY_ENABLED`, or a gateway is
+registered via `CORTEX_STORAGE_INSTANCE` / `CORTEX_DATA_HOME`), the MCP server
+stays connected and serves the **last committed generation** while ingestion
+builds the next generation in isolated staging storage. One owner holds the
+embedded-store lease; same-target writes are queued and serialized through a
+single writer lane; queries are admitted through a bounded reader policy.
+Readiness during a swap is reported by `/ready` (`warming`, `draining`,
+`rollback_ready` states appear in `storage_state`).
 
 ## Input Guide
 
 ### The Most Important Input Types
 
 | Input kind             | Example                                       | Meaning                                          | How to obtain it                                                 |
-| ---------------------- | --------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------- | ------------------------------------------------------- |
+| ---------------------- | --------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------- |
 | Natural-language query | `"payment fails after login"`                 | Behavior or concept to find                      | Write it yourself; use with `explore_graph` or `semantic_search` |
-| Name query             | `"AuthManager                                 | validateToken"`                                  | Symbol name or alternatives                                      | Write known name fragments; use with `search_functions` |
+| Name query             | `"AuthManager\|validateToken"`                | Symbol name or alternatives (`\|` separates)     | Write known name fragments; use with `search_functions`          |
 | Node/function ID       | `"validateToken/1@src/auth/AuthManager.java"` | Stable graph identifier, not just a display name | Copy from search, path, or subgraph results                      |
 | Module/path token      | `"src/auth"`                                  | Substring matched against indexed file paths     | Use a repository directory or filename fragment                  |
-| `project_id`           | `"hypergraph"`                                | Ingestion scope inside a shared graph            | Copy from ingestion config/result or an existing node payload    |
-| `project_id`                   | `"hyper_graph"`                               | FalkorDB graph name or Neo4j database name       | Use `list_databases`; current default runtime uses `hyper_graph` |
-| Qdrant `collection`    | `"hypergraph_73eddc5fcc__python_functions"`   | Vector collection to search                      | Use `list_qdrant_collections`                                    |
-| `parser_type`          | `"cplus"`                                     | Selects the routed backend                       | Use `list_parsers` and the routing table below                   |
+| `project_id`           | `"cortext"`                                   | Project scope; resolves graph shard + Qdrant collection via the registry | Copy from ingestion config/result or `list_databases` |
+| Qdrant `collection`    | `"cortext"`                                   | Vector collection to search (naming rule: `== project_id`) | Use `list_qdrant_collections`                    |
+| `parser_type`          | `"cplus"`                                     | Selects the query profile/backend                | Use `list_parsers` and the routing table below                   |
 
 Do not confuse a symbol name with a symbol ID. `search_functions` accepts a
 name fragment; `get_symbol`, `query_subgraph`, `find_paths`, and impact tools
@@ -507,14 +559,13 @@ Good:
 {
   "query": "AuthManager",
   "parser_type": "python",
-  "project_id": "hyper_graph",
-  "limit": "20"
+  "project_id": "cortext",
+  "limit": 20
 }
 ```
 
-Do not wrap unified calls in a backend-style `payload` object unless you are
-calling the backend module directly. The unified server builds backend payloads
-for you.
+Do not wrap unified calls in a backend-style `payload` object. The unified
+server builds backend payloads for you.
 
 Wrong for the unified server:
 
@@ -528,82 +579,61 @@ Wrong for the unified server:
 
 ### Common Fields
 
-Important normalization rules:
-
-| Rule                        | Details                                                                                                                                                                                     |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Empty strings               | Treated as "not provided".                                                                                                                                                                  |
-| `activate_project` defaults | Stores `parser_type` and `database_name` for later calls in the same server session.                                                                                                        |
-| `project_id` selection      | Current runtime uses FalkorDB graph `hyper_graph`. Pass `project_id: "hyper_graph"` explicitly to scope to that shard, or omit `project_id` to fall through to env defaults.                  |
-| Numeric strings             | Several public wrappers accept numbers as strings, for example `limit: "50"` or `top_k: "10"`.                                                                                              |
-| List aliases                | The router normalizes aliases such as `module` -> `modules`, `source_module` -> `source_modules`, `target_module` -> `target_modules`, and `class_name` -> `class_names` for backend calls. |
-| `project_id`                | Use it when multiple projects are indexed into the same graph/Qdrant services.                                                                                                              |
-| `node_type`                 | Common filters are `code` and `doc`. Use `doc` when searching document nodes rather than code symbols.                                                                                      |
-| `content_mode`              | Backend catalog supports `auto`, `summary`, `comment`, `code`, and `name`; not every public wrapper exposes this field directly.                                                            |
-
-### Number Types
-
-The unified wrapper has two historical number styles. Match the public tool
-schema exactly:
-
-| Style          | Fields                                                                      | Correct sample                       |
-| -------------- | --------------------------------------------------------------------------- | ------------------------------------ |
-| Numeric string | Many search/trace wrappers use `limit`, `top_k`, and `max_depth` as strings | `"limit": "20"`                      |
-| JSON number    | Workflow, planner, and Living Docs wrappers use integers/floats             | `"max_depth": 4`, `"min_score": 0.7` |
-
-When uncertain, call `list_mcp_functions` and use the live `inputs[].type`.
-
-### Lists And Embedded JSON
-
-Use real JSON arrays when a field is declared as `List[...]`:
-
-```json
-{
-  "modules": ["src/auth", "src/payment"],
-  "node_types": ["Function", "Class"]
-}
-```
-
-`get_node_details.node_ids` is a string in the public wrapper. Separate IDs by
-comma or semicolon:
-
-```json
-{
-  "node_ids": "func_1,func_2,func_3"
-}
-```
-
-`reconstruct_flow` is intentionally different: its two inputs are JSON strings,
-not nested objects. Escape the inner JSON:
-
-```json
-{
-  "entry_context_json": "{\"type\":\"backend\",\"entry_point\":\"main\",\"entry_node_id\":\"n1\"}",
-  "paths_json": "[{\"path_id\":\"p1\",\"nodes\":[{\"node_id\":\"n1\",\"name\":\"main\"}],\"edges\":[]}]"
-}
-```
+| Rule | Details |
+| --- | --- |
+| Empty strings | Treated as "not provided". Most parameters default to `""`. |
+| No session state | `parser_type` and `project_id` are not sticky; pass them on **every** call. `list_parsers` reports `active_parser_type: null`. |
+| `project_id` | Case-insensitive project scope. Omit to query across all registered projects (fan-out). |
+| `parser_type` | Canonical parser or alias. Omitting it on the 13 fan-out search tools dispatches across all query engines; see [Fan-Out](#fan-out-across-parsers-and-projects). |
+| Numbers | Public schemas use JSON numbers (`limit: 20`, `max_depth: 4`, `min_score: 0.7`). Several fields also coerce numeric strings. |
+| Lists | Prefer real JSON arrays for `List[...]` fields (`modules`, `kinds`, `node_types`, `graph_rel_types`). |
+| Legacy aliases | The router normalizes `module` → `modules`, `source_module` → `source_modules`, `target_module` → `target_modules`, `class_name` → `class_names`, `db` → `project_id`. |
+| `node_type` | Common filters are `code` and `doc`. Use `doc` when searching document nodes rather than code symbols. |
+| `content_mode` | Backend catalog supports `auto`, `summary`, `comment`, `code`, and `name`; not every wrapper exposes it directly. |
 
 ### Required Scope Fields
 
-Pass `project_id` whenever more than one project shares the same database.
-Fullstack tools use separate scopes:
+Pass `project_id` whenever more than one project shares the same FalkorDB /
+Qdrant services. Fullstack tools use separate frontend/backend scopes:
 
 ```json
 {
   "endpoint_path": "/api/users/:id",
   "http_method": "GET",
   "fe_project_id": "web-client",
-  "be_project_id": "user-service",
-  "project_id": "hyper_graph"
+  "be_project_id": "user-service"
 }
 ```
 
 If a query unexpectedly returns another repository's symbols, missing or wrong
 project scope is the first thing to check.
 
+### Fan-Out Across Parsers And Projects
+
+13 search tools support parser fan-out: `search_functions`, `search_by_code`,
+`get_symbol`, `get_node_details`, `query_subgraph`, `find_paths`,
+`find_path_between_module`, `listup_symbols_matching_file_path`,
+`listup_class_matching_path`, `list_up_entrypoint`, `trace_flow`,
+`trace_flow_between_module`, `list_possible_calls`.
+
+Behavior when `parser_type` is omitted:
+
+- Each physical query engine (backends: `cplus`, `android`) is dispatched in
+  parallel with the same arguments.
+- List results are concatenated and each item is tagged with its source
+  `parser_type`; duplicates are removed (nodes by `id`, edges by
+  `(start, type, end)`); a `dedup_removed` count is reported.
+- The merged response adds `ok`, `parsers_searched`, `parsers_failed`,
+  `parser_errors`, `query_engine: "graph_fanout"`, and a `parser_results` map
+  from engine name to that engine's full raw result (including per-engine
+  diagnostics such as `capability_diagnostics`).
+- `ok` is `false` only when **every** engine failed.
+- Project-context tools are excluded from parser fan-out because their Cypher
+  already reads every project's graph shard directly.
+
 ## Output Guide
 
-There is no single response schema for all 42 tools. The unified wrapper
+There is no single response schema for all 39 tools. The unified wrapper
 normalizes a few common empty states, while each backend preserves useful
 domain-specific fields.
 
@@ -627,6 +657,12 @@ score/content.
 }
 ```
 
+`semantic_search` results carry 400-character text previews (full payload
+fields are narrowed for latency); set `show_snippet` / `show_comment` /
+`include_raw_fields` for more. With `expand_graph: true`, the response gains a
+`graph_expansion` block containing `seed_ids`, `depth`, `direction`,
+`results` (neighbors with `hop_distance` and `graph_proximity`), and `edges`.
+
 ### Graph Responses
 
 Graph tools usually return `nodes` plus `edges`, or a list of ordered `paths`.
@@ -639,6 +675,26 @@ Graph tools usually return `nodes` plus `edges`, or a list of ordered `paths`.
   ],
   "edges": [{ "source": "a", "target": "b", "type": "CALLS" }],
   "paths": [{ "nodes": ["a", "b"], "relationships": ["CALLS"] }]
+}
+```
+
+### Fan-Out Responses
+
+When a fan-out tool runs across engines (see above), the top-level result is
+the merged view plus per-engine raw results:
+
+```json
+{
+  "ok": true,
+  "query_engine": "graph_fanout",
+  "parsers_searched": ["cplus", "android"],
+  "parsers_failed": [],
+  "dedup_removed": 3,
+  "results": ["...merged, each item tagged with parser_type..."],
+  "parser_results": {
+    "cplus": { "...full raw cplus result..." },
+    "android": { "...full raw android result..." }
+  }
 }
 ```
 
@@ -674,37 +730,75 @@ protocol error. For example, `list_up_entrypoint` can return:
 }
 ```
 
-Connection failures, invalid database credentials, and unavailable backend
-tools may still be raised as MCP errors.
+Schema-gated tools return `unsupported_capability` /
+`capability_unavailable` errors with the missing labels/relationships listed.
+Connection failures and invalid credentials may still be raised as MCP errors.
 
 ## Parser Routing
 
-Call `activate_project` once at the beginning of a session if you will run
-multiple related queries.
+`parser_type` selects a capability profile, not a separate MCP server. There
+are 27 canonical profiles; two physical backends. Call `list_parsers`
+(`detail_level`: `"summary"` or `"full"`) for the live table, and
+`inspect_parser_capabilities` to compare a profile's advertised support with
+what the active graph actually contains.
 
-```json
-{
-  "parser_type": "cplus",
-  "database_name": "hyper_graph"
-}
-```
+| Canonical `parser_type` | Aliases | Backend | Support level |
+| --- | --- | --- | --- |
+| `android` | `android`, `android-kotlin`, `kotlin-android` | android | full |
+| `cplus` | `cplus`, `cpp`, `c++`, `c`, `clang`, `proc`, `pro*c`, `pro-c` | cplus | full |
+| `python` | `python`, `py`, `fastapi`, `django`, `flask` | cplus | partial |
+| `javascript` | `javascript`, `js`, `node`, `nodejs`, `express`, `express.js` | cplus | partial |
+| `typescript` | `typescript`, `ts`, `tsx`, `nestjs`, `nest.js` | cplus | full |
+| `php` | `php`, `laravel`, `symfony` | cplus | partial |
+| `csharp` | `csharp`, `c#`, `cs`, `dotnet`, `.net` | cplus | full |
+| `sql` | `sql` | cplus | full (database) |
+| `plsql` | `plsql`, `pl/sql`, `oracle-plsql` | cplus | full (database) |
+| `jvm` | `jvm`, `java`, `kotlin` | cplus | generic |
+| `go` | `go` | cplus | generic |
+| `perl` | `perl` | cplus | generic |
+| `shell` | `shell`, `sh`, `bash` | cplus | generic |
+| `jp1` | `jp1`, `ajs`, `jobnet` | cplus | generic |
+| `rust` | `rust` | cplus | generic |
+| `swift` | `swift` | cplus | generic |
+| `delphi` | `delphi`, `pascal` | cplus | generic |
+| `vbnet` | `vbnet` | cplus | generic |
+| `visual_basic` | `visual_basic`, `vb6`, `vba`, `vbscript` | cplus | generic |
+| `cobol` | `cobol`, `cobol85`, `ibm-cobol`, `gnucobol` | cplus | full |
+| `spring` | `spring`, `spring-boot`, `spring_boot` | cplus | full (+endpoint queries) |
+| `servlet_jsp` | `servlet_jsp`, `servlet-jsp`, `servlet`, `jsp` | cplus | full (generation-scoped) |
+| `mybatis` | `mybatis`, `my-batis` | cplus | full (+persistence queries) |
+| `struts` | `struts`, `struts2`, `apache-struts`, `apache_struts` | cplus | full (+endpoint queries) |
+| `flutter` | `dart`, `flutter`, `flutter-dart`, `flutter_dart` | cplus | full |
+| `aspnet_framework` | `aspnet_framework`, `aspnet-framework`, `asp.net-framework`, `aspnetframework` | cplus | full (generation-scoped) |
+| `aspnet_core` | `aspnet_core`, `aspnet-core`, `asp.net-core`, `aspnetcore` | cplus | full (generation-scoped) |
 
-Current unified routing:
+Notes:
 
-| `parser_type` values                                                                                                      | Backend                                                |
-| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| `android`, `android-kotlin`, `kotlin-android`                                                                             | `android/android_mcp.py`                               |
-| `cplus`, `cpp`, `c++`, `c`, `clang`, `java`, `kotlin`, `jvm`, `go`, `perl`, `rust`, `swift`, `delphi`, `pascal`, `vbnet`, `vb6`, `vba`, `vbscript`, `st` | `cplus/cplus_mcp.py` |
-| Empty or unknown                                                                                                          | `MCP_UNIFIED_DEFAULT_BACKEND`, falling back to `cplus` |
+- Support levels: `full` (all core dimensions), `partial` (some dimensions
+  such as call-graph or endpoints are limited — e.g. Python/JS/PHP report
+  partial calls/endpoints), `generic` (shared generic label/relationship
+  vocabulary). Per-dimension detail is in `list_parsers` output.
+- "generation-scoped" profiles (Servlet/JSP, ASP.NET) tag facts with the
+  ingestion generation so stale facts are filtered automatically.
+- The `cplus` profile additionally exposes `strict`, `conservative`, and
+  `proc_data_impact` query modes for Pro*C data-impact analysis.
+- Empty or unknown `parser_type` on non-fan-out tools falls back to
+  `MCP_UNIFIED_DEFAULT_BACKEND` (default `cplus`).
 
 ## Recommended Query Workflow
 
 1. Call `list_mcp_functions` to confirm the live tool catalog.
-2. Call `list_parsers` and `list_databases` if you are unsure about routing.
-3. Call `activate_project` to set default parser/database context.
-4. Use `semantic_search` or `explore_graph` for vague natural-language discovery; inspect graph-expansion diagnostics when partial.
-5. Use `search_functions`, `search_by_code`, or `listup_symbols_matching_file_path` to get stable node IDs.
-6. Use `get_symbol`, `get_node_details`, `query_subgraph`, `find_paths`, or impact tools for exact analysis.
+2. Call `list_parsers` and `list_databases` if you are unsure about routing or
+   available graph shards.
+3. Pass `parser_type` and `project_id` explicitly on every call. To search
+   everywhere at once, omit `parser_type` (and/or `project_id`) on a fan-out
+   search tool and read the merged `parser_results`.
+4. Use `semantic_search` or `explore_graph` for vague natural-language
+   discovery; inspect graph-expansion diagnostics when partial.
+5. Use `search_functions`, `search_by_code`, or
+   `listup_symbols_matching_file_path` to get stable node IDs.
+6. Use `get_symbol`, `get_node_details`, `query_subgraph`, `find_paths`, or
+   impact tools for exact analysis.
 
 ## Tool Reference
 
@@ -718,15 +812,9 @@ live server can differ from stale documentation.
 
 Input: none.
 
-Output: JSON string containing `total_count` and `functions`. Each function
-entry includes `name`, `description`, `use_cases`, `inputs`, `output`, and
-`example`.
-
-Use when:
-
-- Starting a new MCP session.
-- Building or debugging an MCP client.
-- Checking whether a function is available after code changes.
+Output: JSON string containing `total_count` (39) and `functions`. Each
+function entry includes `name`, `description`, `use_cases`, `inputs`,
+`output`, and `example`.
 
 Example:
 
@@ -736,19 +824,18 @@ Example:
 
 #### `list_parsers`
 
-Purpose: Lists parser aliases supported by the unified router and reports the
-default/active parser context.
+Purpose: Lists all canonical parser profiles with aliases, query engine,
+support level, and per-dimension support.
 
-Input: none.
+Input:
 
-Output: Dict with aliases, canonical `capabilities`, `default_query_engine`,
-`active_parser_type`, and `active_capability`.
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `detail_level` | No | `str` | `summary` (default) or `full`. |
 
-Use when:
-
-- You do not know which `parser_type` to pass.
-- You need to confirm whether the current server supports a language alias.
-- You are debugging unexpected backend routing.
+Output: Dict with `parsers` (sorted alias list), `capabilities`,
+`detail_level`, `capability_contract_version`, `default_query_engine`, and
+`active_parser_type` (always `null` — session state was removed).
 
 Example:
 
@@ -763,10 +850,10 @@ relationship types observed in the active graph provider.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                    |
-| ------------- | -------- | ----- | ---------------------------------------------------------- |
-| `parser_type` | No       | `str` | Parser profile; omit on fan-out tools to dispatch across query engines (results deduplicated by node id). |
-| `project_id`          | No       | `str` | FalkorDB graph name or Neo4j database name.                |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `parser_type` | No | `str` | Parser profile; omit on fan-out tools to dispatch across query engines. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Advertised/effective support for `symbols`, `calls`, `endpoints`, and
 `database`; schema status/fingerprint; missing contract evidence; and a
@@ -775,62 +862,24 @@ recommended action such as `run_incremental_sync`.
 Use this before specialized endpoint or database queries, and after changing
 parser/overlay configuration.
 
-#### `activate_project`
-
-Purpose: Sets default `parser_type` and graph name/database for subsequent calls
-in the same server process.
-
-Input:
-
-| Field           | Required | Type  | Meaning                                                                             |
-| --------------- | -------- | ----- | ----------------------------------------------------------------------------------- |
-| `parser_type`   | No       | `str` | Parser profile or alias, for example `python`, `android`, `java`, or `perl`.        |
-| `database_name` | No       | `str` | FalkorDB graph name or Neo4j database name. Current runtime default: `hyper_graph`. |
-
-Output: Dict with `parser_type`, canonical capability, `database_name`, and
-public `query_engine`.
-
-Use when:
-
-- Running several related calls against the same project/database.
-- Avoiding repeated `parser_type` and `project_id` parameters.
-- Switching between parser profiles and graph query engines.
-
-Example:
-
-```json
-{
-  "parser_type": "perl",
-  "database_name": "hyper_graph"
-}
-```
-
 #### `list_databases`
 
-Purpose: Lists graph names/databases visible to the selected backend. In
-FalkorDB mode this normally returns the configured graph, such as
-`hyper_graph`; in Neo4j mode it lists Neo4j databases.
+Purpose: Lists graph shards visible to the selected backend. In FalkorDB mode
+this returns the registered project graphs (each named after its
+`project_id`); in Neo4j mode it lists Neo4j databases.
 
 Input:
 
-| Field         | Required | Type  | Meaning                              |
-| ------------- | -------- | ----- | ------------------------------------ |
-| `parser_type` | No       | `str` | Backend alias to use for the lookup. |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `parser_type` | No | `str` | Backend alias to use for the lookup. |
 
 Output: Dict with graph/database names, or a provider connection error.
 
-Use when:
-
-- You do not know the correct `project_id` value.
-- You need to verify graph-provider connectivity.
-- You are switching between indexed environments.
-
 Example:
 
 ```json
-{
-  "parser_type": "cplus"
-}
+{ "parser_type": "cplus" }
 ```
 
 #### `list_qdrant_collections`
@@ -839,28 +888,19 @@ Purpose: Lists Qdrant vector collections used by semantic search.
 
 Input:
 
-| Field             | Required | Type   | Meaning                                                                |
-| ----------------- | -------- | ------ | ---------------------------------------------------------------------- |
-| `parser_type`     | No       | `str`  | Backend alias.                                                         |
-| `project_id`              | No       | `str`  | Graph name/database context. Use `hyper_graph` in the current runtime. |
-| `qdrant_url`      | No       | `str`  | Qdrant HTTP URL, defaults to `QDRANT_URL` or `http://localhost:6333`.  |
-| `include_vectors` | No       | `bool` | Include vector metadata when supported.                                |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `parser_type` | No | `str` | Backend alias. |
+| `qdrant_url` | No | `str` | Qdrant HTTP URL, defaults to `QDRANT_URL` or `http://localhost:6333`. |
+| `include_vectors` | No | `bool` | Include vector metadata when supported. |
 
-Output: Dict with Qdrant collection names and optional metadata.
-
-Use when:
-
-- Choosing the `collection` argument for `semantic_search` or `explore_graph`.
-- Checking whether embeddings were generated for a project.
-- Debugging empty semantic search results.
+Output: Dict with Qdrant collection names and optional metadata. Under the
+naming rule the code collection equals the `project_id`.
 
 Example:
 
 ```json
-{
-  "qdrant_url": "http://localhost:6333",
-  "include_vectors": false
-}
+{ "qdrant_url": "http://localhost:6333", "include_vectors": false }
 ```
 
 ### Semantic And Broad Search Tools
@@ -868,42 +908,34 @@ Example:
 #### `explore_graph`
 
 Purpose: Intent-aware graph search for natural language questions, bug
-descriptions, requirement paragraphs, or vague concepts. It combines semantic
-vector search, keyword signals, and graph expansion.
+descriptions, requirement paragraphs, or vague concepts. It fuses semantic
+vector search, BM25 keyword signals, and call-graph expansion, returning
+explainable ranked nodes with per-node reasons.
 
 Input:
 
-| Field        | Required | Type   | Meaning                                                       |
-| ------------ | -------- | ------ | ------------------------------------------------------------- |
-| `query`      | Yes      | `str`  | Natural language query. English and Vietnamese are supported. |
-| `mode`       | No       | `str`  | `semantic`, `hybrid`, or `graph_expanded`. Default: `hybrid`. |
-| `top_k`      | No       | `str`  | Max matched nodes. Default: `10`.                             |
-| `project_id`         | No       | `str`  | Database override used by graph-assisted modes.               |
-| `collection` | No       | `str`  | Qdrant collection override.                                   |
-| `project_id` | No       | `str`  | Case-insensitive project scope for every retrieval and expansion stage. |
-| `debug`      | No       | `bool` | Include per-signal scoring details.                           |
-| `parser_type`| No       | `str`  | Canonical parser or alias; selects labels, properties, and relationships. |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `query` | Yes | `str` | Natural language query. English and Vietnamese are supported. |
+| `mode` | No | `str` | `semantic`, `hybrid`, or `graph_expanded`. Default: `hybrid`. |
+| `top_k` | No | `int` | Max matched nodes. Default: `10`. |
+| `collection` | No | `str` | Qdrant collection override. |
+| `debug` | No | `bool` | Include per-signal scoring details. |
+| `parser_type` | No | `str` | Canonical parser or alias. |
+| `project_id` | No | `str` | Project scope for every retrieval and expansion stage. |
 
 Output: Dict with `matched_nodes`, `entry_points`, `related_paths`,
-`explanation`, `confidence`, `query_analysis`, `mode`, and `retrieval`. The
-`retrieval` block identifies the selected provider/graph and whether graph
-retrieval degraded, so an empty match set is distinguishable from unavailable
-graph expansion.
-
-Use when:
-
-- You only know the business concept, not a function name.
-- You are triaging a bug from a natural-language report.
-- You want both candidate symbols and graph-neighbor context in one call.
-- You need a first-pass map before exact symbol lookup.
+`explanation`, `confidence`, `query_analysis`, and `mode`. Retrieval
+diagnostics identify the selected provider/graph and whether graph retrieval
+degraded, so an empty match set is distinguishable from unavailable graph
+expansion.
 
 Provider note: `semantic` mode is primarily Qdrant-backed. `hybrid` and
-`graph_expanded` use the shared provider abstraction. If graph expansion times
-out, the response can still contain semantic candidates plus diagnostics.
-When `project_id` is supplied, Qdrant vector search, graph keyword matching,
-BM25 boosting, graph expansion, and final result packaging remain inside that
-project. Project-scope matching ignores letter case while preserving the raw
-stored identifier. BM25 cannot introduce an unverified project-external candidate.
+`graph_expanded` add graph expansion through the shared provider abstraction.
+If graph expansion times out, the response can still contain semantic
+candidates plus diagnostics. When `project_id` is supplied, vector search,
+keyword matching, BM25 boosting, expansion, and packaging all remain inside
+that project.
 
 Example:
 
@@ -911,39 +943,40 @@ Example:
 {
   "query": "function xu ly thanh toan bi loi khi user chua login",
   "mode": "semantic",
-  "top_k": "15",
-  "collection": "my_project_python_functions"
+  "top_k": 15,
+  "parser_type": "python",
+  "project_id": "cortext"
 }
 ```
 
 #### `semantic_search`
 
 Purpose: Searches Qdrant embeddings for code or comments similar in meaning to
-the query.
+the query, with optional multi-hop graph expansion.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                                |
-| ------------- | -------- | ----- | ---------------------------------------------------------------------- |
-| `query`       | Yes      | `str` | Natural language query or code snippet.                                |
-| `parser_type` | No       | `str` | Backend alias.                                                         |
-| `project_id`          | No       | `str` | Graph name/database context. Use `hyper_graph` in the current runtime. |
-| `top_k`       | No       | `str` | Number of results.                                                     |
-| `collection`  | No       | `str` | Qdrant collection or project collection prefix.                        |
-| `project_id`  | No       | `str` | Case-insensitive project scope for indexed data.                       |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `query` | Yes | `str` | Natural language query or code snippet. |
+| `mode` | No | `str` | Backend search mode. Default: `combined`. |
+| `top_k` | No | `int` | Number of results. Default: `10`. |
+| `collection` | No | `str` | Qdrant collection override (defaults to the project's collection). |
+| `content_mode` | No | `str` | `auto`, `summary`, `comment`, `code`, or `name`. |
+| `include_raw_fields` | No | `bool` | Include full raw payload fields. |
+| `show_snippet` / `show_comment` | No | `bool` | Include code snippet / comment text in results. |
+| `expand_graph` | No | `bool` | Graph-expand the vector hits. Default: `false`. |
+| `graph_depth` | No | `int` | Expansion hops (capped at 5). Default: `2`. |
+| `graph_direction` | No | `str` | `out`, `in`, or `both`. Default: `both`. |
+| `graph_rel_types` | No | `List[str]` | Relationship types; default `CALLS`, `USES_TYPE`, `REFERENCES`, `INHERITS`. |
+| `graph_limit` | No | `int` | Max expansion results. Default: `50`. |
+| `parser_type` | No | `str` | Backend alias. |
+| `project_id` | No | `str` | Case-insensitive project scope; applied as a server-side Qdrant payload filter and to graph expansion. |
 
-`project_id` is applied as a server-side Qdrant payload filter for every
-backend. With graph expansion enabled, the same scope is applied to graph
-seeds, neighbors, and returned edges. Existing deployments must run
-`python code-tiny/scripts/backfill_project_scope_keys.py` first to inspect the
-migration, then repeat it with `--apply` to populate and index the normalized
-scope field.
-
-Output: Dict with `results`, or backend-specific semantic result fields. Each
-result normally includes score, node metadata, file path, symbol name, and code
-or summary content. With `expand_graph: true`, `graph_expansion.results` includes
-exact `hop_distance`, `seed_id`/`seed_ids` provenance, alias target metadata, and
-`graph_expansion.edges`.
+Output: Dict with `results` (score, node metadata, file path, symbol name,
+400-char content preview) and, when `expand_graph: true`, a `graph_expansion`
+block with exact `hop_distance`, `seed_ids` provenance, `graph_proximity`,
+and `graph_expansion.edges`.
 
 Use when:
 
@@ -957,8 +990,11 @@ Example:
 ```json
 {
   "query": "allocate memory safely",
-  "top_k": "5",
-  "collection": "my_project_cplus_functions"
+  "top_k": 5,
+  "parser_type": "cplus",
+  "project_id": "cortext",
+  "expand_graph": true,
+  "graph_depth": 2
 }
 ```
 
@@ -969,34 +1005,29 @@ tool when you know part of a function, class, type, or symbol name.
 
 Input:
 
-| Field           | Required | Type   | Meaning                                                    |
-| --------------- | -------- | ------ | ---------------------------------------------------------- | ------------------------ |
-| `query`         | Yes      | `str`  | Search terms. Backend catalog supports `termA              | termB` for alternatives. |
-| `parser_type`   | No       | `str`  | Backend alias.                                             |
-| `project_id`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `limit`         | No       | `str`  | Max results.                                               |
-| `node_type`     | No       | `str`  | `code` or `doc`.                                           |
-| `expand_search` | No       | `bool` | Include compact cross-domain context when supported.       |
-| `project_id`    | No       | `str`  | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `query` | Yes | `str` | Search terms. `termA|termB` matches alternatives. |
+| `limit` | No | `int` | Max results. Default: `50`. |
+| `top_k` | No | `int` | Optional alternative result cap. |
+| `content_mode` | No | `str` | Result content verbosity. |
+| `include_raw_fields` | No | `bool` | Include raw backend fields. |
+| `framework` | No | `str` | Framework filter when supported. |
+| `kinds` | No | `List[str]` | Symbol-kind filter (e.g. `["Function", "Class"]`). |
+| `node_type` | No | `str` | `code` or `doc`. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
-Output: Dict with `functions` or backend fields such as `results`, `ids`, and
-`project_id`. Results include node IDs for follow-up calls.
-
-Use when:
-
-- You need a stable `node_id` or `symbol_id`.
-- You know part of a method/class/function name.
-- You want a quick inventory of matching symbols before graph traversal.
-- You are about to call `get_symbol`, `query_subgraph`, or `find_paths`.
+Output: Dict with `results`/`functions` and node IDs for follow-up calls.
 
 Example:
 
 ```json
 {
   "query": "handleLogin|AuthManager",
-  "limit": "20",
+  "limit": 20,
   "parser_type": "cplus",
-  "project_id": "hyper_graph"
+  "project_id": "cortext"
 }
 ```
 
@@ -1005,17 +1036,8 @@ Example:
 Purpose: Searches function bodies or implementation text for exact code
 snippets, string literals, API names, or regex-like fragments.
 
-Input:
-
-| Field           | Required | Type   | Meaning                                                         |
-| --------------- | -------- | ------ | --------------------------------------------------------------- |
-| `query`         | Yes      | `str`  | Code text to match. Backend search is generally case-sensitive. |
-| `parser_type`   | No       | `str`  | Backend alias.                                                  |
-| `project_id`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`.      |
-| `limit`         | No       | `str`  | Max results.                                                    |
-| `node_type`     | No       | `str`  | `code` or `doc`.                                                |
-| `expand_search` | No       | `bool` | Include compact cross-domain context when supported.            |
-| `project_id`    | No       | `str`  | Project scope.                                                  |
+Input: same shape as `search_functions` (`query` is the code text; backend
+search is generally case-sensitive).
 
 Output: Dict with `results` or backend-specific matching nodes.
 
@@ -1024,15 +1046,15 @@ Use when:
 - You know an exact API call, SQL fragment, log message, or literal.
 - You need to find all places using a legacy pattern.
 - Semantic search returns too many broad candidates.
-- You are validating whether a specific code idiom exists.
 
 Example:
 
 ```json
 {
   "query": "DataNormal|Authen|Login|SignIn|Account",
-  "project_id": "hyper_graph",
-  "limit": "500"
+  "parser_type": "cplus",
+  "project_id": "cortext",
+  "limit": 500
 }
 ```
 
@@ -1044,30 +1066,24 @@ Purpose: Fetches full metadata for a single node by ID.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                    |
-| ------------- | -------- | ----- | ---------------------------------------------------------- |
-| `node_id`     | Yes      | `str` | Node ID from search results.                               |
-| `parser_type` | No       | `str` | Backend alias.                                             |
-| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `node_type`   | No       | `str` | Optional domain filter: `code` or `doc`.                   |
-| `project_id`  | No       | `str` | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `node_id` | Yes | `str` | Node ID from search results. |
+| `node_type` | No | `str` | Optional domain filter: `code` or `doc`. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with symbol metadata such as `name`, `qualified_name`,
 `file_path`, `signature`, `code`, `comment`, line numbers, and raw backend
 fields. If not found, returns `symbol: null` with a message.
 
-Use when:
-
-- You need the exact implementation for a node.
-- You want to inspect metadata before modifying a function.
-- You are confirming a search result before impact analysis.
-
 Example:
 
 ```json
 {
-  "node_id": "func_12345",
-  "project_id": "hyper_graph"
+  "node_id": "validateToken/1@src/auth/AuthManager.java",
+  "parser_type": "cplus",
+  "project_id": "cortext"
 }
 ```
 
@@ -1078,59 +1094,40 @@ call.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                                                              |
-| ------------- | -------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| `node_ids`    | Yes      | `str` | One ID or a comma/semicolon-separated string of IDs. Backend also accepts lists after normalization. |
-| `parser_type` | No       | `str` | Backend alias.                                                                                       |
-| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`.                                           |
-| `node_type`   | No       | `str` | Optional domain filter.                                                                              |
-| `project_id`  | No       | `str` | Project scope.                                                                                       |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `node_ids` | Yes | `str` / `List[str]` | One ID, a list of IDs, or a comma/semicolon-separated string. |
+| `node_type` | No | `str` | Optional domain filter. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `nodes` or backend-specific node-detail list.
-
-Use when:
-
-- You have IDs from `find_paths` or `query_subgraph`.
-- You need to render or inspect several related symbols.
-- You want fewer MCP round trips than repeated `get_symbol` calls.
 
 Example:
 
 ```json
-{
-  "node_ids": "func_1,func_2,func_3",
-  "project_id": "hyper_graph"
-}
+{ "node_ids": "func_1,func_2,func_3", "parser_type": "cplus", "project_id": "cortext" }
 ```
 
 #### `query_subgraph`
 
 Purpose: Returns call-graph context around one function: callers, callees, or
-both, depending on direction and backend support.
+both, depending on direction.
 
 Input:
 
-| Field           | Required | Type   | Meaning                                                                                  |
-| --------------- | -------- | ------ | ---------------------------------------------------------------------------------------- |
-| `function_id`   | Yes      | `str`  | Starting function/symbol node ID.                                                        |
-| `parser_type`   | No       | `str`  | Backend alias.                                                                           |
-| `project_id`            | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`.                               |
-| `limit`         | No       | `str`  | Optional backend result cap.                                                             |
-| `node_type`     | No       | `str`  | Optional domain filter.                                                                  |
-| `expand_search` | No       | `bool` | Include compact cross-domain bridge context when supported.                              |
-| `project_id`    | No       | `str`  | Project scope.                                                                           |
-| `direction`     | No       | `str`  | Public wrapper default is `all`; backend catalog also describes `out`, `in`, and `both`. |
-| `max_depth`     | No       | `int`  | Traversal depth. Default: `2`.                                                           |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `function_id` | Yes | `str` | Starting function/symbol node ID. |
+| `direction` | No | `str` | `all` (default), `in`, `out`, or `both`. |
+| `max_depth` | No | `int` | Traversal depth. Default: `2`. |
+| `limit` | No | `int` | Optional backend result cap. |
+| `node_type` | No | `str` | Optional domain filter. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `nodes` and `edges`; empty result is normalized to
 `reason: no_subgraph`.
-
-Use when:
-
-- You are doing impact analysis around one function.
-- You need direct callers/callees before a refactor.
-- You need test scope from graph neighbors.
-- You want to understand local dependencies without computing full paths.
 
 Example:
 
@@ -1139,7 +1136,8 @@ Example:
   "function_id": "func_main",
   "direction": "out",
   "max_depth": 3,
-  "project_id": "hyper_graph"
+  "parser_type": "cplus",
+  "project_id": "cortext"
 }
 ```
 
@@ -1149,27 +1147,18 @@ Purpose: Finds call paths between two specific function nodes.
 
 Input:
 
-| Field               | Required | Type   | Meaning                                                    |
-| ------------------- | -------- | ------ | ---------------------------------------------------------- |
-| `start_function_id` | Yes      | `str`  | Starting function ID.                                      |
-| `end_function_id`   | Yes      | `str`  | Target function ID.                                        |
-| `parser_type`       | No       | `str`  | Backend alias.                                             |
-| `project_id`                | No       | `str`  | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `limit`             | No       | `str`  | Optional max result count.                                 |
-| `node_type`         | No       | `str`  | Optional domain filter.                                    |
-| `expand_search`     | No       | `bool` | Include bridge context when supported.                     |
-| `project_id`        | No       | `str`  | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `start_function_id` | Yes | `str` | Starting function ID. |
+| `end_function_id` | Yes | `str` | Target function ID. |
+| `limit` | No | `int` | Optional max result count. |
+| `node_type` | No | `str` | Optional domain filter. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `paths`, and often `nodes` and `edges`. No-path runtime
 errors are normalized to `paths: []`, `nodes: []`, `edges: []`,
 `reason: no_path`.
-
-Use when:
-
-- You need to prove how one function reaches another.
-- You are debugging unexpected side effects.
-- You want an execution chain for documentation or code review.
-- You need candidate path data for `reconstruct_flow`.
 
 Example:
 
@@ -1177,7 +1166,9 @@ Example:
 {
   "start_function_id": "main",
   "end_function_id": "malloc",
-  "limit": "10"
+  "parser_type": "cplus",
+  "project_id": "cortext",
+  "limit": 10
 }
 ```
 
@@ -1187,23 +1178,15 @@ Purpose: Finds call paths between files/modules using file path tokens.
 
 Input:
 
-| Field           | Required | Type  | Meaning                                                    |
-| --------------- | -------- | ----- | ---------------------------------------------------------- |
-| `source_module` | Yes      | `str` | Source file/module token.                                  |
-| `target_module` | Yes      | `str` | Target file/module token.                                  |
-| `parser_type`   | No       | `str` | Backend alias.                                             |
-| `project_id`            | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `limit`         | No       | `str` | Max paths.                                                 |
-| `project_id`    | No       | `str` | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `source_module` | Yes | `str` | Source file/module token. |
+| `target_module` | Yes | `str` | Target file/module token. |
+| `limit` | No | `int` | Max paths. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `paths` or backend-specific module graph data.
-
-Use when:
-
-- You care about module coupling rather than individual functions.
-- You are planning a refactor across directories.
-- You need to verify whether one subsystem can reach another.
-- You want architectural evidence for dependency cleanup.
 
 Example:
 
@@ -1211,7 +1194,9 @@ Example:
 {
   "source_module": "src/auth",
   "target_module": "src/payment",
-  "limit": "20"
+  "parser_type": "cplus",
+  "project_id": "cortext",
+  "limit": 20
 }
 ```
 
@@ -1222,32 +1207,26 @@ more tokens.
 
 Input:
 
-| Field         | Required | Type        | Meaning                                                    |
-| ------------- | -------- | ----------- | ---------------------------------------------------------- |
-| `file_path`   | No       | `str`       | Convenience single path token.                             |
-| `modules`     | No       | `List[str]` | Explicit list of path tokens.                              |
-| `node_types`  | No       | `List[str]` | Optional filters such as `Function`, `Class`, or `Type`.   |
-| `parser_type` | No       | `str`       | Backend alias.                                             |
-| `project_id`          | No       | `str`       | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `project_id`  | No       | `str`       | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `file_path` | No | `str` | Convenience single path token. |
+| `modules` | No | `List[str]` | Explicit list of path tokens. |
+| `node_types` | No | `List[str]` | Optional filters such as `Function`, `Class`, or `Type`. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 At least one of `file_path` or `modules` is required.
 
 Output: Dict with `symbols` or backend-specific symbol inventory.
-
-Use when:
-
-- You know the file but not the function names.
-- You want the API surface of a file/directory.
-- You need a complete symbol inventory before touching a module.
-- You are mapping a source file to graph IDs.
 
 Example:
 
 ```json
 {
   "file_path": "src/auth/router.ts",
-  "node_types": ["Function"]
+  "node_types": ["Function"],
+  "parser_type": "typescript",
+  "project_id": "cortext"
 }
 ```
 
@@ -1258,28 +1237,18 @@ pattern.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                      |
-| ------------- | -------- | ----- | ------------------------------------------------------------ |
-| `class_name`  | Yes      | `str` | Class/type name pattern. Routed to backend as `class_names`. |
-| `parser_type` | No       | `str` | Backend alias.                                               |
-| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`.   |
-| `project_id`  | No       | `str` | Project scope.                                               |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `class_name` | Yes | `str` | Class/type name pattern. Routed to backend as `class_names`. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `functions` or backend-specific class/method structure.
-
-Use when:
-
-- You need all methods on a class.
-- You are reviewing class-level API behavior.
-- You know a type name but not its method IDs.
 
 Example:
 
 ```json
-{
-  "class_name": "AuthManager",
-  "project_id": "hyper_graph"
-}
+{ "class_name": "AuthManager", "parser_type": "cplus", "project_id": "cortext" }
 ```
 
 #### `list_up_entrypoint`
@@ -1289,31 +1258,19 @@ module that are called from outside the module.
 
 Input:
 
-| Field         | Required | Type        | Meaning                                                                                          |
-| ------------- | -------- | ----------- | ------------------------------------------------------------------------------------------------ |
-| `modules`     | Yes      | `List[str]` | Module/file path tokens.                                                                         |
-| `module`      | No       | `str`       | Single-module alias for clients that cannot pass lists.                                          |
-| `parser_type` | No       | `str`       | Backend alias.                                                                                   |
-| `project_id`          | Yes      | `str`       | Graph name/database. The wrapper advertises legacy `neo4j`; pass `hyper_graph` in FalkorDB mode. |
-| `project_id`  | No       | `str`       | Project scope.                                                                                   |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `modules` | Yes | `List[str]` | Module/file path tokens (`module` accepted as a single-module alias). |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `entrypoints`. If required fields are missing, returns
 `ok: false`, `missing_fields`, accepted formats, and an example.
 
-Use when:
-
-- You want to identify a module's public API surface.
-- You are planning where to start reading a subsystem.
-- You need change-impact entry points for tests or review.
-- You are checking module boundary leaks.
-
 Example:
 
 ```json
-{
-  "modules": ["src/api"],
-  "project_id": "hyper_graph"
-}
+{ "modules": ["src/api"], "parser_type": "cplus", "project_id": "cortext" }
 ```
 
 #### `list_possible_calls`
@@ -1323,63 +1280,42 @@ virtual calls, and callback registrations.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                    |
-| ------------- | -------- | ----- | ---------------------------------------------------------- |
-| `function_id` | No       | `str` | Optional function to scope the indirect-call lookup.       |
-| `parser_type` | No       | `str` | Backend alias.                                             |
-| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `limit`       | No       | `str` | Max results.                                               |
-| `project_id`  | No       | `str` | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `function_id` | No | `str` | Optional function to scope the indirect-call lookup. |
+| `limit` | No | `int` | Max results. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `calls` or backend-specific possible-call edge records.
-
-Use when:
-
-- Static `CALLS` edges are incomplete because of callbacks or dynamic dispatch.
-- You are analyzing C/C++ function pointers.
-- You are tracing Android callback-style behavior.
-- You want a conservative impact set.
 
 Example:
 
 ```json
-{
-  "function_id": "func_123",
-  "limit": "50"
-}
+{ "function_id": "func_123", "limit": 50, "parser_type": "cplus", "project_id": "cortext" }
 ```
 
 #### `annotate_node`
 
-Purpose: Adds or updates review annotations on a graph node.
+Purpose: Adds or updates review annotations on a graph node. This is the
+server's main write operation.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                    |
-| ------------- | -------- | ----- | ---------------------------------------------------------- |
-| `node_id`     | Yes      | `str` | Target node ID.                                            |
-| `note`        | No       | `str` | Free-form note.                                            |
-| `tags`        | No       | `str` | Comma-separated tags.                                      |
-| `parser_type` | No       | `str` | Backend alias.                                             |
-| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `project_id`  | No       | `str` | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `node_id` | Yes | `str` | Target node ID. |
+| `note` | No | `str` | Free-form note. |
+| `tags` | No | `str` | Comma-separated tags. |
+| `parser_type` | No | `str` | Backend alias. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with updated node/annotation data.
-
-Use when:
-
-- Marking a function for review.
-- Tagging security, migration, or tech-debt concerns.
-- Recording analysis findings directly in the graph.
 
 Example:
 
 ```json
-{
-  "node_id": "func_123",
-  "note": "Buffer overflow risk",
-  "tags": "security,review"
-}
+{ "node_id": "func_123", "note": "Buffer overflow risk", "tags": "security,review" }
 ```
 
 ### Flow And Module Tracing Tools
@@ -1391,33 +1327,22 @@ relationships.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                    |
-| ------------- | -------- | ----- | ---------------------------------------------------------- |
-| `start_id`    | Yes      | `str` | Start function/symbol ID.                                  |
-| `direction`   | No       | `str` | Direction filter, backend-specific.                        |
-| `parser_type` | No       | `str` | Backend alias.                                             |
-| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `limit`       | No       | `str` | Max results.                                               |
-| `project_id`  | No       | `str` | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `start_id` | Yes | `str` | Start function/symbol ID. |
+| `direction` | No | `str` | Direction filter, backend-specific (e.g. `downstream`, `upstream`). |
+| `limit` | No | `int` | Max results. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `flows`, `nodes`, `edges`, or backend-specific traced paths.
 No-path runtime errors are normalized to `nodes: []`, `edges: []`,
 `reason: no_path`.
 
-Use when:
-
-- You need broader flow tracing than a single `find_paths` pair.
-- You are exploring downstream or upstream effects from one node.
-- You want backend-specific traversal behavior.
-
 Example:
 
 ```json
-{
-  "start_id": "func_123",
-  "direction": "downstream",
-  "limit": "25"
-}
+{ "start_id": "func_123", "direction": "downstream", "limit": 25, "parser_type": "cplus", "project_id": "cortext" }
 ```
 
 #### `trace_flow_between_module`
@@ -1427,24 +1352,15 @@ logic.
 
 Input:
 
-| Field           | Required | Type  | Meaning                                                    |
-| --------------- | -------- | ----- | ---------------------------------------------------------- |
-| `source_module` | Yes      | `str` | Source module/file token.                                  |
-| `target_module` | Yes      | `str` | Target module/file token.                                  |
-| `parser_type`   | No       | `str` | Backend alias.                                             |
-| `project_id`            | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `limit`         | No       | `str` | Max results.                                               |
-| `project_id`    | No       | `str` | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `source_module` | Yes | `str` | Source module/file token. |
+| `target_module` | Yes | `str` | Target module/file token. |
+| `limit` | No | `int` | Max results. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `flows`, `nodes`, `edges`, or backend-specific module paths.
-No-path runtime errors are normalized to `nodes: []`, `edges: []`,
-`reason: no_path`.
-
-Use when:
-
-- You need cross-module flow evidence.
-- You are analyzing architecture or subsystem coupling.
-- You need Android route/intent/event style relationships where supported.
 
 Example:
 
@@ -1452,8 +1368,9 @@ Example:
 {
   "source_module": "ui/",
   "target_module": "service/",
-  "limit": "20",
-  "parser_type": "android"
+  "limit": 20,
+  "parser_type": "android",
+  "project_id": "digital_key_main"
 }
 ```
 
@@ -1464,21 +1381,14 @@ objects that are easier for agents and reviewers to reason about.
 
 Input:
 
-| Field                | Required | Type  | Meaning                                                                                  |
-| -------------------- | -------- | ----- | ---------------------------------------------------------------------------------------- |
-| `entry_context_json` | Yes      | `str` | JSON object string with `type`, `entry_point`, `entry_node_id`, `screen`, and `trigger`. |
-| `paths_json`         | Yes      | `str` | JSON array string of path objects with `nodes` and `edges`.                              |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `entry_context_json` | Yes | `str` | JSON object string with `type`, `entry_point`, `entry_node_id`, `screen`, and `trigger`. |
+| `paths_json` | Yes | `str` | JSON array string of path objects with `nodes` and `edges`. |
 
 Output: Dict with `flows` and `uncertainties`. Each flow contains `flow_id`,
 `title`, `type`, `confidence`, `entry_node_id`, `paths_used`,
 `discarded_paths`, and ordered `steps`.
-
-Use when:
-
-- You already have path data from `find_paths` or `query_subgraph`.
-- You want an explainable execution narrative.
-- You need to distinguish direct edges from inferred/shared-state steps.
-- You are preparing impact-analysis notes for an agent or reviewer.
 
 Example:
 
@@ -1491,35 +1401,29 @@ Example:
 
 ### Dependency Planning Tools
 
+The five planner tools are proxied to the planning backend
+(`fastmcp_server.py`); they accept the same provider-neutral `project_id`
+scope as the rest of the server.
+
 #### `compute_scc`
 
 Purpose: Computes strongly connected components in a directed dependency graph.
 
 Input:
 
-| Field                | Required | Type                   | Meaning                                                  |
-| -------------------- | -------- | ---------------------- | -------------------------------------------------------- |
-| `nodes`              | No       | `str`                  | Node IDs/names as a comma or semicolon-separated string. |
-| `edges`              | No       | `List[Dict[str, Any]]` | Edge records with source/target style fields.            |
-| `edge_semantics`     | No       | `str`                  | `depends_on` or `calls`. Default: `depends_on`.          |
-| `include_singletons` | No       | `bool`                 | Include one-node SCCs. Default: `true`.                  |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `nodes` | No | `str` | Node IDs/names as a comma or semicolon-separated string. |
+| `edges` | No | `List[Dict]` | Edge records with source/target style fields. |
+| `edge_semantics` | No | `str` | `depends_on` or `calls`. Default: `depends_on`. |
+| `include_singletons` | No | `bool` | Include one-node SCCs. Default: `true`. |
 
 Output: Dict with `components`, `node_to_scc`, and `cycle_summary`.
-
-Use when:
-
-- You need to detect dependency cycles.
-- You are preparing a migration or extraction plan.
-- You want to condense cyclic groups before sorting.
 
 Example:
 
 ```json
-{
-  "nodes": "A,B",
-  "edges": [{ "from": "A", "to": "B" }],
-  "edge_semantics": "depends_on"
-}
+{ "nodes": "A,B", "edges": [{ "from": "A", "to": "B" }], "edge_semantics": "depends_on" }
 ```
 
 #### `topological_sort`
@@ -1529,32 +1433,23 @@ It can auto-condense SCCs when cycles exist.
 
 Input:
 
-| Field            | Required | Type                   | Meaning                                                       |
-| ---------------- | -------- | ---------------------- | ------------------------------------------------------------- |
-| `nodes`          | No       | `str`                  | Node IDs/names as a comma or semicolon-separated string.      |
-| `edges`          | No       | `List[Dict[str, Any]]` | Dependency edges.                                             |
-| `edge_semantics` | No       | `str`                  | `depends_on` or `calls`. Default: `depends_on`.               |
-| `output_mode`    | No       | `str`                  | `linear`, `waves`, or `both`. Default: `both`.                |
-| `on_cycle`       | No       | `str`                  | `auto_condense_scc` or `error`. Default: `auto_condense_scc`. |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `nodes` | No | `str` | Node IDs/names as a comma or semicolon-separated string. |
+| `edges` | No | `List[Dict]` | Dependency edges. |
+| `edge_semantics` | No | `str` | `depends_on` or `calls`. Default: `depends_on`. |
+| `output_mode` | No | `str` | `linear`, `waves`, or `both`. Default: `both`. |
+| `on_cycle` | No | `str` | `auto_condense_scc` or `error`. Default: `auto_condense_scc`. |
 
 Output: Dict with `is_dag`, `linear_order`, `waves`, cycle diagnostics, and
 optional condensed SCC data.
-
-Use when:
-
-- You need migration order.
-- You want parallelizable work waves.
-- You need cycle diagnostics before refactoring.
 
 Example:
 
 ```json
 {
   "nodes": "A,B,C",
-  "edges": [
-    { "from": "A", "to": "B" },
-    { "from": "B", "to": "C" }
-  ],
+  "edges": [{ "from": "A", "to": "B" }, { "from": "B", "to": "C" }],
   "output_mode": "both"
 }
 ```
@@ -1565,30 +1460,21 @@ Purpose: Builds module-level dependency waves from graph `CALLS` edges.
 
 Input:
 
-| Field            | Required | Type  | Meaning                                  |
-| ---------------- | -------- | ----- | ---------------------------------------- |
-| `modules`        | Yes      | `str` | Comma/semicolon-separated module tokens. |
-| `parser_type`    | No       | `str` | Backend alias.                           |
-| `project_id`             | No       | `str` | Database.                                |
-| `edge_semantics` | No       | `str` | Default: `depends_on`.                   |
-| `on_cycle`       | No       | `str` | Default: `auto_condense_scc`.            |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `modules` | Yes | `str` | Comma/semicolon-separated module tokens. |
+| `edge_semantics` | No | `str` | Default: `depends_on`. |
+| `on_cycle` | No | `str` | Default: `auto_condense_scc`. |
+| `parser_type` | No | `str` | Backend alias. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `waves`, `module_order`, `depends_on_map`,
 `module_dependencies`, cycle diagnostics, and SCC mapping.
 
-Use when:
-
-- You need a module migration sequence.
-- You want to split module work into parallel waves.
-- You are planning a refactor across several subsystems.
-
 Example:
 
 ```json
-{
-  "modules": "auth,payment",
-  "project_id": "hyper_graph"
-}
+{ "modules": "auth,payment", "parser_type": "cplus", "project_id": "cortext" }
 ```
 
 #### `plan_file_dependency_order`
@@ -1596,74 +1482,49 @@ Example:
 Purpose: Builds file-level dependency waves inside one or more modules from
 graph `CALLS` edges.
 
-Input:
+Input: as `plan_dependency_order` plus:
 
-| Field                  | Required | Type   | Meaning                                  |
-| ---------------------- | -------- | ------ | ---------------------------------------- |
-| `modules`              | Yes      | `str`  | Comma/semicolon-separated module tokens. |
-| `parser_type`          | No       | `str`  | Backend alias.                           |
-| `project_id`                   | No       | `str`  | Database.                                |
-| `edge_semantics`       | No       | `str`  | Default: `depends_on`.                   |
-| `on_cycle`             | No       | `str`  | Default: `auto_condense_scc`.            |
-| `include_cross_module` | No       | `bool` | Include cross-module edges.              |
-| `max_files_per_module` | No       | `int`  | Default: `2000`.                         |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `include_cross_module` | No | `bool` | Include cross-module edges. |
+| `max_files_per_module` | No | `int` | Default: `2000`. |
 
 Output: Dict with `cross_module_edges` and `modules[]`. Each module contains
 `waves`, `file_order`, `depends_on_map`, cycle diagnostics, SCC mapping, and
 `file_dependencies`.
 
-Use when:
-
-- Module-level planning is too coarse.
-- You need file-by-file migration order.
-- You want cross-module visibility before moving files.
-
 Example:
 
 ```json
-{
-  "modules": "auth,payment",
-  "project_id": "hyper_graph",
-  "include_cross_module": true
-}
+{ "modules": "auth,payment", "include_cross_module": true, "parser_type": "cplus", "project_id": "cortext" }
 ```
 
 #### `plan_function_dependency_order`
 
-Purpose: Builds function-level dependency waves inside one or more modules from
-graph `CALLS` edges.
+Purpose: Builds function-level dependency waves inside one or more modules
+from graph `CALLS` edges.
 
-Input:
+Input: as `plan_dependency_order` plus:
 
-| Field                      | Required | Type   | Meaning                                               |
-| -------------------------- | -------- | ------ | ----------------------------------------------------- |
-| `modules`                  | Yes      | `str`  | Comma/semicolon-separated module tokens.              |
-| `parser_type`              | No       | `str`  | Backend alias.                                        |
-| `project_id`                       | No       | `str`  | Database.                                             |
-| `edge_semantics`           | No       | `str`  | Default: `depends_on`.                                |
-| `on_cycle`                 | No       | `str`  | Default: `auto_condense_scc`.                         |
-| `include_cross_module`     | No       | `bool` | Include cross-module edges.                           |
-| `include_lambdas`          | No       | `bool` | Include lambda/function-literal nodes when available. |
-| `max_functions_per_module` | No       | `int`  | Default: `5000`.                                      |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `include_cross_module` | No | `bool` | Include cross-module edges. |
+| `include_lambdas` | No | `bool` | Include lambda/function-literal nodes when available. |
+| `max_functions_per_module` | No | `int` | Default: `5000`. |
 
 Output: Dict with `cross_module_edges` and `modules[]`. Each module contains
-function waves, ordered IDs, detailed function metadata, dependency maps, cycle
-diagnostics, and SCC mapping.
-
-Use when:
-
-- You need the most granular migration or rewrite order.
-- You are splitting implementation tasks across functions.
-- You need to see cycles at function granularity.
+function waves, ordered IDs, detailed function metadata, dependency maps,
+cycle diagnostics, and SCC mapping.
 
 Example:
 
 ```json
 {
   "modules": "auth,payment",
-  "project_id": "hyper_graph",
   "include_cross_module": true,
-  "include_lambdas": false
+  "include_lambdas": false,
+  "parser_type": "cplus",
+  "project_id": "cortext"
 }
 ```
 
@@ -1671,33 +1532,24 @@ Example:
 
 #### `find_screen_workflows`
 
-Purpose: Finds ranked screen-to-screen workflows for React/TypeScript projects
-using `NAVIGATE` edges. It can search between two screens or around one screen.
+Purpose: Finds ranked screen-to-screen navigation workflows using `NAVIGATE`
+edges. It can search between two screens or around one screen. Implemented in
+the cplus backend via `services/workflow_service.py`.
 
 Input:
 
-| Field                    | Required | Type   | Meaning                                                              |
-| ------------------------ | -------- | ------ | -------------------------------------------------------------------- |
-| `project_id`             | Yes      | `str`  | Project scope.                                                       |
-| `node_a`                 | Yes      | `str`  | Source/anchor screen name or symbol ID.                              |
-| `node_b`                 | No       | `str`  | Target screen name for pair mode.                                    |
-| `direction`              | No       | `str`  | `inbound`, `outbound`, or `bidirectional`. Default: `bidirectional`. |
-| `max_hops`               | No       | `int`  | Max NAVIGATE hops. Default: `8`.                                     |
-| `max_paths`              | No       | `int`  | Max workflows. Default: `100`.                                       |
-| `include_entry_function` | No       | `bool` | Reserved/optional entry metadata.                                    |
-| `include_api_calls`      | No       | `bool` | Reserved/optional API metadata.                                      |
-| `project_id`                     | No       | `str`  | Database.                                                            |
-| `parser_type`            | No       | `str`  | Backend alias.                                                       |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `project_id` | Yes | `str` | Project scope. |
+| `node_a` | Yes | `str` | Source/anchor screen name or symbol ID. |
+| `node_b` | No | `str` | Target screen name for pair mode. |
+| `direction` | No | `str` | `inbound`, `outbound`, or `bidirectional`. Default: `bidirectional`. |
+| `max_hops` | No | `int` | Max NAVIGATE hops. Default: `8`. |
+| `max_paths` | No | `int` | Max workflows. Default: `100`. |
+| `parser_type` | No | `str` | Backend alias. |
 
 Output: Dict with `mode`, `direction`, `project_id`, `resolved`,
 `workflows`, `uncertainties`, and `truncated`.
-
-Use when:
-
-- You need all business flows between two screens.
-- You are changing a screen and want inbound/outbound workflows.
-- You are validating nested navigator paths.
-- You are planning UI regression tests.
 
 Example:
 
@@ -1706,7 +1558,7 @@ Example:
   "project_id": "my-app",
   "node_a": "RewardHome",
   "node_b": "GoldTransfer",
-  "project_id": "hyper_graph",
+  "parser_type": "typescript",
   "max_hops": 8
 }
 ```
@@ -1718,37 +1570,31 @@ the blast radius of changing a function/screen.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                              |
-| ------------- | -------- | ----- | -------------------------------------------------------------------- |
-| `function_id` | Yes      | `str` | Symbol ID or function/screen ID.                                     |
-| `project_id`          | No       | `str` | Neo4j database used by the workflow-scoring layer. Default: `neo4j`. |
-| `direction`   | No       | `str` | `downstream` or `upstream`. Default: `downstream`.                   |
-| `max_depth`   | No       | `int` | CALLS traversal depth, capped at `4`.                                |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `function_id` | Yes | `str` | Symbol ID or function/screen ID. |
+| `project_id` | No | `str` | Project scope; omit to query across all projects. |
+| `direction` | No | `str` | `downstream` or `upstream`. Default: `downstream`. |
+| `max_depth` | No | `int` | CALLS traversal depth, capped at `4`. Default: `4`. |
+| `parser_type` | No | `str` | Backend alias. |
 
-Output: Dict with `risk_score`, counts, `impacted_nodes`, and optional
-`workflow_impact` containing direct/indirect affected workflows, cascade
-workflows, navigator impacts, shared-screen conflict flag, score, and
+Output: Dict with `risk_score`, counts, `impacted_nodes`, and a
+`workflow_impact` block containing direct/indirect affected workflows,
+cascade workflows, navigator impacts, shared-screen conflict flag, score, and
 recommendation.
 
-Use when:
-
-- You need risk before modifying a shared function.
-- You want workflow-aware regression scope.
-- You are refactoring screen navigation or shared UI logic.
-- You need an objective score for review priority.
-
-Provider note: call-graph expansion is dispatched through the provider-aware
-backend, but the workflow-scoring layer still opens a raw Neo4j driver. In the
-FalkorDB runtime, the response may contain base call-graph risk plus
-`workflow_impact.error`. Use Neo4j compatibility mode for the full workflow
-score.
+Provider note: both the call-graph expansion and the workflow-scoring layer
+(`tools/common/workflow_impact_scorer.py`) run through the shared
+provider-neutral graph driver. When the active graph lacks workflow-shaped
+relationships (`HAS_STEP`), the response contains base call-graph risk plus a
+`workflow_impact` diagnostic instead of a score.
 
 Example:
 
 ```json
 {
   "function_id": "func_123",
-  "project_id": "neo4j",
+  "project_id": "cortext",
   "direction": "downstream",
   "max_depth": 4
 }
@@ -1761,71 +1607,46 @@ indirectly through a `CALLS` chain.
 
 Input:
 
-| Field              | Required | Type   | Meaning                                                 |
-| ------------------ | -------- | ------ | ------------------------------------------------------- |
-| `function_id`      | Yes      | `str`  | Symbol ID or file path anchor.                          |
-| `project_id`               | No       | `str`  | Neo4j database. Default: `neo4j`.                       |
-| `include_indirect` | No       | `bool` | Include CALLS-chain derived workflows. Default: `true`. |
-| `max_depth`        | No       | `int`  | Indirect traversal cap, capped at `4`.                  |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `function_id` | Yes | `str` | Symbol ID or file path anchor. |
+| `project_id` | No | `str` | Project scope. |
+| `include_indirect` | No | `bool` | Include CALLS-chain derived workflows. Default: `true`. |
+| `max_depth` | No | `int` | Indirect traversal cap, capped at `4`. Default: `4`. |
+| `parser_type` | No | `str` | Backend alias. |
 
 Output: Dict with `function_id`, `direct_workflows`,
 `indirect_workflows`, and `total`.
 
-Use when:
-
-- You need to know which workflows a function participates in.
-- You are building a regression checklist.
-- You want workflow ownership for a code path.
-
-Provider note: this tool currently opens a raw Neo4j driver and is not
-FalkorDB-aware.
-
 Example:
 
 ```json
-{
-  "function_id": "func_123",
-  "project_id": "neo4j",
-  "include_indirect": true,
-  "max_depth": 4
-}
+{ "function_id": "func_123", "project_id": "cortext", "include_indirect": true, "max_depth": 4 }
 ```
 
 ### IPC And Fullstack API Bridge Tools
 
 #### `get_ipc_message`
 
-Purpose: Queries IPC/message records by sender and/or receiver. It checks graph
-`Message` nodes first and can fall back to JSON data in backend logic.
+Purpose: Queries IPC/message records by sender and/or receiver. It checks
+graph `Message` nodes first and can fall back to JSON data in backend logic.
 
 Input:
 
-| Field         | Required | Type  | Meaning                                                    |
-| ------------- | -------- | ----- | ---------------------------------------------------------- |
-| `sender`      | No       | `str` | Sender component pattern.                                  |
-| `receiver`    | No       | `str` | Receiver component pattern.                                |
-| `parser_type` | No       | `str` | Backend alias.                                             |
-| `project_id`          | No       | `str` | Graph name/database. Current runtime graph: `hyper_graph`. |
-| `project_id`  | No       | `str` | Project scope.                                             |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `sender` | No | `str` | Sender component pattern. |
+| `receiver` | No | `str` | Receiver component pattern. |
+| `parser_type` | No | `str` | Backend alias; omit for fan-out. |
+| `project_id` | No | `str` | Project scope. |
 
 Output: Dict with `messages`, sender/receiver lists, or backend-specific IPC
 details.
 
-Use when:
-
-- An Android component communicates through intents/services/events.
-- You need to trace message passing between components.
-- You only know the sender or receiver and need the counterpart list.
-
 Example:
 
 ```json
-{
-  "sender": "Activity",
-  "receiver": "Service",
-  "project_id": "hyper_graph",
-  "project_id": "digital_key_main"
-}
+{ "sender": "Activity", "receiver": "Service", "parser_type": "android", "project_id": "digital_key_main" }
 ```
 
 #### `find_callers_of_endpoint`
@@ -1835,23 +1656,18 @@ It traverses `Function -> CALLS_API -> ApiCall -> MATCHES -> ApiEndpoint`.
 
 Input:
 
-| Field           | Required | Type  | Meaning                                                                  |
-| --------------- | -------- | ----- | ------------------------------------------------------------------------ |
-| `endpoint_path` | Yes      | `str` | Backend endpoint path, for example `/api/users/:id`.                     |
-| `http_method`   | No       | `str` | `GET`, `POST`, `PUT`, `DELETE`, `ALL`, or empty for any. Default: `GET`. |
-| `be_project_id` | No       | `str` | Case-insensitive backend project scope.                                  |
-| `fe_project_id` | No       | `str` | Case-insensitive frontend project scope.                                 |
-| `project_id`            | No       | `str` | Graph database or graph name; uses active/default context.               |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `endpoint_path` | Yes | `str` | Backend endpoint path, for example `/api/users/:id`. |
+| `http_method` | No | `str` | `GET`, `POST`, `PUT`, `DELETE`, or empty for any. Default: `GET`. |
+| `be_project_id` | No | `str` | Case-insensitive backend project scope. |
+| `fe_project_id` | No | `str` | Case-insensitive frontend project scope. |
+| `project_id` | No | `str` | Project scope; optional when `be_project_id`/`fe_project_id` is set. |
+| `parser_type` | No | `str` | Backend alias. |
 
 Output: Dict with `endpoint_path`, `callers`, and `total`. Each caller
 contains function name, qualified name, React role, file path, line number,
 project ID, URL pattern, and match confidence.
-
-Use when:
-
-- You are changing a backend API contract.
-- You need to find affected frontend screens.
-- You want FE impact before removing or renaming an endpoint.
 
 Provider note: this tool uses the shared graph driver and checks required
 `ApiEndpoint`, `ApiCall`, `CALLS_API`, and `MATCHES` schema before querying.
@@ -1862,9 +1678,8 @@ Example:
 {
   "endpoint_path": "/api/users/:id",
   "http_method": "GET",
-  "be_project_id": "backend",
-  "fe_project_id": "frontend",
-  "project_id": "hyper_graph"
+  "fe_project_id": "web-client",
+  "be_project_id": "user-service"
 }
 ```
 
@@ -1875,369 +1690,112 @@ backend controller, service, repository, and database nodes.
 
 Input:
 
-| Field            | Required | Type  | Meaning                                                          |
-| ---------------- | -------- | ----- | ---------------------------------------------------------------- |
-| `component_name` | No       | `str` | Frontend component/screen name.                                  |
-| `endpoint_path`  | No       | `str` | Backend endpoint path. Required when `component_name` is absent. |
-| `fe_project_id`  | No       | `str` | Case-insensitive frontend project scope.                         |
-| `be_project_id`  | No       | `str` | Case-insensitive backend project scope.                          |
-| `max_depth`      | No       | `str` | Max frontend `CALLS` hops. Default: `5`.                         |
-| `project_id`             | No       | `str` | Graph database or graph name; uses active/default context.       |
+| Field | Required | Type | Meaning |
+| --- | --- | --- | --- |
+| `component_name` | No | `str` | Frontend component/screen name. |
+| `endpoint_path` | No | `str` | Backend endpoint path. Required when `component_name` is absent. |
+| `fe_project_id` | No | `str` | Case-insensitive frontend project scope. |
+| `be_project_id` | No | `str` | Case-insensitive backend project scope. |
+| `project_id` | No | `str` | Project scope; optional when either fe/be scope is set. |
+| `max_depth` | No | `str`/`int` | Max frontend `CALLS` hops. Default: `5`. |
+| `parser_type` | No | `str` | Backend alias. |
 
 Output: Dict with `chains` and `total`. Each chain can include frontend
-component/caller, API call, backend endpoint, controller, service, repository,
-database, and match confidence.
-
-Use when:
-
-- You need to understand what database a screen ultimately touches.
-- You are auditing data access paths.
-- You are debugging a fullstack behavior from UI to backend.
-- You need backend dependencies of a frontend component.
-
-Provider note: this tool uses the shared graph driver and fails with
-`capability_unavailable` when required endpoint/handler schema is absent.
+component/caller, API call, backend endpoint, controller, service,
+repository, database, and match confidence.
 
 Example:
 
 ```json
 {
   "component_name": "UserProfileScreen",
-  "fe_project_id": "frontend",
-  "be_project_id": "backend",
-  "max_depth": "5",
-  "project_id": "hyper_graph"
+  "fe_project_id": "web-client",
+  "be_project_id": "user-service",
+  "max_depth": 5
 }
 ```
 
-### Living Docs V2 Tools
+### Project Context Tools
 
-Living Docs tools use anchor-based code-to-document traceability. They query
-`LINKS_TO` and `LINKED_FROM` relationships between code nodes and document
-anchors. Pass `project_id` when several projects share the same graph.
+All six tools share this common input shape (`project_id` plus optional
+`parser_type`, `offset`/`limit` paging) and return
+`capability_diagnostics` when the active graph lacks the required schema.
 
-#### `livingdoc_get_links_by_anchor`
+#### `get_project_modules`
 
-Purpose: Lists every link touching a known anchor ID.
+Purpose: Canonical modules, descriptors, and internal/external dependencies.
 
-Input:
+Input: `project_id`, `module_id`, `module_path`,
+`include_dependencies` (default `true`), `offset`, `limit` (default `50`),
+`parser_type`.
 
-| Field                  | Required | Type    | Meaning                                                 |
-| ---------------------- | -------- | ------- | ------------------------------------------------------- |
-| `anchor_id`            | Yes      | `str`   | Code or document anchor ID.                             |
-| `project_id`                   | No       | `str`   | FalkorDB graph name or Neo4j database name.             |
-| `direction`            | No       | `str`   | `out`, `in`, or `both`. Default: `both`.                |
-| `include_node_details` | No       | `bool`  | Include linked node details.                            |
-| `min_score`            | No       | `float` | Minimum link score. `0.0` uses no score filter.         |
-| `status_filter`        | No       | `str`   | Filter by link status, such as accepted pipeline state. |
-| `project_id`           | No       | `str`   | Project scope.                                          |
+Output: Module records with descriptors and dependency lists. Requires
+`ProjectModule`/`BuildDescriptor` labels and `HAS_DESCRIPTOR`.
 
-Output: Dict with `links`; each link follows the standard link payload shape
-with anchor IDs, endpoints, score, status, and optional node details.
+#### `get_public_apis`
 
-Use when:
+Purpose: Strict source-level public/exported declarations.
 
-- You already know an anchor ID.
-- You need all incoming/outgoing doc-code links for one anchor.
-- You are investigating low-score or rejected links.
+Input: `project_id`, `module_id`, `symbol_kinds` (list), `language`,
+`include_inferred` (default `false` — inferred C/C++ headers are opt-in),
+`offset`, `limit`, `parser_type`.
 
-Example:
+Output: Public API records. Requires `ProjectModule` + `EXPOSES_API`.
 
-```json
-{
-  "anchor_id": "src/auth.py:AuthManager.validateToken",
-  "direction": "both",
-  "min_score": 0.7
-}
-```
+#### `get_endpoints`
 
-#### `livingdoc_get_links_for_symbol`
+Purpose: Normalized HTTP, route, service, page, and gRPC endpoint inventory.
 
-Purpose: Given a code symbol, returns document sections linked to it.
+Input: `project_id`, `module_id`, `protocol`, `framework`, `http_method`,
+`query`, `offset`, `limit`, `parser_type`.
 
-Input:
+Output: Endpoint records. Requires `ProjectModule` + `EXPOSES_ENDPOINT`.
 
-| Field            | Required | Type    | Meaning                                                 |
-| ---------------- | -------- | ------- | ------------------------------------------------------- |
-| `node_id`        | No       | `str`   | Code node ID.                                           |
-| `qualified_name` | No       | `str`   | Symbol qualified name. Used when `node_id` is unknown.  |
-| `project_id`             | No       | `str`   | FalkorDB graph name or Neo4j database name.             |
-| `min_score`      | No       | `float` | Minimum link score.                                     |
-| `status_filter`  | No       | `str`   | Link status filter.                                     |
-| `limit`          | No       | `int`   | Max links. `0` means backend default/no explicit limit. |
-| `project_id`     | No       | `str`   | Project scope.                                          |
+#### `get_module_architecture_summary`
 
-At least one of `node_id` or `qualified_name` should be provided.
+Purpose: Counts and bounded samples from the indexed graph; no filesystem
+rescan.
 
-Output: Dict with `links` pointing from the symbol to document anchors.
+Input: `project_id`, `module_id` **or** `all_modules=true`, `detail_level`
+(default `standard`), `item_limit` (default `10`), `parser_type`.
 
-Use when:
+Output: Aggregate counts plus bounded per-section samples.
 
-- Reviewing which spec sections a function implements.
-- Checking whether a code path is documented.
-- Preparing impact notes before changing a symbol.
+#### `get_project_special_files`
 
-Example:
+Purpose: Descriptor roles, parse depth, diagnostics, freshness, and
+redaction-safe summaries for special files (build, config, entry points).
 
-```json
-{
-  "qualified_name": "AuthManager.validateToken",
-  "min_score": 0.7
-}
-```
+Input: `project_id`, `module_id`, `role`, `parser`, `framework`,
+`parse_depth`, `status`, `include_generated` (default `true`), `offset`,
+`limit`, `parser_type`.
 
-#### `livingdoc_get_links_for_document`
+Output: Special-file descriptor records.
 
-Purpose: Given a document path, lists code symbols linked to its sections.
+#### `get_framework_context`
 
-Input:
+Purpose: Framework instances and independently reported context dimensions.
 
-| Field                  | Required | Type    | Meaning                                            |
-| ---------------------- | -------- | ------- | -------------------------------------------------- |
-| `source_file`          | Yes      | `str`   | Document source path, for example `docs/spec.pdf`. |
-| `project_id`                   | No       | `str`   | FalkorDB graph name or Neo4j database name.        |
-| `min_score`            | No       | `float` | Minimum link score.                                |
-| `status_filter`        | No       | `str`   | Link status filter.                                |
-| `include_node_details` | No       | `bool`  | Include code/document node details.                |
-| `limit`                | No       | `int`   | Max links.                                         |
-| `project_id`           | No       | `str`   | Project scope.                                     |
+Input: `project_id`, `module_id`, `framework`, `dimensions` (list),
+`offset`, `limit`, `parser_type`.
 
-Output: Dict with `links` keyed around the document's anchors.
+Output: Framework instance/context records. Requires
+`ProjectModule`/`FrameworkInstance` labels and `USES_FRAMEWORK`.
 
-Use when:
+### Backend-Only Tools (Not On The Unified Server)
 
-- Starting from a spec/PDF/PPTX and asking "what code implements this?"
-- Checking document coverage.
-- Drilling into a document found by `livingdoc_list_documents`.
+These exist in backend modules and in the `list_mcp_functions` catalog source
+but are **not** exposed through `graph_mcp` today:
 
-Example:
+| Tool | Location | Inputs |
+| --- | --- | --- |
+| `list_workflows` | `fastmcp_server.py` | `project`, `language`, `domain`, `limit` (default 50), `project_id` |
+| `get_workflow_steps` | `fastmcp_server.py` | `workflow_id`, `project_id` |
+| `search_workflows` | `fastmcp_server.py` | `query`, `limit` (default 20), `project_id` |
+| `analyze_proc_data_impact` | `cplus/cplus_mcp.py` | Pro*C data-impact analysis |
 
-```json
-{
-  "source_file": "docs/spec.pdf",
-  "include_node_details": true
-}
-```
-
-#### `livingdoc_list_documents`
-
-Purpose: Lists documents that have at least one code link, including link count
-and score statistics. This tool reports **linked** documents, not every document
-that was ingested.
-
-Input:
-
-| Field        | Required | Type  | Meaning                                     |
-| ------------ | -------- | ----- | ------------------------------------------- |
-| `project_id`         | No       | `str` | FalkorDB graph name or Neo4j database name. |
-| `min_links`  | No       | `int` | Minimum links required. Default: `1`.       |
-| `limit`      | No       | `int` | Max documents.                              |
-| `project_id` | No       | `str` | Project scope.                              |
-
-Output: Dict with `documents`; each document includes `source_file`,
-`link_count`, and score stats.
-
-Use when:
-
-- Discovering which documents are connected to the codebase.
-- Prioritizing high-coverage specs.
-- Selecting a document before calling `livingdoc_get_links_for_document`.
-
-Example:
-
-```json
-{
-  "min_links": 5,
-  "limit": 20
-}
-```
-
-#### `livingdoc_list_ingested_documents`
-
-Purpose: Lists document nodes actually persisted in the active graph, including
-documents that do not have any Living Docs code links yet.
-
-Input:
-
-| Field        | Required | Type  | Meaning                                                                     |
-| ------------ | -------- | ----- | --------------------------------------------------------------------------- |
-| `project_id`         | No       | `str` | FalkorDB graph name or Neo4j database name. Uses active context when empty. |
-| `limit`      | No       | `int` | Maximum documents. `0` means no explicit limit.                             |
-| `project_id` | No       | `str` | Restrict results to one project.                                            |
-
-Output: Dict with `documents`. Each item contains at least `source_file` and
-`document_node_count`; backend implementations may include additional document
-metadata.
-
-Use when:
-
-- Confirming that a PDF, PPTX, DOCX, or Markdown file reached the graph.
-- Separating an ingestion failure from a Living Docs link-generation failure.
-- Finding documents that exist in the active graph but do not appear in
-  `livingdoc_list_documents`.
-- Auditing document persistence before running or debugging the link pipeline.
-
-Do not use it to measure code-document coverage. A document returned here may
-have zero `LINKS_TO` edges. Use `livingdoc_list_documents` for linked documents
-and `livingdoc_get_link_stats` for link health.
-
-Example:
-
-```json
-{
-  "project_id": "hyper_graph",
-  "limit": 100,
-  "project_id": "hypergraph"
-}
-```
-
-Representative output:
-
-```json
-{
-  "documents": [
-    {
-      "source_file": "docs/authentication-spec.pdf",
-      "document_node_count": 48
-    }
-  ]
-}
-```
-
-#### `livingdoc_get_link_stats`
-
-Purpose: Returns aggregate health statistics for the Living Docs link graph.
-
-Input:
-
-| Field             | Required | Type   | Meaning                                     |
-| ----------------- | -------- | ------ | ------------------------------------------- |
-| `project_id`              | No       | `str`  | FalkorDB graph name or Neo4j database name. |
-| `include_orphans` | No       | `bool` | Count orphaned edges. Default: `true`.      |
-| `project_id`      | No       | `str`  | Project scope.                              |
-
-Output: Dict with `total_links`, `by_status`, `by_pipeline_version`,
-`orphan_count`, and `score_histogram`.
-
-Use when:
-
-- Confirming the Living Docs pipeline has run.
-- Checking traceability health before relying on links.
-- Monitoring pipeline quality after re-ingest.
-
-Example:
-
-```json
-{
-  "include_orphans": true
-}
-```
-
-#### `livingdoc_trace_path`
-
-Purpose: Walks `LINKS_TO` and `LINKED_FROM` relationships from a starting node
-for up to five hops.
-
-Input:
-
-| Field           | Required | Type    | Meaning                                     |
-| --------------- | -------- | ------- | ------------------------------------------- |
-| `start_node_id` | Yes      | `str`   | Starting node ID.                           |
-| `max_hops`      | No       | `int`   | Hop count, usually 1 to 5. Default: `3`.    |
-| `direction`     | No       | `str`   | `out`, `in`, or `both`. Default: `both`.    |
-| `project_id`            | No       | `str`   | FalkorDB graph name or Neo4j database name. |
-| `limit`         | No       | `int`   | Max paths. Default: `50`.                   |
-| `min_score`     | No       | `float` | Minimum link score.                         |
-| `project_id`    | No       | `str`   | Project scope.                              |
-
-Output: Dict with `paths`, each path being an ordered list of node and edge
-records.
-
-Use when:
-
-- Direct lookup is too narrow.
-- You need code -> spec -> related code traversal.
-- You are tracing documentation-driven impact across anchors.
-
-Example:
-
-```json
-{
-  "start_node_id": "c_AuthManager_validateToken",
-  "max_hops": 4,
-  "min_score": 0.7
-}
-```
-
-#### `livingdoc_derive_anchors_for_file`
-
-Purpose: Re-derives anchor IDs for one source file from the active graph. This
-is useful for checking anchor stability before or after refactors/re-ingest.
-
-Input:
-
-| Field             | Required | Type        | Meaning                                                                          |
-| ----------------- | -------- | ----------- | -------------------------------------------------------------------------------- |
-| `source_file`     | Yes      | `str`       | Source code or document file path.                                               |
-| `node_types`      | No       | `List[str]` | Restrict to node types, for example `p` or `h` for document paragraphs/headings. |
-| `project_id`              | No       | `str`       | FalkorDB graph name or Neo4j database name.                                      |
-| `include_anchors` | No       | `bool`      | Include full anchor records. Default: `true`.                                    |
-| `limit`           | No       | `int`       | Max anchors.                                                                     |
-| `project_id`      | No       | `str`       | Project scope.                                                                   |
-
-Output: Dict with `anchors` and per-anchor metadata.
-
-Use when:
-
-- A link disappeared after re-ingest.
-- You need to verify stable anchors across file edits.
-- You are debugging anchor generation for one file.
-
-Example:
-
-```json
-{
-  "source_file": "docs/spec.pdf",
-  "node_types": ["p", "h"],
-  "include_anchors": true
-}
-```
-
-#### `livingdoc_validate_links`
-
-Purpose: Samples existing Living Docs links and re-validates them against the
-pipeline validation rules: self-link prevention, anchor existence, anchor
-format, score threshold, and node existence.
-
-Input:
-
-| Field                     | Required | Type    | Meaning                                                               |
-| ------------------------- | -------- | ------- | --------------------------------------------------------------------- |
-| `sample_size`             | No       | `int`   | Number of links to validate. Default: `100`.                          |
-| `accept_threshold`        | No       | `float` | Minimum accepted score. `0.0` lets backend use env/default threshold. |
-| `project_id`                      | No       | `str`   | FalkorDB graph name or Neo4j database name.                           |
-| `check_nodes`             | No       | `bool`  | Check node existence. Default: `true`.                                |
-| `include_failure_details` | No       | `bool`  | Include detailed failures. Default: `true`.                           |
-| `project_id`              | No       | `str`   | Project scope.                                                        |
-
-Output: Dict with `sample_size`, `passed`, `failed`, and failure details per
-validation rule.
-
-Use when:
-
-- Links were created by an older or looser pipeline.
-- You suspect orphaned endpoints after code/doc deletion.
-- You need a periodic traceability sanity check.
-
-Example:
-
-```json
-{
-  "sample_size": 200,
-  "accept_threshold": 0.7,
-  "include_failure_details": true
-}
-```
+To expose one through the unified server, add its name to
+`_UNIFIED_TOOL_NAMES`/`_PROXIED_TOOL_NAMES` in `unified_mcp.py`.
 
 ## Practical Recipes
 
@@ -2260,10 +1818,9 @@ the default FalkorDB runtime because discovery starts in Qdrant.
    ```json
    {
      "query": "user login succeeds but payment still reports unauthenticated",
-     "collection": "hypergraph_73eddc5fcc__python_functions",
-     "top_k": "10",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
+     "parser_type": "python",
+     "project_id": "cortext",
+     "top_k": 10
    }
    ```
 
@@ -2272,8 +1829,8 @@ the default FalkorDB runtime because discovery starts in Qdrant.
    ```json
    {
      "node_id": "processPayment/2@src/payment/service.py",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
+     "parser_type": "python",
+     "project_id": "cortext"
    }
    ```
 
@@ -2284,8 +1841,8 @@ the default FalkorDB runtime because discovery starts in Qdrant.
      "function_id": "processPayment/2@src/payment/service.py",
      "direction": "all",
      "max_depth": 2,
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
+     "parser_type": "python",
+     "project_id": "cortext"
    }
    ```
 
@@ -2300,22 +1857,13 @@ Situation: you know `validateToken` but do not know its graph ID.
 1. Use `search_functions`:
 
    ```json
-   {
-     "query": "validateToken|AuthManager",
-     "limit": "20",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
-   }
+   { "query": "validateToken|AuthManager", "limit": 20, "parser_type": "cplus", "project_id": "cortext" }
    ```
 
 2. Confirm the exact candidate with `get_symbol`:
 
    ```json
-   {
-     "node_id": "validateToken/1@src/auth/AuthManager.java",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
-   }
+   { "node_id": "validateToken/1@src/auth/AuthManager.java", "parser_type": "cplus", "project_id": "cortext" }
    ```
 
 3. Find callers only with `query_subgraph`:
@@ -2325,8 +1873,8 @@ Situation: you know `validateToken` but do not know its graph ID.
      "function_id": "validateToken/1@src/auth/AuthManager.java",
      "direction": "in",
      "max_depth": 3,
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
+     "parser_type": "cplus",
+     "project_id": "cortext"
    }
    ```
 
@@ -2335,17 +1883,13 @@ Situation: you know `validateToken` but do not know its graph ID.
    ```json
    {
      "function_id": "validateToken/1@src/auth/AuthManager.java",
-     "limit": "100",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
+     "limit": 100,
+     "parser_type": "cplus",
+     "project_id": "cortext"
    }
    ```
 
 ### Recipe 3: Assess Change Risk
-
-#### FalkorDB Default Path
-
-Use provider-aware graph tools for a concrete impact set:
 
 1. `query_subgraph` for the local dependency neighborhood:
 
@@ -2354,8 +1898,8 @@ Use provider-aware graph tools for a concrete impact set:
      "function_id": "processPayment/2@src/payment/service.py",
      "direction": "all",
      "max_depth": 3,
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
+     "parser_type": "python",
+     "project_id": "cortext"
    }
    ```
 
@@ -2365,50 +1909,25 @@ Use provider-aware graph tools for a concrete impact set:
    {
      "start_id": "processPayment/2@src/payment/service.py",
      "direction": "downstream",
-     "limit": "50",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
+     "limit": 50,
+     "parser_type": "python",
+     "project_id": "cortext"
    }
    ```
 
-3. `get_node_details` for the nodes selected for review:
+3. `find_workflows_containing` then `analyze_workflow_impact` for
+   workflow-aware scope (both run on the shared provider-neutral driver):
 
    ```json
-   {
-     "node_ids": "caller_1,caller_2,dependency_1",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph"
-   }
+   { "function_id": "processPayment/2@src/payment/service.py", "project_id": "cortext", "include_indirect": true, "max_depth": 4 }
    ```
-
-#### Provider-Neutral Workflow-Aware Path
-
-Use this when workflow nodes and edges exist in the active graph provider:
-
-1. `find_workflows_containing`:
 
    ```json
-   {
-     "function_id": "processPayment/2@src/payment/service.py",
-    "project_id": "hyper_graph",
-     "include_indirect": true,
-     "max_depth": 4
-   }
+   { "function_id": "processPayment/2@src/payment/service.py", "project_id": "cortext", "direction": "downstream", "max_depth": 4 }
    ```
 
-2. `analyze_workflow_impact`:
-
-   ```json
-   {
-     "function_id": "processPayment/2@src/payment/service.py",
-    "project_id": "hyper_graph",
-     "direction": "downstream",
-     "max_depth": 4
-   }
-   ```
-
-Use `workflow_impact.recommendation`, `overall_risk_score`, and the affected
-workflow lists to decide review depth and regression-test scope.
+Use `workflow_impact.recommendation`, `risk_score`, and the affected workflow
+lists to decide review depth and regression-test scope.
 
 ### Recipe 4: Trace A Frontend Endpoint To Backend Data
 
@@ -2421,8 +1940,7 @@ Starting from an endpoint, call `find_callers_of_endpoint`:
   "endpoint_path": "/api/users/:id",
   "http_method": "GET",
   "fe_project_id": "web-client",
-  "be_project_id": "user-service",
-  "project_id": "hyper_graph"
+  "be_project_id": "user-service"
 }
 ```
 
@@ -2433,98 +1951,34 @@ Starting from a screen, call `get_api_call_chain`:
   "component_name": "UserProfileScreen",
   "fe_project_id": "web-client",
   "be_project_id": "user-service",
-  "max_depth": "5",
-  "project_id": "hyper_graph"
+  "max_depth": 5
 }
 ```
 
 Look for `fe_function`, `api_call`, `be_endpoint`, `be_controller`,
 `be_service`, `be_repository`, and `be_database` in each returned chain.
 
-### Recipe 5: Distinguish Document Ingestion From Linking
-
-Situation: a specification does not appear in code-link results. First determine
-whether the document was persisted at all.
-
-1. List every ingested document with `livingdoc_list_ingested_documents`:
-
-   ```json
-   {
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph",
-     "limit": 200
-   }
-   ```
-
-2. List only documents with code links using `livingdoc_list_documents`:
-
-   ```json
-   {
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph",
-     "min_links": 1,
-     "limit": 200
-   }
-   ```
-
-3. Interpret the difference:
-   - Present in both: ingestion and linking both succeeded.
-   - Present only in `livingdoc_list_ingested_documents`: ingestion succeeded,
-     but link generation produced no accepted links.
-   - Present in neither: verify ingestion scope, source path, and graph name.
-
-4. For a linked document, call `livingdoc_get_links_for_document`:
-
-   ```json
-   {
-     "source_file": "docs/authentication-spec.pdf",
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph",
-     "min_score": 0.65,
-     "include_node_details": true
-   }
-   ```
-
-5. For pipeline diagnostics, call `livingdoc_get_link_stats` and
-   `livingdoc_validate_links`:
-
-   ```json
-   {
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph",
-     "include_orphans": true
-   }
-   ```
-
-   ```json
-   {
-     "project_id": "hypergraph",
-     "project_id": "hyper_graph",
-     "sample_size": 100,
-     "accept_threshold": 0.65,
-     "check_nodes": true,
-     "include_failure_details": true
-   }
-   ```
-
-### Recipe 6: Plan A Migration In Dependency Order
+### Recipe 5: Plan A Migration In Dependency Order
 
 For indexed modules, use `plan_dependency_order`:
 
 ```json
 {
   "modules": "src/auth,src/payment,src/orders",
-  "project_id": "hyper_graph",
+  "parser_type": "cplus",
+  "project_id": "cortext",
   "edge_semantics": "depends_on",
   "on_cycle": "auto_condense_scc"
 }
 ```
 
-Read `waves` from first to last. Items in the same wave can usually be worked on
-in parallel. If the result reports cycles, inspect the SCC mapping before
-assigning separate tasks.
+Read `waves` from first to last. Items in the same wave can usually be worked
+on in parallel. If the result reports cycles, inspect the SCC mapping before
+assigning separate tasks. Drill down with `plan_file_dependency_order` and
+`plan_function_dependency_order` for file- and function-level waves.
 
-For a manually supplied dependency graph, call `compute_scc` first:
+For a manually supplied dependency graph, call `compute_scc` first, then
+`topological_sort` with the same nodes and edges:
 
 ```json
 {
@@ -2537,8 +1991,6 @@ For a manually supplied dependency graph, call `compute_scc` first:
   "include_singletons": true
 }
 ```
-
-Then call `topological_sort` with the same nodes and edges:
 
 ```json
 {
@@ -2553,19 +2005,33 @@ Then call `topological_sort` with the same nodes and edges:
 }
 ```
 
+### Recipe 6: Search Everything At Once (Fan-Out)
+
+Omit `parser_type` and `project_id` on a fan-out search tool to sweep every
+query engine and every registered project in one call:
+
+```json
+{ "query": "validateToken", "limit": 50 }
+```
+
+The merged response tags each hit with its source `parser_type` and keeps the
+per-engine raw results under `parser_results`. Use targeted
+`parser_type`/`project_id` calls once you have narrowed the candidate set.
+
 ### Recipe 7: Debug Empty Results
 
-1. Call `list_databases` with `parser_type: "cplus"`. In the default runtime,
-   verify that `hyper_graph` is returned.
-2. Call `list_qdrant_collections` and copy the exact collection name instead of
-   guessing it.
+1. Call `list_databases` and verify the expected project graph shard is
+   listed.
+2. Call `list_qdrant_collections` and copy the exact collection name instead
+   of guessing it.
 3. Run `search_functions` with a broad known name and explicit
-   `project_id: "hyper_graph"`.
-4. Remove `project_id` temporarily only if the graph is trusted and you are
-   diagnosing a scope mismatch.
-5. Inspect the response provider/database diagnostics and confirm the active graph.
-6. Call `list_mcp_functions` to verify that your client is using the live input
-   schema rather than a cached schema.
+   `parser_type` + `project_id`.
+4. Inspect `capability_diagnostics` (or `parser_results` on fan-out calls) to
+   distinguish "no data" from "schema lacks required labels/relationships".
+5. Call `inspect_parser_capabilities` to see advertised vs observed schema
+   support and the recommended action (e.g. `run_incremental_sync`).
+6. Call `list_mcp_functions` to verify that your client is using the live
+   input schema rather than a cached schema.
 7. Treat an empty array as a valid no-match result only when
    `capability_diagnostics` does not report omitted or unsupported
    relationships; treat connection and schema-validation errors as
@@ -2576,44 +2042,62 @@ Then call `topological_sort` with the same nodes and edges:
 The repository includes an interactive MCP tester:
 
 ```bash
-cd /Users/baka3k/Hyper-Dev/hyper-pack/hyper-dev/hyper-graph
+cd /Users/hieplq1.aip/AI/cortex-harness
 source .venv/bin/activate
-python testtool/mcp_tester.py --endpoint http://127.0.0.1:8788/mcp
+python code-tiny/testtool/mcp_tester.py --endpoint http://127.0.0.1:8788/mcp
 ```
 
 Jump directly to a tool:
 
 ```bash
-python testtool/mcp_tester.py --tool search_functions --project-id my_project
+python code-tiny/testtool/mcp_tester.py --tool search_functions --project-id cortext
 ```
+
+`code-tiny/testtool/` also contains `mcp_client.py` (scriptable client),
+`mcp_batch_report.py` (batch reporting), and `tool_defaults.py`.
 
 ## Troubleshooting
 
-| Symptom                                        | Likely cause                                                                        | What to check                                                                                      |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| FalkorDB connection refused                    | FalkorDB is not running or the runtime points to the wrong host/port.               | `GRAPH_PROVIDER=falkordb`, `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_GRAPH`.                     |
-| Tool unexpectedly connects to Neo4j            | The process explicitly inherited Neo4j provider variables or is running an old cached MCP process. | Check `GRAPH_PROVIDER`, `CODE_GRAPH_PROVIDER`, restart MCP, then inspect response provider/database diagnostics. |
-| Neo4j connection refused in compatibility mode | Neo4j is not running or credentials point to the wrong host/port.                   | `GRAPH_PROVIDER=neo4j`, `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASS`, `NEO4J_DB`.                       |
-| Semantic search returns no results             | Qdrant collection missing or wrong collection name.                                 | `list_qdrant_collections`, `QDRANT_URL`, analyzer ingest logs.                                     |
-| Tool routes to unexpected backend              | Missing or wrong `parser_type`.                                                     | `activate_project`, `list_parsers`, parser routing table above.                                    |
-| Results include another project                | Shared graph without `project_id` filter.                                           | Pass `project_id`, `fe_project_id`, or `be_project_id` where relevant.                             |
-| `list_up_entrypoint` returns `missing_fields`  | Required module/project_id input was empty after normalization.                             | Pass `modules: ["src/api"]` or `module: "src/api"`.                                                |
-| `get_symbol` returns `symbol: null`            | Wrong ID, wrong project scope, or wrong `node_type`.                                | Re-run `search_functions` and verify `project_id`.                                                         |
+| Symptom | Likely cause | What to check |
+| --- | --- | --- |
+| FalkorDB connection refused | FalkorDB is not running or the runtime points to the wrong host/port. | `GRAPH_PROVIDER=falkordb`, `FALKORDB_HOST`, `FALKORDB_PORT`. |
+| Tool unexpectedly connects to Neo4j | The process inherited Neo4j provider variables or is running an old cached MCP process. | Check `GRAPH_PROVIDER` / `CODE_GRAPH_PROVIDER`, restart MCP, then inspect response provider diagnostics. |
+| Neo4j connection refused in compatibility mode | Neo4j is not running or credentials point to the wrong host/port. | `GRAPH_PROVIDER=neo4j`, `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASS`, `NEO4J_DB`. |
+| `activate_project` not found | The tool was removed; there is no session state. | Pass `parser_type` + `project_id` explicitly on every call. |
+| Semantic search returns no results | Qdrant collection missing or wrong collection name. | `list_qdrant_collections`, `QDRANT_URL`; under the naming rule the collection equals `project_id`. |
+| Tool routes to unexpected backend | Missing or wrong `parser_type`. | `list_parsers`, parser routing table above. |
+| Results include another project | Shared services without `project_id` filter (unscoped fan-out is the default when omitted). | Pass `project_id`, `fe_project_id`, or `be_project_id` where relevant. |
+| `list_up_entrypoint` returns `missing_fields` | Required `modules` input was empty after normalization. | Pass `modules: ["src/api"]` or `module: "src/api"`. |
+| `get_symbol` returns `symbol: null` | Wrong ID, wrong project scope, or wrong `node_type`. | Re-run `search_functions` and verify `project_id`. |
+| `/ready` returns 503 | Storage gateway is warming/draining or no committed generation is active. | Check `storage_state` in the response; wait for ingestion publish or review gateway logs (`CORTEX_STORE_GATEWAY_ENABLED`). |
+| Fan-out response missing an engine's data | That engine failed; `ok` is false only when all engines fail. | Inspect `parsers_failed` / `parser_errors` / `parser_results`. |
 
 ## Maintenance Notes
 
 - Update `tool_metadata.py` whenever adding/removing tools or changing
-  documented inputs/outputs.
-- Update `unified_mcp.py` when the public MCP wrapper signature changes.
-- Keep `fastmcp==3.0.0` pinned consistently with related Hyper Dev MCP
-  services, as noted in `requirements.txt`.
-- If `java/java_mcp.py` should become active through the unified server, add it
-  to `BACKENDS` and update the parser routing table in this README.
+  documented inputs/outputs; keep `FANOUT_SEARCH_TOOL_NAMES` there in sync
+  with `_FANOUT_SEARCH_TOOLS` in `unified_mcp.py`.
+- Update `unified_mcp.py` when the public MCP wrapper signature changes, and
+  keep `_UNIFIED_TOOL_NAMES` consistent with the catalog.
+- Update `framework_registry.py` (parser profiles) and the parser routing
+  table in this README together.
+- Keep `fastmcp` pinned consistently with related MCP services, as noted in
+  `requirements.txt`.
+- If `java/java_mcp.py` should become active through the unified server, add
+  it to `BACKENDS` in `unified_mcp.py` and register a profile in
+  `framework_registry.py` (its `_ALLOWED_BACKENDS` currently admits only
+  `android` and `cplus`).
 
-## ASP.NET Framework Profiles
+## Framework Profiles
 
-The unified server exposes two parser-aware profiles through the shared C++
-backend:
+Framework profiles (Spring, MyBatis, Struts, Servlet/JSP, Flutter, ASP.NET)
+are parser-aware capability profiles routed through the shared cplus backend.
+Facts are framework-, project-, module-, and (for Servlet/JSP and ASP.NET)
+generation-scoped; generation-scoped profiles automatically filter stale facts
+from earlier ingestion generations.
+
+The unified server exposes two ASP.NET parser-aware profiles through the
+shared C++ backend:
 
 - `aspnet_core`, `aspnet-core`, `asp.net-core`, and `aspnetcore`
 - `aspnet_framework`, `aspnet-framework`, `asp.net-framework`, and
@@ -2622,6 +2106,5 @@ backend:
 Both profiles search the shared migration labels (`HttpEndpoint`, `Route`,
 `Middleware`, `Controller`, `Action`, `RazorPage`, `WebFormPage`, `Service`,
 `ConfigurationKey`, and related labels) and traverse the normalized ASP.NET
-relationship vocabulary. Facts are framework-, project-, module-, and
-generation-scoped; canonical C# nodes are linked with `SEMANTIC_OF` and remain
-owned by the `csharp` analyzer.
+relationship vocabulary. Canonical C# nodes are linked with `SEMANTIC_OF` and
+remain owned by the `csharp` analyzer.
