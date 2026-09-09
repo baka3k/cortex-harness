@@ -154,15 +154,15 @@ def _path_query_no_apoc(max_hops: int) -> str:
     return f"""
     MATCH (a:Function)
     WHERE a.symbol_id IN $a_ids
-      AND a.project_id_normalized = $pid_normalized
+      AND a.project_id_normalized STARTS WITH $pid_normalized
       AND a.react_role = 'screen'
     MATCH (b:Function)
     WHERE b.symbol_id IN $b_ids
-      AND b.project_id_normalized = $pid_normalized
+      AND b.project_id_normalized STARTS WITH $pid_normalized
       AND b.react_role = 'screen'
     MATCH p = (a)-[:NAVIGATE*1..{max_hops}]->(b)
     WHERE ALL(n IN nodes(p) WHERE n.react_role = 'screen'
-                               AND n.project_id_normalized = $pid_normalized)
+                               AND n.project_id_normalized STARTS WITH $pid_normalized)
       AND NONE(
             x IN nodes(p)
             WHERE size([y IN nodes(p) WHERE y.symbol_id = x.symbol_id]) > 1
@@ -398,11 +398,11 @@ async def _collect_open_ended(
     query = f"""
     MATCH (a:Function), (b:Function)
     WHERE {anchor_clause}
-      AND a.project_id_normalized = $pid_normalized AND b.project_id_normalized = $pid_normalized
+      AND a.project_id_normalized STARTS WITH $pid_normalized AND b.project_id_normalized STARTS WITH $pid_normalized
       AND a.react_role = 'screen' AND b.react_role = 'screen'
     MATCH p = {pattern}
     WHERE ALL(n IN nodes(p) WHERE n.react_role = 'screen'
-                               AND n.project_id_normalized = $pid_normalized)
+                               AND n.project_id_normalized STARTS WITH $pid_normalized)
       AND NONE(
             x IN nodes(p)
             WHERE size([y IN nodes(p) WHERE y.symbol_id = x.symbol_id]) > 1

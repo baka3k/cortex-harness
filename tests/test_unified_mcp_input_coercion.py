@@ -1071,17 +1071,20 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_tool_error_received_params_exclude_missing_values(self):
         # A param that is empty must not be reported as both "received" and
         # "missing". Regression for the contradiction in the user-facing
-        # error payload (project_id appeared in both lists).
+        # error payload (node_a appeared in both lists). find_screen_workflows
+        # pins one truly required param (node_a) so the missing list is
+        # non-empty; project_id is intentionally optional (omit to search
+        # every registered project).
         error = unified_mcp._build_tool_error(
-            "get_public_apis",
-            {"project_id": "", "parser_type": "c++"},
+            "find_screen_workflows",
+            {"node_a": "", "project_id": "", "direction": "downstream"},
             ValueError("boom"),
         )
 
-        self.assertIn("project_id", error["error"]["missing_required_params"])
+        self.assertIn("node_a", error["error"]["missing_required_params"])
+        self.assertNotIn("node_a", error["error"]["received_params"])
+        self.assertIn("direction", error["error"]["received_params"])
         self.assertNotIn("project_id", error["error"]["received_params"])
-        self.assertIn("parser_type", error["error"]["received_params"])
-        self.assertNotIn("parser_type", error["error"]["missing_required_params"])
 
     async def test_build_tool_error_example_follows_caller_parser(self):
         # A c++ caller must not be shown a kotlin-flavored retry example.
@@ -1369,6 +1372,156 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         # Dispatch succeeded (no engine errors).
         self.assertEqual(sorted(result["parsers_searched"]), ["android", "cplus"])
         self.assertEqual(result["parsers_failed"], [])
+
+    async def test_preflight_rejects_missing_required_before_fanout(self):
+        # A payload missing a catalog-required parameter must fail once with
+        # the standard error envelope BEFORE any query engine is contacted —
+        # not surface as a fanout_failed report after every engine rejected
+        # the same call.
+        def _forbidden_backend(name: str):
+            async def forbidden(*args, **kwargs):
+                raise AssertionError(
+                    f"{name} must not be dispatched for a payload that "
+                    "fails the pre-flight contract check"
+                )
+            return forbidden
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(
+                    name="cplus",
+                    module=types.SimpleNamespace(
+                        tool_listup_symbols_matching_file_path=_forbidden_backend("cplus")
+                    ),
+                ),
+                "android": unified_mcp.BackendInfo(
+                    name="android",
+                    module=types.SimpleNamespace(
+                        tool_listup_symbols_matching_file_path=_forbidden_backend("android")
+                    ),
+                ),
+            },
+        ):
+            result = await unified_mcp._dispatch_tool(
+                "listup_symbols_matching_file_path", {}
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"]["type"], "missing_required_parameters")
+        self.assertEqual(result["error"]["missing_required_params"], ["modules"])
+        self.assertIn("modules", result["error"]["required_params"])
+
+    async def test_preflight_accepts_alias_coerced_module_param(self):
+        # The singular `module` alias must satisfy the required `modules`
+        # contract after list coercion (no false pre-flight rejection).
+        async def fake_tool(payload=None):
+            return {"ok": True, "symbols": [], "modules": payload.get("modules")}
+
+        with patch.dict(
+            unified_mcp.BACKENDS,
+            {
+                "cplus": unified_mcp.BackendInfo(
+                    name="cplus",
+                    module=types.SimpleNamespace(
+                        tool_listup_symbols_matching_file_path=fake_tool
+                    ),
+                ),
+            },
+        ):
+            result = await unified_mcp._dispatch_tool(
+                "listup_symbols_matching_file_path", {"module": "src/main"}
+            )
+
+        self.assertTrue(result["ok"])
+
+    def test_apply_catalog_required_to_schema_marks_required_params(self):
+        # The served inputSchema must advertise catalog-required parameters
+        # (e.g. modules on listup_symbols_matching_file_path) so schema-trusting
+        # clients send them instead of discovering the requirement at runtime.
+        class FakeTool:
+            def __init__(self, parameters):
+                self.parameters = parameters
+
+        tool = FakeTool(
+            {
+                "type": "object",
+                "properties": {
+                    "modules": {"type": "array"},
+                    "max_depth": {"type": "integer", "default": None},
+                },
+            }
+        )
+        unified_mcp._apply_catalog_required_to_schema(
+            "listup_symbols_matching_file_path", tool
+        )
+        self.assertIn("modules", tool.parameters["required"])
+        self.assertNotIn("max_depth", tool.parameters["required"])
+
+    def test_apply_catalog_required_keeps_existing_required_entries(self):
+        class FakeTool:
+            def __init__(self, parameters):
+                self.parameters = parameters
+
+        tool = FakeTool(
+            {
+                "type": "object",
+                "properties": {"modules": {"type": "array"}},
+                "required": ["modules"],
+            }
+        )
+        unified_mcp._apply_catalog_required_to_schema(
+            "listup_symbols_matching_file_path", tool
+        )
+        self.assertEqual(tool.parameters["required"], ["modules"])
+
+    async def test_project_context_fanout_merges_registered_projects(self):
+        # Omitting project_id on a project-context tool must fan out once per
+        # registered project (the "omit to search all" contract) instead of
+        # raising "project_id is required".
+        async def fake_single(
+            *,
+            tool_name,
+            project_id,
+            parser_type,
+            required_labels,
+            required_relationships,
+            method_name,
+            method_args,
+        ):
+            return {
+                "ok": True,
+                "project_id": project_id,
+                "modules": [{"module_id": f"m:{project_id}", "id": f"m:{project_id}"}],
+                "total": 2,
+                "offset": 0,
+                "limit": 50,
+                "has_more": project_id == "proj-b",
+            }
+
+        with patch.object(
+            unified_mcp, "list_registered_projects", return_value=["proj-b", "proj-a"]
+        ), patch.object(
+            unified_mcp, "_run_single_project_context", side_effect=fake_single
+        ):
+            result = await unified_mcp._run_project_context_tool(
+                tool_name="get_project_modules",
+                project_id="",
+                parser_type="",
+                required_labels=("ProjectModule",),
+                required_relationships=(),
+                method_name="get_project_modules",
+                method_args={"limit": 50},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["projects_searched"], ["proj-a", "proj-b"])
+        module_ids = {m["module_id"] for m in result["modules"]}
+        self.assertEqual(module_ids, {"m:proj-a", "m:proj-b"})
+        for module in result["modules"]:
+            self.assertIn("project_id", module)
+        self.assertEqual(result["total"], 4)
+        self.assertTrue(result["has_more"])
 
 
 if __name__ == "__main__":

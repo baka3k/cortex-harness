@@ -144,13 +144,18 @@ async def test_context_methods_normalize_bounded_provider_neutral_results():
 
 
 @run_async_test
-async def test_architecture_summary_has_fixed_query_count_and_requires_scope():
+async def test_architecture_summary_has_fixed_query_count_and_defaults_to_all_modules():
     runner = RecordingRunner()
     service = ProjectContextService(runner)
 
-    with pytest.raises(ValueError, match="module_id"):
-        await service.get_module_architecture_summary(project_id="shop")
+    # Omitted module_id follows the "omit to search all" contract: the
+    # summary spans every module instead of rejecting the call.
+    result = await service.get_module_architecture_summary(project_id="shop")
+    assert result["all_modules"] is True
+    assert result["module_id"] == ""
 
+    runner = RecordingRunner()
+    service = ProjectContextService(runner)
     result = await service.get_module_architecture_summary(
         project_id="shop", module_id="project-module:shop:app", item_limit=500
     )
