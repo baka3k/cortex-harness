@@ -248,7 +248,27 @@ class MakeLifecycleTests(unittest.TestCase):
 
     def test_start_creates_launchers_and_pid_records(self):
         with tempfile.TemporaryDirectory() as directory:
-            state_dir = Path(directory)
+            # Hermetic config: invoke_start() reads the nearest dev.json from
+            # the caller's CWD. Pin a minimal project config (deliberately
+            # without CORTEX_STORAGE_INSTANCE) so launcher names and the
+            # default instance name ("default") never depend on the host's
+            # dev.json.
+            project_root = Path(directory) / "project"
+            config_path = project_root / ".cortext-harness" / "config" / "dev.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "active": True,
+                        "project": {"code": "cortext", "name": "cortext"},
+                        "code": {"env": {"FALKORDB_GRAPH": "cortext"}},
+                        "doc": {"env": {"FALKORDB_GRAPH": "cortext_doc"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state_dir = Path(directory) / "state"
+            state_dir.mkdir()
             pid_file = state_dir / "pids.json"
 
             def fake_terminal_command(wrapper):
@@ -259,8 +279,8 @@ class MakeLifecycleTests(unittest.TestCase):
             with mock.patch.object(LIFECYCLE, "STATE_DIR", state_dir), mock.patch.object(
                 LIFECYCLE, "PID_FILE", pid_file
             ), mock.patch.object(LIFECYCLE, "invoke_stop") as stop, mock.patch.object(
-                LIFECYCLE, "tcp_port_open", return_value=False
-            ), mock.patch.object(
+                LIFECYCLE.Path, "cwd", return_value=project_root
+            ), mock.patch.object(LIFECYCLE, "tcp_port_open", return_value=False), mock.patch.object(
                 LIFECYCLE, "terminal_command", side_effect=fake_terminal_command
             ), mock.patch.object(LIFECYCLE, "run"):
                 LIFECYCLE.invoke_start()
