@@ -58,14 +58,24 @@ def _build_stubs():
     fastmcp_mod.FastMCP = _StubFastMCP
     mcp_mod = type(sys)("mcp")
     mcp_server_mod = type(sys)("mcp.server")
+    mcp_types_mod = type(sys)("mcp.types")
+    mcp_types_mod.CallToolResult = type("CallToolResult", (), {})
+    mcp_types_mod.TextContent = type("TextContent", (), {})
 
-    # qdrant_client stub
+    # qdrant_client stub. cortex_harness.storage (imported by
+    # mcp_graph_rag for StorageRole) also resolves against this stub, so it
+    # must expose every attribute both modules touch at import time.
     qdrant_mod = type(sys)("qdrant_client")
+    qdrant_mod.QdrantClient = type("QdrantClient", (), {})
     qdrant_mod.http = type(sys)("qdrant_client.http")
     qdrant_mod.http.models = type(sys)("qdrant_client.http.models")
     qdrant_mod.http.models.FieldCondition = type("FieldCondition", (), {})
     qdrant_mod.http.models.MatchValue = type("MatchValue", (), {})
+    qdrant_mod.http.models.MatchAny = type("MatchAny", (), {})
     qdrant_mod.http.models.Filter = type("Filter", (), {})
+    qdrant_mod.http.models.PayloadSchemaType = type("PayloadSchemaType", (), {})
+    qdrant_mod.http.models.PointIdsList = type("PointIdsList", (), {})
+    qdrant_mod.http.models.PointStruct = type("PointStruct", (), {})
 
     # sentence_transformers stub
     st_mod = type(sys)("sentence_transformers")
@@ -97,6 +107,7 @@ def _build_stubs():
         "mcp": mcp_mod,
         "mcp.server": mcp_server_mod,
         "mcp.server.fastmcp": fastmcp_mod,
+        "mcp.types": mcp_types_mod,
         "qdrant_client": qdrant_mod,
         "qdrant_client.http": qdrant_mod.http,
         "qdrant_client.http.models": qdrant_mod.http.models,
@@ -150,8 +161,8 @@ class TestProjectIdOptional(unittest.TestCase):
     def test_resolve_doc_collection_registered_project_uses_registry(self):
         with patch.object(
             self.mcp,
-            "resolve_project_targets",
-            wraps=self.project_contract.resolve_project_targets,
+            "resolve_doc_candidates",
+            wraps=self.project_contract.resolve_doc_candidates,
         ) as resolve_mock:
             # Pretend there's a registered project "cortext"
             with patch.object(
@@ -168,23 +179,30 @@ class TestProjectIdOptional(unittest.TestCase):
                 self.assertEqual(result, "cortext_doc")
                 resolve_mock.assert_called_once_with("cortext")
 
-    def test_resolve_doc_collection_unregistered_fails_closed(self):
+    def test_resolve_doc_collection_unregistered_falls_back_to_naming_convention(self):
+        # Read paths keep an unregistered project_id reachable through the
+        # naming convention ({project_id}_doc) instead of raising — see
+        # docs/PROJECT_ID_QUERY_RULES.md (R3/R4 fallback chain).
         with patch.object(
             self.project_contract,
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
         ):
-            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
-                self.mcp._resolve_doc_collection("client-alpha")
+            self.assertEqual(
+                self.mcp._resolve_doc_collection("client-alpha"),
+                "client-alpha_doc",
+            )
 
-    def test_resolve_doc_collection_empty_known_list_fails_closed(self):
+    def test_resolve_doc_collection_empty_known_list_falls_back_to_naming_convention(self):
         with patch.object(
             self.project_contract,
             "_read_project_entries",
             return_value=[],
         ):
-            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
-                self.mcp._resolve_doc_collection("anything")
+            self.assertEqual(
+                self.mcp._resolve_doc_collection("anything"),
+                "anything_doc",
+            )
 
     # -- _resolve_doc_collections ------------------------------------------------
     def test_resolve_doc_collections_no_project_id_returns_all_registered(self):
@@ -199,14 +217,16 @@ class TestProjectIdOptional(unittest.TestCase):
             result = self.mcp._resolve_doc_collections(None)
         self.assertEqual(set(result), {"a_doc", "b_doc"})
 
-    def test_resolve_doc_collections_unregistered_fails_closed(self):
+    def test_resolve_doc_collections_unregistered_falls_back_to_naming_convention(self):
         with patch.object(
             self.project_contract,
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
         ):
-            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
-                self.mcp._resolve_doc_collections("client-alpha")
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("client-alpha"),
+                ["client-alpha_doc"],
+            )
 
     def test_resolve_doc_collections_explicit_collection_wins(self):
         result = self.mcp._resolve_doc_collections(None, collection="explicit")
@@ -228,19 +248,29 @@ class TestProjectIdOptional(unittest.TestCase):
             result = names
         self.assertEqual(result, ["aa", "bb", "cc"])
 
-    def test_list_qdrant_collections_unregistered_fails_closed(self):
+    def test_list_qdrant_collections_unregistered_falls_back_to_naming_convention(self):
         with patch.object(
                 self.project_contract,
                 "_read_project_entries",
                 return_value=[{"project_id": "cortext", "doc_env": {}}],
         ):
-            with self.assertRaises(self.project_contract.ProjectNotRegisteredError):
-                self.mcp._resolve_doc_collection("client-alpha")
+            self.assertEqual(
+                self.mcp._resolve_doc_collection("client-alpha"),
+                "client-alpha_doc",
+            )
 
     # -- _acquire_graph_store ----------------------------------------------------
     def test_acquire_graph_store_routes_project_to_project_factory(self):
         scoped = object()
-        with patch.object(self.mcp, "get_neo4j", return_value=scoped) as get_graph:
+        targets = self.project_contract.ProjectTargets(
+            project_id="cortext",
+            project_id_normalized="cortext",
+            doc_graph="cortext_doc",
+            doc_qdrant_collection="cortext_doc",
+        )
+        with patch.object(
+            self.mcp, "resolve_doc_candidates", return_value=[targets]
+        ), patch.object(self.mcp, "get_neo4j", return_value=scoped) as get_graph:
             store, owned = self.mcp._acquire_graph_store("cortext")
         self.assertIs(store, scoped)
         get_graph.assert_called_once_with("cortext")
