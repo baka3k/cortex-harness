@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 from pathlib import Path
 from typing import Iterable
@@ -16,7 +22,10 @@ _SKIP_DIRS = {".git", ".venv", "node_modules", "build", "dist", "target"}
 def scan_shell_files(root: str) -> list[str]:
     paths: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS]
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in _SKIP_DIRS and not matches_extra_ignore(name)
+        ]
         for name in filenames:
             if name.lower().endswith(".sh"):
                 paths.append(os.path.relpath(os.path.join(dirpath, name), root).replace("\\", "/"))

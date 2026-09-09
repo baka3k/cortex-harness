@@ -339,6 +339,62 @@ def _source_folders(source: dict) -> list:
     return result
 
 
+def _ignore_folders(cfg: dict) -> tuple:
+    """Read user-configured ignore folder patterns from active config.
+
+    Entries are folder names or fnmatch globs matched at any depth below a
+    scan root. Tolerates a missing key / wrong types; dedupes preserving
+    declaration order.
+    """
+    section = cfg.get("ignore")
+    raw = section.get("folders") if isinstance(section, dict) else None
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    seen: set = set()
+    out: list = []
+    for item in raw:
+        if isinstance(item, str) and item.strip() and item.strip() not in seen:
+            seen.add(item.strip())
+            out.append(item.strip())
+    return tuple(out)
+
+
+def _match_ignore(name: str, patterns) -> bool:
+    """True when a folder name matches an ignore entry (exact or fnmatch glob)."""
+    return name in patterns or any(fnmatch.fnmatch(name, p) for p in patterns)
+
+
+def _sync_extra_ignores(cfg: dict, process_env: dict) -> frozenset:
+    """Effective user ignore set for a sync run, exported for subprocesses.
+
+    Mutates ``process_env`` to carry ``CORTEX_EXTRA_IGNORE_DIRS`` so spawned
+    sync/analyzer/ingest subprocesses (and their own children) prune the same
+    user-configured folders the orchestrator does. Empty set -> env var is not
+    set and behaviour is byte-for-byte identical to the previous release.
+    """
+    extra = frozenset(_ignore_folders(cfg))
+    if extra:
+        process_env["CORTEX_EXTRA_IGNORE_DIRS"] = ",".join(sorted(extra))
+    return extra
+
+
+def _warn_scan_roots_matching_ignores(selected: list, extra_ignores: frozenset) -> None:
+    """Warn when an explicitly selected scan root is also in the ignore list.
+
+    The root still runs (the user chose it explicitly); the warning surfaces
+    the contradictory configuration instead of silently honouring either side.
+    """
+    if not extra_ignores:
+        return
+    for folder in selected:
+        if _match_ignore(Path(folder).name, extra_ignores):
+            click.echo(
+                f"[warn] Scan root '{folder}' matches the configured ignore list "
+                "(ignore.folders) but was selected explicitly — syncing it anyway.",
+                err=True,
+            )
+
+
 def _dedupe_scan_roots(folders: list, project_path: Path) -> list:
     """Remove canonical duplicates and descendants already covered by a parent scan."""
     selected: list[tuple[str, Path]] = []
@@ -746,20 +802,6 @@ def _mcp_env_from_config(project_dir: Path, service_name: str) -> dict:
 # Scaffold helpers
 # ---------------------------------------------------------------------------
 
-def _discover_folders(project_dir: Path, root_prefix: str) -> list:
-    result = []
-    base = project_dir / root_prefix
-    if not base.exists():
-        return result
-    for item in sorted(base.rglob("*")):
-        if not item.is_dir():
-            continue
-        rel = item.relative_to(project_dir)
-        if not set(rel.parts).intersection(_SCAN_EXCLUDE):
-            result.append(str(rel))
-    return [root_prefix] + result
-
-
 def _scaffold_project(project_dir: Path) -> tuple:
     click.echo("\n─── Scaffolding project structure ─────────")
     created = []
@@ -822,21 +864,48 @@ def _is_sensitive(path: Path) -> bool:
     return any(fnmatch.fnmatch(name, pat) for pat in SENSITIVE_PATTERNS)
 
 
-def _is_excluded_path(path: Path, root: Path) -> bool:
-    """True if path lives inside a _SCAN_EXCLUDE directory (e.g. .venv, node_modules)."""
+def _is_excluded_path(path: Path, root: Path, extra_ignores: frozenset = frozenset()) -> bool:
+    """True if path lives inside an excluded directory.
+
+    Covers the built-in ``_SCAN_EXCLUDE`` defaults plus the user-configured
+    ``ignore.folders`` patterns (exact name or fnmatch glob) when provided.
+    """
     try:
-        return bool(set(path.relative_to(root).parts[:-1]).intersection(_SCAN_EXCLUDE))
+        parts = path.relative_to(root).parts[:-1]
     except ValueError:
         return False
+    if set(parts).intersection(_SCAN_EXCLUDE):
+        return True
+    if extra_ignores:
+        return any(_match_ignore(part, extra_ignores) for part in parts)
+    return False
 
 
-def _detect_langs(folder_path: Path) -> list:
+def _discover_folders(project_dir: Path, root_prefix: str,
+                      extra_ignores: frozenset = frozenset()) -> list:
+    result = []
+    base = project_dir / root_prefix
+    if not base.exists():
+        return result
+    for item in sorted(base.rglob("*")):
+        if not item.is_dir():
+            continue
+        rel = item.relative_to(project_dir)
+        if set(rel.parts).intersection(_SCAN_EXCLUDE):
+            continue
+        if extra_ignores and any(_match_ignore(part, extra_ignores) for part in rel.parts):
+            continue
+        result.append(str(rel))
+    return [root_prefix] + result
+
+
+def _detect_langs(folder_path: Path, extra_ignores: frozenset = frozenset()) -> list:
     """Detect languages from extensions. Android takes priority when AndroidManifest exists."""
     counts: Counter = Counter()
     is_android = any(folder_path.rglob("AndroidManifest.xml"))
 
     for f in folder_path.rglob("*"):
-        if not f.is_file() or _is_sensitive(f) or _is_excluded_path(f, folder_path):
+        if not f.is_file() or _is_sensitive(f) or _is_excluded_path(f, folder_path, extra_ignores):
             continue
         ext = f.suffix.lower()
         for lang, exts in LANG_EXTENSIONS.items():
@@ -974,12 +1043,13 @@ def _ensure_git_repo(folder_path: Path, auto_yes: bool = False) -> bool:
     return True
 
 
-def _mtime_changed_files(folder_path: Path, since_ts: float) -> tuple:
+def _mtime_changed_files(folder_path: Path, since_ts: float,
+                         extra_ignores: frozenset = frozenset()) -> tuple:
     """Return (changed_files, []) using mtime comparison. Paths relative to folder_path."""
     changed = []
     for f in folder_path.rglob("*"):
         if (f.is_file() and not _is_sensitive(f)
-                and not _is_excluded_path(f, folder_path)
+                and not _is_excluded_path(f, folder_path, extra_ignores)
                 and f.stat().st_mtime > since_ts):
             try:
                 changed.append(str(f.relative_to(folder_path)))
@@ -1009,16 +1079,18 @@ def _doc_file_hash(path: Path) -> str:
     return h.hexdigest()
 
 
-def _find_doc_files(folder_path: Path) -> list:
+def _find_doc_files(folder_path: Path, extra_ignores: frozenset = frozenset()) -> list:
     """Return all supported document files under folder_path (sorted)."""
     return sorted(
         f for f in folder_path.rglob("*")
         if (f.is_file() and f.suffix.lower() in DOC_EXTENSIONS
-                and not _is_sensitive(f) and not _is_excluded_path(f, folder_path))
+                and not _is_sensitive(f)
+                and not _is_excluded_path(f, folder_path, extra_ignores))
     )
 
 
-def _detect_changed_docs(folder_path: Path, state: dict) -> tuple:
+def _detect_changed_docs(folder_path: Path, state: dict,
+                         extra_ignores: frozenset = frozenset()) -> tuple:
     """Return (changed_files, deleted_rel_paths) for incremental doc sync.
 
     Priority: git diff > file-hash comparison > mtime.
@@ -1037,7 +1109,8 @@ def _detect_changed_docs(folder_path: Path, state: dict) -> tuple:
         changed_rel, deleted_rel = _git_status_since(folder_path, since_commit)
         changed = [folder_path / r for r in changed_rel
                    if (folder_path / r).suffix.lower() in DOC_EXTENSIONS
-                   and not _is_sensitive(folder_path / r)]
+                   and not _is_sensitive(folder_path / r)
+                   and not _is_excluded_path(folder_path / r, folder_path, extra_ignores)]
         deleted = [r for r in deleted_rel if Path(r).suffix.lower() in DOC_EXTENSIONS]
         return changed, deleted
 
@@ -1045,7 +1118,7 @@ def _detect_changed_docs(folder_path: Path, state: dict) -> tuple:
     if stored_hashes:
         current_files = {
             str(f.relative_to(folder_path)): f
-            for f in _find_doc_files(folder_path)
+            for f in _find_doc_files(folder_path, extra_ignores)
         }
         changed = [
             abs_path for rel, abs_path in current_files.items()
@@ -1057,7 +1130,7 @@ def _detect_changed_docs(folder_path: Path, state: dict) -> tuple:
     # ── mtime fallback ────────────────────────────────────────────────────
     if since_ts:
         changed = [
-            f for f in _find_doc_files(folder_path)
+            f for f in _find_doc_files(folder_path, extra_ignores)
             if f.stat().st_mtime > since_ts
         ]
         return changed, []
@@ -1065,11 +1138,11 @@ def _detect_changed_docs(folder_path: Path, state: dict) -> tuple:
     return [], []
 
 
-def _build_file_hashes(folder_path: Path) -> dict:
+def _build_file_hashes(folder_path: Path, extra_ignores: frozenset = frozenset()) -> dict:
     """Build {relative_path: sha256} mapping for all doc files in folder."""
     return {
         str(f.relative_to(folder_path)): _doc_file_hash(f)
-        for f in _find_doc_files(folder_path)
+        for f in _find_doc_files(folder_path, extra_ignores)
     }
 
 
@@ -1084,6 +1157,7 @@ def _sync_doc_folder(
     entity_provider: str,
     dry_run: bool,
     preview: bool,
+    extra_ignores: frozenset = frozenset(),
 ) -> dict:
     """Sync one doc folder. Returns result summary dict."""
     folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
@@ -1128,7 +1202,7 @@ def _sync_doc_folder(
 
     # ── Full sync ─────────────────────────────────────────────────────────
     if mode == "full":
-        all_files = _find_doc_files(folder_path)
+        all_files = _find_doc_files(folder_path, extra_ignores)
         click.echo(f" files  : {len(all_files)} document(s)")
         if not all_files:
             click.echo("  [warn] No supported document files found — skipping")
@@ -1148,7 +1222,7 @@ def _sync_doc_folder(
                 "last_sync_ts": start_ts,
                 "mode":         "full",
                 "git_commit":   _git_head(folder_path),
-                "file_hashes":  _build_file_hashes(folder_path),
+                "file_hashes":  _build_file_hashes(folder_path, extra_ignores),
                 "file_count":   len(all_files),
             })
 
@@ -1156,7 +1230,7 @@ def _sync_doc_folder(
                 "mode": mode, "elapsed": elapsed}
 
     # ── Incremental sync ──────────────────────────────────────────────────
-    changed_files, deleted_rel = _detect_changed_docs(folder_path, state)
+    changed_files, deleted_rel = _detect_changed_docs(folder_path, state, extra_ignores)
 
     if not changed_files and not deleted_rel:
         click.echo("  [ok] No changes detected — skipping")
@@ -1490,6 +1564,7 @@ def _run_analyzer(
     deleted_files: list,
     dry_run: bool,
     verbose: bool,
+    extra_ignores: frozenset = frozenset(),
 ) -> int:
     """Build and invoke one analyzer subprocess. Returns exit code."""
     project_name = project.get("name", "project")
@@ -1510,7 +1585,7 @@ def _run_analyzer(
                 for path in folder_path.rglob("*")
                 if path.is_file()
                 and not _is_sensitive(path)
-                and not _is_excluded_path(path, folder_path)
+                and not _is_excluded_path(path, folder_path, extra_ignores)
             ]
         for relative in sorted(snapshot_paths, key=lambda item: item.as_posix()):
             normalized = relative.as_posix()
@@ -1617,6 +1692,7 @@ def _sync_folder(
     dry_run: bool,
     verbose: bool,
     preview: bool,
+    extra_ignores: frozenset = frozenset(),
 ) -> dict:
     """Sync one folder. langs=[] means run every analyzer that exists on disk."""
     folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
@@ -1653,7 +1729,7 @@ def _sync_folder(
             changed_files, deleted_files = _git_status_since(folder_path, since_commit)
             click.echo(f"  git diff: {len(changed_files)} changed, {len(deleted_files)} deleted")
         elif since_ts:
-            changed_files, _ = _mtime_changed_files(folder_path, since_ts)
+            changed_files, _ = _mtime_changed_files(folder_path, since_ts, extra_ignores)
             click.echo(f"  mtime:    {len(changed_files)} changed")
         else:
             click.echo("  [info] No baseline — switching to full")
@@ -1699,6 +1775,7 @@ def _sync_folder(
             deleted_files=deleted_files,
             dry_run=dry_run,
             verbose=verbose,
+            extra_ignores=extra_ignores,
         )
         lang_results.append({"lang": lang, "exit_code": rc})
         if rc != 0:
@@ -2880,6 +2957,15 @@ def init(env, project_dir, path):
         default=", ".join(f for f in first_doc.get("folder", []) if f) or "",
     )
 
+    # ── Ignore folders (scan-time excludes, applies to code + doc sync) ─────
+    existing_ignore_folders = list(_ignore_folders(existing))
+    click.echo("\n─── Ignore folders ─────────────────────────")
+    ignore_folders_raw = click.prompt(
+        "  Folders to ignore when scanning (comma-separated, glob allowed)",
+        default=", ".join(existing_ignore_folders),
+    )
+    ignore_folders = [f.strip() for f in ignore_folders_raw.split(",") if f.strip()]
+
     # ── Scaffold / resolve folders ────────────────────────────────────────────
     if code_folders_raw.strip() or doc_folders_raw.strip():
         code_folders = [f.strip() for f in code_folders_raw.split(",") if f.strip()]
@@ -2927,6 +3013,11 @@ def init(env, project_dir, path):
     }
     if remote_section:
         cfg["remote"] = remote_section
+    # Persist the ignore section when the user configured entries, or when a
+    # previous config already had one (so re-init can clear the last entry to
+    # [] instead of silently keeping stale patterns).
+    if ignore_folders or "ignore" in existing:
+        cfg["ignore"] = {"folders": ignore_folders}
 
     _deactivate_other_envs(project_path, env)
     _save_config(cfg, config_path)
@@ -3255,6 +3346,7 @@ def sync_code(
     code_cfg = cfg.get("code", {})
     env      = code_cfg.get("env", {})
     process_env = _code_env_for_process(cfg, project_path)
+    extra_ignores = _sync_extra_ignores(cfg, process_env)
     project  = cfg.get("project", {})
     folders  = _source_folders(code_cfg.get("source", {}))
 
@@ -3264,6 +3356,7 @@ def sync_code(
 
     selected = _dedupe_scan_roots(_select_folders_interactive(folders), project_path)
     _validate_selected_scan_roots(selected, folders, project_path)
+    _warn_scan_roots_matching_ignores(selected, extra_ignores)
     if not selected:
         click.echo("[info] No folders selected.")
         return
@@ -3360,12 +3453,15 @@ def sync_code_all(ctx):
     code_cfg     = cfg.get("code", {})
     env          = code_cfg.get("env", {})
     process_env  = _code_env_for_process(cfg, project_path)
+    extra_ignores = _sync_extra_ignores(cfg, process_env)
     project      = cfg.get("project", {})
     folders      = _dedupe_scan_roots(_source_folders(code_cfg.get("source", {})), project_path)
 
     if not folders:
         click.echo("[warn] No source folders configured. Run 'dev init' or 'dev sync code add'.")
         return
+
+    _warn_scan_roots_matching_ignores(folders, extra_ignores)
 
     available = [l for l, p in {**LANG_ANALYZERS, **FRAMEWORK_ANALYZERS}.items() if p.exists()]
     click.echo(f"\n[sync-code all]  folders={len(folders)}  analyzers={len(available)}")
@@ -3488,6 +3584,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
     cfg, _  = _load_active_config(project_path)
     doc_cfg = cfg.get("doc", {})
     env     = _doc_env_for_process(cfg, project_path)
+    extra_ignores = _sync_extra_ignores(cfg, env)
     project = cfg.get("project", {})
     folders = _source_folders(doc_cfg.get("source", {}))
 
@@ -3500,6 +3597,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
         sys.exit(1)
 
     selected = _select_folders_interactive(folders)
+    _warn_scan_roots_matching_ignores(selected, extra_ignores)
     if not selected:
         click.echo("[info] No folders selected.")
         return
@@ -3522,6 +3620,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
                 entity_provider=entity_provider,
                 dry_run=dry_run,
                 preview=preview,
+                extra_ignores=extra_ignores,
             )
             summaries.append(result)
 
@@ -3542,6 +3641,7 @@ def sync_doc_all(ctx):
     cfg, _       = _load_active_config(project_path)
     doc_cfg      = cfg.get("doc", {})
     env          = _doc_env_for_process(cfg, project_path)
+    extra_ignores = _sync_extra_ignores(cfg, env)
     project      = cfg.get("project", {})
     folders      = _source_folders(doc_cfg.get("source", {}))
 
@@ -3554,6 +3654,7 @@ def sync_doc_all(ctx):
         sys.exit(1)
 
     click.echo(f"\n[sync-doc all]  folders={len(folders)}")
+    _warn_scan_roots_matching_ignores(folders, extra_ignores)
 
     python      = _venv_python(DOC_TINY)
     summaries   = []
@@ -3573,6 +3674,7 @@ def sync_doc_all(ctx):
                 entity_provider=o["entity_provider"],
                 dry_run=o["dry_run"],
                 preview=False,
+                extra_ignores=extra_ignores,
             )
             summaries.append(result)
 
@@ -3691,6 +3793,100 @@ def sync_doc_add(project_dir, git_url, folders):
     click.echo(f"\n[ok] Added project #{len(existing_projects)}: {git_url or '(local)'}  {folders}")
     click.echo(f"     Total doc projects: {len(existing_projects)}  "
                f"({len(_source_folders(cfg['doc']['source']))} folders)")
+
+
+# ── dev ignore ────────────────────────────────────────────────────────────────
+
+def _ignore_change_hint() -> None:
+    click.echo("[info] Changes apply to the next 'dev sync code' / 'dev sync doc' run.")
+
+
+@cli.group()
+def ignore():
+    """Manage user-configured ignore folders (scan-time excludes).
+
+    \b
+    Entries are folder names or fnmatch globs ("generated-*") matched at any
+    depth below the scan roots. They ADD to the built-in default excludes
+    (.venv, node_modules, build, ...) — defaults can never be un-ignored.
+    Applies to both 'dev sync code' and 'dev sync doc'.
+    """
+
+
+@ignore.command("add")
+@click.option("--project-dir", default=".", show_default=True)
+@click.argument("folders", nargs=-1, required=True, metavar="<FOLDER>...")
+def ignore_add(project_dir, folders):
+    """Add ignore folders to the active environment config.
+
+    \b
+    Example:
+      dev ignore add legacy generated-*
+    """
+    project_path = Path(project_dir).resolve()
+    cfg, cfg_path = _load_active_config(project_path)
+
+    current = list(_ignore_folders(cfg))
+    added, duplicate = [], []
+    for folder in folders:
+        name = folder.strip()
+        if not name:
+            continue
+        if name in current:
+            duplicate.append(name)
+        else:
+            current.append(name)
+            added.append(name)
+
+    cfg["ignore"] = {"folders": current}
+    _save_config(cfg, cfg_path)
+    for name in added:
+        click.echo(f"[ok] ignore add: {name}")
+    for name in duplicate:
+        click.echo(f"[info] already ignored: {name}")
+    _ignore_change_hint()
+
+
+@ignore.command("remove")
+@click.option("--project-dir", default=".", show_default=True)
+@click.argument("folders", nargs=-1, required=True, metavar="<FOLDER>...")
+def ignore_remove(project_dir, folders):
+    """Remove exact-match entries from the ignore list."""
+    project_path = Path(project_dir).resolve()
+    cfg, cfg_path = _load_active_config(project_path)
+
+    current = list(_ignore_folders(cfg))
+    removed, missing = [], []
+    for folder in folders:
+        name = folder.strip()
+        if name in current:
+            current.remove(name)
+            removed.append(name)
+        else:
+            missing.append(name)
+
+    cfg["ignore"] = {"folders": current}
+    _save_config(cfg, cfg_path)
+    for name in removed:
+        click.echo(f"[ok] ignore remove: {name}")
+    for name in missing:
+        click.echo(f"[warn] not in ignore list: {name}")
+    _ignore_change_hint()
+
+
+@ignore.command("list")
+@click.option("--project-dir", default=".", show_default=True)
+def ignore_list(project_dir):
+    """Print the configured ignore folders."""
+    project_path = Path(project_dir).resolve()
+    cfg, _ = _load_active_config(project_path)
+
+    entries = _ignore_folders(cfg)
+    if not entries:
+        click.echo("No ignore folders configured.")
+        return
+    for entry in entries:
+        click.echo(entry)
 
 
 # ---------------------------------------------------------------------------

@@ -19,6 +19,26 @@ from graph_store import add_graph_store_args, create_graph_store_from_args
 from doc_local_qdrant import get_document_qdrant_store
 from project_contract import ProjectNotRegisteredError, resolve_project_targets
 
+# Directory excludes shared with the code-tiny analyzers (and the
+# orchestrator's user-configured ``ignore.folders`` via
+# ``CORTEX_EXTRA_IGNORE_DIRS``). doc-tiny normally runs standalone, so the
+# import reaches into the sibling code-tiny checkout; when that layout is
+# unavailable, fall back to a minimal mirror of the default list.
+try:
+    _code_tiny_root = Path(__file__).resolve().parent.parent / "code-tiny"
+    if str(_code_tiny_root) not in sys.path:
+        sys.path.insert(0, str(_code_tiny_root))
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE, matches_extra_ignore
+except Exception:
+    COMMON_SCAN_EXCLUDE = frozenset({
+        ".git", ".hg", ".svn", ".venv", "venv", "env", "__pycache__",
+        "node_modules", "build", "out", "target", "dist", "bin", "obj",
+        ".idea", ".vscode", ".cache", ".cortext-harness",
+    })
+
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 try:
     from dotenv import load_dotenv
 except Exception:
@@ -636,21 +656,25 @@ def _stringify_values(values: Dict[str, Any]) -> Dict[str, Any]:
     return safe
 
 
+_DOC_INPUT_EXTENSIONS = {".pdf", ".txt", ".md", ".docx", ".pptx", ".xlsx"}
+
+
 def _iter_input_files(folder: Path) -> List[Path]:
     files = []
     for path in folder.rglob("*"):
         if (
             path.is_file()
             and not path.name.startswith("~$")
-            and path.suffix.lower() in {
-                ".pdf",
-                ".txt",
-                ".md",
-                ".docx",
-                ".pptx",
-                ".xlsx",
-            }
+            and path.suffix.lower() in _DOC_INPUT_EXTENSIONS
         ):
+            # Prune files inside excluded directories (default caches/build
+            # dirs plus user-configured CORTEX_EXTRA_IGNORE_DIRS entries).
+            parts = path.relative_to(folder).parts[:-1]
+            if any(
+                part in COMMON_SCAN_EXCLUDE or matches_extra_ignore(part)
+                for part in parts
+            ):
+                continue
             files.append(path)
     return sorted(files)
 

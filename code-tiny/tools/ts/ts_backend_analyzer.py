@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 """TypeScript Backend Semantic Analyzer — Express / NestJS V1.0
 
 Extracts a structured, flow-aware **Backend Execution Graph**::
@@ -117,7 +123,10 @@ def _scan_backend_files(root: str) -> List[str]:
     """Walk *root* and collect all TS/JS source files, skipping common noise dirs."""
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _SCAN_SKIP_DIRS and not matches_extra_ignore(d)
+        ]
         for name in filenames:
             if name.endswith(_BACKEND_SOURCE_EXTENSIONS):
                 files.append(os.path.join(dirpath, name))
@@ -1210,7 +1219,10 @@ def detect_project_type(root: str) -> str:
 
     # ── 2. Directory structure ─────────────────────────────────────────────
     for dirpath, dirnames, _ in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _SCAN_SKIP_DIRS and not matches_extra_ignore(d)
+        ]
         for d in dirnames:
             dl = d.lower()
             if dl in _BACKEND_DIR_SEGMENTS:

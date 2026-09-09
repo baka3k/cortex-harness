@@ -10,6 +10,13 @@ on 2026-04-03 as part of code optimization effort.
 
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import fnmatch
 import os
 import re
@@ -198,7 +205,7 @@ def _is_skipped_android_name(name: str) -> bool:
     for pattern in _ANDROID_SKIP_DIRS:
         if name == pattern or fnmatch.fnmatch(name, pattern):
             return True
-    return False
+    return matches_extra_ignore(name)
 
 
 def _android_attr(elem: ET.Element, name: str) -> Optional[str]:
@@ -570,6 +577,8 @@ def _scan_android_manifest_files(root: str, skip_dirs: Optional[set] = None) -> 
 
 def _is_skipped_android_name_custom(name: str, skip_dirs: set) -> bool:
     """Check if a directory/file name should be skipped (custom skip_dirs version)."""
+    if matches_extra_ignore(name):
+        return True
     if name.startswith("."):
         return True
     for pattern in skip_dirs:

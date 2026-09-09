@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
@@ -444,6 +451,7 @@ def _discover(root: Path) -> List[Path]:
         path
         for path in root.rglob("*.dart")
         if not any(part in SKIPPED_DIRECTORIES for part in path.relative_to(root).parts)
+        and not any(matches_extra_ignore(part) for part in path.relative_to(root).parts)
     )
 
 
