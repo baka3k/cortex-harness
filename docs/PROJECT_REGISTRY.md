@@ -73,6 +73,36 @@ silently shadowing an explicitly registered project.
   rejected with `DuplicateProjectRegistrationError`; resolution never depends
   on filesystem iteration order.
 
+> **Query-side scope rules (READ paths) live in
+> [`docs/PROJECT_ID_QUERY_RULES.md`](./PROJECT_ID_QUERY_RULES.md)** — omit
+> `project_id` to search every project; scoped queries are case-insensitive
+> AND prefix/LIKE (`bank` matches `bank_android`, `bank_Cplus`). Read paths
+> resolve through `resolve_project_scope_candidates` and the
+> `STARTS WITH $project_id_normalized` Cypher convention; write/sync/delete
+> paths keep exact `resolve_project_targets` equality.
+
+---
+
+## Read-Path Scope Resolution
+
+```python
+from tools.common.project_registry import resolve_project_scope_candidates
+```
+
+`resolve_project_scope_candidates(project_id, *, config_dir=None)` returns the
+ordered list of matching `ProjectTargets` for a **read** query:
+
+1. Exact case-insensitive match → one target.
+2. Otherwise every registered project whose casefold id starts with the query
+   id (`bank` → `bank_android`, `bank_Cplus`) — the scanner names per-target
+   projects `{stem}_{platform}` off a shared stem.
+3. No registry match → `[]`; read callers fall back to the raw id via the
+   naming convention so out-of-band shards stay reachable. Blank/`None` input
+   also yields `[]` (unscoped query).
+
+`resolve_project_targets` remains the exact-match resolver for write paths and
+storage provisioning.
+
 ---
 
 ## Config File Format

@@ -139,11 +139,11 @@ async def expand_semantic_results(
     node_query = f"""
     UNWIND $seed_ids AS sid
     MATCH (seed {{id: sid}})
-    WHERE ($project_id IS NULL OR seed.project_id_normalized = $project_id_normalized)
+    WHERE ($project_id IS NULL OR seed.project_id_normalized STARTS WITH $project_id_normalized)
     MATCH p = (seed){rel_pattern}(neighbor)
     WHERE neighbor.id IS NOT NULL
       AND NOT neighbor.id IN $seed_ids
-      AND ($project_id IS NULL OR neighbor.project_id_normalized = $project_id_normalized)
+      AND ($project_id IS NULL OR neighbor.project_id_normalized STARTS WITH $project_id_normalized)
       AND {servlet_active_generation_predicate('neighbor')}
     WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
     ORDER BY hops ASC
@@ -224,8 +224,8 @@ async def expand_semantic_results(
     MATCH (source){edge_pattern}(target)
     WHERE source.id IN $node_ids
       AND target.id IN $node_ids
-      AND ($project_id IS NULL OR source.project_id_normalized = $project_id_normalized)
-      AND ($project_id IS NULL OR target.project_id_normalized = $project_id_normalized)
+      AND ($project_id IS NULL OR source.project_id_normalized STARTS WITH $project_id_normalized)
+      AND ($project_id IS NULL OR target.project_id_normalized STARTS WITH $project_id_normalized)
     RETURN DISTINCT source.id AS source,
            target.id AS target,
            type(r) AS type,

@@ -312,7 +312,7 @@ def _graph_keyword_search(
         for property_name in safe_properties
     )
     cypher = (
-        "MATCH (n) WHERE ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) AND "
+        "MATCH (n) WHERE ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) AND "
         + label_clause
         + "any(q IN $qs WHERE " + property_clause + ") "
         + "RETURN n LIMIT $limit"

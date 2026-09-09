@@ -94,16 +94,16 @@ def test_structured_xlsx_entity_builder_receives_project_scope():
     assert "project_id_normalized=project_id_normalized" in source
 
 
-def test_doc_ingest_and_query_both_reject_unregistered_projects():
+def test_doc_ingest_rejects_unregistered_projects_and_query_falls_back():
+    # Ingest (write path) still fails loudly for an unregistered project...
     source = inspect.getsource(ingest.main)
     assert "raise SystemExit(str(exc)) from exc" in source
+    # ...while the query path keeps the raw id reachable through the
+    # naming convention ({project_id}_doc) per the project_id query rules.
     with mock.patch.object(
-        mcp_graph_rag,
-        "resolve_project_targets",
-        side_effect=KeyError("missing"),
+        mcp_graph_rag, "resolve_doc_candidates", return_value=[]
     ):
-        with pytest.raises(KeyError):
-            mcp_graph_rag._resolve_doc_collection("missing")
+        assert mcp_graph_rag._resolve_doc_collection("missing") == "missing_doc"
 
 
 def test_doc_qdrant_helper_uses_document_owner_store():
@@ -262,7 +262,9 @@ def test_mind_qdrant_search_resolves_collection_and_filter_from_project():
     assert captured["collection_name"] == "cortext_doc"
     condition = captured["query_filter"].must[0]
     assert condition.key == "project_id_normalized"
-    assert condition.match.value == "cortext"
+    # LIKE/prefix contract: the scoped filter matches the expanded key set
+    # (here the query key itself — no registered project shares the prefix).
+    assert getattr(condition.match, "any", None) == ["cortext"]
 
 
 def test_mind_qdrant_reports_missing_scoped_collection():

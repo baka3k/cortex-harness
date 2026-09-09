@@ -453,6 +453,50 @@ def resolve_project_targets(
     )
 
 
+def resolve_project_scope_candidates(
+    project_id: Any,
+    *,
+    config_dir: Optional[Path] = None,
+) -> List[ProjectTargets]:
+    """Resolve every registered project matching a scoped query.
+
+    Implements the LIKE/prefix rule of the ``project_id`` query contract:
+    an exact case-insensitive match wins (single target); otherwise every
+    registered project whose casefold() id starts with the query id matches
+    — ``bank`` → ``bank_android``, ``bank_Cplus`` — because the scanner
+    names per-target projects ``{stem}_{platform}`` off a shared stem.
+
+    Returns matches in config-file order (exact matches first when both
+    kinds exist, which cannot co-occur here because exact wins outright).
+    An empty list means the registry has no match at all; read-path callers
+    then fall back to the raw id (naming convention) so out-of-band shards
+    stay reachable. Unscoped (``None``/blank) input also yields ``[]`` —
+    callers fan out over :func:`list_registered_projects` instead.
+    """
+    query_key = project_id_lookup_key(project_id)
+    if query_key is None:
+        return []
+    directory = Path(config_dir) if config_dir is not None else _default_config_dir()
+    entries = _project_entries(_read_config_files(directory))
+    matches: List[Dict[str, Any]] = []
+    for entry in entries:
+        candidate_key = project_id_lookup_key(entry.get("project_id"))
+        if candidate_key and candidate_key.startswith(query_key):
+            matches.append(entry)
+    # Exact match (if present) collapses the result to that one project.
+    exact = [
+        entry
+        for entry in matches
+        if project_id_lookup_key(entry.get("project_id")) == query_key
+    ]
+    if exact:
+        matches = exact
+    return [
+        _resolve_targets(str(entry["project_id"]), entries)
+        for entry in matches
+    ]
+
+
 def list_registered_projects(
     *, config_dir: Optional[Path] = None
 ) -> List[str]:

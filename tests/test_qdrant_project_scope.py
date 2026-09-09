@@ -67,7 +67,7 @@ class QdrantProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                     request["query_filter"].model_dump(exclude_none=True),
                     {"must": [{
                         "key": "project_id_normalized",
-                        "match": {"value": "project-a"},
+                        "match": {"any": ["project-a"]},
                     }]},
                 )
 
@@ -164,7 +164,7 @@ class QdrantProjectScopeTests(unittest.IsolatedAsyncioTestCase):
             store.queries[0][1]["query_filter"].model_dump(exclude_none=True),
             {"must": [{
                 "key": "project_id_normalized",
-                "match": {"value": "project-a"},
+                "match": {"any": ["project-a"]},
             }]},
         )
 
@@ -278,7 +278,7 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                 request["query_filter"].model_dump(exclude_none=True),
                 {"must": [{
                     "key": "project_id_normalized",
-                    "match": {"value": "procsample"},
+                    "match": {"any": ["procsample"]},
                 }]},
             )
 
@@ -319,7 +319,7 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                     store.queries[-1][1]["query_filter"].model_dump(exclude_none=True),
                     {"must": [{
                         "key": "project_id_normalized",
-                        "match": {"value": "project-a"},
+                        "match": {"any": ["project-a"]},
                     }]},
                 )
 

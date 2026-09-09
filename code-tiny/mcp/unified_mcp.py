@@ -82,6 +82,8 @@ from tools.common.project_scope import project_id_lookup_key  # noqa: E402
 from tools.common.project_registry import (  # noqa: E402
     ProjectNotRegisteredError,
     ProjectRegistryError,
+    list_registered_projects,
+    resolve_project_scope_candidates,
     resolve_project_targets,
 )
 from cortex_harness.storage import (  # noqa: E402
@@ -1055,12 +1057,46 @@ class _ProxyMiddleware(Middleware):
 _proxy_middleware = _ProxyMiddleware()
 
 
+def _apply_catalog_required_to_schema(tool_name: str, tool: Tool) -> None:
+    """Mirror the metadata catalog's ``required`` flags onto the wire schema.
+
+    ``Tool.from_function`` derives ``parameters`` from the backend wrapper's
+    Python signature, where every field has a default — so the served schema
+    advertises every parameter as optional even when the backend rejects a
+    call without it (e.g. ``listup_symbols_matching_file_path`` without
+    ``modules``). Clients that trust the schema (LLM tool callers) then omit
+    the field and only discover the requirement through a runtime error.
+    Syncing ``required`` from the catalog makes the contract visible at
+    discovery time. Call-time validation still flows through
+    ``_dispatch_tool``'s pre-flight so alias coercion (``module`` →
+    ``modules``) keeps working and errors use the standard envelope.
+    """
+    parameters = getattr(tool, "parameters", None)
+    if not isinstance(parameters, dict):
+        return
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        return
+    catalog_required = [
+        name for name in _required_params(tool_name) if name in properties
+    ]
+    if not catalog_required:
+        return
+    existing = [
+        name for name in (parameters.get("required") or [])
+        if isinstance(name, str)
+    ]
+    parameters["required"] = list(dict.fromkeys(existing + catalog_required))
+
+
 def _register_proxy_tools() -> None:
     """Dynamically register proxied tools from their backend callables.
 
     Each proxied tool's schema is derived from the backend function signature
     by FastMCP's ``Tool.from_function`` machinery — so adding or removing a
     parameter in the backend is automatically reflected here on next reload.
+    The ``required`` list is then synced from the metadata catalog (see
+    ``_apply_catalog_required_to_schema``).
     """
     for name in _PROXIED_TOOL_NAMES:
         backend_module = _resolve_proxy_backend_module(name)
@@ -1074,14 +1110,14 @@ def _register_proxy_tools() -> None:
             )
         catalog_entry = _CATALOG_BY_NAME.get(name, {})
         description = catalog_entry.get("description") or f"Proxied to {backend_module.__name__}"
-        mcp_server.add_tool(
-            Tool.from_function(
-                fn,
-                name=name,
-                description=description,
-                output_schema=None,
-            )
+        tool = Tool.from_function(
+            fn,
+            name=name,
+            description=description,
+            output_schema=None,
         )
+        _apply_catalog_required_to_schema(name, tool)
+        mcp_server.add_tool(tool)
 
 
 async def _dispatch_planner_tool(tool_name: str, arguments: Dict[str, Any]) -> Any:
@@ -1103,6 +1139,17 @@ async def _dispatch_planner_tool(tool_name: str, arguments: Dict[str, Any]) -> A
             tool_name,
             arguments,
             ValueError(f"Planner tool '{tool_name}' is not registered on fast_backend."),
+        )
+    missing_required = _missing_required_params(tool_name, arguments)
+    if missing_required:
+        # Fail with the standard envelope instead of leaking the raw
+        # TypeError from the kwargs call below.
+        return _build_tool_error(
+            tool_name,
+            arguments,
+            ValueError(
+                "Missing required parameters: " + ", ".join(missing_required)
+            ),
         )
     try:
         return await fn(**arguments)
@@ -1439,6 +1486,20 @@ async def _fanout_dispatch(
 async def _dispatch_tool(tool_name: str, payload: Dict[str, Any]) -> Any:
     merged = _apply_unified_defaults(payload)
     merged = _coerce_list_fields(merged)
+    # Pre-flight contract check: a payload missing a catalog-required
+    # parameter would fail identically on every backend it reaches. Fail once
+    # here with the standard error envelope (required_params + example)
+    # instead of dispatching to every query engine and wrapping the repeated
+    # backend validation errors in a fanout_failed report.
+    missing_required = _missing_required_params(tool_name, merged)
+    if missing_required:
+        return _build_tool_error(
+            tool_name,
+            merged,
+            ValueError(
+                "Missing required parameters: " + ", ".join(missing_required)
+            ),
+        )
     selected_parser = _normalize_parser_type(merged.get("parser_type"))
     capability = capability_for_parser(selected_parser)
     if selected_parser and capability is None:
@@ -1566,16 +1627,20 @@ async def tool_inspect_parser_capabilities(
     project_id: str = "",
 ) -> Dict[str, Any]:
     _db = _resolve_graph_database(project_id=project_id or None)
-    selected_parser = (
-        _normalize_parser_type(parser_type)
-        or _normalize_parser_type(parser_type)
-    )
+    selected_parser = _normalize_parser_type(parser_type)
+    if not selected_parser and project_id:
+        # Omitted parser_type resolves from the project's registered profile
+        # before falling back to the default query engine's profile, so the
+        # call answers for the project actually being inspected instead of
+        # rejecting the request.
+        try:
+            selected_parser = _normalize_parser_type(
+                resolve_project_targets(project_id).parser_type
+            )
+        except ProjectNotRegisteredError:
+            selected_parser = None
     if not selected_parser:
-        return _build_tool_error(
-            "inspect_parser_capabilities",
-            {"parser_type": parser_type, "db": _db},
-            ValueError("parser_type is required when no project profile is active."),
-        )
+        selected_parser = _normalize_parser_type(DEFAULT_BACKEND)
     capability = capability_for_parser(selected_parser)
     if capability is None:
         return _unsupported_parser_result(
@@ -1741,15 +1806,22 @@ async def tool_explore_graph(
         if not relationship_types:
             effective_mode = "semantic"
     service = get_explore_service()
-    active_db = _resolve_graph_database(project_id=project_id or None) if project_id else None
+    # project_id query rules: pin a single graph/collection only when the
+    # scope resolves to exactly one project (exact or one prefix hit). A
+    # multi-project prefix scope (bank -> bank_android, bank_Cplus) must stay
+    # unset here so explore_service fans out one target per candidate.
+    active_db: Optional[str] = None
     resolved_collection = collection or None
-    if project_id and not resolved_collection:
-        try:
-            resolved_collection = resolve_project_targets(
-                project_id
-            ).code_qdrant_collection
-        except ProjectNotRegisteredError:
-            resolved_collection = project_id
+    if project_id:
+        matched = resolve_project_scope_candidates(project_id or "")
+        if len(matched) == 1:
+            active_db = _resolve_graph_database(project_id=project_id or None)
+            resolved_collection = (
+                resolved_collection or matched[0].code_qdrant_collection
+            )
+        elif not matched:
+            active_db = _resolve_graph_database(project_id=project_id or None)
+            resolved_collection = resolved_collection or project_id
     result = await service.explore(
         query      = q,
         top_k      = k,
@@ -1919,6 +1991,212 @@ async def _run_project_context_tool(
     # same graph the topology writer filled. Without this, a server started
     # for project A silently reads A's graph for every call and returns empty
     # results for every other project.
+    if not str(project_id or "").strip():
+        # Omitted project_id follows the unified search contract: omit to
+        # search all. Fan out once per registered project and merge, so the
+        # project-context tools behave like the parser-less fan-out search
+        # tools instead of rejecting the call.
+        return await _run_project_context_fanout(
+            tool_name=tool_name,
+            parser_type=parser_type,
+            required_labels=required_labels,
+            required_relationships=required_relationships,
+            method_name=method_name,
+            method_args=method_args,
+        )
+    return await _run_single_project_context(
+        tool_name=tool_name,
+        project_id=project_id,
+        parser_type=parser_type,
+        required_labels=required_labels,
+        required_relationships=required_relationships,
+        method_name=method_name,
+        method_args=method_args,
+    )
+
+
+# Per-project result keys whose values are lists we merge (tagged with the
+# source project) across the project-context fan-out. Everything else is
+# merged per the scalar rules in ``_merge_project_context_results``.
+_PROJECT_CONTEXT_LIST_KEYS: frozenset = frozenset(
+    {
+        "modules",
+        "public_apis",
+        "endpoints",
+        "special_files",
+        "frameworks",
+    }
+)
+
+
+def _merge_project_context_summary(
+    summaries: List[Dict[str, Any]],
+    projects: List[str],
+) -> Dict[str, Any]:
+    """Merge per-project ``summary`` dicts (get_module_architecture_summary).
+
+    Nested list samples are concatenated (tagged with the source project);
+    ``*_count`` / ``*_total`` fields are summed; descriptive scalars are kept
+    from the first project.
+    """
+    merged: Dict[str, Any] = {}
+    for key, value in summaries[0].items():
+        values = [summary.get(key) for summary in summaries]
+        if isinstance(value, list):
+            items: List[Any] = []
+            for project, project_items in zip(projects, values):
+                if not isinstance(project_items, list):
+                    continue
+                for item in project_items:
+                    if isinstance(item, dict):
+                        tagged = dict(item)
+                        tagged.setdefault("project_id", project)
+                        items.append(tagged)
+                    else:
+                        items.append(item)
+            merged[key] = items
+        elif isinstance(value, (int, float)) and (
+            key.endswith("_count") or key.endswith("_total")
+        ):
+            merged[key] = sum(
+                v for v in values if isinstance(v, (int, float))
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
+def _merge_project_context_results(
+    results: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Merge per-project project-context results into one payload.
+
+    List-valued keys are concatenated (each item tagged with ``project_id``);
+    numeric ``total`` fields are summed; ``has_more`` is the logical OR;
+    ``offset``/``limit`` are kept from the first successful project. If every
+    project failed, the first error envelope is returned so callers see the
+    standard error contract.
+    """
+    ok_projects = [
+        project for project, result in sorted(results.items())
+        if isinstance(result, dict) and result.get("ok") is not False
+    ]
+    failed_projects = {
+        project: result.get("error")
+        for project, result in sorted(results.items())
+        if isinstance(result, dict) and result.get("ok") is False
+    }
+    if not ok_projects:
+        first_error = next(iter(failed_projects.values()), None)
+        return {
+            "ok": False,
+            "error": first_error
+            or {
+                "type": "project_context_unavailable",
+                "message": "No registered projects produced a result.",
+            },
+        }
+
+    merged: Dict[str, Any] = {"ok": True, "projects_searched": ok_projects}
+    if failed_projects:
+        merged["projects_failed"] = failed_projects
+    first_result = results[ok_projects[0]]
+
+    for key, value in first_result.items():
+        if key in {"ok", "project_id", "error"}:
+            continue
+        if key == "summary" and isinstance(value, dict):
+            merged[key] = _merge_project_context_summary(
+                [
+                    results[project].get("summary") or {}
+                    for project in ok_projects
+                ],
+                ok_projects,
+            )
+            continue
+        if key in _PROJECT_CONTEXT_LIST_KEYS and isinstance(value, list):
+            items: List[Any] = []
+            seen_ids: set = set()
+            for project in ok_projects:
+                project_items = results[project].get(key)
+                if not isinstance(project_items, list):
+                    continue
+                for item in project_items:
+                    if isinstance(item, dict):
+                        item_id = item.get("id") or item.get("module_id")
+                        if item_id and item_id in seen_ids:
+                            continue
+                        if item_id:
+                            seen_ids.add(item_id)
+                        merged_item = dict(item)
+                        merged_item.setdefault("project_id", project)
+                        items.append(merged_item)
+                    else:
+                        items.append(item)
+            merged[key] = items
+            continue
+        if key == "total" and isinstance(value, (int, float)):
+            merged[key] = sum(
+                results[project].get(key) or 0
+                for project in ok_projects
+                if isinstance(results[project].get(key), (int, float))
+            )
+            continue
+        if key == "has_more" and isinstance(value, bool):
+            merged[key] = any(
+                bool(results[project].get(key)) for project in ok_projects
+            )
+            continue
+        merged[key] = value
+    return merged
+
+
+async def _run_project_context_fanout(
+    *,
+    tool_name: str,
+    parser_type: str,
+    required_labels: Tuple[str, ...],
+    required_relationships: Tuple[str, ...],
+    method_name: str,
+    method_args: Dict[str, Any],
+) -> Dict[str, Any]:
+    projects = list_registered_projects()
+    if not projects:
+        return _build_tool_error(
+            tool_name,
+            {"parser_type": parser_type, **method_args},
+            ValueError(
+                "project_id is omitted and no projects are registered, so "
+                "there is nothing to search. Register a project or pass "
+                "project_id explicitly."
+            ),
+        )
+
+    async def _run_one(project: str) -> Tuple[str, Dict[str, Any]]:
+        return project, await _run_single_project_context(
+            tool_name=tool_name,
+            project_id=project,
+            parser_type=parser_type,
+            required_labels=required_labels,
+            required_relationships=required_relationships,
+            method_name=method_name,
+            method_args=method_args,
+        )
+
+    runs = await asyncio.gather(*(_run_one(project) for project in projects))
+    return _merge_project_context_results(dict(runs))
+
+
+async def _run_single_project_context(
+    *,
+    tool_name: str,
+    project_id: str,
+    parser_type: str,
+    required_labels: Tuple[str, ...],
+    required_relationships: Tuple[str, ...],
+    method_name: str,
+    method_args: Dict[str, Any],
+) -> Dict[str, Any]:
     database = _resolve_graph_database(
         project_id=project_id or None,
     )

@@ -22,7 +22,12 @@ from tools.graph.core.shared_runtime import reset_shared_graph_drivers
 
 
 class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
-    async def test_workflow_service_defaults_to_falkordb_graph_name(self):
+    async def test_workflow_service_uses_per_project_graph_name(self):
+        # FalkorDB shards one graph per project. An unregistered project_id
+        # resolves through the code_graph == project_id naming convention
+        # (same contract as unified_mcp._resolve_graph_database) instead of
+        # silently querying the server's default graph, which returns empty
+        # or wrong-project results for every other project.
         captured = {}
 
         async def fake_finder(_driver, database, **kwargs):
@@ -37,7 +42,7 @@ class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
                 {"project_id": "demo", "node_a": "Home"},
             )
 
-        self.assertEqual(captured["database"], "hyper_graph")
+        self.assertEqual(captured["database"], "demo")
 
     async def test_bridge_defaults_to_shared_falkordb_driver(self):
         class FakeDriver:
@@ -235,8 +240,8 @@ class FrameworkMcpFlowTests(unittest.IsolatedAsyncioTestCase):
         for backend in backends:
             with self.subTest(backend=backend.__name__), patch.object(
                 backend,
-                "resolve_project_targets",
-                side_effect=backend.ProjectNotRegisteredError(project_id, []),
+                "resolve_project_scope_candidates",
+                return_value=[],
             ), patch.object(backend, "DEFAULT_GRAPH_DB", "another-project"):
                 self.assertEqual(
                     backend._resolve_db_candidates(project_id),

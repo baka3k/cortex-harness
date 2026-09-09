@@ -91,7 +91,7 @@ class ProjectContextService:
         query = f"""
         /* project_context:{marker}:count */
         MATCH (node:{label})
-        WHERE node.project_id_normalized = $project_id_normalized
+        WHERE node.project_id_normalized STARTS WITH $project_id_normalized
           AND ($module_id = '' OR node.module_id = $module_id OR node.id = $module_id)
           {extra_where}
         RETURN count(node) AS total
@@ -130,7 +130,7 @@ class ProjectContextService:
             """
             /* project_context:modules:count */
             MATCH (m:ProjectModule)
-            WHERE m.project_id_normalized = $project_id_normalized
+            WHERE m.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR m.id = $module_id)
               AND ($module_path = '' OR m.module_path = $module_path)
             RETURN count(m) AS total
@@ -141,7 +141,7 @@ class ProjectContextService:
             """
             /* project_context:modules:page */
             MATCH (m:ProjectModule)
-            WHERE m.project_id_normalized = $project_id_normalized
+            WHERE m.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR m.id = $module_id)
               AND ($module_path = '' OR m.module_path = $module_path)
             OPTIONAL MATCH (m)-[:HAS_DESCRIPTOR]->(d:BuildDescriptor)
@@ -287,7 +287,7 @@ class ProjectContextService:
             f"""
             /* project_context:public_apis:count */
             MATCH (m:ProjectModule)-[:EXPOSES_API]->(symbol)
-            WHERE m.project_id_normalized = $project_id_normalized
+            WHERE m.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR m.id = $module_id)
               {predicate}
             RETURN count(DISTINCT symbol) AS total
@@ -298,7 +298,7 @@ class ProjectContextService:
             f"""
             /* project_context:public_apis:page */
             MATCH (m:ProjectModule)-[:EXPOSES_API]->(symbol)
-            WHERE m.project_id_normalized = $project_id_normalized
+            WHERE m.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR m.id = $module_id)
               {predicate}
             RETURN DISTINCT symbol.id AS symbol_id,
@@ -389,7 +389,7 @@ class ProjectContextService:
             f"""
             /* project_context:endpoints:count */
             MATCH (m:ProjectModule)-[:EXPOSES_ENDPOINT]->(endpoint)
-            WHERE m.project_id_normalized = $project_id_normalized
+            WHERE m.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR m.id = $module_id)
               {predicate}
             RETURN count(DISTINCT endpoint) AS total
@@ -400,7 +400,7 @@ class ProjectContextService:
             f"""
             /* project_context:endpoints:page */
             MATCH (m:ProjectModule)-[:EXPOSES_ENDPOINT]->(endpoint)
-            WHERE m.project_id_normalized = $project_id_normalized
+            WHERE m.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR m.id = $module_id)
               {predicate}
             OPTIONAL MATCH (endpoint)-[:HANDLED_BY|SEMANTIC_OF]->(handler)
@@ -528,7 +528,7 @@ class ProjectContextService:
             f"""
             /* project_context:special_files:count */
             MATCH (module:ProjectModule)-[:HAS_DESCRIPTOR]->(descriptor:BuildDescriptor)
-            WHERE module.project_id_normalized = $project_id_normalized
+            WHERE module.project_id_normalized STARTS WITH $project_id_normalized
               {predicate}
             RETURN count(DISTINCT descriptor) AS total
             """,
@@ -538,7 +538,7 @@ class ProjectContextService:
             f"""
             /* project_context:special_files:page */
             MATCH (module:ProjectModule)-[:HAS_DESCRIPTOR]->(descriptor:BuildDescriptor)
-            WHERE module.project_id_normalized = $project_id_normalized
+            WHERE module.project_id_normalized STARTS WITH $project_id_normalized
               {predicate}
             RETURN descriptor.id AS descriptor_id,
                    descriptor.file_path AS path,
@@ -634,7 +634,7 @@ class ProjectContextService:
             """
             /* project_context:frameworks:count */
             MATCH (module:ProjectModule)-[:USES_FRAMEWORK]->(instance:FrameworkInstance)
-            WHERE module.project_id_normalized = $project_id_normalized
+            WHERE module.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR module.id = $module_id)
               AND ($framework = '' OR toLower(instance.framework) = $framework)
             RETURN count(DISTINCT instance) AS total
@@ -645,7 +645,7 @@ class ProjectContextService:
             """
             /* project_context:frameworks:page */
             MATCH (module:ProjectModule)-[:USES_FRAMEWORK]->(instance:FrameworkInstance)
-            WHERE module.project_id_normalized = $project_id_normalized
+            WHERE module.project_id_normalized STARTS WITH $project_id_normalized
               AND ($module_id = '' OR module.id = $module_id)
               AND ($framework = '' OR toLower(instance.framework) = $framework)
             RETURN instance.id AS instance_id,
@@ -712,8 +712,9 @@ class ProjectContextService:
         detail_level: str = "standard",
         item_limit: Any = DEFAULT_SAMPLE_LIMIT,
     ) -> Dict[str, Any]:
-        if not module_id and not all_modules:
-            raise ValueError("provide module_id or set all_modules=true")
+        # Omitted module_id follows the "omit to search all" contract: the
+        # summary spans every module instead of rejecting the call.
+        all_modules = bool(all_modules or not str(module_id or "").strip())
         sample_limit = _positive_int(
             item_limit, DEFAULT_SAMPLE_LIMIT, MAX_SAMPLE_LIMIT
         )

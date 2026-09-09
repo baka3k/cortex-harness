@@ -122,9 +122,9 @@ class CypherGraphDriver(GraphDriver):
         rel_pattern = f"[:{'|'.join(relationship_types)}*..{max_depth}]"
         cypher = f"""
         MATCH (a:Function) WHERE a.id = $start
-          AND ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR a.project_id_normalized STARTS WITH $project_id_normalized)
         MATCH (b:Function) WHERE b.id = $end
-          AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR b.project_id_normalized STARTS WITH $project_id_normalized)
         AND a.id <> b.id
         MATCH p=(a)-{rel_pattern}->(b)
         RETURN p ORDER BY length(p) LIMIT $limit
@@ -161,7 +161,7 @@ class CypherGraphDriver(GraphDriver):
 
         cypher = f"""
         MATCH (f:Function) WHERE f.id = $id
-          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized)
         MATCH p=(f){pattern}(n)
         RETURN p
         """
@@ -234,12 +234,12 @@ class CypherGraphDriver(GraphDriver):
             toLower(coalesce(s.file_path, '')) CONTAINS token OR
             toLower(coalesce(sf.path, '')) CONTAINS token OR
             toLower(coalesce(sf.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR s.project_id_normalized STARTS WITH $project_id_normalized)
         AND any(token IN targets WHERE
             toLower(coalesce(t.file_path, '')) CONTAINS token OR
             toLower(coalesce(tf.path, '')) CONTAINS token OR
             toLower(coalesce(tf.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR t.project_id_normalized STARTS WITH $project_id_normalized)
         AND s.id <> t.id
         MATCH p=(s){rel_pattern}(t)
         RETURN p ORDER BY length(p)
@@ -265,8 +265,8 @@ class CypherGraphDriver(GraphDriver):
     ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         cypher = """
         MATCH (a:Function)-[r:POSSIBLE_CALLS]->(b:Function)
-        WHERE ($project_id IS NULL OR a.project_id_normalized = $project_id_normalized)
-        AND ($project_id IS NULL OR b.project_id_normalized = $project_id_normalized)
+        WHERE ($project_id IS NULL OR a.project_id_normalized STARTS WITH $project_id_normalized)
+        AND ($project_id IS NULL OR b.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN a, b, r
         LIMIT $limit
         """
@@ -309,7 +309,7 @@ class CypherGraphDriver(GraphDriver):
             toLower(coalesce(f.file_path, '')) CONTAINS token OR
             toLower(coalesce(file.path, '')) CONTAINS token OR
             toLower(coalesce(file.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
@@ -331,9 +331,9 @@ class CypherGraphDriver(GraphDriver):
         WHERE any(token IN tokens WHERE
             toLower(coalesce(c.name, '')) CONTAINS token OR
             toLower(coalesce(c.qualified_name, '')) CONTAINS token)
-          AND ($project_id IS NULL OR c.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR c.project_id_normalized STARTS WITH $project_id_normalized)
         MATCH (c)-[:CONTAINS]->(f:Function)
-        WHERE ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
+        WHERE ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
@@ -354,7 +354,7 @@ class CypherGraphDriver(GraphDriver):
         WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower($token)
            OR toLower(coalesce(file.path, '')) CONTAINS toLower($token)
            OR toLower(coalesce(file.file_path, '')) CONTAINS toLower($token)
-          AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN DISTINCT f
         """
         records, _, _ = await self.execute_query(
@@ -379,17 +379,17 @@ class CypherGraphDriver(GraphDriver):
             toLower(coalesce(internalFn.file_path, '')) CONTAINS token OR
             toLower(coalesce(internalFile.path, '')) CONTAINS token OR
             toLower(coalesce(internalFile.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR internalFn.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR internalFn.project_id_normalized STARTS WITH $project_id_normalized)
         WITH collect(internalFn.id) AS internalIds, modules
         MATCH (externalFile:File)-[:CONTAINS]->(externalFn:Function)
         WHERE NOT any(token IN modules WHERE
             toLower(coalesce(externalFn.file_path, '')) CONTAINS token OR
             toLower(coalesce(externalFile.path, '')) CONTAINS token OR
             toLower(coalesce(externalFile.file_path, '')) CONTAINS token)
-          AND ($project_id IS NULL OR externalFn.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR externalFn.project_id_normalized STARTS WITH $project_id_normalized)
         MATCH (externalFn)-[:{rel_pattern}]->(entryFn:Function)
         WHERE entryFn.id IN internalIds
-          AND ($project_id IS NULL OR entryFn.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR entryFn.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN DISTINCT entryFn
         """
         records, _, _ = await self.execute_query(
