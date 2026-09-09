@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import argparse
 import asyncio
 import functools
@@ -717,7 +723,10 @@ def _func_qdrant_payload(
 def _scan_ts_files(root: str) -> List[str]:
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in _SCAN_SKIP_DIRS and not matches_extra_ignore(name)
+        ]
         for name in filenames:
             if name.endswith(_TS_SOURCE_EXTENSIONS):
                 files.append(os.path.join(dirpath, name))

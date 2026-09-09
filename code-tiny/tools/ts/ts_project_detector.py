@@ -18,6 +18,12 @@ Intended usage from hyper-agent scan pipeline:
 """
 from __future__ import annotations
 
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import json
 import os
 import re
@@ -215,7 +221,10 @@ def detect_project_type(root: str) -> ProjectTypeResult:
 
     # ── Pass 2: directory structure ──────────────────────────────────────────
     for dirpath, dirnames, _ in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _SKIP_DIRS and not matches_extra_ignore(d)
+        ]
         for d in dirnames:
             dl = d.lower()
             for seg_name, weight, is_be in _DIR_SIGNALS:

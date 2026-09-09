@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import argparse
 import asyncio
 import concurrent.futures
@@ -88,7 +95,11 @@ def _scan_vb_files(root: str, dialect: str) -> List[str]:
     exts = set(_SOURCE_EXTS.get(dialect, ()))
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS and not name.startswith(".")]
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in _SKIP_DIRS and not name.startswith(".")
+            and not matches_extra_ignore(name)
+        ]
         for name in filenames:
             rel = os.path.relpath(os.path.join(dirpath, name), root).replace("\\", "/")
             ext = os.path.splitext(name.lower())[1]

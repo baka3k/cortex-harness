@@ -92,3 +92,47 @@ The generated project structure must be reflected in the configuration file. For
     }
 
 ```
+
+### 4. Ignore Folders (scan-time excludes)
+
+`dev init` asks for a comma-separated list of folders to skip while scanning,
+stored as a top-level config section that applies to **both** code sync and
+doc sync:
+
+```json
+{
+  "ignore": {
+    "folders": ["legacy", "generated-*", "sandbox", "third_party"]
+  }
+}
+```
+
+Semantics:
+
+* Each entry is a **folder name** (exact, e.g. `legacy`) or an **fnmatch glob**
+  (`generated-*`, `*.tmp-out`), matched against directory names at **any
+  depth** below the configured scan roots. Relative paths (`a/b`) are not
+  supported in v1.
+* User entries **add to** the built-in default excludes
+  (`_SCAN_EXCLUDE` / `COMMON_SCAN_EXCLUDE`); defaults can never be un-ignored.
+* Excluded folders are hidden from the `dev sync code` / `dev sync doc` folder
+  pickers, omitted from snapshot hashes, incremental change detection and
+  doc ingestion. A scan root selected explicitly while also matching the
+  ignore list still runs, with a warning.
+* Manage the list without re-running `dev init`:
+
+  ```bash
+  dev ignore add legacy generated-*   # merge into ignore.folders
+  dev ignore remove legacy            # exact-match removal
+  dev ignore list                     # print configured entries
+  ```
+
+  All three act on the active environment config and fail with
+  "Run 'dev init' first" when no config exists. Changes apply from the next
+  sync run.
+
+* `CORTEX_EXTRA_IGNORE_DIRS` (comma-separated) is the **internal channel**
+  the orchestrator uses to propagate `ignore.folders` into spawned
+  subprocesses (incremental_sync, language analyzers, doc-tiny ingest).
+  Configure ignores via `dev init` / `dev ignore` — do not set the env var by
+  hand.

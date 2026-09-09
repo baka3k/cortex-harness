@@ -19,6 +19,13 @@ from tools.struts.validation_parser import parse_validation_xml_file
 from tools.struts.web_xml_parser import parse_web_xml_file
 
 
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
+
 _IGNORED_DIR_PATTERNS = {
     # Version control
     ".git", ".hg", ".svn",
@@ -61,6 +68,7 @@ def _iter_files(root: Path) -> Iterable[Path]:
             item
             for item in dirs
             if not item.startswith(".") and not _matches_pattern(item, _IGNORED_DIR_PATTERNS)
+            and not matches_extra_ignore(item)
         )
         for name in sorted(files):
             if _matches_pattern(name, _IGNORED_FILE_PATTERNS):

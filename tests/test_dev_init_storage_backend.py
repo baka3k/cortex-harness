@@ -62,6 +62,8 @@ class DevInitStorageBackendTests(unittest.TestCase):
             cfg = json.loads(self._config_path(project_path).read_text(encoding="utf-8"))
             self.assertEqual(cfg["storage_backend"], "local")
             self.assertNotIn("remote", cfg)
+            # Blank ignore prompt on a fresh project must not write the section.
+            self.assertNotIn("ignore", cfg)
             self.assertNotIn(
                 "Remote backend — Enter at least one endpoint",
                 result.output,

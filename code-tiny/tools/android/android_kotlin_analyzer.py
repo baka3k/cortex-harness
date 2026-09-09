@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import argparse
 import asyncio
 import gc
@@ -1426,7 +1433,7 @@ def _is_skipped_android_name(name: str) -> bool:
     for pattern in _ANDROID_SKIP_DIRS:
         if name == pattern or fnmatch.fnmatch(name, pattern):
             return True
-    return False
+    return matches_extra_ignore(name)
 
 
 def _walk_android_tree(root: str) -> Iterable[Tuple[str, List[str], List[str]]]:

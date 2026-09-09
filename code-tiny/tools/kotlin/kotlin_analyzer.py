@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import argparse
 import asyncio
 import gc
@@ -1221,6 +1228,7 @@ def _scan_kotlin_files(root: str) -> List[str]:
         dirnames[:] = [
             d for d in dirnames
             if not _should_ignore_directory(d, os.path.join(dirpath, d))
+                    and not matches_extra_ignore(d)
         ]
 
         for name in filenames:

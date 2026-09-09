@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import hashlib
 import json
 import os
@@ -80,7 +86,9 @@ def scan_perl_files(root: str, *, max_files: int = DEFAULT_MAX_FILES) -> Tuple[T
         dirnames[:] = sorted(
             name
             for name in dirnames
-            if name not in _SKIP_DIRS and not os.path.islink(os.path.join(current_root, name))
+            if name not in _SKIP_DIRS
+            and not matches_extra_ignore(name)
+            and not os.path.islink(os.path.join(current_root, name))
         )
         for filename in sorted(filenames):
             if not filename.lower().endswith(SUPPORTED_EXTENSIONS):

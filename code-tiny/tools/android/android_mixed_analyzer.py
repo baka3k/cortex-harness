@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import argparse
 import fnmatch
 import os
@@ -28,7 +35,7 @@ def _is_skipped_name(name: str) -> bool:
     for pattern in _SCAN_SKIP_DIRS:
         if name == pattern or fnmatch.fnmatch(name, pattern):
             return True
-    return False
+    return matches_extra_ignore(name)
 
 
 def _scan_mixed_source_files(root: str) -> Tuple[List[str], List[str]]:

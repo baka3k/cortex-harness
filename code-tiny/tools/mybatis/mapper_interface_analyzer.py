@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 import re
 import hashlib
@@ -375,7 +382,11 @@ def _property_rows(node, source_bytes: bytes):
 
 def _iter_java_files(root: str):
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS and not d.startswith(".")]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIRS and not d.startswith(".")
+            and not matches_extra_ignore(d)
+        ]
         for name in filenames:
             if name.endswith(".java"):
                 abs_path = os.path.join(dirpath, name)

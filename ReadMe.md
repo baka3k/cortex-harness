@@ -171,6 +171,9 @@ The CLI has **two independent command groups** serving different roles:
 | `dev init` | Interactive wizard — create/update config and scaffold project folders |
 | `dev init --env prod` | Configure the `prod` environment (default: `dev`) |
 | `dev init --project-dir /path` | Target a specific project directory |
+| `dev ignore add <FOLDER>...` | Add folders (names or globs like `generated-*`) to the scan-ignore list of the active config |
+| `dev ignore remove <FOLDER>...` | Remove entries from the scan-ignore list (exact match) |
+| `dev ignore list` | Print the configured ignore folders |
 | `dev status` | Show active config (Neo4j, Qdrant, folders, environments) |
 | `dev journal status --journal-path PATH` | Show payload-free recovery queue state |
 | `dev journal purge --journal-path PATH --run-id ID --project-id ID --root ROOT` | Purge one expired terminal run after exact-scope safety checks |
@@ -181,6 +184,11 @@ The CLI has **two independent command groups** serving different roles:
 > non-localhost URLs and the wizard will prompt for credentials. Secrets are stored
 > in plaintext in `.cortext-harness/config/{env}.json` — do not commit populated
 > configs to shared repos.
+
+> **Ignore folders:** `dev init` also asks for folders to skip while scanning
+> (comma-separated, globs like `generated-*` allowed). Entries add to the
+> built-in defaults and apply to both code and doc sync; manage them later
+> with `dev ignore add|remove|list`.
 
 Backend selection is per project. A remote project may configure only Qdrant
 or only FalkorDB; the missing component is resolved as an explicit local

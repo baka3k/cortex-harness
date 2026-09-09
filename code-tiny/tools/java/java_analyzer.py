@@ -47,9 +47,12 @@ except Exception:
 
 _PARSE_CACHE_VERSION = "java-v2026-07-25-public-api-1"
 try:
-    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE, matches_extra_ignore
 except Exception:
     COMMON_SCAN_EXCLUDE = frozenset()
+
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
 
 _SCAN_SKIP_DIRS = {
     # Version control
@@ -1492,7 +1495,7 @@ def _scan_java_files(root: str) -> List[str]:
         for pattern in _SCAN_SKIP_DIRS:
             if name == pattern or fnmatch.fnmatch(name, pattern):
                 return True
-        return False
+        return matches_extra_ignore(name)
 
     java_files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
