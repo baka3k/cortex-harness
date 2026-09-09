@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 from pathlib import Path
 from typing import Iterator, Optional, Tuple
@@ -47,6 +54,7 @@ def iter_descriptor_paths(root: Path) -> Iterator[Tuple[str, DescriptorSpec]]:
             name
             for name in dirnames
             if name not in SKIP_DIRS and not name.startswith(".")
+            and not matches_extra_ignore(name)
         )
         for filename in sorted(filenames):
             absolute = Path(current) / filename

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
@@ -188,7 +195,11 @@ def _semantic_facts_from_foundation(
 
 def _iter_source_files(root: str) -> Iterable[Tuple[str, str]]:
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS and not d.startswith(".")]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIRS and not d.startswith(".")
+            and not matches_extra_ignore(d)
+        ]
         for name in filenames:
             if not name.endswith((".java", ".kt", ".kts")):
                 continue

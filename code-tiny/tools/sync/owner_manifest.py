@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 import re
 from dataclasses import dataclass
@@ -304,7 +310,10 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset({
 
 def _iter_files(root: str) -> Iterable[Tuple[str, str]]:
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIRS and not matches_extra_ignore(d)
+        ]
         for name in filenames:
             abs_path = os.path.join(dirpath, name)
             rel_path = _safe_rel_path(os.path.relpath(abs_path, root))

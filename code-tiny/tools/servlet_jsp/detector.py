@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 import re
 from dataclasses import dataclass
@@ -239,7 +246,10 @@ class ServletJspProjectDetector:
 
     def _iter_files(self) -> Iterable[Tuple[str, str]]:
         for current, dirs, files in os.walk(self.root, followlinks=False):
-            dirs[:] = sorted(name for name in dirs if name not in _EXCLUDED_DIRS)
+            dirs[:] = sorted(
+                name for name in dirs
+                if name not in _EXCLUDED_DIRS and not matches_extra_ignore(name)
+            )
             for name in sorted(files):
                 absolute = os.path.join(current, name)
                 rel = normalize_relative_path(os.path.relpath(absolute, self.root))

@@ -129,6 +129,14 @@ Directories matching any entry below are pruned before descent — they will **n
 > Glob-style entries (e.g. `cmake-build-*`, `moc_*`) are listed for documentation purposes  
 > but are **not** evaluated as globs at runtime — add fnmatch logic if wildcard support is needed.
 
+> **User-configured ignores:** every analyzer additionally prunes directory
+> names matching `CORTEX_EXTRA_IGNORE_DIRS` (comma-separated names or fnmatch
+> globs). The orchestrator (`cortex_harness/dev.py`) exports this env var from
+> the active config's `ignore.folders` section (set via `dev init` /
+> `dev ignore`) when spawning sync subprocesses. The shared merge helper lives
+> in `tools/common/scan_ignore.py` (`extra_ignore_dirs()` /
+> `matches_extra_ignore()`); see `docs/specs/cli.md` for the config shape.
+
 ---
 
 # 3. Data Extraction Specification

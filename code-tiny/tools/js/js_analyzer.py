@@ -47,9 +47,12 @@ except Exception:
 _PARSE_CACHE_VERSION = "js-v2026-03-09-1"
 _JS_SOURCE_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs")
 try:
-    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE, matches_extra_ignore
 except Exception:
     COMMON_SCAN_EXCLUDE = frozenset()
+
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
 
 _SCAN_SKIP_DIRS = {
     # Version control
@@ -1087,7 +1090,10 @@ def _stable_point_id(symbol_id: str) -> str:
 def _scan_js_files(root: str) -> List[str]:
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in _SCAN_SKIP_DIRS and not matches_extra_ignore(name)
+        ]
         for name in filenames:
             if name.endswith(_JS_SOURCE_EXTENSIONS):
                 files.append(os.path.join(dirpath, name))

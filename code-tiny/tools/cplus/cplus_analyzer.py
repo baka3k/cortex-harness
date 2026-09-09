@@ -103,9 +103,12 @@ _PARSE_CACHE_VERSION = "cplus-v2026-08-24-tree-sitter-structure-v2"
 # Imported lazily so the analyzer module stays usable when invoked outside
 # the ``code-tiny`` package layout (e.g. direct path-based tests).
 try:
-    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE, matches_extra_ignore
 except Exception:
     COMMON_SCAN_EXCLUDE = frozenset()
+
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
 
 _SCAN_SKIP_DIRS = {
     # Version control
@@ -2987,7 +2990,10 @@ def _detect_git_commit_sha(root: str) -> str:
 def _scan_c_family_files(root: str) -> List[str]:
     files: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in _SCAN_SKIP_DIRS and not matches_extra_ignore(name)
+        ]
         for name in filenames:
             if name.lower().endswith(
                 (".c", ".h", ".hpp", ".cpp", ".cc", ".cxx", ".hh", ".hxx", ".pc", ".pcc")

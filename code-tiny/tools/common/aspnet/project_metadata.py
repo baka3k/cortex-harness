@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 import re
 from dataclasses import dataclass
@@ -35,7 +42,11 @@ def discover_project_roots(root: str) -> tuple[str, ...]:
     root_path = Path(root).resolve()
     modules: set[str] = set()
     for current, dirnames, filenames in os.walk(root_path, topdown=True, followlinks=False):
-        dirnames[:] = sorted(name for name in dirnames if name not in IGNORED_DIRS and not name.startswith("."))
+        dirnames[:] = sorted(
+            name for name in dirnames
+            if name not in IGNORED_DIRS and not name.startswith(".")
+            and not matches_extra_ignore(name)
+        )
         if any(name.lower().endswith((".csproj", ".vbproj")) for name in filenames):
             modules.add(normalize_relative_path(os.path.relpath(current, root_path)) or ".")
     if not modules:
@@ -54,6 +65,7 @@ def iter_module_files(root: str, module_path: str) -> Iterable[str]:
             if name not in IGNORED_DIRS
             and not name.startswith(".")
             and not _contains_project_file(Path(current) / name)
+            and not matches_extra_ignore(name)
         )
         for filename in sorted(filenames):
             absolute = Path(current) / filename

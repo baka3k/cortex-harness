@@ -52,9 +52,12 @@ _BRANCH_NODES = {
 }
 _LOOP_NODES = {"for_statement", "range_clause"}
 try:
-    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE
+    from tools.common.scan_ignore import COMMON_SCAN_EXCLUDE, matches_extra_ignore
 except Exception:
     COMMON_SCAN_EXCLUDE = frozenset()
+
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
 
 _SCAN_SKIP_DIRS = {
     ".git",
@@ -958,7 +961,10 @@ def _scan_go_files(root: str, selected_rel_paths: Optional[Iterable[str]] = None
     selected = {item.replace("\\", "/") for item in selected_rel_paths or [] if item}
     paths: List[str] = []
     for current_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = [item for item in dirnames if item not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [
+            item for item in dirnames
+            if item not in _SCAN_SKIP_DIRS and not matches_extra_ignore(item)
+        ]
         for filename in filenames:
             if not filename.endswith(_GO_SOURCE_EXTENSIONS) or filename.endswith("_test.go"):
                 continue
