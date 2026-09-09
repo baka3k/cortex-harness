@@ -17,6 +17,8 @@ matches for unrelated languages).
 
 from __future__ import annotations
 
+import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -153,19 +155,64 @@ COMMON_SCAN_EXCLUDE: frozenset[str] = frozenset(
 )
 
 
+# Environment variable carrying user-configured ignore folders from the
+# orchestrator (``dev.py`` reads ``ignore.folders`` from the active config and
+# exports it when spawning sync/analyzer/ingest subprocesses). Comma-separated
+# folder names or fnmatch globs, matched at any depth below the scan root.
+# Users normally configure this via ``dev init`` / ``dev ignore``, not by hand.
+EXTRA_IGNORE_DIRS_ENV_VAR = "CORTEX_EXTRA_IGNORE_DIRS"
+
+
+@lru_cache(maxsize=1)
+def extra_ignore_dirs() -> frozenset[str]:
+    """User-configured extra ignore dirs from ``CORTEX_EXTRA_IGNORE_DIRS``.
+
+    Cached at first access so a process sees a stable set for its lifetime;
+    call :func:`reset_extra_ignore_dirs` after changing the environment
+    (mainly a test hook). Missing/blank entries degrade to an empty set, which
+    keeps behaviour byte-for-byte identical to the pre-config era.
+    """
+    raw = os.environ.get(EXTRA_IGNORE_DIRS_ENV_VAR, "")
+    return frozenset(
+        entry.strip() for entry in raw.split(",") if entry.strip()
+    )
+
+
+def reset_extra_ignore_dirs() -> None:
+    """Drop the cached extra-ignore set (test hook after env changes)."""
+    extra_ignore_dirs.cache_clear()
+
+
+def matches_extra_ignore(name: str) -> bool:
+    """True when *name* matches an extra-ignore entry (exact or fnmatch glob).
+
+    Matches ONLY the user-configured set — callers that must keep their own
+    default list (e.g. ``incremental_sync._SKIP_DIRS``) merge this on top
+    without inheriting :data:`COMMON_SCAN_EXCLUDE`.
+    """
+    extra = extra_ignore_dirs()
+    if not extra:
+        return False
+    if name in extra:
+        return True
+    return any(_matches_pattern(name, pattern) for pattern in extra)
+
+
 def is_excluded_dir(name: str) -> bool:
     """Return ``True`` when *name* should be skipped during a directory walk.
 
     Accepts both exact matches (``".venv"``) and simple glob patterns
     (``"*.egg-info"``) so analyzers can extend the set without rewriting the
-    matching logic.
+    matching logic. Matches the built-in :data:`COMMON_SCAN_EXCLUDE` plus the
+    user-configured ``CORTEX_EXTRA_IGNORE_DIRS`` set on top — defaults can
+    never be un-ignored.
     """
     if name in COMMON_SCAN_EXCLUDE:
         return True
-    # Light glob support for entries like ``*.egg-info`` and ``*.lock``.
-    if any(_matches_pattern(name, pattern) for pattern in COMMON_SCAN_EXCLUDE):
+    if matches_extra_ignore(name):
         return True
-    return False
+    # Light glob support for entries like ``*.egg-info`` and ``*.lock``.
+    return any(_matches_pattern(name, pattern) for pattern in COMMON_SCAN_EXCLUDE)
 
 
 def _matches_pattern(name: str, pattern: str) -> bool:

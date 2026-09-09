@@ -12,6 +12,7 @@ import importlib.util
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -141,6 +142,79 @@ class FlutterAnalyzerIntegrationTests(unittest.TestCase):
                 sorted(p.name for p in dart_files),
                 ["main.dart"],
             )
+
+
+class ExtraIgnoreDirsTests(unittest.TestCase):
+    """``CORTEX_EXTRA_IGNORE_DIRS`` merges on top of the built-in defaults."""
+
+    ENV_VAR = "CORTEX_EXTRA_IGNORE_DIRS"
+
+    def setUp(self) -> None:
+        scan_ignore.reset_extra_ignore_dirs()
+        self.addCleanup(scan_ignore.reset_extra_ignore_dirs)
+
+    def test_extra_ignore_dirs_from_env(self) -> None:
+        with unittest.mock.patch.dict(
+            "os.environ", {self.ENV_VAR: "sandbox, _pc2c"}
+        ):
+            scan_ignore.reset_extra_ignore_dirs()
+            self.assertIn("sandbox", scan_ignore.extra_ignore_dirs())
+            self.assertTrue(scan_ignore.is_excluded_dir("sandbox"))
+            self.assertTrue(scan_ignore.is_excluded_dir("_pc2c"))
+            self.assertFalse(scan_ignore.is_excluded_dir("src"))
+
+    def test_extra_ignore_glob_from_env(self) -> None:
+        with unittest.mock.patch.dict(
+            "os.environ", {self.ENV_VAR: "gen-*"}
+        ):
+            scan_ignore.reset_extra_ignore_dirs()
+            self.assertTrue(scan_ignore.is_excluded_dir("gen-ui"))
+            self.assertFalse(scan_ignore.is_excluded_dir("generated"))  # no match
+
+    def test_blank_and_unset_env_change_nothing(self) -> None:
+        with unittest.mock.patch.dict("os.environ", {}, clear=False):
+            import os
+            os.environ.pop(self.ENV_VAR, None)
+            scan_ignore.reset_extra_ignore_dirs()
+            self.assertEqual(scan_ignore.extra_ignore_dirs(), frozenset())
+            self.assertFalse(scan_ignore.is_excluded_dir("sandbox"))
+
+        with unittest.mock.patch.dict("os.environ", {self.ENV_VAR: " , ,, "}):
+            scan_ignore.reset_extra_ignore_dirs()
+            self.assertEqual(scan_ignore.extra_ignore_dirs(), frozenset())
+
+    def test_common_scan_exclude_not_mutated_by_env(self) -> None:
+        before = frozenset(scan_ignore.COMMON_SCAN_EXCLUDE)
+        with unittest.mock.patch.dict(
+            "os.environ", {self.ENV_VAR: "sandbox"}
+        ):
+            scan_ignore.reset_extra_ignore_dirs()
+            scan_ignore.is_excluded_dir("sandbox")
+        self.assertEqual(scan_ignore.COMMON_SCAN_EXCLUDE, before)
+        self.assertNotIn("sandbox", scan_ignore.COMMON_SCAN_EXCLUDE)
+
+    def test_filter_paths_and_has_excluded_parent_respect_extra(self) -> None:
+        with unittest.mock.patch.dict(
+            "os.environ", {self.ENV_VAR: "archive"}
+        ):
+            scan_ignore.reset_extra_ignore_dirs()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                root = Path(tmpdir)
+                keep = root / "src" / "main.py"
+                drop = root / "archive" / "old.py"
+                for path in (keep, drop):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text("x = 1\n", encoding="utf-8")
+
+                self.assertTrue(
+                    scan_ignore.has_excluded_parent(drop, root=root)
+                )
+                self.assertFalse(
+                    scan_ignore.has_excluded_parent(keep, root=root)
+                )
+                self.assertEqual(
+                    scan_ignore.filter_paths([keep, drop], root=root), [keep]
+                )
 
 
 if __name__ == "__main__":

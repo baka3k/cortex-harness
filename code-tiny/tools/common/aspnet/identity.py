@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import hashlib
 import os
 import re
@@ -75,7 +82,9 @@ def project_files(root: str, extensions: set[str], ignored_dirs: set[str]) -> tu
     values: list[str] = []
     for current, dirnames, filenames in os.walk(root_path, topdown=True, followlinks=False):
         dirnames[:] = sorted(
-            name for name in dirnames if name not in ignored_dirs and not name.startswith(".")
+            name for name in dirnames
+            if name not in ignored_dirs and not name.startswith(".")
+            and not matches_extra_ignore(name)
         )
         for name in sorted(filenames):
             if Path(name).suffix.lower() not in extensions:

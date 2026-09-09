@@ -23,6 +23,7 @@ if _ROOT_DIR not in sys.path:
 
 from tools.common.harness_config import load_harness_config
 from tools.common.project_scope import project_id_lookup_key
+from tools.common.scan_ignore import matches_extra_ignore
 
 from tools.common.analyzer_cache import safe_cache_root
 from tools.common.git_diff import (
@@ -731,7 +732,11 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
     struts_candidates = {path for path in normalized_paths if _is_framework_candidate("struts", path)}
     struts_evidence: List[str] = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIRS and not name.startswith(".")]
+        dirnames[:] = [
+            name for name in dirnames
+            if name not in _SKIP_DIRS and not name.startswith(".")
+            and not matches_extra_ignore(name)
+        ]
         for filename in filenames:
             lower_name = filename.lower()
             full_path = os.path.join(dirpath, filename)
@@ -1799,7 +1804,13 @@ def _walk_all_source_files(root: str) -> Set[str]:
     found: Set[str] = set()
     root_abs = os.path.realpath(os.path.abspath(root))
     for dirpath, dirnames, filenames in os.walk(root_abs, topdown=True):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        # _SKIP_DIRS stays the built-in default; user-configured ignore
+        # folders (CORTEX_EXTRA_IGNORE_DIRS, exact or glob) prune on top.
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _SKIP_DIRS and not d.startswith(".")
+            and not matches_extra_ignore(d)
+        ]
         for fname in filenames:
             lower = fname.lower()
             ext = os.path.splitext(lower)[1]

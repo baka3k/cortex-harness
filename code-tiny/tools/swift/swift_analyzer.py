@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import argparse
 import asyncio
 import json
@@ -963,7 +970,10 @@ def _scan_swift_files(root: str, selected_rel_paths: Optional[Iterable[str]] = N
     selected = {item.replace("\\", "/") for item in selected_rel_paths or [] if item}
     paths: List[str] = []
     for current_root, dirnames, filenames in os.walk(root):
-        dirnames[:] = [item for item in dirnames if item not in _SCAN_SKIP_DIRS]
+        dirnames[:] = [
+            item for item in dirnames
+            if item not in _SCAN_SKIP_DIRS and not matches_extra_ignore(item)
+        ]
         for filename in filenames:
             if filename.endswith(_SWIFT_SOURCE_EXTENSIONS):
                 path = os.path.join(current_root, filename)

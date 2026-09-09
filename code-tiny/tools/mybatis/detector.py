@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import os
 import re
 from dataclasses import dataclass
@@ -232,7 +239,11 @@ class MyBatisProjectDetector:
 
     def _iter_files(self) -> Iterable[Tuple[str, str]]:
         for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS and not d.startswith(".")]
+            dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIRS and not d.startswith(".")
+            and not matches_extra_ignore(d)
+        ]
             for name in filenames:
                 abs_path = os.path.join(dirpath, name)
                 yield abs_path, safe_rel_path(os.path.relpath(abs_path, self.root))
@@ -260,7 +271,11 @@ class MyBatisProjectDetector:
         src_root = os.path.join(base, "src")
         if os.path.isdir(src_root):
             for dirpath, dirnames, filenames in os.walk(src_root):
-                dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS and not d.startswith(".")]
+                dirnames[:] = [
+            d for d in dirnames
+            if d not in _EXCLUDED_DIRS and not d.startswith(".")
+            and not matches_extra_ignore(d)
+        ]
                 for name in filenames:
                     rel = safe_rel_path(os.path.relpath(os.path.join(dirpath, name), self.root))
                     lower = rel.lower()

@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+
+try:
+    from tools.common.scan_ignore import matches_extra_ignore
+except Exception:  # standalone use outside code-tiny — no extra ignores
+    def matches_extra_ignore(_name: str) -> bool:
+        return False
+
 import argparse
 import asyncio
 import json
@@ -1005,6 +1012,7 @@ def _scan_rust_files(root: str, selected_rel_paths: Optional[Iterable[str]] = No
             item
             for item in dirnames
             if item not in _SCAN_SKIP_DIRS
+            and not matches_extra_ignore(item)
         ]
         for filename in filenames:
             if filename.endswith(_RUST_SOURCE_EXTENSIONS):
