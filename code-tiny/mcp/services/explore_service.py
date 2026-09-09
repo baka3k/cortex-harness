@@ -488,22 +488,29 @@ class ExploreService:
     ) -> List[Tuple[str, str, str]]:
         """Return deterministic project/graph/collection targets for a search."""
         from tools.common.project_registry import (
-            ProjectNotRegisteredError,
             list_registered_projects,
+            resolve_project_scope_candidates,
             resolve_project_targets,
         )
 
         if project_id:
-            try:
-                target = resolve_project_targets(project_id)
-                return [(
-                    target.project_id_normalized,
-                    db or target.code_graph,
-                    collection or target.code_qdrant_collection,
-                )]
-            except ProjectNotRegisteredError:
-                normalized = str(project_id).strip().casefold()
-                return [(normalized, db or str(project_id), collection or str(project_id))]
+            # project_id query rules: exact case-insensitive match wins, else
+            # every registered project whose id casefold-starts-with the
+            # query (bank -> bank_android, bank_Cplus) becomes its own
+            # target. No registry match -> the raw id names an out-of-band
+            # shard via the naming convention.
+            candidates = resolve_project_scope_candidates(project_id)
+            if candidates:
+                return [
+                    (
+                        target.project_id_normalized,
+                        db or target.code_graph,
+                        collection or target.code_qdrant_collection,
+                    )
+                    for target in candidates
+                ]
+            normalized = str(project_id).strip().casefold()
+            return [(normalized, db or str(project_id), collection or str(project_id))]
 
         # An explicit physical target remains a single-target request. The
         # implicit contract (no project and no target overrides) searches all

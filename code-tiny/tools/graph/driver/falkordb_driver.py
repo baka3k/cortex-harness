@@ -773,7 +773,7 @@ class FalkorDBDriver(CypherGraphDriver):
         cypher = """
         MATCH (n)
         WHERE n.id = $id
-          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN n
         LIMIT 1
         """
@@ -805,7 +805,7 @@ class FalkorDBDriver(CypherGraphDriver):
         cypher = """
         MATCH (n)
         WHERE n.id IN $ids
-          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN n
         """
         records, _, _ = await self.execute_query(
@@ -845,7 +845,7 @@ class FalkorDBDriver(CypherGraphDriver):
             toLower(n.name) CONTAINS toLower($query)
             OR toLower(coalesce(n.qualified_name, '')) CONTAINS toLower($query)
         )
-          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
@@ -875,7 +875,7 @@ class FalkorDBDriver(CypherGraphDriver):
             OR toLower(coalesce(n.comment, '')) CONTAINS toLower($query)
             OR toLower(coalesce(n.summary, '')) CONTAINS toLower($query)
         )
-          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
@@ -896,7 +896,7 @@ class FalkorDBDriver(CypherGraphDriver):
     ) -> List[Dict[str, Any]]:
         cypher = f"""
         CALL db.idx.fulltext.queryNodes({_cypher_string(label)}, $query) YIELD node, score
-        WHERE ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized)
+        WHERE ($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit

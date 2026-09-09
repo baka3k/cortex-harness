@@ -51,6 +51,36 @@ def project_id_lookup_key(value: Any) -> Optional[str]:
     return normalized.casefold() if normalized is not None else None
 
 
+def registered_project_scope_ids() -> List[str]:
+    """Best-effort list of registered project ids for scope expansion."""
+    try:
+        return list(list_registered_projects())
+    except Exception:  # noqa: BLE001 - scope expansion must never break a query
+        return []
+
+
+def project_id_scope_keys(
+    value: Any,
+    known_ids: Optional[Iterable[Any]] = None,
+) -> Optional[List[str]]:
+    """Return the case-insensitive match keys for a project-scope query.
+
+    Implements the LIKE/prefix rule of the query contract: the query's own
+    casefold() key always matches, plus every known project id whose
+    casefold() key starts with it — ``bank`` matches ``bank_android`` /
+    ``bank_Cplus`` payloads too. ``None`` means unscoped (no filter).
+    """
+    query_key = project_id_lookup_key(value)
+    if query_key is None:
+        return None
+    keys = {query_key}
+    for known in known_ids if known_ids is not None else registered_project_scope_ids():
+        known_key = project_id_lookup_key(known)
+        if known_key and known_key.startswith(query_key):
+            keys.add(known_key)
+    return sorted(keys)
+
+
 @dataclass(frozen=True)
 class ProjectTargets:
     """Doc-side storage targets resolved through the registry."""
@@ -214,6 +244,44 @@ def resolve_project_targets(
     return _resolve_doc_targets(normalized, entries)
 
 
+def resolve_doc_candidates(
+    project_id: Any,
+    *,
+    config_dir: Optional[Path] = None,
+) -> List[ProjectTargets]:
+    """Resolve every registered doc project matching a scoped query.
+
+    Implements the LIKE/prefix rule of the ``project_id`` query contract:
+    an exact case-insensitive match wins (single target); otherwise every
+    registered project whose casefold() id starts with the query id matches
+    — ``bank`` → ``bank_android``, ``bank_Cplus``. An empty list means the
+    registry has no match at all; read-path callers fall back to the raw id
+    (naming convention) so out-of-band shards stay reachable. Unscoped
+    input yields ``[]`` — callers fan out over all registered projects.
+    """
+    query_key = project_id_lookup_key(project_id)
+    if query_key is None:
+        return []
+    directory = Path(config_dir) if config_dir is not None else _default_config_dir()
+    entries = _read_project_entries(directory)
+    matches: List[Dict[str, Any]] = []
+    for entry in entries:
+        candidate_key = project_id_lookup_key(entry.get("project_id"))
+        if candidate_key and candidate_key.startswith(query_key):
+            matches.append(entry)
+    exact = [
+        entry
+        for entry in matches
+        if project_id_lookup_key(entry.get("project_id")) == query_key
+    ]
+    if exact:
+        matches = exact
+    return [
+        _resolve_doc_targets(str(entry["project_id"]), entries)
+        for entry in matches
+    ]
+
+
 def list_registered_projects(config_dir: Optional[Path] = None) -> List[str]:
     directory = Path(config_dir) if config_dir is not None else _default_config_dir()
     return [entry["project_id"] for entry in _read_project_entries(directory)]
@@ -231,18 +299,23 @@ def with_overrides(targets: ProjectTargets, **overrides: Optional[str]) -> Proje
     return replace(targets, **overrides)
 
 
-def qdrant_project_filter(project_id: Any) -> Optional[Dict[str, Any]]:
+def qdrant_project_filter(
+    project_id: Any,
+    known_ids: Optional[Iterable[Any]] = None,
+) -> Optional[Dict[str, Any]]:
     """Build the canonical Qdrant payload filter for a doc project scope.
 
     When ``project_id`` is empty (``None``/blank), the filter is suppressed
-    (``None`` returned) so the query crosses project boundaries. This is the
-    implicit default for the unified contract.
+    (``None`` returned) so the query crosses project boundaries. A scoped
+    query expands to the prefix/LIKE key set (``bank`` → ``bank`` +
+    ``bank_android`` + ...) and matches any of them — identical behavior on
+    the local embedded store and a remote Qdrant server.
     """
-    normalized = project_id_lookup_key(project_id)
-    if normalized is None:
+    keys = project_id_scope_keys(project_id, known_ids)
+    if keys is None:
         return None
     return {
         "must": [
-            {"key": PROJECT_ID_NORMALIZED_FIELD, "match": {"value": normalized}},
+            {"key": PROJECT_ID_NORMALIZED_FIELD, "match": {"any": keys}},
         ],
     }

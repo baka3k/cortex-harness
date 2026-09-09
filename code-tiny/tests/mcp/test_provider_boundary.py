@@ -239,13 +239,17 @@ class WorkflowProviderBoundaryTest(unittest.IsolatedAsyncioTestCase):
         return observed["database"]
 
     async def test_falkor_default_ignores_neo4j_database(self) -> None:
+        # FalkorDB shards one graph per project: an unregistered project_id
+        # resolves through the code_graph == project_id naming convention,
+        # and the Neo4j database env must not leak into the Falkor path.
         database = await self._run_workflow(
             {
                 "CODE_GRAPH_PROVIDER": "falkordb",
                 "NEO4J_DB": "must-not-leak-into-falkor",
             }
         )
-        self.assertEqual(database, "hyper_graph")
+        self.assertEqual(database, "sample")
+        self.assertNotEqual(database, "must-not-leak-into-falkor")
 
     async def test_explicit_neo4j_keeps_legacy_database_override(self) -> None:
         database = await self._run_workflow(
@@ -255,6 +259,96 @@ class WorkflowProviderBoundaryTest(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.assertEqual(database, "legacy-graph")
+
+    async def test_omitted_project_id_fans_out_per_registered_project(self) -> None:
+        # Omitting project_id follows the unified "omit to search all"
+        # contract: each registered project is queried against its own graph
+        # and the per-project workflows are merged and tagged.
+        observed: list[tuple[str, str]] = []
+
+        async def fake_find_screen_workflows(driver, database, **kwargs):
+            project_id = kwargs["project_id"]
+            observed.append((project_id, database))
+            return {
+                "mode": "single",
+                "direction": "bidirectional",
+                "project_id": project_id,
+                "resolved": {
+                    "node_a": {"input": kwargs["node_a"], "candidates": []},
+                    "node_b": None,
+                },
+                "workflows": [{"path": [f"{project_id}:screen"]}],
+                "uncertainties": [],
+                "truncated": False,
+            }
+
+        finder_module = types.ModuleType("tools.ts.workflow_finder")
+        finder_module.find_screen_workflows = fake_find_screen_workflows
+        driver_provider = AsyncMock(return_value=object())
+
+        registry_module = types.ModuleType("tools.common.project_registry")
+        # Raise the same exception class workflow_service catches so the
+        # per-project naming-convention fallback applies.
+        registry_module.ProjectNotRegisteredError = (
+            workflow_service.ProjectNotRegisteredError
+        )
+        registry_module.list_registered_projects = lambda **_: ["proj-b", "proj-a"]
+
+        def fake_resolve(project_id, **_):
+            raise registry_module.ProjectNotRegisteredError(project_id, [])
+
+        registry_module.resolve_project_targets = fake_resolve
+
+        with (
+            patch.dict(sys.modules, {"tools.ts.workflow_finder": finder_module}),
+            patch.dict(
+                workflow_service.os.environ,
+                {"CODE_GRAPH_PROVIDER": "falkordb"},
+                clear=True,
+            ),
+            patch.object(
+                workflow_service,
+                "list_registered_projects",
+                registry_module.list_registered_projects,
+            ),
+            patch.object(
+                workflow_service,
+                "resolve_project_targets",
+                registry_module.resolve_project_targets,
+            ),
+        ):
+            result = await workflow_service.run_find_screen_workflows(
+                driver_provider,
+                {"project_id": "", "node_a": "RewardHome"},
+            )
+
+        self.assertEqual(
+            sorted(observed),
+            [("proj-a", "proj-a"), ("proj-b", "proj-b")],
+        )
+        self.assertEqual(result["projects_searched"], ["proj-a", "proj-b"])
+        workflow_projects = {w["project_id"] for w in result["workflows"]}
+        self.assertEqual(workflow_projects, {"proj-a", "proj-b"})
+        self.assertFalse(result["truncated"])
+
+    async def test_omitted_project_id_requires_registered_projects(self) -> None:
+        async def fake_find_screen_workflows(driver, database, **kwargs):
+            return {"workflows": []}
+
+        finder_module = types.ModuleType("tools.ts.workflow_finder")
+        finder_module.find_screen_workflows = fake_find_screen_workflows
+
+        with (
+            patch.dict(sys.modules, {"tools.ts.workflow_finder": finder_module}),
+            patch.object(
+                workflow_service, "list_registered_projects", lambda **_: []
+            ),
+        ):
+            with self.assertRaises(ValueError):
+                await workflow_service.run_find_screen_workflows(
+                    AsyncMock(return_value=object()),
+                    {"project_id": "", "node_a": "RewardHome"},
+                )
 
 
 if __name__ == "__main__":

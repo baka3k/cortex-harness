@@ -460,7 +460,7 @@ class Neo4jDriver(CypherGraphDriver):
         fulltext_cypher = """
         CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
         WHERE node:Function
-          AND ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit
@@ -481,7 +481,7 @@ class Neo4jDriver(CypherGraphDriver):
         MATCH (n:Function)
         WHERE toLower(n.name) CONTAINS toLower($query)
            OR toLower(coalesce(n.qualified_name, '')) CONTAINS toLower($query)
-          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
@@ -501,7 +501,7 @@ class Neo4jDriver(CypherGraphDriver):
         """Search for nodes by code content"""
         fulltext_cypher = """
         CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
-        WHERE ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized)
+        WHERE ($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN node AS n
         ORDER BY score DESC
         LIMIT $limit
@@ -523,7 +523,7 @@ class Neo4jDriver(CypherGraphDriver):
         WHERE toLower(coalesce(n.code, '')) CONTAINS toLower($query)
            OR toLower(coalesce(n.comment, '')) CONTAINS toLower($query)
            OR toLower(coalesce(n.summary, '')) CONTAINS toLower($query)
-          AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
         RETURN n
         LIMIT $limit
         """
