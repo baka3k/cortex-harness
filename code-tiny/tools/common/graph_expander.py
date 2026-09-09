@@ -135,10 +135,10 @@ def _expand_cypher(rel_types: List[str], depth: int) -> str:
     return f"""
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
-WHERE ($project_id IS NULL OR seed.project_id_normalized = $project_id_normalized)
+WHERE ($project_id IS NULL OR seed.project_id_normalized STARTS WITH $project_id_normalized)
     MATCH p = (seed)-[:{rel}*1..{depth}]-(neighbor)
     WHERE neighbor.id <> sid
-      AND ($project_id IS NULL OR neighbor.project_id_normalized = $project_id_normalized)
+      AND ($project_id IS NULL OR neighbor.project_id_normalized STARTS WITH $project_id_normalized)
     WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
     RETURN
         seed_ids,
@@ -171,9 +171,9 @@ def _shortest_hop_cypher(rel_types: List[str], depth: int) -> str:
     return f"""
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
-WHERE ($project_id IS NULL OR seed.project_id_normalized = $project_id_normalized)
+WHERE ($project_id IS NULL OR seed.project_id_normalized STARTS WITH $project_id_normalized)
 MATCH p = (seed)-[:{rel}*1..{depth}]-(target {{id: $target_id}})
-WHERE ($project_id IS NULL OR target.project_id_normalized = $project_id_normalized)
+WHERE ($project_id IS NULL OR target.project_id_normalized STARTS WITH $project_id_normalized)
 RETURN length(p) AS hops
 ORDER BY hops
 LIMIT 1
@@ -314,7 +314,7 @@ class GraphExpander:
         cypher = """
 UNWIND $seed_ids AS sid
 MATCH (n {id: sid})
-WHERE ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+WHERE ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
 RETURN
     n.id                                   AS node_id,
     n.name                                 AS name,
@@ -498,7 +498,7 @@ class AsyncGraphExpander:
         cypher = """
 UNWIND $seed_ids AS sid
 MATCH (n {id: sid})
-WHERE ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized)
+WHERE ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
 RETURN
     n.id                                   AS node_id,
     n.name                                 AS name,

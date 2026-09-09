@@ -72,7 +72,7 @@ class ExploreProjectScopeTests(unittest.TestCase):
         )
 
         query, params, database = driver.queries[0]
-        self.assertIn("n.project_id_normalized = $project_id_normalized", query)
+        self.assertIn("n.project_id_normalized STARTS WITH $project_id_normalized", query)
         self.assertEqual(params["project_id"], "PrOjEcT-A")
         self.assertEqual(params["project_id_normalized"], "project-a")
         self.assertEqual(database, "cortext")
@@ -88,8 +88,8 @@ class ExploreProjectScopeTests(unittest.TestCase):
 
         self.assertEqual([node.node_id for node in nodes], ["neighbor"])
         query, params, database = driver.queries[0]
-        self.assertIn("seed.project_id_normalized = $project_id_normalized", query)
-        self.assertIn("neighbor.project_id_normalized = $project_id_normalized", query)
+        self.assertIn("seed.project_id_normalized STARTS WITH $project_id_normalized", query)
+        self.assertIn("neighbor.project_id_normalized STARTS WITH $project_id_normalized", query)
         self.assertEqual(params["project_id"], "PrOjEcT-A")
         self.assertEqual(params["project_id_normalized"], "project-a")
         self.assertEqual(database, "cortext")
@@ -191,8 +191,8 @@ class ExploreProjectScopeAsyncTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([node.node_id for node in nodes], ["neighbor"])
         query, params, database = driver.queries[0]
-        self.assertIn("seed.project_id_normalized = $project_id_normalized", query)
-        self.assertIn("neighbor.project_id_normalized = $project_id_normalized", query)
+        self.assertIn("seed.project_id_normalized STARTS WITH $project_id_normalized", query)
+        self.assertIn("neighbor.project_id_normalized STARTS WITH $project_id_normalized", query)
         self.assertEqual(params["project_id"], "PrOjEcT-A")
         self.assertEqual(params["project_id_normalized"], "project-a")
         self.assertEqual(database, "cortext")

@@ -40,8 +40,8 @@ from tools.common.local_qdrant import (
     query_points,
 )
 from tools.common.project_registry import (  # noqa: E402
-    ProjectNotRegisteredError,
     list_registered_projects,
+    resolve_project_scope_candidates,
     resolve_project_targets,
 )
 from semantic_graph_expansion import expand_semantic_results
@@ -274,12 +274,15 @@ async def _select_database_name(requested: Optional[str]) -> Optional[str]:
 def _resolve_db_candidates(project_id: Optional[str]) -> List[str]:
     candidates: List[str] = []
     if project_id and str(project_id).strip():
-        try:
-            targets = resolve_project_targets(project_id)
+        # project_id query rules: exact case-insensitive match wins, else
+        # every registered project whose id casefold-starts-with the query
+        # (bank -> bank_android, bank_Cplus). No registry match at all ->
+        # fall back to the raw id so out-of-band shards stay reachable.
+        for targets in resolve_project_scope_candidates(project_id):
             graph_name = _normalize_db_name(targets.code_graph)
             if graph_name and graph_name not in candidates:
                 candidates.append(graph_name)
-        except ProjectNotRegisteredError:
+        if not candidates:
             graph_name = _normalize_db_name(str(project_id).strip())
             if graph_name:
                 candidates.append(graph_name)
@@ -1568,8 +1571,8 @@ async def tool_find_path_between_module(
         "MATCH (s:Function), (t:Function) "
         "WHERE any(token IN $sources WHERE s.file_path CONTAINS token) "
         "AND any(token IN $targets WHERE t.file_path CONTAINS token) "
-        "AND ($project_id IS NULL OR s.project_id_normalized = $project_id_normalized) "
-        "AND ($project_id IS NULL OR t.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR s.project_id_normalized STARTS WITH $project_id_normalized) "
+        "AND ($project_id IS NULL OR t.project_id_normalized STARTS WITH $project_id_normalized) "
         f"MATCH p=(s)-[:CALLS*..{depth}]->(t) "
         "RETURN p ORDER BY length(p) LIMIT 10"
     )
@@ -2170,7 +2173,7 @@ async def tool_listup_symbols_matching_file_path(
     cypher = (
         f"MATCH (n) WHERE ({type_conditions}) "
         "AND any(token IN $modules WHERE n.file_path CONTAINS token OR n.path CONTAINS token) "
-        "AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN n"
     )
     used_db, results = await _run_cypher_first(cypher, {"modules": modules, "project_id": project_id}, db_candidates)
@@ -2199,9 +2202,9 @@ async def tool_listup_class_matching_path(
         "WHERE (c:Class OR c:Type) "
         "AND any(token IN $classes WHERE "
         "toLower(c.name) CONTAINS toLower(token) OR toLower(c.qualified_name) CONTAINS toLower(token)) "
-        "AND ($project_id IS NULL OR c.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR c.project_id_normalized STARTS WITH $project_id_normalized) "
         "OPTIONAL MATCH (c)-[:DECLARES]->(f:Function) "
-        "WHERE ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized) "
+        "WHERE ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN c, f"
     )
     used_db, results = await _run_cypher_first(cypher, {"classes": class_names, "project_id": project_id}, db_candidates)
@@ -2241,7 +2244,7 @@ async def tool_list_up_entrypoint(
         "WHERE any(token IN $modules WHERE f.file_path CONTAINS token) "
         "AND none(token IN $modules WHERE caller.file_path CONTAINS token) "
         "AND (f.kind IS NULL OR f.kind <> 'lambda') "
-        "AND ($project_id IS NULL OR f.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN DISTINCT f LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
@@ -2288,7 +2291,7 @@ async def tool_search_functions(
         "OR toLower(coalesce(n.caption, '')) CONTAINS q "
         "OR toLower(coalesce(n.text, '')) CONTAINS q "
         "OR toLower(coalesce(n.summary, '')) CONTAINS q) "
-        "AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) "
         "AND ($framework IS NULL OR n.framework = $framework) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR n.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('n')} "
@@ -2299,7 +2302,7 @@ async def tool_search_functions(
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
         "WHERE (node:Function OR node:Class OR node:Type OR node:Namespace OR node:Package OR node:Resource OR node:UIControl "
         "OR node.framework IN ['spring', 'servlet_jsp', 'mybatis']) "
-        "AND ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized) "
         "AND ($framework IS NULL OR node.framework = $framework) "
         "AND ($kinds IS NULL OR size($kinds) = 0 OR node.kind IN $kinds) "
         f"AND {servlet_active_generation_predicate('node')} "
@@ -2359,11 +2362,11 @@ async def tool_search_by_code(
     qs = [t.strip() for t in query.split("|") if t.strip()]
     if not qs:
         raise ValueError("query is required.")
-    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) RETURN n LIMIT $limit"
+    fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) RETURN n LIMIT $limit"
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
         "CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score "
-        "WHERE ($project_id IS NULL OR node.project_id_normalized = $project_id_normalized) "
+        "WHERE ($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN node AS n ORDER BY score DESC LIMIT $limit"
     )
     try:
@@ -2419,7 +2422,7 @@ async def tool_annotate_node(
     node_id = str(node_id)
     cypher = (
         "MATCH (n) WHERE n.id = $id "
-        "AND ($project_id IS NULL OR n.project_id_normalized = $project_id_normalized) "
+        "AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) "
         "SET n.note = $note, n.tags = $tags, n.severity = $severity "
         "RETURN n"
     )
@@ -2475,7 +2478,7 @@ async def tool_list_workflows(
         filters.append("w.domain = $domain")
         params["domain"] = domain
     if project_id is not None:
-        filters.append("w.project_id_normalized = $project_id_normalized")
+        filters.append("w.project_id_normalized STARTS WITH $project_id_normalized")
         params["project_id"] = project_id
     where = ("WHERE " + " AND ".join(filters)) if filters else ""
     query = f"""
@@ -2572,7 +2575,7 @@ async def tool_search_workflows(
     WHERE (toLower(w.name) CONTAINS toLower($q)
        OR toLower(w.description) CONTAINS toLower($q)
        OR toLower(w.domain) CONTAINS toLower($q))
-      AND ($project_id IS NULL OR w.project_id_normalized = $project_id_normalized)
+      AND ($project_id IS NULL OR w.project_id_normalized STARTS WITH $project_id_normalized)
     RETURN w.workflow_id   AS workflow_id,
            w.name          AS name,
            w.domain        AS domain,

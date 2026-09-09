@@ -35,17 +35,40 @@ project_scope = _load_project_scope()
 
 class QdrantFilterTests(unittest.TestCase):
     """``qdrant_project_filter`` scopes by project_id when set, returns
-    ``None`` (full search) when the id is empty."""
+    ``None`` (full search) when the id is empty, and expands the scope to
+    the LIKE/prefix key set of the known projects."""
 
     def test_filters_by_project(self) -> None:
-        filt = project_scope.qdrant_project_filter("cortext")
+        filt = project_scope.qdrant_project_filter("cortext", known_ids=[])
         self.assertEqual(
             filt,
             {
                 "must": [
                     {
                         "key": "project_id_normalized",
-                        "match": {"value": "cortext"},
+                        "match": {"any": ["cortext"]},
+                    }
+                ]
+            },
+        )
+
+    def test_prefix_expands_known_ids(self) -> None:
+        # The LIKE rule: query "Bank" matches the query key itself plus
+        # every known id that casefold-starts-with it. Unrelated ids are
+        # not pulled in.
+        filt = project_scope.qdrant_project_filter(
+            "Bank",
+            known_ids=["bank_android", "bank_Cplus", "bangkok", "other"],
+        )
+        self.assertEqual(
+            filt,
+            {
+                "must": [
+                    {
+                        "key": "project_id_normalized",
+                        "match": {
+                            "any": ["bank", "bank_android", "bank_cplus"]
+                        },
                     }
                 ]
             },
@@ -58,13 +81,51 @@ class QdrantFilterTests(unittest.TestCase):
         self.assertIsNone(project_scope.qdrant_project_filter("   "))
 
 
+class ScopeKeysTests(unittest.TestCase):
+    """``project_id_scope_keys`` implements the case-insensitive LIKE key
+    set used by every read-path filter."""
+
+    def test_unscoped_is_none(self) -> None:
+        self.assertIsNone(project_scope.project_id_scope_keys(None))
+        self.assertIsNone(project_scope.project_id_scope_keys("  "))
+
+    def test_exact_key_only_without_known_ids(self) -> None:
+        self.assertEqual(
+            project_scope.project_id_scope_keys("Bank", known_ids=[]),
+            ["bank"],
+        )
+
+    def test_prefix_keys_include_query_key(self) -> None:
+        self.assertEqual(
+            project_scope.project_id_scope_keys(
+                "bank", known_ids=["Bank_android", "BANK_CPLUS", "bank"]
+            ),
+            ["bank", "bank_android", "bank_cplus"],
+        )
+
+
 class MatchesProjectScopeTests(unittest.TestCase):
     """``matches_project_scope`` returns True for every candidate when
-    ``project_id`` is missing."""
+    ``project_id`` is missing, and applies the case-insensitive LIKE rule
+    otherwise."""
 
     def test_matching_project(self) -> None:
         candidate = {"project_id_normalized": "projA", "name": "x"}
         self.assertTrue(project_scope.matches_project_scope(candidate, "ProjA"))
+
+    def test_prefix_candidate_matches(self) -> None:
+        # "proj" matches projA / projAndroid — the scanner names per-target
+        # projects {stem}_{platform} off a shared stem.
+        self.assertTrue(
+            project_scope.matches_project_scope(
+                {"project_id_normalized": "proja"}, "proj"
+            )
+        )
+        self.assertTrue(
+            project_scope.matches_project_scope(
+                {"project_id": "ProjAndroid"}, "proj"
+            )
+        )
 
     def test_non_matching_project(self) -> None:
         candidate = {"project_id_normalized": "projB", "name": "x"}

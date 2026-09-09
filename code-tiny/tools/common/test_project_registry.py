@@ -487,5 +487,59 @@ class RegistryContractTests(_BaseTest):
         self.assertEqual(targets.code_graph, "alpha")
 
 
+class ScopeCandidatesTests(_BaseTest):
+    """``resolve_project_scope_candidates`` implements the LIKE/prefix rule
+    of the project_id query contract (read paths only)."""
+
+    def test_exact_match_collapses_to_one_target(self) -> None:
+        self.write_config("bank_android")
+        self.write_config("bank_cplus")
+        candidates = project_registry.resolve_project_scope_candidates(
+            "BANK_CPLUS", config_dir=self.config_dir
+        )
+        self.assertEqual([c.project_id for c in candidates], ["bank_cplus"])
+
+    def test_prefix_query_fans_out_across_stem_siblings(self) -> None:
+        self.write_config("bank_android")
+        self.write_config("bank_Cplus")
+        self.write_config("other")
+        candidates = project_registry.resolve_project_scope_candidates(
+            "bank", config_dir=self.config_dir
+        )
+        # The contract is the SET of stem siblings (case-insensitive prefix
+        # match); order follows the registry's config-file iteration order.
+        self.assertEqual(
+            {c.project_id for c in candidates},
+            {"bank_android", "bank_Cplus"},
+        )
+        # Each candidate resolves its own naming-convention graph.
+        self.assertEqual(
+            {c.project_id: c.code_graph for c in candidates},
+            {"bank_android": "bank_android", "bank_Cplus": "bank_Cplus"},
+        )
+
+    def test_unregistered_query_returns_empty_for_raw_fallback(self) -> None:
+        self.write_config("bank_android")
+        candidates = project_registry.resolve_project_scope_candidates(
+            "unrelated", config_dir=self.config_dir
+        )
+        self.assertEqual(candidates, [])
+
+    def test_blank_query_is_unscoped(self) -> None:
+        self.write_config("bank_android")
+        self.assertEqual(
+            project_registry.resolve_project_scope_candidates(
+                None, config_dir=self.config_dir
+            ),
+            [],
+        )
+        self.assertEqual(
+            project_registry.resolve_project_scope_candidates(
+                "  ", config_dir=self.config_dir
+            ),
+            [],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

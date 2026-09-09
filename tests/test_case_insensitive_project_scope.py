@@ -70,11 +70,22 @@ class ProjectScopeContractTests(unittest.TestCase):
 
     def test_qdrant_and_python_filters_are_case_insensitive(self):
         self.assertEqual(
-            qdrant_project_filter("HiEp"),
+            qdrant_project_filter("HiEp", known_ids=[]),
             {
                 "must": [{
                     "key": "project_id_normalized",
-                    "match": {"value": "hiep"},
+                    "match": {"any": ["hiep"]},
+                }]
+            },
+        )
+        # LIKE rule: the query key also matches known ids that start with
+        # it (bank -> bank_android, bank_Cplus).
+        self.assertEqual(
+            qdrant_project_filter("hiep", known_ids=["HIEP_android", "other"]),
+            {
+                "must": [{
+                    "key": "project_id_normalized",
+                    "match": {"any": ["hiep", "hiep_android"]},
                 }]
             },
         )
@@ -85,7 +96,13 @@ class ProjectScopeContractTests(unittest.TestCase):
                 "hiEp",
             )
         )
-        self.assertFalse(matches_project_scope({"project_id": "hiep-2"}, "hiep"))
+        # Prefix candidates match; unrelated ids do not.
+        self.assertTrue(
+            matches_project_scope({"project_id": "hiep-2"}, "hiep")
+        )
+        self.assertFalse(
+            matches_project_scope({"project_id": "other"}, "hiep")
+        )
 
 
 class _GraphDriver:

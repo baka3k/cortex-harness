@@ -42,10 +42,10 @@ class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
 
         node_query, node_params, _ = calls[0]
         edge_query, edge_params, _ = calls[1]
-        self.assertIn("seed.project_id_normalized = $project_id_normalized", node_query)
-        self.assertIn("neighbor.project_id_normalized = $project_id_normalized", node_query)
-        self.assertIn("source.project_id_normalized = $project_id_normalized", edge_query)
-        self.assertIn("target.project_id_normalized = $project_id_normalized", edge_query)
+        self.assertIn("seed.project_id_normalized STARTS WITH $project_id_normalized", node_query)
+        self.assertIn("neighbor.project_id_normalized STARTS WITH $project_id_normalized", node_query)
+        self.assertIn("source.project_id_normalized STARTS WITH $project_id_normalized", edge_query)
+        self.assertIn("target.project_id_normalized STARTS WITH $project_id_normalized", edge_query)
         self.assertEqual(node_params["project_id"], "PrOjEcT-A")
         self.assertEqual(edge_params["project_id"], "PrOjEcT-A")
         self.assertEqual(node_params["project_id_normalized"], "project-a")

@@ -24,6 +24,7 @@ from project_contract import (
     ProjectNotRegisteredError,
     list_registered_projects,
     qdrant_project_filter as _pc_qdrant_project_filter,
+    resolve_doc_candidates,
     resolve_project_targets,
 )
 from cortex_harness.storage import StorageRole
@@ -114,7 +115,12 @@ def get_qdrant(project_id: Optional[str] = None) -> Any:
     """
     if project_id:
         if project_id not in _qdrant_stores:
-            _qdrant_stores[project_id] = get_document_qdrant_store(project_id=project_id)
+            try:
+                _qdrant_stores[project_id] = get_document_qdrant_store(project_id=project_id)
+            except ProjectNotRegisteredError:
+                # Unregistered id (naming-convention fallback): use the
+                # instance store; the collection name scopes the shard.
+                _qdrant_stores[project_id] = get_document_qdrant_store()
         return _qdrant_stores[project_id]
     # Legacy / global access for scripts that don't carry a project_id.
     return get_document_qdrant_store()
@@ -145,7 +151,19 @@ def get_neo4j(project_id: Optional[str] = None) -> Any:
             from cortex_harness.storage import create_storage
             from tools.common.project_registry import resolve_project_targets
 
-            targets = resolve_project_targets(project_id)
+            try:
+                targets = resolve_project_targets(project_id)
+            except ProjectNotRegisteredError:
+                # Unregistered id (naming-convention fallback): seed the
+                # env-based store and point it at the convention graph.
+                base = get_neo4j()
+                if getattr(base, "provider", None) == "falkordb":
+                    _graph_drivers[project_id] = base.for_graph(
+                        f"{str(project_id).strip()}_doc"
+                    )
+                else:
+                    _graph_drivers[project_id] = base
+                return _graph_drivers[project_id]
             factory = create_storage(targets)
             driver = factory.get_falkordb_driver(
                 targets.doc_graph,
@@ -170,9 +188,29 @@ def _acquire_graph_store(project_id: Optional[str]):
 
 
 def _graph_store_candidates(project_id: Optional[str]):
-    """Return deterministic graph stores for scoped or full-search queries."""
+    """Return deterministic graph stores for scoped or full-search queries.
+
+    Scoped queries follow the project_id rules: an exact case-insensitive
+    registry match (or a single prefix hit) pins one store; a multi-project
+    prefix scope (``bank`` → ``bank_android``, ``bank_Cplus``) returns one
+    store per candidate; no registry match falls back to the raw id via the
+    naming convention.
+    """
     if project_id:
-        return [_acquire_graph_store(project_id)]
+        if env_graph_provider() == "neo4j":
+            # Neo4j keeps one shared database; the per-query project filter
+            # scopes rows, so a single request-scoped store is enough.
+            return [_acquire_graph_store(project_id)]
+        matched = resolve_doc_candidates(project_id)
+        if len(matched) <= 1:
+            return [_acquire_graph_store(
+                matched[0].project_id if matched else project_id
+            )]
+        stores: List[Any] = []
+        for targets in matched:
+            store, owned = _acquire_graph_store(targets.project_id)
+            stores.append((store, owned))
+        return stores
     base = get_neo4j()
     if getattr(base, "provider", None) != "falkordb":
         return [(base, False)]
@@ -193,7 +231,7 @@ def _resolve_doc_collection(
     if collection:
         return collection
     if project_id:
-        return resolve_project_targets(project_id).doc_qdrant_collection
+        return _resolve_doc_collections(project_id, None)[0]
     return QDRANT_COLLECTION
 
 
@@ -203,7 +241,18 @@ def _resolve_doc_collections(
     if collection:
         return [collection]
     if project_id:
-        return [resolve_project_targets(project_id).doc_qdrant_collection]
+        # project_id rules: exact case-insensitive match wins, else every
+        # registered project whose id casefold-starts-with the query. No
+        # registry match -> naming-convention fallback so out-of-band doc
+        # shards stay reachable.
+        names: List[str] = []
+        for targets in resolve_doc_candidates(project_id):
+            name = targets.doc_qdrant_collection
+            if name and name not in names:
+                names.append(name)
+        if names:
+            return names
+        return [f"{str(project_id).strip()}_doc"]
 
     collections: List[str] = []
     for registered_project in list_registered_projects():
@@ -238,12 +287,23 @@ def qdrant_search_entity_payload(
     if project_filter and "must" in project_filter:
         for cond in project_filter["must"]:
             key = cond.get("key")
-            match_value = cond.get("match", {}).get("value")
-            if key and match_value is not None:
+            match_spec = cond.get("match") or {}
+            if not key:
+                continue
+            # The project scope filter carries either an exact value or the
+            # LIKE/prefix key set ("any") — map both onto Qdrant conditions.
+            if "value" in match_spec:
                 must_conditions.append(
                     qmodels.FieldCondition(
                         key=key,
-                        match=qmodels.MatchValue(value=match_value),
+                        match=qmodels.MatchValue(value=match_spec["value"]),
+                    )
+                )
+            elif "any" in match_spec:
+                must_conditions.append(
+                    qmodels.FieldCondition(
+                        key=key,
+                        match=qmodels.MatchAny(any=match_spec["any"]),
                     )
                 )
     qdrant_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
@@ -328,7 +388,7 @@ def fetch_entities_by_ids(
                     MATCH (e:Entity)
                     WHERE e.id IN $ids
                       AND ($project_id_normalized IS NULL OR
-                           e.project_id_normalized = $project_id_normalized)
+                           e.project_id_normalized STARTS WITH $project_id_normalized)
                     RETURN e.id AS id, e.name AS name, e.type AS type
                     """,
                     ids=entity_ids,
@@ -370,8 +430,8 @@ def fetch_relations_by_entity_ids(
                     MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)
                     WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)
                       AND ($project_id_normalized IS NULL OR
-                           (e.project_id_normalized = $project_id_normalized AND
-                            e2.project_id_normalized = $project_id_normalized))
+                           (e.project_id_normalized STARTS WITH $project_id_normalized AND
+                            e2.project_id_normalized STARTS WITH $project_id_normalized))
                     RETURN e.id AS source_id, e.name AS source, e.type AS source_type,
                            r.type AS relation,
                            e2.id AS target_id, e2.name AS target, e2.type AS target_type
@@ -538,7 +598,7 @@ def fetch_paragraph_by_source(
                     """
                     MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
                     WHERE $project_id_normalized IS NULL OR
-                          p.project_id_normalized = $project_id_normalized
+                          p.project_id_normalized STARTS WITH $project_id_normalized
                     RETURN p.text AS text,
                            p.short AS short,
                            p.source_id AS source_id,
@@ -634,7 +694,7 @@ def register_tools(mcp: FastMCP) -> None:
                         MATCH (p:Paragraph)
                         WHERE p.source_id IS NOT NULL
                           AND ($project_id_normalized IS NULL OR
-                               p.project_id_normalized = $project_id_normalized)
+                               p.project_id_normalized STARTS WITH $project_id_normalized)
                         RETURN DISTINCT p.source_id AS source_id
                         ORDER BY source_id
                         LIMIT $limit

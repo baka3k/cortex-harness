@@ -149,14 +149,35 @@ class UnknownProjectTests(_BaseTest):
 
 class QdrantFilterTests(unittest.TestCase):
     def test_default_filters_by_normalized_project(self) -> None:
-        filt = project_contract.qdrant_project_filter("cortext")
+        filt = project_contract.qdrant_project_filter("cortext", known_ids=[])
         self.assertEqual(
             filt,
             {
                 "must": [
                     {
                         "key": "project_id_normalized",
-                        "match": {"value": "cortext"},
+                        "match": {"any": ["cortext"]},
+                    }
+                ]
+            },
+        )
+
+    def test_prefix_scope_expands_known_ids(self) -> None:
+        # LIKE rule: query "Bank" matches the query key plus every known
+        # id that casefold-starts-with it; unrelated ids stay out.
+        filt = project_contract.qdrant_project_filter(
+            "Bank",
+            known_ids=["bank_android", "bank_Cplus", "other"],
+        )
+        self.assertEqual(
+            filt,
+            {
+                "must": [
+                    {
+                        "key": "project_id_normalized",
+                        "match": {
+                            "any": ["bank", "bank_android", "bank_cplus"]
+                        },
                     }
                 ]
             },

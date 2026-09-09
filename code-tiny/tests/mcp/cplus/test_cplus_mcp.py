@@ -108,13 +108,30 @@ class CPlusMCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(without_self, [sibling])
         self.assertEqual(only_primary, [self_path])
 
+    def test_prefix_scope_fans_out_across_registered_siblings(self):
+        # project_id query rules: "bank" resolves to every registered
+        # project whose id casefold-starts-with it (bank_android,
+        # bank_Cplus) — the scanner names per-target projects off a stem.
+        candidates = [
+            SimpleNamespace(code_graph="bank_android"),
+            SimpleNamespace(code_graph="bank_Cplus"),
+        ]
+        with patch.object(
+            cplus_mcp,
+            "resolve_project_scope_candidates",
+            return_value=candidates,
+        ):
+            result = cplus_mcp._resolve_db_candidates("Bank")
+
+        self.assertEqual(result, ["bank_android", "bank_Cplus"])
+
     def test_unregistered_project_id_remains_the_scoped_graph_candidate(self):
         project_id = "unregistered-project"
         with (
             patch.object(
                 cplus_mcp,
-                "resolve_project_targets",
-                side_effect=cplus_mcp.ProjectNotRegisteredError(project_id, []),
+                "resolve_project_scope_candidates",
+                return_value=[],
             ),
             patch.object(cplus_mcp, "DEFAULT_GRAPH_DB", "default-graph"),
         ):
