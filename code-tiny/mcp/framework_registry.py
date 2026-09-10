@@ -96,6 +96,46 @@ DATABASE_SEARCHABLE_PROPERTIES = tuple(dict.fromkeys((
     *GENERIC_SEARCHABLE_PROPERTIES, "schema_name", "dialect", "object_kind", "declared",
 )))
 
+# C# primary analyzer upgrade (Phase 05) — additive labels and relationships.
+CSHARP_LABELS = GENERIC_LABELS | frozenset({
+    # Member inventory (Phase 03)
+    "Property", "Field", "Event", "Delegate", "Parameter", "GenericParameter",
+    # Project metadata (Phase 04)
+    "PackageReference",
+    # Framework-agnostic semantic items (Phase 04)
+    "EfEntityMapping", "GrpcService", "SignalRHub", "BackgroundService",
+    "AuthPolicy", "LoggingTelemetry", "NuGetDependency",
+    # Conventional fallbacks already used by the analyzer
+    "Service", "Repository", "Model", "Route",
+})
+CSHARP_RELATIONSHIPS = tuple(dict.fromkeys((
+    *GENERIC_RELATIONSHIPS,
+    # Member containment (Phase 03)
+    "HAS_PROPERTY", "HAS_FIELD", "HAS_EVENT", "HAS_DELEGATE",
+    "HAS_PARAMETER", "HAS_GENERIC_PARAMETER", "HAS_ATTRIBUTE",
+    # Type relationships (Phase 03)
+    "EXTENDS_CLASS", "IMPLEMENTS_INTERFACE",
+    # Project dependencies (Phase 04)
+    "DEPENDS_ON_PACKAGE", "REFERENCES_PROJECT",
+    # Framework-agnostic relationships (Phase 04)
+    "MAPS_ENTITY", "EXPOSES_GRPC", "EXPOSES_HUB", "RUNS_BACKGROUND",
+    "ENFORCES_POLICY", "EMITS_LOG", "TRACES_ACTIVITY",
+    # Semantic bridge to overlay nodes (Phase 05)
+    "SEMANTIC_OF",
+)))
+CSHARP_SEARCHABLE_PROPERTIES = tuple(dict.fromkeys((
+    *GENERIC_SEARCHABLE_PROPERTIES,
+    "return_type", "type_name", "delegate_type",
+    "accessibility", "is_async", "is_static",
+    "service_type", "execute_method",
+    "config_path", "section_name",
+    "entity_type", "table_name",
+    "route", "http_method",
+    "policy_name", "middleware_type",
+    "package_name", "version", "is_development",
+    "activity_name", "instrumentation_type", "logger_category",
+)))
+
 GENERIC_FEATURES = frozenset({
     "graph_search", "graph_paths", "graph_flow", "semantic_search",
     "graph_exploration", "dependency_planning",
@@ -515,9 +555,23 @@ CAPABILITIES: Dict[str, FrameworkQueryConfig] = {
         support={"symbols": "full", "calls": "partial", "endpoints": "partial", "database": "none"},
         features=FRAMEWORK_FEATURES | frozenset({"endpoint_queries"}),
     ),
-    "csharp": _generic_profile(
-        "csharp", {"csharp", "c#", "cs", "dotnet", ".net"},
+    "csharp": FrameworkQueryConfig(
+        name="csharp",
+        aliases=frozenset({"csharp", "c#", "cs", "dotnet", ".net"}),
+        labels=CSHARP_LABELS,
+        relationships=CSHARP_RELATIONSHIPS,
+        searchable_properties=CSHARP_SEARCHABLE_PROPERTIES,
         support_level="full",
+        support={
+            "symbols": "full",
+            "calls": "full",        # resolved via Roslyn (Phase 03)
+            "endpoints": "partial", # Minimal API endpoints live in ASP.NET overlay
+            "database": "partial",  # EF entity mappings extracted (Phase 04)
+        },
+        features=FRAMEWORK_FEATURES | frozenset({
+            "endpoint_queries",
+            "framework_context_queries",
+        }),
     ),
     "sql": FrameworkQueryConfig(
         name="sql",

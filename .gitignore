@@ -124,11 +124,16 @@ tests/fixtures/aspnet-framework-application/**/bin/
 tests/fixtures/aspnet-framework-application/**/obj/
 code-tiny/tools/common/aspnet/roslyn_worker/bin/
 code-tiny/tools/common/aspnet/roslyn_worker/obj/
+code-tiny/tools/csharp/roslyn_worker/bin/
+code-tiny/tools/csharp/roslyn_worker/obj/
+code-tiny/tools/csharp/roslyn_worker/*.user
 !code-tiny/tools/cobol/lib/cobol.cpython-310-darwin.so
 
 code-tiny/tools/common/aspnet
 code-tiny/tools/common/aspnet/roslyn_worker/bin/
 code-tiny/tools/common/aspnet/roslyn_worker/obj/
+code-tiny/tools/csharp/roslyn_worker/bin/
+code-tiny/tools/csharp/roslyn_worker/obj/
 .cortext-harness/config/dev.json
 .cortex/flutter/
 .cortex/flutter/**

@@ -47,6 +47,23 @@ from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_ar
 from tools.graph.writer.language_writer import LanguageCodeWriter
 
 try:
+    from tools.csharp.roslyn_integration import (
+        RoslynFirstRunner,
+        RoslynRunnerOptions,
+        RoslynPayloadCache,
+        is_roslyn_runtime_available,
+        roslyn_cache_signature,
+    )
+except Exception:  # standalone use outside code-tiny — Roslyn disabled
+    RoslynFirstRunner = None
+    RoslynRunnerOptions = None
+    RoslynPayloadCache = None
+    def is_roslyn_runtime_available() -> bool:
+        return False
+    def roslyn_cache_signature(sig: str) -> str:
+        return sig
+
+try:
     from tree_sitter_languages import get_parser as ts_get_parser
 except Exception:
     ts_get_parser = None
@@ -1136,6 +1153,22 @@ def _load_or_parse_payload(
     return payload
 
 
+def _load_payload_roslyn_first(
+    file_path: str,
+    root: str,
+    parse_cache_root: str,
+    parse_cache: bool,
+    roslyn_cache: Optional["RoslynPayloadCache"],
+) -> Dict[str, Any]:
+    """Roslyn-first payload loader. Falls back to Tree-sitter per file."""
+    rel = os.path.relpath(file_path, root).replace("\\", "/")
+    if roslyn_cache is not None:
+        roslyn_payload = roslyn_cache.success_by_relpath.get(rel)
+        if roslyn_payload is not None:
+            return roslyn_payload
+    return _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache)
+
+
 async def build_call_graph(
     root: str,
     code_writer: Optional['LanguageCodeWriter'],
@@ -1159,6 +1192,7 @@ async def build_call_graph(
     deleted_files: Optional[Iterable[str]] = None,
     commit_sha: str = "",
     commit_sha_before: str = "",
+    roslyn_runner: Optional["RoslynFirstRunner"] = None,
 ) -> None:
     start_time = time.time()
     cache_root = safe_cache_root(cache_dir, "csharp_analyzer", project_root=root)
@@ -1200,6 +1234,20 @@ async def build_call_graph(
         print(f"[scan] Found {len(all_files)} C# files under {root}")
     total_files = len(all_files)
 
+    # Roslyn-first extraction. If the runner is not provided (e.g. legacy call
+    # sites) or fails, fall back to the existing Tree-sitter path.
+    roslyn_cache = None
+    if roslyn_runner is not None:
+        roslyn_cache = roslyn_runner.try_load(all_files)
+        if verbose:
+            if roslyn_cache is not None:
+                backend = roslyn_cache.backend
+                print(
+                    f"[parse] Roslyn backend={backend} resolved={len(roslyn_cache.success_by_relpath)} files"
+                )
+            elif roslyn_runner.last_error:
+                print(f"[parse] Roslyn unavailable, Tree-sitter fallback: {roslyn_runner.last_error}")
+
     cleanup_targets = sorted(changed_set | deleted_set)
     if incremental and cleanup_targets:
         if code_writer:
@@ -1222,7 +1270,9 @@ async def build_call_graph(
         for index, file_path in enumerate(all_files, start=1):
             if log_parse and verbose and (index == 1 or index % 50 == 0 or index == total_files):
                 print(f"[parse] {index}/{total_files}: {file_path}")
-            yield _load_or_parse_payload(file_path, root, parse_cache_root, parse_cache)
+            yield _load_payload_roslyn_first(
+                file_path, root, parse_cache_root, parse_cache, roslyn_cache
+            )
 
     selected_payloads: List[Dict[str, Any]] = []
     selected_payload_by_rel: Dict[str, Dict[str, Any]] = {}
@@ -1328,6 +1378,10 @@ async def build_call_graph(
         all_functions: List[Dict[str, Any]] = []
         all_relations: List[Dict[str, Any]] = []
         all_calls: List[Dict[str, Any]] = []
+        all_properties: List[Dict[str, Any]] = []
+        all_fields: List[Dict[str, Any]] = []
+        all_events: List[Dict[str, Any]] = []
+        all_delegates: List[Dict[str, Any]] = []
 
         for payload in selected_payloads:
             file_def = payload["file_def"]
@@ -1429,6 +1483,108 @@ async def build_call_graph(
                 all_relations.append(
                     {"source_id": file_id, "source_label": "File", "target_id": func["symbol_id"], "target_label": "Function", "rel_type": "CONTAINS", "properties": {}}
                 )
+            for prop in payload.get("properties", []):
+                all_properties.append({
+                    "id": prop.get("symbol_id") or f"{prop.get('qualified_name', prop.get('name', ''))}@{file_id}",
+                    "name": prop.get("name", ""),
+                    "qualified_name": prop.get("qualified_name", ""),
+                    "type_name": prop.get("type_name", ""),
+                    "accessibility": prop.get("accessibility", ""),
+                    "is_static": bool(prop.get("is_static", False)),
+                    "is_virtual": bool(prop.get("is_virtual", False)),
+                    "is_override": bool(prop.get("is_override", False)),
+                    "is_abstract": bool(prop.get("is_abstract", False)),
+                    "kind": prop.get("kind", "property"),
+                    "file_path": file_id,
+                    "start_line": prop.get("start_line", 0),
+                    "end_line": prop.get("end_line", 0),
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                })
+                prop_id = all_properties[-1]["id"]
+                all_relations.append({
+                    "source_id": file_id, "source_label": "File",
+                    "target_id": prop_id, "target_label": "Property",
+                    "rel_type": "CONTAINS", "properties": {"accessibility": prop.get("accessibility", "")},
+                })
+            for field_def in payload.get("fields", []):
+                all_fields.append({
+                    "id": field_def.get("symbol_id") or f"{field_def.get('qualified_name', field_def.get('name', ''))}@{file_id}",
+                    "name": field_def.get("name", ""),
+                    "qualified_name": field_def.get("qualified_name", ""),
+                    "type_name": field_def.get("type_name", ""),
+                    "accessibility": field_def.get("accessibility", ""),
+                    "is_static": bool(field_def.get("is_static", False)),
+                    "is_const": bool(field_def.get("is_const", False)),
+                    "is_readonly": bool(field_def.get("is_readonly", False)),
+                    "constant_value": field_def.get("constant_value"),
+                    "kind": "field",
+                    "file_path": file_id,
+                    "start_line": field_def.get("start_line", 0),
+                    "end_line": field_def.get("end_line", 0),
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                })
+                field_id = all_fields[-1]["id"]
+                all_relations.append({
+                    "source_id": file_id, "source_label": "File",
+                    "target_id": field_id, "target_label": "Field",
+                    "rel_type": "CONTAINS", "properties": {},
+                })
+            for event_def in payload.get("events", []):
+                all_events.append({
+                    "id": event_def.get("symbol_id") or f"{event_def.get('qualified_name', event_def.get('name', ''))}@{file_id}",
+                    "name": event_def.get("name", ""),
+                    "qualified_name": event_def.get("qualified_name", ""),
+                    "delegate_type": event_def.get("delegate_type", ""),
+                    "accessibility": event_def.get("accessibility", ""),
+                    "is_static": bool(event_def.get("is_static", False)),
+                    "kind": "event",
+                    "file_path": file_id,
+                    "start_line": event_def.get("start_line", 0),
+                    "end_line": event_def.get("end_line", 0),
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                })
+                event_id = all_events[-1]["id"]
+                all_relations.append({
+                    "source_id": file_id, "source_label": "File",
+                    "target_id": event_id, "target_label": "Event",
+                    "rel_type": "CONTAINS", "properties": {},
+                })
+            for delegate_def in payload.get("delegates", []):
+                all_delegates.append({
+                    "id": delegate_def.get("symbol_id") or f"{delegate_def.get('qualified_name', delegate_def.get('name', ''))}@{file_id}",
+                    "name": delegate_def.get("name", ""),
+                    "qualified_name": delegate_def.get("qualified_name", ""),
+                    "return_type": delegate_def.get("return_type", ""),
+                    "type_parameters": delegate_def.get("type_parameters", []),
+                    "parameters": delegate_def.get("parameters", []),
+                    "kind": "delegate",
+                    "file_path": file_id,
+                    "start_line": delegate_def.get("start_line", 0),
+                    "end_line": delegate_def.get("end_line", 0),
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                })
+                delegate_id = all_delegates[-1]["id"]
+                all_relations.append({
+                    "source_id": file_id, "source_label": "File",
+                    "target_id": delegate_id, "target_label": "Delegate",
+                    "rel_type": "CONTAINS", "properties": {},
+                })
             for rel in payload["relations"]:
                 if rel["rel_type"] not in allowed_rel_types:
                     continue
@@ -1454,6 +1610,10 @@ async def build_call_graph(
             functions=all_functions or None,
             relations=all_relations or None,
             calls=all_calls or None,
+            properties=all_properties or None,
+            fields=all_fields or None,
+            events=all_events or None,
+            constants=all_delegates or None,
             use_full_writers=True,
             files_variant="default",
         )
@@ -1676,7 +1836,41 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--disable-roslyn", action="store_true",
+                        help="Disable Roslyn worker, use Tree-sitter only")
+    parser.add_argument("--roslyn-worker-project", default=None,
+                        help="Path to CSharpRoslynWorker.csproj (default: auto-detect)")
+    parser.add_argument("--semantic-mode", default="auto", choices=["auto", "on", "off"],
+                        help="Roslyn semantic analysis mode")
+    parser.add_argument("--roslyn-timeout", type=float, default=600.0,
+                        help="Roslyn worker timeout in seconds")
     return parser.parse_args(argv)
+
+
+def _build_roslyn_runner(
+    root: str,
+    args: argparse.Namespace,
+    *,
+    verbose: bool = False,
+) -> Optional["RoslynFirstRunner"]:
+    if getattr(args, "disable_roslyn", False):
+        return None
+    if RoslynFirstRunner is None or RoslynRunnerOptions is None:
+        if verbose:
+            print("[csharp][roslyn] integration module unavailable, using Tree-sitter only")
+        return None
+    if not is_roslyn_runtime_available():
+        if verbose:
+            print("[csharp][roslyn] worker not built yet or dotnet unavailable, using Tree-sitter")
+        return None
+    options = RoslynRunnerOptions(
+        enabled=True,
+        semantic_mode=getattr(args, "semantic_mode", "auto"),
+        worker_project_path=getattr(args, "roslyn_worker_project", None),
+        timeout_sec=float(getattr(args, "roslyn_timeout", 600.0) or 600.0),
+        verbose=verbose,
+    )
+    return RoslynFirstRunner(root=root, options=options, tree_sitter_fallback=parse_csharp_file)
 
 
 async def main(argv: Optional[List[str]] = None) -> int:
@@ -1796,6 +1990,7 @@ async def main(argv: Optional[List[str]] = None) -> int:
             deleted_files=deleted_manifest_files,
             commit_sha=commit_sha,
             commit_sha_before=commit_sha_before,
+            roslyn_runner=_build_roslyn_runner(args.root, args, verbose=args.verbose),
         )
         if args.enable_message_scan:
             message_summary = await run_message_scan_pipeline(
