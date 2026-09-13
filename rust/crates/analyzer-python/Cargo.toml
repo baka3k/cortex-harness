@@ -1,0 +1,22 @@
+[package]
+name = "analyzer-python"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/python/python_analyzer.py — template analyzer Wave D (phase 04 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-python"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+regex = "1"
+serde_json = "1"
+tree-sitter = "0.25"
+tree-sitter-python = "0.25"
+
+[lints.rust]
+unsafe_code = "deny"
