@@ -1,0 +1,846 @@
+{
+  "generator": "scripts/rust_parity/gen_phase05_fixtures.py",
+  "fingerprint": "8613fc08894a26c2",
+  "name": "code_graph",
+  "version": 2,
+  "index_count": 166,
+  "driver_indexes": [
+    {
+      "label": "Project",
+      "property": "project_id",
+      "type": "range"
+    },
+    {
+      "label": "Repository",
+      "property": "name",
+      "type": "range"
+    },
+    {
+      "label": "Workflow",
+      "property": "workflow_id",
+      "type": "range"
+    },
+    {
+      "label": "Alias",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Action",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Advice",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AndroidComponent",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AndroidAnnotation",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AndroidHandlerMessage",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AndroidIntentAction",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AndroidManifest",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AndroidNavRoute",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AndroidResource",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ApiEndpoint",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ApplicationEvent",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AspNetAnalysisState",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Aspect",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AsyncBoundary",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AuthenticationScheme",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Authority",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "AuthorizationPolicy",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "BuildConfiguration",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "BuildDescriptor",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CacheOperation",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CacheRegion",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CallSite",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Class",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolCicsCommand",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolCopybook",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolDataItem",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolFile",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolParagraph",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolProgram",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolSection",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "CobolSqlStatement",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Constant",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ConfigurationKey",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Controller",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "DataRepository",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Database",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "DatabaseColumn",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "DatabaseTable",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Dependency",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Directory",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Document",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Enum",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ErrorPage",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Event",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Field",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "File",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Filter",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "FilterMapping",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "FrameworkInstance",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Function",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "FunctionType",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "GradleDependency",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "GradleModule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "GrpcEndpoint",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "GrpcService",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "GraphWriteReceipt",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "HttpEndpoint",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "HttpHandler",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "HttpModule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Interface",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "InfraNode",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "JSPView",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "JpaEntity",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Jp1Unit",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "JspExpression",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "JspTag",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Layout",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "LifecycleEvent",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Listener",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Message",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MessageDestination",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MessageEndpoint",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Middleware",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Model",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisArtifact",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisCache",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisConfig",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisDynamicNode",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisExtension",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisInclude",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisJavaProperty",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisMapper",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisMapperMethod",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisModule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisParameter",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisResultMap",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisResultMapping",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisSpringBridge",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisSqlFragment",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisSqlJoin",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisSqlParameter",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisSqlProvider",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisSqlStatement",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisStatement",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "MyBatisXmlDocument",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Namespace",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Navigator",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Package",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "PageHandler",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Paragraph",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ParseRun",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "PartialView",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Pointcut",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Procedure",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ProjectModule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Property",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "RazorPage",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Repository",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Resource",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Result",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "RouteParam",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Route",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ScheduledTask",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SemanticCoverage",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SecurityConstraint",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SecurityFilterChain",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SecurityRule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Service",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "BatchProgram",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ShellFunction",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ShellInvocation",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ShellScript",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Servlet",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ServletJspAnalysisState",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ServletJspModule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ServletMapping",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SessionState",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SqlCursor",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SqlDirective",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SqlHostVariable",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SqlStatement",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SpringApplication",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SpringBean",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SpringConfiguration",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "SpringModule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "StateSlot",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Table",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Template",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "TransactionBoundary",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Type",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "UIControl",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "UnknownFunction",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ValidationConstraint",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ValidationRule",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "Variable",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "View",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ViewModel",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "WebConfiguration",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "WebDescriptor",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "WebFormPage",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "WebTarget",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "WelcomePage",
+      "property": "id",
+      "type": "range"
+    },
+    {
+      "label": "ApiEndpoint",
+      "property": "symbol_id",
+      "type": "range"
+    },
+    {
+      "label": "Controller",
+      "property": "symbol_id",
+      "type": "range"
+    },
+    {
+      "label": "DataRepository",
+      "property": "symbol_id",
+      "type": "range"
+    },
+    {
+      "label": "Database",
+      "property": "symbol_id",
+      "type": "range"
+    },
+    {
+      "label": "Middleware",
+      "property": "symbol_id",
+      "type": "range"
+    },
+    {
+      "label": "Service",
+      "property": "symbol_id",
+      "type": "range"
+    },
+    {
+      "label": "BuildConfiguration",
+      "property": "config_fingerprint",
+      "type": "range"
+    },
+    {
+      "label": "CallSite",
+      "property": "site_id",
+      "type": "range"
+    },
+    {
+      "label": "SemanticCoverage",
+      "property": "tu_key",
+      "type": "range"
+    },
+    {
+      "label": "SemanticCoverage",
+      "property": "fingerprint",
+      "type": "range"
+    }
+  ],
+  "has_identity": {
+    "File/id": true,
+    "File/path": false,
+    "ApiEndpoint/symbol_id": true,
+    "SemanticCoverage/tu_key": true,
+    "SemanticCoverage/id": true
+  }
+}

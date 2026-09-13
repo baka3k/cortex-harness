@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+# Rust port của CortexHarness retrieval brain + graph core.
+# Parity-first: mọi module port phải có golden fixtures sinh từ code Python
+# tham chiếu (scripts/rust_parity/), xem plans/260913-1715-rust-retrieval-graph-port.

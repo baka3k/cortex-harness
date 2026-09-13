@@ -1,0 +1,14 @@
+[package]
+name = "cortex-graph-driver"
+version = "0.1.0"
+edition = "2024"
+description = "Spike: LadybugDB (lbug crate) driver cho CortexHarness graph core"
+license = "MIT"
+publish = false
+
+[dependencies]
+lbug = "0.20.4"
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "deny"

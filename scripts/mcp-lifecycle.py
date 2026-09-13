@@ -158,12 +158,12 @@ USAGE = """Usage (equivalent forms):
   make build       | dev build       Create/sync virtualenvs and Python dependencies.
   make install     | dev install     Run build and install the global dev command.
   make uninstall   | dev uninstall   Remove the global dev command.
-  make infra-up    | dev infra-up    Ensure local Docker Qdrant + FalkorDB (Browser UI)
-                                      containers are running, initialize local storage,
-                                      and probe remote projects (pass INFRA_ARGS=
-                                      "--provision" to provision).
-  make infra-down  | dev infra-down  Stop the managed Docker containers and close
-                                      cached remote clients (local files persist).
+  make infra-up    | dev infra-up    Initialize local storage for all registered
+                                      projects and probe remote backends (pass
+                                      INFRA_ARGS="--provision" to provision).
+  make infra-down  | dev infra-down  Deprecated: stop legacy Docker containers if
+                                      present and close cached remote clients
+                                      (local file-backed storage persists).
   make storage-layout               Show instance paths, manifest, and current leases.
   make storage-init                 Create the canonical instance tree and manifest.
   make storage-migrate-layout       Dry-run legacy repository-local migration.
@@ -175,6 +175,23 @@ USAGE = """Usage (equivalent forms):
   make sync doc stop                 Stop document sync workers and descendants.
   make start       | dev start       Load the nearest project dev.json and open both MCPs.
   make stop        | dev stop        Stop MCP terminals/processes started by start.
+
+Rust workspace (rust/) — parity-first port of the graph core + retrieval brain:
+  make rust-build                    cargo build --release for the whole workspace.
+  make rust-test                     cargo test against committed golden fixtures.
+  make rust-clippy                   cargo clippy -D warnings (mandatory port gate).
+  make rust-check                    clippy + test (run before every cutover).
+  make rust-pyo3                     Build the PyO3 extension (cortex-retrieval-py)
+                                      and replay the Python↔Rust parity suite.
+  make rust-fixtures                 Regenerate golden fixtures from the Python
+                                      reference in scripts/rust_parity/ (commit diffs).
+  make rust-clean                    cargo clean.
+
+Graph providers (GRAPH_PROVIDER / CODE_GRAPH_PROVIDER / DOC_GRAPH_PROVIDER):
+  falkordb  embedded FalkorDBLite (POSIX default), or remote via FALKORDB_URI.
+  ladybug   embedded LadybugDB, local-only (Windows default; aliases
+            lbug | lady-bug | kuzu; LADYBUG_GRAPH default hyper_graph).
+  neo4j     remote Neo4j.
 
 Parameterized MCP instances:
   dev start --server code --name shop --project SHOP --port 8790
@@ -189,9 +206,9 @@ Default MCP ports (occupied ports are advanced automatically):
 
 Default local storage:
   data root     ~/.cortext-harness/v1/instances/default
-  qdrant code  <data-root>/qdrant/code
-  qdrant doc   <data-root>/qdrant/doc
-  falkordb     <data-root>/falkordb/{code,doc}/data.rdb
+  qdrant        <data-root>/qdrant/{code,doc}
+  falkordb      <data-root>/falkordb/{code,doc}/data.rdb
+  ladybug       <data-root>/ladybug/{code,doc}/<owner>.lbug/<graph>
 """
 
 INSTANCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")

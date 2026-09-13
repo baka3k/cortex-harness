@@ -1,0 +1,709 @@
+{
+  "generator": "/Users/hieplq1.aip/AI/cortex-harness/scripts/rust_parity/gen_fusion_fixtures.py",
+  "cases": [
+    {
+      "name": "structural_with_bm25",
+      "query": "who calls validateToken",
+      "top_k": 10,
+      "debug": true,
+      "weight_override": null,
+      "now_epoch": 1789300800.0,
+      "bm25_docs": [
+        {
+          "symbol_id": "fn_validate_token",
+          "note": "validate token credential session"
+        },
+        {
+          "symbol_id": "fn_login",
+          "note": "login session authentication"
+        },
+        {
+          "symbol_id": "fn_check_permission",
+          "note": "permission access control check"
+        },
+        {
+          "symbol_id": "fn_refund_payment",
+          "note": "refund payment transaction"
+        },
+        {
+          "symbol_id": "fn_sync_state",
+          "note": "sync state checkpoint"
+        }
+      ],
+      "freshness_map": {
+        "fn_validate_token": "2026-09-13T11:00:00+00:00",
+        "fn_login": "2026-08-14T12:00:00+00:00"
+      },
+      "dirty": [
+        "fn_check_permission"
+      ],
+      "qdrant_hits": [
+        {
+          "id": "q-1",
+          "score": 0.91,
+          "payload": {
+            "symbol_id": "fn_validate_token",
+            "name": "validate_token",
+            "qualified_name": "auth.fn_validate_token",
+            "kind": "function",
+            "file_path": "src/auth.py",
+            "doc_confidence": 0.7,
+            "signals": {
+              "usage": 0.4
+            },
+            "exported": true,
+            "project_id": "demo",
+            "language": "python"
+          }
+        },
+        {
+          "id": "q-2",
+          "score": 0.72,
+          "payload": {
+            "symbol_id": "fn_login",
+            "name": "login",
+            "kind": "function",
+            "file_path": "src/auth.py",
+            "doc_confidence": 0.5
+          }
+        },
+        {
+          "id": "q-3",
+          "score": 0.55,
+          "payload": {
+            "symbol_id": "cls_session",
+            "name": "Session",
+            "kind": "class",
+            "file_path": "src/session.py"
+          }
+        }
+      ],
+      "keyword_nodes": [
+        {
+          "id": "fn_validate_token",
+          "name": "validate_token",
+          "qualified_name": "auth.fn_validate_token",
+          "kind": "function",
+          "file_path": "src/auth.py",
+          "doc_confidence": 0.7,
+          "exported": true
+        },
+        {
+          "id": "fn_check_permission",
+          "name": "check_permission",
+          "kind": "function",
+          "file_path": "src/auth.py"
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "fn_validate_token",
+          "score": 0.439952,
+          "node": {
+            "node_id": "fn_validate_token",
+            "name": "validate_token",
+            "qualified_name": "auth.fn_validate_token",
+            "kind": "function",
+            "file_path": "src/auth.py",
+            "semantic": 1.0,
+            "keyword": 1.0,
+            "graph": 0.0,
+            "freshness": 0.9990377588337834,
+            "confidence": 0.7,
+            "usage": 0.4,
+            "intent": "",
+            "exported": true,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "demo",
+            "language": "python",
+            "_source": "qdrant",
+            "bm25": 0.0
+          },
+          "explanation": {
+            "semantic": 1.0,
+            "keyword": 1.0,
+            "graph": 0.0,
+            "freshness": 0.9990377588337834,
+            "confidence": 0.7,
+            "usage": 0.4,
+            "weighted_contributions": {
+              "semantic": 0.2,
+              "keyword": 0.1,
+              "graph": 0.0,
+              "freshness": 0.049952,
+              "confidence": 0.07,
+              "usage": 0.02
+            },
+            "query_intent": "structural",
+            "weights_used": {
+              "semantic": 0.2,
+              "keyword": 0.1,
+              "graph": 0.5,
+              "freshness": 0.05,
+              "confidence": 0.1,
+              "usage": 0.05
+            }
+          }
+        },
+        {
+          "node_id": "fn_login",
+          "score": 0.233242,
+          "node": {
+            "node_id": "fn_login",
+            "name": "login",
+            "qualified_name": "",
+            "kind": "function",
+            "file_path": "src/auth.py",
+            "semantic": 0.791209,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.5,
+            "confidence": 0.5,
+            "usage": 0.0,
+            "intent": "",
+            "exported": false,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "",
+            "language": "",
+            "_source": "qdrant",
+            "bm25": 0.0
+          },
+          "explanation": {
+            "semantic": 0.791209,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.5,
+            "confidence": 0.5,
+            "usage": 0.0,
+            "weighted_contributions": {
+              "semantic": 0.158242,
+              "keyword": 0.0,
+              "graph": 0.0,
+              "freshness": 0.025,
+              "confidence": 0.05,
+              "usage": 0.0
+            },
+            "query_intent": "structural",
+            "weights_used": {
+              "semantic": 0.2,
+              "keyword": 0.1,
+              "graph": 0.5,
+              "freshness": 0.05,
+              "confidence": 0.1,
+              "usage": 0.05
+            }
+          }
+        },
+        {
+          "node_id": "fn_check_permission",
+          "score": 0.15,
+          "node": {
+            "node_id": "fn_check_permission",
+            "name": "check_permission",
+            "qualified_name": "",
+            "kind": "function",
+            "file_path": "src/auth.py",
+            "semantic": 0.0,
+            "keyword": 1.0,
+            "graph": 0.0,
+            "freshness": 1.0,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "intent": "",
+            "exported": false,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "",
+            "language": "",
+            "_source": "graph_keyword",
+            "bm25": 0.0
+          },
+          "explanation": {
+            "semantic": 0.0,
+            "keyword": 1.0,
+            "graph": 0.0,
+            "freshness": 1.0,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "weighted_contributions": {
+              "semantic": 0.0,
+              "keyword": 0.1,
+              "graph": 0.0,
+              "freshness": 0.05,
+              "confidence": 0.0,
+              "usage": 0.0
+            },
+            "query_intent": "structural",
+            "weights_used": {
+              "semantic": 0.2,
+              "keyword": 0.1,
+              "graph": 0.5,
+              "freshness": 0.05,
+              "confidence": 0.1,
+              "usage": 0.05
+            }
+          }
+        },
+        {
+          "node_id": "cls_session",
+          "score": 0.135879,
+          "node": {
+            "node_id": "cls_session",
+            "name": "Session",
+            "qualified_name": "",
+            "kind": "class",
+            "file_path": "src/session.py",
+            "semantic": 0.604396,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "intent": "",
+            "exported": false,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "",
+            "language": "",
+            "_source": "qdrant",
+            "bm25": 0.0
+          },
+          "explanation": {
+            "semantic": 0.604396,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "weighted_contributions": {
+              "semantic": 0.120879,
+              "keyword": 0.0,
+              "graph": 0.0,
+              "freshness": 0.015,
+              "confidence": 0.0,
+              "usage": 0.0
+            },
+            "query_intent": "structural",
+            "weights_used": {
+              "semantic": 0.2,
+              "keyword": 0.1,
+              "graph": 0.5,
+              "freshness": 0.05,
+              "confidence": 0.1,
+              "usage": 0.05
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "semantic_override_topk3_no_bm25",
+      "query": "explain payment refund flow",
+      "top_k": 3,
+      "debug": true,
+      "weight_override": {
+        "semantic": 0.6,
+        "graph": 0.1
+      },
+      "now_epoch": 1789300800.0,
+      "bm25_docs": null,
+      "freshness_map": {},
+      "dirty": [],
+      "qdrant_hits": [
+        {
+          "id": "q-10",
+          "score": 0.88,
+          "payload": {
+            "symbol_id": "fn_refund_payment",
+            "name": "refund_payment",
+            "kind": "function",
+            "file_path": "src/payment.py",
+            "doc_confidence": 0.9,
+            "signals": {
+              "usage": 0.2
+            }
+          }
+        },
+        {
+          "id": "q-11",
+          "score": 0.41,
+          "payload": {
+            "symbol_id": "fn_charge",
+            "name": "charge",
+            "kind": "function",
+            "file_path": "src/payment.py"
+          }
+        }
+      ],
+      "keyword_nodes": [],
+      "expected": [
+        {
+          "node_id": "fn_refund_payment",
+          "score": 0.690909,
+          "node": {
+            "node_id": "fn_refund_payment",
+            "name": "refund_payment",
+            "qualified_name": "",
+            "kind": "function",
+            "file_path": "src/payment.py",
+            "semantic": 1.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.9,
+            "usage": 0.2,
+            "intent": "",
+            "exported": false,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "",
+            "language": "",
+            "_source": "qdrant",
+            "bm25": 0.0
+          },
+          "explanation": {
+            "semantic": 1.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.9,
+            "usage": 0.2,
+            "weighted_contributions": {
+              "semantic": 0.545455,
+              "keyword": 0.0,
+              "graph": 0.0,
+              "freshness": 0.013636,
+              "confidence": 0.122727,
+              "usage": 0.009091
+            },
+            "query_intent": "semantic",
+            "weights_used": {
+              "semantic": 0.6,
+              "keyword": 0.15,
+              "graph": 0.1,
+              "freshness": 0.05,
+              "confidence": 0.15,
+              "usage": 0.05
+            }
+          }
+        },
+        {
+          "node_id": "fn_charge",
+          "score": 0.013636,
+          "node": {
+            "node_id": "fn_charge",
+            "name": "charge",
+            "qualified_name": "",
+            "kind": "function",
+            "file_path": "src/payment.py",
+            "semantic": 0.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "intent": "",
+            "exported": false,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "",
+            "language": "",
+            "_source": "qdrant",
+            "bm25": 0.0
+          },
+          "explanation": {
+            "semantic": 0.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "weighted_contributions": {
+              "semantic": 0.0,
+              "keyword": 0.0,
+              "graph": 0.0,
+              "freshness": 0.013636,
+              "confidence": 0.0,
+              "usage": 0.0
+            },
+            "query_intent": "semantic",
+            "weights_used": {
+              "semantic": 0.6,
+              "keyword": 0.15,
+              "graph": 0.1,
+              "freshness": 0.05,
+              "confidence": 0.15,
+              "usage": 0.05
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "temporal_bm25_adds_minimal_candidate",
+      "query": "what changed in sync state checkpoint",
+      "top_k": 10,
+      "debug": true,
+      "weight_override": null,
+      "now_epoch": 1789300800.0,
+      "bm25_docs": [
+        {
+          "symbol_id": "fn_validate_token",
+          "note": "validate token credential session"
+        },
+        {
+          "symbol_id": "fn_login",
+          "note": "login session authentication"
+        },
+        {
+          "symbol_id": "fn_check_permission",
+          "note": "permission access control check"
+        },
+        {
+          "symbol_id": "fn_refund_payment",
+          "note": "refund payment transaction"
+        },
+        {
+          "symbol_id": "fn_sync_state",
+          "note": "sync state checkpoint"
+        }
+      ],
+      "freshness_map": {},
+      "dirty": [],
+      "qdrant_hits": [],
+      "keyword_nodes": [
+        {
+          "id": "fn_sync_state",
+          "name": "sync_state",
+          "kind": "function",
+          "file_path": "src/state.py"
+        }
+      ],
+      "expected": [
+        {
+          "node_id": "fn_sync_state",
+          "score": 0.247826,
+          "node": {
+            "node_id": "fn_sync_state",
+            "name": "sync_state",
+            "qualified_name": "",
+            "kind": "function",
+            "file_path": "src/state.py",
+            "semantic": 0.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "intent": "",
+            "exported": false,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "",
+            "language": "",
+            "_source": "graph_keyword",
+            "bm25": 1.0
+          },
+          "explanation": {
+            "semantic": 0.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.3,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "bm25": 1.0,
+            "weighted_contributions": {
+              "semantic": 0.0,
+              "keyword": 0.0,
+              "graph": 0.0,
+              "freshness": 0.117391,
+              "confidence": 0.0,
+              "usage": 0.0,
+              "bm25": 0.130435
+            },
+            "query_intent": "temporal",
+            "weights_used": {
+              "semantic": 0.2,
+              "keyword": 0.15,
+              "graph": 0.1,
+              "freshness": 0.45,
+              "confidence": 0.05,
+              "usage": 0.05
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "single_candidate_semantic_norm_zero",
+      "query": "random gibberish query",
+      "top_k": 10,
+      "debug": true,
+      "weight_override": null,
+      "now_epoch": 1789300800.0,
+      "bm25_docs": null,
+      "freshness_map": {
+        "fn_charge": "2026-09-13T18:59:59+07:00"
+      },
+      "dirty": [],
+      "qdrant_hits": [
+        {
+          "id": "q-11",
+          "score": 0.41,
+          "payload": {
+            "symbol_id": "fn_charge",
+            "name": "charge",
+            "kind": "function",
+            "file_path": "src/payment.py"
+          }
+        }
+      ],
+      "keyword_nodes": [],
+      "expected": [
+        {
+          "node_id": "fn_charge",
+          "score": 0.1,
+          "node": {
+            "node_id": "fn_charge",
+            "name": "charge",
+            "qualified_name": "",
+            "kind": "function",
+            "file_path": "src/payment.py",
+            "semantic": 0.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.999999732582142,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "intent": "",
+            "exported": false,
+            "side_effect": false,
+            "return_type": "",
+            "project_id": "",
+            "language": "",
+            "_source": "qdrant",
+            "bm25": 0.0
+          },
+          "explanation": {
+            "semantic": 0.0,
+            "keyword": 0.0,
+            "graph": 0.0,
+            "freshness": 0.999999732582142,
+            "confidence": 0.0,
+            "usage": 0.0,
+            "weighted_contributions": {
+              "semantic": 0.0,
+              "keyword": 0.0,
+              "graph": 0.0,
+              "freshness": 0.1,
+              "confidence": 0.0,
+              "usage": 0.0
+            },
+            "query_intent": "default",
+            "weights_used": {
+              "semantic": 0.35,
+              "keyword": 0.2,
+              "graph": 0.2,
+              "freshness": 0.1,
+              "confidence": 0.1,
+              "usage": 0.05
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "empty_query",
+      "query": "   ",
+      "top_k": 5,
+      "debug": true,
+      "weight_override": null,
+      "now_epoch": 1789300800.0,
+      "bm25_docs": [
+        {
+          "symbol_id": "fn_validate_token",
+          "note": "validate token credential session"
+        },
+        {
+          "symbol_id": "fn_login",
+          "note": "login session authentication"
+        },
+        {
+          "symbol_id": "fn_check_permission",
+          "note": "permission access control check"
+        },
+        {
+          "symbol_id": "fn_refund_payment",
+          "note": "refund payment transaction"
+        },
+        {
+          "symbol_id": "fn_sync_state",
+          "note": "sync state checkpoint"
+        }
+      ],
+      "freshness_map": {},
+      "dirty": [],
+      "qdrant_hits": [
+        {
+          "id": "q-1",
+          "score": 0.91,
+          "payload": {
+            "symbol_id": "fn_validate_token",
+            "name": "validate_token",
+            "qualified_name": "auth.fn_validate_token",
+            "kind": "function",
+            "file_path": "src/auth.py",
+            "doc_confidence": 0.7,
+            "signals": {
+              "usage": 0.4
+            },
+            "exported": true,
+            "project_id": "demo",
+            "language": "python"
+          }
+        },
+        {
+          "id": "q-2",
+          "score": 0.72,
+          "payload": {
+            "symbol_id": "fn_login",
+            "name": "login",
+            "kind": "function",
+            "file_path": "src/auth.py",
+            "doc_confidence": 0.5
+          }
+        },
+        {
+          "id": "q-3",
+          "score": 0.55,
+          "payload": {
+            "symbol_id": "cls_session",
+            "name": "Session",
+            "kind": "class",
+            "file_path": "src/session.py"
+          }
+        }
+      ],
+      "keyword_nodes": [
+        {
+          "id": "fn_validate_token",
+          "name": "validate_token",
+          "qualified_name": "auth.fn_validate_token",
+          "kind": "function",
+          "file_path": "src/auth.py",
+          "doc_confidence": 0.7,
+          "exported": true
+        },
+        {
+          "id": "fn_check_permission",
+          "name": "check_permission",
+          "kind": "function",
+          "file_path": "src/auth.py"
+        }
+      ],
+      "expected": []
+    }
+  ]
+}

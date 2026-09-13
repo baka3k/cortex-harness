@@ -1,0 +1,552 @@
+{
+  "generator": "scripts/rust_parity/gen_journal_scenario.py",
+  "now_epoch": 1789300800.0,
+  "metadata_a": {
+    "project_id": "demo",
+    "scope_id": "demo",
+    "source_revision": "rev-1",
+    "source_snapshot": "snap-1",
+    "physical_target": "local",
+    "generation": "gen-1",
+    "parser": "python",
+    "parser_version": "1.0",
+    "schema_fingerprint": "sfp-1",
+    "query_shape_version": "qv-1",
+    "operation_versions": {},
+    "contract_version": 1
+  },
+  "metadata_b": {
+    "project_id": "demo",
+    "scope_id": "demo",
+    "source_revision": "rev-1",
+    "source_snapshot": "snap-1",
+    "physical_target": "local",
+    "generation": "gen-1",
+    "parser": "java",
+    "parser_version": "1.0",
+    "schema_fingerprint": "sfp-1",
+    "query_shape_version": "qv-1",
+    "operation_versions": {},
+    "contract_version": 1
+  },
+  "artifact_rows": [
+    {
+      "id": "row-1",
+      "value": "payment",
+      "score": 1
+    },
+    {
+      "id": "row-2",
+      "value": "auth",
+      "score": 2
+    }
+  ],
+  "ops": [
+    {
+      "op": "open_run",
+      "result": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "fingerprint": "5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "python",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        },
+        "status": "open",
+        "created_at": "2026-09-13T12:00:00.000000+00:00",
+        "updated_at": "2026-09-13T12:00:00.000000+00:00",
+        "retention_until": "2026-09-20T12:00:00.000000+00:00",
+        "error_code": null
+      }
+    },
+    {
+      "op": "open_run",
+      "result": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "fingerprint": "5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "python",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        },
+        "status": "open",
+        "created_at": "2026-09-13T12:00:00.000000+00:00",
+        "updated_at": "2026-09-13T12:00:00.000000+00:00",
+        "retention_until": "2026-09-20T12:00:00.000000+00:00",
+        "error_code": null
+      }
+    },
+    {
+      "op": "open_run",
+      "result": {
+        "run_id": "run_630da3c2ad1c726345f06beee32e88c643b731adde14d50677cef30ae506f88a",
+        "fingerprint": "630da3c2ad1c726345f06beee32e88c643b731adde14d50677cef30ae506f88a",
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "java",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        },
+        "status": "open",
+        "created_at": "2026-09-13T12:00:00.000000+00:00",
+        "updated_at": "2026-09-13T12:00:00.000000+00:00",
+        "retention_until": "2026-09-20T12:00:00.000000+00:00",
+        "error_code": null
+      }
+    },
+    {
+      "op": "find_resumable_run",
+      "result": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "fingerprint": "5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "python",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        },
+        "status": "open",
+        "created_at": "2026-09-13T12:00:00.000000+00:00",
+        "updated_at": "2026-09-13T12:00:00.000000+00:00",
+        "retention_until": "2026-09-20T12:00:00.000000+00:00",
+        "error_code": null
+      }
+    },
+    {
+      "op": "list_runs",
+      "result": [
+        {
+          "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+          "fingerprint": "5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+          "metadata": {
+            "project_id": "demo",
+            "scope_id": "demo",
+            "source_revision": "rev-1",
+            "source_snapshot": "snap-1",
+            "physical_target": "local",
+            "generation": "gen-1",
+            "parser": "python",
+            "parser_version": "1.0",
+            "schema_fingerprint": "sfp-1",
+            "query_shape_version": "qv-1",
+            "operation_versions": {},
+            "contract_version": 1
+          },
+          "status": "open",
+          "created_at": "2026-09-13T12:00:00.000000+00:00",
+          "updated_at": "2026-09-13T12:00:00.000000+00:00",
+          "retention_until": "2026-09-20T12:00:00.000000+00:00",
+          "error_code": null
+        },
+        {
+          "run_id": "run_630da3c2ad1c726345f06beee32e88c643b731adde14d50677cef30ae506f88a",
+          "fingerprint": "630da3c2ad1c726345f06beee32e88c643b731adde14d50677cef30ae506f88a",
+          "metadata": {
+            "project_id": "demo",
+            "scope_id": "demo",
+            "source_revision": "rev-1",
+            "source_snapshot": "snap-1",
+            "physical_target": "local",
+            "generation": "gen-1",
+            "parser": "java",
+            "parser_version": "1.0",
+            "schema_fingerprint": "sfp-1",
+            "query_shape_version": "qv-1",
+            "operation_versions": {},
+            "contract_version": 1
+          },
+          "status": "open",
+          "created_at": "2026-09-13T12:00:00.000000+00:00",
+          "updated_at": "2026-09-13T12:00:00.000000+00:00",
+          "retention_until": "2026-09-20T12:00:00.000000+00:00",
+          "error_code": null
+        }
+      ]
+    },
+    {
+      "op": "create_artifact",
+      "result": {
+        "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+        "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+        "byte_count": 83,
+        "row_count": 2
+      }
+    },
+    {
+      "op": "open_barrier",
+      "result": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "name": "barrier-tables",
+        "status": "open",
+        "produced_count": 0,
+        "drained_count": 0,
+        "closed_at": null
+      }
+    },
+    {
+      "op": "enqueue_batch",
+      "result": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "nodes",
+        "operation_key": "node.upsert",
+        "sequence": 0,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "pending",
+        "attempt": 0,
+        "max_attempts": 5,
+        "fencing_token": null,
+        "lease_until": null,
+        "next_attempt_at": null,
+        "required_barriers": [],
+        "produced_barriers": [
+          "barrier-tables"
+        ],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "enqueue_batch",
+      "result": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "nodes",
+        "operation_key": "node.upsert",
+        "sequence": 0,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "pending",
+        "attempt": 0,
+        "max_attempts": 5,
+        "fencing_token": null,
+        "lease_until": null,
+        "next_attempt_at": null,
+        "required_barriers": [],
+        "produced_barriers": [
+          "barrier-tables"
+        ],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "enqueue_batch",
+      "result": {
+        "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "calls",
+        "operation_key": "call.upsert",
+        "sequence": 1,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "pending",
+        "attempt": 0,
+        "max_attempts": 5,
+        "fencing_token": null,
+        "lease_until": null,
+        "next_attempt_at": null,
+        "required_barriers": [
+          "barrier-tables"
+        ],
+        "produced_barriers": [],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "get_barrier",
+      "result": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "name": "barrier-tables",
+        "status": "open",
+        "produced_count": 1,
+        "drained_count": 0,
+        "closed_at": null
+      }
+    },
+    {
+      "op": "close_barrier",
+      "result": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "name": "barrier-tables",
+        "status": "produced",
+        "produced_count": 1,
+        "drained_count": 0,
+        "closed_at": "2026-09-13T12:00:00.000000+00:00"
+      }
+    },
+    {
+      "op": "claim_batch",
+      "result": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "nodes",
+        "operation_key": "node.upsert",
+        "sequence": 0,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "leased",
+        "attempt": 1,
+        "max_attempts": 5,
+        "fencing_token": "ee2657ca7188bd628f28ca52e3cb547a",
+        "lease_until": "2026-09-13T12:01:00.000000+00:00",
+        "next_attempt_at": null,
+        "required_barriers": [],
+        "produced_barriers": [
+          "barrier-tables"
+        ],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "renew_lease",
+      "result": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "nodes",
+        "operation_key": "node.upsert",
+        "sequence": 0,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "leased",
+        "attempt": 1,
+        "max_attempts": 5,
+        "fencing_token": "ee2657ca7188bd628f28ca52e3cb547a",
+        "lease_until": "2026-09-13T12:01:00.000000+00:00",
+        "next_attempt_at": null,
+        "required_barriers": [],
+        "produced_barriers": [
+          "barrier-tables"
+        ],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "ack_batch",
+      "result": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "nodes",
+        "operation_key": "node.upsert",
+        "sequence": 0,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "done",
+        "attempt": 1,
+        "max_attempts": 5,
+        "fencing_token": null,
+        "lease_until": null,
+        "next_attempt_at": null,
+        "required_barriers": [],
+        "produced_barriers": [
+          "barrier-tables"
+        ],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "claim_batch",
+      "result": {
+        "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "calls",
+        "operation_key": "call.upsert",
+        "sequence": 1,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "leased",
+        "attempt": 1,
+        "max_attempts": 5,
+        "fencing_token": "2cb8bce3ee1ad7cc84ae2005fd9880c2",
+        "lease_until": "2026-09-13T12:01:00.000000+00:00",
+        "next_attempt_at": null,
+        "required_barriers": [
+          "barrier-tables"
+        ],
+        "produced_barriers": [],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "ack_batch",
+      "result": {
+        "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "phase": "calls",
+        "operation_key": "call.upsert",
+        "sequence": 1,
+        "artifact": {
+          "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+          "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+          "byte_count": 83,
+          "row_count": 2
+        },
+        "expected_count": 2,
+        "status": "done",
+        "attempt": 1,
+        "max_attempts": 5,
+        "fencing_token": null,
+        "lease_until": null,
+        "next_attempt_at": null,
+        "required_barriers": [
+          "barrier-tables"
+        ],
+        "produced_barriers": [],
+        "retry_class": null,
+        "error_code": null,
+        "operation": {}
+      }
+    },
+    {
+      "op": "claim_batch",
+      "result": null
+    },
+    {
+      "op": "complete_producers",
+      "result": 0
+    },
+    {
+      "op": "enqueue_batch",
+      "error": {
+        "code": "invalid_transition"
+      }
+    },
+    {
+      "op": "renew_lease",
+      "error": {
+        "code": "stale_fence"
+      }
+    },
+    {
+      "op": "inspect",
+      "result": [
+        {
+          "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+          "status": "open",
+          "resumed": true,
+          "parser": "python",
+          "produced": 2,
+          "acked": 2,
+          "pending": 0,
+          "leased": 0,
+          "retrying": 0,
+          "reconciling": 0,
+          "blocked": 0,
+          "dead_letter": 0,
+          "rows": 4,
+          "payload_bytes": 166,
+          "artifact_bytes": 83,
+          "journal_bytes": 494216,
+          "oldest_unfinished_at": null,
+          "oldest_unfinished_age_seconds": null,
+          "next_action": "close_production",
+          "error_code": null
+        },
+        {
+          "run_id": "run_630da3c2ad1c726345f06beee32e88c643b731adde14d50677cef30ae506f88a",
+          "status": "open",
+          "resumed": false,
+          "parser": "java",
+          "produced": 0,
+          "acked": 0,
+          "pending": 0,
+          "leased": 0,
+          "retrying": 0,
+          "reconciling": 0,
+          "blocked": 0,
+          "dead_letter": 0,
+          "rows": 0,
+          "payload_bytes": 0,
+          "artifact_bytes": 0,
+          "journal_bytes": 494216,
+          "oldest_unfinished_at": null,
+          "oldest_unfinished_age_seconds": null,
+          "next_action": "close_production",
+          "error_code": null
+        }
+      ]
+    }
+  ]
+}

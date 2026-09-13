@@ -162,30 +162,41 @@ PY-->>CI : pass/fail status
 ## Detailed Component Analysis
 
 ### Makefile Targets
-The Makefile exposes high-level targets that map to lifecycle operations. Typical categories include:
-- Development setup: dev, setup, install
-- Testing: test, test-unit, test-integration
-- Building: build, package, dist
-- Deployment: deploy, publish
-- Maintenance: clean, lint, format
+The Makefile exposes high-level targets that map to lifecycle operations. The actual inventory is:
+
+Lifecycle targets (delegated to `scripts/mcp-lifecycle.py`, or `scripts/mcp-lifecycle.ps1` on Windows):
+- `build` / `install` / `uninstall` — create/sync the virtualenv and Python dependencies via `uv`; install/remove the global `dev` command.
+- `infra-up` / `infra-down` — initialize local storage for all registered projects and probe remote backends (`INFRA_ARGS="--provision"` provisions). `infra-down` is deprecated: embedded storage has no service to stop, it only closes cached remote clients.
+- `storage-layout` / `storage-init` / `storage-migrate-layout` / `storage-backup` — inspect/create/back up the canonical instance tree (`storage-backup` accepts `OWNER=code|doc`).
+- `doctor` — check local storage, running MCP servers, sync workers, and remote reachability.
+- `start` / `stop` — open/stop MCP servers (`START_ARGS` / `STOP_ARGS` for parameterized instances).
+- `sync code stop` / `sync doc stop` (also `sync-code-stop` / `sync-doc-stop`) — stop sync workers.
+- `export-db` / `import-db` (aliases `export` / `import`) — archive import/export via `cortex_harness/dev.py` (`ARCHIVE=`, `PROJECT_ID=`, `ROLE=`, `OVERWRITE=1`).
+
+Rust workspace targets (`rust/` — parity-first port of the graph core + retrieval brain):
+- `rust-build` — `cargo build --release --workspace`.
+- `rust-test` — `cargo test --workspace` against committed golden fixtures.
+- `rust-clippy` — `cargo clippy -D warnings` (mandatory gate for every ported module).
+- `rust-check` — clippy + test (run before every cutover).
+- `rust-pyo3` — build the `cortex-retrieval-py` PyO3 extension into `scripts/rust_parity/` and replay the Python↔Rust parity suite.
+- `rust-fixtures` — regenerate the golden fixtures from the Python reference in `scripts/rust_parity/` (commit the diffs).
+- `rust-clean` — `cargo clean`.
 
 Behavioral characteristics:
-- Dependencies: Many targets depend on environment preparation (e.g., virtual environment creation, dependency installation).
-- Execution context: Targets may switch into a virtual environment or set environment variables before invoking lifecycle scripts.
-- Configuration options: Environment variables override defaults for providers, paths, and flags.
-- Expected outcomes: Artifacts are produced in designated directories; logs are emitted to standard output or files depending on target.
+- Dependencies: Lifecycle targets require `uv` and Python 3.12+; Rust targets require `cargo` (workspace at `rust/Cargo.toml`).
+- Execution context: Targets invoke the virtualenv Python; `rust-pyo3` uses `.venv/bin/python` for the parity replay.
+- Configuration options: Environment variables override defaults (`PYTHON`, `UV`, `CARGO`, `INFRA_ARGS`, `START_ARGS`, `STOP_ARGS`, `OWNER`, `ARCHIVE`).
+- Expected outcomes: Logs are emitted to standard output; PyO3 artifacts land in `scripts/rust_parity/cortex_retrieval_py.so`.
 
-Cross-platform notes:
-- On POSIX systems, Makefile delegates to shell and Python scripts.
-- On Windows, PowerShell or batch helpers may be used by specific targets.
+Graph providers (`GRAPH_PROVIDER` / `CODE_GRAPH_PROVIDER` / `DOC_GRAPH_PROVIDER`):
+- `falkordb` — embedded FalkorDBLite (POSIX default), or remote via `FALKORDB_URI`.
+- `ladybug` — embedded LadybugDB, local-only (Windows default; aliases `lbug` | `lady-bug` | `kuzu`; `LADYBUG_GRAPH` defaults to `hyper_graph`).
+- `neo4j` — remote Neo4j.
 
-Examples of common patterns:
-- dev: initialize environment, start local services, and launch tooling.
-- test: run full suite; test-unit and test-integration split scope.
-- build: compile or assemble outputs; package creates distributables; dist produces final archives.
-- deploy/publish: push artifacts to registries or installers.
-- clean: remove generated artifacts and caches.
-- lint/format: enforce code style and formatting.
+Default local storage (instance root `~/.cortext-harness/v1/instances/default`):
+- `qdrant/<code|doc>` — vector collections.
+- `falkordb/{code,doc}/data.rdb` — FalkorDBLite stores.
+- `ladybug/{code,doc}/<owner>.lbug/<graph>` — LadybugDB single-file stores.
 
 **Section sources**
 - [Makefile](file://Makefile)

@@ -1,0 +1,260 @@
+{
+  "generator": "scripts/rust_parity/gen_phase03_fixtures.py",
+  "clamp": [
+    {
+      "value": 1.5,
+      "lo": 0.0,
+      "hi": 1.0,
+      "expected": 1.0
+    },
+    {
+      "value": -0.5,
+      "lo": 0.0,
+      "hi": 1.0,
+      "expected": 0.0
+    },
+    {
+      "value": 0.42,
+      "lo": 0.0,
+      "hi": 1.0,
+      "expected": 0.42
+    },
+    {
+      "value": 7.0,
+      "lo": 5.0,
+      "hi": 5.0,
+      "expected": 5.0
+    }
+  ],
+  "min_max": [
+    {
+      "values": [],
+      "expected": []
+    },
+    {
+      "values": [
+        7.0
+      ],
+      "expected": [
+        0.0
+      ]
+    },
+    {
+      "values": [
+        3.0,
+        3.0,
+        3.0
+      ],
+      "expected": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "values": [
+        0.1,
+        0.5,
+        0.9,
+        1.2
+      ],
+      "expected": [
+        0.0,
+        0.3636363636363637,
+        0.7272727272727274,
+        1.0
+      ]
+    },
+    {
+      "values": [
+        -4.0,
+        0.0,
+        4.0
+      ],
+      "expected": [
+        0.0,
+        0.5,
+        1.0
+      ]
+    }
+  ],
+  "batch": [
+    {
+      "values": [
+        null,
+        null,
+        0.0,
+        5.0,
+        12.5
+      ],
+      "lo": null,
+      "hi": null,
+      "expected": [
+        0.0,
+        0.0,
+        0.0,
+        0.4,
+        1.0
+      ]
+    },
+    {
+      "values": [
+        1.0,
+        7.5,
+        30.0
+      ],
+      "lo": 0.0,
+      "hi": 25.0,
+      "expected": [
+        0.04,
+        0.3,
+        1.0
+      ]
+    },
+    {
+      "values": [
+        10.0,
+        20.0,
+        30.0
+      ],
+      "lo": 20.0,
+      "hi": 20.0,
+      "expected": [
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "values": [
+        2.0,
+        4.0
+      ],
+      "lo": 0.0,
+      "hi": 10.0,
+      "expected": [
+        0.2,
+        0.4
+      ]
+    }
+  ],
+  "normalize_signals": [
+    {
+      "raw": {
+        "semantic": 0.83,
+        "keyword": 14.2,
+        "graph": 3,
+        "freshness": 0.6,
+        "confidence": 0.71,
+        "usage": 0.42
+      },
+      "bounds": {
+        "keyword": [
+          0.0,
+          20.0
+        ],
+        "graph": [
+          0.0,
+          10.0
+        ]
+      },
+      "expected": {
+        "semantic": 0.83,
+        "keyword": 0.71,
+        "graph": 0.3,
+        "freshness": 0.6,
+        "confidence": 0.71,
+        "usage": 0.42
+      }
+    },
+    {
+      "raw": {
+        "semantic": 1.7,
+        "keyword": -3.0,
+        "mystery": 9.9
+      },
+      "bounds": null,
+      "expected": {
+        "semantic": 1.0,
+        "keyword": 0.0,
+        "mystery": 1.0
+      }
+    },
+    {
+      "raw": {
+        "graph": 0.5
+      },
+      "bounds": {
+        "graph": [
+          0.5,
+          0.5
+        ]
+      },
+      "expected": {
+        "graph": 0.0
+      }
+    }
+  ],
+  "freshness_elapsed": [
+    {
+      "elapsed": 0.0,
+      "half_life_days": 30.0,
+      "expected": 1.0
+    },
+    {
+      "elapsed": -100.0,
+      "half_life_days": 30.0,
+      "expected": 1.0
+    },
+    {
+      "elapsed": 2592000,
+      "half_life_days": 30.0,
+      "expected": 0.5
+    },
+    {
+      "elapsed": 86400,
+      "half_life_days": 30.0,
+      "expected": 0.9771599684342459
+    },
+    {
+      "elapsed": 31536000,
+      "half_life_days": 7.0,
+      "expected": 2.011110532027311e-16
+    }
+  ],
+  "freshness_dirty": {
+    "now_epoch": 1789300800.0,
+    "cases": [
+      {
+        "is_dirty": true,
+        "iso": "",
+        "expected": 1.0
+      },
+      {
+        "is_dirty": false,
+        "iso": "",
+        "expected": 0.3
+      },
+      {
+        "is_dirty": false,
+        "iso": "bogus",
+        "expected": 0.3
+      },
+      {
+        "is_dirty": false,
+        "iso": "2026-09-13T11:00:00+00:00",
+        "expected": 0.9990377588337834
+      },
+      {
+        "is_dirty": false,
+        "iso": "2026-08-14T12:00:00+00:00",
+        "expected": 0.5
+      },
+      {
+        "is_dirty": false,
+        "iso": "2026-09-13T18:59:59+07:00",
+        "expected": 0.999999732582142
+      }
+    ]
+  }
+}

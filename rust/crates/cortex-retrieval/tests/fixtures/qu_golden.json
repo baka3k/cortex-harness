@@ -1,0 +1,465 @@
+{
+  "generator": "scripts/rust_parity/gen_phase03_fixtures.py",
+  "from_text": [
+    {
+      "text": "function xử lý thanh toán bị lỗi khi user chưa login",
+      "expected": {
+        "intent": "default",
+        "entities": [
+          "chưa login",
+          "thanh toán",
+          "bị lỗi",
+          "login",
+          "user"
+        ],
+        "keywords": [
+          "function",
+          "thanh",
+          "toán",
+          "lỗi",
+          "user",
+          "login"
+        ],
+        "actions": [
+          "process",
+          "payment"
+        ],
+        "domain_signals": [
+          "auth",
+          "error",
+          "payment",
+          "user"
+        ],
+        "embedding_text": "function xử lý thanh toán bị lỗi khi user chưa login authentication authorization login session token credential error exception failure crash bug handler payment transaction checkout billing charge invoice user account profile customer member chưa login thanh toán bị lỗi login user process payment",
+        "raw_query": "function xử lý thanh toán bị lỗi khi user chưa login"
+      }
+    },
+    {
+      "text": "who calls UserService.validate_token in payment module",
+      "expected": {
+        "intent": "structural",
+        "entities": [
+          "UserService",
+          "validate_token",
+          "validate",
+          "payment",
+          "token",
+          "users",
+          "user"
+        ],
+        "keywords": [
+          "who",
+          "calls",
+          "userservice",
+          "validate_token",
+          "payment",
+          "module"
+        ],
+        "actions": [
+          "call"
+        ],
+        "domain_signals": [
+          "auth",
+          "payment",
+          "user",
+          "validation"
+        ],
+        "embedding_text": "who calls UserService.validate_token in payment module authentication authorization login session token credential payment transaction checkout billing charge invoice user account profile customer member validation constraint check sanitize invalid UserService validate_token validate payment token users user call",
+        "raw_query": "who calls UserService.validate_token in payment module"
+      }
+    },
+    {
+      "text": "Truy vấn đơn hàng bị lỗi khi thanh toán",
+      "expected": {
+        "intent": "default",
+        "entities": [
+          "Truy",
+          "thanh toán",
+          "đơn hàng",
+          "truy vấn",
+          "bị lỗi"
+        ],
+        "keywords": [
+          "truy",
+          "vấn",
+          "đơn",
+          "hàng",
+          "lỗi",
+          "thanh",
+          "toán"
+        ],
+        "actions": [
+          "payment"
+        ],
+        "domain_signals": [
+          "database",
+          "error",
+          "order",
+          "payment"
+        ],
+        "embedding_text": "Truy vấn đơn hàng bị lỗi khi thanh toán database repository query entity schema error exception failure crash bug handler order fulfillment shipment delivery purchase payment transaction checkout billing charge invoice Truy thanh toán đơn hàng truy vấn bị lỗi payment",
+        "raw_query": "Truy vấn đơn hàng bị lỗi khi thanh toán"
+      }
+    },
+    {
+      "text": "explain the authentication flow with JWT token refresh",
+      "expected": {
+        "intent": "temporal",
+        "entities": [
+          "JWT",
+          "authentication",
+          "token"
+        ],
+        "keywords": [
+          "explain",
+          "authentication",
+          "flow",
+          "jwt",
+          "token",
+          "refresh"
+        ],
+        "actions": [],
+        "domain_signals": [
+          "auth"
+        ],
+        "embedding_text": "explain the authentication flow with JWT token refresh authentication authorization login session token credential JWT authentication token",
+        "raw_query": "explain the authentication flow with JWT token refresh"
+      }
+    },
+    {
+      "text": "\"validateToken\" calls UserService and handle_payment",
+      "expected": {
+        "intent": "structural",
+        "entities": [
+          "validateToken",
+          "UserService",
+          "handle_payment",
+          "validate",
+          "payment",
+          "token",
+          "users",
+          "user"
+        ],
+        "keywords": [
+          "validatetoken",
+          "calls",
+          "userservice",
+          "handle_payment"
+        ],
+        "actions": [
+          "call"
+        ],
+        "domain_signals": [
+          "auth",
+          "payment",
+          "user",
+          "validation"
+        ],
+        "embedding_text": "\"validateToken\" calls UserService and handle_payment authentication authorization login session token credential payment transaction checkout billing charge invoice user account profile customer member validation constraint check sanitize invalid validateToken UserService handle_payment validate payment token users user call",
+        "raw_query": "\"validateToken\" calls UserService and handle_payment"
+      }
+    },
+    {
+      "text": "recent changes in checkout component",
+      "expected": {
+        "intent": "temporal",
+        "entities": [
+          "component",
+          "checkout",
+          "check"
+        ],
+        "keywords": [
+          "recent",
+          "changes",
+          "checkout",
+          "component"
+        ],
+        "actions": [],
+        "domain_signals": [
+          "payment",
+          "ui",
+          "validation"
+        ],
+        "embedding_text": "recent changes in checkout component payment transaction checkout billing charge invoice ui component render view state frontend validation constraint check sanitize invalid component checkout check",
+        "raw_query": "recent changes in checkout component"
+      }
+    },
+    {
+      "text": "",
+      "expected": {
+        "intent": "default",
+        "entities": [],
+        "keywords": [],
+        "actions": [],
+        "domain_signals": [],
+        "embedding_text": "",
+        "raw_query": ""
+      }
+    },
+    {
+      "text": "   ",
+      "expected": {
+        "intent": "default",
+        "entities": [],
+        "keywords": [],
+        "actions": [],
+        "domain_signals": [],
+        "embedding_text": "",
+        "raw_query": ""
+      }
+    },
+    {
+      "text": "get user by id from database repository",
+      "expected": {
+        "intent": "default",
+        "entities": [
+          "repository",
+          "database",
+          "user"
+        ],
+        "keywords": [
+          "get",
+          "user",
+          "from",
+          "database",
+          "repository"
+        ],
+        "actions": [],
+        "domain_signals": [
+          "database",
+          "user"
+        ],
+        "embedding_text": "get user by id from database repository database repository query entity schema user account profile customer member repository database user",
+        "raw_query": "get user by id from database repository"
+      }
+    },
+    {
+      "text": "Hệ thống gửi thông báo email khi đơn hàng hoàn tất",
+      "expected": {
+        "intent": "default",
+        "entities": [
+          "thông báo",
+          "đơn hàng",
+          "email"
+        ],
+        "keywords": [
+          "thống",
+          "gửi",
+          "thông",
+          "báo",
+          "email",
+          "đơn",
+          "hàng",
+          "hoàn",
+          "tất"
+        ],
+        "actions": [
+          "send"
+        ],
+        "domain_signals": [
+          "notification",
+          "order"
+        ],
+        "embedding_text": "Hệ thống gửi thông báo email khi đơn hàng hoàn tất notification email alert message event order fulfillment shipment delivery purchase thông báo đơn hàng email send",
+        "raw_query": "Hệ thống gửi thông báo email khi đơn hàng hoàn tất"
+      }
+    },
+    {
+      "text": "tạo mới hóa đơn và cập nhật trạng thái",
+      "expected": {
+        "intent": "default",
+        "entities": [
+          "hóa đơn"
+        ],
+        "keywords": [
+          "tạo",
+          "mới",
+          "hóa",
+          "đơn",
+          "cập",
+          "nhật",
+          "trạng",
+          "thái"
+        ],
+        "actions": [
+          "create",
+          "update"
+        ],
+        "domain_signals": [
+          "payment"
+        ],
+        "embedding_text": "tạo mới hóa đơn và cập nhật trạng thái payment transaction checkout billing charge invoice hóa đơn create update",
+        "raw_query": "tạo mới hóa đơn và cập nhật trạng thái"
+      }
+    },
+    {
+      "text": "xử lý đơn hàng: validate_order kiểm tra PaymentController mỗi khi order có lỗi 500",
+      "expected": {
+        "intent": "default",
+        "entities": [
+          "PaymentController",
+          "validate_order",
+          "controller",
+          "xử lý đơn",
+          "đơn hàng",
+          "validate",
+          "kiểm tra",
+          "payment",
+          "order"
+        ],
+        "keywords": [
+          "đơn",
+          "hàng",
+          "validate_order",
+          "kiểm",
+          "tra",
+          "paymentcontroller",
+          "mỗi",
+          "order",
+          "lỗi",
+          "500"
+        ],
+        "actions": [
+          "process",
+          "validate"
+        ],
+        "domain_signals": [
+          "api",
+          "error",
+          "order",
+          "payment",
+          "validation"
+        ],
+        "embedding_text": "xử lý đơn hàng: validate_order kiểm tra PaymentController mỗi khi order có lỗi 500 api endpoint route request response controller error exception failure crash bug handler order fulfillment shipment delivery purchase payment transaction checkout billing charge invoice validation constraint check sanitize invalid PaymentController validate_order controller xử lý đơn đơn hàng validate kiểm tra payment process validate",
+        "raw_query": "xử lý đơn hàng: validate_order kiểm tra PaymentController mỗi khi order có lỗi 500"
+      }
+    }
+  ],
+  "from_paragraph": [
+    {
+      "text": "who calls validateToken\nsecond line about payment gateway\nthird line",
+      "max_chars": 2000,
+      "expected": {
+        "intent": "structural",
+        "entities": [
+          "validate",
+          "payment",
+          "token"
+        ],
+        "keywords": [
+          "who",
+          "calls",
+          "validatetoken",
+          "second",
+          "line",
+          "payment",
+          "gateway",
+          "third"
+        ],
+        "actions": [
+          "call"
+        ],
+        "domain_signals": [
+          "auth",
+          "payment",
+          "validation"
+        ],
+        "embedding_text": "who calls validateToken\nsecond line about payment gateway\nthird line authentication authorization login session token credential payment transaction checkout billing charge invoice validation constraint check sanitize invalid validate payment token call",
+        "raw_query": "who calls validateToken\nsecond line about payment gateway\nthird line"
+      }
+    },
+    {
+      "text": "Tìm các component UI liên quan đến thanh toán.\nDòng thứ hai mô tả thêm về session và token.",
+      "max_chars": 2000,
+      "expected": {
+        "intent": "default",
+        "entities": [
+          "thanh toán",
+          "component",
+          "session",
+          "token"
+        ],
+        "keywords": [
+          "tìm",
+          "component",
+          "liên",
+          "quan",
+          "đến",
+          "thanh",
+          "toán",
+          "dòng",
+          "thứ",
+          "thêm",
+          "session",
+          "token"
+        ],
+        "actions": [
+          "payment"
+        ],
+        "domain_signals": [
+          "auth",
+          "payment",
+          "ui"
+        ],
+        "embedding_text": "Tìm các component UI liên quan đến thanh toán.\nDòng thứ hai mô tả thêm về session và token. authentication authorization login session token credential payment transaction checkout billing charge invoice ui component render view state frontend thanh toán component session token payment",
+        "raw_query": "Tìm các component UI liên quan đến thanh toán.\nDòng thứ hai mô tả thêm về session và token."
+      }
+    },
+    {
+      "text": "explain how the payment refund works with the order database and user notification email flow in detail",
+      "max_chars": 60,
+      "expected": {
+        "intent": "semantic",
+        "entities": [
+          "database",
+          "payment",
+          "refund",
+          "order"
+        ],
+        "keywords": [
+          "explain",
+          "how",
+          "payment",
+          "refund",
+          "works",
+          "order",
+          "database"
+        ],
+        "actions": [],
+        "domain_signals": [
+          "database",
+          "order",
+          "payment"
+        ],
+        "embedding_text": "explain how the payment refund works with the order database database repository query entity schema order fulfillment shipment delivery purchase payment transaction checkout billing charge invoice database payment refund order",
+        "raw_query": "explain how the payment refund works with the order database"
+      }
+    },
+    {
+      "text": "",
+      "max_chars": 100,
+      "expected": {
+        "intent": "default",
+        "entities": [],
+        "keywords": [],
+        "actions": [],
+        "domain_signals": [],
+        "embedding_text": "",
+        "raw_query": ""
+      }
+    },
+    {
+      "text": "   \n  ",
+      "max_chars": 100,
+      "expected": {
+        "intent": "default",
+        "entities": [],
+        "keywords": [],
+        "actions": [],
+        "domain_signals": [],
+        "embedding_text": "",
+        "raw_query": ""
+      }
+    }
+  ]
+}
