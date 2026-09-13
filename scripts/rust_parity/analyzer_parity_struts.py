@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from analyzer_parity_p08_common import (  # noqa: E402
-    PY_BIN, REPO, REPORTS, FAILURES, check, compare_files, compare_graphs,
+    PY_BIN, REPO, REPORTS, FAILURES, check, compare_files, scratch_dir, compare_graphs,
     header, run_overlay, seed_base_graph,
 )
 from tools.graph.driver.falkordb_driver import FalkorDBDriver  # noqa: E402
