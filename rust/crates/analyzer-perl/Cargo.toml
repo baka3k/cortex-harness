@@ -1,0 +1,30 @@
+[package]
+name = "analyzer-perl"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/perl/perl_analyzer.py — Perl structural analyzer (phase 05 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-perl"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-falkordb = { path = "../cortex-falkordb" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+tree-sitter = "0.25"
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1"
+
+[lints.rust]
+unsafe_code = "deny"

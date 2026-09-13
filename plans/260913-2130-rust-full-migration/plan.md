@@ -1,6 +1,6 @@
 ---
 title: "Rust full migration — analyzers, CLI/storage, MCP server (sau phase 01-07)"
-status: in-progress (P01 GO + P02 + P03 + P04 xong; chi tiết trong từng phase-XX.md)
+status: in-progress (P01-P04 + P05 xong; P06 java/kotlin xong, đang android; chi tiết trong từng phase-XX.md)
 created: 2026-09-13
 target: "rust/ (mở rộng), code-tiny/tools + code-tiny/mcp + doc-tiny + cortex_harness (tham chiếu parity, xoá dần sau cutover)"
 blockedBy: []

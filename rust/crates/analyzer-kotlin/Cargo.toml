@@ -1,0 +1,29 @@
+[package]
+name = "analyzer-kotlin"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/kotlin/kotlin_analyzer.py — phase 06 rust-full-migration (JVM batch)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-kotlin"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+tree-sitter = "0.25"
+# PyPI venv chạy tree-sitter-kotlin 1.1.0 (fallback path của `_get_kotlin_parser`
+# vì tree_sitter_languages.get_parser TypeError với tree_sitter 0.26).
+# `tree-sitter-kotlin` trên crates.io dừng ở 0.3.8 (grammar cũ, node kinds
+# khác); `tree-sitter-kotlin-ng` 1.1.0 build cùng grammar fwcd v1.1.0 —
+# parse trees đã verify byte-identical với PyPI 1.1.0 (diff sexp trên corpus
+# enum/data-class/companion/delegation/lambda).
+tree-sitter-kotlin-ng = "1.1.0"
+
+[lints.rust]
+unsafe_code = "deny"
