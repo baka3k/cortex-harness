@@ -58,7 +58,7 @@ MIN_PARA_CHARS = 40
 
 # ---------------------------------------------------------------- corpus ----
 
-STOCK_DOCS = REPO.parent / "baka3k" / "stock" / "docs"
+STOCK_DOCS = Path.home() / "baka3k" / "stock" / "docs"
 STOCK_SUBSET = [
     "deerflow_same_ec2_deploy.md",
     "mcp_pipeline_tools.md",
@@ -206,9 +206,12 @@ def run_rust(*args: str, env: dict | None = None) -> subprocess.CompletedProcess
     proc_env.pop("CORTEX_EXTRA_IGNORE_DIRS", None)
     if env:
         proc_env.update(env)
-    return subprocess.run(
+    proc = subprocess.run(
         [str(RUST_BIN), *args], capture_output=True, text=True, env=proc_env, timeout=600
     )
+    # println! adds exactly one trailing newline — content-only comparisons.
+    proc.stdout = proc.stdout.rstrip("\n")
+    return proc
 
 
 # --------------------------------------------------------------- gates ----
@@ -366,7 +369,7 @@ def run_python_ingest(fixture: dict) -> tuple[bool, str]:
 
     files = G._iter_input_files(CORPUS_DIR)
     for file_path in files:
-        rel = file_path.relative_to(CORPUS_DIR).as_posix()
+        rel = G._safe_source_id(CORPUS_DIR, file_path)
         source_id = f"{SOURCE_PREFIX}__{rel}"
         raw_text = G._read_input_text(file_path)
         G.process_text(
@@ -383,8 +386,15 @@ def run_python_ingest(fixture: dict) -> tuple[bool, str]:
 
 # -------------------------------------------------------- graph dump/diff ----
 
-from dual_write_diff import MASKED_PROPS, clean_graph, diff_dump  # noqa: E402
+from dual_write_diff import MASKED_PROPS as _BASE_MASKED_PROPS  # noqa: E402
+from dual_write_diff import clean_graph, diff_dump  # noqa: E402
 from tools.graph.driver.falkordb_driver import FalkorDBDriver  # noqa: E402
+
+# FalkorDB engine-internal edge endpoint ids are creation-order dependent and
+# masked like dual_write_diff's `_graph_id`/`_src`/`_dst` (this driver version
+# exposes them as `_start_id`/`_end_id`). Mask extension lives here because
+# dual_write_diff.py is a shared phase-03 artifact.
+MASKED_PROPS = _BASE_MASKED_PROPS | {"_start_id", "_end_id"}
 
 _NODE_IDENTITY_KEYS = ("id", "site_id", "fingerprint", "project_id", "name")
 

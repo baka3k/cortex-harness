@@ -1,5 +1,230 @@
 {
  "entities_by_paragraph": {
+  "# DeerFlow Deployment On Same Stock EC2": [
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 2,
+    "end_char": 10
+   }
+  ],
+  "Mục tiêu: triển khai DeerFlow trên **chính EC2 hiện tại** của stock, không tách máy, không đổi runtime production hiện có của stock.": [
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 21,
+    "end_char": 29
+   }
+  ],
+  "## 1. Layout thư mục chuẩn trên EC2": [],
+  "```bash\n/home/ec2-user/stock/                 # stock app hiện tại\n/home/ec2-user/stock/deer-flow/       # DeerFlow clone vào đây\n```": [
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 107,
+    "end_char": 115
+   }
+  ],
+  "## 2. Kiến trúc runtime": [],
+  "- Stock UI giữ nguyên:\n  - Streamlit: `127.0.0.1:8501`\n  - Nginx hệ thống: public `:80/:443`\n- DeerFlow chạy Docker Compose trong `/home/ec2-user/stock/deer-flow`:\n  - bind local-only: `127.0.0.1:2026`\n- `stock-mcp` chạy host service:\n  - bind local-only: `127.0.0.1:8789`\n- Nginx route theo subdomain:\n  - `stock.<domain>` -> `127.0.0.1:8501`\n  - `deerflow.<domain>` -> `127.0.0.1:2026`": [
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 95,
+    "end_char": 103
+   },
+   {
+    "name": "Docker",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 109,
+    "end_char": 115
+   },
+   {
+    "name": "deerflow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 349,
+    "end_char": 357
+   },
+   {
+    "name": "UI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 8,
+    "end_char": 10
+   }
+  ],
+  "## 3. Deploy DeerFlow vào cùng EC2": [
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 13,
+    "end_char": 21
+   }
+  ],
+  "```bash\ncd /home/ec2-user/stock\nchmod +x ./scripts/ec2/*.sh": [],
+  "./scripts/ec2/deploy_deerflow_on_stock_ec2.sh \\\n  --deerflow-repo-url <deer-flow-repo-url> \\\n  --deerflow-branch main \\\n  --stock-dir /home/ec2-user/stock \\\n  --deerflow-dir /home/ec2-user/stock/deer-flow \\\n  --bind-host 127.0.0.1 \\\n  --bind-port 2026\n```": [
+   {
+    "name": "deerflow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 21,
+    "end_char": 29
+   }
+  ],
+  "Script sẽ:\n- clone/pull DeerFlow vào `deer-flow/`\n- seed `config.yaml`, `extensions_config.json`, `.env` (nếu chưa có)\n- chạy `./scripts/deploy.sh up` với `PORT=127.0.0.1:2026`": [
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 24,
+    "end_char": 32
+   },
+   {
+    "name": "PORT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 156,
+    "end_char": 160
+   }
+  ],
+  "## 4. Cấu hình Nginx cho deerflow.<domain>": [
+   {
+    "name": "deerflow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 25,
+    "end_char": 33
+   }
+  ],
+  "```bash\nsudo ./scripts/ec2/install_deerflow_nginx_vhost.sh \\\n  --domain deerflow.<domain> \\\n  --upstream-host 127.0.0.1 \\\n  --upstream-port 2026\n```": [
+   {
+    "name": "deerflow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 35,
+    "end_char": 43
+   }
+  ],
+  "Nếu dùng TLS cert có sẵn:": [
+   {
+    "name": "TLS",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 9,
+    "end_char": 12
+   }
+  ],
+  "```bash\nsudo ./scripts/ec2/install_deerflow_nginx_vhost.sh \\\n  --domain deerflow.<domain> \\\n  --upstream-host 127.0.0.1 \\\n  --upstream-port 2026 \\\n  --ssl-cert /etc/letsencrypt/live/deerflow.<domain>/fullchain.pem \\\n  --ssl-key /etc/letsencrypt/live/deerflow.<domain>/privkey.pem\n```": [
+   {
+    "name": "deerflow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 35,
+    "end_char": 43
+   }
+  ],
+  "## 5. Cài `stock-mcp` service trên host": [],
+  "```bash\nsudo ./scripts/ec2/install_stock_mcp_service.sh \\\n  --app-dir /home/ec2-user/stock \\\n  --user ec2-user \\\n  --host 127.0.0.1 \\\n  --port 8789 \\\n  --path /mcp\n```": [],
+  "Sau khi cài:\n- unit: `stock-mcp.service`\n- env file: `/etc/stock-mcp.env`": [],
+  "## 6. Nối DeerFlow -> stock_mcp (MCP HTTP)": [
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 10,
+    "end_char": 18
+   },
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 33,
+    "end_char": 36
+   },
+   {
+    "name": "HTTP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 37,
+    "end_char": 41
+   }
+  ],
+  "```bash\n./scripts/ec2/configure_deerflow_stock_mcp.py \\\n  --deerflow-dir /home/ec2-user/stock/deer-flow \\\n  --server-name stock_mcp \\\n  --url http://host.docker.internal:8789/mcp \\\n  --restart\n```": [
+   {
+    "name": "deerflow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 32,
+    "end_char": 40
+   }
+  ],
+  "Script sẽ update `extensions_config.json` để bật server MCP `stock_mcp`.": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 56,
+    "end_char": 59
+   }
+  ],
+  "## 7. Tạo custom agent `stock-suggest`": [],
+  "```bash\n./scripts/ec2/bootstrap_stock_suggest_agent.py \\\n  --base-url http://127.0.0.1:2026 \\\n  --agent-name stock-suggest\n```": [],
+  "Agent soul mặc định đã cấu hình:\n- format trả lời `Action / Confidence / Why / Risks / Next step`\n- ưu tiên gọi stock MCP tools trước web search cho gợi ý mã": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 118,
+    "end_char": 121
+   }
+  ],
+  "## 8. Cài daily alert 16:30 ICT (SQLite watchlist + Telegram)": [
+   {
+    "name": "ICT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 28,
+    "end_char": 31
+   }
+  ],
+  "```bash\nsudo ./scripts/ec2/install_stock_alert_timer.sh \\\n  --app-dir /home/ec2-user/stock \\\n  --user ec2-user \\\n  --service-name stock-alert \\\n  --watchlist main \\\n  --benchmark VNIndex \\\n  --calendar \"Mon..Fri 16:30\"\n```": [],
+  "Điền Telegram secret:": [],
+  "```bash\nsudo vi /etc/stock-alert.env\n# TELEGRAM_BOT_TOKEN=...\n# TELEGRAM_CHAT_ID=...\n```": [],
+  "Quản lý watchlist SQLite:": [],
+  "```bash\npython -m stock_bot.manage_watchlist set --name main --symbols FPT,VNM,VCB\npython -m stock_bot.manage_watchlist list\n```": [
+   {
+    "name": "FPT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 71,
+    "end_char": 74
+   },
+   {
+    "name": "VNM",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 75,
+    "end_char": 78
+   },
+   {
+    "name": "VCB",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 79,
+    "end_char": 82
+   }
+  ],
+  "Run test thủ công:": [],
+  "```bash\nsudo systemctl start stock-alert.service\njournalctl -u stock-alert.service -n 100 --no-pager\n```": [],
+  "## 9. Smoke test / nghiệm thu": [],
+  "```bash\n./scripts/ec2/smoke_test_deerflow_stock.sh \\\n  --de": [],
   "Ops runbook cho cụm FalkorDB.": [
    {
     "name": "FalkorDB",
@@ -23,6 +248,633 @@
     "confidence": 0.87,
     "start_char": 55,
     "end_char": 60
+   }
+  ],
+  "# MCP Tools Reference and Pipeline Decomposition": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 2,
+    "end_char": 5
+   }
+  ],
+  "## 1) MCP functions are defined where?": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 6,
+    "end_char": 9
+   }
+  ],
+  "Primary MCP server definitions are in:\n- stock_mcp/server.py": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 8,
+    "end_char": 11
+   }
+  ],
+  "REST API (for n8n HTTP calls) is in:\n- stock_mcp/http_api.py": [
+   {
+    "name": "REST API",
+    "type": "ORG",
+    "confidence": 0.87,
+    "start_char": 0,
+    "end_char": 8
+   },
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 14,
+    "end_char": 17
+   },
+   {
+    "name": "REST",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 0,
+    "end_char": 4
+   },
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 5,
+    "end_char": 8
+   },
+   {
+    "name": "HTTP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 18,
+    "end_char": 22
+   }
+  ],
+  "Reusable subprocess-based runner is in:\n- stock_mcp/analysis_runner.py": [],
+  "## 2) Existing high-level MCP tools (original)": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 26,
+    "end_char": 29
+   }
+  ],
+  "Defined in stock_mcp/server.py:\n- health_check\n- analyze_symbol\n- analyze_watchlist\n- get_symbol_decision\n- get_latest_report\n- get_watchlist_config\n- set_watchlist_config\n- list_watchlist_configs": [],
+  "These are convenient but still relatively coarse-grained and can be slow when chained.": [],
+  "## 3) New granular pipeline MCP tools (step-by-step)": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 28,
+    "end_char": 31
+   }
+  ],
+  "To support n8n customization, the pipeline is decomposed into independent MCP tools.\nAll are defined in stock_mcp/server.py.": [
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 11,
+    "end_char": 14
+   },
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 74,
+    "end_char": 77
+   }
+  ],
+  "### Step 1: Security profile\n- pipeline_step_1_security_info\n- Input: symbol, market\n- Output: parsed security profile + raw payload\n- Purpose: get static metadata without running full pipeline": [],
+  "### Step 2: Price data fetch\n- pipeline_step_2_price_data\n- Input: symbol, from_date, to_date, market\n- Output: row counts + small preview for daily price and OHLC\n- Purpose: fetch data only (no indicators/AI)": [
+   {
+    "name": "OHLC",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 159,
+    "end_char": 163
+   },
+   {
+    "name": "AI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 206,
+    "end_char": 208
+   }
+  ],
+  "### Step 3: Indicators + signals\n- pipeline_step_3_indicators_signals\n- Input: symbol, from_date, to_date, market\n- Output: latest indicator row + signal tail\n- Purpose: compute technicals and composite BUY/SELL/NEUTRAL only": [
+   {
+    "name": "BUY",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 203,
+    "end_char": 206
+   },
+   {
+    "name": "SELL",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 207,
+    "end_char": 211
+   }
+  ],
+  "### Step 4-5: Flow analytics\n- pipeline_step_4_5_flow_analytics\n- Input: symbol, from_date, to_date, market\n- Output:\n  - foreign_flow\n  - foreign_value_flow\n  - order_flow\n  - put_through\n- Purpose: isolate liquidity/flow analysis from other heavy steps": [],
+  "### Step 6: Benchmark + breadth\n- pipeline_step_6_benchmark_breadth\n- Input: symbol, from_date, to_date, benchmark, market\n- Output:\n  - benchmark_comparison\n  - market_breadth\n- Purpose: relative performance and market context only": [],
+  "### Step 7: Risk + drawdown\n- pipeline_step_7_risk_drawdown\n- Input: symbol, from_date, to_date, market\n- Output:\n  - risk\n  - drawdown\n- Purpose: stop-loss/take-profit, VaR, max drawdown, volatility": [],
+  "### Step 8: Backtest\n- pipeline_step_8_backtest\n- Input: symbol, from_date, to_date, market, initial_capital, commission_pct\n- Output: backtest metrics\n- Purpose: strategy validation independent from report/LLM": [
+   {
+    "name": "LLM",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 207,
+    "end_char": 210
+   }
+  ],
+  "### Step 9: Multi-timeframe\n- pipeline_step_9_multi_timeframe\n- Input: symbol, from_date, to_date, market\n- Output: daily/weekly/monthly confluence\n- Purpose: confirm trend across horizons": [],
+  "### Step 10: Sector peers\n- pipeline_step_10_sector_peers\n- Input: symbol, peers_csv, from_date, to_date, market\n- Output: peer comparison and ranking\n- Purpose: relative ranking against custom peer list": [],
+  "### Step 11: AI-1 weighted\n- pipeline_step_11_ai_weighted\n- Input: symbol, from_date, to_date, benchmark, market\n- Output: weighted scorer result\n- Purpose: rule-based AI signal only": [
+   {
+    "name": "AI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 13,
+    "end_char": 15
+   }
+  ],
+  "### Step 12a: AI-2 ML\n- pipeline_step_12_ai_ml\n- Input: symbol, from_date, to_date, market, ml_model_path\n- Output: ML recommendation + probability\n- Purpose: ML signal only": [
+   {
+    "name": "AI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 14,
+    "end_char": 16
+   },
+   {
+    "name": "ML",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 19,
+    "end_char": 21
+   }
+  ],
+  "### Step 12b: AI-3 LLM\n- pipeline_step_12_ai_llm\n- Input: symbol, from_date, to_date, benchmark, market, provider, llm_model, ml_model_path\n- Output: LLM advice and optional AI-1/AI-2 context\n- Purpose: run LLM reasoning without forcing full monolithic run": [
+   {
+    "name": "AI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 14,
+    "end_char": 16
+   },
+   {
+    "name": "LLM",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 19,
+    "end_char": 22
+   }
+  ],
+  "## 4) Current docs status": [],
+  "There is partial doc in docs/n8n_stock_api.md for old high-level tools.\nThis file (docs/mcp_pipeline_tools.md) documents the n": [],
+  "# Stock REST API for n8n": [
+   {
+    "name": "REST API",
+    "type": "ORG",
+    "confidence": 0.87,
+    "start_char": 8,
+    "end_char": 16
+   },
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 21,
+    "end_char": 24
+   },
+   {
+    "name": "REST",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 8,
+    "end_char": 12
+   },
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 13,
+    "end_char": 16
+   }
+  ],
+  "REST API này dùng lại logic của `analyze_stock.py` qua `stock_mcp.analysis_runner`, để n8n gọi trực tiếp bằng **HTTP Request** node.": [
+   {
+    "name": "REST API",
+    "type": "ORG",
+    "confidence": 0.87,
+    "start_char": 0,
+    "end_char": 8
+   },
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 87,
+    "end_char": 90
+   },
+   {
+    "name": "REST",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 0,
+    "end_char": 4
+   },
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 5,
+    "end_char": 8
+   },
+   {
+    "name": "HTTP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 112,
+    "end_char": 116
+   }
+  ],
+  "## 1) Chạy local": [],
+  "```bash\n# Cài dependencies\npython -m pip install -r requirements_stock_mcp.txt": [],
+  "# Chạy API server (default: 127.0.0.1:8790)\npython -m stock_mcp.http_api\n```": [
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 7,
+    "end_char": 10
+   }
+  ],
+  "Hoặc override host/port:": [],
+  "```bash\nSTOCK_API_HOST=0.0.0.0 STOCK_API_PORT=8790 python -m stock_mcp.http_api\n```": [],
+  "## 2) Optional auth token": [],
+  "Nếu đặt `STOCK_API_TOKEN`, mọi request phải kèm 1 trong 2 cách:": [],
+  "- Header `Authorization: Bearer <token>`\n- Header `X-API-Key: <token>`": [
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 53,
+    "end_char": 56
+   }
+  ],
+  "## 3) Endpoints chính cho n8n": [
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 26,
+    "end_char": 29
+   }
+  ],
+  "- `GET /health`\n- `POST /api/v1/analyze`\n- `GET /api/v1/decision/{symbol}`\n- `GET /api/v1/news/{symbol}` (mới, tin tốt/xấu ngắn hạn)\n- `GET /api/v1/latest/{symbol}`\n- `GET /api/v1/watchlists`\n- `GET /api/v1/watchlists/{name}`\n- `PUT /api/v1/watchlists/{name}`\n- `POST /api/v1/watchlists/{name}/analyze`": [
+   {
+    "name": "GET",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 3,
+    "end_char": 6
+   },
+   {
+    "name": "POST",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 19,
+    "end_char": 23
+   },
+   {
+    "name": "PUT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 229,
+    "end_char": 232
+   }
+  ],
+  "## 4) Request/response mẫu": [],
+  "### 4.1 Lấy decision nhanh cho chat bot": [],
+  "```bash\ncurl -s \"http://127.0.0.1:8790/api/v1/decision/FPT?refresh=true&benchmark=VNIndex&include_news=true&news_max_items=3\"\n```": [
+   {
+    "name": "FPT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 55,
+    "end_char": 58
+   }
+  ],
+  "Response (rút gọn):": [],
+  "```json\n{\n  \"symbol\": \"FPT\",\n  \"action\": \"BUY\",\n  \"confidence\": \"0.73\",\n  \"ai_weighted_recommendation\": \"BUY\",\n  \"ai_ml_recommendation\": \"HOLD\",\n  \"ai_llm_action\": \"BUY\",\n  \"ai_llm_confidence\": \"0.73\",\n  \"risk\": \"signal=BUY, close=122500\",\n  \"news_short_term\": {\n    \"ok\": true,\n    \"impact_bias\": \"MIXED\",\n    \"positive_news\": [\"...\"],\n    \"negative_news\": [\"...\"],\n    \"sentiment_summary\": \"...\"\n  },\n  \"as_of\": \"2026-04-06T10:20:00+07:00\"\n}\n```": [
+   {
+    "name": "FPT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 23,
+    "end_char": 26
+   },
+   {
+    "name": "BUY",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 42,
+    "end_char": 45
+   },
+   {
+    "name": "HOLD",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 138,
+    "end_char": 142
+   },
+   {
+    "name": "MIXED",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 299,
+    "end_char": 304
+   }
+  ],
+  "### 4.1.1 Chỉ lấy tin ngắn hạn (good/bad news)": [],
+  "```bash\ncurl -s \"http://127.0.0.1:8790/api/v1/news/FPT?max_items=3&cache_hours=6&include_sources=false\"\n```": [
+   {
+    "name": "FPT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 51,
+    "end_char": 54
+   }
+  ],
+  "### 4.2 Phân tích đầy đủ một mã": [],
+  "```bash\ncurl -s -X POST \"http://127.0.0.1:8790/api/v1/analyze\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"symbol\": \"FPT\",\n    \"benchmark\": \"VNIndex\",\n    \"provider\": \"minimax\",\n    \"llm_model\": \"gemini-2.5-flash\",\n    \"include_log_tail\": true\n  }'\n```": [
+   {
+    "name": "POST",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 19,
+    "end_char": 23
+   },
+   {
+    "name": "FPT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 128,
+    "end_char": 131
+   }
+  ],
+  "### 4.3 Cập nhật watchlist": [],
+  "```bash\ncurl -s -X PUT \"http://127.0.0.1:8790/api/v1/watchlists/main\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"symbols\": [\"FPT\", \"VHM\", \"VNM\"], \"enabled\": true}'\n```": [
+   {
+    "name": "PUT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 19,
+    "end_char": 22
+   },
+   {
+    "name": "FPT",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 132,
+    "end_char": 135
+   },
+   {
+    "name": "VHM",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 139,
+    "end_char": 142
+   },
+   {
+    "name": "VNM",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 146,
+    "end_char": 149
+   }
+  ],
+  "### 4.4 Scan watchlist": [],
+  "```bash\ncurl -s -X POST \"http://127.0.0.1:8790/api/v1/watchlists/main/analyze\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"benchmark\": \"VNIndex\", \"max_symbols\": 10}'\n```": [
+   {
+    "name": "POST",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 19,
+    "end_char": 23
+   }
+  ],
+  "## 5) Deploy service trên EC2": [],
+  "Script mới:": [],
+  "```bash\n./scripts/ec2/install_stock_api_service.sh --app-dir /home/ec2-user/stock --port 8790\n```": [],
+  "Script này tạo service systemd `stock-api` với `ExecStart=<venv>/python -m stock_mcp.http_api`.": [],
+  "## 6) MCP tools tương ứng (cho n8n Agent / DeerFlow Agent)": [
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 31,
+    "end_char": 34
+   },
+   {
+    "name": "DeerFlow",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 43,
+    "end_char": 51
+   },
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 6,
+    "end_char": 9
+   }
+  ],
+  "Trong `stock_mcp.server` đã map thêm các tool để agent gọi trực tiếp:": [],
+  "- `health_check`\n- `analyze_symbol`\n- `get_symbol_decision` (mới)\n- `get_symbol_news` (mới, expose `fetch_news_for_ticker`)\n- `analyze_watchlist`\n- `get_latest_report`\n- `get_watchlist_config`\n- `set_watchlist_config`\n- `list_watchlist_configs`": [],
+  "Chạy MCP server:": [
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 5,
+    "end_char": 8
+   }
+  ],
+  "```bash\npython -m stock_mcp.server --host 127.0.0.1 --port 8789 --path /mcp\n```": [],
+  "# Stock dashboard architecture": [],
+  "## Overview": [],
+  "The repository is a monorepo with an installed Python backend and a generated-contract React client.": [
+   {
+    "name": "Python",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 47,
+    "end_char": 53
+   }
+  ],
+  "```mermaid\nflowchart LR\n    Browser[React dashboard] -->|same-origin JSON/SSE| Proxy[Nginx]\n    Proxy --> API[FastAPI]\n    Integrations[n8n/MCP] --> API\n    API --> DB[(SQLite WAL)]\n    API --> Snapshots[Typed snapshots]\n    Worker[Dedicated worker] --> DB\n    Worker --> Analysis[Analysis service]\n    Analysis --> SSI[SSI FastConnect]\n    Analysis --> AI[AI tiers]\n    Analysis --> Snapshots\n    MCP[MCP adapter] --> Analysis\n```": [
+   {
+    "name": "FastAPI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 110,
+    "end_char": 117
+   },
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 136,
+    "end_char": 139
+   },
+   {
+    "name": "LR",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 21,
+    "end_char": 23
+   },
+   {
+    "name": "JSON",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 69,
+    "end_char": 73
+   },
+   {
+    "name": "SSE",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 74,
+    "end_char": 77
+   },
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 106,
+    "end_char": 109
+   },
+   {
+    "name": "MCP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 140,
+    "end_char": 143
+   },
+   {
+    "name": "DB",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 165,
+    "end_char": 167
+   },
+   {
+    "name": "WAL",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 176,
+    "end_char": 179
+   },
+   {
+    "name": "SSI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 316,
+    "end_char": 319
+   },
+   {
+    "name": "AI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 354,
+    "end_char": 356
+   }
+  ],
+  "## Boundaries": [],
+  "- `backend/src/stock_backend/analysis` owns typed requests, results, orchestration, and immutable snapshots.\n- `backend/src/stock_backend/api` owns browser HTTP/SSE and the temporary n8n compatibility surface.\n- `backend/src/stock_backend/auth`, `jobs`, and `watchlists` own durable state and authorization.\n- `frontend` consumes `backend/openapi.json`; it never reads CSV, Markdown, or server paths.\n- `backend/var` is runtime state. Production mounts it at `/var/lib/stock`.": [
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 183,
+    "end_char": 186
+   },
+   {
+    "name": "HTTP",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 156,
+    "end_char": 160
+   },
+   {
+    "name": "SSE",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 161,
+    "end_char": 164
+   },
+   {
+    "name": "CSV",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 369,
+    "end_char": 372
+   }
+  ],
+  "## Runtime model": [],
+  "API and worker are separate processes. `POST /api/v1/analysis-jobs` persists a queued job and returns `202`; the worker claims it transactionally, emits sequenced events, writes one immutable snapshot, and then marks the job terminal. A per-symbol database lock prevents concurrent publication for the same symbol.": [
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 0,
+    "end_char": 3
+   },
+   {
+    "name": "POST",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 40,
+    "end_char": 44
+   }
+  ],
+  "SQLite uses WAL, short transactions, foreign keys, and versioned migrations. Move to PostgreSQL plus a distributed queue when sustained queue wait exceeds the operating SLO or more than one host is required.": [
+   {
+    "name": "WAL",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 12,
+    "end_char": 15
+   },
+   {
+    "name": "SLO",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 169,
+    "end_char": 172
+   }
+  ],
+  "## Compatibility": [],
+  "The old n8n routes retain their response shape for one release and require a configured machine token. `stock_mcp`, `stock_bot`, and `analyze_stock` import wrappers delegate to the installed package. Streamlit remains a rollback-only entry point until the cutover observation window is complete.": [
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 8,
+    "end_char": 11
    }
   ],
   "# Crafted parity fixture": [],

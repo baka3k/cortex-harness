@@ -6,6 +6,7 @@
 //! types/fields/uses/relations, và `resolve_calls` (callee_id từng call).
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;

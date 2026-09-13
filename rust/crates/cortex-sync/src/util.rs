@@ -8,7 +8,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use sha1::{Digest as Sha1Digest, Sha1};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 /// `os.path.realpath(os.path.abspath(path))` — resolve symlinks on the
 /// longest existing prefix, then append the remainder lexically.

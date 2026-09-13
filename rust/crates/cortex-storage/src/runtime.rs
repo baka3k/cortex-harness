@@ -109,6 +109,7 @@ pub fn begin_gateway_drain() -> usize {
 ///
 /// The Python version is async; this blocking variant drains each gateway in
 /// turn and surfaces the first failure after closing the rest.
+#[allow(clippy::result_large_err)]
 pub fn close_active_gateways(
     timeout_seconds: Option<f64>,
 ) -> Result<usize, (usize, crate::errors::StoreError)> {

@@ -30,6 +30,7 @@ const DELEGATE_SENTINEL: &str = "__delegate__";
 
 /// Subprocess failure mirroring `subprocess.CalledProcessError` with tails.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ChildError {
     pub returncode: i32,
     pub cmd: Vec<String>,
@@ -318,8 +319,8 @@ pub fn run_incremental(args: &Args) -> i32 {
         "failed_terminal"
     };
     let mut artifacts: Vec<Value> = Vec::new();
-    if let Some(manifest_path) = &parse_quality_manifest_path {
-        if Path::new(manifest_path).exists() {
+    if let Some(manifest_path) = &parse_quality_manifest_path
+        && Path::new(manifest_path).exists() {
             artifacts.push(json!({
                 "kind": "parse_quality",
                 "path": manifest_path,
@@ -328,7 +329,6 @@ pub fn run_incremental(args: &Args) -> i32 {
                 "item_count": 0,
             }));
         }
-    }
     let run_result = json!({
         "schema_version": "1.0",
         "run_id": run_id,
@@ -764,11 +764,10 @@ fn run_flow(
             scopes = discovered.iter().take(1).cloned().collect();
             ignored_prefixes = discovered.iter().skip(1).map(|item| item.source_prefix.clone()).collect();
             for warning in &discovered_warnings {
-                if let Some(path) = warning.get("path").and_then(Value::as_str) {
-                    if !path.is_empty() {
+                if let Some(path) = warning.get("path").and_then(Value::as_str)
+                    && !path.is_empty() {
                         ignored_prefixes.insert(path.to_string());
                     }
-                }
             }
             summary.insert(
                 "submodules_ignored".into(),
@@ -1249,9 +1248,7 @@ fn run_flow(
     let mut framework_grouped = framework_routing.grouped;
     let framework_evidence = framework_routing.evidence;
     let topology_changed: BTreeSet<String> = changed_paths
-        .union(&impacted_paths)
-        .cloned()
-        .filter(|path| walk::is_descriptor_path(path))
+        .union(&impacted_paths).filter(|&path| walk::is_descriptor_path(path)).cloned()
         .collect();
     let topology_deleted: BTreeSet<String> = deleted_paths
         .iter()
@@ -2097,9 +2094,7 @@ fn run_flow(
         current.entries.keys().filter(|path| !under_preserved(path)).cloned().collect()
     } else {
         changed_paths
-            .union(&impacted_paths)
-            .cloned()
-            .filter(|path| !under_preserved(path))
+            .union(&impacted_paths).filter(|&path| !under_preserved(path)).cloned()
             .collect()
     };
     inventory::validate_inventory_unchanged(root, &current, &verification_paths)
@@ -2199,15 +2194,14 @@ fn sync_list(summary: &mut serde_json::Map<String, Value>, key: &str, list: &[Va
     summary.insert(key.to_string(), Value::Array(list.to_vec()));
 }
 
-fn set_list_field(list: &mut Vec<Value>, index: usize, field: &str, value: Value) {
-    if let Some(entry) = list.get_mut(index) {
-        if let Some(map) = entry.as_object_mut() {
+fn set_list_field(list: &mut [Value], index: usize, field: &str, value: Value) {
+    if let Some(entry) = list.get_mut(index)
+        && let Some(map) = entry.as_object_mut() {
             map.insert(field.to_string(), value);
         }
-    }
 }
 
-fn finalize_list_entry(list: &mut Vec<Value>, index: usize, status: &str, started: Instant) {
+fn finalize_list_entry(list: &mut [Value], index: usize, status: &str, started: Instant) {
     if !status.is_empty() {
         set_list_field(list, index, "status", json!(status));
     }
@@ -2221,19 +2215,18 @@ fn finalize_list_entry(list: &mut Vec<Value>, index: usize, status: &str, starte
 }
 
 fn propagate_vector_status(
-    parser_summaries: &mut Vec<Value>,
+    parser_summaries: &mut [Value],
     parser: &str,
     vector_info: &Value,
 ) {
     let status = vector_info.get("vector_status").cloned().unwrap_or(json!(""));
     let count = vector_info.get("vector_count").cloned().unwrap_or(json!(0));
     for entry in parser_summaries.iter_mut() {
-        if entry.get("parser").and_then(Value::as_str) == Some(parser) {
-            if let Some(map) = entry.as_object_mut() {
+        if entry.get("parser").and_then(Value::as_str) == Some(parser)
+            && let Some(map) = entry.as_object_mut() {
                 map.insert("vector_status".into(), status.clone());
                 map.insert("vector_count".into(), count.clone());
             }
-        }
     }
 }
 
@@ -2279,7 +2272,7 @@ fn read_parse_quality_aggregates(
     artifact_dir: &Path,
     policy: &str,
     entry_index: usize,
-    parser_summaries: &mut Vec<Value>,
+    parser_summaries: &mut [Value],
 ) {
     if parser != "cplus" || policy == "off" {
         return;
@@ -2454,11 +2447,10 @@ fn build_analyzer_env(
         if !graph.is_empty() {
             env.insert("FALKORDB_GRAPH".to_string(), graph);
         }
-    } else if let Some(graph) = &args.falkordb_graph {
-        if !graph.is_empty() {
+    } else if let Some(graph) = &args.falkordb_graph
+        && !graph.is_empty() {
             env.insert("FALKORDB_GRAPH".to_string(), graph.clone());
         }
-    }
     if let Some(url) = &args.qdrant_url {
         env.insert("QDRANT_CODE_PATH".to_string(), url.clone());
     }

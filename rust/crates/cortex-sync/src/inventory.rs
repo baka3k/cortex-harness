@@ -62,11 +62,10 @@ fn fingerprint(
 ) -> Result<InventoryEntry, SourceChanged> {
     let before = std::fs::metadata(full_path).map_err(|error| SourceChanged(error.to_string()))?;
     let before_mtime = mtime_ns(&before);
-    if let Some(previous) = previous {
-        if !force_hash && previous.size == before.len() as i64 && previous.mtime_ns == before_mtime {
+    if let Some(previous) = previous
+        && !force_hash && previous.size == before.len() as i64 && previous.mtime_ns == before_mtime {
             return Ok(previous.clone());
         }
-    }
     let sha256 = util::sha256_of_file(full_path).map_err(|error| SourceChanged(error.to_string()))?;
     let after = std::fs::metadata(full_path).map_err(|error| SourceChanged(error.to_string()))?;
     let after_mtime = mtime_ns(&after);

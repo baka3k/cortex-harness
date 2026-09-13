@@ -79,6 +79,7 @@ pub fn is_framework_candidate(framework: &str, path: &str) -> bool {
 }
 
 /// `_path_in_module`.
+#[allow(dead_code)]
 pub fn path_in_module(path: &str, module_root: &str) -> bool {
     let normalized = path.replace('\\', "/").trim_matches('/').to_string();
     let module = (module_root.trim()).replace('\\', "/");
@@ -221,7 +222,8 @@ pub fn group_paths_by_framework(paths: &BTreeSet<String>, root: &Path) -> Framew
     }
 
     // Web framework content markers.
-    let web_specs: Vec<(&str, Vec<&str>, Vec<&str>, Vec<&str>)> = vec![
+    type WebSpec = (&'static str, Vec<&'static str>, Vec<&'static str>, Vec<&'static str>);
+    let web_specs: Vec<WebSpec> = vec![
         (
             "fastapi_django",
             vec![".py"],

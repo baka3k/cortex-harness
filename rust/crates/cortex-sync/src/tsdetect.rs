@@ -94,6 +94,7 @@ const ENTRY_CANDIDATES: [&str; 8] = [
     "src/app.ts",
 ];
 
+#[allow(dead_code)]
 pub struct ProjectTypeResult {
     pub project_type: String,
     pub framework: String,
@@ -113,9 +114,9 @@ pub fn detect_project_type(root: &Path) -> ProjectTypeResult {
 
     // Pass 1: package.json dependency scoring.
     let pkg_path = root.join("package.json");
-    if pkg_path.is_file() {
-        if let Ok(text) = std::fs::read_to_string(&pkg_path) {
-            if let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&text) {
+    if pkg_path.is_file()
+        && let Ok(text) = std::fs::read_to_string(&pkg_path)
+            && let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&text) {
                 let mut all_deps: Vec<String> = Vec::new();
                 for key in ["dependencies", "devDependencies"] {
                     if let Some(map) = pkg.get(key).and_then(|v| v.as_object()) {
@@ -147,8 +148,6 @@ pub fn detect_project_type(root: &Path) -> ProjectTypeResult {
                     }
                 }
             }
-        }
-    }
 
     // Pass 2: directory structure scoring.
     score_directories(root, &mut backend_score, &mut frontend_score);
