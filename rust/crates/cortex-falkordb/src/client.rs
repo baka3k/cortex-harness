@@ -92,6 +92,27 @@ pub enum Param {
     Float(f64),
     Str(String),
     List(Vec<Param>),
+    /// Map literal — falkordb-py stringify dict thành ``{`k`:v,...}`` (key
+    /// bọc backtick, value đệ quy). Batch writer truyền `rows` dạng
+    /// list-of-map nên variant này là bắt buộc cho upsert pipelines. Key
+    /// rỗng/chứa backtick bị chặn lúc dựng Param (`validate_map_key`) —
+    /// tương đương ValueError của falkordb-py trước khi lệnh rời client.
+    Map(Vec<(String, Param)>),
+}
+
+/// Chặn key map rỗng hoặc chứa backtick như `ValueError` của falkordb-py
+/// (FalkorDB header parser không hỗ trợ escaped backtick trong identifier).
+pub fn validate_map_key(key: &str) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("Cypher map key cannot be empty".to_string());
+    }
+    if key.contains('`') {
+        return Err(format!(
+            "Cypher map key cannot contain a backtick: {key:?} \
+             (FalkorDB does not support escaped backticks in identifiers)"
+        ));
+    }
+    Ok(())
 }
 
 impl From<&str> for Param {
@@ -155,11 +176,28 @@ pub fn stringify_param_value(value: &Param) -> String {
             let inner: Vec<String> = items.iter().map(stringify_param_value).collect();
             format!("[{}]", inner.join(","))
         }
+        // Dict của falkordb-py: key bọc backtick, value đệ quy
+        // (`{`k`:v,...}`) — key đã được `validate_map_key` chặn trước.
+        Param::Map(entries) => {
+            let inner: Vec<String> = entries
+                .iter()
+                .map(|(key, value)| format!("`{key}`:{}", stringify_param_value(value)))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
         // str(True) == "True" trong Python — giữ đúng để param tương thích.
         Param::Bool(true) => "True".to_string(),
         Param::Bool(false) => "False".to_string(),
         Param::Int(v) => v.to_string(),
-        Param::Float(v) => format!("{v}"),
+        // str(2.0) == "2.0" trong Python (Rust sẽ in "2") — giữ dấu chấm
+        // động cho giá trị nguyên để server nhận đúng kiểu double.
+        Param::Float(v) => {
+            if v.is_finite() && v.fract() == 0.0 && v.abs() < 1e16 {
+                format!("{v:.1}")
+            } else {
+                format!("{v}")
+            }
+        }
     }
 }
 
@@ -171,6 +209,11 @@ pub struct FalkorDbClient {
 }
 
 impl FalkorDbClient {
+    #[doc(hidden)]
+    pub fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
+
     pub fn connect(host: &str, port: u16) -> RedisResult<Self> {
         let client = redis::Client::open((host, port))?;
         let connection = client.get_connection()?;
@@ -188,6 +231,17 @@ impl FalkorDbClient {
             return Err(ClientError::Server(format!("PING trả về {pong:?}")));
         }
         Ok(client)
+    }
+
+    /// Graph key chưa tồn tại (FalkorDB từ chối mọi graph op trên key rỗng,
+    /// kể cả procedure read) — schema cache bỏ trống để query thật tự tạo key.
+    fn schema_load_empty_key_error(error: &ClientError) -> bool {
+        match error {
+            // Server error reply surfaced qua redis::RedisError.
+            ClientError::Redis(e) => e.to_string().contains("empty key"),
+            ClientError::Server(message) => message.contains("empty key"),
+            _ => false,
+        }
     }
 
     /// Đọc bảng tên schema hiện hành của graph (DB.LABELS / DB.RELATIONSHIPTYPES
@@ -255,6 +309,22 @@ impl FalkorDbClient {
                 )));
             }
         };
+        // Query KHÔNG có RETURN (vd `MATCH (n) DETACH DELETE n`) trả duy nhất
+        // phần statistics — falkordb-py chấp nhận (result_set rỗng).
+        if let [redis::Value::Array(lines)] = &sections[..] {
+            let statistics = lines
+                .iter()
+                .map(|line| match line {
+                    redis::Value::BulkString(b) => String::from_utf8_lossy(b).into_owned(),
+                    other => format!("{other:?}"),
+                })
+                .collect();
+            return Ok(QueryResult {
+                header: vec![],
+                records: vec![],
+                statistics,
+            });
+        }
         if sections.len() < 3 {
             return Err(ParseError::Malformed(format!(
                 "reply cần >= 3 section, got {}",
@@ -379,9 +449,16 @@ impl FalkorDbClient {
     ) -> Result<QueryResult, ClientError> {
         // Schema cache theo graph — refresh ngay khi parse gặp id lạ
         // (falkordb-py giữ schema trên Graph object và refresh on mismatch).
+        // Graph key chưa tồn tại → bỏ qua pre-load (empty schema) và để query
+        // thật tạo key, khớp hành vi falkordb-py (schema refresh on demand).
         if !self.schemas.contains_key(graph) {
-            let schema = self.load_schema(graph)?;
-            self.schemas.insert(graph.to_string(), schema);
+            match self.load_schema(graph) {
+                Ok(schema) => {
+                    self.schemas.insert(graph.to_string(), schema);
+                }
+                Err(error) if Self::schema_load_empty_key_error(&error) => {}
+                Err(error) => return Err(error),
+            }
         }
         let mut schema = self.schemas.get(graph).cloned().unwrap_or_default();
         match self.run_graph_command("GRAPH.RO_QUERY", graph, query, params, timeout_ms, &mut schema)
@@ -425,8 +502,15 @@ impl FalkorDbClient {
         // Write có thể tạo label/rel-type/property mới → chủ động refresh cache
         // sau khi ghi thành công (giống lần đầu client khác nhìn thấy schema mới).
         if !self.schemas.contains_key(graph) {
-            let schema = self.load_schema(graph)?;
-            self.schemas.insert(graph.to_string(), schema);
+            match self.load_schema(graph) {
+                Ok(schema) => {
+                    self.schemas.insert(graph.to_string(), schema);
+                }
+                // Fresh graph key: query thật sẽ tạo key; cache được load ở
+                // nhánh refresh-after-write bên dưới.
+                Err(error) if Self::schema_load_empty_key_error(&error) => {}
+                Err(error) => return Err(error),
+            }
         }
         let mut schema = self.schemas.get(graph).cloned().unwrap_or_default();
         let result = self.run_graph_command("GRAPH.QUERY", graph, query, params, timeout_ms, &mut schema);
@@ -458,6 +542,29 @@ mod tests {
             header,
             "CYPHER `flag`=True `limit`=5 `name`=\"O'Brien\" `scope`=null `tags`=[\"a\",\"b\"] "
         );
+    }
+
+    #[test]
+    fn map_param_matches_falkordb_py_dict_repr() {
+        // Python: stringify_param_value({"rows": [{"id": "a", "n": 1}]})
+        //      == '{"`rows`":[{`id`:"a",`n`:1}]}'  (key backticked, value đệ quy)
+        let row = Param::Map(vec![
+            ("id".to_string(), Param::Str("a".into())),
+            ("n".to_string(), Param::Int(1)),
+        ]);
+        let mut params = BTreeMap::new();
+        params.insert("rows".to_string(), Param::List(vec![row]));
+        assert_eq!(
+            build_params_header(&params),
+            "CYPHER `rows`=[{`id`:\"a\",`n`:1}] "
+        );
+    }
+
+    #[test]
+    fn map_key_validation_matches_falkordb_py() {
+        assert!(validate_map_key("").is_err());
+        assert!(validate_map_key("a`b").is_err());
+        assert!(validate_map_key("@type").is_ok());
     }
 
     #[test]
