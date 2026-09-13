@@ -44,6 +44,22 @@
   "ops": [
     {
       "op": "open_run",
+      "args": {
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "python",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        }
+      },
       "result": {
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
         "fingerprint": "5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -70,6 +86,22 @@
     },
     {
       "op": "open_run",
+      "args": {
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "python",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        }
+      },
       "result": {
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
         "fingerprint": "5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -96,6 +128,22 @@
     },
     {
       "op": "open_run",
+      "args": {
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "java",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        }
+      },
       "result": {
         "run_id": "run_630da3c2ad1c726345f06beee32e88c643b731adde14d50677cef30ae506f88a",
         "fingerprint": "630da3c2ad1c726345f06beee32e88c643b731adde14d50677cef30ae506f88a",
@@ -122,6 +170,22 @@
     },
     {
       "op": "find_resumable_run",
+      "args": {
+        "metadata": {
+          "project_id": "demo",
+          "scope_id": "demo",
+          "source_revision": "rev-1",
+          "source_snapshot": "snap-1",
+          "physical_target": "local",
+          "generation": "gen-1",
+          "parser": "python",
+          "parser_version": "1.0",
+          "schema_fingerprint": "sfp-1",
+          "query_shape_version": "qv-1",
+          "operation_versions": {},
+          "contract_version": 1
+        }
+      },
       "result": {
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
         "fingerprint": "5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -148,6 +212,7 @@
     },
     {
       "op": "list_runs",
+      "args": {},
       "result": [
         {
           "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -199,6 +264,21 @@
     },
     {
       "op": "create_artifact",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "rows": [
+          {
+            "id": "row-1",
+            "value": "payment",
+            "score": 1
+          },
+          {
+            "id": "row-2",
+            "value": "auth",
+            "score": 2
+          }
+        ]
+      },
       "result": {
         "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
         "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
@@ -208,6 +288,10 @@
     },
     {
       "op": "open_barrier",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "name": "barrier-tables"
+      },
       "result": {
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
         "name": "barrier-tables",
@@ -219,6 +303,27 @@
     },
     {
       "op": "enqueue_batch",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "spec": {
+          "phase": "nodes",
+          "operation_key": "node.upsert",
+          "sequence": 0,
+          "artifact": {
+            "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+            "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+            "byte_count": 83,
+            "row_count": 2
+          },
+          "expected_count": 2,
+          "required_barriers": [],
+          "produced_barriers": [
+            "barrier-tables"
+          ],
+          "max_attempts": 5,
+          "operation": {}
+        }
+      },
       "result": {
         "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -249,6 +354,27 @@
     },
     {
       "op": "enqueue_batch",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "spec": {
+          "phase": "nodes",
+          "operation_key": "node.upsert",
+          "sequence": 0,
+          "artifact": {
+            "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+            "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+            "byte_count": 83,
+            "row_count": 2
+          },
+          "expected_count": 2,
+          "required_barriers": [],
+          "produced_barriers": [
+            "barrier-tables"
+          ],
+          "max_attempts": 5,
+          "operation": {}
+        }
+      },
       "result": {
         "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -279,6 +405,27 @@
     },
     {
       "op": "enqueue_batch",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "spec": {
+          "phase": "calls",
+          "operation_key": "call.upsert",
+          "sequence": 1,
+          "artifact": {
+            "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+            "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+            "byte_count": 83,
+            "row_count": 2
+          },
+          "expected_count": 2,
+          "required_barriers": [
+            "barrier-tables"
+          ],
+          "produced_barriers": [],
+          "max_attempts": 5,
+          "operation": {}
+        }
+      },
       "result": {
         "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -309,6 +456,10 @@
     },
     {
       "op": "get_barrier",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "name": "barrier-tables"
+      },
       "result": {
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
         "name": "barrier-tables",
@@ -320,6 +471,10 @@
     },
     {
       "op": "close_barrier",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "name": "barrier-tables"
+      },
       "result": {
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
         "name": "barrier-tables",
@@ -331,6 +486,10 @@
     },
     {
       "op": "claim_batch",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "lease_seconds": 60
+      },
       "result": {
         "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -347,7 +506,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "db8ca8a4ce245292d5df5096a8455d06",
+        "fencing_token": "8982149ff3e21370b2109317e8e043b9",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [],
@@ -361,6 +520,11 @@
     },
     {
       "op": "renew_lease",
+      "args": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "fencing_token": "8982149ff3e21370b2109317e8e043b9",
+        "lease_seconds": 60
+      },
       "result": {
         "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -377,7 +541,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "db8ca8a4ce245292d5df5096a8455d06",
+        "fencing_token": "8982149ff3e21370b2109317e8e043b9",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [],
@@ -391,6 +555,11 @@
     },
     {
       "op": "ack_batch",
+      "args": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "fencing_token": "8982149ff3e21370b2109317e8e043b9",
+        "elapsed_ms": 120
+      },
       "result": {
         "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -421,6 +590,10 @@
     },
     {
       "op": "claim_batch",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "lease_seconds": 60
+      },
       "result": {
         "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -437,7 +610,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "6ef7646addee746e7e1083b002046f88",
+        "fencing_token": "c881b933200479d9427aba6818767179",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [
@@ -451,6 +624,11 @@
     },
     {
       "op": "ack_batch",
+      "args": {
+        "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
+        "fencing_token": "c881b933200479d9427aba6818767179",
+        "elapsed_ms": null
+      },
       "result": {
         "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
         "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
@@ -481,20 +659,53 @@
     },
     {
       "op": "claim_batch",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "lease_seconds": 60
+      },
       "result": null
     },
     {
       "op": "complete_producers",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f"
+      },
       "result": 0
     },
     {
       "op": "enqueue_batch",
+      "args": {
+        "run_id": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f",
+        "spec": {
+          "phase": "nodes",
+          "operation_key": "node.upsert",
+          "sequence": 0,
+          "artifact": {
+            "sha256": "a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e",
+            "relative_path": "run_5517fb1da34e0a1d4a6d5b8334b45a57a651c269a1dcfdd5ca695d6a509ad53f/a3da4f7e7002d6d5412e08f8b39942342bc2a8314cc44932d89d041e14efe24e.jsonl",
+            "byte_count": 83,
+            "row_count": 2
+          },
+          "expected_count": 2,
+          "required_barriers": [],
+          "produced_barriers": [
+            "barrier-tables"
+          ],
+          "max_attempts": 5,
+          "operation": {}
+        }
+      },
       "error": {
         "code": "invalid_transition"
       }
     },
     {
       "op": "renew_lease",
+      "args": {
+        "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
+        "fencing_token": "00000000000000000000000000000000",
+        "lease_seconds": 60
+      },
       "error": {
         "code": "stale_fence"
       }

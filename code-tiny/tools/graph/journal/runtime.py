@@ -19,6 +19,7 @@ from .models import (
 )
 from .operation import GraphWriteOperation
 from .retry import classify_error, retry_at
+from .shadow import attach_shadow_capture
 from .sqlite_store import SQLiteJournal
 
 
@@ -42,6 +43,9 @@ class GraphWriteJournalRuntime:
     def __init__(self, config: JournalConfig) -> None:
         self.config = config
         self.journal = SQLiteJournal(config.path, limits=config.limits)
+        # Shadow capture (Track B): env-gated, mặc định OFF. Khi bật, mọi
+        # write path phía producer đi qua wrapper này — đúng 1 điểm capture.
+        self.journal = attach_shadow_capture(self.journal, config)
         self.run = self.journal.open_run(config.metadata)
         self.journal.recover_run_leases_as_ambiguous(self.run.run_id)
         self._node_barriers: dict[tuple[str, str, str, bytes], str] = {}
