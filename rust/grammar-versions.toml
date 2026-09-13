@@ -1,18 +1,51 @@
 # Grammar version pins — đối chiếu với wheels Python đang dùng.
 #
-# Parity contract (phase-04): parse tree của analyzer Rust phải khớp analyzer
+# Parity contract (phase-04+): parse tree của analyzer Rust phải khớp analyzer
 # Python trên cùng corpus. Python side KHÔNG dùng `tree-sitter-languages`
 # (wheels 1.10.2 build trên ABI cũ, raise TypeError với tree-sitter ≥0.25 —
-# `_get_python_parser` fallback sang grammar crate riêng), nên pin theo grammar
+# `_get_*_parser` fallback sang grammar crate riêng), nên pin theo grammar
 # crate từng language, không theo tree-sitter-languages.
 #
 # Khi bump 1 bên, bump bên kia cùng minor và chạy lại parity gate:
-#     .venv/bin/python scripts/rust_parity/analyzer_parity.py
+#     .venv/bin/python scripts/rust_parity/analyzer_parity.py        # python
+#     .venv/bin/python scripts/rust_parity/analyzer_parity_shell.py  # shell (regex, không grammar)
+#     .venv/bin/python scripts/rust_parity/analyzer_parity_js.py     # js
+#     .venv/bin/python scripts/rust_parity/analyzer_parity_ts.py     # ts
+#     .venv/bin/python scripts/rust_parity/analyzer_parity_php.py    # php
+#     .venv/bin/python scripts/rust_parity/analyzer_parity_java.py   # java
 
 [python]
 # PyPI tree-sitter-python 0.25.0 == crates.io tree-sitter-python 0.25.0
-# (grammar revision tree-sitter-python v0.25.0). Đã parity PASS trên
+# (grammar revision tree-sitter-python v0.25.0). Parity PASS trên
 # stock (115 .py) + tests/fixtures/python-analyzer, FULL + incremental.
 python-wheel = "tree-sitter-python==0.25.0"
 rust-crate = "tree-sitter-python@0.25.0"
 runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25.10" }
+
+[javascript]
+# PyPI tree-sitter-javascript 0.25.0 == crates.io 0.25.0. Parity PASS
+# (tests/fixtures/js-analyzer, FULL + incremental).
+python-wheel = "tree-sitter-javascript==0.25.0"
+rust-crate = "tree-sitter-javascript@0.25.0"
+runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25" }
+
+[typescript]
+# PyPI tree-sitter-typescript 0.23.2 (language_tsx/language_typescript).
+# Parity PASS trên stock/frontend (76 ts/tsx) + tests/fixtures/ts-analyzer.
+python-wheel = "tree-sitter-typescript==0.23.2"
+rust-crate = "tree-sitter-typescript@0.23"
+runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25" }
+
+[php]
+# crates.io KHÔNG có 0.25 cho php crate — pin 0.24 (0.24.2) khớp PyPI 0.24.1.
+# Parity PASS (tests/fixtures/php-analyzer).
+python-wheel = "tree-sitter-php==0.24.1"
+rust-crate = "tree-sitter-php@0.24"
+runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25" }
+
+[java]
+# crates.io chỉ có 0.23.x — pin 0.23.5 == PyPI 0.23.5. Parity PASS
+# (tests/fixtures/java-analyzer).
+python-wheel = "tree-sitter-java==0.23.5"
+rust-crate = "tree-sitter-java@0.23.5"
+runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25" }

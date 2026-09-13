@@ -1303,6 +1303,41 @@ def _graph_target_cli_args(args: argparse.Namespace) -> List[str]:
     return result
 
 
+# Parsers đã có analyzer Rust port (phase 04–06 rust-full-migration).
+_RUST_ANALYZER_BINARIES = {
+    "python": "analyzer-python",
+    "shell": "analyzer-shell",
+    "ts": "analyzer-ts",
+    "js": "analyzer-js",
+    "php": "analyzer-php",
+    "perl": "analyzer-perl",
+    "java": "analyzer-java",
+}
+
+
+def _rust_analyzer_binary(analyzer: AnalyzerConfig) -> Optional[str]:
+    """Resolve Rust analyzer binary khi backend swap được bật qua env.
+
+    ``CORTEX_RUST_ANALYZER=rust`` chọn backend Rust cho các parser đã port;
+    binary không tồn tại ⇒ fallback Python (rollback tức thì). Graph target
+    args và mọi flag khác giữ nguyên — CLI contract 2 backend giống từng chữ.
+    """
+    mode = (os.environ.get("CORTEX_RUST_ANALYZER") or "").strip().lower()
+    if mode != "rust":
+        return None
+    binary_name = _RUST_ANALYZER_BINARIES.get(analyzer.parser)
+    if not binary_name:
+        return None
+    # _ROOT_DIR trỏ vào code-tiny; repo root là thư mục cha.
+    repo_root = os.path.dirname(_ROOT_DIR)
+    bin_dir = (
+        os.environ.get("CORTEX_RUST_ANALYZER_BIN_DIR")
+        or os.path.join(repo_root, "rust", "target", "release")
+    )
+    candidate = os.path.join(bin_dir, binary_name)
+    return candidate if os.path.isfile(candidate) else None
+
+
 def _build_analyzer_cmd(
     *,
     python_bin: str,
@@ -1334,20 +1369,29 @@ def _build_analyzer_cmd(
     parse_quality_max_bytes: int = 8 * 1024 * 1024,
     graph_target_args: Sequence[str] = (),
 ) -> List[str]:
-    cmd = [
-        python_bin,
-        analyzer.script_path,
-        "--root",
-        root,
-        "--project-id",
-        project_id,
-        "--project-name",
-        project_name,
-        "--commit-sha-before",
-        before_sha,
-        "--commit-sha-after",
-        after_sha,
-    ]
+    rust_binary = _rust_analyzer_binary(analyzer)
+    if rust_binary is not None:
+        # Backend swap: Rust binary nhận cùng bộ flag (CLI contract phase-04).
+        cmd = [rust_binary]
+    else:
+        cmd = [
+            python_bin,
+            analyzer.script_path,
+        ]
+    cmd.extend(
+        [
+            "--root",
+            root,
+            "--project-id",
+            project_id,
+            "--project-name",
+            project_name,
+            "--commit-sha-before",
+            before_sha,
+            "--commit-sha-after",
+            after_sha,
+        ]
+    )
     cmd.extend(analyzer.extra_args)
     cmd.extend(graph_target_args)
     if analyzer.parser == "shell":
