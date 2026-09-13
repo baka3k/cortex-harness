@@ -1,4 +1,5 @@
 qdrant-client==1.18.0
+ladybug>=0.20.4,<0.21
 falkordblite==0.10.0 ; sys_platform != 'win32'
 falkordb ; sys_platform == 'win32'
 python-dotenv

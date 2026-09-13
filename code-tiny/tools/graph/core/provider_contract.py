@@ -18,6 +18,11 @@ _PROVIDER_ALIASES = {
     "falkor-db": GraphProvider.FALKORDB,
     "neo": GraphProvider.NEO4J,
     "neo4j": GraphProvider.NEO4J,
+    "ladybug": GraphProvider.LADYBUG,
+    "lbug": GraphProvider.LADYBUG,
+    "lady-bug": GraphProvider.LADYBUG,
+    # Deprecated pre-fork alias; kept resolving onto the maintained provider.
+    "kuzu": GraphProvider.LADYBUG,
 }
 
 _DIRECTION_ALIASES = {
@@ -73,7 +78,11 @@ def normalize_graph_provider_name(
             f"got {type(candidate).__name__}"
         )
 
-    if provider not in {GraphProvider.FALKORDB, GraphProvider.NEO4J}:
+    if provider not in {
+        GraphProvider.FALKORDB,
+        GraphProvider.NEO4J,
+        GraphProvider.LADYBUG,
+    }:
         raise ValueError(f"Unsupported graph provider: {provider.value}")
     return provider.value
 
@@ -107,12 +116,29 @@ def isolate_graph_provider_environment(
         environment[scoped_key] = provider
     if "MCP_GRAPH_PROVIDER" in environment:
         environment["MCP_GRAPH_PROVIDER"] = provider
+    if "LADYBUG_PROVIDER" in environment:
+        environment["LADYBUG_PROVIDER"] = provider
 
     for key in tuple(environment):
-        if provider == "falkordb" and key.startswith("NEO4J_"):
+        # ``LADYBUG_PROVIDER`` is a scoped provider selector (like
+        # MCP_GRAPH_PROVIDER), never a provider-specific setting, so the
+        # LADYBUG_ prefix strip below must not remove it.
+        if key == "LADYBUG_PROVIDER":
+            continue
+        if provider == "falkordb" and (
+            key.startswith("NEO4J_") or key.startswith("LADYBUG_")
+        ):
             environment.pop(key, None)
         elif provider == "neo4j" and (
-            key.startswith("FALKORDB_") or key == "DOC_FALKORDB_GRAPH"
+            key.startswith("FALKORDB_")
+            or key.startswith("LADYBUG_")
+            or key == "DOC_FALKORDB_GRAPH"
+        ):
+            environment.pop(key, None)
+        elif provider == "ladybug" and (
+            key.startswith("FALKORDB_")
+            or key.startswith("NEO4J_")
+            or key == "DOC_FALKORDB_GRAPH"
         ):
             environment.pop(key, None)
     return provider

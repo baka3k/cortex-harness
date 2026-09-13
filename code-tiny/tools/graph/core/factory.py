@@ -96,9 +96,34 @@ class GraphDriverFactory:
                 password=config["password"],
                 database=config.get("database"),
             )
-        elif provider == GraphProvider.KUZU:
-            # Future implementation
-            raise NotImplementedError("Kuzu driver not yet implemented")
+        elif provider in {GraphProvider.KUZU, GraphProvider.LADYBUG}:
+            # KUZU is a deprecated alias routed onto the maintained LadybugDB
+            # provider.  Ladybug is embedded/local-only: a path is required.
+            from tools.graph.driver.ladybug_driver import LadybugDriver
+
+            path = config.get("path")
+            if not path:
+                raise ValueError(
+                    "Ladybug provider requires a local store path (config 'path' "
+                    "or LADYBUG_PATH); it has no remote/server mode. "
+                    "Use falkordb or neo4j for remote graph servers."
+                )
+            if any(
+                config.get(key)
+                for key in ("uri", "url", "user", "username", "password", "host", "port")
+            ):
+                raise ValueError(
+                    "Ladybug is local-only: uri/user/password/host/port are not "
+                    "supported. Use falkordb or neo4j for remote graph servers."
+                )
+            return LadybugDriver(
+                path=path,
+                graph=config.get("graph") or config.get("database"),
+                instance_id=config.get("instance_id"),
+                owner_id=config.get("owner_id"),
+                additional_paths=config.get("additional_paths"),
+                query_timeout_ms=config.get("query_timeout_ms"),
+            )
         elif provider == GraphProvider.FALKORDB:
             from tools.graph.driver.falkordb_driver import FalkorDBDriver
 
@@ -145,6 +170,19 @@ class GraphDriverFactory:
                 "user": os.getenv(f"{env_prefix}_USER", "neo4j"),
                 "password": os.getenv(f"{env_prefix}_PASSWORD", ""),
                 "database": os.getenv(f"{env_prefix}_DATABASE"),
+            }
+            return await GraphDriverFactory.create_driver(provider, config)
+        elif provider in {GraphProvider.KUZU, GraphProvider.LADYBUG}:
+            path = os.getenv("LADYBUG_PATH")
+            if not path:
+                from cortex_harness.storage import resolve_storage
+                path = str(resolve_storage(Path.cwd()).ladybug_code_path)
+            config: Dict[str, Any] = {
+                "graph": os.getenv("LADYBUG_GRAPH", "hyper_graph"),
+                "path": path,
+                "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+                "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
+                "query_timeout_ms": os.getenv("LADYBUG_QUERY_TIMEOUT_MS"),
             }
             return await GraphDriverFactory.create_driver(provider, config)
         elif provider == GraphProvider.FALKORDB:

@@ -361,7 +361,12 @@ def remote_graph_target(
     ssl: bool = False,
     provider: str = "falkordb",
 ) -> EffectiveStorageTarget:
-    default_scheme = "redis" if provider.casefold() == "falkordb" else "bolt"
+    normalized_provider = provider.casefold()
+    if normalized_provider == "ladybug":
+        raise ValueError(
+            "ladybug is local-only; use falkordb/neo4j for remote graph targets"
+        )
+    default_scheme = "redis" if normalized_provider == "falkordb" else "bolt"
     location, uri_principal = canonical_remote_endpoint(uri, default_scheme=default_scheme)
     return EffectiveStorageTarget(
         component="graph",
@@ -375,10 +380,16 @@ def remote_graph_target(
     )
 
 
-def local_graph_target(path: str | Path, *, graph: str, role: object) -> EffectiveStorageTarget:
+def local_graph_target(
+    path: str | Path,
+    *,
+    graph: str,
+    role: object,
+    provider: str = "falkordb",
+) -> EffectiveStorageTarget:
     return EffectiveStorageTarget(
         component="graph",
-        provider="falkordb",
+        provider=str(provider).casefold(),
         mode="file",
         location=canonical_local_target(path),
         namespace=str(graph),
@@ -452,6 +463,21 @@ def _runtime_graph_target_from_env(env: Mapping[str, str]) -> EffectiveStorageTa
             password=env.get("NEO4J_PASSWORD"),
             principal=env.get("NEO4J_USER"),
             provider="neo4j",
+        )
+    if provider == "ladybug":
+        graph = env.get("LADYBUG_GRAPH") or "hyper_graph"
+        # Ladybug is embedded-only: a remote endpoint is a configuration
+        # error, never a fallback.
+        if str(env.get("FALKORDB_URI") or "").strip() or str(env.get("NEO4J_URI") or "").strip():
+            raise ValueError(
+                "ladybug is local-only; unset the remote endpoint or select the "
+                "provider it belongs to"
+            )
+        return local_graph_target(
+            env.get("LADYBUG_PATH") or "embedded",
+            graph=graph,
+            role=role,
+            provider="ladybug",
         )
     graph = env.get("FALKORDB_GRAPH") or env.get("FALKORDB_DATABASE") or "hyper_graph"
     uri = str(env.get("FALKORDB_URI") or "").strip()

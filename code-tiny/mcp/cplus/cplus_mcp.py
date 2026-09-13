@@ -152,7 +152,7 @@ else:
     DEFAULT_NEO4J_PASSWORD = None
     DEFAULT_NEO4J_DB = "hyper_graph"
 DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
-DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
+DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER in {"falkordb", "ladybug"} else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 
@@ -216,6 +216,13 @@ def _search_timing_enabled() -> bool:
 async def _get_graph_driver() -> GraphDriver:
     global _graph_driver
     if _graph_driver is not None:
+        return _graph_driver
+    if DEFAULT_GRAPH_PROVIDER == "ladybug":
+        from ladybug_discovery import build_ladybug_driver_config
+
+        _graph_driver = await get_shared_graph_driver(
+            GraphProvider.LADYBUG, build_ladybug_driver_config()
+        )
         return _graph_driver
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
         from cortex_harness.storage import resolve_storage
@@ -1087,12 +1094,39 @@ async def _list_relationship_types(dbs: List[str]) -> Optional[List[str]]:
     provisioned default shard — veto relationships that exist in the other
     graphs, surfacing as bogus ``unsupported_capability`` errors.
     """
+    # Provider-neutral introspection: dialect stays inside the driver.
+    try:
+        driver = await _get_graph_driver()
+        list_rel = getattr(driver, "list_relationship_types", None)
+    except Exception as exc:
+        logger.warning("Unable to resolve graph driver for introspection: %s", exc)
+        list_rel = None
+        driver = None
+    if callable(list_rel):
+        collected: Optional[List[str]] = None
+        for db in [item for item in dbs if item]:
+            try:
+                rows = list(await list_rel(database=db) or [])
+            except Exception as exc:
+                if _is_db_not_found(exc):
+                    continue
+                logger.warning("Unable to list relationship types from %s: %s", db, exc)
+                break
+            if collected is None:
+                collected = []
+            for rel_type in rows:
+                if isinstance(rel_type, str):
+                    rel_upper = rel_type.upper()
+                    if rel_upper not in collected:
+                        collected.append(rel_upper)
+        return collected
+
     query_call = (
         "CALL db.relationshipTypes() YIELD relationshipType "
         "RETURN relationshipType AS rel_type"
     )
     query_show = "SHOW RELATIONSHIP TYPES YIELD relationshipType RETURN relationshipType AS rel_type"
-    collected: Optional[List[str]] = None
+    collected = None
     for db in [item for item in dbs if item]:
         try:
             try:
@@ -1121,9 +1155,34 @@ async def _list_node_labels(dbs: List[str]) -> Optional[List[str]]:
     Mirrors ``_list_relationship_types``: union across all candidate graphs
     rather than trusting the first (possibly empty) one.
     """
+    # Provider-neutral introspection: dialect stays inside the driver.
+    try:
+        driver = await _get_graph_driver()
+        list_labels = getattr(driver, "list_labels", None)
+    except Exception as exc:
+        logger.warning("Unable to resolve graph driver for introspection: %s", exc)
+        list_labels = None
+        driver = None
+    if callable(list_labels):
+        collected: Optional[List[str]] = None
+        for db in [item for item in dbs if item]:
+            try:
+                rows = list(await list_labels(database=db) or [])
+            except Exception as exc:
+                if _is_db_not_found(exc):
+                    continue
+                logger.warning("Unable to list node labels from %s: %s", db, exc)
+                break
+            if collected is None:
+                collected = []
+            for label in rows:
+                if isinstance(label, str) and label not in collected:
+                    collected.append(label)
+        return collected
+
     query_call = "CALL db.labels() YIELD label RETURN label"
     query_show = "SHOW NODE LABELS YIELD label RETURN label"
-    collected: Optional[List[str]] = None
+    collected = None
     for db in [item for item in dbs if item]:
         try:
             try:
@@ -1335,7 +1394,7 @@ async def _run_cypher_first(query: str, params: Dict[str, Any], dbs: List[str]) 
 
 async def _list_databases() -> List[str]:
     driver = await _get_graph_driver()
-    if DEFAULT_GRAPH_PROVIDER == "falkordb":
+    if DEFAULT_GRAPH_PROVIDER in {"falkordb", "ladybug"}:
         return await driver.list_databases()
     records, summary, keys = await driver.execute_query("SHOW DATABASES", {}, DEFAULT_NEO4J_DB)
     names: List[str] = []

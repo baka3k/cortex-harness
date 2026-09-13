@@ -143,7 +143,7 @@ else:
     DEFAULT_NEO4J_PASSWORD = None
     DEFAULT_NEO4J_DB = "hyper_graph"
 DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
-DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
+DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER in {"falkordb", "ladybug"} else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 
@@ -200,6 +200,13 @@ def _search_timing_enabled() -> bool:
 async def _get_graph_driver() -> GraphDriver:
     global _graph_driver
     if _graph_driver is not None:
+        return _graph_driver
+    if DEFAULT_GRAPH_PROVIDER == "ladybug":
+        from ladybug_discovery import build_ladybug_driver_config
+
+        _graph_driver = await get_shared_graph_driver(
+            GraphProvider.LADYBUG, build_ladybug_driver_config()
+        )
         return _graph_driver
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
         from cortex_harness.storage import resolve_storage

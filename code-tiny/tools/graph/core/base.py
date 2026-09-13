@@ -12,9 +12,13 @@ from enum import Enum
 class GraphProvider(Enum):
     """Supported graph database providers"""
     NEO4J = "neo4j"
+    # Deprecated alias for LADYBUG ("kuzu" predates the LadybugDB fork;
+    # normalize_graph_provider maps it onto LADYBUG). Do not build new
+    # behavior against this member.
     KUZU = "kuzu"
     FALKORDB = "falkordb"
     NEPTUNE = "neptune"
+    LADYBUG = "ladybug"
 
 
 class QueryExecutor(ABC):

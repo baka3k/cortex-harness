@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import argparse
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
@@ -17,11 +18,19 @@ from tools.graph.core.provider_contract import normalize_graph_provider
 logger = logging.getLogger(__name__)
 
 
-def env_graph_provider(default: str = "falkordb") -> str:
+def env_graph_provider(default: str | None = None) -> str:
+    """Resolve the graph provider from the environment.
+
+    When nothing is configured the platform default applies: ladybug on
+    win32 (FalkorDBLite has no Windows wheels), falkordb elsewhere.
+    """
+    resolved_default = default
+    if resolved_default is None:
+        resolved_default = "ladybug" if sys.platform == "win32" else "falkordb"
     return (
         os.getenv("CODE_GRAPH_PROVIDER")
         or os.getenv("GRAPH_PROVIDER")
-        or default
+        or resolved_default
     )
 
 
@@ -66,9 +75,21 @@ def add_graph_provider_args(parser: ArgumentParser) -> None:
     if not _has_option(parser, "--graph-provider"):
         parser.add_argument(
             "--graph-provider",
-            choices=["neo4j", "falkordb"],
+            choices=["neo4j", "falkordb", "ladybug"],
             default=env_graph_provider(),
             help="Graph database provider used for graph writes.",
+        )
+    if not _has_option(parser, "--ladybug-path"):
+        parser.add_argument(
+            "--ladybug-path",
+            default=os.getenv("LADYBUG_PATH"),
+            help="Owner-specific LadybugDB store file (derived when omitted).",
+        )
+    if not _has_option(parser, "--ladybug-graph"):
+        parser.add_argument(
+            "--ladybug-graph",
+            default=os.getenv("LADYBUG_GRAPH") or "hyper_graph",
+            help="Named graph served by the LadybugDB store.",
         )
     if not _has_option(parser, "--falkordb-path"):
         parser.add_argument(
@@ -211,6 +232,25 @@ def prepare_graph_args(args: Namespace) -> bool:
             and getattr(args, "neo4j_password", None)
         )
 
+    if provider == GraphProvider.LADYBUG:
+        # Ladybug is embedded-only: derive the local store path, ignore any
+        # remote FalkorDB endpoint (it belongs to another provider).
+        if not getattr(args, "ladybug_path", None):
+            path_override = os.getenv("LADYBUG_PATH")
+            if path_override:
+                path = path_override
+            else:
+                from cortex_harness.storage import resolve_storage
+                path = str(resolve_storage(Path.cwd()).ladybug_code_path)
+            setattr(args, "ladybug_path", path)
+        if not getattr(args, "ladybug_graph", None):
+            setattr(
+                args,
+                "ladybug_graph",
+                getattr(args, "project_id", None) or os.getenv("LADYBUG_GRAPH") or "hyper_graph",
+            )
+        return True
+
     explicit_target = getattr(args, "_explicit_falkordb_target", None)
     if explicit_target == "path":
         falkordb_uri = None
@@ -218,8 +258,7 @@ def prepare_graph_args(args: Namespace) -> bool:
     else:
         falkordb_uri = getattr(args, "falkordb_uri", None) or os.getenv("FALKORDB_URI")
     if falkordb_uri:
-        # Remote FalkorDB project: never synthesize an embedded local path —
-        # FalkorDBLite may not even be installable on this platform (win32).
+        # Remote FalkorDB project: never synthesize an embedded local path.
         args.falkordb_uri = falkordb_uri
         args.falkordb_path = None
     else:
@@ -281,6 +320,32 @@ async def create_graph_driver_from_args(
             user=user,
             password=password,
             database=getattr(args, "neo4j_db", None),
+        )
+        if attach_journal:
+            from tools.graph.journal.config import attach_journal_config
+            from tools.graph.journal.consumer import resume_journal
+
+            journal_config = attach_journal_config(driver, args)
+            if journal_config is not None and journal_config.required:
+                await resume_journal(journal_config, driver)
+        return driver
+
+    if provider == GraphProvider.LADYBUG:
+        graph_name = (
+            getattr(args, "ladybug_graph", None)
+            or getattr(args, "project_id", None)
+            or "hyper_graph"
+        )
+        setattr(args, "neo4j_db", graph_name)
+        driver = await GraphDriverFactory.create_driver(
+            GraphProvider.LADYBUG,
+            {
+                "graph": graph_name,
+                "path": getattr(args, "ladybug_path", None),
+                "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+                "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
+                "query_timeout_ms": os.getenv("LADYBUG_QUERY_TIMEOUT_MS"),
+            },
         )
         if attach_journal:
             from tools.graph.journal.config import attach_journal_config

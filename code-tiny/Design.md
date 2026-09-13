@@ -76,8 +76,9 @@ This document describes the architecture of the Graph Code system after the abst
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                           │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐     │
-│  │  Neo4jDriver     │  │  KuzuDriver      │  │  FalkorDBDriver  │     │
-│  │  (Production)    │  │  (Planned)       │  │  (Planned)       │     │
+│  │  Neo4jDriver     │  │ FalkorDBDriver   │  │ LadybugDriver    │     │
+│  │  (Remote)        │  │  (Embedded/      │  │  (Embedded,      │     │
+│  │                  │  │   Remote)        │  │   win32 default) │     │
 │  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘     │
 │           │                     │                      │                │
 └───────────┼─────────────────────┼──────────────────────┼────────────────┘
@@ -88,8 +89,8 @@ This document describes the architecture of the Graph Code system after the abst
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                           │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐     │
-│  │     Neo4j        │  │      Kuzu        │  │    FalkorDB      │     │
-│  │  (Graph DB)      │  │  (Embedded)      │  │  (Redis-based)   │     │
+│  │     Neo4j        │  │    FalkorDB      │  │    LadybugDB     │     │
+│  │  (Graph DB)      │  │  (Redis-based)   │  │  (Embedded file) │     │
 │  └──────────────────┘  └──────────────────┘  └──────────────────┘     │
 │                                                                           │
 │  ┌──────────────────────────────────────────────────────────────┐      │
@@ -182,9 +183,10 @@ await driver.close()
 ```python
 class GraphProvider(Enum):
     NEO4J = "neo4j"
-    KUZU = "kuzu"
+    KUZU = "kuzu"          # deprecated alias, routes onto LADYBUG
     FALKORDB = "falkordb"
     NEPTUNE = "neptune"
+    LADYBUG = "ladybug"
 
 class GraphDriverFactory:
     @staticmethod
@@ -194,8 +196,8 @@ class GraphDriverFactory:
     ) -> GraphDriver:
         if provider == GraphProvider.NEO4J:
             return Neo4jDriver(config)
-        elif provider == GraphProvider.KUZU:
-            return KuzuDriver(config)
+        elif provider in {GraphProvider.KUZU, GraphProvider.LADYBUG}:
+            return LadybugDriver(config)   # embedded, local-only
         # ... other providers
 ```
 
@@ -210,9 +212,10 @@ config = {
     "database": "neo4j"  # optional
 }
 
-# Kuzu (planned)
+# Ladybug (embedded, local-only; default provider on win32)
 config = {
-    "database_path": "/path/to/db"
+    "path": "/root/code.lbug/hyper_graph",  # one store file per named graph
+    "graph": "hyper_graph",
 }
 ```
 
@@ -705,7 +708,7 @@ python mcp/android/android_mcp.py --transport streamable-http
 
 - ✅ 3,990 lines removed (14% reduction)
 - ✅ Single source of truth (LanguageCodeWriter)
-- ✅ Easy to add new databases (Kuzu, FalkorDB, etc.)
+- ✅ Easy to add new databases (LadybugDB, FalkorDB, Neo4j, ...)
 - ✅ Consistent behavior across all analyzers
 - ✅ Clean async/await pattern
 - ✅ MCP servers also migrated (true async)
@@ -725,13 +728,15 @@ python mcp/android/android_mcp.py --transport streamable-http
 
 ### 1. Additional Database Support
 
-**Kuzu** (Embedded Graph Database):
+**LadybugDB** (Embedded Graph Database — implemented; see
+`tools/graph/driver/ladybug_driver.py`, Kùzu successor, win32 default):
 
 ```python
-class KuzuDriver(GraphDriver):
+class LadybugDriver(CypherGraphDriver):
+    # One store file per named graph; static-schema bootstrap + gated
+    # auto-DDL; ART/FTS indexes; prepared-statement cache invalidation.
     async def execute_query(self, query, params, database):
-        # Kuzu-specific implementation
-        pass
+        ...  # implemented
 ```
 
 **FalkorDB** (Redis-based):
@@ -757,7 +762,7 @@ Following Graphiti's pattern, add:
 Support querying across multiple databases:
 
 ```python
-# Query from both Neo4j and Kuzu
+# Query from both Neo4j and Ladybug
 results = await multi_query([
     (neo4j_driver, query1),
     (kuzu_driver, query2)

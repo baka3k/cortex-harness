@@ -9,6 +9,9 @@ parsed by ``tools.common.project_registry``) and a :class:`ResolvedStorage`
   project's ``storage_backend`` choice.
 * :meth:`StorageFactory.get_falkordb_driver` returns a ``FalkorDBDriver``
   opened against the matching local ``.rdb`` path or remote URI.
+* :meth:`StorageFactory.get_ladybug_driver` returns a ``LadybugDriver``
+  opened against the project's local LadybugDB store file (local-only
+  provider; remote ``falkordb_uri`` configurations must not select it).
 
 Mixed backend is supported: a project may choose ``storage_backend: remote``
 yet still leave ``remote.falkordb_uri`` unset (and vice versa). In that case
@@ -56,6 +59,7 @@ from .targets import (
 if TYPE_CHECKING:  # pragma: no cover - circular import guard
     from tools.common.project_registry import ProjectTargets
     from tools.graph.driver.falkordb_driver import FalkorDBDriver
+    from tools.graph.driver.ladybug_driver import LadybugDriver
 
 
 @runtime_checkable
@@ -227,6 +231,7 @@ class StorageFactory:
         resolved: ResolvedStorage,
         remote: Optional[RemoteStorageConfig] = None,
         project_scope: str = "unbound",
+        graph_provider: str = "falkordb",
         code_graph: Optional[str] = None,
         doc_graph: Optional[str] = None,
         code_collection: Optional[str] = None,
@@ -243,6 +248,10 @@ class StorageFactory:
             self._remote = remote if backend_mode == BackendMode.REMOTE else None
         self._resolved = resolved
         self._project_scope = str(project_scope or "unbound")
+        provider = str(graph_provider or "falkordb").strip().casefold()
+        if provider in {"kuzu", "lbug", "lady-bug"}:
+            provider = "ladybug"
+        self._graph_provider = provider
         self._code_graph = code_graph or resolved.code_graph
         self._doc_graph = doc_graph or resolved.doc_graph
         self._code_collection = code_collection or resolved.code_collection
@@ -278,6 +287,7 @@ class StorageFactory:
             resolved=resolved,
             remote=remote,
             project_scope=targets.project_id,
+            graph_provider=getattr(targets, "provider", None) or "falkordb",
             code_graph=getattr(targets, "code_graph", None),
             doc_graph=getattr(targets, "doc_graph", None),
             code_collection=getattr(targets, "code_qdrant_collection", None),
@@ -310,6 +320,10 @@ class StorageFactory:
         value = role.value if hasattr(role, "value") else str(role)
         return "doc" if value == "document" else value
 
+    @property
+    def graph_provider(self) -> str:
+        return self._graph_provider
+
     def effective_graph_target(
         self,
         graph_name: Optional[str] = None,
@@ -329,6 +343,15 @@ class StorageFactory:
         )
         if not namespace:
             raise ValueError("effective graph target requires a graph name")
+        if self._graph_provider == "ladybug":
+            # Embedded-only provider: always a file target on the Ladybug
+            # store, never a remote endpoint.
+            return local_graph_target(
+                self._resolved.ladybug_path_for_role(role_value),
+                graph=namespace,
+                role=role_value,
+                provider="ladybug",
+            )
         if self._mode == BackendMode.REMOTE and self._remote and self._remote.falkordb_uri:
             return remote_graph_target(
                 self._remote.falkordb_uri,
@@ -444,6 +467,45 @@ class StorageFactory:
             )
         return FalkorDBDriver(
             path=str(self._resolved.falkordb_path_for_role(role)),
+            graph=graph_name,
+            owner_id=(
+                self._resolved.doc_owner_id
+                if role == StorageRole.DOCUMENT
+                else self._resolved.code_owner_id
+            ),
+            instance_id=self._resolved.instance_id,
+        )
+
+    # ── LadybugDB ───────────────────────────────────────────────────────────
+
+    def get_ladybug_driver(
+        self,
+        graph_name: str,
+        role: StorageRole = StorageRole.CODE,
+    ) -> "LadybugDriver":
+        """Return an embedded LadybugDB driver for ``graph_name``.
+
+        Ladybug is local-only: calling this while the project selects a
+        remote FalkorDB endpoint fails closed instead of silently writing to
+        a different backend.  The driver receives the resolved
+        ``owner_id``/``instance_id`` so the embedded lease identity matches
+        what other call sites compute.
+        """
+        if (
+            self._mode == BackendMode.REMOTE
+            and self._remote is not None
+            and self._remote.falkordb_uri
+        ):
+            raise ValueError(
+                "ladybug is local-only; the project selects a remote FalkorDB "
+                "server. Use get_falkordb_driver or unset remote.falkordb_uri."
+            )
+        # Imported here to avoid a ``cortex_harness`` → ``code-tiny`` import
+        # cycle at module load time.
+        from tools.graph.driver.ladybug_driver import LadybugDriver
+
+        return LadybugDriver(
+            path=str(self._resolved.ladybug_path_for_role(role)),
             graph=graph_name,
             owner_id=(
                 self._resolved.doc_owner_id

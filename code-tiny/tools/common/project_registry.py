@@ -102,6 +102,7 @@ DEFAULT_CONFIG_DIRNAME = ".cortext-harness/config"
 # must never choose a FalkorDB graph (or vice versa).
 _ENV_FALKOR_CODE_GRAPH = "FALKORDB_GRAPH"
 _ENV_NEO4J_CODE_GRAPH = "NEO4J_DB"
+_ENV_LADYBUG_CODE_GRAPH = "LADYBUG_GRAPH"
 _ENV_CODE_COLLECTION = "QDRANT_COLLECTION"
 _ENV_DOC_GRAPH = "FALKORDB_GRAPH_DOC"
 _ENV_DOC_COLLECTION = "QDRANT_COLLECTION_DOC"
@@ -110,6 +111,7 @@ _ENV_DOC_PROVIDER = ("DOC_GRAPH_PROVIDER", "GRAPH_PROVIDER")
 
 _FALKORDB_PROVIDER_ALIASES = frozenset({"falkordb", "falkor", "local", "embedded"})
 _NEO4J_PROVIDER_ALIASES = frozenset({"neo4j", "neo"})
+_LADYBUG_PROVIDER_ALIASES = frozenset({"ladybug", "lbug", "lady-bug", "kuzu"})
 
 
 def _normalize_graph_provider(value: Any) -> str:
@@ -118,8 +120,11 @@ def _normalize_graph_provider(value: Any) -> str:
         return "falkordb"
     if normalized in _NEO4J_PROVIDER_ALIASES:
         return "neo4j"
+    if normalized in _LADYBUG_PROVIDER_ALIASES:
+        # "kuzu" predates the LadybugDB fork and resolves onto it.
+        return "ladybug"
     raise ValueError(
-        f"Unsupported graph provider '{value}'. Expected 'falkordb' or 'neo4j'."
+        f"Unsupported graph provider '{value}'. Expected 'falkordb', 'ladybug', or 'neo4j'."
     )
 
 
@@ -294,6 +299,8 @@ def _resolve_targets(
         env_graph = os.environ.get(
             _ENV_NEO4J_CODE_GRAPH
             if env_provider == "neo4j"
+            else _ENV_LADYBUG_CODE_GRAPH
+            if env_provider == "ladybug"
             else _ENV_FALKOR_CODE_GRAPH
         )
         env_seeds = (
@@ -341,15 +348,20 @@ def _resolve_targets(
     def _code_graph() -> str:
         if code_graph_override:
             return code_graph_override
-        graph_key = "NEO4J_DB" if provider == "neo4j" else "FALKORDB_GRAPH"
+        graph_key = (
+            "NEO4J_DB" if provider == "neo4j"
+            else "LADYBUG_GRAPH" if provider == "ladybug"
+            else "FALKORDB_GRAPH"
+        )
         if code_env.get(graph_key):
             return str(code_env[graph_key])
         if env_allowed:
-            env_value = os.environ.get(
-                _ENV_NEO4J_CODE_GRAPH
-                if provider == "neo4j"
+            env_key = (
+                _ENV_NEO4J_CODE_GRAPH if provider == "neo4j"
+                else _ENV_LADYBUG_CODE_GRAPH if provider == "ladybug"
                 else _ENV_FALKOR_CODE_GRAPH
             )
+            env_value = os.environ.get(env_key)
             if env_value:
                 return env_value
         return canonical_project_id
@@ -368,7 +380,11 @@ def _resolve_targets(
     def _doc_graph() -> str:
         if doc_graph_override:
             return doc_graph_override
-        graph_key = "NEO4J_DB" if doc_provider == "neo4j" else "FALKORDB_GRAPH"
+        graph_key = (
+            "NEO4J_DB" if doc_provider == "neo4j"
+            else "LADYBUG_GRAPH" if doc_provider == "ladybug"
+            else "FALKORDB_GRAPH"
+        )
         if doc_env.get(graph_key):
             return str(doc_env[graph_key])
         if env_allowed:

@@ -463,18 +463,36 @@ def _deactivate_other_envs(project_dir: Path, current_env: str) -> None:
             pass
 
 
+_LADYBUG_PROVIDER_ALIASES = frozenset({"ladybug", "lbug", "lady-bug", "kuzu"})
+
+
+def _default_graph_provider() -> str:
+    """Platform default when no provider is configured explicitly.
+
+    Windows has no FalkorDBLite wheel, so the embedded LadybugDB provider is
+    the only out-of-the-box local graph there.  POSIX keeps the historical
+    FalkorDBLite default so existing stores are never reinterpreted.
+    """
+    if sys.platform == "win32":
+        return "ladybug"
+    return "falkordb"
+
+
 def _graph_provider(env: dict, scoped_key: str) -> str:
     scoped_value = str(env.get(scoped_key) or "").strip()
     global_value = str(env.get("GRAPH_PROVIDER") or "").strip()
     source = scoped_key if scoped_value else "GRAPH_PROVIDER"
-    provider = (scoped_value or global_value or "falkordb").casefold()
+    default = _default_graph_provider() if not scoped_value and not global_value else "falkordb"
+    provider = (scoped_value or global_value or default).casefold()
     if provider in {"falkor", "falkordb"}:
         return "falkordb"
     if provider == "neo4j":
         return "neo4j"
+    if provider in _LADYBUG_PROVIDER_ALIASES:
+        return "ladybug"
     raise ValueError(
         f"Unsupported graph provider for {source}: {provider!r}; expected "
-        "'falkordb' (alias 'falkor') or 'neo4j'"
+        "'falkordb' (alias 'falkor'), 'ladybug' (alias 'lbug'), or 'neo4j'"
     )
 
 
@@ -484,10 +502,20 @@ def _isolate_graph_provider_environment(env: dict, scoped_key: str) -> str:
     env["GRAPH_PROVIDER"] = provider
     env[scoped_key] = provider
     for key in tuple(env):
-        if provider == "falkordb" and key.startswith("NEO4J_"):
+        if provider == "falkordb" and (
+            key.startswith("NEO4J_") or key.startswith("LADYBUG_")
+        ):
             env.pop(key, None)
         elif provider == "neo4j" and (
-            key.startswith("FALKORDB_") or key == "DOC_FALKORDB_GRAPH"
+            key.startswith("FALKORDB_")
+            or key.startswith("LADYBUG_")
+            or key == "DOC_FALKORDB_GRAPH"
+        ):
+            env.pop(key, None)
+        elif provider == "ladybug" and (
+            key.startswith("FALKORDB_")
+            or key.startswith("NEO4J_")
+            or key == "DOC_FALKORDB_GRAPH"
         ):
             env.pop(key, None)
     return provider
@@ -507,6 +535,10 @@ def _env_to_neo4j_args(env: dict) -> list:
         elif env.get("FALKORDB_PATH"):
             args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
         args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
+    elif provider == "ladybug":
+        if env.get("LADYBUG_PATH"):
+            args += ["--ladybug-path", str(env["LADYBUG_PATH"])]
+        args += ["--ladybug-graph", env.get("LADYBUG_GRAPH", "hyper_graph")]
     else:
         args += [
             "--neo4j-uri", env.get("NEO4J_URI", "bolt://localhost:7687"),
@@ -517,7 +549,7 @@ def _env_to_neo4j_args(env: dict) -> list:
 
 
 def _neo4j_args_code(env: dict) -> list:
-    """Build code-tiny graph arguments for local FalkorDB or explicit Neo4j."""
+    """Build code-tiny graph arguments for local FalkorDB, Ladybug, or Neo4j."""
     provider = _graph_provider(env, "CODE_GRAPH_PROVIDER")
     args = ["--graph-provider", provider]
     if provider == "falkordb":
@@ -530,6 +562,10 @@ def _neo4j_args_code(env: dict) -> list:
         elif env.get("FALKORDB_PATH"):
             args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
         args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
+    elif provider == "ladybug":
+        if env.get("LADYBUG_PATH"):
+            args += ["--ladybug-path", str(env["LADYBUG_PATH"])]
+        args += ["--ladybug-graph", env.get("LADYBUG_GRAPH", "hyper_graph")]
     else:
         args += [
             "--neo4j-uri", env.get("NEO4J_URI", "bolt://localhost:7687"),
@@ -561,14 +597,16 @@ def _storage_targets(cfg: dict) -> tuple[str, str, str, str]:
     doc_env = dict(cfg.get("doc", {}).get("env", {}))
     code_provider = _graph_provider(code_env, "CODE_GRAPH_PROVIDER")
     doc_provider = _graph_provider(doc_env, "DOC_GRAPH_PROVIDER")
-    code_graph = str(
-        code_env.get("NEO4J_DB" if code_provider == "neo4j" else "FALKORDB_GRAPH")
-        or project_id
-    )
-    doc_graph = str(
-        doc_env.get("NEO4J_DB" if doc_provider == "neo4j" else "FALKORDB_GRAPH")
-        or f"{project_id}_doc"
-    )
+
+    def _graph_key(provider: str) -> str:
+        if provider == "neo4j":
+            return "NEO4J_DB"
+        if provider == "ladybug":
+            return "LADYBUG_GRAPH"
+        return "FALKORDB_GRAPH"
+
+    code_graph = str(code_env.get(_graph_key(code_provider)) or project_id)
+    doc_graph = str(doc_env.get(_graph_key(doc_provider)) or f"{project_id}_doc")
     code_collection = _code_qdrant_collection(code_env, project)
     doc_collection = str(
         doc_env.get("QDRANT_COLLECTION_DOC")

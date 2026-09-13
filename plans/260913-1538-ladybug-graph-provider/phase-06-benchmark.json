@@ -1,0 +1,29 @@
+{
+ "copy_ingest_rows": 20000,
+ "copy_ingest_seconds": 0.062,
+ "copy_speedup_vs_merge": 26.23,
+ "generated_at": "2026-09-13T11:31:26+00:00",
+ "ladybug_version": "0.20.4",
+ "machine": {
+  "python": "3.12.14"
+ },
+ "merge_ingest_seconds": 1.626,
+ "nodes_per_path": 20000,
+ "read_latency_merge_store": {
+  "by_id": {
+   "mean_ms": 0.284,
+   "p50_ms": 0.045,
+   "p95_ms": 0.083
+  },
+  "contains_scan": {
+   "mean_ms": 0.343,
+   "p50_ms": 0.165,
+   "p95_ms": 0.214
+  },
+  "traverse_depth2": {
+   "mean_ms": 0.838,
+   "p50_ms": 0.62,
+   "p95_ms": 0.82
+  }
+ }
+}

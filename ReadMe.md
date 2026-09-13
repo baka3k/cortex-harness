@@ -44,7 +44,41 @@ The goal is to provide a foundational layer for building reliable AI-native syst
 
 Clone the repo once, install the `dev` command globally — no aliases, no path prefixes needed.
 
-The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windows. Python 3.12+ is required. Qdrant and FalkorDBLite run as embedded, file-backed libraries; no database daemon or container runtime is required.
+The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windows. Python 3.12+ is required. Qdrant runs as an embedded, file-backed library and the graph store is an embedded database (LadybugDB on Windows by default, FalkorDBLite elsewhere); no database daemon or container runtime is required.
+
+### Graph providers
+
+| | Windows 10/11 (x64, ARM64) | macOS 12–14 | macOS 15+ | Linux (glibc 2.26+) |
+|---|---|---|---|---|
+| Default graph provider | **ladybug** (embedded) | falkordb (embedded) | falkordb (embedded) | falkordb (embedded) |
+| Opt-in ladybug | `GRAPH_PROVIDER=ladybug` | `GRAPH_PROVIDER=ladybug` | `GRAPH_PROVIDER=ladybug` | `GRAPH_PROVIDER=ladybug` |
+| Opt-in embedded falkordb | install extra + remote URI (see rollback) | default | default | default |
+| Remote graph (`FALKORDB_URI` / Neo4j) | `GRAPH_PROVIDER=falkordb` or `neo4j` | supported | supported | supported |
+
+LadybugDB ([PyPI `ladybug`](https://pypi.org/project/ladybug/)) is an embedded graph database — one store file per named graph, no server, no Docker. The default store for the code owner lives at `~/.cortext-harness/v1/instances/default/ladybug/code/code.lbug/hyper_graph`. Useful environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GRAPH_PROVIDER` | `ladybug` on win32, `falkordb` elsewhere | Provider selection (`ladybug`, `falkordb`, `neo4j`; `kuzu` is accepted as a deprecated alias of `ladybug`) |
+| `LADYBUG_PATH` | derived from `CORTEX_DATA_HOME` | Store file for the active owner's primary graph |
+| `LADYBUG_GRAPH` | `hyper_graph` | Primary named graph |
+| `LADYBUG_QUERY_TIMEOUT_MS` | `120000` | Per-query timeout (mirrors `FALKORDB_QUERY_TIMEOUT_MS`) |
+| `LADYBUG_BUFFER_POOL_SIZE` | library default | Byte size of Ladybug's buffer pool |
+| `CORTEX_GRAPH_AUTO_DDL` | on | Auto-`ALTER TABLE` when analyzers write properties missing from the static schema (off = fail closed). Every auto-DDL statement is logged loudly. |
+
+**Windows quickstart (no Docker):**
+
+```bat
+git clone https://github.com/baka3k/cortex-harness.git && cd cortex-harness
+install-windows.bat     \ REM or install-windows.ps1
+dev storage-init
+dev doctor              \ REM includes the ladybug round-trip probe
+dev sync-processes      \ REM ingests into the embedded LadybugDB store
+```
+
+**Rollback to FalkorDB** (any platform): set `GRAPH_PROVIDER=falkordb` plus `FALKORDB_URI` for a remote server, or install the historical embedded backend on POSIX with `pip install -e '.[falkordb-local]'` and `FALKORDB_PATH=<data.rdb>`. On Windows only the remote path is available (FalkorDBLite has no win32 wheels). No code changes or data migration required — providers write to separate stores.
+
+**macOS note:** the LadybugDB wheel floor is macOS 15 (Sequoia) per PyPI metadata; older macOS keeps FalkorDBLite as the default and can still use ladybug if the wheel installs.
 
 ```bash
 git clone https://github.com/baka3k/cortex-harness.git
@@ -55,7 +89,7 @@ make build       # create/reuse .venv and install dependencies with uv
 make storage-init # create ~/.cortext-harness/v1/instances/default and its manifest
 make storage-layout # show resolved owner paths, manifest, and leases
 make install     # create/reuse .venv, install dependencies, and install global dev command
-make doctor      # isolated Qdrant/FalkorDBLite round-trips plus MCP port diagnostics
+make doctor      # isolated Qdrant/graph round-trips (FalkorDBLite + LadybugDB) plus MCP port diagnostics
 make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
 make stop        # stop MCP terminal/processes started by make start
 make uninstall   # remove the global dev command installed by make install
@@ -70,6 +104,7 @@ The default persistent-data tree is independent of every indexed source checkout
 ├── manifest.json
 ├── qdrant/{code,doc}/
 ├── falkordb/{code,doc}/data.rdb
+├── ladybug/{code,doc}/{owner}.lbug/<graph>   # one store file per named graph
 └── backups/
 ```
 

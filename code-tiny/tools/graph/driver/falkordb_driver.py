@@ -19,18 +19,26 @@ they emit a deprecation warning and are ignored when a ``path`` is supplied.
 import asyncio
 import logging
 import os
-import re
 import threading
 import time
 from concurrent.futures import Future
 import warnings
 from collections.abc import Mapping
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from tools.graph.core.base import GraphProvider
 from tools.graph.core.cypher_driver import CypherGraphDriver
+from tools.graph.core.errors import (
+    AmbiguousWriteTimeoutError,
+    NativeOperationInFlightError,
+)
+from tools.graph.core.query_normalize import (
+    is_retryable_read as _is_retryable_read,
+    normalize_call_importing_subqueries as _normalize_query,
+    rewrite_datetime_call,
+    utc_timestamp as _utc_timestamp,
+)
 from tools.common.project_scope import prepare_project_scope_parameters
 from cortex_harness.storage.lease import StorageLease
 from cortex_harness.storage.admission import BoundedLane, LaneLimits
@@ -39,55 +47,11 @@ from cortex_harness.storage.admission import BoundedLane, LaneLimits
 logger = logging.getLogger(__name__)
 
 
-class AmbiguousWriteTimeoutError(TimeoutError):
-    """A timed-out mutation may have committed and must be reconciled."""
-
-
-class NativeOperationInFlightError(RuntimeError):
-    """A canceled native call is still running and owns the embedded client."""
-
-
-# Neo4j 5.x subquery-with-importing-variable: CALL (var) { ... }.
-# FalkorDB only supports the older CALL { WITH var ... } form (variables
-# imported via opening WITH clause). Rewrite the parenthesized form to the
-# portable form so a single query works against both backends.
-#
-# Caveat: this regex matches the opening ``CALL (var) {`` and rewriter inserts
-# ``WITH var`` right after the brace. Nested CALL subqueries inside the body
-# are left alone — if a query has nested ``CALL (other) {`` braces inside the
-# outer subquery, callers should write the query in the portable form.
-_CALL_IMPORTING_SUBQUERY_RE = re.compile(
-    r"CALL\s+\(([A-Za-z_][A-Za-z0-9_]*)\)\s*\{",
-)
-_MUTATING_CYPHER_RE = re.compile(
-    r"\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP|ALTER|FOREACH|LOAD\s+CSV)\b",
-    re.IGNORECASE,
-)
-
-
-def _normalize_query(query: str) -> str:
-    """Rewrite Cypher constructs FalkorDB doesn't understand.
-
-    Rewrites Neo4j 5 ``CALL (var) { ... }`` (importing-variable subquery)
-    to ``CALL { WITH var ... }`` which both FalkorDB and Neo4j accept.
-
-    Index creation must go through ``driver.create_indexes()`` — never raw
-    ``CREATE INDEX`` Cypher — so each backend uses its native API.
-    """
-    return _CALL_IMPORTING_SUBQUERY_RE.sub(r"CALL { WITH \1", query)
-
-
-def _is_retryable_read(query: str) -> bool:
-    """Retry only queries that are unambiguously read-only.
-
-    A synchronous embedded call can fail after committing a mutation, so a
-    blanket retry can duplicate ingestion effects.  Read retries remain useful
-    for transient checkpoint contention.
-    """
-    first_token = query.lstrip().split(None, 1)[0].upper() if query.strip() else ""
-    return first_token in {"MATCH", "OPTIONAL", "UNWIND", "WITH", "RETURN", "SHOW", "EXPLAIN", "PROFILE"} and not bool(
-        _MUTATING_CYPHER_RE.search(query)
-    )
+__all__ = [
+    "AmbiguousWriteTimeoutError",
+    "FalkorDBDriver",
+    "NativeOperationInFlightError",
+]
 
 
 def _is_timeout_error(exc: BaseException) -> bool:
@@ -101,27 +65,15 @@ def _cypher_string(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
-def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
 def _prepare_falkordb_query(
     query: str,
     parameters: Optional[Dict[str, Any]],
 ) -> Tuple[str, Dict[str, Any]]:
     query = _normalize_query(query)
     params = prepare_project_scope_parameters(query, parameters)
-    if "datetime()" not in query:
-        return query, params
-
-    param_name = "__falkordb_now"
-    while param_name in params:
-        param_name = f"_{param_name}"
-
-    return query.replace("datetime()", f"${param_name}"), {
-        **params,
-        param_name: _utc_timestamp(),
-    }
+    # FalkorDB accepts a bound ISO-8601 string where a datetime value is
+    # expected, so the rewritten parameter is substituted directly.
+    return rewrite_datetime_call(query, params, param_prefix="__falkordb_now")
 
 
 def _result_key(header_item: Any) -> str:
@@ -155,6 +107,12 @@ def _normalize_falkordb_value(value: Any) -> Any:
         graph_id = getattr(value, "id", None)
         if graph_id is not None:
             node.setdefault("_graph_id", graph_id)
+        labels = getattr(value, "labels", None)
+        if labels:
+            try:
+                node.setdefault("_label", sorted(str(label) for label in labels)[0])
+            except (TypeError, ValueError):  # pragma: no cover - defensive
+                pass
         return node
 
     if hasattr(value, "properties") and hasattr(value, "relation"):
@@ -764,126 +722,54 @@ class FalkorDBDriver(CypherGraphDriver):
                     rel_types.append(rel_upper)
         return rel_types
 
-    async def find_node_by_id(
-        self,
-        node_id: str,
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> Optional[Dict[str, Any]]:
-        cypher = """
-        MATCH (n)
-        WHERE n.id = $id
-          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
-        RETURN n
-        LIMIT 1
-        """
+    async def list_labels(self, database: Optional[str] = None) -> List[str]:
         records, _, _ = await self.execute_query(
-            cypher,
-            {"id": node_id, "project_id": project_id},
-            database,
+            "CALL db.labels() YIELD label RETURN label AS label",
+            database=database,
         )
-        node = records[0].get("n") if records else None
-        if node and node.get("framework") == "servlet_jsp":
-            active_records, _, _ = await self.execute_query(
-                "MATCH (s:ServletJspAnalysisState {project_id: $project_id, module_id: $module_id}) "
-                "WHERE s.active_generation = $generation_id RETURN s.id AS id LIMIT 1",
-                {"project_id": node.get("project_id"), "module_id": node.get("module_id"), "generation_id": node.get("generation_id")},
-                database,
-            )
-            if not active_records:
-                return None
-        return node
+        return [
+            record["label"]
+            for record in records
+            if isinstance(record.get("label"), str)
+        ]
 
-    async def find_nodes_by_ids(
+    async def fulltext_query_nodes(
         self,
-        node_ids: List[str],
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        if not node_ids:
-            return []
-        cypher = """
-        MATCH (n)
-        WHERE n.id IN $ids
-          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
-        RETURN n
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"ids": node_ids, "project_id": project_id},
-            database,
-        )
-        nodes = [record.get("n") for record in records if record.get("n")]
-        servlet_nodes = [n for n in nodes if n.get("framework") == "servlet_jsp"]
-        if servlet_nodes:
-            active_records, _, _ = await self.execute_query(
-                "UNWIND $rows AS row "
-                "MATCH (s:ServletJspAnalysisState {project_id: row.project_id, module_id: row.module_id}) "
-                "WHERE s.active_generation = row.generation_id RETURN row.id AS id",
-                {"rows": servlet_nodes},
-                database,
-            )
-            active_ids = {str(row.get("id")) for row in active_records if row.get("id")}
-            nodes = [n for n in nodes if n.get("framework") != "servlet_jsp" or str(n.get("id")) in active_ids]
-        return nodes
-
-    async def search_functions(
-        self,
+        *,
+        index_name: str,
+        labels: List[str],
         query: str,
-        limit: int = 50,
         project_id: Optional[str] = None,
+        limit: int = 50,
+        extra_where: str = "",
+        extra_params: Optional[Dict[str, Any]] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        try:
-            return await self._fulltext_node_search("Function", query, limit, project_id, database)
-        except Exception as exc:
-            logger.debug("FalkorDB fulltext search_functions fallback to CONTAINS: %s", exc)
+        """FalkorDB native full-text query over a named index.
 
-        cypher = """
-        MATCH (n:Function)
-        WHERE (
-            toLower(n.name) CONTAINS toLower($query)
-            OR toLower(coalesce(n.qualified_name, '')) CONTAINS toLower($query)
-        )
-          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
-        RETURN n
+        ``labels`` restricts the node labels considered (rendered as Cypher
+        label predicates); ``extra_where`` appends additional property-only
+        predicates joined with AND.
+        """
+
+        predicates = [
+            "($project_id IS NULL OR node.project_id_normalized STARTS WITH $project_id_normalized)"
+        ]
+        if labels:
+            predicates.append("(" + " OR ".join(f"node:{label}" for label in labels) + ")")
+        if extra_where:
+            predicates.append(f"({extra_where})")
+        where_clause = " AND ".join(predicates)
+        cypher = f"""
+        CALL db.index.fulltext.queryNodes($index_name, $query) YIELD node, score
+        WHERE {where_clause}
+        RETURN node AS n
+        ORDER BY score DESC
         LIMIT $limit
         """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"query": query, "limit": limit, "project_id": project_id},
-            database,
-        )
-        return [record.get("n") for record in records if record.get("n")]
-
-    async def search_by_code(
-        self,
-        query: str,
-        limit: int = 50,
-        project_id: Optional[str] = None,
-        database: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        try:
-            return await self._fulltext_node_search("Function", query, limit, project_id, database)
-        except Exception as exc:
-            logger.debug("FalkorDB fulltext search_by_code fallback to CONTAINS: %s", exc)
-
-        cypher = """
-        MATCH (n)
-        WHERE (
-            toLower(coalesce(n.code, '')) CONTAINS toLower($query)
-            OR toLower(coalesce(n.comment, '')) CONTAINS toLower($query)
-            OR toLower(coalesce(n.summary, '')) CONTAINS toLower($query)
-        )
-          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
-        RETURN n
-        LIMIT $limit
-        """
-        records, _, _ = await self.execute_query(
-            cypher,
-            {"query": query, "limit": limit, "project_id": project_id},
-            database,
-        )
+        params = {"index_name": index_name, "query": query, "project_id": project_id, "limit": int(limit)}
+        params.update(extra_params or {})
+        records, _, _ = await self.execute_query(cypher, params, database)
         return [record.get("n") for record in records if record.get("n")]
 
     async def _fulltext_node_search(
