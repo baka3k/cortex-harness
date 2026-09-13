@@ -90,6 +90,8 @@ tests/fixtures/**
 !tests/fixtures/framework-java-app/**
 !tests/fixtures/shell-application/
 !tests/fixtures/shell-application/batch_entry.sh
+!tests/fixtures/android-analyzer/
+!tests/fixtures/android-analyzer/**
 !tests/fixtures/aspnet-core-application/
 !tests/fixtures/aspnet-core-application/**
 !tests/fixtures/aspnet-framework-application/

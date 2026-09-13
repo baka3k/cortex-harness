@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/homeFragment"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <fragment
+        android:id="@+id/homeFragment"
+        android:name="com.paritydemo.ui.HomeScreen"
+        android:label="home" />
+    <fragment
+        android:id="@+id/detailFragment"
+        android:name="com.paritydemo.ui.DetailScreen"
+        android:label="detail" />
+</navigation>

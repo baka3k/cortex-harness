@@ -1,0 +1,35 @@
+[package]
+name = "analyzer-cplus"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/cplus/cplus_analyzer.py — phase 07 rust-full-migration (C/C++ tree-sitter plane)"
+license = "MIT"
+publish = false
+
+[lib]
+name = "analyzer_cplus"
+path = "src/lib.rs"
+
+[[bin]]
+name = "analyzer-cplus"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+uuid = { version = "1", features = ["v4", "v5"] }
+sha2 = "0.10"
+encoding_rs = "0.8"
+tree-sitter = "0.25"
+# PyPI venv chạy tree-sitter-c 0.24.2 + tree-sitter-cpp 0.23.4
+# (tree_sitter_languages.get_parser raise TypeError với tree_sitter 0.26 nên
+# cplus_analyzer.py dùng fallback tree_sitter_c/tree_sitter_cpp trực tiếp) —
+# pin cùng bản để parse tree byte-identical.
+tree-sitter-c = "=0.24.2"
+tree-sitter-cpp = "=0.23.4"
+
+[lints.rust]
+unsafe_code = "deny"
