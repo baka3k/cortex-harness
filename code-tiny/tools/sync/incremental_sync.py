@@ -1312,6 +1312,21 @@ _RUST_ANALYZER_BINARIES = {
     "php": "analyzer-php",
     "perl": "analyzer-perl",
     "java": "analyzer-java",
+    "kotlin": "analyzer-kotlin",
+    "android": "analyzer-android",
+    "go": "analyzer-go",
+    "rust": "analyzer-rust",
+    "swift": "analyzer-swift",
+    "delphi": "analyzer-delphi",
+    "cobol": "analyzer-cobol",
+    "jp1": "analyzer-jp1",
+    "vbnet": "analyzer-vbnet",
+    "vb6": "analyzer-vb6",
+    "vba": "analyzer-vba",
+    "vbscript": "analyzer-vbscript",
+    "cplus": "analyzer-cplus",
+    "sql": "analyzer-sql",
+    "plsql": "analyzer-plsql",
 }
 
 
