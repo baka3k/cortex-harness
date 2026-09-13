@@ -1,0 +1,30 @@
+[package]
+name = "analyzer-android"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/android/android_kotlin_analyzer.py + android_common.py — phase 06 rust-full-migration (JVM batch, android primary entry)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-android"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+quick-xml = "0.37"
+regex = "1"
+serde_json = "1"
+sha1 = "0.10"
+tree-sitter = "0.25"
+# PyPI venv chạy tree-sitter-kotlin 1.1.0 từ repo tree-sitter-grammars/tree-sitter-kotlin
+# (`_get_kotlin_parser` fallback sang `tree_sitter_kotlin` vì tree-sitter-languages
+# 1.10.2 raise TypeError với tree-sitter ≥0.25). crates.io `tree-sitter-kotlin`
+# (fwcd lineage) là grammar KHÁC — crate cùng lineage là `tree-sitter-kotlin-ng`
+# 1.1.0, cùng tag v1.1.0 với wheel PyPI — pin để parse tree byte-identical.
+tree-sitter-kotlin-ng = "1.1.0"
+
+[lints.rust]
+unsafe_code = "deny"

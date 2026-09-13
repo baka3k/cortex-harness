@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.paritydemo">
+
+    <application
+        android:name=".ParityApp"
+        android:label="Parity Demo"
+        android:allowBackup="false">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".ui.DetailActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
+        <service
+            android:name=".data.SyncService"
+            android:enabled="true"
+            android:process=":sync" />
+        <receiver
+            android:name=".data.BootReceiver"
+            android:enabled="true"
+            android:directBootAware="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.paritydemo.ACTION_SYNC_NOW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="https" android:host="parity.dev" />
+            </intent-filter>
+        </receiver>
+        <provider
+            android:name=".data.NotesProvider"
+            android:authorities="com.paritydemo.notes"
+            android:exported="false" />
+    </application>
+</manifest>

@@ -1,0 +1,32 @@
+[package]
+name = "analyzer-delphi"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của code-tiny/tools/delphi/delphi_analyzer.py — Delphi call graph analyzer (phase 07 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-delphi"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+tree-sitter = "0.25"
+# PyPI venv tham chiếu chạy grammar `pascal` của tree_sitter_language_pack
+# (= Isopod/tree-sitter-pascal, node kinds `declProc`/`defProc`/`kUnit`/...).
+# crates.io 0.10.2 wrap cùng dòng grammar (LANGUAGE_VERSION 14) — verify bằng
+# golden test: interface/implementation ranges RỖNG trên cả 2 (node kinds
+# `interface`/`implementation` không chứa "section"/"part" nên không match
+# bộ lọc `_extract_section_line_ranges_from_tree`) + has_error/ERROR counts.
+tree-sitter-pascal = "0.10.2"
+# `_stable_point_id` = uuid5(NAMESPACE_URL, symbol_id) phía Python; v4 cho
+# parse_run_id tự sinh (`uuid.uuid4().hex[:8]`).
+uuid = { version = "1", features = ["v4", "v5"] }
+
+[lints.rust]
+unsafe_code = "deny"

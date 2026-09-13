@@ -26,7 +26,12 @@
 - [x] 3/3 analyzer (java, kotlin, android×3 mode) parity pass trên testdata + repo mẫu.
 - [x] Overlay labels (AndroidNavRoute, HandlerMessage...) đủ theo CODE_GRAPH_SCHEMA.
 
-**Trạng thái 2026-09-14:** java + kotlin PASS toàn bộ gate (reports/phase06-java-parity.md,
-phase06-kotlin-parity.md) — FULL diff 0 ngoài mask, incremental cleanup khớp, SCAN_RESULT
-byte-identical. Grammar: java 0.23.5 cả 2 bên; kotlin-ng 1.1.0 (crates.io `tree-sitter-kotlin`
-stale ở 0.3.8, PyPI 1.1.0 build cùng grammar fwcd). Android đang port (`analyzer-android`).
+**Trạng thái 2026-09-14:** 3/3 PASS toàn bộ gate (reports/phase06-{java,kotlin,android}-parity.md)
+— FULL diff 0 ngoài mask, incremental cleanup khớp, SCAN_RESULT byte-identical.
+Grammar: java 0.23.5 cả 2 bên; kotlin-ng 1.1.0 (crates.io `tree-sitter-kotlin` stale ở
+0.3.8, PyPI 1.1.0 build cùng grammar fwcd); android dùng kotlin-ng + quick-xml DOM với
+namespace resolution cho AndroidManifest/res. Overlay labels (IntentAction,
+HandlerMessage, NavRoute, UsesResource...) theo CODE_GRAPH_SCHEMA — port trong
+`analyzer-android` (18 labels qua write_nodes_batch). Ghi chú: Python reference crash
+(re.error) trên composable trailing-lambda — bug tham chiếu, fixtures dùng dạng
+parenthesized; Rust xử lý no-match.
