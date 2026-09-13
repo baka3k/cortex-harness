@@ -7,6 +7,7 @@ blockedBy: []
 blocks: []
 relatedPlans:
   - "260913-1538-ladybug-graph-provider"
+  - "1309-2104-parallel-bm25-journal-cutover (continuation: runtime wiring — BM25 auto-corpus + journal shadow)"
 predictionReport: "reports/prediction_report_20260913-1553.md"
 ---
 
