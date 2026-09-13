@@ -682,14 +682,62 @@ def main() -> int:
     lines.append("")
     lines.append(f"**OVERALL: {'PASS' if all_ok else 'FAIL'}** (optional gates excluded from verdict)")
     lines.append("")
-    lines.append("### Notes")
+    lines.append("### Port matrix (stage-by-stage)")
     lines.append("")
-    lines.append("- Chunking/assembly/write/query Cypher text is byte-identical to the python "
-                 "module; entity ids are uuid5(NAMESPACE_URL, `{project}::{type}::{name_norm}`).")
-    lines.append("- Excluded from parity (documented): live LLM extraction + answers, PDF/DOCX/"
-                 "PPTX/XLSX readers (python-side), xlsx structured pipeline (python-side), "
-                 "local-mode Qdrant vector store (python-embedded, no wire protocol), neo4j "
-                 "provider (optional rollback path only), MCP server surface (phase 13).")
+    lines.append("| stage | python (doc-tiny) | rust (cortex-doc) | mode |")
+    lines.append("|---|---|---|---|")
+    lines.append("| text reading (.txt/.md) | `read_text_file` | `text_reader::read_text_file` | rust native |")
+    lines.append("| folder scan + excludes | `_iter_input_files` + `code-tiny scan_ignore` (89 dirs) | `text_reader::iter_input_files` + `COMMON_SCAN_EXCLUDE` | rust native |")
+    lines.append("| source_id | `_safe_source_id` | `text_reader::safe_source_id` | rust native |")
+    lines.append("| chunking | `split_paragraphs` | `chunker::split_paragraphs` | rust native (G1) |")
+    lines.append("| entity id / normalize | `_entity_id`, `_normalize_entity_name` | `entity::{entity_id, normalize_entity_name}` (uuid5 SHA-1) | rust native |")
+    lines.append("| graph assembly | `build_graph_components_from_entities` | `entity::build_graph_components_from_entities` | rust native (G2) |")
+    lines.append("| graph writes | `ingest_to_graph_batch` → FalkorDB | `store::DocGraphStore::ingest_to_graph_batch` (Cypher byte-identical) | rust native (G3) |")
+    lines.append("| project registry | `project_contract.py` | `project_contract.rs` | rust native |")
+    lines.append("| entity provider seam | `build_graph_components` | `providers::EntityProvider` | rust native |")
+    lines.append("| langextract provider | `entity_extractors.extract_entities_langextract` (langextract lib) | `langextract::LangextractProvider` (reqwest: Gemini/OpenAI/Ollama, same env + retry ladder) | rust native (LLM — excluded from parity) |")
+    lines.append("| spacy provider | `build_spacy_pipeline` | `providers::SpacyProvider` (EntityRuler subset native; statistical NER → python sidecar) | rust native + sidecar |")
+    lines.append("| gliner provider | `extract_entities_gliner*` | `providers::GlinerProvider` (python sidecar subprocess) | python sidecar |")
+    lines.append("| LLM answer | `graphrag_query_langextract.llm_generate` | `langextract::llm_generate` | rust native (LLM — excluded) |")
+    lines.append("| query: graph fetch + context + prompt | `fetch_related_graph`/`format_graph_context`/`build_generation_prompt` | `store::{fetch_related_graph, format_graph_context, build_generation_prompt}` + `py_dedent` | rust native (G4, byte-level) |")
+    lines.append("| embeddings bge-m3 dense | `SentenceTransformer` in-process | `embed::encode` — Plan B: python sidecar subprocess (ONNX `ort` = later spike) | python sidecar (optional G5) |")
+    lines.append("| Qdrant vector upsert/search | local-mode embedded Qdrant | excluded | python-side |")
+    lines.append("| pdf/docx/pptx/xlsx readers + xlsx structured pipeline | pypdf/python-docx/python-pptx/openpyxl + `extractor/excel` | excluded | python-side |")
+    lines.append("| neo4j provider | `graph_store.Neo4jGraphStore` (rollback path) | excluded (falkordb only) | python-side |")
+    lines.append("| MCP tool surface | `mcp_graph_rag.py` | phase 13 surface — not ported here | out of scope |")
+    lines.append("")
+    lines.append("### Mock/parity protocol")
+    lines.append("")
+    lines.append("- LLM/NER disabled identically: deterministic regex miner (`mine_entities`) records "
+                 "entities per paragraph into `fixtures/doctiny_fixture.json`; python side replays it "
+                 "through a monkeypatched `build_graph_components` (real `process_text` + real "
+                 "`build_graph_components_from_entities` + real FalkorDB writes), rust side replays it "
+                 "through the `fixture` provider. Vector upserts stubbed on the python side.")
+    lines.append("- Entity ids are deterministic: `uuid5(NAMESPACE_URL, \`{project}::{type}::{name_norm}\`)`; "
+                 "graph write Cypher is byte-identical; `textwrap.dedent` semantics (incl. whitespace-only "
+                 "line emptying) replicated in `store::py_dedent`.")
+    lines.append("- Masked in graph diff: volatile timestamps + engine-internal ids (`MASKED_PROPS` of "
+                 "`dual_write_diff.py` + `_start_id`/`_end_id` — FalkorDB edge endpoint ids are "
+                 "creation-order dependent).")
+    lines.append("")
+    lines.append("### Exclusions")
+    lines.append("")
+    lines.append("- Live LLM extraction/answers (langextract/gemini/openai) — provider ports exist; outputs "
+                 "are non-deterministic, hence mocked in parity.")
+    lines.append("- Binary document readers + xlsx structured pipeline — python-side; deterministic but "
+                 "out of the phase 14 Scope A parity corpus (markdown).")
+    lines.append("- Local-mode (embedded) Qdrant — python-embedded store, no wire protocol; vector stage "
+                 "stubbed/excluded. Remote Qdrant would need a follow-up.")
+    lines.append("- neo4j provider (rollback-only), `neo4j_loader.py` legacy opt-in — excluded; falkordb is "
+                 "the parity flow target.")
+    lines.append("- MCP server (`mcp_graph_rag.py` tools, `mcp.sh`) — phase 13 surface; ingest CLI only here.")
+    lines.append("")
+    lines.append("### Suspected shared bugs")
+    lines.append("")
+    lines.append("- None found in shared crates. One port-fidelity finding (not a bug in python): "
+                 "`graphrag_query_langextract.build_generation_prompt` keeps its 8-space indentation "
+                 "whenever `passages_str` is multi-line, because `textwrap.dedent` computes an empty "
+                 "margin — the rust port replicates this byte-for-byte.")
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
