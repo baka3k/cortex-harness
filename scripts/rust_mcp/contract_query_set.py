@@ -205,6 +205,11 @@ def parser_gate_cases() -> List[Dict[str, Any]]:
         "plan_function_dependency_order",
         "reconstruct_flow",
     }
+    # analyze_workflow_impact is excluded: with a filled function_id the
+    # Python tool treats an unknown parser as *degraded data* (risk score +
+    # embedded subgraph_error) instead of a fatal gate — its internals are
+    # ported with the graph tools in phase 12.
+    excluded = {"analyze_workflow_impact"}
     extra_args: Dict[str, Dict[str, Any]] = {
         "inspect_parser_capabilities": {"project_id": ""},
         "get_ipc_message": {},
@@ -215,7 +220,7 @@ def parser_gate_cases() -> List[Dict[str, Any]]:
     }
     cases: List[Dict[str, Any]] = []
     for tool in UNIFIED_TOOL_NAMES:
-        if tool in no_parser_gate:
+        if tool in no_parser_gate or tool in excluded:
             continue
         arguments = dict(REQUIRED_SENTINELS.get(tool, {}))
         arguments.update(extra_args.get(tool, {}))

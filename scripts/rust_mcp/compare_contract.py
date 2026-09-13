@@ -104,13 +104,27 @@ def deep_diff(actual: Any, expected: Any, path: str, diffs: List[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_rust_server() -> None:
-    subprocess.run(
-        ["cargo", "build", "-p", "cortex-mcp"],
-        cwd=str(CARGO_ROOT),
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
+def build_rust_server(attempts: int = 10, wait_seconds: float = 30.0) -> None:
+    """Build with retries — sibling agents add crates to the shared workspace
+    concurrently, and a half-written sibling manifest briefly breaks `cargo`."""
+    for attempt in range(attempts):
+        result = subprocess.run(
+            ["cargo", "build", "-p", "cortex-mcp"],
+            cwd=str(CARGO_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return
+        transient = "failed to load manifest" in result.stderr or (
+            "no targets specified" in result.stderr
+        )
+        if transient and attempt + 1 < attempts:
+            print(f"[compare] workspace busy (sibling crate mid-write); retrying…")
+            time.sleep(wait_seconds)
+            continue
+        sys.stderr.write(result.stderr)
+        result.check_returncode()
 
 
 def launch_rust_server(port: int) -> subprocess.Popen:

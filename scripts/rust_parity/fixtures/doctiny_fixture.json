@@ -1,0 +1,140 @@
+{
+ "entities_by_paragraph": {
+  "Ops runbook cho cụm FalkorDB.": [
+   {
+    "name": "FalkorDB",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 20,
+    "end_char": 28
+   }
+  ],
+  "Restart FalkorDB service bằng systemd, sau đó kiểm tra GRAPH.RO_QUERY trên port 6379 và xác nhận schema của graph p14_doc_py chưa drift. Log ghi tại /var/log/falkordb.": [
+   {
+    "name": "FalkorDB",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 8,
+    "end_char": 16
+   },
+   {
+    "name": "GRAPH",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 55,
+    "end_char": 60
+   }
+  ],
+  "# Crafted parity fixture": [],
+  "Đây là đoạn đầu tiên có dấu tiếng Việt để kiểm tra UTF-8 byte-level.": [
+   {
+    "name": "UTF",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 51,
+    "end_char": 54
+   }
+  ],
+  "Đoạn thứ hai có ký tự tab\tvà nhiều dòng liên tiếp.\nFalkorDB là graph database chạy trên Redis, dùng cho parity gate này.": [
+   {
+    "name": "FalkorDB",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 51,
+    "end_char": 59
+   },
+   {
+    "name": "Redis",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 88,
+    "end_char": 93
+   }
+  ],
+  "Short.": [],
+  "A": [],
+  "Paragraph ba mươi hơn bốn mươi ký tự: Acme Systems hợp tác với CCC tại Berlin\ntheo chuẩn ISO 15118 về Plug&Charge và Digital Key 3.0.": [
+   {
+    "name": "Acme Systems",
+    "type": "ORG",
+    "confidence": 0.87,
+    "start_char": 38,
+    "end_char": 50
+   },
+   {
+    "name": "ISO 15118",
+    "type": "STANDARD",
+    "confidence": 0.87,
+    "start_char": 89,
+    "end_char": 98
+   },
+   {
+    "name": "Plug&Charge",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 102,
+    "end_char": 113
+   },
+   {
+    "name": "Digital Key 3.0",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 117,
+    "end_char": 132
+   },
+   {
+    "name": "CCC",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 63,
+    "end_char": 66
+   },
+   {
+    "name": "ISO",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 89,
+    "end_char": 92
+   }
+  ],
+  "Kết thúc file crafted.": [],
+  "Plain text fixture cho doc-tiny parity.": [],
+  "The SSI FastConnect API exposes the iOrder and ekos systems through n8n webhooks.\nDraft note trước khi publish lên wiki nội bộ.": [
+   {
+    "name": "FastConnect API",
+    "type": "ORG",
+    "confidence": 0.87,
+    "start_char": 8,
+    "end_char": 23
+   },
+   {
+    "name": "n8n",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 68,
+    "end_char": 71
+   },
+   {
+    "name": "webhooks",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 72,
+    "end_char": 80
+   },
+   {
+    "name": "SSI",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 4,
+    "end_char": 7
+   },
+   {
+    "name": "API",
+    "type": "TECH",
+    "confidence": 0.87,
+    "start_char": 20,
+    "end_char": 23
+   }
+  ]
+ }
+}

@@ -1,0 +1,50 @@
+[package]
+name = "analyzer-sql-family"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của SQL-family analyzers — phase 08 rust-full-migration: mybatis overlay + database_schema + sql + plsql"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-mybatis"
+path = "src/bin/analyzer-mybatis.rs"
+
+[[bin]]
+name = "analyzer-database-schema"
+path = "src/bin/analyzer-database-schema.rs"
+
+[[bin]]
+name = "analyzer-sql"
+path = "src/bin/analyzer-sql.rs"
+
+[[bin]]
+name = "analyzer-plsql"
+path = "src/bin/analyzer-plsql.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+tree-sitter = "0.25"
+# Pin cùng version với analyzer-java (== fallback tree_sitter_java 0.23.5 của
+# venv Python) — mapper-interface parse tree byte-identical + symbol ids khớp.
+tree-sitter-java = "0.23.5"
+# Grammar XML (tree-sitter-grammars/tree-sitter-xml) — cùng grammar họ với
+# `tree_sitter_language_pack.get_parser("xml")` phía Python.
+tree-sitter-xml = "0.7"
+# Grammar SQL của mybatis sql-semantic gate: PyPI `tree-sitter-sql` 0.3.11
+# (derekstride/tree-sitter-sql — fallback của `_get_sql_parser` khi
+# `tree_sitter_languages.get_parser("sql")` raise TypeError với tree_sitter
+# 0.26). Crates.io `tree-sitter-sql` là grammar KHÁC (m-novikov 0.0.2) và git
+# tag v0.3.11 không commit src/parser.c (.gitignore) nên vendor nguồn SINH từ
+# sdist PyPI cùng version vào `sql-grammar/` (path dep — tự động trở thành
+# workspace member). Cùng nguồn sinh chính xác với wheel Python.
+sql-grammar-vendored = { path = "sql-grammar" }
+
+[lints.rust]
+unsafe_code = "deny"
