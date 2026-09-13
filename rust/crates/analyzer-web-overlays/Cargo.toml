@@ -1,0 +1,42 @@
+[package]
+name = "analyzer-web-overlays"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của các web framework-overlay analyzers: fastapi_django, express_js, laravel, aspnet_framework, aspnet_core (phase 08 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-fastapi-django"
+path = "src/bin/analyzer-fastapi-django.rs"
+
+[[bin]]
+name = "analyzer-express-js"
+path = "src/bin/analyzer-express-js.rs"
+
+[[bin]]
+name = "analyzer-laravel"
+path = "src/bin/analyzer-laravel.rs"
+
+[[bin]]
+name = "analyzer-aspnet-framework"
+path = "src/bin/analyzer-aspnet-framework.rs"
+
+[[bin]]
+name = "analyzer-aspnet-core"
+path = "src/bin/analyzer-aspnet-core.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+cortex-falkordb = { path = "../cortex-falkordb" }
+clap = { version = "4", features = ["derive"] }
+fancy-regex = "0.14"
+quick-xml = "0.37"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[lints.rust]
+unsafe_code = "deny"

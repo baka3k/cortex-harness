@@ -1,6 +1,6 @@
 # Phase 08 — laravel overlay parity (python vs rust)
 
-- chạy: 2026-09-14 05:49:24
+- chạy: 2026-09-14 06:02:58
 - fixture: `tests/fixtures/web-overlays/laravel`
 - rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-laravel`
 - base parser (prerequisite): `php` (python, journal-shadow)
@@ -31,4 +31,11 @@
 ## Kết luận
 
 - FAILURES: không có — PASS toàn bộ
+
+
+## Ghi chú parity (phase 08 — laravel)
+
+- **Port**: `_LARAVEL_RE` (`Route::(get|...|match)(path, [Scope::class, 'method'])`)
+  + scope resolution `scope.split("\\")[-1]` map vào class PHP của base analyzer.
+- Base seeding: `php_analyzer.py` (prerequisite parser), journal-shadow env.
 

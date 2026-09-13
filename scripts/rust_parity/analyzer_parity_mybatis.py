@@ -101,7 +101,8 @@ def journal_env(env: dict, root: Path, project_id: str, graph: str, host: str, p
     return env
 
 
-def run_java_seed(root: Path, project_id: str, graph: str, host: str, port: int) -> None:
+def run_java_seed(root: Path, project_id: str, graph: str, host: str, port: int,
+                  incremental: tuple[Path, Path] | None = None) -> None:
     """SEED — python java analyzer trên graph (cả 2 phía dùng CÙNG base)."""
     cmd = [
         str(PY_BIN), str(PY_JAVA),
@@ -113,6 +114,13 @@ def run_java_seed(root: Path, project_id: str, graph: str, host: str, port: int)
         "--falkordb-graph", graph,
         "--disable-message-scan",
     ]
+    if incremental:
+        cmd.append("--incremental")
+        changed, deleted = incremental
+        if changed:
+            cmd.extend(["--changed-files-manifest", str(changed)])
+        if deleted:
+            cmd.extend(["--deleted-files-manifest", str(deleted)])
     env = journal_env(analyzer_env(), root, project_id, graph, host, port)
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
     if proc.returncode != 0:
@@ -315,17 +323,28 @@ def scenario_incremental(driver: FalkorDBDriver, host: str, port: int,
         changed_manifest = Path(tmp) / "changed.json"
         deleted_manifest = Path(tmp) / "deleted.json"
         changed_manifest.write_text(
-            json.dumps({"files": ["src/main/resources/mapper/UserMapper.xml"]}) + "\n",
+            json.dumps({"files": [
+                "src/main/resources/mapper/UserMapper.xml",
+                "src/main/java/com/acme/mapper/OrderMapper.java",
+            ]}) + "\n",
             encoding="utf-8",
         )
         deleted_manifest.write_text(
             json.dumps({"files": ["src/main/resources/mapper/OrderMapper.xml"]}) + "\n",
             encoding="utf-8",
         )
+        # Production order: base (java) analyzer incremental chạy TRƯỚC overlay
+        # incremental trên cùng graph — Function node cho method mới (countAll)
+        # được base tạo ra trước khi overlay SEMANTIC_OF→Function vào nó.
+        manifests = (changed_manifest, deleted_manifest)
+        run_java_seed(workdir, "parity_mybatis", "p08_mybatis_inc_seed_py",
+                      host, port, incremental=manifests)
+        run_java_seed(workdir, "parity_mybatis", "p08_mybatis_inc_seed_rs",
+                      host, port, incremental=manifests)
         # KHÔNG clean giữa seed và incremental — cleanup xoá mybatis nodes của
         # 2 file manifest khỏi graph seed.
         dual(driver, workdir, "inc_run", host, port, report, scratch,
-             incremental=(changed_manifest, deleted_manifest), clean=False)
+             incremental=manifests, clean=False)
 
 
 def main() -> int:

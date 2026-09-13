@@ -1,6 +1,6 @@
 # Phase 08 — express_js overlay parity (python vs rust)
 
-- chạy: 2026-09-14 05:49:10
+- chạy: 2026-09-14 06:02:45
 - fixture: `tests/fixtures/web-overlays/express_js`
 - rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-express-js`
 - base parser (prerequisite): `js` (python, journal-shadow)
@@ -31,4 +31,13 @@
 ## Kết luận
 
 - FAILURES: không có — PASS toàn bộ
+
+
+## Ghi chú parity (phase 08 — express_js)
+
+- **Port**: giống fastapi_django nhưng `_EXPRESS_RE` (app|router|server|api +
+  method set có `all`/`use` → normalized `ALL`) + symbol index JS (function decl
+  + arrow `const x = (...) =>`).
+- Base seeding: `js_analyzer.py` (prerequisite parser theo FRAMEWORK_ANALYZERS),
+  journal-shadow env như orchestrator.
 

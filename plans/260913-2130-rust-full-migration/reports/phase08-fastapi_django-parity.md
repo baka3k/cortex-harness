@@ -1,6 +1,6 @@
 # Phase 08 — fastapi_django overlay parity (python vs rust)
 
-- chạy: 2026-09-14 05:48:51
+- chạy: 2026-09-14 06:02:32
 - fixture: `tests/fixtures/web-overlays/fastapi_django`
 - rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django`
 - base parser (prerequisite): `python` (python, journal-shadow)
@@ -31,4 +31,21 @@
 ## Kết luận
 
 - FAILURES: không có — PASS toàn bộ
+
+
+## Ghi chú parity (phase 08 — fastapi_django)
+
+- **Port**: `tools/web_framework/` (109 + 198 + models 77 LOC) → `web::pipeline`
+  + `web::models` + `web::writer`; regex `_FASTAPI_RE`/`_DJANGO_RE` port với
+  `(?is)`/`(?m)` đúng flags Python. `stable_id` = `web::` + sha256[:32] của
+  `"\x1f".join(str(p).strip())`.
+- **Semantic engine**: KHÔNG dùng `SemanticInferenceEngine` (overlay thuần regex
+  + symbol index); handler resolution từ symbol index tự scan (def/class/function).
+- **Writer**: `WebFrameworkWriter` qua `GraphStore.execute_query` — MERGE
+  `ApiEndpoint {id}` + `SET node += row` + `HANDLES`/`SEMANTIC_OF` có điều kiện
+  match handler (name/file_path/scope) như Python; `delete_paths` per framework.
+- **Incremental**: manifest đọc key `paths` (dict) hoặc list — ĐÚNG chữ ký
+  `_manifest()` của overlay (khác `load_manifest_paths` của orchestrator).
+- **project_id**: node/relationship rows đều mang `project_id` tường minh
+  (writer contract); Python overlay cũng tự điền nên không cần journal env.
 

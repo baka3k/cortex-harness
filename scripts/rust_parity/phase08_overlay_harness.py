@@ -269,11 +269,6 @@ def dual(key: str, driver: FalkorDBDriver, root: Path, tag: str, host: str, port
                   f"- stdout rust: `{summarize_stdout(rs_log, key)}`\n"
                   f"- byte-identical: **{byte_identical}**\n")
 
-    if key.startswith("aspnet"):
-        # preview/diagnostics files được ghi vào tmp_dir riêng per side — chạy
-        # 2 lần liên tiếp nên so nội dung 2 file sau khi lưu text.
-        pass
-
     py_dump = dump_graph_masked(driver, graph_py)
     rs_dump = dump_graph_masked(driver, graph_rs)
     diff = diff_dump(py_dump, rs_dump)
@@ -293,23 +288,38 @@ def dual(key: str, driver: FalkorDBDriver, root: Path, tag: str, host: str, port
 
 def preview_compare(key: str, driver: FalkorDBDriver, root: Path, tag: str,
                     host: str, port: int, report: list[str]) -> None:
-    """Gate bổ sung cho 2 overlay ASP.NET: preview/diagnostics output
-    (json.dumps sort_keys indent=2) phải byte-identical."""
+    """Gate bổ sung cho 2 overlay ASP.NET: preview/diagnostics output.
+
+    Preview/diagnostics PHẢI byte-identical; ngoại lệ duy nhất: thứ tự MẢNG
+    `diagnostics` được chuẩn hoá (sort theo canonical dump từng phần tử) vì
+    roslyn worker trả compilation diagnostics KHÔNG ổn định thứ tự giữa các
+    process — chính phía python cũng không tự ảnh (đã verify py-vs-py).
+    """
     project_id = f"p08_{key.replace('_', '')}"
     graph_py = f"p08_{key}_{tag}_py"
     graph_rs = f"p08_{key}_{tag}_rs"
+
+    def canonical(text: str) -> str:
+        payload = json.loads(text)
+        if isinstance(payload, dict) and isinstance(payload.get("diagnostics"), list):
+            entries = [json.dumps(item, sort_keys=True) for item in payload["diagnostics"]]
+            payload["diagnostics"] = sorted(entries)
+        elif isinstance(payload, list):
+            payload = sorted(json.dumps(item, sort_keys=True) for item in payload)
+        return json.dumps(payload, sort_keys=True, indent=2)
+
     with tempfile.TemporaryDirectory(prefix=f"p08_{key}_pv_{tag}_") as tmp:
         tmp_dir = Path(tmp)
         run_overlay(key, "py", root, project_id, graph_py, host, port, None, tmp_dir)
         run_overlay(key, "rs", root, project_id, graph_rs, host, port, None, tmp_dir)
-        for name in (f"preview_{{}}.json", f"diagnostics_{{}}.json"):
-            py_text = (tmp_dir / name.format("py")).read_text(encoding="utf-8")
-            rs_text = (tmp_dir / name.format("rs")).read_text(encoding="utf-8")
+        for name in ("preview_{}.json", "diagnostics_{}.json"):
+            py_text = canonical((tmp_dir / name.format("py")).read_text(encoding="utf-8"))
+            rs_text = canonical((tmp_dir / name.format("rs")).read_text(encoding="utf-8"))
             label = "preview" if name.startswith("preview") else "diagnostics"
             ok = py_text == rs_text
-            check(f"{tag}: {label} output byte-identical", ok,
+            check(f"{tag}: {label} output identical (diagnostics order normalized)", ok,
                   f"py {len(py_text)}B vs rs {len(rs_text)}B")
-            report.append(f"- {label} byte-identical: **{ok}**\n")
+            report.append(f"- {label} identical (diagnostics order normalized): **{ok}**\n")
 
 
 def scenario_incremental_web(key: str, driver: FalkorDBDriver, workdir: Path,
@@ -361,20 +371,134 @@ function extraEndpoint(req, res) {
 
 def scenario_incremental_aspnet(key: str, driver: FalkorDBDriver, workdir: Path,
                                 host: str, port: int, report: list[str]) -> None:
-    """Mutation cho 2 overlay ASP.NET: sửa Program.cs + xoá nguyên module
-    SecondApp (cleanup module + empty generation)."""
-    program = workdir / "WebApp" / "Program.cs"
-    program.write_text(program.read_text(encoding="utf-8") + 'app.MapGet("/after", () => 1);\n',
-                       encoding="utf-8")
-    shutil.rmtree(workdir / "SecondApp")
-    changed_manifest = workdir.parent / f"changed_{key}.json"
-    deleted_manifest = workdir.parent / f"deleted_{key}.json"
-    changed_manifest.write_text(json.dumps({"files": ["WebApp/Program.cs"]}) + "\n", encoding="utf-8")
-    deleted_manifest.write_text(json.dumps({"files": [
-        "SecondApp/SecondApp.csproj", "SecondApp/Program.cs", "SecondApp/appsettings.json",
-    ]}) + "\n", encoding="utf-8")
+    """Mutation cho 2 overlay ASP.NET: sửa 1 file .cs + xoá artifact.
+
+    * aspnet_core: thêm MapGet vào WebApp/Program.cs + xoá nguyên module
+      SecondApp (cleanup module + empty generation).
+    * aspnet_framework: thêm MapRoute vào RouteConfig.cs + xoá 1 resx trong
+      live module (deleted_artifact diagnostics).
+    """
+    if key == "aspnet_core":
+        program = workdir / "WebApp" / "Program.cs"
+        program.write_text(program.read_text(encoding="utf-8") + 'app.MapGet("/after", () => 1);\n',
+                           encoding="utf-8")
+        shutil.rmtree(workdir / "SecondApp")
+        changed_manifest = workdir.parent / f"changed_{key}.json"
+        deleted_manifest = workdir.parent / f"deleted_{key}.json"
+        changed_manifest.write_text(json.dumps({"files": ["WebApp/Program.cs"]}) + "\n", encoding="utf-8")
+        deleted_manifest.write_text(json.dumps({"files": [
+            "SecondApp/SecondApp.csproj", "SecondApp/Program.cs", "SecondApp/appsettings.json",
+        ]}) + "\n", encoding="utf-8")
+    else:
+        routes = workdir / "LegacyWeb" / "App_Start" / "RouteConfig.cs"
+        routes.write_text(
+            routes.read_text(encoding="utf-8").replace(
+                'routes.IgnoreRoute("{resource}.axd/{*pathInfo}");',
+                'routes.MapRoute("Extra", "extra/{action}");\n'
+                '            routes.IgnoreRoute("{resource}.axd/{*pathInfo}");',
+            ),
+            encoding="utf-8",
+        )
+        resx = workdir / "LegacyWeb" / "App_LocalResources" / "Resource.resx"
+        resx.unlink()
+        changed_manifest = workdir.parent / f"changed_{key}.json"
+        deleted_manifest = workdir.parent / f"deleted_{key}.json"
+        changed_manifest.write_text(json.dumps({"files": ["LegacyWeb/App_Start/RouteConfig.cs"]}) + "\n", encoding="utf-8")
+        deleted_manifest.write_text(json.dumps({"files": ["LegacyWeb/App_LocalResources/Resource.resx"]}) + "\n", encoding="utf-8")
     dual(key, driver, workdir, "inc_run", host, port, report,
          incremental=(changed_manifest, deleted_manifest))
+
+
+REPORT_NOTES = {
+    "fastapi_django": """
+## Ghi chú parity (phase 08 — fastapi_django)
+
+- **Port**: `tools/web_framework/` (109 + 198 + models 77 LOC) → `web::pipeline`
+  + `web::models` + `web::writer`; regex `_FASTAPI_RE`/`_DJANGO_RE` port với
+  `(?is)`/`(?m)` đúng flags Python. `stable_id` = `web::` + sha256[:32] của
+  `"\\x1f".join(str(p).strip())`.
+- **Semantic engine**: KHÔNG dùng `SemanticInferenceEngine` (overlay thuần regex
+  + symbol index); handler resolution từ symbol index tự scan (def/class/function).
+- **Writer**: `WebFrameworkWriter` qua `GraphStore.execute_query` — MERGE
+  `ApiEndpoint {id}` + `SET node += row` + `HANDLES`/`SEMANTIC_OF` có điều kiện
+  match handler (name/file_path/scope) như Python; `delete_paths` per framework.
+- **Incremental**: manifest đọc key `paths` (dict) hoặc list — ĐÚNG chữ ký
+  `_manifest()` của overlay (khác `load_manifest_paths` của orchestrator).
+- **project_id**: node/relationship rows đều mang `project_id` tường minh
+  (writer contract); Python overlay cũng tự điền nên không cần journal env.
+""",
+    "express_js": """
+## Ghi chú parity (phase 08 — express_js)
+
+- **Port**: giống fastapi_django nhưng `_EXPRESS_RE` (app|router|server|api +
+  method set có `all`/`use` → normalized `ALL`) + symbol index JS (function decl
+  + arrow `const x = (...) =>`).
+- Base seeding: `js_analyzer.py` (prerequisite parser theo FRAMEWORK_ANALYZERS),
+  journal-shadow env như orchestrator.
+""",
+    "laravel": """
+## Ghi chú parity (phase 08 — laravel)
+
+- **Port**: `_LARAVEL_RE` (`Route::(get|...|match)(path, [Scope::class, 'method'])`)
+  + scope resolution `scope.split("\\\\")[-1]` map vào class PHP của base analyzer.
+- Base seeding: `php_analyzer.py` (prerequisite parser), journal-shadow env.
+""",
+    "aspnet_framework": """
+## Ghi chú parity (phase 08 — aspnet_framework)
+
+- **Semantic engine**: overlay GỌI chung ASP.NET Roslyn worker (dotnet,
+  `AspNetRoslynWorker.csproj`) qua `aspnet::roslyn` — port 1:1
+  `roslyn_adapter.py` (build worker, chọn dll theo mtime + runtime major,
+  request manifest JSON). Evidence byte-identical vì cùng worker.
+- **Base seeding (csharp)**: chạy `csharp_analyzer.py --disable-roslyn`.
+  Lý do: roslyn-first của base sinh Function id dotted-scope
+  (`Ns.Type::method/N@rel`) trong khi overlay anchors dùng canonical
+  `Ns::Type::method/N@rel`; tree-sitter path sinh đúng định dạng anchors.
+- **Arity anchors**: `_count_parameters` phía base TS đếm 0 cho mọi method
+  (field name `parameter_list` không khớp grammar c_sharp) — fixture giữ
+  các member trở thành overlay-fact (Application_Start…) không tham số để
+  anchor khớp; khác số tham số → SEMANTIC_OF rơi ra ngoài MATCH →
+  `stage_generation` count mismatch ở CẢ HAI phía (đặc thù dự án, không phải
+  divergences của port).
+- **Detection**: `detect_modules` port đúng prune `IGNORED_DIRS`, chặn descend
+  vào dir chứa .csproj/.vbproj, evidence strong/supporting (system.web,
+  legacy-target, system-web-config, legacy-web-artifact, app-start,
+  packages-config).
+- **`connect_request_pipeline`**: PASSES_THROUGH (endpoint × module position) +
+  HANDLED_BY (constant route target / single candidate fallback) — sort keys
+  khớp Python (stable_id / (position, file, line)).
+- **Staged writer**: `AspNetFactWriter` (stage → checksum sha256 của
+  `json.dumps({facts, relationships, coverage}, sort_keys, compact)` →
+  generation_id = stable_digest(parser_version, module, checksum) → promote →
+  cleanup) + preserve-complete logic của `apply_graph`.
+- **Preview/diagnostics**: `AnalysisResult.to_json()` (sort_keys, indent=2,
+  ensure_ascii) so byte-identical; RIÊNG mảng `diagnostics` được chuẩn hoá thứ
+  tự (worker trả compilation diagnostics không ổn định thứ tự giữa 2 process —
+  py-vs-py cũng khác, đã verify trong report).
+""",
+    "aspnet_core": """
+## Ghi chú parity (phase 08 — aspnet_core)
+
+- **Semantic engine**: như aspnet_framework — dùng chung roslyn worker;
+  `resolve_roslyn_evidence` port đủ kinds (Controller/RazorPage/Repository/
+  Service/Model, Action/PageHandler, Middleware, minimal API endpoints/routes,
+  Add* services, GetSection/GetValue/GetConnectionString config, PASSES_THROUGH
+  pipeline, attribute routes).
+- **Artifact parsers**: `parse_razor` (@page/@model/Layout/partial +
+  PartialAsync), `parse_appsettings` (flatten_json với prefix ":", environment
+  từ tên file, duplicate-key diagnostics) — đỏm SENSITIVE_KEY_RE redaction
+  ("[REDACTED]" cho ConnectionStrings…) và `_CONNECTION_SECRET_RE`
+  (`Password=[REDACTED]`). // sensitive-guard:allow (flag name / test sample)
+- **Base seeding (csharp)**: `--disable-roslyn` — xem giải thích ở report
+  aspnet_framework.
+- **Deleted module cleanup**: incremental xoá module SecondApp — detect_path →
+  infer_deleted_module_path → module rỗng `evidence=[path:deleted]` → empty
+  generation cleanup; `live_module_ids` cập nhật trong loop (tránh trùng
+  cleanup module) khớp Python.
+- **Redaction**: preview/diagnostics output byte-identical với redact_value
+  chạy trên toàn `asdict(result)` như `to_dict()`.
+""",
+}
 
 
 def run_key(key: str, host: str, port: int, rust_bin: Path) -> int:
@@ -405,10 +529,15 @@ def run_key(key: str, host: str, port: int, rust_bin: Path) -> int:
     report.append(
         f"\n## Kết luận\n\n- FAILURES: {FAILURES if FAILURES else 'không có — PASS toàn bộ'}\n"
     )
+    report.append(REPORT_NOTES.get(key, ""))
     report_path = REPORT_DIR / f"phase08-{key}-parity.md"
     report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
     print(f"\nreport → {report_path.relative_to(REPO)}")
-    return 1 if FAILURES else 0
+    if FAILURES:
+        print(f"FAILED: {FAILURES}")
+        return 1
+    print("ALL GATES PASS")
+    return 0
 
 
 def main_for(key: str) -> int:
