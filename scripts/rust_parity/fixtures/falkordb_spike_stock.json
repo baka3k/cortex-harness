@@ -1,0 +1,1247 @@
+{
+  "graph": "stock",
+  "queries": [
+    {
+      "name": "keyword_search",
+      "query": "MATCH (n) WHERE ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) AND any(q IN $qs WHERE toLower(coalesce(n.name, '')) CONTAINS q OR toLower(coalesce(n.qualified_name, '')) CONTAINS q) RETURN n LIMIT $limit",
+      "params": {
+        "qs": [
+          "stock"
+        ],
+        "project_id": "stock",
+        "project_id_normalized": "stock",
+        "limit": 5
+      },
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "n"
+        ],
+        "records": [
+          {
+            "n": {
+              "project_id": "stock",
+              "name": "stock",
+              "slug": "stock",
+              "created_at": 1787666642671,
+              "node_type": "code",
+              "language": "sql",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "root": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:54.777Z",
+              "project_id_normalized": "stock",
+              "_graph_id": 0,
+              "_label": "Project"
+            }
+          },
+          {
+            "n": {
+              "name": "stock/stock",
+              "id": "stock/stock",
+              "project_id": "stock",
+              "created_at": 1787666642671,
+              "project_id_normalized": "stock",
+              "_graph_id": 1,
+              "_label": "Repository"
+            }
+          },
+          {
+            "n": {
+              "id": "ensure_stock_data/6@backend/src/stock_backend/integrations/mcp/server.py",
+              "name": "ensure_stock_data",
+              "node_type": "code",
+              "qualified_name": "ensure_stock_data",
+              "kind": "function",
+              "file_path": "backend/src/stock_backend/integrations/mcp/server.py",
+              "start_line": 1012,
+              "end_line": 1136,
+              "arity": 6,
+              "code": "def ensure_stock_data(\n    symbol: str,\n    force_refresh: bool = False,\n    from_date: str = \"\",\n    to_date: str = \"\",\n    market: str = \"HOSE\",\n    cache_hours: float = 24.0,\n) -> dict[str, Any]:\n    \"\"\"Ensure sufficient stock data is cached for analysis (auto-fetch missing date ranges).\n    \n    Checks the local stock cache for the requested date range. If data is missing\n    or stale, automatically fetches the missing date ranges from SSI API and\n    merges them into the cache. This is the recommended first step before running\n    any pipeline analysis, especially when you need ≥1 year of data for\n    multi-timeframe or ML analysis.\n    \n    Args:\n        symbol: Stock ticker (e.g., 'FPT'). Case-insensitive, spaces stripped. REQUIRED.\n        force_refresh: If True, ignore cache and fetch fresh data for the full range. REQUIRED.\n        from_date: Start date DD/MM/YYYY (default: 1 year ago).\n        to_date: End date DD/MM/YYYY (default: today).\n        market: Market exchange (HOSE/HNX/UPCOM, default HOSE).\n        cache_hours: Max cache age in hours before considering stale (0-168, default 24).\n        \n    Returns:\n        dict with keys:\n        - symbol: Sanitized symbol\n        - ok: True if data is available\n        - from_date: Resolved start date\n        - to_date: Resolved end date\n        - price_rows: Number of price rows available\n        - ohlc_rows: Number of OHLC rows available\n        - coverage_from: Earliest date in cache\n        - coverage_to: Latest date in cache\n        - missing_ranges: List of date ranges that were fetched (empty if all cached)\n        - cached: Whether data was served from cache\n    \"\"\"\n    core = _load_analysis_core()\n    safe_symbol = sanitize_symbol(symbol)\n    safe_market = (market or \"HOSE\").strip().upper() or \"HOSE\"\n    safe_cache_hours = _safe_float(cache_hours, 0.0, 168.0)\n\n    # Resolve dates: default to 1 year window\n    resolved_from, resolved_to = _resolve_dates(from_date, to_date)\n\n    fetcher = core.SSIDataFetcher()\n\n    # Load cache\n    _use_cache = not force_refresh\n    cache_hit = core._load_stock_cache(safe_symbol, resolved_from, resolved_to, safe_cache_hours) if _use_cache else None\n\n    cached_from = cache_hit.get(\"_from_date\") if cache_hit else None\n    cached_to = cache_hit.get(\"_to_date\") if cache_hit else None\n    cached_ranges = core._normalize_date_ranges(cache_hit.get(\"_ranges\", [])) if cache_hit else []\n    cached_price_df = core._df_from_cache(cache_hit.get(\"price_df\", [])) if cache_hit else core.pd.DataFrame()\n    cached_ohlc_df = core._df_from_cache(cache_hit.get(\"ohlc_df\", [])) if cache_hit else core.pd.DataFrame()\n\n    # If legacy cache, force full refetch\n    if cache_hit and cache_hit.get(\"_is_legacy\"):\n        cached_from = None\n        cached_to = None\n        cached_ranges = []\n        cached_price_df = core.pd.DataFrame()\n        cached_ohlc_df = core.pd.DataFrame()\n\n    # Compute missing ranges\n    missing_ranges = core._compute_missing_ranges(\n        resolved_from, resolved_to, cached_from, cached_to, cached_ranges\n    )\n\n    price_full = cached_price_df.copy()\n    ohlc_full = cached_ohlc_df.copy()\n    fetched_ok_ranges: list[tuple[str, str]] = []\n\n    if missing_ranges:\n        for fd, td in missing_ranges:\n            price_new, price_ok = fetcher.get_daily_stock_price(safe_symbol, fd, td, safe_market, return_ranges=True)\n            ohlc_new, ohlc_ok = fetcher.get_daily_ohlc(safe_symbol, fd, td, return_ranges=True)\n            price_full = core._merge_df_by_date(price_full, price_new, \"TradingDate\")\n            ohlc_full = core._merge_df_by_date(ohlc_full, ohlc_new, \"TradingDate\")\n            chunk_ok = core._normalize_date_ranges([*price_ok, *ohlc_ok])\n            if chunk_ok:\n                fetched_ok_ranges.extend(chunk_ok)\n    elif not cache_hit:\n        # No cache at all, fetch full range\n        price_full, price_ok = fetcher.get_daily_stock_price(safe_symbol, resolved_from, resolved_to, safe_market, return_ranges=True)\n        ohlc_full, ohlc_ok = fetcher.get_daily_ohlc(safe_symbol, resolved_from, resolved_to, return_ranges=True)\n        fetched_ok_ranges.extend(core._normalize_date_ranges([*price_ok, *ohlc_ok]))\n\n    # Slice to requested range\n    price_df = core._slice_df_by_date(price_full, resolved_from, resolved_to, \"TradingDate\")\n    ohlc_df = core._slice_df_by_date(ohlc_full, resolved_from, resolved_to, \"TradingDate\")\n\n    # Save cache\n    new_ranges = core._normalize_date_ranges([*cached_ranges, *fetched_ok_ranges])\n    new_cov_from, new_cov_to = core._coverage_bounds_from_ranges(new_ranges)\n    if not new_cov_from or not new_cov_to:\n        pmin, pmax = core._df_date_bounds(price_full, \"TradingDate\")\n        omin, omax = core._df_date_bounds(ohlc_full, \"TradingDate\")\n        new_cov_from = core._min_date_str(cached_from, pmin, omin)\n        new_cov_to = core._max_date_str(cached_to, pmax, omax)\n\n    if new_cov_from and new_cov_to:\n        core._save_stock_cache(safe_symbol, new_cov_from, new_cov_to, {\n            \"price_df\": price_full,\n            \"ohlc_df\": ohlc_full,\n            \"_ranges\": new_ranges,\n        })\n\n    # Coverage info\n    final_from, final_to = core._df_date_bounds(ohlc_full if not ohlc_full.empty else price_full, \"TradingDate\")\n\n    return {\n        \"symbol\": safe_symbol,\n        \"ok\": not price_df.empty or not ohlc_df.empty,\n        \"from_date\": resolved_from,\n        \"to_date\": resolved_to,\n        \"price_rows\": int(len(price_df)),\n        \"ohlc_rows\": int(len(ohlc_df)),\n        \"coverage_from\": final_from,\n        \"coverage_to\": final_to,\n        \"missing_ranges\": [[r[0], r[1]] for r in missing_ranges],\n        \"fetched_ranges\": [[r[0], r[1]] for r in fetched_ok_ranges],\n        \"cached\": cache_hit is not None and not missing_ranges,\n    }",
+              "comment": "Ensure sufficient stock data is cached for analysis (auto-fetch missing date ranges).\n    \n    Checks the local stock cache for the requested date range. If data is missing\n    or stale, automatically fetches the missing date ranges from SSI API and\n    merges them into the cache. This is the recommended first step before running\n    any pipeline analysis, especially when you need ≥1 year of data for\n    multi-timeframe or ML analysis.\n    \n    Args:\n        symbol: Stock ticker (e.g., 'FPT'). Case-insensitive, spaces stripped. REQUIRED.\n        force_refresh: If True, ignore cache and fetch fresh data for the full range. REQUIRED.\n        from_date: Start date DD/MM/YYYY (default: 1 year ago).\n        to_date: End date DD/MM/YYYY (default: today).\n        market: Market exchange (HOSE/HNX/UPCOM, default HOSE).\n        cache_hours: Max cache age in hours before considering stale (0-168, default 24).\n        \n    Returns:\n        dict with keys:\n        - symbol: Sanitized symbol\n        - ok: True if data is available\n        - from_date: Resolved start date\n        - to_date: Resolved end date\n        - price_rows: Number of price rows available\n        - ohlc_rows: Number of OHLC rows available\n        - coverage_from: Earliest date in cache\n        - coverage_to: Latest date in cache\n        - missing_ranges: List of date ranges that were fetched (empty if all cached)\n        - cached: Whether data was served from cache",
+              "summary": "Ensure sufficient stock data is cached for analysis (auto-fetch missing date ranges).\n    \n    Checks the local stock cache for the requested date range. If data is missing\n    or stale, automatically fetches the missing date ranges from SSI API and\n    merges them into the cache. This is the recommended first step before running\n    any pipeline analysis, especially when you need ≥1 year of data for\n    multi-timeframe or ML analysis.\n    \n    Args:\n        symbol: Stock ticker (e.g., 'FPT'). Case-insensitive, spaces stripped. REQUIRED.\n        force_refresh: If True, ignore cache and fetch fresh data for the full range. REQUIRED.\n        from_date: Start date DD/MM/YYYY (default: 1 year ago).\n        to_date: End date DD/MM/YYYY (default: today).\n        market: Market exchange (HOSE/HNX/UPCOM, default HOSE).\n        cache_hours: Max cache age in hours before considering stale (0-168, default 24).\n        \n    Returns:\n        dict with keys:\n        - symbol: Sanitized symbol\n        - ok: True if data is available\n        - from_date: Resolved start date\n        - to_date: Resolved end date\n        - price_rows: Number of price rows available\n        - ohlc_rows: Number of OHLC rows available\n        - coverage_from: Earliest date in cache\n        - coverage_to: Latest date in cache\n        - missing_ranges: List of date ranges that were fetched (empty if all cached)\n        - cached: Whether data was served from cache",
+              "note": "Summary:\nEnsure sufficient stock data is cached for analysis (auto-fetch missing date ranges).\n    \n    Checks the local stock cache for the requested date range. If data is missing\n    or stale, automatically fetches the missing date ranges from SSI API and\n    merges them into the cache. This is the recommended first step before running\n    any pipeline analysis, especially when you need ≥1 year of data for\n    multi-timeframe or ML analysis.\n    \n    Args:\n        symbol: Stock ticker (e.g., 'FPT'). Case-insensitive, spaces stripped. REQUIRED.\n        force_refresh: If True, ignore cache and fetch fresh data for the full range. REQUIRED.\n        from_date: Start date DD/MM/YYYY (default: 1 year ago).\n        to_date: End date DD/MM/YYYY (default: today).\n        market: Market exchange (HOSE/HNX/UPCOM, default HOSE).\n        cache_hours: Max cache age in hours before considering stale (0-168, default 24).\n        \n    Returns:\n        dict with keys:\n        - symbol: Sanitized symbol\n        - ok: True if data is available\n        - from_date: Resolved start date\n        - to_date: Resolved end date\n        - price_rows: Number of price rows available\n        - ohlc_rows: Number of OHLC rows available\n        - coverage_from: Earliest date in cache\n        - coverage_to: Latest date in cache\n        - missing_ranges: List of date ranges that were fetched (empty if all cached)\n        - cached: Whether data was served from cache\n\nIntent: validation (confidence: 0.36)\n\nComment:\nEnsure sufficient stock data is cached for analysis (auto-fetch missing date ranges).\n    \n    Checks the local stock cache for the requested date range. If data is missing\n    or stale, automatically fetches the missing date ranges from SSI API and\n    merges them into the cache. This is the recommended first step before running\n    any pipeline analysis, especially when you need ≥1 year of data for\n    multi-timeframe or ML analysis.\n    \n    Args:\n        symbol: Stock ticker (e.g., 'FPT'). Case-insensitive, spaces stripped. REQUIRED.\n        force_refresh: If True, ignore cache and fetch fresh data for the full range. REQUIRED.\n        from_date: Start date DD/MM/YYYY (default: 1 year ago).\n        to_date: End date DD/MM/YYYY (default: today).\n        market: Market exchange (HOSE/HNX/UPCOM, default HOSE).\n        cache_hours: Max cache age in hours before considering stale (0-168, default 24).\n        \n    Returns:\n        dict with keys:\n        - symbol: Sanitized symbol\n        - ok: True if data is available\n        - from_date: Resolved start date\n        - to_date: Resolved end date\n        - price_rows: Number of price rows available\n        - ohlc_rows: Number of OHLC rows available\n        - coverage_from: Earliest date in cache\n        - coverage_to: Latest date in cache\n        - missing_ranges: List of date ranges that were fetched (empty if all cached)\n        - cached: Whether data was served from cache\n\nCode:\ndef ensure_stock_data(\n    symbol: str,\n    force_refresh: bool = False,\n    from_date: str = \"\",\n    to_date: str = \"\",\n    market: str = \"HOSE\",\n    cache_hours: float = 24.0,\n) -> dict[str, Any]:\n    \"\"\"Ensure sufficient stock data is cached for analysis (auto-fetch missing date ranges).\n    \n    Checks the local stock cache for the requested date range. If data is missing\n    or stale, automatically fetches the missing date ranges from SSI API and\n    merges them into the cache. This is the recommended first step before running\n    any pipeline analysis, especially when you need ≥1 year of data for\n    multi-timeframe or ML analysis.\n    \n    Args:\n        symbol: Stock ticker (e.g., 'FPT'). Case-insensitive, spaces stripped. REQUIRED.\n        force_refresh: If True, ignore cache and fetch fresh data for the full range. REQUIRED.\n        from_date: Start date DD/MM/YYYY (default: 1 year ago).\n        to_date: End date DD/MM/YYYY (default: today).\n        market: Market exchange (HOSE/HNX/UPCOM, default HOSE).\n        cache_hours: Max cache age in hours before considering stale (0-168, default 24).\n        \n    Returns:\n        dict with keys:\n        - symbol: Sanitized symbol\n        - ok: True if data is available\n        - from_date: Resolved start date\n        - to_date: Resolved end date\n        - price_rows: Number of price rows available\n        - ohlc_rows: Number of OHLC rows available\n        - coverage_from: Earliest date in cache\n        - coverage_to: Latest date in cache\n        - missing_ranges: List of date ranges that were fetched (empty if all cached)\n        - cached: Whether data was served from cache\n    \"\"\"\n    core = _load_analysis_core()\n    safe_symbol = sanitize_symbol(symbol)\n    safe_market = (market or \"HOSE\").strip().upper() or \"HOSE\"\n    safe_cache_hours = _safe_float(cache_hours, 0.0, 168.0)\n\n    # Resolve dates: default to 1 year window\n    resolved_from, resolved_to = _resolve_dates(from_date, to_date)\n\n    fetcher = core.SSIDataFetcher()\n\n    # Load cache\n    _use_cache = not force_refresh\n    cache_hit = core._load_stock_cache(safe_symbol, resolved_from, resolved_to, safe_cache_hours) if _use_cache else None\n\n    cached_from = cache_hit.get(\"_from_date\") if cache_hit else None\n    cached_to = cache_hit.get(\"_to_date\") if cache_hit else None\n    cached_ranges = core._normalize_date_ranges(cache_hit.get(\"_ranges\", [])) if cache_hit else []\n    cached_price_df = core._df_from_cache(cache_hit.get(\"price_df\", [])) if cache_hit else core.pd.DataFrame()\n    cached_ohlc_df = core._df_from_cache(cache_hit.get(\"ohlc_df\", [])) if cache_hit else core.pd.DataFrame()\n\n    # If legacy cache, force full refetch\n    if cache_hit and cache_hit.get(\"_is_legacy\"):\n        cached_from = None\n        cached_to = None\n        cached_ranges = []\n        cached_price_df = core.pd.DataFrame()\n        cached_ohlc_df = core.pd.DataFrame()\n\n    # Compute missing ranges\n    missing_ranges = core._compute_missing_ranges(\n        resolved_from, resolved_to, cached_from, cached_to, cached_ranges\n    )\n\n    price_full = cached_price_df.copy()\n    ohlc_full = cached_ohlc_df.copy()\n    fetched_ok_ranges: list[tuple[str, str]] = []\n\n    if missing_ranges:\n        for fd, td in missing_ranges:\n            price_new, price_ok = fetcher.get_daily_stock_price(safe_symbol, fd, td, safe_market, return_ranges=True)\n            ohlc_new, ohlc_ok = fetcher.get_daily_ohlc(safe_symbol, fd, td, return_ranges=True)\n            price_full = core._merge_df_by_date(price_full, price_new, \"TradingDate\")\n            ohlc_full = core._merge_df_by_date(ohlc_full, ohlc_new, \"TradingDate\")\n            chunk_ok = core._normalize_date_ranges([*price_ok, *ohlc_ok])\n            if chunk_ok:\n                fetched_ok_ranges.extend(chunk_ok)\n    elif not cache_hit:\n        # No cache at all, fetch full range\n        price_full, price_ok = fetcher.get_daily_stock_price(safe_symbol, resolved_from, resolved_to, safe_market, return_ranges=True)\n        ohlc_full, ohlc_ok = fetcher.get_daily_ohlc(safe_symbol, resolved_from, resolved_to, return_ranges=True)\n        fetched_ok_ranges.extend(core._normalize_date_ranges([*price_ok, *ohlc_ok]))\n\n    # Slice to requested range\n    price_df = core._slice_df_by_date(price_full, resolved_from, resolved_to, \"TradingDate\")\n    ohlc_df = core._slice_df_by_date(ohlc_full, resolved_from, resolved_to, \"TradingDate\")\n\n    # Save cache\n    new_ranges = core._normalize_date_ranges([*cached_ranges, *fetched_ok_ranges])\n    new_cov_from, new_cov_to = core._coverage_bounds_from_ranges(new_ranges)\n    if not new_cov_from or not new_cov_to:\n        pmin, pmax = core._df_date_bounds(price_full, \"TradingDate\")\n        omin, omax = core._df_date_bounds(ohlc_full, \"TradingDate\")\n        new_cov_from = core._min_date_str(cached_from, pmin, omin)\n        new_cov_to = core._max_date_str(cached_to, pmax, omax)\n\n    if new_cov_from and new_cov_to:\n        core._save_stock_cache(safe_symbol, new_cov_from, new_cov_to, {\n            \"price_df\": price_full,\n            \"ohlc_df\": ohlc_full,\n            \"_ranges\": new_ranges,\n        })\n\n    # Coverage info\n    final_from, final_to = core._df_date_bounds(ohlc_full if not ohlc_full.empty else price_full, \"TradingDate\")\n\n    return {\n        \"symbol\": safe_symbol,\n        \"ok\": not price_df.empty or not ohlc_df.empty,\n        \"from_date\": resolved_from,\n        \"to_date\": resolved_to,\n        \"price_rows\": int(len(price_df)),\n        \"ohlc_rows\": int(len(ohlc_df)),\n        \"coverage_from\": final_from,\n        \"coverage_to\": final_to,\n        \"missing_ranges\": [[r[0], r[1]] for r in missing_ranges],\n        \"fetched_ranges\": [[r[0], r[1]] for r in fetched_ok_ranges],\n        \"cached\": cache_hit is not None and not missing_ranges,\n    }",
+              "exported": false,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "python",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:47.779Z",
+              "_graph_id": 90,
+              "_label": "Function"
+            }
+          },
+          {
+            "n": {
+              "id": "shell-invocation::deploy/ec2/run_stock_analysis.sh:148:1",
+              "name": "EXTRA_ARGS+=(--no-stock-cache)",
+              "command_name": "EXTRA_ARGS+=(--no-stock-cache)",
+              "raw_command": "EXTRA_ARGS+=(--no-stock-cache)",
+              "file_path": "deploy/ec2/run_stock_analysis.sh",
+              "line": 148,
+              "ordinal": 1,
+              "dynamic": false,
+              "resolution_status": "unresolved",
+              "project_id": "stock",
+              "project_name": "stock",
+              "language": "shell",
+              "repo": "stock",
+              "build_system": "shell",
+              "project_id_normalized": "stock",
+              "_graph_id": 442,
+              "_label": "ShellInvocation"
+            }
+          },
+          {
+            "n": {
+              "id": "shell-invocation::deploy/ec2/run_stock_analysis.sh:154:1",
+              "name": "EXTRA_ARGS+=(--stock-cache-hours",
+              "command_name": "EXTRA_ARGS+=(--stock-cache-hours",
+              "raw_command": "EXTRA_ARGS+=(--stock-cache-hours",
+              "file_path": "deploy/ec2/run_stock_analysis.sh",
+              "line": 154,
+              "ordinal": 1,
+              "dynamic": false,
+              "resolution_status": "unresolved",
+              "project_id": "stock",
+              "project_name": "stock",
+              "language": "shell",
+              "repo": "stock",
+              "build_system": "shell",
+              "project_id_normalized": "stock",
+              "_graph_id": 446,
+              "_label": "ShellInvocation"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "legacy_fulltext_queryNodes",
+      "query": "CALL db.idx.fulltext.queryNodes('Function', 'handle') YIELD node, score RETURN node, score LIMIT 5",
+      "params": {},
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "node",
+          "score"
+        ],
+        "records": []
+      }
+    },
+    {
+      "name": "id_lookup",
+      "query": "MATCH (n) WHERE id(n) = $id RETURN n",
+      "params": {
+        "id": 1
+      },
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "n"
+        ],
+        "records": [
+          {
+            "n": {
+              "name": "stock/stock",
+              "id": "stock/stock",
+              "project_id": "stock",
+              "created_at": 1787666642671,
+              "project_id_normalized": "stock",
+              "_graph_id": 1,
+              "_label": "Repository"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "db_labels",
+      "query": "CALL db.labels() YIELD label RETURN label AS label",
+      "params": {},
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "label"
+        ],
+        "records": [
+          {
+            "label": "Project"
+          },
+          {
+            "label": "Repository"
+          },
+          {
+            "label": "Workflow"
+          },
+          {
+            "label": "Alias"
+          },
+          {
+            "label": "Action"
+          },
+          {
+            "label": "Advice"
+          },
+          {
+            "label": "AndroidComponent"
+          },
+          {
+            "label": "AndroidAnnotation"
+          },
+          {
+            "label": "AndroidHandlerMessage"
+          },
+          {
+            "label": "AndroidIntentAction"
+          },
+          {
+            "label": "AndroidManifest"
+          },
+          {
+            "label": "AndroidNavRoute"
+          },
+          {
+            "label": "AndroidResource"
+          },
+          {
+            "label": "ApiEndpoint"
+          },
+          {
+            "label": "ApplicationEvent"
+          },
+          {
+            "label": "AspNetAnalysisState"
+          },
+          {
+            "label": "Aspect"
+          },
+          {
+            "label": "AsyncBoundary"
+          },
+          {
+            "label": "AuthenticationScheme"
+          },
+          {
+            "label": "Authority"
+          },
+          {
+            "label": "AuthorizationPolicy"
+          },
+          {
+            "label": "BuildConfiguration"
+          },
+          {
+            "label": "BuildDescriptor"
+          },
+          {
+            "label": "CacheOperation"
+          },
+          {
+            "label": "CacheRegion"
+          },
+          {
+            "label": "CallSite"
+          },
+          {
+            "label": "Class"
+          },
+          {
+            "label": "CobolCicsCommand"
+          },
+          {
+            "label": "CobolCopybook"
+          },
+          {
+            "label": "CobolDataItem"
+          },
+          {
+            "label": "CobolFile"
+          },
+          {
+            "label": "CobolParagraph"
+          },
+          {
+            "label": "CobolProgram"
+          },
+          {
+            "label": "CobolSection"
+          },
+          {
+            "label": "CobolSqlStatement"
+          },
+          {
+            "label": "Constant"
+          },
+          {
+            "label": "ConfigurationKey"
+          },
+          {
+            "label": "Controller"
+          },
+          {
+            "label": "DataRepository"
+          },
+          {
+            "label": "Database"
+          },
+          {
+            "label": "DatabaseColumn"
+          },
+          {
+            "label": "DatabaseTable"
+          },
+          {
+            "label": "Dependency"
+          },
+          {
+            "label": "Directory"
+          },
+          {
+            "label": "Document"
+          },
+          {
+            "label": "Enum"
+          },
+          {
+            "label": "ErrorPage"
+          },
+          {
+            "label": "Event"
+          },
+          {
+            "label": "Field"
+          },
+          {
+            "label": "File"
+          },
+          {
+            "label": "Filter"
+          },
+          {
+            "label": "FilterMapping"
+          },
+          {
+            "label": "FrameworkInstance"
+          },
+          {
+            "label": "Function"
+          },
+          {
+            "label": "FunctionType"
+          },
+          {
+            "label": "GradleDependency"
+          },
+          {
+            "label": "GradleModule"
+          },
+          {
+            "label": "GrpcEndpoint"
+          },
+          {
+            "label": "GrpcService"
+          },
+          {
+            "label": "HttpEndpoint"
+          },
+          {
+            "label": "HttpHandler"
+          },
+          {
+            "label": "HttpModule"
+          },
+          {
+            "label": "Interface"
+          },
+          {
+            "label": "InfraNode"
+          },
+          {
+            "label": "JSPView"
+          },
+          {
+            "label": "JpaEntity"
+          },
+          {
+            "label": "Jp1Unit"
+          },
+          {
+            "label": "JspExpression"
+          },
+          {
+            "label": "JspTag"
+          },
+          {
+            "label": "Layout"
+          },
+          {
+            "label": "LifecycleEvent"
+          },
+          {
+            "label": "Listener"
+          },
+          {
+            "label": "Message"
+          },
+          {
+            "label": "MessageDestination"
+          },
+          {
+            "label": "MessageEndpoint"
+          },
+          {
+            "label": "Middleware"
+          },
+          {
+            "label": "Model"
+          },
+          {
+            "label": "MyBatisArtifact"
+          },
+          {
+            "label": "MyBatisCache"
+          },
+          {
+            "label": "MyBatisConfig"
+          },
+          {
+            "label": "MyBatisDynamicNode"
+          },
+          {
+            "label": "MyBatisExtension"
+          },
+          {
+            "label": "MyBatisInclude"
+          },
+          {
+            "label": "MyBatisJavaProperty"
+          },
+          {
+            "label": "MyBatisMapper"
+          },
+          {
+            "label": "MyBatisMapperMethod"
+          },
+          {
+            "label": "MyBatisModule"
+          },
+          {
+            "label": "MyBatisParameter"
+          },
+          {
+            "label": "MyBatisResultMap"
+          },
+          {
+            "label": "MyBatisResultMapping"
+          },
+          {
+            "label": "MyBatisSpringBridge"
+          },
+          {
+            "label": "MyBatisSqlFragment"
+          },
+          {
+            "label": "MyBatisSqlJoin"
+          },
+          {
+            "label": "MyBatisSqlParameter"
+          },
+          {
+            "label": "MyBatisSqlProvider"
+          },
+          {
+            "label": "MyBatisSqlStatement"
+          },
+          {
+            "label": "MyBatisStatement"
+          },
+          {
+            "label": "MyBatisXmlDocument"
+          },
+          {
+            "label": "Namespace"
+          },
+          {
+            "label": "Navigator"
+          },
+          {
+            "label": "Package"
+          },
+          {
+            "label": "PageHandler"
+          },
+          {
+            "label": "Paragraph"
+          },
+          {
+            "label": "ParseRun"
+          },
+          {
+            "label": "PartialView"
+          },
+          {
+            "label": "Pointcut"
+          },
+          {
+            "label": "Procedure"
+          },
+          {
+            "label": "ProjectModule"
+          },
+          {
+            "label": "Property"
+          },
+          {
+            "label": "RazorPage"
+          },
+          {
+            "label": "Resource"
+          },
+          {
+            "label": "Result"
+          },
+          {
+            "label": "RouteParam"
+          },
+          {
+            "label": "Route"
+          },
+          {
+            "label": "ScheduledTask"
+          },
+          {
+            "label": "SemanticCoverage"
+          },
+          {
+            "label": "SecurityConstraint"
+          },
+          {
+            "label": "SecurityFilterChain"
+          },
+          {
+            "label": "SecurityRule"
+          },
+          {
+            "label": "Service"
+          },
+          {
+            "label": "BatchProgram"
+          },
+          {
+            "label": "ShellFunction"
+          },
+          {
+            "label": "ShellInvocation"
+          },
+          {
+            "label": "ShellScript"
+          },
+          {
+            "label": "Servlet"
+          },
+          {
+            "label": "ServletJspAnalysisState"
+          },
+          {
+            "label": "ServletJspModule"
+          },
+          {
+            "label": "ServletMapping"
+          },
+          {
+            "label": "SessionState"
+          },
+          {
+            "label": "SqlCursor"
+          },
+          {
+            "label": "SqlDirective"
+          },
+          {
+            "label": "SqlHostVariable"
+          },
+          {
+            "label": "SqlStatement"
+          },
+          {
+            "label": "SpringApplication"
+          },
+          {
+            "label": "SpringBean"
+          },
+          {
+            "label": "SpringConfiguration"
+          },
+          {
+            "label": "SpringModule"
+          },
+          {
+            "label": "StateSlot"
+          },
+          {
+            "label": "Table"
+          },
+          {
+            "label": "Template"
+          },
+          {
+            "label": "TransactionBoundary"
+          },
+          {
+            "label": "Type"
+          },
+          {
+            "label": "UIControl"
+          },
+          {
+            "label": "UnknownFunction"
+          },
+          {
+            "label": "ValidationConstraint"
+          },
+          {
+            "label": "ValidationRule"
+          },
+          {
+            "label": "Variable"
+          },
+          {
+            "label": "View"
+          },
+          {
+            "label": "ViewModel"
+          },
+          {
+            "label": "WebConfiguration"
+          },
+          {
+            "label": "WebDescriptor"
+          },
+          {
+            "label": "WebFormPage"
+          },
+          {
+            "label": "WebTarget"
+          },
+          {
+            "label": "WelcomePage"
+          },
+          {
+            "label": "GraphWriteReceipt"
+          },
+          {
+            "label": "SpikeProbe"
+          }
+        ]
+      }
+    },
+    {
+      "name": "db_relationship_types",
+      "query": "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType AS rel_type",
+      "params": {},
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "rel_type"
+        ],
+        "records": [
+          {
+            "rel_type": "HAS_REPOSITORY"
+          },
+          {
+            "rel_type": "IMPORTS"
+          },
+          {
+            "rel_type": "CONTAINS"
+          },
+          {
+            "rel_type": "CALLS"
+          },
+          {
+            "rel_type": "HAS_INVOCATION"
+          },
+          {
+            "rel_type": "HANDLES"
+          },
+          {
+            "rel_type": "SEMANTIC_OF"
+          },
+          {
+            "rel_type": "EXPOSES_ENDPOINT"
+          },
+          {
+            "rel_type": "INHERITS_FROM"
+          },
+          {
+            "rel_type": "REFERENCES_TABLE"
+          },
+          {
+            "rel_type": "HAS_DESCRIPTOR"
+          },
+          {
+            "rel_type": "QUERIES"
+          }
+        ]
+      }
+    },
+    {
+      "name": "label_filter_order_limit",
+      "query": "MATCH (n:Function) WHERE n.project_id_normalized STARTS WITH $scope RETURN n ORDER BY n.name LIMIT $limit",
+      "params": {
+        "scope": "stock",
+        "limit": 3
+      },
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "n"
+        ],
+        "records": [
+          {
+            "n": {
+              "id": "AccessStatusPage/1@frontend/src/features/auth/AccessStatusPage.tsx",
+              "name": "AccessStatusPage",
+              "node_type": "code",
+              "qualified_name": "AccessStatusPage",
+              "kind": "function",
+              "file_path": "frontend/src/features/auth/AccessStatusPage.tsx",
+              "start_line": 7,
+              "end_line": 39,
+              "arity": 1,
+              "code": "function AccessStatusPage({ status }: { status: \"pending\" | \"rejected\" }) {\n  const { session, refresh } = useSession();\n  const navigate = useNavigate();\n  const logout = useMutation({\n    mutationFn: () => authApi.logout(session?.csrf_token),\n    onSettled: async () => {\n      await refresh();\n      navigate(\"/login\", { replace: true });\n    },\n  });\n  const pending = status === \"pending\";\n\n  return (\n    <main className=\"centered-page\" id=\"main-content\">\n      <section className=\"status-card\" aria-labelledby=\"access-title\">\n        <span className={`status-icon ${pending ? \"status-icon-wait\" : \"status-icon-stop\"}`} aria-hidden=\"true\">\n          {pending ? \"…\" : \"!\"}\n        </span>\n        <p className=\"eyebrow\">Trạng thái truy cập</p>\n        <h1 id=\"access-title\">{pending ? \"Tài khoản đang chờ duyệt\" : \"Yêu cầu truy cập đã bị từ chối\"}</h1>\n        <p className=\"muted\">\n          {pending\n            ? \"Quản trị viên cần duyệt tài khoản trước khi bạn có thể xem dữ liệu phân tích.\"\n            : \"Liên hệ quản trị viên nếu bạn cho rằng trạng thái này chưa chính xác.\"}\n        </p>\n        {session?.user?.email && <p className=\"identity-chip\">{session.user.email}</p>}\n        <button className=\"button button-secondary\" type=\"button\" onClick={() => logout.mutate()} disabled={logout.isPending}>\n          Đăng xuất\n        </button>\n      </section>\n    </main>\n  );\n}",
+              "comment": "",
+              "summary": "",
+              "note": "Code:\nfunction AccessStatusPage({ status }: { status: \"pending\" | \"rejected\" }) {\n  const { session, refresh } = useSession();\n  const navigate = useNavigate();\n  const logout = useMutation({\n    mutationFn: () => authApi.logout(session?.csrf_token),\n    onSettled: async () => {\n      await refresh();\n      navigate(\"/login\", { replace: true });\n    },\n  });\n  const pending = status === \"pending\";\n\n  return (\n    <main className=\"centered-page\" id=\"main-content\">\n      <section className=\"status-card\" aria-labelledby=\"access-title\">\n        <span className={`status-icon ${pending ? \"status-icon-wait\" : \"status-icon-stop\"}`} aria-hidden=\"true\">\n          {pending ? \"…\" : \"!\"}\n        </span>\n        <p className=\"eyebrow\">Trạng thái truy cập</p>\n        <h1 id=\"access-title\">{pending ? \"Tài khoản đang chờ duyệt\" : \"Yêu cầu truy cập đã bị từ chối\"}</h1>\n        <p className=\"muted\">\n          {pending\n            ? \"Quản trị viên cần duyệt tài khoản trước khi bạn có thể xem dữ liệu phân tích.\"\n            : \"Liên hệ quản trị viên nếu bạn cho rằng trạng thái này chưa chính xác.\"}\n        </p>\n        {session?.user?.email && <p className=\"identity-chip\">{session.user.email}</p>}\n        <button className=\"button button-secondary\" type=\"button\" onClick={() => logout.mutate()} disabled={logout.isPending}>\n          Đăng xuất\n        </button>\n      </section>\n    </main>\n  );\n}",
+              "exported": true,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "typescript",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:51.918Z",
+              "_graph_id": 2611,
+              "_label": "Function"
+            }
+          },
+          {
+            "n": {
+              "id": "AdminPage/0@frontend/src/pages/AdminPage.tsx",
+              "name": "AdminPage",
+              "node_type": "code",
+              "qualified_name": "AdminPage",
+              "kind": "function",
+              "file_path": "frontend/src/pages/AdminPage.tsx",
+              "start_line": 16,
+              "end_line": 51,
+              "arity": 0,
+              "code": "function AdminPage() {\n  const [status, setStatus] = useState<\"all\" | AdminUser[\"status\"]>(\"pending\");\n  const queryClient = useQueryClient();\n  const toast = useToast();\n  const users = useQuery({ queryKey: queryKeys.users, queryFn: dashboardApi.users });\n  const review = useMutation({\n    mutationFn: ({ id, input }: { id: string; input: UserReviewInput }) => dashboardApi.reviewUser(id, input),\n    onSuccess: async (user) => {\n      toast.success(`Đã cập nhật ${user.email}.`);\n      await queryClient.invalidateQueries({ queryKey: queryKeys.users });\n    },\n  });\n  const remove = useMutation({\n    mutationFn: dashboardApi.deleteUser,\n    onSuccess: async () => {\n      toast.success(\"Đã xóa tài khoản.\");\n      await queryClient.invalidateQueries({ queryKey: queryKeys.users });\n    },\n  });\n  const update = (user: AdminUser, input: UserReviewInput, label: string) => {\n    if (window.confirm(`${label} tài khoản ${user.email}?`)) review.mutate({ id: user.id, input });\n  };\n\n  if (users.isPending) return <PageSkeleton label=\"Đang tải người dùng\" />;\n  if (users.isError) return <ResourceError error={users.error} onRetry={() => void users.refetch()} />;\n  const filtered = users.data.filter((user) => status === \"all\" || user.status === status);\n\n  return (\n    <div className=\"page-stack\">\n      <header className=\"page-heading\"><div><p className=\"eyebrow\">Root administration</p><h1>Người dùng và quyền</h1><p>Duyệt tài khoản và thay đổi role. Mỗi mutation được xác nhận, bảo vệ bằng CSRF và ghi audit phía server.</p></div></header>\n      {(review.isError || remove.isError) && <InlineError>{(review.error ?? remove.error)?.message}</InlineError>}\n      <section className=\"metric-grid\" aria-label=\"Tổng hợp người dùng\"><article className=\"metric-card\"><span className=\"metric-label\">Tổng tài khoản</span><strong>{users.data.length}</strong></article><article className=\"metric-card\"><span className=\"metric-label\">Chờ duyệt</span><strong>{users.data.filter((user) => user.status === \"pending\").length}</strong><StatusBadge tone=\"warning\">Cần xem xét</StatusBadge></article><article className=\"metric-card\"><span className=\"metric-label\">Quản trị viên</span><strong>{users.data.filter((user) => user.role === \"admin\" || user.role === \"root\").length}</strong></article></section>\n      <section className=\"panel\"><div className=\"panel-heading\"><div><p className=\"eyebrow\">Access review</p><h2>Danh sách tài khoản</h2></div><label className=\"compact-select\">Trạng thái<select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value=\"pending\">Chờ duyệt</option><option value=\"approved\">Đã duyệt</option><option value=\"rejected\">Từ chối</option><option value=\"all\">Tất cả</option></select></label></div><div className=\"responsive-table\" tabIndex={0} aria-label=\"Bảng quản trị người dùng\"><table><thead><tr><th scope=\"col\">Người dùng</th><th scope=\"col\">Role</th><th scope=\"col\">Trạng thái</th><th scope=\"col\">Ngày tạo</th><th scope=\"col\">Hành động</th></tr></thead><tbody>{filtered.map((user) => <tr key={user.id}><th scope=\"row\"><span className=\"user-cell\"><strong>{user.full_name || \"Chưa có tên\"}</strong><small>{user.email}</small></span></th><td>{user.role}</td><td><StatusBadge tone={user.status === \"approved\" ? \"positive\" : user.status === \"rejected\" ? \"negative\" : \"warning\"}>{statusLabel[user.status] ?? user.status}</StatusBadge></td><td>{formatDateTime(user.created_at)}</td><td><div className=\"table-actions\">{user.role !== \"root\" && <><button type=\"button\" className=\"text-button\" onClick={() => update(user, { status: \"approved\", role: \"user\" }, \"Duyệt\")}>Duyệt user</button><button type=\"button\" className=\"text-button\" onClick={() => update(user, { status: \"approved\", role: \"admin\" }, \"Cấp quyền admin cho\")}>Cấp admin</button><button type=\"button\" className=\"text-button danger-link\" onClick={() => update(user, { status: \"rejected\", role: user.role === \"admin\" ? \"admin\" : \"user\" }, \"Từ chối\")}>Từ chối</button><button type=\"button\" className=\"text-button danger-link\" onClick={() => { if (window.confirm(`Xóa vĩnh viễn tài khoản ${user.email}? Hành động này không thể hoàn tác.`)) remove.mutate(user.id); }}>Xóa tài khoản</button></>}</div></td></tr>)}</tbody></table></div>{filtered.length === 0 && <p className=\"muted empty-copy\">Không có tài khoản trong trạng thái này.</p>}</section>\n    </div>\n  );\n}",
+              "comment": "",
+              "summary": "",
+              "note": "Code:\nfunction AdminPage() {\n  const [status, setStatus] = useState<\"all\" | AdminUser[\"status\"]>(\"pending\");\n  const queryClient = useQueryClient();\n  const toast = useToast();\n  const users = useQuery({ queryKey: queryKeys.users, queryFn: dashboardApi.users });\n  const review = useMutation({\n    mutationFn: ({ id, input }: { id: string; input: UserReviewInput }) => dashboardApi.reviewUser(id, input),\n    onSuccess: async (user) => {\n      toast.success(`Đã cập nhật ${user.email}.`);\n      await queryClient.invalidateQueries({ queryKey: queryKeys.users });\n    },\n  });\n  const remove = useMutation({\n    mutationFn: dashboardApi.deleteUser,\n    onSuccess: async () => {\n      toast.success(\"Đã xóa tài khoản.\");\n      await queryClient.invalidateQueries({ queryKey: queryKeys.users });\n    },\n  });\n  const update = (user: AdminUser, input: UserReviewInput, label: string) => {\n    if (window.confirm(`${label} tài khoản ${user.email}?`)) review.mutate({ id: user.id, input });\n  };\n\n  if (users.isPending) return <PageSkeleton label=\"Đang tải người dùng\" />;\n  if (users.isError) return <ResourceError error={users.error} onRetry={() => void users.refetch()} />;\n  const filtered = users.data.filter((user) => status === \"all\" || user.status === status);\n\n  return (\n    <div className=\"page-stack\">\n      <header className=\"page-heading\"><div><p className=\"eyebrow\">Root administration</p><h1>Người dùng và quyền</h1><p>Duyệt tài khoản và thay đổi role. Mỗi mutation được xác nhận, bảo vệ bằng CSRF và ghi audit phía server.</p></div></header>\n      {(review.isError || remove.isError) && <InlineError>{(review.error ?? remove.error)?.message}</InlineError>}\n      <section className=\"metric-grid\" aria-label=\"Tổng hợp người dùng\"><article className=\"metric-card\"><span className=\"metric-label\">Tổng tài khoản</span><strong>{users.data.length}</strong></article><article className=\"metric-card\"><span className=\"metric-label\">Chờ duyệt</span><strong>{users.data.filter((user) => user.status === \"pending\").length}</strong><StatusBadge tone=\"warning\">Cần xem xét</StatusBadge></article><article className=\"metric-card\"><span className=\"metric-label\">Quản trị viên</span><strong>{users.data.filter((user) => user.role === \"admin\" || user.role === \"root\").length}</strong></article></section>\n      <section className=\"panel\"><div className=\"panel-heading\"><div><p className=\"eyebrow\">Access review</p><h2>Danh sách tài khoản</h2></div><label className=\"compact-select\">Trạng thái<select value={status} onChange={(event) => setStatus(event.target.value as typeof status)}><option value=\"pending\">Chờ duyệt</option><option value=\"approved\">Đã duyệt</option><option value=\"rejected\">Từ chối</option><option value=\"all\">Tất cả</option></select></label></div><div className=\"responsive-table\" tabIndex={0} aria-label=\"Bảng quản trị người dùng\"><table><thead><tr><th scope=\"col\">Người dùng</th><th scope=\"col\">Role</th><th scope=\"col\">Trạng thái</th><th scope=\"col\">Ngày tạo</th><th scope=\"col\">Hành động</th></tr></thead><tbody>{filtered.map((user) => <tr key={user.id}><th scope=\"row\"><span className=\"user-cell\"><strong>{user.full_name || \"Chưa có tên\"}</strong><small>{user.email}</small></span></th><td>{user.role}</td><td><StatusBadge tone={user.status === \"approved\" ? \"positive\" : user.status === \"rejected\" ? \"negative\" : \"warning\"}>{statusLabel[user.status] ?? user.status}</StatusBadge></td><td>{formatDateTime(user.created_at)}</td><td><div className=\"table-actions\">{user.role !== \"root\" && <><button type=\"button\" className=\"text-button\" onClick={() => update(user, { status: \"approved\", role: \"user\" }, \"Duyệt\")}>Duyệt user</button><button type=\"button\" className=\"text-button\" onClick={() => update(user, { status: \"approved\", role: \"admin\" }, \"Cấp quyền admin cho\")}>Cấp admin</button><button type=\"button\" className=\"text-button danger-link\" onClick={() => update(user, { status: \"rejected\", role: user.role === \"admin\" ? \"admin\" : \"user\" }, \"Từ chối\")}>Từ chối</button><button type=\"button\" className=\"text-button danger-link\" onClick={() => { if (window.confirm(`Xóa vĩnh viễn tài khoản ${user.email}? Hành động này không thể hoàn tác.`)) remove.mutate(user.id); }}>Xóa tài khoản</button></>}</div></td></tr>)}</tbody></table></div>{filtered.length === 0 && <p className=\"muted empty-copy\">Không có tài khoản trong trạng thái này.</p>}</section>\n    </div>\n  );\n}",
+              "exported": true,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "typescript",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:51.918Z",
+              "_graph_id": 2589,
+              "_label": "Function"
+            }
+          },
+          {
+            "n": {
+              "id": "AnalysisLauncher/1@frontend/src/features/jobs/AnalysisLauncher.tsx",
+              "name": "AnalysisLauncher",
+              "node_type": "code",
+              "qualified_name": "AnalysisLauncher",
+              "kind": "function",
+              "file_path": "frontend/src/features/jobs/AnalysisLauncher.tsx",
+              "start_line": 23,
+              "end_line": 140,
+              "arity": 1,
+              "code": "function AnalysisLauncher({ initialSymbol = \"FPT\", onCreated }: { initialSymbol?: string; onCreated: (id: string, symbol: string) => void }) {\n  const { capabilities } = useSession();\n  const queryClient = useQueryClient();\n  const toast = useToast();\n  const watchlists = useQuery({ queryKey: queryKeys.watchlists, queryFn: dashboardApi.watchlists });\n  const [runMode, setRunMode] = useState<RunMode>(\"single\");\n  const [symbol, setSymbol] = useState(initialSymbol);\n  const [symbolsText, setSymbolsText] = useState(\"FPT\\nMBB\\nVHM\");\n  const [watchlistId, setWatchlistId] = useState(\"\");\n  const [fromDate, setFromDate] = useState(isoDate(365));\n  const [toDate, setToDate] = useState(isoDate());\n  const [market, setMarket] = useState(\"HOSE\");\n  const [benchmark, setBenchmark] = useState(\"VNIndex\");\n  const [provider, setProvider] = useState(\"\");\n  const [llmModel, setLlmModel] = useState(\"\");\n  const [useAi, setUseAi] = useState(true);\n  const [autoRetrain, setAutoRetrain] = useState(true);\n  const [stockCache, setStockCache] = useState(true);\n  const [stockCacheHours, setStockCacheHours] = useState(24);\n  const [newsCache, setNewsCache] = useState(true);\n  const [newsCacheHours, setNewsCacheHours] = useState(24);\n  const [cacheHealFull, setCacheHealFull] = useState(false);\n  const [peers, setPeers] = useState(\"\");\n  const [launchMessage, setLaunchMessage] = useState(\"\");\n\n  const createJob = useMutation({\n    mutationFn: async ({ symbols, input }: { symbols: string[]; input: Omit<JobCreateInput, \"symbol\"> }) => {\n      const jobs = [];\n      const failures: string[] = [];\n      for (const item of symbols) {\n        try {\n          jobs.push(await dashboardApi.createJob({ ...input, symbol: item }));\n        } catch (error) {\n          failures.push(`${item}: ${error instanceof Error ? error.message : \"không thể tạo tác vụ\"}`);\n        }\n      }\n      return { jobs, failures };\n    },\n    onSuccess: async ({ jobs, failures }) => {\n      const firstJob = jobs[0];\n      if (firstJob) {\n        onCreated(firstJob.id, firstJob.symbol);\n        toast.success(`Đã xếp hàng ${jobs.length} mã: ${jobs.map((job) => job.symbol).join(\", \")}.`);\n      }\n      setLaunchMessage(failures.length > 0 ? `Không xếp hàng được ${failures.join(\"; \")}` : \"\");\n      await queryClient.invalidateQueries({ queryKey: queryKeys.jobs });\n      await queryClient.invalidateQueries({ queryKey: queryKeys.overview });\n    },\n  });\n\n  const submit = (event: FormEvent) => {\n    event.preventDefault();\n    setLaunchMessage(\"\");\n    const selectedWatchlist = watchlists.data?.find((item) => item.id === watchlistId);\n    const symbols = runMode === \"single\"\n      ? parseSymbols(symbol)\n      : runMode === \"manual\"\n        ? parseSymbols(symbolsText)\n        : selectedWatchlist?.symbols ?? [];\n    if (symbols.length === 0) {\n      setLaunchMessage(\"Vui lòng chọn hoặc nhập ít nhất một mã hợp lệ.\");\n      return;\n    }\n    const input: Omit<JobCreateInput, \"symbol\"> = {\n      from_date: fromDate || null,\n      to_date: toDate || null,\n      benchmark,\n      provider: useAi && provider ? provider : null,\n      no_ai: !useAi,\n      market,\n      auto_retrain: useAi && autoRetrain,\n      llm_model: useAi && llmModel.trim() ? llmModel.trim() : null,\n      retrain_days: 0,\n      retrain_periods: 5,\n      retrain_threshold: 1.5,\n      stock_cache: stockCache,\n      stock_cache_hours: stockCacheHours,\n      news_cache: newsCache,\n      news_cache_hours: newsCacheHours,\n      cache_heal_full: cacheHealFull,\n      peers: peers.trim() || null,\n    };\n    createJob.mutate({ symbols, input });\n  };\n\n  return (\n    <form className=\"launcher-form\" onSubmit={submit}>\n      {createJob.isError && <InlineError>{createJob.error.message}</InlineError>}\n      {launchMessage && <InlineError>{launchMessage}</InlineError>}\n      <div className=\"form-grid\">\n        <label className=\"field\">Chế độ chạy<select value={runMode} onChange={(event) => setRunMode(event.target.value as RunMode)}><option value=\"single\">Một mã</option><option value=\"manual\">Nhập danh sách</option><option value=\"watchlist\">Watchlist</option></select></label>\n        {runMode === \"single\" && <label className=\"field\">Mã chứng khoán<input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} required pattern=\"[A-Za-z0-9]{1,10}\" maxLength={10} /></label>}\n        {runMode === \"manual\" && <label className=\"field field-wide\">Danh sách mã<textarea value={symbolsText} onChange={(event) => setSymbolsText(event.target.value.toUpperCase())} rows={3} placeholder=\"FPT, MBB, VHM\" /></label>}\n        {runMode === \"watchlist\" && <label className=\"field\">Watchlist<select value={watchlistId} onChange={(event) => setWatchlistId(event.target.value)} required><option value=\"\">Chọn watchlist</option>{watchlists.data?.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.symbols.length} mã</option>)}</select></label>}\n        <label className=\"field\">Từ ngày<input type=\"date\" value={fromDate} max={toDate} onChange={(event) => setFromDate(event.target.value)} /></label>\n        <label className=\"field\">Đến ngày<input type=\"date\" value={toDate} min={fromDate} max={isoDate()} onChange={(event) => setToDate(event.target.value)} /></label>\n        <label className=\"field\">Sàn<select value={market} onChange={(event) => setMarket(event.target.value)}><option>HOSE</option><option>HNX</option><option>UPCOM</option></select></label>\n        <label className=\"field\">Benchmark<select value={benchmark} onChange={(event) => setBenchmark(event.target.value)}><option>VNIndex</option><option>VN30</option><option>HNXIndex</option></select></label>\n        <label className=\"field\">Nhà cung cấp AI<select value={provider} onChange={(event) => setProvider(event.target.value)} disabled={!useAi}><option value=\"\">Theo cấu hình backend</option>{capabilities?.providers.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>\n        <label className=\"check-field\"><input type=\"checkbox\" checked={useAi} onChange={(event) => setUseAi(event.target.checked)} />Phân tích với AI</label>\n      </div>\n      <details className=\"launcher-advanced\">\n        <summary>Tùy chọn AI, model và cache</summary>\n        <div className=\"form-grid advanced-grid\">\n          <label className=\"field\">LLM model<input value={llmModel} onChange={(event) => setLlmModel(event.target.value)} disabled={!useAi} maxLength={100} placeholder=\"Theo provider config\" /></label>\n          <label className=\"field\">Mã cùng ngành<input value={peers} onChange={(event) => setPeers(event.target.value.toUpperCase())} maxLength={200} placeholder=\"VNM, MSN, SAB\" /></label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={autoRetrain} onChange={(event) => setAutoRetrain(event.target.checked)} disabled={!useAi} />Tự retrain AI-2/ML</label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={stockCache} onChange={(event) => setStockCache(event.target.checked)} />Cache dữ liệu SSI</label>\n          <label className=\"field\">Cache SSI (giờ)<input type=\"number\" min=\"0.5\" max=\"720\" step=\"0.5\" value={stockCacheHours} onChange={(event) => setStockCacheHours(Number(event.target.value))} disabled={!stockCache} /></label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={newsCache} onChange={(event) => setNewsCache(event.target.checked)} disabled={!useAi} />Cache tin tức AI</label>\n          <label className=\"field\">Cache tin (giờ)<input type=\"number\" min=\"0.5\" max=\"720\" step=\"0.5\" value={newsCacheHours} onChange={(event) => setNewsCacheHours(Number(event.target.value))} disabled={!useAi || !newsCache} /></label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={cacheHealFull} onChange={(event) => setCacheHealFull(event.target.checked)} disabled={!stockCache} />Cào lại toàn bộ dữ liệu</label>\n        </div>\n      </details>\n      <div className=\"button-row\"><button className=\"button button-primary\" type=\"submit\" disabled={createJob.isPending}>{createJob.isPending ? \"Đang gửi…\" : \"Chạy phân tích\"}</button><span className=\"muted small-copy\">Dữ liệu EOD, không phải báo giá realtime.</span></div>\n    </form>\n  );\n}",
+              "comment": "",
+              "summary": "",
+              "note": "Code:\nfunction AnalysisLauncher({ initialSymbol = \"FPT\", onCreated }: { initialSymbol?: string; onCreated: (id: string, symbol: string) => void }) {\n  const { capabilities } = useSession();\n  const queryClient = useQueryClient();\n  const toast = useToast();\n  const watchlists = useQuery({ queryKey: queryKeys.watchlists, queryFn: dashboardApi.watchlists });\n  const [runMode, setRunMode] = useState<RunMode>(\"single\");\n  const [symbol, setSymbol] = useState(initialSymbol);\n  const [symbolsText, setSymbolsText] = useState(\"FPT\\nMBB\\nVHM\");\n  const [watchlistId, setWatchlistId] = useState(\"\");\n  const [fromDate, setFromDate] = useState(isoDate(365));\n  const [toDate, setToDate] = useState(isoDate());\n  const [market, setMarket] = useState(\"HOSE\");\n  const [benchmark, setBenchmark] = useState(\"VNIndex\");\n  const [provider, setProvider] = useState(\"\");\n  const [llmModel, setLlmModel] = useState(\"\");\n  const [useAi, setUseAi] = useState(true);\n  const [autoRetrain, setAutoRetrain] = useState(true);\n  const [stockCache, setStockCache] = useState(true);\n  const [stockCacheHours, setStockCacheHours] = useState(24);\n  const [newsCache, setNewsCache] = useState(true);\n  const [newsCacheHours, setNewsCacheHours] = useState(24);\n  const [cacheHealFull, setCacheHealFull] = useState(false);\n  const [peers, setPeers] = useState(\"\");\n  const [launchMessage, setLaunchMessage] = useState(\"\");\n\n  const createJob = useMutation({\n    mutationFn: async ({ symbols, input }: { symbols: string[]; input: Omit<JobCreateInput, \"symbol\"> }) => {\n      const jobs = [];\n      const failures: string[] = [];\n      for (const item of symbols) {\n        try {\n          jobs.push(await dashboardApi.createJob({ ...input, symbol: item }));\n        } catch (error) {\n          failures.push(`${item}: ${error instanceof Error ? error.message : \"không thể tạo tác vụ\"}`);\n        }\n      }\n      return { jobs, failures };\n    },\n    onSuccess: async ({ jobs, failures }) => {\n      const firstJob = jobs[0];\n      if (firstJob) {\n        onCreated(firstJob.id, firstJob.symbol);\n        toast.success(`Đã xếp hàng ${jobs.length} mã: ${jobs.map((job) => job.symbol).join(\", \")}.`);\n      }\n      setLaunchMessage(failures.length > 0 ? `Không xếp hàng được ${failures.join(\"; \")}` : \"\");\n      await queryClient.invalidateQueries({ queryKey: queryKeys.jobs });\n      await queryClient.invalidateQueries({ queryKey: queryKeys.overview });\n    },\n  });\n\n  const submit = (event: FormEvent) => {\n    event.preventDefault();\n    setLaunchMessage(\"\");\n    const selectedWatchlist = watchlists.data?.find((item) => item.id === watchlistId);\n    const symbols = runMode === \"single\"\n      ? parseSymbols(symbol)\n      : runMode === \"manual\"\n        ? parseSymbols(symbolsText)\n        : selectedWatchlist?.symbols ?? [];\n    if (symbols.length === 0) {\n      setLaunchMessage(\"Vui lòng chọn hoặc nhập ít nhất một mã hợp lệ.\");\n      return;\n    }\n    const input: Omit<JobCreateInput, \"symbol\"> = {\n      from_date: fromDate || null,\n      to_date: toDate || null,\n      benchmark,\n      provider: useAi && provider ? provider : null,\n      no_ai: !useAi,\n      market,\n      auto_retrain: useAi && autoRetrain,\n      llm_model: useAi && llmModel.trim() ? llmModel.trim() : null,\n      retrain_days: 0,\n      retrain_periods: 5,\n      retrain_threshold: 1.5,\n      stock_cache: stockCache,\n      stock_cache_hours: stockCacheHours,\n      news_cache: newsCache,\n      news_cache_hours: newsCacheHours,\n      cache_heal_full: cacheHealFull,\n      peers: peers.trim() || null,\n    };\n    createJob.mutate({ symbols, input });\n  };\n\n  return (\n    <form className=\"launcher-form\" onSubmit={submit}>\n      {createJob.isError && <InlineError>{createJob.error.message}</InlineError>}\n      {launchMessage && <InlineError>{launchMessage}</InlineError>}\n      <div className=\"form-grid\">\n        <label className=\"field\">Chế độ chạy<select value={runMode} onChange={(event) => setRunMode(event.target.value as RunMode)}><option value=\"single\">Một mã</option><option value=\"manual\">Nhập danh sách</option><option value=\"watchlist\">Watchlist</option></select></label>\n        {runMode === \"single\" && <label className=\"field\">Mã chứng khoán<input value={symbol} onChange={(event) => setSymbol(event.target.value.toUpperCase())} required pattern=\"[A-Za-z0-9]{1,10}\" maxLength={10} /></label>}\n        {runMode === \"manual\" && <label className=\"field field-wide\">Danh sách mã<textarea value={symbolsText} onChange={(event) => setSymbolsText(event.target.value.toUpperCase())} rows={3} placeholder=\"FPT, MBB, VHM\" /></label>}\n        {runMode === \"watchlist\" && <label className=\"field\">Watchlist<select value={watchlistId} onChange={(event) => setWatchlistId(event.target.value)} required><option value=\"\">Chọn watchlist</option>{watchlists.data?.filter((item) => item.enabled).map((item) => <option key={item.id} value={item.id}>{item.name} · {item.symbols.length} mã</option>)}</select></label>}\n        <label className=\"field\">Từ ngày<input type=\"date\" value={fromDate} max={toDate} onChange={(event) => setFromDate(event.target.value)} /></label>\n        <label className=\"field\">Đến ngày<input type=\"date\" value={toDate} min={fromDate} max={isoDate()} onChange={(event) => setToDate(event.target.value)} /></label>\n        <label className=\"field\">Sàn<select value={market} onChange={(event) => setMarket(event.target.value)}><option>HOSE</option><option>HNX</option><option>UPCOM</option></select></label>\n        <label className=\"field\">Benchmark<select value={benchmark} onChange={(event) => setBenchmark(event.target.value)}><option>VNIndex</option><option>VN30</option><option>HNXIndex</option></select></label>\n        <label className=\"field\">Nhà cung cấp AI<select value={provider} onChange={(event) => setProvider(event.target.value)} disabled={!useAi}><option value=\"\">Theo cấu hình backend</option>{capabilities?.providers.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>\n        <label className=\"check-field\"><input type=\"checkbox\" checked={useAi} onChange={(event) => setUseAi(event.target.checked)} />Phân tích với AI</label>\n      </div>\n      <details className=\"launcher-advanced\">\n        <summary>Tùy chọn AI, model và cache</summary>\n        <div className=\"form-grid advanced-grid\">\n          <label className=\"field\">LLM model<input value={llmModel} onChange={(event) => setLlmModel(event.target.value)} disabled={!useAi} maxLength={100} placeholder=\"Theo provider config\" /></label>\n          <label className=\"field\">Mã cùng ngành<input value={peers} onChange={(event) => setPeers(event.target.value.toUpperCase())} maxLength={200} placeholder=\"VNM, MSN, SAB\" /></label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={autoRetrain} onChange={(event) => setAutoRetrain(event.target.checked)} disabled={!useAi} />Tự retrain AI-2/ML</label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={stockCache} onChange={(event) => setStockCache(event.target.checked)} />Cache dữ liệu SSI</label>\n          <label className=\"field\">Cache SSI (giờ)<input type=\"number\" min=\"0.5\" max=\"720\" step=\"0.5\" value={stockCacheHours} onChange={(event) => setStockCacheHours(Number(event.target.value))} disabled={!stockCache} /></label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={newsCache} onChange={(event) => setNewsCache(event.target.checked)} disabled={!useAi} />Cache tin tức AI</label>\n          <label className=\"field\">Cache tin (giờ)<input type=\"number\" min=\"0.5\" max=\"720\" step=\"0.5\" value={newsCacheHours} onChange={(event) => setNewsCacheHours(Number(event.target.value))} disabled={!useAi || !newsCache} /></label>\n          <label className=\"check-field\"><input type=\"checkbox\" checked={cacheHealFull} onChange={(event) => setCacheHealFull(event.target.checked)} disabled={!stockCache} />Cào lại toàn bộ dữ liệu</label>\n        </div>\n      </details>\n      <div className=\"button-row\"><button className=\"button button-primary\" type=\"submit\" disabled={createJob.isPending}>{createJob.isPending ? \"Đang gửi…\" : \"Chạy phân tích\"}</button><span className=\"muted small-copy\">Dữ liệu EOD, không phải báo giá realtime.</span></div>\n    </form>\n  );\n}",
+              "exported": true,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "typescript",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:51.918Z",
+              "_graph_id": 2600,
+              "_label": "Function"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "count_by_label",
+      "query": "MATCH (n) RETURN labels(n)[0] AS label, count(*) AS cnt ORDER BY cnt DESC, label LIMIT 8",
+      "params": {},
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "label",
+          "cnt"
+        ],
+        "records": [
+          {
+            "label": "ShellInvocation",
+            "cnt": 1286
+          },
+          {
+            "label": "Function",
+            "cnt": 915
+          },
+          {
+            "label": "Type",
+            "cnt": 168
+          },
+          {
+            "label": "File",
+            "cnt": 147
+          },
+          {
+            "label": "ApiEndpoint",
+            "cnt": 73
+          },
+          {
+            "label": "ShellFunction",
+            "cnt": 36
+          },
+          {
+            "label": "Dependency",
+            "cnt": 33
+          },
+          {
+            "label": "ShellScript",
+            "cnt": 24
+          }
+        ]
+      }
+    },
+    {
+      "name": "multi_hop_calls",
+      "query": "MATCH (a:Function)-[:CALLS]->(b:Function) WHERE a.project_id_normalized STARTS WITH $scope RETURN a, b LIMIT 3",
+      "params": {
+        "scope": "stock"
+      },
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "a",
+          "b"
+        ],
+        "records": [
+          {
+            "a": {
+              "id": "SnapshotStore::_canonical_bytes/1@backend/src/stock_backend/analysis/snapshots.py",
+              "name": "_canonical_bytes",
+              "node_type": "code",
+              "qualified_name": "SnapshotStore::_canonical_bytes",
+              "kind": "function",
+              "scope_name": "SnapshotStore",
+              "file_path": "backend/src/stock_backend/analysis/snapshots.py",
+              "start_line": 60,
+              "end_line": 70,
+              "arity": 1,
+              "code": "def _canonical_bytes(value: Any) -> bytes:\n        return (\n            json.dumps(\n                normalize_json(value),\n                ensure_ascii=False,\n                allow_nan=False,\n                separators=(\",\", \":\"),\n                sort_keys=True,\n            )\n            + \"\\n\"\n        ).encode(\"utf-8\")",
+              "comment": "",
+              "summary": "Performs canonical bytes operation (takes 1 parameter)",
+              "note": "Summary (inferred):\nPerforms canonical bytes operation (takes 1 parameter)\n\nIntent: side_effect (confidence: 0.23)\n\nCode:\ndef _canonical_bytes(value: Any) -> bytes:\n        return (\n            json.dumps(\n                normalize_json(value),\n                ensure_ascii=False,\n                allow_nan=False,\n                separators=(\",\", \":\"),\n                sort_keys=True,\n            )\n            + \"\\n\"\n        ).encode(\"utf-8\")",
+              "exported": false,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "python",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:47.779Z",
+              "_graph_id": 2,
+              "_label": "Function"
+            },
+            "b": {
+              "id": "normalize_json/2@backend/src/stock_backend/analysis/models.py",
+              "name": "normalize_json",
+              "node_type": "code",
+              "qualified_name": "normalize_json",
+              "kind": "function",
+              "file_path": "backend/src/stock_backend/analysis/models.py",
+              "start_line": 73,
+              "end_line": 111,
+              "arity": 2,
+              "code": "def normalize_json(value: Any, default_timezone=None) -> Any:\n    \"\"\"Recursively normalize domain/scientific values into strict JSON values.\"\"\"\n\n    value = _scientific_value(value)\n    # SignalAction and similar domain enums inherit from ``str``.  Test for\n    # Enum first so callers receive their wire value (\"BUY\"), not an enum\n    # instance whose ``str()`` representation is \"SignalAction.BUY\".\n    if isinstance(value, Enum):\n        return normalize_json(value.value, default_timezone)\n    if value is None or isinstance(value, (str, bool, int)):\n        return value\n    if isinstance(value, float):\n        return value if math.isfinite(value) else None\n    if isinstance(value, Decimal):\n        converted = float(value)\n        return converted if math.isfinite(converted) else None\n    if isinstance(value, datetime):\n        return ensure_aware(value, default_timezone).isoformat()\n    if isinstance(value, date):\n        return value.isoformat()\n    if isinstance(value, Path):\n        return value.as_posix()\n    if is_dataclass(value):\n        return {\n            item.name: normalize_json(getattr(value, item.name), default_timezone)\n            for item in fields(value)\n        }\n    if isinstance(value, Mapping):\n        return {str(key): normalize_json(item, default_timezone) for key, item in value.items()}\n    if isinstance(value, (list, tuple)):\n        return [normalize_json(item, default_timezone) for item in value]\n    if isinstance(value, (set, frozenset)):\n        normalized = [normalize_json(item, default_timezone) for item in value]\n        return sorted(normalized, key=lambda item: repr(item))\n    if hasattr(value, \"tolist\"):\n        return normalize_json(value.tolist(), default_timezone)\n    if hasattr(value, \"item\"):\n        return normalize_json(value.item(), default_timezone)\n    raise TypeError(\"Value of type %s is not JSON serializable\" % type(value).__name__)",
+              "comment": "Recursively normalize domain/scientific values into strict JSON values.",
+              "summary": "Recursively normalize domain/scientific values into strict JSON values.",
+              "note": "Summary:\nRecursively normalize domain/scientific values into strict JSON values.\n\nIntent: transformation (confidence: 0.53)\n\nComment:\nRecursively normalize domain/scientific values into strict JSON values.\n\nCode:\ndef normalize_json(value: Any, default_timezone=None) -> Any:\n    \"\"\"Recursively normalize domain/scientific values into strict JSON values.\"\"\"\n\n    value = _scientific_value(value)\n    # SignalAction and similar domain enums inherit from ``str``.  Test for\n    # Enum first so callers receive their wire value (\"BUY\"), not an enum\n    # instance whose ``str()`` representation is \"SignalAction.BUY\".\n    if isinstance(value, Enum):\n        return normalize_json(value.value, default_timezone)\n    if value is None or isinstance(value, (str, bool, int)):\n        return value\n    if isinstance(value, float):\n        return value if math.isfinite(value) else None\n    if isinstance(value, Decimal):\n        converted = float(value)\n        return converted if math.isfinite(converted) else None\n    if isinstance(value, datetime):\n        return ensure_aware(value, default_timezone).isoformat()\n    if isinstance(value, date):\n        return value.isoformat()\n    if isinstance(value, Path):\n        return value.as_posix()\n    if is_dataclass(value):\n        return {\n            item.name: normalize_json(getattr(value, item.name), default_timezone)\n            for item in fields(value)\n        }\n    if isinstance(value, Mapping):\n        return {str(key): normalize_json(item, default_timezone) for key, item in value.items()}\n    if isinstance(value, (list, tuple)):\n        return [normalize_json(item, default_timezone) for item in value]\n    if isinstance(value, (set, frozenset)):\n        normalized = [normalize_json(item, default_timezone) for item in value]\n        return sorted(normalized, key=lambda item: repr(item))\n    if hasattr(value, \"tolist\"):\n        return normalize_json(value.tolist(), default_timezone)\n    if hasattr(value, \"item\"):\n        return normalize_json(value.item(), default_timezone)\n    raise TypeError(\"Value of type %s is not JSON serializable\" % type(value).__name__)",
+              "exported": false,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "python",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:47.779Z",
+              "_graph_id": 2340,
+              "_label": "Function"
+            }
+          },
+          {
+            "a": {
+              "id": "SnapshotStore::_atomic_write/3@backend/src/stock_backend/analysis/snapshots.py",
+              "name": "_atomic_write",
+              "node_type": "code",
+              "qualified_name": "SnapshotStore::_atomic_write",
+              "kind": "function",
+              "scope_name": "SnapshotStore",
+              "file_path": "backend/src/stock_backend/analysis/snapshots.py",
+              "start_line": 90,
+              "end_line": 106,
+              "arity": 3,
+              "code": "def _atomic_write(self, target: Path, content: bytes) -> None:\n        target.parent.mkdir(parents=True, exist_ok=True)\n        descriptor, raw_temp = tempfile.mkstemp(prefix=\".%s.\" % target.name, suffix=\".tmp\", dir=str(target.parent))\n        temp_path = Path(raw_temp)\n        try:\n            with os.fdopen(descriptor, \"wb\") as handle:\n                handle.write(content)\n                handle.flush()\n                os.fsync(handle.fileno())\n            os.replace(str(temp_path), str(target))\n            self._fsync_directory(target.parent)\n        except Exception:\n            try:\n                temp_path.unlink()\n            except FileNotFoundError:\n                pass\n            raise",
+              "comment": "",
+              "summary": "Performs unknown operation on atomic write (takes 3 parameters)",
+              "note": "Summary (inferred):\nPerforms unknown operation on atomic write (takes 3 parameters)\n\nCode:\ndef _atomic_write(self, target: Path, content: bytes) -> None:\n        target.parent.mkdir(parents=True, exist_ok=True)\n        descriptor, raw_temp = tempfile.mkstemp(prefix=\".%s.\" % target.name, suffix=\".tmp\", dir=str(target.parent))\n        temp_path = Path(raw_temp)\n        try:\n            with os.fdopen(descriptor, \"wb\") as handle:\n                handle.write(content)\n                handle.flush()\n                os.fsync(handle.fileno())\n            os.replace(str(temp_path), str(target))\n            self._fsync_directory(target.parent)\n        except Exception:\n            try:\n                temp_path.unlink()\n            except FileNotFoundError:\n                pass\n            raise",
+              "exported": false,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "python",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:47.779Z",
+              "_graph_id": 5,
+              "_label": "Function"
+            },
+            "b": {
+              "id": "SnapshotStore::_fsync_directory/1@backend/src/stock_backend/analysis/snapshots.py",
+              "name": "_fsync_directory",
+              "node_type": "code",
+              "qualified_name": "SnapshotStore::_fsync_directory",
+              "kind": "function",
+              "scope_name": "SnapshotStore",
+              "file_path": "backend/src/stock_backend/analysis/snapshots.py",
+              "start_line": 80,
+              "end_line": 88,
+              "arity": 1,
+              "code": "def _fsync_directory(directory: Path) -> None:\n        try:\n            descriptor = os.open(str(directory), os.O_RDONLY)\n        except OSError:\n            return\n        try:\n            os.fsync(descriptor)\n        finally:\n            os.close(descriptor)",
+              "comment": "",
+              "summary": "Performs unknown operation on fsync directory (takes 1 parameter)",
+              "note": "Summary (inferred):\nPerforms unknown operation on fsync directory (takes 1 parameter)\n\nCode:\ndef _fsync_directory(directory: Path) -> None:\n        try:\n            descriptor = os.open(str(directory), os.O_RDONLY)\n        except OSError:\n            return\n        try:\n            os.fsync(descriptor)\n        finally:\n            os.close(descriptor)",
+              "exported": false,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "python",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:47.779Z",
+              "_graph_id": 4,
+              "_label": "Function"
+            }
+          },
+          {
+            "a": {
+              "id": "SnapshotStore::snapshot_path/2@backend/src/stock_backend/analysis/snapshots.py",
+              "name": "snapshot_path",
+              "node_type": "code",
+              "qualified_name": "SnapshotStore::snapshot_path",
+              "kind": "function",
+              "scope_name": "SnapshotStore",
+              "file_path": "backend/src/stock_backend/analysis/snapshots.py",
+              "start_line": 121,
+              "end_line": 122,
+              "arity": 2,
+              "code": "def snapshot_path(self, analysis_id: str) -> Path:\n        return self.snapshots_dir / (self._safe_analysis_id(analysis_id) + \".json\")",
+              "comment": "",
+              "summary": "Performs snapshot path operation (takes 2 parameters)",
+              "note": "Summary (inferred):\nPerforms snapshot path operation (takes 2 parameters)\n\nIntent: side_effect (confidence: 0.21)\n\nCode:\ndef snapshot_path(self, analysis_id: str) -> Path:\n        return self.snapshots_dir / (self._safe_analysis_id(analysis_id) + \".json\")",
+              "exported": false,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "python",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:47.779Z",
+              "_graph_id": 7,
+              "_label": "Function"
+            },
+            "b": {
+              "id": "SnapshotStore::_safe_analysis_id/1@backend/src/stock_backend/analysis/snapshots.py",
+              "name": "_safe_analysis_id",
+              "node_type": "code",
+              "qualified_name": "SnapshotStore::_safe_analysis_id",
+              "kind": "function",
+              "scope_name": "SnapshotStore",
+              "file_path": "backend/src/stock_backend/analysis/snapshots.py",
+              "start_line": 47,
+              "end_line": 50,
+              "arity": 1,
+              "code": "def _safe_analysis_id(analysis_id: str) -> str:\n        if not _SAFE_ID_RE.fullmatch(analysis_id):\n            raise ValueError(\"Invalid analysis_id\")\n        return analysis_id",
+              "comment": "",
+              "summary": "Performs unknown operation on safe analysis id (takes 1 parameter)",
+              "note": "Summary (inferred):\nPerforms unknown operation on safe analysis id (takes 1 parameter)\n\nCode:\ndef _safe_analysis_id(analysis_id: str) -> str:\n        if not _SAFE_ID_RE.fullmatch(analysis_id):\n            raise ValueError(\"Invalid analysis_id\")\n        return analysis_id",
+              "exported": false,
+              "visibility": "unknown",
+              "is_public_api": false,
+              "visibility_source": "",
+              "export_evidence": "",
+              "signature": "",
+              "external": false,
+              "builtin": false,
+              "react_role": "",
+              "middleware_kind": "",
+              "project_id": "stock",
+              "project_id_normalized": "stock",
+              "project_name": "stock",
+              "language": "python",
+              "repo": "/Users/hieplq1.aip/baka3k/stock",
+              "build_system": "",
+              "updated_at": "2026-09-13T13:36:47.779Z",
+              "_graph_id": 2303,
+              "_label": "Function"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "edge_return",
+      "query": "MATCH (p:Project)-[e:CONTAINS]->(m) RETURN e ORDER BY id(e) LIMIT 3",
+      "params": {},
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "e"
+        ],
+        "records": [
+          {
+            "e": {
+              "topology_owner": "project_topology",
+              "project_id": "stock",
+              "_type": "CONTAINS",
+              "_start_id": 0,
+              "_end_id": 2299
+            }
+          },
+          {
+            "e": {
+              "topology_owner": "project_topology",
+              "project_id": "stock",
+              "_type": "CONTAINS",
+              "_start_id": 0,
+              "_end_id": 2301
+            }
+          },
+          {
+            "e": {
+              "topology_owner": "project_topology",
+              "project_id": "stock",
+              "_type": "CONTAINS",
+              "_start_id": 0,
+              "_end_id": 2300
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "path_return",
+      "query": "MATCH p=(a:Project)-[:CONTAINS]->(b) WHERE b.project_id_normalized STARTS WITH $scope RETURN p LIMIT 1",
+      "params": {
+        "scope": "stock"
+      },
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "p"
+        ],
+        "records": [
+          {
+            "p": {
+              "nodes": [
+                {
+                  "project_id": "stock",
+                  "name": "stock",
+                  "slug": "stock",
+                  "created_at": 1787666642671,
+                  "node_type": "code",
+                  "language": "sql",
+                  "repo": "/Users/hieplq1.aip/baka3k/stock",
+                  "root": "/Users/hieplq1.aip/baka3k/stock",
+                  "build_system": "",
+                  "updated_at": "2026-09-13T13:36:54.777Z",
+                  "project_id_normalized": "stock",
+                  "_graph_id": 0,
+                  "_label": "Project"
+                },
+                {
+                  "id": "project-module:stock:frontend",
+                  "project_id": "stock",
+                  "module_path": "frontend",
+                  "name": "stock-dashboard",
+                  "kind": "unknown",
+                  "languages": [],
+                  "frameworks": [],
+                  "build_systems": [],
+                  "source_roots": [],
+                  "descriptor_ids": [
+                    "project-descriptor:58c4dd9aa081b7e892fb2337",
+                    "project-descriptor:9413d9c2e78c0238b14b1692",
+                    "project-descriptor:09db2edf58f69ccd55198b65",
+                    "project-descriptor:49795d4b366562fc0382c081"
+                  ],
+                  "confidence": "high",
+                  "diagnostics": [],
+                  "properties": "{}",
+                  "project_id_normalized": "stock",
+                  "topology_owned": true,
+                  "_graph_id": 2299,
+                  "_label": "ProjectModule"
+                }
+              ],
+              "edges": [
+                {
+                  "topology_owner": "project_topology",
+                  "project_id": "stock",
+                  "_type": "CONTAINS",
+                  "_start_id": 0,
+                  "_end_id": 2299
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "scalar_battery",
+      "query": "RETURN true AS t, false AS f, null AS z, 1.5 AS d, 42 AS i, 'text' AS s, [1, 'a', true] AS arr, {x: 1, y: 'z'} AS m",
+      "params": {},
+      "expected": {
+        "status": "ok",
+        "keys": [
+          "t",
+          "f",
+          "z",
+          "d",
+          "i",
+          "s",
+          "arr",
+          "m"
+        ],
+        "records": [
+          {
+            "t": true,
+            "f": false,
+            "z": null,
+            "d": 1.5,
+            "i": 42,
+            "s": "text",
+            "arr": [
+              1,
+              "a",
+              true
+            ],
+            "m": {
+              "x": 1,
+              "y": "z"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -2,11 +2,9 @@
 //! - schema DDL (v3) + `inspect_journal` (phase 05)
 //! - `Journal` — production/consumer loop (open_run / create_artifact /
 //!   enqueue_batch / barriers / claim / renew / ack / retry / block /
-//!   complete_producers) theo **low-level path**.
-//!
-//! **Chưa port (documented):** manifest staging (node/edge manifests,
-//! conservation, endpoint audit) — Rust từ chối rõ ràng `BatchSpec` có
-//! `operation` khác rỗng; kịch bản low-level (operation rỗng) parity 1:1.
+//!   complete_producers)
+//! - manifest staging + conservation + endpoint audit + reconciling
+//!   (phase 02 của rust-full-migration, module `journal_manifest`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +13,10 @@ use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 
 use crate::artifacts::ArtifactStore;
-use crate::identity::{canonical_json, deterministic_job_id, run_fingerprint, run_id, JobIdentity};
+use crate::identity::{canonical_json, deterministic_job_id, run_fingerprint, run_id, sha256_hex, JobIdentity};
+use crate::journal_manifest::{
+    manifest_candidates, stage_manifests_locked, PRODUCERS_COMPLETE_ID,
+};
 use crate::models::{
     BarrierRecord, BarrierStatus, BatchRecord, BatchSpec, BatchStatus, JournalError, JournalLimits,
     ManifestDisposition, OperationPhase, ProducerStatus, RetryClass, RunMetadata, RunRecord,
@@ -604,7 +605,6 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
-const PRODUCERS_COMPLETE_ID: &str = "__journal_all_producers_complete__";
 
 type Clock = Box<dyn Fn() -> f64 + Send>;
 
@@ -1050,17 +1050,11 @@ impl Journal {
         self.artifacts.write_jsonl(run_id_value, rows)
     }
 
-    // ── batch lifecycle (low-level path — operation phải rỗng) ──
+    // ── batch lifecycle (manifest staging + low-level path) ──
 
     pub fn enqueue_batch(&self, run_id_value: &str, spec: BatchSpec)
         -> Result<BatchRecord, JournalError>
     {
-        if !spec.operation.is_empty() {
-            return Err(JournalError::new(
-                TerminalErrorCode::InvalidContract,
-                "manifest staging (non-empty operation) is not ported to the Rust journal yet",
-            ));
-        }
         let spec = spec.build().map_err(|message| {
             JournalError::new(TerminalErrorCode::InvalidContract, message)
         })?;
@@ -1076,8 +1070,7 @@ impl Journal {
             ));
         }
         self.artifacts.verify(&spec.artifact)?;
-        // Python vẫn read_jsonl ở low-level path (artifact hỏng phải fail như nhau).
-        let _artifact_rows = self.artifacts.read_jsonl(&spec.artifact)?;
+        let artifact_rows = self.artifacts.read_jsonl(&spec.artifact)?;
         let job_identity = JobIdentity {
             run_fingerprint: &run.fingerprint,
             phase: spec.phase.value(),
@@ -1086,8 +1079,12 @@ impl Journal {
             payload_sha256: &spec.artifact.sha256,
         };
         let job_id = deterministic_job_id(&job_identity);
+        // Candidates suy ra NGOÀI transaction như Python.
+        let (producer_id, manifest_candidates_list) =
+            manifest_candidates(&run, &spec, &artifact_rows, &job_id);
+        let mut manifest_failure: BTreeMap<String, i64> = BTreeMap::new();
         let now = self.now_iso();
-        self.transaction(|conn| {
+        let result = self.transaction(|conn| {
             let production_complete: Option<i64> = conn
                 .query_row(
                     "SELECT 1 FROM producer_completion WHERE run_id = ?1 AND producer_id = ?2 AND status = ?3",
@@ -1220,74 +1217,121 @@ impl Journal {
             )
             .map_err(sqlite_err)?;
 
-            // Barrier production (low-level: không manifest failure).
-            for barrier_name in &spec.produced_barriers {
-                let barrier: Option<(String, i64)> = conn
-                    .query_row(
-                        "SELECT status, produced_count FROM barriers WHERE run_id = ?1 AND name = ?2",
-                        rusqlite::params![run_id_value, barrier_name],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
-                    )
-                    .ok();
-                match barrier {
-                    None => {
-                        conn.execute(
-                            "INSERT INTO barriers(run_id, name, status, produced_count, \
-                             drained_count, updated_at) VALUES (?1, ?2, ?3, 1, 0, ?4)",
-                            rusqlite::params![
-                                run_id_value,
-                                barrier_name,
-                                BarrierStatus::Open.value(),
-                                now,
-                            ],
+            if let Some(producer_id) = &producer_id {
+                manifest_failure = stage_manifests_locked(
+                    conn,
+                    run_id_value,
+                    &job_id,
+                    producer_id,
+                    &manifest_candidates_list,
+                    &now,
+                )?;
+            }
+            if !manifest_failure.is_empty() {
+                let failure_json = String::from_utf8(canonical_json(&
+                    serde_json::Value::Object(
+                        manifest_failure
+                            .iter()
+                            .map(|(k, v)| (k.clone(), serde_json::Value::from(*v)))
+                            .collect(),
+                    ),
+                ))
+                .map_err(|e| JournalError::new(TerminalErrorCode::JournalCorrupt, e.to_string()))?;
+                conn.execute(
+                    "UPDATE batches SET status = ?1, retry_class = ?2, error_code = ?3, \
+                     error_detail = ?4, updated_at = ?5 WHERE job_id = ?6",
+                    rusqlite::params![
+                        BatchStatus::Blocked.value(),
+                        RetryClass::Integrity.value(),
+                        TerminalErrorCode::InvalidContract.value(),
+                        failure_json,
+                        now,
+                        job_id,
+                    ],
+                )
+                .map_err(sqlite_err)?;
+                Self::set_run_error_locked(
+                    conn,
+                    &self.limits,
+                    run_id_value,
+                    RunStatus::Blocked,
+                    TerminalErrorCode::InvalidContract,
+                    &now,
+                )?;
+            }
+            // Barrier production chỉ chạy khi manifest sạch (như Python).
+            if manifest_failure.is_empty() {
+                for barrier_name in &spec.produced_barriers {
+                    let barrier: Option<(String, i64)> = conn
+                        .query_row(
+                            "SELECT status, produced_count FROM barriers WHERE run_id = ?1 AND name = ?2",
+                            rusqlite::params![run_id_value, barrier_name],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
                         )
-                        .map_err(sqlite_err)?;
-                    }
-                    Some((status, produced_count)) if status == BarrierStatus::Open.value() => {
-                        conn.execute(
-                            "UPDATE barriers SET produced_count = produced_count + 1, updated_at = ?1 \
-                             WHERE run_id = ?2 AND name = ?3",
-                            rusqlite::params![now, run_id_value, barrier_name],
-                        )
-                        .map_err(sqlite_err)?;
-                        let _ = produced_count;
-                    }
-                    Some((status, _)) => {
-                        return Err(JournalError::new(
-                            TerminalErrorCode::InvalidTransition,
-                            format!("cannot enqueue producer after barrier {status} is closed"),
-                        ))
+                        .ok();
+                    match barrier {
+                        None => {
+                            conn.execute(
+                                "INSERT INTO barriers(run_id, name, status, produced_count, \
+                                 drained_count, updated_at) VALUES (?1, ?2, ?3, 1, 0, ?4)",
+                                rusqlite::params![
+                                    run_id_value,
+                                    barrier_name,
+                                    BarrierStatus::Open.value(),
+                                    now,
+                                ],
+                            )
+                            .map_err(sqlite_err)?;
+                        }
+                        Some((status, produced_count)) if status == BarrierStatus::Open.value() => {
+                            conn.execute(
+                                "UPDATE barriers SET produced_count = produced_count + 1, updated_at = ?1 \
+                                 WHERE run_id = ?2 AND name = ?3",
+                                rusqlite::params![now, run_id_value, barrier_name],
+                            )
+                            .map_err(sqlite_err)?;
+                            let _ = produced_count;
+                        }
+                        Some((status, _)) => {
+                            return Err(JournalError::new(
+                                TerminalErrorCode::InvalidTransition,
+                                format!("cannot enqueue producer after barrier {status} is closed"),
+                            ))
+                        }
                     }
                 }
             }
 
-            let pending: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM batches WHERE run_id = ?1 AND status != ?2",
-                    rusqlite::params![run_id_value, BatchStatus::Done.value()],
-                    |row| row.get(0),
-                )
-                .map_err(sqlite_err)?;
-            let counters_json = serde_json::json!({
-                "bytes": spec.artifact.byte_count,
-                "rows": spec.artifact.row_count,
-                "pending": pending,
-            });
-            conn.execute(
-                "INSERT INTO events(run_id, job_id, event_type, counters_json, attempt, \
-                 elapsed_ms, error_code, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![
-                    run_id_value,
-                    job_id,
-                    "batch_enqueued",
-                    counters_json.to_string(),
-                    Option::<i64>::None,
-                    Option::<i64>::None,
-                    Option::<String>::None,
-                    now,
-                ],
-            )
-            .map_err(sqlite_err)?;
+            let mut counters: Vec<(String, i64)> = vec![
+                ("bytes".to_string(), spec.artifact.byte_count),
+                ("rows".to_string(), spec.artifact.row_count),
+            ];
+            counters.extend(
+                manifest_failure
+                    .iter()
+                    .map(|(k, v)| (k.clone(), *v)),
+            );
+            let counter_refs: Vec<(&str, i64)> =
+                counters.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+            Self::add_event_full(
+                conn,
+                run_id_value,
+                Some(&job_id),
+                if manifest_failure.is_empty() {
+                    "batch_enqueued"
+                } else {
+                    "batch_manifest_rejected"
+                },
+                &counter_refs,
+                None,
+                None,
+                if manifest_failure.is_empty() {
+                    None
+                } else {
+                    Some(TerminalErrorCode::InvalidContract)
+                },
+                &now,
+            )?;
 
             let row = conn
                 .query_row(
@@ -1297,7 +1341,17 @@ impl Journal {
                 )
                 .map_err(sqlite_err)?;
             batch_from_map(&row)
-        })
+        })?;
+        if !manifest_failure.is_empty() {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidContract,
+                format!(
+                    "batch manifest contains conflicting or rejected graph identities \
+                     (job_id={job_id}, failure={manifest_failure:?})"
+                ),
+            ));
+        }
+        Ok(result)
     }
 
     // ── barriers ──────────────────────────────────────────────
@@ -1783,6 +1837,769 @@ impl Journal {
     }
 
     // ── producers ─────────────────────────────────────────────
+
+    /// `claim_reconciling`: fence một batch ambiguous cho readback, không
+    /// chuyển nó thành executable.
+    pub fn claim_reconciling(&self, run_id_value: Option<&str>, lease_seconds: i64)
+        -> Result<Option<BatchRecord>, JournalError>
+    {
+        if lease_seconds <= 0 {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidContract,
+                "lease_seconds must be positive",
+            ));
+        }
+        let now_value = self.now_epoch();
+        let now = iso_from_epoch(now_value);
+        let lease_until = iso_from_epoch(now_value + lease_seconds as f64);
+        self.transaction(|conn| {
+            Self::recover_expired_leases_locked(conn, &now)?;
+            let mut query = String::from(
+                "SELECT b.* FROM batches b JOIN runs r ON r.run_id = b.run_id \
+                 WHERE b.status = ?1 AND b.fencing_token IS NULL \
+                 AND (b.next_attempt_at IS NULL OR b.next_attempt_at <= ?2) \
+                 AND r.status IN (?3, ?4)",
+            );
+            let mut params: Vec<String> = vec![
+                BatchStatus::Reconciling.value().to_string(),
+                now.clone(),
+                RunStatus::Open.value().to_string(),
+                RunStatus::Draining.value().to_string(),
+            ];
+            if let Some(run_filter) = run_id_value {
+                query.push_str(" AND b.run_id = ?5");
+                params.push(run_filter.to_string());
+            }
+            query.push_str(" ORDER BY b.sequence, b.created_at, b.job_id LIMIT 1");
+            let row = conn
+                .query_row(&query, rusqlite::params_from_iter(params.iter()), batch_row_to_map)
+                .ok();
+            let Some(row) = row else { return Ok(None) };
+            let job_id = text_field(&row, "job_id");
+            let token = random_token();
+            let updated = conn
+                .execute(
+                    "UPDATE batches SET fencing_token = ?1, lease_until = ?2, updated_at = ?3 \
+                     WHERE job_id = ?4 AND status = ?5 AND fencing_token IS NULL",
+                    rusqlite::params![
+                        token,
+                        lease_until,
+                        now,
+                        job_id,
+                        BatchStatus::Reconciling.value(),
+                    ],
+                )
+                .map_err(sqlite_err)?;
+            if updated != 1 {
+                return Ok(None);
+            }
+            let claimed = conn
+                .query_row(
+                    "SELECT * FROM batches WHERE job_id = ?1",
+                    [&job_id],
+                    batch_row_to_map,
+                )
+                .map_err(sqlite_err)?;
+            let claimed_run = text_field(&claimed, "run_id");
+            let attempt = int_field(&claimed, "attempt");
+            Self::add_event_static_with_attempt(
+                conn,
+                &claimed_run,
+                &job_id,
+                "batch_reconciliation_leased",
+                attempt,
+                &now,
+            )?;
+            Ok(Some(batch_from_map(&claimed)?))
+        })
+    }
+
+    /// `claim_reconciling_job`: fence đúng một batch ambiguous theo job_id.
+    pub fn claim_reconciling_job(&self, job_id: &str, lease_seconds: i64)
+        -> Result<Option<BatchRecord>, JournalError>
+    {
+        if lease_seconds <= 0 {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidContract,
+                "lease_seconds must be positive",
+            ));
+        }
+        let now_value = self.now_epoch();
+        let now = iso_from_epoch(now_value);
+        let lease_until = iso_from_epoch(now_value + lease_seconds as f64);
+        self.transaction(|conn| {
+            Self::recover_expired_leases_locked(conn, &now)?;
+            let row = conn
+                .query_row(
+                    "SELECT b.* FROM batches b JOIN runs r ON r.run_id = b.run_id \
+                     WHERE b.job_id = ?1 AND b.status = ?2 \
+                     AND b.fencing_token IS NULL \
+                     AND (b.next_attempt_at IS NULL OR b.next_attempt_at <= ?3) \
+                     AND r.status IN (?4, ?5)",
+                    rusqlite::params![
+                        job_id,
+                        BatchStatus::Reconciling.value(),
+                        now,
+                        RunStatus::Open.value(),
+                        RunStatus::Draining.value(),
+                    ],
+                    batch_row_to_map,
+                )
+                .ok();
+            let Some(row) = row else { return Ok(None) };
+            let row_run = text_field(&row, "run_id");
+            let _ = row_run;
+            let token = random_token();
+            let updated = conn
+                .execute(
+                    "UPDATE batches SET fencing_token = ?1, lease_until = ?2, updated_at = ?3 \
+                     WHERE job_id = ?4 AND status = ?5 AND fencing_token IS NULL",
+                    rusqlite::params![
+                        token,
+                        lease_until,
+                        now,
+                        job_id,
+                        BatchStatus::Reconciling.value(),
+                    ],
+                )
+                .map_err(sqlite_err)?;
+            if updated != 1 {
+                return Ok(None);
+            }
+            let claimed = conn
+                .query_row(
+                    "SELECT * FROM batches WHERE job_id = ?1",
+                    [job_id],
+                    batch_row_to_map,
+                )
+                .map_err(sqlite_err)?;
+            let claimed_run = text_field(&claimed, "run_id");
+            let attempt = int_field(&claimed, "attempt");
+            Self::add_event_static_with_attempt(
+                conn,
+                &claimed_run,
+                job_id,
+                "batch_reconciliation_leased",
+                attempt,
+                &now,
+            )?;
+            Ok(Some(batch_from_map(&claimed)?))
+        })
+    }
+
+    /// `schedule_reconciliation_retry`: back off readback ambiguous mà không
+    /// biến mutation thành executable. `retry_at` là ISO-8601 UTC.
+    pub fn schedule_reconciliation_retry(
+        &self,
+        job_id: &str,
+        fencing_token: &str,
+        retry_at: &str,
+        error_code: TerminalErrorCode,
+    ) -> Result<BatchRecord, JournalError> {
+        let now = self.now_iso();
+        self.transaction(|conn| {
+            let owned = Self::owned_transition(conn, job_id, fencing_token, &now)?;
+            let run_id_value = text_field(&owned, "run_id");
+            let status = text_field(&owned, "status");
+            if status != BatchStatus::Reconciling.value() {
+                return Err(JournalError::new(
+                    TerminalErrorCode::InvalidTransition,
+                    "only ambiguous readback work can schedule reconciliation retry",
+                ));
+            }
+            let next_attempt = int_field(&owned, "attempt") + 1;
+            let max_attempts = int_field(&owned, "max_attempts");
+            let exhausted = next_attempt >= max_attempts;
+            let new_status = if exhausted {
+                BatchStatus::DeadLetter
+            } else {
+                BatchStatus::Reconciling
+            };
+            let terminal_code = if exhausted {
+                TerminalErrorCode::MaxAttempts
+            } else {
+                error_code
+            };
+            conn.execute(
+                "UPDATE batches SET status = ?1, attempt = ?2, fencing_token = NULL, \
+                 lease_until = NULL, next_attempt_at = ?3, retry_class = ?4, \
+                 error_code = ?5, updated_at = ?6 \
+                 WHERE job_id = ?7 AND fencing_token = ?8 AND status = ?9",
+                rusqlite::params![
+                    new_status.value(),
+                    next_attempt,
+                    if exhausted { None } else { Some(retry_at) },
+                    RetryClass::Transient.value(),
+                    terminal_code.value(),
+                    now,
+                    job_id,
+                    fencing_token,
+                    BatchStatus::Reconciling.value(),
+                ],
+            )
+            .map_err(sqlite_err)?;
+            Self::add_event_full(
+                conn,
+                &run_id_value,
+                Some(job_id),
+                if exhausted {
+                    "batch_dead_lettered"
+                } else {
+                    "reconciliation_retry_scheduled"
+                },
+                &[],
+                Some(next_attempt),
+                None,
+                Some(terminal_code),
+                &now,
+            )?;
+            if exhausted {
+                Self::set_run_error_locked(
+                    conn,
+                    &self.limits,
+                    &run_id_value,
+                    RunStatus::DeadLettered,
+                    terminal_code,
+                    &now,
+                )?;
+            }
+            let updated = conn
+                .query_row("SELECT * FROM batches WHERE job_id = ?1", [job_id], batch_row_to_map)
+                .map_err(sqlite_err)?;
+            batch_from_map(&updated)
+        })
+    }
+
+    /// `recover_run_leases_as_ambiguous`: tiếp quản lease để lại từ process cũ
+    /// trên cùng run — outcome graph chưa biết, phải reconcile trước khi replay.
+    pub fn recover_run_leases_as_ambiguous(&self, run_id_value: &str)
+        -> Result<usize, JournalError>
+    {
+        let now = self.now_iso();
+        self.transaction(|conn| {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT job_id, attempt FROM batches \
+                     WHERE run_id = ?1 AND status = ?2",
+                )
+                .map_err(sqlite_err)?;
+            let leased: Vec<(String, i64)> = stmt
+                .query_map(
+                    rusqlite::params![run_id_value, BatchStatus::Leased.value()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .map_err(sqlite_err)?
+                .collect::<Result<_, _>>()
+                .map_err(sqlite_err)?;
+            drop(stmt);
+            for (job_id, attempt) in &leased {
+                conn.execute(
+                    "UPDATE batches SET status = ?1, fencing_token = NULL, lease_until = NULL, \
+                     retry_class = ?2, updated_at = ?3 WHERE job_id = ?4 AND status = ?5",
+                    rusqlite::params![
+                        BatchStatus::Reconciling.value(),
+                        RetryClass::Ambiguous.value(),
+                        now,
+                        job_id,
+                        BatchStatus::Leased.value(),
+                    ],
+                )
+                .map_err(sqlite_err)?;
+                Self::add_event_static_with_attempt(
+                    conn,
+                    run_id_value,
+                    job_id,
+                    "lease_recovered_as_ambiguous",
+                    *attempt,
+                    &now,
+                )?;
+            }
+            let mut stmt = conn
+                .prepare(
+                    "SELECT job_id, attempt FROM batches \
+                     WHERE run_id = ?1 AND status = ?2 AND fencing_token IS NOT NULL",
+                )
+                .map_err(sqlite_err)?;
+            let reconciling: Vec<(String, i64)> = stmt
+                .query_map(
+                    rusqlite::params![run_id_value, BatchStatus::Reconciling.value()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .map_err(sqlite_err)?
+                .collect::<Result<_, _>>()
+                .map_err(sqlite_err)?;
+            drop(stmt);
+            for (job_id, attempt) in &reconciling {
+                conn.execute(
+                    "UPDATE batches SET fencing_token = NULL, lease_until = NULL, updated_at = ?1 \
+                     WHERE job_id = ?2 AND status = ?3",
+                    rusqlite::params![now, job_id, BatchStatus::Reconciling.value()],
+                )
+                .map_err(sqlite_err)?;
+                Self::add_event_static_with_attempt(
+                    conn,
+                    run_id_value,
+                    job_id,
+                    "reconciliation_ownership_recovered",
+                    *attempt,
+                    &now,
+                )?;
+            }
+            Ok(leased.len() + reconciling.len())
+        })
+    }
+
+    /// `quarantine_legacy_targets`: fence các run active dùng target identity
+    /// cũ (superseded) — trả số run bị quarantine.
+    pub fn quarantine_legacy_targets(
+        &self,
+        metadata: &RunMetadata,
+        physical_targets: &[String],
+    ) -> Result<usize, JournalError> {
+        let mut targets: Vec<String> = physical_targets
+            .iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty() && *t != metadata.physical_target)
+            .collect();
+        targets.sort();
+        targets.dedup();
+        if targets.is_empty() {
+            return Ok(0);
+        }
+        let now_value = self.now_epoch();
+        let now = iso_from_epoch(now_value);
+        let retention_until = iso_from_epoch(now_value + self.limits.retention_seconds as f64);
+        self.transaction(|conn| {
+            let placeholders: Vec<String> =
+                targets.iter().enumerate().map(|(i, _)| format!("?{}", i + 4)).collect();
+            let query = format!(
+                "SELECT run_id FROM runs \
+                 WHERE project_id = ?1 AND scope_id = ?2 AND parser = ?3 \
+                 AND physical_target IN ({}) AND status IN (?{}, ?{})",
+                placeholders.join(", "),
+                4 + targets.len(),
+                5 + targets.len(),
+            );
+            let mut params: Vec<String> = vec![
+                metadata.project_id.clone(),
+                metadata.scope_id.clone(),
+                metadata.parser.clone(),
+            ];
+            params.extend(targets.iter().cloned());
+            params.push(RunStatus::Open.value().to_string());
+            params.push(RunStatus::Draining.value().to_string());
+            let mut stmt = conn.prepare(&query).map_err(sqlite_err)?;
+            let rows: Vec<String> = stmt
+                .query_map(rusqlite::params_from_iter(params.iter()), |row| row.get(0))
+                .map_err(sqlite_err)?
+                .collect::<Result<_, _>>()
+                .map_err(sqlite_err)?;
+            drop(stmt);
+            for run_id_value in &rows {
+                conn.execute(
+                    "UPDATE runs SET status = ?1, updated_at = ?2, retention_until = ?3, \
+                     error_code = ?4, error_detail = ?5 WHERE run_id = ?6",
+                    rusqlite::params![
+                        RunStatus::Quarantined.value(),
+                        now,
+                        retention_until,
+                        TerminalErrorCode::IncompatibleSchema.value(),
+                        "superseded by the credential-free effective-target identity contract",
+                        run_id_value,
+                    ],
+                )
+                .map_err(sqlite_err)?;
+                Self::add_event_full(
+                    conn,
+                    run_id_value,
+                    None,
+                    "run_quarantined",
+                    &[],
+                    None,
+                    None,
+                    Some(TerminalErrorCode::IncompatibleSchema),
+                    &now,
+                )?;
+                conn.execute(
+                    "UPDATE batches SET status = ?1, fencing_token = NULL, lease_until = NULL, \
+                     retry_class = ?2, error_code = ?3, updated_at = ?4 \
+                     WHERE run_id = ?5 AND status != ?6",
+                    rusqlite::params![
+                        BatchStatus::Blocked.value(),
+                        RetryClass::Incompatible.value(),
+                        TerminalErrorCode::IncompatibleSchema.value(),
+                        now,
+                        run_id_value,
+                        BatchStatus::Done.value(),
+                    ],
+                )
+                .map_err(sqlite_err)?;
+            }
+            Ok(rows.len())
+        })
+    }
+
+    // ── conservation + endpoint audit ─────────────────────────
+
+    /// `conservation_summary`: counters payload-free + digest manifest,
+    /// khớp shape JSON của Python (keys giống hệt).
+    pub fn conservation_summary(&self, run_id_value: &str)
+        -> Result<serde_json::Value, JournalError>
+    {
+        let conn = self.connection.lock().unwrap();
+        Self::conservation_summary_locked(&conn, run_id_value)
+    }
+
+    /// Phiên bản conn-level của `conservation_summary` (dùng trong transaction).
+    fn conservation_summary_locked(
+        conn: &Connection,
+        run_id_value: &str,
+    ) -> Result<serde_json::Value, JournalError> {
+        let totals = |table: &str| -> Result<serde_json::Value, JournalError> {
+            let (emitted, staged_unique, declared_duplicate, conflict, rejected, acked, verified): (
+                i64, i64, i64, i64, i64, i64, i64,
+            ) = conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*), \
+                         COALESCE(SUM(CASE WHEN disposition = ?1 THEN 1 ELSE 0 END), 0), \
+                         COALESCE(SUM(CASE WHEN disposition = ?2 THEN 1 ELSE 0 END), 0), \
+                         COALESCE(SUM(CASE WHEN disposition = ?3 THEN 1 ELSE 0 END), 0), \
+                         COALESCE(SUM(CASE WHEN disposition = ?4 THEN 1 ELSE 0 END), 0), \
+                         COALESCE(SUM(acked), 0), COALESCE(SUM(graph_verified), 0) \
+                         FROM {table} WHERE run_id = ?5"
+                    ),
+                    rusqlite::params![
+                        ManifestDisposition::StagedUnique.value(),
+                        ManifestDisposition::DeclaredDuplicate.value(),
+                        ManifestDisposition::Conflict.value(),
+                        ManifestDisposition::Rejected.value(),
+                        run_id_value,
+                    ],
+                    |row| {
+                        Ok((
+                            row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?,
+                            row.get(4)?, row.get(5)?, row.get(6)?,
+                        ))
+                    },
+                )
+                .map_err(sqlite_err)?;
+            let conserved = emitted == staged_unique + declared_duplicate + conflict + rejected
+                && staged_unique == acked
+                && acked == verified;
+            Ok(serde_json::json!({
+                "emitted": emitted,
+                "staged_unique": staged_unique,
+                "declared_duplicate": declared_duplicate,
+                "conflict": conflict,
+                "rejected": rejected,
+                "acked": acked,
+                "graph_verified": verified,
+                "conserved": conserved,
+            }))
+        };
+        let node = totals("node_manifest")?;
+        let edge = totals("edge_manifest")?;
+        let (producers_total, producers_open): (i64, i64) = conn
+            .query_row(
+                "SELECT COUNT(*), \
+                 COALESCE(SUM(CASE WHEN status = ?1 THEN 1 ELSE 0 END), 0) \
+                 FROM producer_completion WHERE run_id = ?2 AND producer_id != ?3",
+                rusqlite::params![
+                    ProducerStatus::Open.value(),
+                    run_id_value,
+                    PRODUCERS_COMPLETE_ID,
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(sqlite_err)?;
+
+        // node_manifest_digest: canonical json của list row-dict theo đúng
+        // thứ tự ORDER BY của Python.
+        let mut stmt = conn
+            .prepare(
+                "SELECT scope, node_label, identity_property, identity_type, \
+                 identity_json, payload_digest, disposition \
+                 FROM node_manifest WHERE run_id = ?1 \
+                 ORDER BY scope, node_label, identity_property, identity_type, \
+                 identity_json, payload_digest, manifest_id",
+            )
+            .map_err(sqlite_err)?;
+        let manifest_rows: Vec<serde_json::Value> = stmt
+            .query_map([run_id_value], |row| {
+                Ok(serde_json::json!({
+                    "scope": row.get::<_, Option<String>>(0)?,
+                    "node_label": row.get::<_, Option<String>>(1)?,
+                    "identity_property": row.get::<_, Option<String>>(2)?,
+                    "identity_type": row.get::<_, Option<String>>(3)?,
+                    "identity_json": row.get::<_, Option<String>>(4)?,
+                    "payload_digest": row.get::<_, Option<String>>(5)?,
+                    "disposition": row.get::<_, Option<String>>(6)?,
+                }))
+            })
+            .map_err(sqlite_err)?
+            .collect::<Result<_, _>>()
+            .map_err(sqlite_err)?;
+        drop(stmt);
+        let manifest_digest = sha256_hex(&canonical_json(&serde_json::Value::Array(manifest_rows)));
+
+        // endpoint_manifest_digest: LEFT JOIN edge_endpoint theo ORDER BY
+        // manifest_id, role (alias cột khớp Python `dict(row)`).
+        let mut stmt = conn
+            .prepare(
+                "SELECT em.manifest_id, em.job_id, em.producer_id, em.row_ordinal, \
+                 em.scope, em.relationship_type, em.identity_type, \
+                 em.identity_json, em.payload_digest, em.disposition, \
+                 ep.role, ep.scope AS endpoint_scope, ep.node_label, \
+                 ep.identity_property, ep.identity_type AS endpoint_identity_type, \
+                 ep.identity_json AS endpoint_identity_json, ep.required \
+                 FROM edge_manifest AS em \
+                 LEFT JOIN edge_endpoint AS ep \
+                   ON ep.run_id = em.run_id AND ep.edge_manifest_id = em.manifest_id \
+                 WHERE em.run_id = ?1 \
+                 ORDER BY em.manifest_id, ep.role",
+            )
+            .map_err(sqlite_err)?;
+        let endpoint_rows: Vec<serde_json::Value> = stmt
+            .query_map([run_id_value], |row| {
+                Ok(serde_json::json!({
+                    "manifest_id": row.get::<_, Option<String>>(0)?,
+                    "job_id": row.get::<_, Option<String>>(1)?,
+                    "producer_id": row.get::<_, Option<String>>(2)?,
+                    "row_ordinal": row.get::<_, Option<i64>>(3)?,
+                    "scope": row.get::<_, Option<String>>(4)?,
+                    "relationship_type": row.get::<_, Option<String>>(5)?,
+                    "identity_type": row.get::<_, Option<String>>(6)?,
+                    "identity_json": row.get::<_, Option<String>>(7)?,
+                    "payload_digest": row.get::<_, Option<String>>(8)?,
+                    "disposition": row.get::<_, Option<String>>(9)?,
+                    "role": row.get::<_, Option<String>>(10)?,
+                    "endpoint_scope": row.get::<_, Option<String>>(11)?,
+                    "node_label": row.get::<_, Option<String>>(12)?,
+                    "identity_property": row.get::<_, Option<String>>(13)?,
+                    "endpoint_identity_type": row.get::<_, Option<String>>(14)?,
+                    "endpoint_identity_json": row.get::<_, Option<String>>(15)?,
+                    "required": row.get::<_, Option<i64>>(16)?,
+                }))
+            })
+            .map_err(sqlite_err)?
+            .collect::<Result<_, _>>()
+            .map_err(sqlite_err)?;
+        drop(stmt);
+        let endpoint_manifest_digest =
+            sha256_hex(&canonical_json(&serde_json::Value::Array(endpoint_rows)));
+
+        let run_status: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT status, error_code FROM runs WHERE run_id = ?1",
+                [run_id_value],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        let v3_eligible = match &run_status {
+            Some((status, error_code)) => !(
+                status == RunStatus::Quarantined.value()
+                    && error_code.as_deref() == Some(TerminalErrorCode::IncompatibleSchema.value())
+            ),
+            None => false,
+        };
+        let node_conserved = node["conserved"].as_bool().unwrap_or(false);
+        let edge_conserved = edge["conserved"].as_bool().unwrap_or(false);
+        let edge_emitted = edge["emitted"].as_i64().unwrap_or(0);
+        Ok(serde_json::json!({
+            "node": node,
+            "edge": edge,
+            "producers": {"total": producers_total, "open": producers_open},
+            "node_manifest_digest": manifest_digest,
+            "endpoint_manifest_digest": endpoint_manifest_digest,
+            "auditable_edge_rows": edge_emitted,
+            "v3_eligible": v3_eligible,
+            "conserved": v3_eligible && node_conserved && edge_conserved,
+        }))
+    }
+
+    /// `_validate_endpoint_audit_boundary_locked` + insert `endpoint_audit`.
+    fn validate_endpoint_audit_boundary(
+        conn: &Connection,
+        run_id_value: &str,
+        sealed: Option<(&str, i64)>,
+    ) -> Result<serde_json::Value, JournalError> {
+        let summary = Self::conservation_summary_conn(conn, run_id_value)?;
+        let production_complete: Option<i64> = conn
+            .query_row(
+                "SELECT 1 FROM producer_completion \
+                 WHERE run_id = ?1 AND producer_id = ?2 AND status = ?3",
+                rusqlite::params![
+                    run_id_value,
+                    PRODUCERS_COMPLETE_ID,
+                    ProducerStatus::Complete.value()
+                ],
+                |_| Ok(1),
+            )
+            .ok();
+        let producers_open = summary["producers"]["open"].as_i64().unwrap_or(0);
+        if production_complete.is_none() || producers_open > 0 {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidTransition,
+                "endpoint audit requires the durable producer-completion boundary",
+            ));
+        }
+        let edge = &summary["edge"];
+        let edge_classified = edge["emitted"].as_i64().unwrap_or(0)
+            == edge["staged_unique"].as_i64().unwrap_or(0)
+                + edge["declared_duplicate"].as_i64().unwrap_or(0)
+                + edge["conflict"].as_i64().unwrap_or(0)
+                + edge["rejected"].as_i64().unwrap_or(0);
+        let node = &summary["node"];
+        if !summary["v3_eligible"].as_bool().unwrap_or(false)
+            || !node["conserved"].as_bool().unwrap_or(false)
+            || !edge_classified
+            || node["conflict"].as_i64().unwrap_or(0) > 0
+            || node["rejected"].as_i64().unwrap_or(0) > 0
+            || edge["conflict"].as_i64().unwrap_or(0) > 0
+            || edge["rejected"].as_i64().unwrap_or(0) > 0
+        {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidContract,
+                "endpoint audit cannot seal an ineligible or unconserved manifest",
+            ));
+        }
+        if let Some((sealed_digest, sealed_receipt_count)) = sealed
+            && (sealed_digest != summary["endpoint_manifest_digest"].as_str().unwrap_or("")
+                || sealed_receipt_count != summary["auditable_edge_rows"].as_i64().unwrap_or(0))
+            {
+                return Err(JournalError::new(
+                    TerminalErrorCode::InvalidContract,
+                    "sealed endpoint audit no longer matches the durable edge manifest",
+                ));
+            }
+        Ok(summary)
+    }
+
+    /// Phiên bản conn-level wrapper (tương thích tên gọi Python `_locked`).
+    fn conservation_summary_conn(
+        conn: &Connection,
+        run_id_value: &str,
+    ) -> Result<serde_json::Value, JournalError> {
+        Journal::conservation_summary_locked(conn, run_id_value)
+    }
+
+    /// `seal_endpoint_audit`: niêm phong audit endpoint (immutable).
+    /// Trả status ("sealed").
+    pub fn seal_endpoint_audit(
+        &self,
+        run_id_value: &str,
+        manifest_digest: Option<&str>,
+        receipt_count: Option<i64>,
+        audited_rows: Option<i64>,
+    ) -> Result<String, JournalError> {
+        if audited_rows.is_some_and(|v| v < 0) {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidContract,
+                "audited_rows must be non-negative",
+            ));
+        }
+        if receipt_count.is_some_and(|v| v < 0) {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidContract,
+                "receipt_count must be non-negative",
+            ));
+        }
+        let now = self.now_iso();
+        self.transaction(|conn| {
+            let existing: Option<(String, String, i64)> = conn
+                .query_row(
+                    "SELECT status, manifest_digest, receipt_count FROM endpoint_audit \
+                     WHERE run_id = ?1",
+                    [run_id_value],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .ok();
+            let summary = Self::validate_endpoint_audit_boundary(
+                conn,
+                run_id_value,
+                existing
+                    .as_ref()
+                    .map(|(_, digest, count)| (digest.as_str(), *count)),
+            )?;
+            if let Some((status, digest, count)) = &existing {
+                if let Some(supplied_digest) = manifest_digest
+                    && digest != supplied_digest {
+                        return Err(JournalError::new(
+                            TerminalErrorCode::InvalidContract,
+                            "sealed endpoint audit is immutable",
+                        ));
+                    }
+                let supplied_count = audited_rows.or(receipt_count);
+                if let Some(supplied) = supplied_count
+                    && *count != supplied {
+                        return Err(JournalError::new(
+                            TerminalErrorCode::InvalidContract,
+                            "sealed endpoint audit is immutable",
+                        ));
+                    }
+                return Ok(status.clone());
+            }
+            let resolved_digest = manifest_digest
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    summary["endpoint_manifest_digest"].as_str().unwrap_or_default().to_string()
+                });
+            let resolved_audited_rows = audited_rows
+                .or(receipt_count)
+                .unwrap_or_else(|| summary["auditable_edge_rows"].as_i64().unwrap_or(0));
+            if resolved_digest != summary["endpoint_manifest_digest"].as_str().unwrap_or("") {
+                return Err(JournalError::new(
+                    TerminalErrorCode::InvalidContract,
+                    "endpoint audit digest does not match the durable edge/endpoint manifest",
+                ));
+            }
+            if resolved_audited_rows != summary["auditable_edge_rows"].as_i64().unwrap_or(0) {
+                return Err(JournalError::new(
+                    TerminalErrorCode::InvalidContract,
+                    "endpoint audit row count does not match staged edge rows",
+                ));
+            }
+            conn.execute(
+                "INSERT INTO endpoint_audit(\
+                    run_id, status, manifest_digest, receipt_count, sealed_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    run_id_value,
+                    "sealed",
+                    resolved_digest,
+                    resolved_audited_rows,
+                    now,
+                ],
+            )
+            .map_err(sqlite_err)?;
+            Ok("sealed".to_string())
+        })
+    }
+
+    /// `endpoint_audit_status`: status hoặc None; validate boundary nếu đã seal.
+    pub fn endpoint_audit_status(&self, run_id_value: &str)
+        -> Result<Option<String>, JournalError>
+    {
+        let conn = self.connection.lock().unwrap();
+        let existing: Option<(String, String, i64)> = conn
+            .query_row(
+                "SELECT status, manifest_digest, receipt_count FROM endpoint_audit \
+                 WHERE run_id = ?1",
+                [run_id_value],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok();
+        if let Some((status, digest, count)) = &existing {
+            Self::validate_endpoint_audit_boundary(
+                &conn,
+                run_id_value,
+                Some((digest.as_str(), *count)),
+            )?;
+            return Ok(Some(status.clone()));
+        }
+        Ok(None)
+    }
 
     pub fn list_open_producers(&self, run_id_value: &str) -> Result<Vec<String>, JournalError> {
         let conn = self.connection.lock().unwrap();
