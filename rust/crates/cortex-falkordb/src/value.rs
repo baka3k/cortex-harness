@@ -319,6 +319,72 @@ fn parse_edge(payload: &redis::Value, schema: &mut GraphSchema) -> Result<Falkor
     })
 }
 
+impl FalkorValue {
+    /// Chuyển sang JSON — shape khớp `_normalize_falkordb_value` của
+    /// `falkordb_driver.py`: node → `{props..., _label, _graph_id}`,
+    /// edge → `{props..., _type, _src, _dst}`, path → `{nodes, edges}`.
+    pub fn to_json_value(&self) -> serde_json::Value {
+        use serde_json::{json, Map, Value as Json};
+        match self {
+            FalkorValue::Null => Json::Null,
+            FalkorValue::Bool(b) => Json::Bool(*b),
+            FalkorValue::Int(i) => json!(i),
+            FalkorValue::Double(d) => json!(d),
+            FalkorValue::String(s) => Json::String(s.clone()),
+            FalkorValue::Array(items) => {
+                Json::Array(items.iter().map(Self::to_json_value).collect())
+            }
+            FalkorValue::Map(entries) => {
+                let mut map = Map::new();
+                for (key, value) in entries {
+                    map.insert(key.clone(), value.to_json_value());
+                }
+                Json::Object(map)
+            }
+            FalkorValue::Node {
+                id,
+                labels,
+                properties,
+            } => {
+                let mut map = Map::new();
+                for (key, value) in properties {
+                    map.insert(key.clone(), value.to_json_value());
+                }
+                if let Some(label) = labels.iter().min() {
+                    map.insert("_label".to_string(), Json::String(label.clone()));
+                }
+                map.insert("_graph_id".to_string(), json!(id));
+                Json::Object(map)
+            }
+            FalkorValue::Edge {
+                id,
+                relation,
+                src_id,
+                dest_id,
+                properties,
+            } => {
+                let mut map = Map::new();
+                for (key, value) in properties {
+                    map.insert(key.clone(), value.to_json_value());
+                }
+                map.insert("_type".to_string(), Json::String(relation.clone()));
+                map.insert("_edge_id".to_string(), json!(id));
+                map.insert("_src".to_string(), json!(src_id));
+                map.insert("_dst".to_string(), json!(dest_id));
+                Json::Object(map)
+            }
+            FalkorValue::Path { nodes, edges } => json!({
+                "nodes": nodes.iter().map(Self::to_json_value).collect::<Vec<_>>(),
+                "edges": edges.iter().map(Self::to_json_value).collect::<Vec<_>>(),
+            }),
+            FalkorValue::Point {
+                latitude,
+                longitude,
+            } => json!({"latitude": latitude, "longitude": longitude}),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
