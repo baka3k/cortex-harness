@@ -1,0 +1,23 @@
+[package]
+name = "analyzer-jp1"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của code-tiny/tools/jp1/jp1_analyzer.py — JP1/AJS jobnet analyzer (phase 07 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-jp1"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+# Python `re` pattern `^\s*unit=` v.v. — pattern có non-greedy + `$`,
+# dùng fancy-regex cho tương đồng semantics.
+fancy-regex = "0.14"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
