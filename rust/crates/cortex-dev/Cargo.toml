@@ -1,0 +1,19 @@
+[package]
+name = "cortex-dev"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của cortex_harness/dev.py — unified dev CLI (phase 10 scope A, rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "cortex-dev"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+
+[lints.rust]
+unsafe_code = "deny"
