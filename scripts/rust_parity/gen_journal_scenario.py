@@ -4,15 +4,24 @@ implementation Python THẬT (`SQLiteJournal`, clock cố định) để Rust re
 
 Chạy từ repo root:
     .venv/bin/python scripts/rust_parity/gen_journal_scenario.py
+    # kèm emit store Python + JSONL capture-format vào 1 thư mục:
+    .venv/bin/python scripts/rust_parity/gen_journal_scenario.py --emit-dir /tmp/journal-regression
 
-Output: rust/crates/cortex-graph-core/tests/fixtures/journal_scenario.json
+Output:
+- rust/crates/cortex-graph-core/tests/fixtures/journal_scenario.json
+  (ops kèm `args` — Rust test serde bỏ qua field lạ nên vẫn tương thích)
+- rust/crates/cortex-graph-core/tests/fixtures/journal_scenario.jsonl
+  (capture format Track B: header + 1 dòng/op + key prefix `_`)
+- với --emit-dir: <dir>/python_store.sqlite3 (store Python FIXED-clock)
 """
 
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import datetime as dt
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -26,15 +35,35 @@ from tools.graph.journal import sqlite_store  # noqa: E402
 from tools.graph.journal.artifacts import ArtifactStore  # noqa: E402
 from tools.graph.journal.identity import run_fingerprint, run_id  # noqa: E402
 from tools.graph.journal.models import (  # noqa: E402
+    JOURNAL_SCHEMA_VERSION,
+    JournalLimits,
     BatchSpec,
     OperationPhase,
     RunMetadata,
 )
+from tools.graph.journal.shadow import spec_to_dict  # noqa: E402
 
 FIXED = dt.datetime(2026, 9, 13, 12, 0, 0, tzinfo=dt.timezone.utc)
 FIXED_EPOCH = FIXED.timestamp()
 
 FIXTURES = REPO / "rust" / "crates" / "cortex-graph-core" / "tests" / "fixtures"
+
+# Thứ tự positional args của từng op — khớp `SQLiteJournal` (cho JSONL).
+_ARG_NAMES = {
+    "open_run": ("metadata",),
+    "find_resumable_run": ("metadata",),
+    "list_runs": (),
+    "create_artifact": ("run_id", "rows"),
+    "open_barrier": ("run_id", "name"),
+    "close_barrier": ("run_id", "name"),
+    "get_barrier": ("run_id", "name"),
+    "enqueue_batch": ("run_id", "spec"),
+    "claim_batch": ("run_id", "lease_seconds"),
+    "renew_lease": ("job_id", "fencing_token", "lease_seconds"),
+    "ack_batch": ("job_id", "fencing_token", "elapsed_ms"),
+    "complete_producers": ("run_id",),
+    "inspect": (),
+}
 
 
 def enumify(value):
@@ -95,13 +124,51 @@ def artifact_to_dict(ref) -> dict:
     return dataclasses.asdict(ref)
 
 
+def _serialize_arg(value):
+    if isinstance(value, RunMetadata):
+        return metadata_dict(value)
+    if isinstance(value, BatchSpec):
+        return spec_to_dict(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_serialize_arg(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _serialize_arg(item) for key, item in value.items()}
+    if hasattr(value, "value"):
+        return value.value
+    return repr(value)
+
+
+def args_dict(name, args, kwargs):
+    names = _ARG_NAMES.get(name)
+    if names is None:
+        return {"_positional": [repr(argument) for argument in args]}
+    serialized = {}
+    for index, arg_name in enumerate(names):
+        if index < len(args):
+            serialized[arg_name] = _serialize_arg(args[index])
+        elif arg_name in kwargs:
+            serialized[arg_name] = _serialize_arg(kwargs[arg_name])
+        else:
+            defaults = {
+                "lease_seconds": 60,
+                "elapsed_ms": None,
+            }
+            if arg_name in defaults:
+                serialized[arg_name] = defaults[arg_name]
+    return serialized
+
+
 def record_result(ops, name, callable_fn, *args, **kwargs):
+    entry = {"op": name, "args": args_dict(name, args, kwargs)}
     try:
         result = callable_fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001
         code = getattr(exc, "code", None)
         code = code.value if code is not None else type(exc).__name__
-        ops.append({"op": name, "error": {"code": code}})
+        entry["error"] = {"code": code}
+        ops.append(entry)
         return None
     serializer = {
         "open_run": run_to_dict,
@@ -121,11 +188,43 @@ def record_result(ops, name, callable_fn, *args, **kwargs):
         "complete_producers": lambda count: count,
         "inspect": lambda rows: rows,
     }[name]
-    ops.append({"op": name, "result": serializer(result)})
+    entry["result"] = serializer(result)
+    ops.append(entry)
     return result
 
 
+def to_capture_jsonl(journal_config: dict, ops: list[dict], path: Path) -> None:
+    """Đổi ops → capture format Track B: header + 1 dòng/op, key prefix `_`."""
+
+    lines = [
+        json.dumps(
+            {
+                "_header": True,
+                "schema_version": JOURNAL_SCHEMA_VERSION,
+                "journal_config": journal_config,
+                "now_epoch": FIXED_EPOCH,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    ]
+    for seq, op in enumerate(ops):
+        entry = dict(op)
+        entry["_seq"] = seq
+        entry["_captured_at"] = FIXED.isoformat(timespec="microseconds")
+        entry["_captured_at_epoch"] = FIXED_EPOCH
+        lines.append(json.dumps(entry, ensure_ascii=False, separators=(",", ":")))
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--emit-dir",
+        default=None,
+        help="copy store Python (FIXED clock) ra thư mục này cho diff regression",
+    )
+    arguments = parser.parse_args()
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         db_path = (tmp_path / "scenario.sqlite").resolve()
@@ -216,6 +315,25 @@ def main() -> None:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {path.relative_to(REPO)} ({len(ops)} ops)")
 
+        journal_config = {
+            "mode": "required",
+            "path": "scenario.sqlite3",
+            "metadata": metadata_dict(meta_a),
+            "limits": dataclasses.asdict(JournalLimits()),
+        }
+        jsonl_path = FIXTURES / "journal_scenario.jsonl"
+        to_capture_jsonl(journal_config, ops, jsonl_path)
+        print(f"wrote {jsonl_path.relative_to(REPO)} ({len(ops)} ops)")
+
+        # Đóng store (WAL checkpointed khi close) rồi copy cho diff regression.
+        journal.close()
+        if arguments.emit_dir:
+            emit_dir = Path(arguments.emit_dir).resolve()
+            emit_dir.mkdir(parents=True, exist_ok=True)
+            store_copy = emit_dir / "python_store.sqlite3"
+            shutil.copyfile(db_path, store_copy)
+            print(f"emitted {store_copy} (Python store, FIXED clock)")
+
 
 class SQLiteJournalWithArtifacts:
     """SQLiteJournal + ArtifactStore thật, clock cố định cho determinism."""
@@ -263,6 +381,9 @@ class SQLiteJournalWithArtifacts:
 
     def inspect(self):
         return sqlite_store.inspect_journal(self.journal.path)
+
+    def close(self):
+        self.journal.close()
 
 
 if __name__ == "__main__":
