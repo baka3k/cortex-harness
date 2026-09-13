@@ -19,6 +19,9 @@ gliner
 pandas
 portalocker>=3.2,<4
 psutil>=5.9,<8
+# BM25 keyword signal for hybrid retrieval (pin = golden-fixture parity, see
+# scripts/rust_parity/gen_bm25_fixtures.py).
+rank-bm25==0.2.2
 # FastMCP dependencies
 # New C/C++ analysis tools
 networkx
