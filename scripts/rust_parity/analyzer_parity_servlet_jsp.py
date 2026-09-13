@@ -108,7 +108,12 @@ def dual(driver: FalkorDBDriver, root: Path, tag: str, host: str, port: int,
     rs_log = run_rust(root, graph_rust, host, port, preview_rs, cache_rs, incremental, rust_bin)
 
     py_summary, rs_summary = summary_line(py_log), summary_line(rs_log)
-    check(f"{tag}: summary JSON byte-identical", py_summary == rs_summary,
+    # "preview" chứa đường dẫn scratch riêng của từng backend (_py/_rs) —
+    # normalize trước khi so (giá trị thật đã được gate bởi preview JSON
+    # byte-identical).
+    normalize = lambda text: re.sub(r'"preview":"[^"]*"', '"preview":"<normalized>"', text)
+    check(f"{tag}: summary JSON byte-identical (preview path normalized)",
+          normalize(py_summary) == normalize(rs_summary),
           f"py={py_summary!r} rs={rs_summary!r}")
     report.append(f"\n### summary {tag}\n\n- py: `{py_summary}`\n- rs: `{rs_summary}`\n")
 

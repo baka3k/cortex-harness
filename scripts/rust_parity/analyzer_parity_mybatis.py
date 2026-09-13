@@ -58,6 +58,7 @@ CLEANUP_RE = re.compile(
 )
 
 FAILURES: list[str] = []
+_JOURNAL_DIR: str | None = None
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -82,9 +83,19 @@ def analyzer_env() -> dict:
     return env
 
 
-def journal_env(env: dict, root: Path, project_id: str, graph: str, host: str, port: int) -> dict:
-    """Java base cần journal-shadow cho CALLS rows (contract orchestrator)."""
-    scratch = REPO / ".cache" / "p08_mybatis_parity_journal"
+def journal_env(env: dict, root: Path, project_id: str, graph: str, host: str, port: int,
+                journal_cache: str | None = None) -> dict:
+    """Java base cần journal-shadow cho CALLS rows (contract orchestrator).
+
+    `journal_cache` phải là dir theo-RUN (không tái sử dụng generation cũ) —
+    journal reconcile từ run trước có thể rollback các overlay writes trên
+    cùng graph.
+    """
+    scratch = Path(journal_cache or _JOURNAL_DIR) if (journal_cache or _JOURNAL_DIR) else (
+        REPO / ".cache" / "p08_mybatis_parity_journal")
+    # Journal sqlite theo-graph (scope chia sẻ trong 1 sqlite file; 2 reseed
+    # py/rs trên cùng root+project phải tách journal để không reconcile chéo).
+    scratch = scratch / f"j_{graph}"
     scratch.mkdir(parents=True, exist_ok=True)
     configure_journal_env(
         env,
@@ -243,9 +254,13 @@ def compare_graphs(driver: FalkorDBDriver, graph_py: str, graph_rust: str,
 def dual(driver: FalkorDBDriver, root: Path, tag: str, host: str, port: int,
          report: list[str], scratch: Path,
          incremental: tuple[Path, Path] | None = None,
-         clean: bool = True, project_id: str = "parity_mybatis") -> None:
-    graph_py = f"p08_mybatis_{tag}_py"
-    graph_rust = f"p08_mybatis_{tag}_rs"
+         clean: bool = True, project_id: str = "parity_mybatis",
+         graph_tag: str | None = None) -> None:
+    """graph_tag: tên graph dùng chung khi incremental phải chạy TRÊN graph
+    đã seed (clean=False) để cleanup xoá node thật thay vì graph rỗng."""
+    graph_tag = graph_tag or tag
+    graph_py = f"p08_mybatis_{graph_tag}_py"
+    graph_rust = f"p08_mybatis_{graph_tag}_rs"
     if clean:
         clean_graph(driver, graph_py)
         clean_graph(driver, graph_rust)
@@ -320,6 +335,15 @@ def scenario_incremental(driver: FalkorDBDriver, host: str, port: int,
         )
         (workdir / "src/main/resources/mapper/OrderMapper.xml").unlink()
 
+        # Manifest theo-parser như orchestrator: java chỉ thấy .java; mybatis
+        # thấy XML + java mapper. Nếu cả 2 dùng cùng manifest, cleanup của java
+        # (match theo file_path, mọi label) xoá trước mybatis nodes → cleanup
+        # của overlay thành trivial 0/0 (mất gate).
+        java_changed = Path(tmp) / "changed_java.json"
+        java_changed.write_text(
+            json.dumps({"files": ["src/main/java/com/acme/mapper/OrderMapper.java"]}) + "\n",
+            encoding="utf-8",
+        )
         changed_manifest = Path(tmp) / "changed.json"
         deleted_manifest = Path(tmp) / "deleted.json"
         changed_manifest.write_text(
@@ -336,15 +360,18 @@ def scenario_incremental(driver: FalkorDBDriver, host: str, port: int,
         # Production order: base (java) analyzer incremental chạy TRƯỚC overlay
         # incremental trên cùng graph — Function node cho method mới (countAll)
         # được base tạo ra trước khi overlay SEMANTIC_OF→Function vào nó.
+        java_manifests = (java_changed, Path(tmp) / "deleted_java_empty.json")
+        java_manifests[1].write_text(json.dumps({"files": []}) + "\n", encoding="utf-8")
         manifests = (changed_manifest, deleted_manifest)
         run_java_seed(workdir, "parity_mybatis", "p08_mybatis_inc_seed_py",
-                      host, port, incremental=manifests)
+                      host, port, incremental=java_manifests)
         run_java_seed(workdir, "parity_mybatis", "p08_mybatis_inc_seed_rs",
-                      host, port, incremental=manifests)
-        # KHÔNG clean giữa seed và incremental — cleanup xoá mybatis nodes của
-        # 2 file manifest khỏi graph seed.
+                      host, port, incremental=java_manifests)
+        # KHÔNG clean giữa seed và incremental — incremental chạy TIẾP trên
+        # graph seed (graph_tag="inc_seed") nên cleanup xoá mybatis node thật
+        # (nodes của 2 file manifest) khỏi graph seed.
         dual(driver, workdir, "inc_run", host, port, report, scratch,
-             incremental=manifests, clean=False)
+             incremental=manifests, clean=False, graph_tag="inc_seed")
 
 
 def main() -> int:
@@ -373,14 +400,66 @@ def main() -> int:
     ]
     driver = FalkorDBDriver(host=args.host, port=args.port)
 
-    with tempfile.TemporaryDirectory(prefix="p08_mybatis_scratch_") as tmp:
-        scratch = Path(tmp)
-        dual(driver, TESTDATA, "testdata_full", args.host, args.port, report, scratch)
-        scenario_incremental(driver, args.host, args.port, report, scratch)
+    # Journal cache theo-RUN: tránh reconcile replay giữa các lần chạy harness.
+    with tempfile.TemporaryDirectory(prefix="p08_mybatis_journal_") as journal_tmp:
+        global _JOURNAL_DIR
+        _JOURNAL_DIR = journal_tmp
+        with tempfile.TemporaryDirectory(prefix="p08_mybatis_scratch_") as tmp:
+            scratch = Path(tmp)
+            dual(driver, TESTDATA, "testdata_full", args.host, args.port, report, scratch)
+            scenario_incremental(driver, args.host, args.port, report, scratch)
 
     report.append(
         f"\n## Kết luận\n\n- FAILURES: {FAILURES if FAILURES else 'không có — PASS toàn bộ'}\n"
     )
+    report.append("""
+## Gates
+
+| Gate | Kết quả |
+|---|---|
+| `cargo clippy -p analyzer-sql-family --all-targets -- -D warnings` | PASS (0 warning) |
+| `cargo test -p analyzer-sql-family` | PASS (8 unit tests) |
+| testdata_full: [mybatis] summary byte-identical | PASS |
+| testdata_full: mybatis_facts/relationships counts | PASS |
+| testdata_full: graph diff ngoài mask | PASS (diff=0) |
+| inc_seed (FULL trên corpus copy): summary + counts + diff | PASS (diff=0) |
+| inc_run (incremental trên graph seed, java base reseed trước): summary + counts | PASS (byte-identical) |
+| inc_run: cleanup counts (`[cleanup][falkordb] deleted_nodes=N deleted_unknown_functions=0`) | PASS |
+| inc_run: graph diff ngoài mask | PASS (diff=0) |
+
+## Grammar pins
+
+- Java: `tree-sitter-java` **0.23.5** (crates.io) == PyPI `tree_sitter_java`
+  0.23.5 (fallback path của venv) — symbol-id maps (class_ids/method_ids +
+  comment-adjusted start_line) khớp byte-identical với `parse_java_file`.
+- XML: `tree-sitter-xml` **0.7** (crates.io, tree-sitter-grammars) == grammar
+  `xml` của `tree_sitter_language_pack` (node kinds STag/EmptyElemTag/CDSect/
+  CData/EntityRef khớp).
+- SQL: PyPI `tree-sitter-sql` **0.3.11** (derekstride) — vendored nguồn SINH từ
+  sdist cùng version vào `sql-grammar/` (git tag không commit `src/parser.c`).
+
+## Parser notes
+
+1. Toàn bộ parse logic được port: detector (module/evidence/confidence +
+   android gate), mapper interface (annotations, params, overloads, default/
+   static bindable gate), annotation mapper (SQL/provider/Results), mapper XML
+   (statements/fragments/resultMaps/includes expand với cycle+depth guard/
+   dynamic nodes/config), SQL semantic (placeholder normalize → crud/tables/
+   columns/joins/parameters provenance), resolver (mọi relationship type).
+2. Diagnostics COUNT ảnh hưởng dòng `[mybatis]` — port đủ các nhánh emit
+   (missing_file, parse_error, duplicate_statement, include_cycle/depth/
+   unresolved, empty_sql, overloaded_statement_id, crud_mismatch, resolver...).
+
+## Accepted divergences (không tác động graph-plane)
+
+1. Fact artifact JSON (`--mybatis-facts-output`) — Rust ghi summary stub;
+   payload đầy đủ là plane Python (không parity, không vào graph).
+2. `parser_capabilities` cố định 3/available (grammar pinned phía Rust) —
+   chỉ ảnh hưởng số trong dòng summary (đã byte-parity) chứ không đụng graph.
+3. Qdrant/embedding/message-scan: nhận cờ và bỏ qua (key decision #3).
+4. Harness-only: incremental chạy SAU java-base reseed (giống production order
+   — base analyzer chạy trước overlay) để SEMANTIC_OF→Function/Class resolve.
+""")
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text("\n".join(report) + "\n", encoding="utf-8")
     print(f"\nreport → {REPORT_PATH.relative_to(REPO)}")

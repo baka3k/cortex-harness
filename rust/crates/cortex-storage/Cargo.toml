@@ -1,0 +1,22 @@
+[package]
+name = "cortex-storage"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port of the CortexHarness storage layer (leases, bounded lanes, generations, gateway, config/targets/factory, layout, Qdrant adapters)"
+license = "MIT"
+
+[dependencies]
+libc = "0.2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ureq = { version = "2", features = ["json"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+# flock/statvfs require libc FFI; unsafe is confined to src/ffi.rs.
+unsafe_code = "allow"
