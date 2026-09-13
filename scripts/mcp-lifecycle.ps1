@@ -88,6 +88,9 @@ Graph providers (GRAPH_PROVIDER / CODE_GRAPH_PROVIDER / DOC_GRAPH_PROVIDER):
             lbug | lady-bug | kuzu; LADYBUG_GRAPH default hyper_graph).
   neo4j     remote Neo4j.
 
+Retrieval env (CORTEX_BM25_AUTO):
+  auto-BM25 keyword boost on search seeds (default on; 0 = off, rollback).
+
 Parameterized MCP instances:
   dev start --server code --name shop --project SHOP --port 8790
   dev start --name shop --project SHOP --code-port 8790 --doc-port 8791

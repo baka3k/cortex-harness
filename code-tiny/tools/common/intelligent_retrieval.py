@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -93,6 +94,34 @@ DEFAULT_SEED_K       = 20   # initial Qdrant retrieval count
 DEFAULT_EXPAND_DEPTH = 2    # Graph expansion depth
 DEFAULT_EXPAND_LIMIT = 50   # max graph-expanded candidates
 DEFAULT_TOP_K        = 10
+
+# Auto-BM25: engine tự build corpus BM25 từ seed candidates khi caller không
+# inject ``bm25_ranker``. Env ``CORTEX_BM25_AUTO`` điều khiển default; cả hai
+# giá trị off/on đều tường minh để rollback không cần đụng code.
+ENV_BM25_AUTO          = "CORTEX_BM25_AUTO"
+_BM25_AUTO_ON_VALUES   = frozenset({"1", "true", "on", "yes"})
+_BM25_AUTO_OFF_VALUES  = frozenset({"0", "false", "off", "no"})
+# Mặc định ON (phase A2, sau A/B report — xem
+# plans/1309-2104-parallel-bm25-journal-cutover/reports/ab-bm25-auto.md).
+# Rollback 1 dòng nếu auto-BM25 gây regression ranking: đổi thành ``False``
+# (hoặc đặt env ``CORTEX_BM25_AUTO=0`` không cần đụng code).
+_BM25_AUTO_DEFAULT     = True
+
+
+def _resolve_auto_bm25(auto_bm25: Optional[bool] = None) -> bool:
+    """Resolve cờ auto-BM25: constructor param override env ``CORTEX_BM25_AUTO``.
+
+    Env hỗ trợ ``1/true/on/yes`` (ON), ``0/false/off/no`` (OFF); khi unset
+    dùng ``_BM25_AUTO_DEFAULT``.
+    """
+    if auto_bm25 is not None:
+        return bool(auto_bm25)
+    raw = os.environ.get(ENV_BM25_AUTO, "").strip().lower()
+    if raw in _BM25_AUTO_ON_VALUES:
+        return True
+    if raw in _BM25_AUTO_OFF_VALUES:
+        return False
+    return _BM25_AUTO_DEFAULT
 
 # ─────────────────────────────────────────────────────────────
 # Qdrant local-client helpers
@@ -354,6 +383,25 @@ def _node_record_to_dict(node: Any) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────
 
 
+def _bm25_corpus_text(candidate: Dict[str, Any]) -> str:
+    """Ghép các identifier field của candidate thành corpus text cho BM25.
+
+    Dùng ``qualified_name``, ``name``, ``kind``, ``file_path`` (join bằng
+    space, lọc giá trị rỗng) — tokenizer ``[a-z0-9_]+`` của ``BM25Ranker``
+    sinh token phù hợp cho identifier nên không cần prose note thêm.
+    """
+    return " ".join(
+        part
+        for part in (
+            str(candidate.get("qualified_name") or ""),
+            str(candidate.get("name") or ""),
+            str(candidate.get("kind") or ""),
+            str(candidate.get("file_path") or ""),
+        )
+        if part
+    )
+
+
 def _qdrant_hit_to_candidate(
     hit: Dict[str, Any],
     semantic_score: float,
@@ -467,6 +515,14 @@ class IntelligentRetrievalEngine:
     seed_k        : Number of initial Qdrant results to use as seeds.
     expand_depth  : Graph expansion hop depth.
     expand_limit  : Maximum graph-expanded candidates.
+    bm25_ranker   : Optional pre-built ``BM25Ranker`` (inject-ready). When
+                    None and auto-BM25 is enabled, the engine builds a
+                    ranker over the seed candidates' identifier fields.
+    bm25_weight   : Weight of the bm25 signal when the ranker produced a
+                    non-zero score for at least one candidate.
+    auto_bm25     : Auto-corpus BM25 toggle. ``None`` (default) resolves
+                    from env ``CORTEX_BM25_AUTO``; explicit True/False
+                    overrides the env.
     """
 
     def __init__(
@@ -484,6 +540,7 @@ class IntelligentRetrievalEngine:
         expand_limit: int = DEFAULT_EXPAND_LIMIT,
         bm25_ranker: Optional[Any] = None,
         bm25_weight: float = 0.15,
+        auto_bm25: Optional[bool] = None,
     ) -> None:
         self._qdrant_url  = qdrant_url
         self._collection  = collection
@@ -498,6 +555,7 @@ class IntelligentRetrievalEngine:
         self._expand_limit = expand_limit
         self._bm25_ranker  = bm25_ranker
         self._bm25_weight  = bm25_weight
+        self._auto_bm25    = _resolve_auto_bm25(auto_bm25)
 
     # ── public search ─────────────────────────────────────────
 
@@ -573,9 +631,16 @@ class IntelligentRetrievalEngine:
 
         seed_ids = list(candidates.keys())
 
+        # 2a. Auto-corpus BM25 — khi caller không inject ranker, engine tự
+        # build corpus BM25 trên các seed candidates hiện có (corpus text =
+        # identifier fields). Ranker local này dùng cho đúng một lượt search.
+        bm25_ranker = self._bm25_ranker
+        if bm25_ranker is None and self._auto_bm25 and candidates:
+            bm25_ranker = self._build_auto_bm25_ranker(candidates)
+
         # 2b. BM25 signal injection (keyword precision boost)
-        if self._bm25_ranker is not None:
-            bm25_scores = self._bm25_ranker.score(q)
+        if bm25_ranker is not None:
+            bm25_scores = bm25_ranker.score(q)
             for nid, bm25_score in bm25_scores.items():
                 if nid in candidates:
                     candidates[nid]["bm25"] = bm25_score
@@ -612,7 +677,7 @@ class IntelligentRetrievalEngine:
 
         # 5. Score and rank — inject BM25 weight if active
         scorer_weights = dict(weights)
-        if self._bm25_ranker is not None and any(c.get("bm25", 0) > 0 for c in candidate_list):
+        if bm25_ranker is not None and any(c.get("bm25", 0) > 0 for c in candidate_list):
             scorer_weights["bm25"] = self._bm25_weight
         scorer  = RetrievalScorer(weights=scorer_weights)
         results = scorer.score_all(candidate_list, top_k=top_k, debug=debug)
@@ -694,6 +759,30 @@ class IntelligentRetrievalEngine:
             project_id=project_id,
         )
         return [_graph_keyword_node_to_candidate(n) for n in nodes]
+
+    def _build_auto_bm25_ranker(
+        self,
+        candidates: Dict[str, Dict[str, Any]],
+    ) -> Optional[Any]:
+        """Build a BM25 index over the seed candidates' identifier text.
+
+        Corpus text cho mỗi candidate được ghép bởi ``_bm25_corpus_text`` và
+        ghi ngược vào key ``_bm25_text`` của candidate dict. Trả về ``None``
+        (không đổi gì) khi ``BM25Ranker`` không import được hoặc backend
+        (Rust extension / rank-bm25) chưa sẵn sàng.
+        """
+        if _BM25Ranker is None:
+            return None
+        ranker = _BM25Ranker()
+        if not ranker.available:
+            return None
+        documents: List[Dict[str, Any]] = []
+        for candidate in candidates.values():
+            text = _bm25_corpus_text(candidate)
+            candidate["_bm25_text"] = text
+            documents.append(candidate)
+        ranker.build_index(documents, text_field="_bm25_text", id_field="node_id")
+        return ranker
 
     def _inject_freshness(self, candidates: List[Dict[str, Any]]) -> None:
         """Compute and inject freshness scores in-place."""
