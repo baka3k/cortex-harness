@@ -186,12 +186,17 @@ class RetrievalScorer:
         keys: semantic, keyword, graph, freshness, confidence, usage.
         Missing signals default to 0.0.
 
-        Returns a ``ScoredResult`` with an optional explanation when
-        ``debug=True``.
+        ``bm25`` is an optional injected signal (see
+        ``IntelligentRetrievalEngine``): it participates in the score only when
+        the caller supplied a ``"bm25"`` weight.  Before 2026-09-13 the bm25
+        weight only diluted the other weights via ``_normalize_weights`` while
+        the bm25 value itself was never added to the score.
         """
         raw_signals: Dict[str, float] = {
             k: float(candidate.get(k) or 0.0) for k in _SIGNAL_KEYS
         }
+        if "bm25" in self._weights:
+            raw_signals["bm25"] = float(candidate.get("bm25") or 0.0)
 
         weighted_sum = sum(
             self._weights.get(k, 0.0) * v
@@ -207,7 +212,6 @@ class RetrievalScorer:
                     for k, v in raw_signals.items()
                 },
             }
-
         node_id = str(candidate.get("node_id") or candidate.get("symbol_id") or "")
         return ScoredResult(
             node_id=node_id,

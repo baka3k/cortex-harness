@@ -1,0 +1,316 @@
+{
+  "generator": "scripts/rust_parity/gen_phase03_fixtures.py",
+  "classify": [
+    {
+      "query": "who calls the validateToken function",
+      "expected": "structural"
+    },
+    {
+      "query": "show me the callers of processPayment",
+      "expected": "structural"
+    },
+    {
+      "query": "find code similar to payment flow",
+      "expected": "semantic"
+    },
+    {
+      "query": "recently changed files",
+      "expected": "temporal"
+    },
+    {
+      "query": "unlikely helper",
+      "expected": "semantic"
+    },
+    {
+      "query": "explain the auth flow",
+      "expected": "semantic"
+    },
+    {
+      "query": "dirty nodes",
+      "expected": "temporal"
+    },
+    {
+      "query": "who uses UserService",
+      "expected": "structural"
+    },
+    {
+      "query": "Callers of X",
+      "expected": "structural"
+    },
+    {
+      "query": "caller of validate",
+      "expected": "structural"
+    },
+    {
+      "query": "where is validateToken used",
+      "expected": "structural"
+    },
+    {
+      "query": "this week changes",
+      "expected": "temporal"
+    },
+    {
+      "query": "how does checkout work",
+      "expected": "semantic"
+    },
+    {
+      "query": "path from A to B",
+      "expected": "structural"
+    },
+    {
+      "query": "latest changes in repo",
+      "expected": "temporal"
+    },
+    {
+      "query": "",
+      "expected": "default"
+    },
+    {
+      "query": "   ",
+      "expected": "default"
+    },
+    {
+      "query": "random gibberish query",
+      "expected": "default"
+    },
+    {
+      "query": "imports of module",
+      "expected": "structural"
+    },
+    {
+      "query": "dependencies of PaymentService",
+      "expected": "structural"
+    },
+    {
+      "query": "uncommitted work in checkout",
+      "expected": "temporal"
+    }
+  ],
+  "explain": [
+    {
+      "query": "who calls the validateToken function",
+      "expected": {
+        "query": "who calls the validateToken function",
+        "intent": "structural",
+        "matched": "keyword: 'who calls'"
+      }
+    },
+    {
+      "query": "show me the callers of processPayment",
+      "expected": {
+        "query": "show me the callers of processPayment",
+        "intent": "structural",
+        "matched": "keyword: 'callers of'"
+      }
+    },
+    {
+      "query": "find code similar to payment flow",
+      "expected": {
+        "query": "find code similar to payment flow",
+        "intent": "semantic",
+        "matched": "keyword: 'similar to'"
+      }
+    },
+    {
+      "query": "recently changed files",
+      "expected": {
+        "query": "recently changed files",
+        "intent": "temporal",
+        "matched": "keyword: 'recently changed'"
+      }
+    },
+    {
+      "query": "unlikely helper",
+      "expected": {
+        "query": "unlikely helper",
+        "intent": "semantic",
+        "matched": "keyword: 'like'"
+      }
+    },
+    {
+      "query": "explain the auth flow",
+      "expected": {
+        "query": "explain the auth flow",
+        "intent": "semantic",
+        "matched": "keyword: 'explain'"
+      }
+    },
+    {
+      "query": "dirty nodes",
+      "expected": {
+        "query": "dirty nodes",
+        "intent": "temporal",
+        "matched": "keyword: 'dirty'"
+      }
+    },
+    {
+      "query": "who uses UserService",
+      "expected": {
+        "query": "who uses UserService",
+        "intent": "structural",
+        "matched": "keyword: 'who uses'"
+      }
+    },
+    {
+      "query": "Callers of X",
+      "expected": {
+        "query": "Callers of X",
+        "intent": "structural",
+        "matched": "keyword: 'callers of'"
+      }
+    },
+    {
+      "query": "caller of validate",
+      "expected": {
+        "query": "caller of validate",
+        "intent": "structural",
+        "matched": "regex: '\\bcall(er|ers|ed|ing)?\\s+(of|graph)\\b'"
+      }
+    },
+    {
+      "query": "where is validateToken used",
+      "expected": {
+        "query": "where is validateToken used",
+        "intent": "structural",
+        "matched": "keyword: 'where is'"
+      }
+    },
+    {
+      "query": "this week changes",
+      "expected": {
+        "query": "this week changes",
+        "intent": "temporal",
+        "matched": "keyword: 'this week'"
+      }
+    },
+    {
+      "query": "how does checkout work",
+      "expected": {
+        "query": "how does checkout work",
+        "intent": "semantic",
+        "matched": "keyword: 'how does'"
+      }
+    },
+    {
+      "query": "path from A to B",
+      "expected": {
+        "query": "path from A to B",
+        "intent": "structural",
+        "matched": "keyword: 'path from'"
+      }
+    },
+    {
+      "query": "latest changes in repo",
+      "expected": {
+        "query": "latest changes in repo",
+        "intent": "temporal",
+        "matched": "keyword: 'latest changes'"
+      }
+    },
+    {
+      "query": "",
+      "expected": {
+        "query": "",
+        "intent": "default",
+        "matched": "empty query"
+      }
+    },
+    {
+      "query": "   ",
+      "expected": {
+        "query": "   ",
+        "intent": "default",
+        "matched": "empty query"
+      }
+    },
+    {
+      "query": "random gibberish query",
+      "expected": {
+        "query": "random gibberish query",
+        "intent": "default",
+        "matched": "fallback"
+      }
+    },
+    {
+      "query": "imports of module",
+      "expected": {
+        "query": "imports of module",
+        "intent": "structural",
+        "matched": "keyword: 'imports'"
+      }
+    },
+    {
+      "query": "dependencies of PaymentService",
+      "expected": {
+        "query": "dependencies of PaymentService",
+        "intent": "structural",
+        "matched": "keyword: 'dependencies of'"
+      }
+    },
+    {
+      "query": "uncommitted work in checkout",
+      "expected": {
+        "query": "uncommitted work in checkout",
+        "intent": "temporal",
+        "matched": "keyword: 'uncommitted'"
+      }
+    }
+  ],
+  "weights": [
+    {
+      "intent": "semantic",
+      "expected": {
+        "semantic": 0.5,
+        "keyword": 0.15,
+        "graph": 0.1,
+        "freshness": 0.05,
+        "confidence": 0.15,
+        "usage": 0.05
+      }
+    },
+    {
+      "intent": "structural",
+      "expected": {
+        "semantic": 0.2,
+        "keyword": 0.1,
+        "graph": 0.5,
+        "freshness": 0.05,
+        "confidence": 0.1,
+        "usage": 0.05
+      }
+    },
+    {
+      "intent": "temporal",
+      "expected": {
+        "semantic": 0.2,
+        "keyword": 0.15,
+        "graph": 0.1,
+        "freshness": 0.45,
+        "confidence": 0.05,
+        "usage": 0.05
+      }
+    },
+    {
+      "intent": "default",
+      "expected": {
+        "semantic": 0.35,
+        "keyword": 0.2,
+        "graph": 0.2,
+        "freshness": 0.1,
+        "confidence": 0.1,
+        "usage": 0.05
+      }
+    },
+    {
+      "intent": "unknown-intent",
+      "expected": {
+        "semantic": 0.35,
+        "keyword": 0.2,
+        "graph": 0.2,
+        "freshness": 0.1,
+        "confidence": 0.1,
+        "usage": 0.05
+      }
+    }
+  ]
+}

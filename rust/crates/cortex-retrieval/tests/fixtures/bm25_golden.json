@@ -1,0 +1,221 @@
+{
+  "rank_bm25_version": "0.2.2",
+  "generator": "scripts/rust_parity/gen_bm25_fixtures.py",
+  "sets": [
+    {
+      "name": "code_nodes",
+      "text_field": "note",
+      "id_field": "symbol_id",
+      "documents": [
+        {
+          "id": "fn_process_payment",
+          "text": "Process payment retry policy for failed transactions"
+        },
+        {
+          "id": "fn_refund_payment",
+          "text": "Refund payment flow with payment gateway timeout handling"
+        },
+        {
+          "id": "cls_payment_gateway",
+          "text": "Payment gateway client for payment service integration"
+        },
+        {
+          "id": "fn_validate_order",
+          "text": "Validate order payload before order is submitted"
+        },
+        {
+          "id": "fn_submit_order",
+          "text": "Submit order to order service and await confirmation"
+        },
+        {
+          "id": "cls_db_session",
+          "text": "Database session helper with savepoint support"
+        },
+        {
+          "id": "fn_batch_checkpoint",
+          "text": "Persist batch checkpoint for batch restart"
+        },
+        {
+          "id": "xu_ly_thanh_toan",
+          "text": "Hàm xử lý thanh toán bị lỗi timeout khi gọi cổng thanh toán"
+        }
+      ],
+      "cases": [
+        {
+          "query": "payment",
+          "expected": {
+            "fn_process_payment": 0.7172523961661341,
+            "fn_refund_payment": 0.9614561027837261,
+            "cls_payment_gateway": 1.0
+          }
+        },
+        {
+          "query": "payment order",
+          "expected": {
+            "fn_process_payment": 0.33928155934003057,
+            "fn_refund_payment": 0.45479712237014813,
+            "cls_payment_gateway": 0.47302952371238116,
+            "fn_validate_order": 1.0,
+            "fn_submit_order": 0.9614561027837261
+          }
+        },
+        {
+          "query": "payment payment retry",
+          "expected": {
+            "fn_process_payment": 1.0,
+            "fn_refund_payment": 0.4821126962886016,
+            "cls_payment_gateway": 0.5014401540462737
+          }
+        },
+        {
+          "query": "nonexistentterm",
+          "expected": {}
+        },
+        {
+          "query": "payment nonexistentterm",
+          "expected": {
+            "fn_process_payment": 0.7172523961661341,
+            "fn_refund_payment": 0.9614561027837261,
+            "cls_payment_gateway": 1.0
+          }
+        },
+        {
+          "query": "same tokens",
+          "expected": {}
+        },
+        {
+          "query": "tokens same same",
+          "expected": {}
+        },
+        {
+          "query": "CamelCase",
+          "expected": {}
+        },
+        {
+          "query": "đơn hàng",
+          "expected": {
+            "xu_ly_thanh_toan": 1.0
+          }
+        },
+        {
+          "query": "timeout",
+          "expected": {
+            "fn_refund_payment": 1.0,
+            "xu_ly_thanh_toan": 0.6257088846880906
+          }
+        },
+        {
+          "query": "  ",
+          "expected": {}
+        },
+        {
+          "query": "",
+          "expected": {}
+        },
+        {
+          "query": "xu_ly_thanh_toan xử lý",
+          "expected": {
+            "xu_ly_thanh_toan": 1.0
+          }
+        }
+      ]
+    },
+    {
+      "name": "edge_cases",
+      "text_field": "summary",
+      "id_field": "node_id",
+      "documents": [
+        {
+          "id": "empty_text",
+          "text": ""
+        },
+        {
+          "id": "none_text",
+          "text": ""
+        },
+        {
+          "id": "dup_a",
+          "text": "same tokens same tokens"
+        },
+        {
+          "id": "dup_b",
+          "text": "same tokens different order tokens"
+        },
+        {
+          "id": "UPPER_Mix",
+          "text": "CamelCase and snake_case and UPPERCASE"
+        },
+        {
+          "id": "vietnamese",
+          "text": "Truy vấn dữ liệu đơn hàng theo mã đơn"
+        }
+      ],
+      "cases": [
+        {
+          "query": "payment",
+          "expected": {}
+        },
+        {
+          "query": "payment order",
+          "expected": {
+            "dup_b": 1.0
+          }
+        },
+        {
+          "query": "payment payment retry",
+          "expected": {}
+        },
+        {
+          "query": "nonexistentterm",
+          "expected": {}
+        },
+        {
+          "query": "payment nonexistentterm",
+          "expected": {}
+        },
+        {
+          "query": "same tokens",
+          "expected": {
+            "dup_a": 1.0,
+            "dup_b": 0.7839042901804212
+          }
+        },
+        {
+          "query": "tokens same same",
+          "expected": {
+            "dup_a": 1.0,
+            "dup_b": 0.735432596331312
+          }
+        },
+        {
+          "query": "CamelCase",
+          "expected": {
+            "UPPER_Mix": 1.0
+          }
+        },
+        {
+          "query": "đơn hàng",
+          "expected": {
+            "vietnamese": 1.0
+          }
+        },
+        {
+          "query": "timeout",
+          "expected": {}
+        },
+        {
+          "query": "  ",
+          "expected": {}
+        },
+        {
+          "query": "",
+          "expected": {}
+        },
+        {
+          "query": "xu_ly_thanh_toan xử lý",
+          "expected": {}
+        }
+      ]
+    }
+  ]
+}
