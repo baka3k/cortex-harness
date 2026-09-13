@@ -1,0 +1,26 @@
+[package]
+name = "analyzer-php"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của code-tiny/tools/php/php_analyzer.py — PHP call graph analyzer (phase 05 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-php"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+tree-sitter = "0.25"
+# crates.io tree-sitter-php dừng ở 0.24.2 (không có 0.25); 0.24.x wraps cùng
+# dòng grammar với PyPI tree-sitter-php 0.24.1 mà venv Python tham chiếu dùng
+# (tree-sitter-languages 1.10.2 broken với tree_sitter 0.26 → fallback ts_php).
+tree-sitter-php = "0.24"
+
+[lints.rust]
+unsafe_code = "deny"

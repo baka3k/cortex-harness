@@ -12,7 +12,6 @@ use cortex_analyzer_framework::summary::{scan_result_line, summary_json, write_s
 use cortex_analyzer_framework::scan::rel_posix;
 use cortex_analyzer_framework::traits::{Analyzer, AnalyzerContext, AnalyzerResult};
 use cortex_graph_writer::language_writer::{FilesVariant, LanguageCodeWriter, WriteAllPayload};
-use cortex_graph_writer::store::GraphStore;
 
 use crate::pyparse;
 use crate::resolve::FunctionIndex;
@@ -121,7 +120,7 @@ impl Analyzer for PythonAnalyzer {
                 );
             }
             let (deleted_nodes, deleted_unknown) =
-                cleanup_graph_files(store, &project_id, &targets)?;
+                cortex_analyzer_framework::cleanup::cleanup_graph_files(store, &project_id, &targets).map_err(|e| e.to_string())?;
             if verbose {
                 println!(
                     "[cleanup][graph] deleted_nodes={deleted_nodes} deleted_unknown_functions={deleted_unknown}"
@@ -174,6 +173,8 @@ impl Analyzer for PythonAnalyzer {
                         func.arity,
                         &func.symbol_id,
                         func.exported,
+                        "",
+                        &[],
                         &usage_index,
                     );
                     func.intent = enriched.intent;
@@ -294,70 +295,4 @@ impl Analyzer for PythonAnalyzer {
 
 fn rel_of(root: &std::path::Path, path: &std::path::Path) -> String {
     rel_posix(root, path)
-}
-
-/// `cleanup_neo4j_for_files` — DETACH DELETE theo file_path/path/File.id.
-fn cleanup_graph_files(
-    store: &mut dyn GraphStore,
-    project_id: &str,
-    paths: &[String],
-) -> Result<(i64, i64), String> {
-    if paths.is_empty() {
-        return Ok((0, 0));
-    }
-    let delete_query = r#"
-    WITH $paths AS paths, $project_id AS project_id
-    MATCH (n)
-    WHERE n.project_id = project_id
-      AND (
-        coalesce(n.file_path, '') IN paths
-        OR coalesce(n.path, '') IN paths
-        OR (n:File AND n.id IN paths)
-      )
-    WITH collect(DISTINCT n) AS nodes
-    UNWIND nodes AS n
-    WITH DISTINCT n
-    DETACH DELETE n
-    RETURN count(n) AS deleted_nodes
-    "#;
-    let mut params = std::collections::BTreeMap::new();
-    params.insert(
-        "paths".to_string(),
-        serde_json::Value::Array(
-            paths
-                .iter()
-                .map(|path| serde_json::Value::String(path.clone()))
-                .collect(),
-        ),
-    );
-    params.insert(
-        "project_id".to_string(),
-        serde_json::Value::String(project_id.to_string()),
-    );
-    let records = store
-        .execute_query(delete_query, &params, None)
-        .map_err(|e| e.to_string())?;
-    let deleted_nodes = records
-        .first()
-        .and_then(|record| record.get("deleted_nodes"))
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-
-    let prune_query = r#"
-    MATCH (u:UnknownFunction)
-    WHERE NOT ()-[:UNKNOWN_CALL]->(u)
-    WITH collect(u) AS nodes
-    UNWIND nodes AS u
-    DETACH DELETE u
-    RETURN count(u) AS deleted_unknown_functions
-    "#;
-    let records = store
-        .execute_query(prune_query, &Default::default(), None)
-        .map_err(|e| e.to_string())?;
-    let deleted_unknown = records
-        .first()
-        .and_then(|record| record.get("deleted_unknown_functions"))
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-    Ok((deleted_nodes, deleted_unknown))
 }

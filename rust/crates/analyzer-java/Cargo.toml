@@ -1,0 +1,26 @@
+[package]
+name = "analyzer-java"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/java/java_analyzer.py — phase 06 rust-full-migration (JVM batch)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-java"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+tree-sitter = "0.25"
+# PyPI venv chạy tree-sitter-java 0.23.5 (fallback path của `_get_java_parser`
+# vì tree_sitter_languages.get_parser TypeError với tree_sitter 0.26) — pin
+# cùng bản để parse tree byte-identical.
+tree-sitter-java = "0.23.5"
+
+[lints.rust]
+unsafe_code = "deny"

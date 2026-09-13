@@ -1386,7 +1386,15 @@ async def build_call_graph(
             for call in payload["calls"]:
                 callee_id = call.get("callee_id") or resolve_callee_id(call)
                 if callee_id:
-                    all_calls.append({"caller_id": call["caller_id"], "callee_id": callee_id})
+                    all_calls.append(
+                        {
+                            "caller_id": call["caller_id"],
+                            "callee_id": callee_id,
+                            # Explicit scope: same value journal metadata carries
+                            # in orchestrator runs, keeps journal-less runs valid.
+                            "project_id": project_id,
+                        }
+                    )
             # ── Resolve RENDERS edges ─────────────────────────────────────────
             for render in payload.get("renders") or []:
                 renderer_id = render["renderer_id"]

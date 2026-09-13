@@ -1,0 +1,25 @@
+[package]
+name = "analyzer-shell"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/shell/shell_analyzer.py — ShellScript/ShellFunction/ShellInvocation + program mapping lineage (phase 05 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-shell"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-falkordb = { path = "../cortex-falkordb" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+encoding_rs = "0.8"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[lints.rust]
+unsafe_code = "deny"
