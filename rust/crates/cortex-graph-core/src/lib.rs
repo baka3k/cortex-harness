@@ -5,5 +5,6 @@
 pub mod artifacts;
 pub mod identity;
 pub mod journal;
+pub mod journal_manifest;
 pub mod models;
 pub mod schema_manifest;

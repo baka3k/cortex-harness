@@ -63,6 +63,14 @@ _ARG_NAMES = {
     "ack_batch": ("job_id", "fencing_token", "elapsed_ms"),
     "complete_producers": ("run_id",),
     "inspect": (),
+    # Phase 02 — manifest staging + reconciling + conservation
+    "mark_reconciling": ("job_id", "fencing_token"),
+    "claim_reconciling": ("run_id", "lease_seconds"),
+    "schedule_reconciliation_retry": ("job_id", "fencing_token", "retry_at", "error_code"),
+    "recover_run_leases_as_ambiguous": ("run_id",),
+    "conservation_summary": ("run_id",),
+    "seal_endpoint_audit": ("run_id", "manifest_digest", "receipt_count", "audited_rows"),
+    "endpoint_audit_status": ("run_id",),
 }
 
 
@@ -129,6 +137,8 @@ def _serialize_arg(value):
         return metadata_dict(value)
     if isinstance(value, BatchSpec):
         return spec_to_dict(value)
+    if isinstance(value, dt.datetime):
+        return value.isoformat()
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, (list, tuple)):
@@ -187,6 +197,13 @@ def record_result(ops, name, callable_fn, *args, **kwargs):
         "find_resumable_run": lambda row: run_to_dict(row) if row else None,
         "complete_producers": lambda count: count,
         "inspect": lambda rows: rows,
+        # Phase 02
+        "claim_reconciling": lambda row: batch_to_dict(row) if row else None,
+        "schedule_reconciliation_retry": batch_to_dict,
+        "recover_run_leases_as_ambiguous": lambda count: count,
+        "conservation_summary": lambda summary: summary,
+        "seal_endpoint_audit": lambda status: status,
+        "endpoint_audit_status": lambda status: status,
     }[name]
     entry["result"] = serializer(result)
     ops.append(entry)
@@ -249,7 +266,7 @@ def main() -> None:
 
         run_a = record_result(ops, "open_run", journal.open_run, meta_a)
         record_result(ops, "open_run", journal.open_run, meta_a)  # resume path
-        record_result(ops, "open_run", journal.open_run, meta_b)
+        run_b = record_result(ops, "open_run", journal.open_run, meta_b)
         record_result(ops, "find_resumable_run", journal.find_resumable_run, meta_a)
         record_result(ops, "list_runs", journal.list_runs)
 
@@ -299,6 +316,136 @@ def main() -> None:
         fake_token = "0" * 32
         record_result(ops, "renew_lease", journal.renew_lease, batch1.job_id, fake_token, 60)
 
+        # ── Phase 02: manifest staging + reconciling + conservation ──
+        meta_c = RunMetadata(
+            project_id="demo", scope_id="demo", source_revision="rev-2",
+            source_snapshot="snap-2", physical_target="local", generation="gen-1",
+            parser="cplus", parser_version="1.0", schema_fingerprint="sfp-1",
+            query_shape_version="qv-1",
+        )
+        run_c = record_result(ops, "open_run", journal.open_run, meta_c)
+
+        # Run B (java, đã open): batch dirty — dup + conflict + rejected trong
+        # 1 batch node_identity → batch BLOCKED + run BLOCKED sau commit.
+        rows_b = [
+            {"id": "fn-1", "comment": "a"},
+            {"id": "fn-1", "comment": "a"},
+            {"id": "fn-1", "comment": "b"},
+            {"comment": "missing id"},
+        ]
+        artifact_b = record_result(
+            ops, "create_artifact", journal.create_artifact, run_b.run_id, rows_b
+        )
+        spec_dirty = BatchSpec(
+            phase=OperationPhase.NODES, operation_key="node.upsert", sequence=0,
+            artifact=artifact_b, expected_count=len(rows_b),
+            operation={
+                "reconciliation": "node_identity", "node_label": "Function",
+                "identity_property": "id", "mutation_kind": "merge",
+                "producer_id": "producer-dirty",
+            },
+        )
+        record_result(ops, "enqueue_batch", journal.enqueue_batch, run_b.run_id, spec_dirty)
+        record_result(ops, "complete_producers", journal.complete_producers, run_b.run_id)
+        record_result(
+            ops, "recover_run_leases_as_ambiguous",
+            journal.recover_run_leases_as_ambiguous, run_b.run_id,
+        )
+
+        # Run C (cplus): sạch — node dups + call_edge dups, đủ vòng reconcile
+        # rồi seal endpoint audit.
+        nodes_a = [
+            {"id": "fn-1", "comment": "clean-a"},
+            {"id": "fn-2", "comment": "clean-b"},
+            {"id": "fn-1", "comment": "clean-a"},
+        ]
+        artifact_c1 = record_result(
+            ops, "create_artifact", journal.create_artifact, run_c.run_id, nodes_a
+        )
+        spec_node = BatchSpec(
+            phase=OperationPhase.NODES, operation_key="node.upsert", sequence=0,
+            artifact=artifact_c1, expected_count=len(nodes_a),
+            operation={
+                "reconciliation": "node_identity", "node_label": "Function",
+                "identity_property": "id", "mutation_kind": "merge",
+                "producer_id": "producer-clean",
+            },
+        )
+        batch_c1 = record_result(
+            ops, "enqueue_batch", journal.enqueue_batch, run_c.run_id, spec_node
+        )
+
+        edges_a = [
+            {"caller_id": "fn-1", "callee_id": "fn-2"},
+            {"caller_id": "fn-1", "callee_id": "fn-2"},
+            {"caller_id": "fn-2", "callee_id": "fn-1"},
+        ]
+        artifact_c2 = record_result(
+            ops, "create_artifact", journal.create_artifact, run_c.run_id, edges_a
+        )
+        spec_edge = BatchSpec(
+            phase=OperationPhase.CALLS, operation_key="call.upsert", sequence=1,
+            artifact=artifact_c2, expected_count=len(edges_a),
+            operation={
+                "reconciliation": "call_edge", "producer_id": "producer-clean",
+            },
+        )
+        batch_c2 = record_result(
+            ops, "enqueue_batch", journal.enqueue_batch, run_c.run_id, spec_edge
+        )
+
+        record_result(
+            ops, "conservation_summary", journal.conservation_summary, run_c.run_id
+        )
+
+        claimed_c = record_result(ops, "claim_batch", journal.claim_batch, run_c.run_id, 60)
+        assert claimed_c is not None and claimed_c.job_id == batch_c1.job_id
+        record_result(
+            ops, "mark_reconciling", journal.mark_reconciling,
+            batch_c1.job_id, claimed_c.fencing_token,
+        )
+        record_result(
+            ops, "schedule_reconciliation_retry", journal.schedule_reconciliation_retry,
+            batch_c1.job_id, claimed_c.fencing_token,
+            FIXED,  # clock cố định → retry claimable ngay ở tick kế tiếp
+            sqlite_store.TerminalErrorCode.INVALID_CONTRACT,
+        )
+        fenced = record_result(
+            ops, "claim_reconciling", journal.claim_reconciling, run_c.run_id, 60
+        )
+        assert fenced is not None and fenced.job_id == batch_c1.job_id
+        record_result(
+            ops, "ack_batch", journal.ack_batch,
+            batch_c1.job_id, fenced.fencing_token, 100,
+        )
+        claimed_c2 = record_result(ops, "claim_batch", journal.claim_batch, run_c.run_id, 60)
+        assert claimed_c2 is not None and claimed_c2.job_id == batch_c2.job_id
+        record_result(
+            ops, "ack_batch", journal.ack_batch,
+            batch_c2.job_id, claimed_c2.fencing_token, None,
+        )
+
+        record_result(ops, "complete_producers", journal.complete_producers, run_c.run_id)
+        record_result(
+            ops, "conservation_summary", journal.conservation_summary, run_c.run_id
+        )
+        record_result(
+            ops, "seal_endpoint_audit", journal.seal_endpoint_audit,
+            run_c.run_id, None, None, None,
+        )
+        # seal lần 2 với digest khác → immutable error
+        record_result(
+            ops, "seal_endpoint_audit", journal.seal_endpoint_audit,
+            run_c.run_id, "deadbeef", None, None,
+        )
+        record_result(
+            ops, "endpoint_audit_status", journal.endpoint_audit_status, run_c.run_id
+        )
+        record_result(
+            ops, "recover_run_leases_as_ambiguous",
+            journal.recover_run_leases_as_ambiguous, run_c.run_id,
+        )
+
         summary = journal.inspect()
         ops.append({"op": "inspect", "result": summary})
 
@@ -307,7 +454,11 @@ def main() -> None:
             "now_epoch": FIXED_EPOCH,
             "metadata_a": metadata_dict(meta_a),
             "metadata_b": metadata_dict(meta_b),
+            "metadata_c": metadata_dict(meta_c),
             "artifact_rows": rows,
+            "artifact_rows_b": rows_b,
+            "artifact_rows_c1": nodes_a,
+            "artifact_rows_c2": edges_a,
             "ops": ops,
         }
         FIXTURES.mkdir(parents=True, exist_ok=True)
@@ -378,6 +529,31 @@ class SQLiteJournalWithArtifacts:
 
     def complete_producers(self, run_id_value: str):
         return self.journal.complete_producers(run_id_value)
+
+    def mark_reconciling(self, job_id: str, token: str):
+        return self.journal.mark_reconciling(job_id, token)
+
+    def claim_reconciling(self, run_id_value: str, lease_seconds: int):
+        return self.journal.claim_reconciling(run_id_value=run_id_value, lease_seconds=lease_seconds)
+
+    def schedule_reconciliation_retry(self, job_id: str, token: str, retry_at, error_code):
+        return self.journal.schedule_reconciliation_retry(
+            job_id, token, retry_at=retry_at, error_code=error_code
+        )
+
+    def recover_run_leases_as_ambiguous(self, run_id_value: str):
+        return self.journal.recover_run_leases_as_ambiguous(run_id_value)
+
+    def conservation_summary(self, run_id_value: str):
+        return self.journal.conservation_summary(run_id_value)
+
+    def seal_endpoint_audit(self, run_id_value: str, manifest_digest, receipt_count, audited_rows):
+        return self.journal.seal_endpoint_audit(
+            run_id_value, manifest_digest, receipt_count, audited_rows=audited_rows
+        )
+
+    def endpoint_audit_status(self, run_id_value: str):
+        return self.journal.endpoint_audit_status(run_id_value)
 
     def inspect(self):
         return sqlite_store.inspect_journal(self.journal.path)
