@@ -2,6 +2,8 @@
 
 Implementation and maintenance records, newest first:
 
+- [Phase 03 graph writer + operations Rust port](2026-09-13-phase03-graph-writer-port.md)
+- [LadybugDB dialect findings khi port writer](2026-09-13-ladybug-dialect-findings-writer.md)
 - [Durable C++/Pro*C node-first recovery](2026-08-28-durable-cplus-node-first-recovery.md)
 - [MCP storage concurrency hardening](2026-08-28-mcp-storage-concurrency-hardening.md)
 - [Graph journal recovery hardening](2026-08-28-graph-journal-recovery-hardening.md)
