@@ -63,6 +63,7 @@ from tools.common.retrieval_scorer import (
     WEIGHTS_STRUCTURAL,
     WEIGHTS_TEMPORAL,
 )
+from tools.common import rust_bridge
 
 # ─────────────────────────────────────────────────────────────
 # Intent constants
@@ -211,7 +212,15 @@ def classify_query(query: str) -> str:
     Classify *query* into one of the four intent strings.
 
     Returns one of: "semantic", "structural", "temporal", "default".
+
+    Dispatches to the Rust port (``cortex_retrieval_py``) when available;
+    the implementation below is the Python reference and the parity gate
+    target (``make rust-pyo3``).
     """
+    rust_intent = rust_bridge.classify_query(query)
+    if rust_intent is not None:
+        return rust_intent
+
     q = (query or "").strip().lower()
     if not q:
         return INTENT_DEFAULT
@@ -245,6 +254,10 @@ def classify_query_explain(query: str) -> Dict[str, object]:
           "matched": "keyword: 'who calls'",
         }
     """
+    rust_explain = rust_bridge.classify_query_explain(query)
+    if rust_explain is not None:
+        return rust_explain
+
     q = (query or "").strip().lower()
     if not q:
         return {"query": query, "intent": INTENT_DEFAULT, "matched": "empty query"}
@@ -273,6 +286,9 @@ def get_weight_profile(intent: str) -> Dict[str, float]:
 
     Falls back to ``DEFAULT_WEIGHTS`` for unknown intents.
     """
+    rust_weights = rust_bridge.get_weight_profile(intent)
+    if rust_weights is not None:
+        return rust_weights
     return dict(WEIGHT_PROFILES.get(intent, DEFAULT_WEIGHTS))
 
 

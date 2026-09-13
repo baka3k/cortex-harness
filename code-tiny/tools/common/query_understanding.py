@@ -42,6 +42,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from tools.common import rust_bridge
 from tools.common.query_intent_classifier import (
     classify_query,
     INTENT_SEMANTIC,
@@ -457,6 +458,12 @@ class QueryUnderstanding:
             )
 
         raw = text.strip()
+
+        # Rust fast path — payload có đúng các field của dataclass; bản Python
+        # bên dưới là reference implementation cho parity gate (make rust-pyo3).
+        rust_payload = rust_bridge.query_understanding(raw)
+        if rust_payload is not None:
+            return cls(**rust_payload)
 
         intent         = classify_query(raw)
         entities       = _extract_entities(raw)
