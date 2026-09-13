@@ -1,0 +1,37 @@
+[package]
+name = "analyzer-vb"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của code-tiny/tools/vb/* — phase 07 rust-full-migration (VB family: vbnet/vb6/vba/vbscript)"
+license = "MIT"
+publish = false
+
+# Bốn binary mirror 4 entry point Python (`vbnet_analyzer.py`, `vb6_analyzer.py`,
+# `vba_analyzer.py`, `vbscript_analyzer.py`) — mỗi entry chỉ inject `--dialect`
+# rồi gọi chung `vb_analyzer_base.main`.
+[[bin]]
+name = "analyzer-vbnet"
+path = "src/bin/vbnet.rs"
+
+[[bin]]
+name = "analyzer-vb6"
+path = "src/bin/vb6.rs"
+
+[[bin]]
+name = "analyzer-vba"
+path = "src/bin/vba.rs"
+
+[[bin]]
+name = "analyzer-vbscript"
+path = "src/bin/vbscript.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "deny"
