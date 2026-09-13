@@ -1,12 +1,14 @@
 """
 Graph-store adapter for doc-tiny scripts.
 
-Neo4j remains the default provider. FalkorDB can be selected with
-``--graph-provider falkordb`` or ``DOC_GRAPH_PROVIDER=falkordb``.
+Providers: ``neo4j`` (remote server), ``falkordb`` (embedded FalkorDBLite or
+remote server), and ``ladybug`` (embedded LadybugDB, local-only). Select with
+``--graph-provider`` or ``DOC_GRAPH_PROVIDER``/``GRAPH_PROVIDER``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -96,16 +98,15 @@ class FalkorDBGraphStore:
             self._driver.close()
 
     def setup_indexes(self) -> None:
-        graph = self._driver.driver.select_graph(self._database)
+        # Route through the driver's provider-neutral index API: Ladybug has
+        # no ``select_graph`` and FalkorDB index creation stays inside its
+        # driver as well.
+        asyncio.run(self._driver.create_indexes(DOC_INDEXES))
         for index in DOC_INDEXES:
             label = index["label"]
             prop = index["property"]
             props = prop if isinstance(prop, list) else [prop]
-            try:
-                graph.create_node_range_index(label, *props)
-                print(f"Applied FalkorDB range index: {label}({', '.join(props)})")
-            except Exception as exc:
-                print(f"Skipped FalkorDB range index {label}({', '.join(props)}): {exc}")
+            print(f"Applied {self.provider} index: {label}({', '.join(props)})")
 
 
 class Neo4jGraphStore:
@@ -135,9 +136,12 @@ class Neo4jGraphStore:
 
 
 def normalize_provider(value: Optional[str]) -> str:
-    provider = (value or "neo4j").strip().lower()
+    provider = (value or "falkordb").strip().lower()
     if provider in {"falkor", "falkordb"}:
         return "falkordb"
+    if provider in {"ladybug", "lbug", "lady-bug", "kuzu"}:
+        # "kuzu" predates the LadybugDB fork and resolves onto it.
+        return "ladybug"
     if provider == "neo4j":
         return provider
     raise ValueError(f"Unsupported graph provider: {value}")
@@ -150,7 +154,7 @@ def env_graph_provider() -> str:
 def add_graph_store_args(parser) -> None:
     parser.add_argument(
         "--graph-provider",
-        choices=["neo4j", "falkordb"],
+        choices=["neo4j", "falkordb", "ladybug"],
         default=env_graph_provider(),
         help="Graph database provider for doc-tiny graph operations.",
     )
@@ -179,6 +183,44 @@ def add_graph_store_args(parser) -> None:
         "--falkordb-graph",
         default=os.getenv("FALKORDB_GRAPH") or os.getenv("FALKORDB_DATABASE", "neo4j"),
     )
+    parser.add_argument("--ladybug-path", default=os.getenv("LADYBUG_PATH"))
+    parser.add_argument(
+        "--ladybug-graph",
+        default=os.getenv("LADYBUG_GRAPH") or "hyper_graph",
+    )
+
+
+def _resolve_default_graph_path(role: str) -> str:
+    from cortex_harness.storage import resolve_storage
+
+    resolved = resolve_storage(Path.cwd())
+    if role == "doc":
+        return str(resolved.falkordb_doc_path)
+    return str(resolved.falkordb_code_path)
+
+
+def _resolve_default_ladybug_path(role: str) -> str:
+    from cortex_harness.storage import resolve_storage
+
+    resolved = resolve_storage(Path.cwd())
+    if role == "doc":
+        return str(resolved.ladybug_doc_path)
+    return str(resolved.ladybug_code_path)
+
+
+def _open_ladybug_store(graph: Optional[str], path: Optional[str], role: str = "doc"):
+    from tools.graph.driver.ladybug_driver import LadybugDriver
+
+    if not path:
+        path = _resolve_default_ladybug_path(role)
+    return FalkorDBGraphStore(
+        LadybugDriver(
+            path=path,
+            graph=graph or "hyper_graph",
+            owner_id=os.getenv("CORTEX_STORAGE_OWNER", "doc"),
+            instance_id=os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+        )
+    )
 
 
 def create_graph_store_from_args(args):
@@ -189,6 +231,11 @@ def create_graph_store_from_args(args):
             args.neo4j_user,
             args.neo4j_pass,
             getattr(args, "neo4j_db", None) or os.getenv("NEO4J_DB"),
+        )
+    if provider == "ladybug":
+        return _open_ladybug_store(
+            getattr(args, "ladybug_graph", None),
+            getattr(args, "ladybug_path", None),
         )
     falkordb_uri = getattr(args, "falkordb_uri", None)
     if falkordb_uri:
@@ -203,8 +250,7 @@ def create_graph_store_from_args(args):
         )
     path = getattr(args, "falkordb_path", None)
     if not path:
-        from cortex_harness.storage import resolve_storage
-        path = str(resolve_storage(Path.cwd()).falkordb_doc_path)
+        path = _resolve_default_graph_path("doc")
     return FalkorDBGraphStore(
         FalkorDBDriver(
             path=path,
@@ -224,6 +270,11 @@ def create_graph_store_from_env():
             os.getenv("NEO4J_PASS", "password"),
             os.getenv("NEO4J_DB"),
         )
+    if provider == "ladybug":
+        return _open_ladybug_store(
+            os.getenv("LADYBUG_GRAPH") or "hyper_graph",
+            os.getenv("LADYBUG_PATH"),
+        )
     falkordb_uri = (os.getenv("FALKORDB_URI") or "").strip()
     if falkordb_uri:
         return FalkorDBGraphStore(
@@ -239,8 +290,7 @@ def create_graph_store_from_env():
         )
     path = os.getenv("FALKORDB_PATH")
     if not path:
-        from cortex_harness.storage import resolve_storage
-        path = str(resolve_storage(Path.cwd()).falkordb_doc_path)
+        path = _resolve_default_graph_path("doc")
     return FalkorDBGraphStore(
         FalkorDBDriver(
             path=path,
@@ -264,6 +314,8 @@ def create_graph_store_for_project(project_id: str):
             os.getenv("NEO4J_PASS", "password"),
             targets.doc_graph,
         )
+    if provider == "ladybug":
+        return _open_ladybug_store(targets.doc_graph, os.getenv("LADYBUG_PATH"))
     falkordb_uri = (os.getenv("FALKORDB_URI") or "").strip()
     if falkordb_uri:
         return FalkorDBGraphStore(
@@ -278,9 +330,7 @@ def create_graph_store_for_project(project_id: str):
         )
     path = os.getenv("FALKORDB_PATH")
     if not path:
-        from cortex_harness.storage import resolve_storage
-
-        path = str(resolve_storage(Path.cwd()).falkordb_doc_path)
+        path = _resolve_default_graph_path("doc")
     return FalkorDBGraphStore(
         FalkorDBDriver(
             path=path,

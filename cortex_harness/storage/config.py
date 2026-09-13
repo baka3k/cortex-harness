@@ -26,6 +26,7 @@ DEFAULT_QDRANT_PATH = Path(STORAGE_SCHEMA_VERSION) / "instances" / DEFAULT_INSTA
 DEFAULT_FALKORDB_PATH = (
     Path(STORAGE_SCHEMA_VERSION) / "instances" / DEFAULT_INSTANCE_ID / "falkordb" / "code" / "data.rdb"
 )
+DEFAULT_LADYBUG_GRAPH = "hyper_graph"
 
 ENV_DATA_HOME = "CORTEX_DATA_HOME"
 ENV_INSTANCE = "CORTEX_STORAGE_INSTANCE"
@@ -37,6 +38,14 @@ ENV_QDRANT_DOC = "QDRANT_DOC_PATH"
 ENV_FALKORDB_PATH = "FALKORDB_PATH"
 ENV_FALKORDB_CODE = "FALKORDB_CODE_PATH"
 ENV_FALKORDB_DOC = "FALKORDB_DOC_PATH"
+ENV_LADYBUG_PATH = "LADYBUG_PATH"
+ENV_LADYBUG_CODE = "LADYBUG_CODE_PATH"
+ENV_LADYBUG_DOC = "LADYBUG_DOC_PATH"
+ENV_LADYBUG_GRAPH = "LADYBUG_GRAPH"
+ENV_LADYBUG_QUERY_TIMEOUT_MS = "LADYBUG_QUERY_TIMEOUT_MS"
+ENV_LADYBUG_BUFFER_POOL_SIZE = "LADYBUG_BUFFER_POOL_SIZE"
+ENV_GRAPH_AUTO_DDL = "CORTEX_GRAPH_AUTO_DDL"
+ENV_GRAPH_PROVIDER = "GRAPH_PROVIDER"
 ENV_PERFORMANCE_PROFILE = "CORTEX_STORAGE_PROFILE"
 
 CFG_DATA_HOME = ENV_DATA_HOME
@@ -49,6 +58,9 @@ CFG_QDRANT_DOC = ENV_QDRANT_DOC
 CFG_FALKORDB_PATH = ENV_FALKORDB_PATH
 CFG_FALKORDB_CODE = ENV_FALKORDB_CODE
 CFG_FALKORDB_DOC = ENV_FALKORDB_DOC
+CFG_LADYBUG_PATH = ENV_LADYBUG_PATH
+CFG_LADYBUG_CODE = ENV_LADYBUG_CODE
+CFG_LADYBUG_DOC = ENV_LADYBUG_DOC
 CFG_PERFORMANCE_PROFILE = ENV_PERFORMANCE_PROFILE
 
 LEGACY_REMOTE_KEYS: tuple[str, ...] = (
@@ -58,6 +70,12 @@ LEGACY_REMOTE_KEYS: tuple[str, ...] = (
 )
 
 _IDENTITY_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$")
+
+
+def _normalize_ladybug_alias(provider: str) -> bool:
+    """True for any alias that resolves onto the LadybugDB provider."""
+
+    return provider in {"ladybug", "lbug", "lady-bug", "kuzu"}
 
 
 class LegacyRemoteConfigurationError(ValueError):
@@ -127,6 +145,8 @@ class RemoteStorageConfig:
 def validate_backend_config(
     backend: str,
     remote: Optional[Mapping[str, Any]],
+    *,
+    graph_provider: object = "falkordb",
 ) -> tuple[BackendMode, Optional[RemoteStorageConfig]]:
     """Validate ``storage_backend`` and remote config completeness.
 
@@ -134,7 +154,8 @@ def validate_backend_config(
     :class:`RemoteStorageConfig` when the mode is ``REMOTE``. ``remote`` may
     be ``None`` when the mode is ``LOCAL``. When the mode is ``REMOTE`` the
     caller must supply at least one of ``qdrant_url`` or ``falkordb_uri``;
-    an empty remote section raises ``ValueError``.
+    an empty remote section raises ``ValueError``. The embedded-only LadybugDB
+    provider may never be combined with a remote backend.
     """
     try:
         mode = BackendMode(backend)
@@ -142,6 +163,13 @@ def validate_backend_config(
         raise InvalidStorageIdentityError(
             f"storage_backend must be 'local' or 'remote'; got {backend!r}"
         ) from exc
+    if (
+        mode == BackendMode.REMOTE
+        and _normalize_ladybug_alias(str(graph_provider or "").strip().casefold())
+    ):
+        raise ValueError(
+            "ladybug is local-only; use falkordb/neo4j for remote graph backends"
+        )
     if mode == BackendMode.LOCAL:
         return mode, None
     if remote is None:
@@ -246,6 +274,8 @@ class ResolvedStorage:
     instance_root: Optional[Path] = None
     falkordb_code_path: Optional[Path] = None
     falkordb_doc_path: Optional[Path] = None
+    ladybug_code_path: Optional[Path] = None
+    ladybug_doc_path: Optional[Path] = None
     manifest_path: Optional[Path] = None
     backups_path: Optional[Path] = None
     path_provenance: str = "derived-default"
@@ -260,12 +290,37 @@ class ResolvedStorage:
         instance_root = self.instance_root or self.qdrant_base.parent
         falkor_code = self.falkordb_code_path or self.falkordb_path
         falkor_doc = self.falkordb_doc_path or (self.falkordb_path.parent.parent / "doc" / "data.rdb")
+        ladybug_code = self.ladybug_code_path or self._derive_ladybug_path(
+            instance_root, self.code_owner_id
+        )
+        ladybug_doc = self.ladybug_doc_path or self._derive_ladybug_path(
+            instance_root, self.doc_owner_id
+        )
         object.__setattr__(self, "data_root", Path(data_root))
         object.__setattr__(self, "instance_root", Path(instance_root))
         object.__setattr__(self, "falkordb_code_path", Path(falkor_code))
         object.__setattr__(self, "falkordb_doc_path", Path(falkor_doc))
+        object.__setattr__(self, "ladybug_code_path", Path(ladybug_code))
+        object.__setattr__(self, "ladybug_doc_path", Path(ladybug_doc))
         object.__setattr__(self, "manifest_path", self.manifest_path or Path(instance_root) / "manifest.json")
         object.__setattr__(self, "backups_path", self.backups_path or Path(instance_root) / "backups")
+
+    @staticmethod
+    def _derive_ladybug_path(instance_root: Path, owner_id: str) -> Path:
+        """Default LadybugDB store for an owner's primary graph.
+
+        Layout: ``<instance>/ladybug/<owner>/<owner>.lbug/<graph>`` — one
+        store **file** per named graph (spike: Ladybug keeps the whole
+        database in a single file), all of an owner's graphs beside each
+        other so driver routing can discover siblings by parent directory.
+        """
+        from .layout import ladybug_graph_path
+
+        return ladybug_graph_path(
+            Path(instance_root) / "ladybug" / owner_id,
+            owner_id,
+            DEFAULT_LADYBUG_GRAPH,
+        )
 
     @property
     def has_legacy_keys(self) -> bool:
@@ -291,11 +346,21 @@ class ResolvedStorage:
             return Path(self.falkordb_doc_path)
         raise ValueError(f"Unknown storage role: {role!r}")
 
+    def ladybug_path_for_role(self, role: StorageRole | QdrantStorageRole | str) -> Path:
+        value = role.value if isinstance(role, Enum) else str(role)
+        if value == StorageRole.CODE.value:
+            return Path(self.ladybug_code_path)
+        if value in {StorageRole.DOCUMENT.value, "document"}:
+            return Path(self.ladybug_doc_path)
+        raise ValueError(f"Unknown storage role: {role!r}")
+
     def ensure_directories(self) -> None:
         self.qdrant_code_path.mkdir(parents=True, exist_ok=True)
         self.qdrant_doc_path.mkdir(parents=True, exist_ok=True)
         Path(self.falkordb_code_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.falkordb_doc_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.ladybug_code_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(self.ladybug_doc_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.backups_path).mkdir(parents=True, exist_ok=True)
 
 
@@ -342,6 +407,10 @@ def resolve_storage(
     falkordb_path: object = None,
     falkordb_code_path: object = None,
     falkordb_doc_path: object = None,
+    ladybug_path: object = None,
+    ladybug_code_path: object = None,
+    ladybug_doc_path: object = None,
+    graph_provider: object = None,
     code_graph: Optional[str] = None,
     doc_graph: Optional[str] = None,
     code_collection: Optional[str] = None,
@@ -352,10 +421,14 @@ def resolve_storage(
     cfg = dict(config or {})
     legacy = _legacy_keys(cfg)
     local_keys = (CFG_DATA_HOME, CFG_QDRANT_BASE, CFG_QDRANT_CODE, CFG_QDRANT_DOC,
-                  CFG_FALKORDB_PATH, CFG_FALKORDB_CODE, CFG_FALKORDB_DOC)
+                  CFG_FALKORDB_PATH, CFG_FALKORDB_CODE, CFG_FALKORDB_DOC,
+                  CFG_LADYBUG_PATH, CFG_LADYBUG_CODE, CFG_LADYBUG_DOC)
     backend_raw = _nonempty(cfg, "storage_backend") or "local"
+    provider_raw = _nonempty(cfg, "graph_provider") or graph_provider
     remote_section = cfg.get("remote")
-    backend_mode, remote_config = validate_backend_config(backend_raw, remote_section)
+    backend_mode, remote_config = validate_backend_config(
+        backend_raw, remote_section, graph_provider=provider_raw
+    )
     if backend_mode == BackendMode.REMOTE and legacy:
         # User supplied both legacy and the new remote section. Legacy keys remain
         # rejected to avoid mixing two endpoint sources; surface them clearly.
@@ -424,12 +497,27 @@ def resolve_storage(
     f_code = _resolve_override(f_code_raw, root) if f_code_raw else instance_root / "falkordb" / code_owner / "data.rdb"
     f_doc = _resolve_override(f_doc_raw, root) if f_doc_raw else instance_root / "falkordb" / doc_owner / "data.rdb"
 
+    shared_ladybug = _select(ladybug_path, _nonempty(cfg, CFG_LADYBUG_PATH), os.environ.get(ENV_LADYBUG_PATH))
+    lb_code_raw = _select(ladybug_code_path, _nonempty(cfg, CFG_LADYBUG_CODE), os.environ.get(ENV_LADYBUG_CODE), shared_ladybug)
+    lb_doc_raw = _select(ladybug_doc_path, _nonempty(cfg, CFG_LADYBUG_DOC), os.environ.get(ENV_LADYBUG_DOC))
+    lb_code = (
+        _resolve_override(lb_code_raw, root)
+        if lb_code_raw
+        else ResolvedStorage._derive_ladybug_path(instance_root, code_owner)
+    )
+    lb_doc = (
+        _resolve_override(lb_doc_raw, root)
+        if lb_doc_raw
+        else ResolvedStorage._derive_ladybug_path(instance_root, doc_owner)
+    )
+
     return ResolvedStorage(
         project_root=root, data_root=data_root, schema_version=STORAGE_SCHEMA_VERSION,
         instance_id=instance, code_owner_id=code_owner, doc_owner_id=doc_owner,
         instance_root=instance_root, qdrant_base=q_base, qdrant_code_path=q_code,
         qdrant_doc_path=q_doc, falkordb_path=f_code, falkordb_code_path=f_code,
-        falkordb_doc_path=f_doc, manifest_path=instance_root / "manifest.json",
+        falkordb_doc_path=f_doc, ladybug_code_path=lb_code, ladybug_doc_path=lb_doc,
+        manifest_path=instance_root / "manifest.json",
         backups_path=instance_root / "backups", path_provenance=provenance,
         code_graph=code_graph, doc_graph=doc_graph,
         code_collection=code_collection, doc_collection=doc_collection,
@@ -450,6 +538,9 @@ def storage_overlay(
 ) -> dict[str, str]:
     selected = owner.value if isinstance(owner, Enum) else str(owner)
     selected = "doc" if selected == "document" else selected
+    provider = str(graph_provider or "falkordb").strip().casefold()
+    if provider in {"kuzu", "lbug", "lady-bug"}:
+        provider = "ladybug"
     falkor_selected = resolved.falkordb_path_for_role(selected)
     overlay = {
         ENV_DATA_HOME: str(resolved.data_root), ENV_INSTANCE: resolved.instance_id,
@@ -457,8 +548,19 @@ def storage_overlay(
         ENV_QDRANT_BASE: str(resolved.qdrant_base),
         ENV_QDRANT_CODE: str(resolved.qdrant_code_path), ENV_QDRANT_DOC: str(resolved.qdrant_doc_path),
         ENV_FALKORDB_CODE: str(resolved.falkordb_code_path), ENV_FALKORDB_DOC: str(resolved.falkordb_doc_path),
-        ENV_FALKORDB_PATH: str(falkor_selected), "CORTEX_STORAGE_OWNER": selected,
+        ENV_FALKORDB_PATH: str(falkor_selected),
+        ENV_LADYBUG_CODE: str(resolved.ladybug_code_path), ENV_LADYBUG_DOC: str(resolved.ladybug_doc_path),
+        "CORTEX_STORAGE_OWNER": selected,
     }
+    if provider == "ladybug":
+        # Ladybug is embedded-only: point the active store at the resolved
+        # Ladybug file and keep FALKORDB_URI out so children cannot select a
+        # remote endpoint the driver would reject anyway.
+        overlay.pop(ENV_FALKORDB_PATH, None)
+        overlay[ENV_LADYBUG_PATH] = str(
+            resolved.ladybug_path_for_role(selected)
+        )
+        overlay[ENV_GRAPH_PROVIDER] = "ladybug"
     remote = resolved.remote
     force_local = environment_flag_enabled(os.getenv("CORTEX_STORAGE_BACKEND_FORCE_LOCAL"))
     if resolved.backend_mode == BackendMode.REMOTE and remote is not None and not force_local:
@@ -475,10 +577,11 @@ def storage_overlay(
         if remote.falkordb_uri:
             # A remote FalkorDB server replaces the embedded store for this
             # project. Drop the local path keys so children cannot silently
-            # fall back to FalkorDBLite (unavailable on win32) and pass the
-            # connection details through instead. The FalkorDBDriver accepts
-            # both ``scheme://host:port`` URIs and bare ``host:port`` values.
+            # fall back to an embedded backend and pass the connection
+            # details through instead. The FalkorDBDriver accepts both
+            # ``scheme://host:port`` URIs and bare ``host:port`` values.
             overlay["FALKORDB_URI"] = remote.falkordb_uri
+            overlay.pop(ENV_LADYBUG_PATH, None)
             for key in (ENV_FALKORDB_PATH, ENV_FALKORDB_CODE, ENV_FALKORDB_DOC):
                 overlay.pop(key, None)
             if remote.falkordb_password:
@@ -502,14 +605,17 @@ def storage_overlay(
     # legacy env reconstruction path for callers that have not yet adopted the
     # storage overlay.
     graph_name = overlay.get("FALKORDB_GRAPH")
+    if provider == "ladybug":
+        graph_name = overlay.get(ENV_LADYBUG_GRAPH) or overlay.get("FALKORDB_GRAPH")
     collection_name = (
         overlay.get("QDRANT_COLLECTION_DOC")
         if selected == StorageRole.DOCUMENT.value
         else overlay.get("QDRANT_COLLECTION")
     )
-    if graph_name and collection_name and str(graph_provider).casefold() in {
+    if graph_name and collection_name and provider in {
         "falkor",
         "falkordb",
+        "ladybug",
         "local",
         "embedded",
     }:
@@ -527,6 +633,7 @@ def storage_overlay(
             backend_mode=resolved.backend_mode,
             resolved=resolved,
             remote=remote,
+            graph_provider=provider,
             code_graph=code_graph or resolved.code_graph,
             doc_graph=doc_graph or resolved.doc_graph,
             code_collection=code_collection or resolved.code_collection,

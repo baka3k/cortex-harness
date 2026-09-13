@@ -131,7 +131,7 @@ else:
     DEFAULT_NEO4J_PASSWORD = None
     DEFAULT_NEO4J_DB = "hyper_graph"
 DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
-DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
+DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER in {"falkordb", "ladybug"} else DEFAULT_NEO4J_DB
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 IPC_MESSAGES_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "temp", "ipc_messages.json")
@@ -195,6 +195,13 @@ def _search_timing_enabled() -> bool:
 async def _get_graph_driver() -> GraphDriver:
     global _graph_driver
     if _graph_driver is not None:
+        return _graph_driver
+    if DEFAULT_GRAPH_PROVIDER == "ladybug":
+        from ladybug_discovery import build_ladybug_driver_config
+
+        _graph_driver = await get_shared_graph_driver(
+            GraphProvider.LADYBUG, build_ladybug_driver_config()
+        )
         return _graph_driver
     if DEFAULT_GRAPH_PROVIDER == "falkordb":
         from cortex_harness.storage import resolve_storage
@@ -898,6 +905,25 @@ async def _run_cypher(query: str, params: Dict[str, Any], db: str) -> List[Dict[
 
 
 async def _list_relationship_types(dbs: List[str]) -> List[str]:
+    # Provider-neutral introspection: dialect stays inside the driver.
+    try:
+        driver = await _get_graph_driver()
+        list_rel = getattr(driver, "list_relationship_types", None)
+    except Exception as exc:
+        logger.warning("Unable to resolve graph driver for introspection: %s", exc)
+        list_rel = None
+        driver = None
+    if callable(list_rel):
+        for db in [item for item in dbs if item]:
+            try:
+                return list(await list_rel(database=db) or [])
+            except Exception as exc:
+                if _is_db_not_found(exc):
+                    continue
+                logger.warning("Unable to list relationship types from %s: %s", db, exc)
+                break
+        return []
+
     query_call = (
         "CALL db.relationshipTypes() YIELD relationshipType "
         "RETURN relationshipType AS rel_type"

@@ -400,4 +400,160 @@ class CypherGraphDriver(GraphDriver):
         return [record.get("entryFn") for record in records if record.get("entryFn")]
 
 
+    async def find_node_by_id(
+        self,
+        node_id: str,
+        project_id: Optional[str] = None,
+        database: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        cypher = """
+        MATCH (n)
+        WHERE n.id = $id
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
+        RETURN n
+        LIMIT 1
+        """
+        records, _, _ = await self.execute_query(
+            cypher,
+            {"id": node_id, "project_id": project_id},
+            database,
+        )
+        node = records[0].get("n") if records else None
+        if node and node.get("framework") == "servlet_jsp":
+            active_records, _, _ = await self.execute_query(
+                "MATCH (s:ServletJspAnalysisState {project_id: $project_id, module_id: $module_id}) "
+                "WHERE s.active_generation = $generation_id RETURN s.id AS id LIMIT 1",
+                {"project_id": node.get("project_id"), "module_id": node.get("module_id"), "generation_id": node.get("generation_id")},
+                database,
+            )
+            if not active_records:
+                return None
+        return node
+
+    async def find_nodes_by_ids(
+        self,
+        node_ids: List[str],
+        project_id: Optional[str] = None,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        if not node_ids:
+            return []
+        cypher = """
+        MATCH (n)
+        WHERE n.id IN $ids
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
+        RETURN n
+        """
+        records, _, _ = await self.execute_query(
+            cypher,
+            {"ids": node_ids, "project_id": project_id},
+            database,
+        )
+        nodes = [record.get("n") for record in records if record.get("n")]
+        servlet_nodes = [n for n in nodes if n.get("framework") == "servlet_jsp"]
+        if servlet_nodes:
+            active_records, _, _ = await self.execute_query(
+                "UNWIND $rows AS row "
+                "MATCH (s:ServletJspAnalysisState {project_id: row.project_id, module_id: row.module_id}) "
+                "WHERE s.active_generation = row.generation_id RETURN row.id AS id",
+                {"rows": servlet_nodes},
+                database,
+            )
+            active_ids = {str(row.get("id")) for row in active_records if row.get("id")}
+            nodes = [n for n in nodes if n.get("framework") != "servlet_jsp" or str(n.get("id")) in active_ids]
+        return nodes
+
+    async def search_functions(
+        self,
+        query: str,
+        limit: int = 50,
+        project_id: Optional[str] = None,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            return await self._fulltext_node_search("Function", query, limit, project_id, database)
+        except NotImplementedError:
+            pass
+        except Exception as exc:
+            logger.debug("%s fulltext search_functions fallback to CONTAINS: %s", type(self).__name__, exc)
+
+        cypher = """
+        MATCH (n:Function)
+        WHERE (
+            toLower(n.name) CONTAINS toLower($query)
+            OR toLower(coalesce(n.qualified_name, '')) CONTAINS toLower($query)
+        )
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
+        RETURN n
+        LIMIT $limit
+        """
+        records, _, _ = await self.execute_query(
+            cypher,
+            {"query": query, "limit": limit, "project_id": project_id},
+            database,
+        )
+        return [record.get("n") for record in records if record.get("n")]
+
+    async def search_by_code(
+        self,
+        query: str,
+        limit: int = 50,
+        project_id: Optional[str] = None,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            return await self._fulltext_node_search("Function", query, limit, project_id, database)
+        except NotImplementedError:
+            pass
+        except Exception as exc:
+            logger.debug("%s fulltext search_by_code fallback to CONTAINS: %s", type(self).__name__, exc)
+
+        cypher = """
+        MATCH (n)
+        WHERE (
+            toLower(coalesce(n.code, '')) CONTAINS toLower($query)
+            OR toLower(coalesce(n.comment, '')) CONTAINS toLower($query)
+            OR toLower(coalesce(n.summary, '')) CONTAINS toLower($query)
+        )
+          AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized)
+        RETURN n
+        LIMIT $limit
+        """
+        records, _, _ = await self.execute_query(
+            cypher,
+            {"query": query, "limit": limit, "project_id": project_id},
+            database,
+        )
+        return [record.get("n") for record in records if record.get("n")]
+
+    async def list_labels(self, database: Optional[str] = None) -> List[str]:
+        """List node labels in the database.
+
+        Providers without a native implementation raise
+        ``NotImplementedError`` so callers can degrade gracefully.
+        """
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement list_labels"
+        )
+
+    async def _fulltext_node_search(
+        self,
+        label: str,
+        query: str,
+        limit: int,
+        project_id: Optional[str],
+        database: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """Provider hook: full-text node search ordered by relevance score.
+
+        Concrete drivers override this with their native full-text API.
+        Raising ``NotImplementedError`` makes the portable ``CONTAINS``
+        fallbacks in ``search_functions``/``search_by_code`` apply.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement full-text node search"
+        )
+
+
 __all__ = ["CypherGraphDriver"]

@@ -1,6 +1,10 @@
 qdrant-client==1.18.0
+ladybug>=0.20.4,<0.21
 falkordblite==0.10.0 ; sys_platform != 'win32'
 falkordb ; sys_platform == 'win32'
+# BM25 keyword ranking cho IntelligentRetrievalEngine (tools/common/bm25_ranker.py).
+# Thiếu package này BM25Ranker sẽ warn lúc init và hybrid search mất bm25 signal.
+rank-bm25>=0.2.2
 # FastMCP dependencies
 fastmcp
 

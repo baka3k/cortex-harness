@@ -3,11 +3,66 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .config import ResolvedStorage
+
+
+_LADYBUG_NAME_FORBIDDEN_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_WINDOWS_RESERVED_DEVICE_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL",
+     *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+)
+LADYBUG_STORE_SUFFIX = ".lbug"
+
+
+def ladybug_store_file_name(graph_name: str) -> str:
+    """Return the sanitized store file name for one named graph.
+
+    Canonical mapping shared by the LadybugDB driver, layout resolution, and
+    sibling discovery: a graph name becomes a store **file** name (Ladybug
+    keeps an entire database in one file).  Names that cannot map cleanly
+    are configuration errors and fail closed instead of being rewritten.
+    """
+
+    name = str(graph_name or "").strip()
+    if not name:
+        raise ValueError("Ladybug graph name must not be empty")
+    if _LADYBUG_NAME_FORBIDDEN_RE.search(name):
+        raise ValueError(
+            f"Ladybug graph name {graph_name!r} must only contain letters, digits, "
+            "'_', '-', or '.' (it becomes a store file name)"
+        )
+    cleaned = name.casefold().rstrip(".")
+    if not cleaned or cleaned in {".", ".."}:
+        raise ValueError(f"Ladybug graph name {graph_name!r} is not a valid store name")
+    stem = cleaned.split(".", 1)[0]
+    if stem.upper() in _WINDOWS_RESERVED_DEVICE_NAMES:
+        raise ValueError(
+            f"Ladybug graph name {graph_name!r} collides with a Windows reserved "
+            "device name and cannot be used as a store file name"
+        )
+    return cleaned
+
+
+def ladybug_owner_store_dir(root: Path | str, owner_role: str) -> Path:
+    """Return the directory holding every Ladybug store of one owner."""
+
+    return Path(root) / f"{owner_role}{LADYBUG_STORE_SUFFIX}"
+
+
+def ladybug_graph_path(root: Path | str, owner_role: str, graph_name: str) -> Path:
+    """Return the canonical LadybugDB store file for one named graph.
+
+    Layout: ``<root>/<owner_role>.lbug/<sanitized-graph-name>``.  All named
+    graphs of one owner live side by side so driver routing can lazily open
+    sibling graphs from the primary store's parent directory.
+    """
+
+    return ladybug_owner_store_dir(root, owner_role) / ladybug_store_file_name(graph_name)
 
 
 def _utc_now() -> str:

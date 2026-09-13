@@ -1413,9 +1413,10 @@ def invoke_doctor() -> None:
                 client.close()
         except ImportError as error:
             # Local falkordblite is unavailable on Windows (redislite ships
-            # only Linux/macOS wheels). Windows operators run the remote
-            # FalkorDB path, which is exercised by ``doctor_remote_checks``.
-            # Surface as a warning so it never blocks ``make doctor``.
+            # only Linux/macOS wheels). Windows operators run the LadybugDB
+            # or remote FalkorDB path, which is exercised by
+            # ``doctor_remote_checks``. Surface as a warning so it never
+            # blocks ``make doctor``.
             failures += doctor_check(
                 "falkordblite round-trip",
                 False,
@@ -1424,6 +1425,32 @@ def invoke_doctor() -> None:
             )
         except Exception as error:
             failures += doctor_check("falkordblite round-trip", False, str(error))
+
+        try:
+            from ladybug import Connection as LadybugConnection, Database as LadybugDatabase
+
+            ladybug_path = Path(temporary) / "ladybug" / "doctor.lbug"
+            ladybug_path.parent.mkdir(parents=True, exist_ok=True)
+            database = LadybugDatabase(str(ladybug_path))
+            try:
+                connection = LadybugConnection(database)
+                rows = connection.execute("RETURN 1 AS ok", {}).get_all()
+                failures += doctor_check(
+                    "ladybug round-trip",
+                    bool(rows) and rows[0][0] == 1,
+                    str(ladybug_path),
+                )
+            finally:
+                database.close()
+        except ImportError as error:
+            failures += doctor_check(
+                "ladybug round-trip",
+                False,
+                f"skipped (ladybug package unavailable: {error})",
+                required=False,
+            )
+        except Exception as error:
+            failures += doctor_check("ladybug round-trip", False, str(error))
 
     doctor_mcp_checks()
 

@@ -42,7 +42,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Optional, Sequence
 
 _CODE_ROOT = Path(__file__).resolve().parents[1]
 if str(_CODE_ROOT) not in sys.path:
@@ -820,6 +820,59 @@ def apply_neo4j_schema(
 apply_constraints = apply_neo4j_schema
 
 
+async def apply_ladybug_schema(
+    driver: Any,
+    *,
+    index_statements: Iterable[tuple[str, str]] = INDEXES,
+    fulltext_statements: Iterable[tuple[str, str]] = FULLTEXT_INDEXES,
+    database: Optional[str] = None,
+) -> dict[str, int]:
+    """Apply the shared schema through the LadybugDB driver.
+
+    Ladybug has no unique constraints (the primary key is the only
+    uniqueness rule), so constraint statements are reported as zero and
+    range/fulltext indexes are routed through ``driver.create_indexes``
+    (range → ART, fulltext → FTS extension).
+    """
+    summary = {"constraints": 0, "indexes": 0, "fulltext_indexes": 0}
+
+    index_defs = []
+    for _, statement in index_statements:
+        label, properties = parse_range_index(statement)
+        index_defs.append(
+            {
+                "label": label,
+                "property": list(properties) if len(properties) > 1 else properties[0],
+                "type": "range",
+            }
+        )
+    if index_defs:
+        await driver.create_indexes(index_defs, database=database)
+    summary["indexes"] = len(index_defs)
+
+    fulltext_defs = []
+    if fulltext_statements:
+        # FTS indexes are per-table on Ladybug; labels without a table yet
+        # (no analyzer data ingested) are skipped instead of failing setup.
+        existing_labels = set(await driver.list_labels(database=database) or [])
+        for _, statement in fulltext_statements:
+            labels, properties = parse_fulltext_index(statement)
+            for label in labels:
+                if label not in existing_labels:
+                    continue
+                fulltext_defs.append(
+                    {
+                        "label": label,
+                        "property": list(properties) if len(properties) > 1 else properties[0],
+                        "type": "fulltext",
+                    }
+                )
+    if fulltext_defs:
+        await driver.create_indexes(fulltext_defs, database=database)
+    summary["fulltext_indexes"] = len(fulltext_defs)
+    return summary
+
+
 async def apply_selected_schema(args: argparse.Namespace) -> dict[str, int] | None:
     """Apply schema for the selected provider and close provider resources."""
     provider = normalize_graph_provider(args.graph_provider)
@@ -835,15 +888,18 @@ async def apply_selected_schema(args: argparse.Namespace) -> dict[str, int] | No
     prepare_graph_args(args)
     driver = await create_graph_driver_from_args(args)
     if driver is None:
-        raise RuntimeError("FalkorDB provider could not be configured")
+        raise RuntimeError("graph provider could not be configured")
     try:
         # Preserve the project-id backfill before constraints become active.
         driver.execute_query_sync(BACKFILL_PROJECT_ID, database=args.neo4j_db)
-        summary = apply_falkordb_schema(
-            driver,
-            constraint_timeout=args.constraint_timeout,
-            poll_interval=args.constraint_poll_interval,
-        )
+        if provider == GraphProvider.LADYBUG:
+            summary = await apply_ladybug_schema(driver, database=args.neo4j_db)
+        else:
+            summary = apply_falkordb_schema(
+                driver,
+                constraint_timeout=args.constraint_timeout,
+                poll_interval=args.constraint_poll_interval,
+            )
         print(
             "Done: "
             f"constraints {summary['constraints']} operational, "

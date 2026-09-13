@@ -11,6 +11,11 @@ dependencies = [
     "click",
     "requests",
     "qdrant-client==1.18.0",
+    # Embedded graph providers. LadybugDB ships native wheels for win_amd64,
+    # win_arm64, macOS (15+), and manylinux, so it is a core dependency; the
+    # fork is young, hence the upper bound
+    # (plans/260913-1538-ladybug-graph-provider).
+    "ladybug>=0.20.4,<0.21",
     "falkordblite==0.10.0 ; sys_platform != 'win32'",
     "falkordb ; sys_platform == 'win32'",
     "python-dotenv>=1.2.2",
@@ -24,6 +29,10 @@ neo4j = ["neo4j", "neo4j-graphrag"]
 # falkordb is already pulled in by default on Windows; this extra stays for
 # Linux/macOS users who flip storage_backend to "remote".
 falkordb-remote = ["falkordb"]
+# Rollback extra: keep the historical embedded FalkorDBLite backend installed
+# where it is available. LadybugDB is the default local provider on win32;
+# FalkorDBLite never shipped there, so the marker keeps installable parity.
+falkordb-local = ["falkordblite==0.10.0 ; sys_platform != 'win32'"]
 
 [project.scripts]
 dev = "cortex_harness.dev:cli"
@@ -37,6 +46,9 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib"
 pythonpath = ["code-tiny", "doc-tiny"]
+markers = [
+    "ladybug: integration tests that require the ladybug package (deselect with '-m \"not ladybug\"')",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

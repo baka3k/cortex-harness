@@ -112,7 +112,10 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(keys, ["n", "r", "count"])
-        self.assertEqual(records[0]["n"], {"id": "fn-1", "name": "main"})
+        self.assertEqual(
+            records[0]["n"],
+            {"id": "fn-1", "name": "main", "_label": "Function"},
+        )
         self.assertEqual(records[0]["r"]["_type"], "CALLS")
         self.assertEqual(records[0]["r"]["_start_id"], 1)
         self.assertEqual(records[0]["r"]["_end_id"], 2)
