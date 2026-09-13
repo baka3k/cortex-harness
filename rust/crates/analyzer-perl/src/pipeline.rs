@@ -519,8 +519,6 @@ pub fn run_perl_analysis(
     })
 }
 
-/// Cache payload deser cần Deserialize trên ParsedFile — đã derive ở models.
-
 #[cfg(test)]
 mod tests {
     use super::*;

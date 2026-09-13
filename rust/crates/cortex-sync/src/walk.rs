@@ -59,11 +59,10 @@ pub fn matches_extra_ignore(name: &str) -> bool {
         if entry == name {
             return true;
         }
-        if entry.contains('*') || entry.contains('?') || entry.contains('[') {
-            if util::fnmatch(name, entry) {
+        if (entry.contains('*') || entry.contains('?') || entry.contains('['))
+            && util::fnmatch(name, entry) {
                 return true;
             }
-        }
     }
     false
 }
@@ -258,11 +257,10 @@ fn walk_recursive(base: &Path, dir: &Path, found: &mut BTreeSet<String>) {
 /// `_is_source_candidate` — the git-candidate filter used before inventory
 /// intersection.
 pub fn is_source_candidate(root: &Path, normalized: &str, summary_rel_path: Option<&str>) -> bool {
-    if let Some(summary_rel) = summary_rel_path {
-        if normalized == summary_rel {
+    if let Some(summary_rel) = summary_rel_path
+        && normalized == summary_rel {
             return false;
         }
-    }
     let parts: Vec<&str> = normalized.split('/').collect();
     if parts.len() > 1 {
         for part in &parts[..parts.len() - 1] {

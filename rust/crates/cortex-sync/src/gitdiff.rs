@@ -433,6 +433,7 @@ pub fn write_manifest_paths(path: &Path, files: &BTreeSet<String>) -> std::io::R
 }
 
 /// `load_manifest_paths` — used by the parity harness; kept for symmetry.
+#[allow(dead_code)]
 pub fn load_manifest_paths(path: &Path, root: &Path) -> BTreeSet<String> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
@@ -468,5 +469,7 @@ pub fn load_manifest_paths(path: &Path, root: &Path) -> BTreeSet<String> {
     resolved
 }
 
+#[allow(dead_code)]
 pub type PathMap = BTreeMap<String, String>;
+#[allow(dead_code)]
 pub type PathBufMap = BTreeMap<String, PathBuf>;

@@ -10,9 +10,31 @@ use sha2::{Digest, Sha256};
 /// khớp byte-for-byte với Python cho các giá trị JSON tương ứng
 /// (string/int/bool/null/list/map; non-ASCII giữ nguyên như `ensure_ascii=False`).
 pub fn canonical_json(value: &serde_json::Value) -> Vec<u8> {
-    serde_json::to_string(value)
+    // Feature unification: crate khác bật serde_json/preserve_order khiến Map
+    // thành insertion-ordered — canonical hoá PHẢI sort tường minh để stable-id
+    // deterministic bất kể feature của workspace.
+    let canonical_value = canonicalize(value);
+    serde_json::to_string(&canonical_value)
         .expect("canonical json serialize")
         .into_bytes()
+}
+
+fn canonicalize(value: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<&String, &serde_json::Value> =
+                map.iter().collect();
+            Value::Object(
+                sorted
+                    .into_iter()
+                    .map(|(key, item)| (key.clone(), canonicalize(item)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonicalize).collect()),
+        other => other.clone(),
+    }
 }
 
 pub fn sha256_hex(value: &[u8]) -> String {

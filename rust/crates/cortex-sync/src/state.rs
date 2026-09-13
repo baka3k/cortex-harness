@@ -65,7 +65,8 @@ impl IncrementalSyncState {
                 })
                 .unwrap_or_default()
         };
-        let state = IncrementalSyncState {
+        
+        IncrementalSyncState {
             project_id: project_id.to_string(),
             root: crate::util::path_to_string(&crate::util::realpath(root)),
             schema_version: STATE_SCHEMA_VERSION,
@@ -114,8 +115,7 @@ impl IncrementalSyncState {
             migrated_from: migrated_from.or_else(|| {
                 data.get("migrated_from").and_then(|v| v.as_i64())
             }),
-        };
-        state
+        }
     }
 
     /// `to_dict`.
