@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/lifecycle-macos.yml"
       - "Makefile"
+      - "rust/**"
       - "pyproject.toml"
       - "cortex_harness/dev.py"
       - "scripts/mcp-lifecycle.py"
@@ -17,6 +18,7 @@ on:
     paths:
       - ".github/workflows/lifecycle-macos.yml"
       - "Makefile"
+      - "rust/**"
       - "pyproject.toml"
       - "cortex_harness/dev.py"
       - "scripts/mcp-lifecycle.py"
@@ -101,3 +103,15 @@ jobs:
       - name: LadybugDB parity gate (opt-in suite)
         run: |
           uv run python -m pytest tests/test_parity_ladybug.py -m ladybug -v
+
+  rust:
+    name: Rust gate (clippy + test)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run make rust-check
+        run: make rust-check
