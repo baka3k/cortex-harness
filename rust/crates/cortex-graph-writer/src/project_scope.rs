@@ -42,22 +42,46 @@ pub fn project_id_lookup_key(value: Option<&str>) -> Option<String> {
 /// `project_id` (đệ quy vào list/map). Rows của writer luôn đi qua hàm này ở
 /// store layer (qua `prepare_project_scope_parameters`).
 pub fn enrich_project_scope_map(value: &Map<String, Value>) -> Map<String, Value> {
-    let mut enriched = value.clone();
-    if let Some(project_id) = enriched.get("project_id") {
-        let lookup = project_id_lookup_key(project_id.as_str());
-        match lookup {
-            Some(key) => {
-                enriched.insert(
-                    PROJECT_ID_NORMALIZED_FIELD.to_string(),
-                    Value::String(key),
-                );
-            }
-            None => {
-                enriched.remove(PROJECT_ID_NORMALIZED_FIELD);
-            }
-        }
+    match enrich_project_scope_value(&Value::Object(value.clone())) {
+        Value::Object(map) => map,
+        _ => Map::new(),
     }
-    enriched
+}
+
+/// Đệ quy đầy đủ như `project_scope.enrich_project_scope` của Python:
+/// Mapping → enrich + inject normalized; list → enrich từng item. Bắt buộc
+/// đệ quy vào `$rows` (array of row-map) vì writer batch toàn bộ qua 1 param.
+pub fn enrich_project_scope_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut enriched: Map<String, Value> = map
+                .iter()
+                .map(|(key, item)| (key.clone(), enrich_project_scope_value(item)))
+                .collect();
+            if let Some(project_id) = enriched.get("project_id").cloned() {
+                let lookup = project_id_lookup_key(project_id.as_str());
+                match lookup {
+                    Some(key) => {
+                        enriched.insert(
+                            PROJECT_ID_NORMALIZED_FIELD.to_string(),
+                            Value::String(key),
+                        );
+                    }
+                    None => {
+                        enriched.remove(PROJECT_ID_NORMALIZED_FIELD);
+                    }
+                }
+            }
+            Value::Object(enriched)
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(enrich_project_scope_value)
+                .collect(),
+        ),
+        other => other.clone(),
+    }
 }
 
 /// `prepare_project_scope_parameters`: mỗi recognized scope param nhận sibling
@@ -67,25 +91,17 @@ pub fn prepare_project_scope_parameters(
 ) -> BTreeMap<String, Value> {
     let mut prepared: BTreeMap<String, Value> = BTreeMap::new();
     for (key, value) in parameters {
-        // enrich từng param: param-map có project_id → thêm normalized field.
-        match value {
-            Value::Object(map) => {
-                prepared.insert(key.clone(), Value::Object(enrich_project_scope_map(map)));
-            }
-            other => {
-                prepared.insert(key.clone(), other.clone());
-            }
-        }
+        // enrich đệ quy từng param (map lẫn array-of-rows như Python).
+        prepared.insert(key.clone(), enrich_project_scope_value(value));
     }
     for key in PROJECT_SCOPE_PARAMETER_KEYS {
         if let Some(value) = prepared.get(key) {
+            // Python chèn sibling kể cả khi lookup None (None value).
             let lookup = project_id_lookup_key(value.as_str());
-            if let Some(normalized) = lookup {
-                prepared.insert(
-                    format!("{key}_normalized"),
-                    Value::String(normalized),
-                );
-            }
+            prepared.insert(
+                format!("{key}_normalized"),
+                lookup.map(Value::String).unwrap_or(Value::Null),
+            );
         }
     }
     prepared

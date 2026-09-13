@@ -31,7 +31,7 @@ Port `tools/python/python_analyzer.py` (2.2k) + phần dùng chung của nó:
 - Parse `.py` bằng tree-sitter (grammar `tree-sitter-python`), extract: Module/File, Class,
   Function (kèm arity), imports, CALLS edges, decorators → labels/schema của CODE_GRAPH_SCHEMA.
 - Node properties giữ nguyên tên field (`project_id`, `project_id_normalized`, `repo`,
-  `updated_at`, `content_mode`, note/summary format "Performs X operation (takes N parameters)"
+  `updated_at`, content_mode, note/summary format "Performs X operation (takes N parameters)"
   — **format chuỗi này phải byte-identical** vì nó được embed vào vector sau này).
 - Incremental: đọc changed/deleted manifests, cleanup graph cho deleted files
   (`deleted_nodes=740` semantics như log sync thật), `repo_file_edges` batched writes.
@@ -47,8 +47,51 @@ Port `tools/python/python_analyzer.py` (2.2k) + phần dùng chung của nó:
 
 ## Gate
 
-- [ ] Graph diff rỗng (ngoài mask) trên stock + ≥1 testdata dir, chế độ FULL.
-- [ ] Incremental: sửa/thêm/xoá file thật trên bản copy stock → changed-manifest path cho
+- [x] Graph diff rỗng (ngoài mask) trên stock + ≥1 testdata dir, chế độ FULL.
+- [x] Incremental: sửa/thêm/xoá file thật trên bản copy stock → changed-manifest path cho
       kết quả giống Python (cleanup counts khớp).
-- [ ] Summary JSON cùng schema (`summary-path`).
-- [ ] clippy `-D warnings`; harness nằm trong CI.
+- [x] Summary JSON cùng schema (`summary-path`).
+- [x] clippy `-D warnings`; harness nằm trong CI.
+
+**Trạng thái 2026-09-14:** PASS toàn bộ gate.
+
+- Crate `rust/crates/cortex-analyzer-framework`: `cli` (contract orchestrator
+  `_build_analyzer_cmd` — gồm các flag lane vector/message/cache nhận-và-bỏ-qua, contract
+  test replay dòng lệnh), `scan` (COMMON_SCAN_EXCLUDE + `_should_ignore_directory` +
+  `CORTEX_EXTRA_IGNORE_DIRS` fnmatch normcase-darwin), `manifest` (`load_manifest_paths`
+  JSON dict/array/TXT), `ts` (decode `errors="ignore"`, cursor walk, snippet leading
+  comments), `semantic` (port `semantic_inference.py` + `call_graph_builder.py` +
+  `confidence_scorer.py` — naming/type/body/usage signals, `_build_semantic_note`,
+  usage-regex memoized, float parity cho `doc_confidence`), `traits` (`Analyzer` +
+  `AnalyzerContext`, store `Option` cho `CORTEX_DISABLE_GRAPH`), `summary` (JSON schema +
+  `[SCAN_RESULT]` line byte-identical).
+- Crate `rust/crates/analyzer-python`: parse tree-sitter-python 0.25 (walk + docstring +
+  signature + base classes + self-fields + entrypoint decorators + imports), semantic enrich
+  (mutation như Python), call resolution (arity → self-field type → caller scope), IMPORTS,
+  OVERRIDES, write_all `use_full_writers=True files_variant=with_imports`, incremental
+  cleanup (DETACH DELETE + UnknownFunction prune), exemplar consumer của `Analyzer` trait.
+- `rust/grammar-versions.toml`: pin `tree-sitter-python` 0.25.0 cả 2 bên — phát hiện
+  `tree-sitter-languages` 1.10.2 wheels build trên ABI cũ, **raise TypeError** với
+  tree-sitter ≥0.25 nên `_get_python_parser` fallback sang `tree_sitter_python` crate riêng;
+  pin theo grammar crate, không theo tsl.
+- **Sửa latent bug phase-03**: `prepare_project_scope_parameters` Rust không đệ quy vào
+  `$rows` (array of row-map) → node viết từ Rust thiếu `project_id_normalized`
+  (`File` nodes) trong khi Python inject qua `enrich_project_scope` đệ quy. Fixture phase-03
+  không bắt được vì rows fixture đã mang sẵn `project_id_normalized` ("stock" normalize
+  no-op). Đã fix `project_scope.rs` (enrich đệ quy list + sibling `*_normalized` kể cả
+  None) — đúng cho cả 2 store.
+- **python_analyzer.py** (tham chiếu): call rows giờ mang `project_id` tường minh — cùng giá
+  trị journal metadata project_id trong orchestrator run, giữ journal-less run hợp lệ
+  (`_require_call_project_scope` fail-closed). Rust mirror.
+- Khác biệt scope có chủ đích (ghi trong lib.rs/main.rs): embedding/Qdrant không port (key
+  decision #3); message scan + `--enable-flows` + `--enable-llm-summary` là plane Python;
+  `--config` nhận-và-bỏ-quá (Rust orchestrator truyền explicit args).
+
+**Parity kết quả** (`reports/phase04-analyzer-parity.md`, falkordb local 127.0.0.1:6379):
+- FULL testdata (`tests/fixtures/python-analyzer/`, 2 files khó: decorators/nested
+  class/unicode/self-field resolution): nodes 26/26, edges 38/38, diff=0
+- FULL stock thật (115 .py): nodes 1149/1149, edges 2990/2990, diff=0
+- Incremental trên copy 30 files stock (sửa/thêm/xoá + manifests): nodes 517/517,
+  edges 1382/1382, diff=0, cleanup deleted_nodes py=3 rust=3
+- `[SCAN_RESULT]` byte-identical cả 2 corpus; summary JSON schema đủ 15 trường
+- Thời gian: stock python 4.7s vs rust 1.5s (không đặt gate tuyệt đối)

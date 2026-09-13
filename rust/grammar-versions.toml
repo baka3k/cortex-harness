@@ -1,0 +1,18 @@
+# Grammar version pins — đối chiếu với wheels Python đang dùng.
+#
+# Parity contract (phase-04): parse tree của analyzer Rust phải khớp analyzer
+# Python trên cùng corpus. Python side KHÔNG dùng `tree-sitter-languages`
+# (wheels 1.10.2 build trên ABI cũ, raise TypeError với tree-sitter ≥0.25 —
+# `_get_python_parser` fallback sang grammar crate riêng), nên pin theo grammar
+# crate từng language, không theo tree-sitter-languages.
+#
+# Khi bump 1 bên, bump bên kia cùng minor và chạy lại parity gate:
+#     .venv/bin/python scripts/rust_parity/analyzer_parity.py
+
+[python]
+# PyPI tree-sitter-python 0.25.0 == crates.io tree-sitter-python 0.25.0
+# (grammar revision tree-sitter-python v0.25.0). Đã parity PASS trên
+# stock (115 .py) + tests/fixtures/python-analyzer, FULL + incremental.
+python-wheel = "tree-sitter-python==0.25.0"
+rust-crate = "tree-sitter-python@0.25.0"
+runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25.10" }
