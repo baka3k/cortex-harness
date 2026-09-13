@@ -42,7 +42,11 @@ class ImpactAnalyzer:
             from tools.graph.core.shared_runtime import get_shared_graph_driver  # noqa: PLC0415
 
             provider = GraphProvider(normalize_graph_provider_name(env_graph_provider()))
-            if provider == GraphProvider.FALKORDB:
+            if provider == GraphProvider.LADYBUG:
+                from ladybug_discovery import build_ladybug_driver_config  # noqa: PLC0415
+
+                config = build_ladybug_driver_config(graph=db)
+            elif provider == GraphProvider.FALKORDB:
                 from cortex_harness.storage import resolve_storage  # noqa: PLC0415
                 from falkordb_discovery import discover_falkordb_data_files  # noqa: PLC0415
 

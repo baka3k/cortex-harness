@@ -230,6 +230,14 @@ async def _make_graph_driver(
         provider,
         default=_DEFAULT_GRAPH_PROVIDER,
     )
+    if provider_text == "ladybug":
+        from tools.graph import GraphProvider
+        from tools.graph.core.shared_runtime import get_shared_graph_driver
+        from ladybug_discovery import build_ladybug_driver_config
+
+        return await get_shared_graph_driver(
+            GraphProvider.LADYBUG, build_ladybug_driver_config(graph=database)
+        )
     use_falkor = provider_text in {"falkor", "falkordb"} or _is_falkordb_uri(uri)
     if not use_falkor and not (user and password):
         logger.info(

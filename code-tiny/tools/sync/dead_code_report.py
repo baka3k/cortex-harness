@@ -227,11 +227,17 @@ async def _run_report(args: argparse.Namespace) -> Dict[str, Any]:
 
     started = time.time()
     try:
-        rel_type_records, _, _ = await driver.execute_query(
-            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
-            database=args.neo4j_db,
-        )
-        available_rel_types = {str(row.get("relationshipType") or "") for row in rel_type_records}
+        # Provider-neutral introspection: FalkorDB's ``CALL db.relationshipTypes()``
+        # dialect stays inside the driver (Ladybug has no such procedure).
+        list_rel = getattr(driver, "list_relationship_types", None)
+        if callable(list_rel):
+            available_rel_types = {str(name or "") for name in await list_rel(database=args.neo4j_db)}
+        else:
+            rel_type_records, _, _ = await driver.execute_query(
+                "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType",
+                database=args.neo4j_db,
+            )
+            available_rel_types = {str(row.get("relationshipType") or "") for row in rel_type_records}
         rel_types = [name for name in requested_rel_types if name in available_rel_types]
         if not rel_types:
             raise ValueError(

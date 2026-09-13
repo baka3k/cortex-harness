@@ -62,6 +62,17 @@ def _reopen_inventory(path: Path, backend: str) -> tuple[str, ...]:
             ))
         finally:
             client.close()
+    if backend == "ladybug":
+        from ladybug import Database, Connection
+        database = Database(str(path), read_only=True)
+        try:
+            connection = Connection(database)
+            rows = connection.execute("CALL show_tables() RETURN *", {}).get_all()
+            return tuple(sorted(
+                str(row[1]) for row in rows if len(row) >= 3 and str(row[2]).upper() in {"NODE", "REL"}
+            ))
+        finally:
+            database.close()
     raise ValueError(f"Unsupported migration backend: {backend}")
 
 
