@@ -899,6 +899,8 @@ impl SemanticInferenceEngine {
         arity: i64,
         symbol_id: &str,
         is_exported: bool,
+        return_type: &str,
+        param_types: &[String],
         index: Option<&FunctionUsageIndex>,
         compiled: &Compiled,
     ) -> SemanticResult {
@@ -906,10 +908,8 @@ impl SemanticInferenceEngine {
         let is_async = compiled.async_re.is_match(&head);
 
         let (naming_intent, naming_conf, matched_pat) = Self::naming_signal(name, compiled);
-        // Python parse payload không có return_type/param_types cho function
-        // definition → trả về rỗng (giữ logic engine nguyên vẹn).
-        let (type_intent_rt, type_conf_rt) = analyze_return_type("", compiled);
-        let (type_intent_pt, type_conf_pt) = analyze_param_types(&[]);
+        let (type_intent_rt, type_conf_rt) = analyze_return_type(return_type, compiled);
+        let (type_intent_pt, type_conf_pt) = analyze_param_types(param_types);
         let type_conf = type_conf_rt.max(type_conf_pt);
         let type_intent = type_intent_rt.or(type_intent_pt);
         let (body_intent, body_conf) = analyze_body(code, compiled);
@@ -934,11 +934,14 @@ impl SemanticInferenceEngine {
             None => camel_to_words(name, compiled),
         };
 
-        // Python: A or (B and C); return_type parse-stage luôn rỗng → B=True:
-        // intent in (side_effect, io_write) or intent not in (predicate, retrieval)
+        // Python: A or (B and C) với B = return_type rỗng/void/undefined.
+        let rt_lower = return_type.trim().to_lowercase();
+        let side_effect_base = rt_lower == "void"
+            || rt_lower == "undefined"
+            || rt_lower.is_empty();
         let is_side_effect = intent == INTENT_SIDE_EFFECT
             || intent == INTENT_IO_WRITE
-            || (intent != INTENT_PREDICATE && intent != INTENT_RETRIEVAL);
+            || (side_effect_base && intent != INTENT_PREDICATE && intent != INTENT_RETRIEVAL);
 
         let (summary, inferred) = if !comment.is_empty() {
             let first = comment
@@ -987,6 +990,8 @@ impl SemanticInferenceEngine {
         arity: i64,
         symbol_id: &str,
         is_exported: bool,
+        return_type: &str,
+        param_types: &[String],
         index: &FunctionUsageIndex,
     ) -> EnrichedFunction {
         let compiled = compiled();
@@ -997,6 +1002,8 @@ impl SemanticInferenceEngine {
             arity,
             symbol_id,
             is_exported,
+            return_type,
+            param_types,
             Some(index),
             compiled,
         );

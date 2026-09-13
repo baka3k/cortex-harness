@@ -14,6 +14,7 @@
 //! * `traits` — `Analyzer` trait + `AnalyzerContext`.
 //! * `summary` — structured JSON summary cho orchestrator.
 
+pub mod cleanup;
 pub mod cli;
 pub mod manifest;
 pub mod scan;

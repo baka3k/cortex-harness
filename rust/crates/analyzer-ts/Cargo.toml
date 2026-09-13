@@ -1,0 +1,27 @@
+[package]
+name = "analyzer-ts"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/ts/ts_analyzer.py — TypeScript/TSX analyzer + Navigation Intelligence V2.0 + ApiCall bridge (phase 05 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-ts"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+cortex-falkordb = { path = "../cortex-falkordb" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v5"] }
+tree-sitter = "0.25"
+tree-sitter-typescript = "0.23"
+
+[lints.rust]
+unsafe_code = "deny"
