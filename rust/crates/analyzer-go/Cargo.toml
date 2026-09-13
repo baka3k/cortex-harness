@@ -1,0 +1,25 @@
+[package]
+name = "analyzer-go"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của code-tiny/tools/go/go_analyzer.py — Go call graph analyzer (phase 07 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-go"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+tree-sitter = "0.25"
+# PyPI venv tham chiếu chạy tree-sitter-go 0.25.0 — crates.io 0.25.0 wraps cùng
+# dòng grammar nên node kinds khớp (type_alias/type_case/communication_case...).
+tree-sitter-go = "0.25"
+
+[lints.rust]
+unsafe_code = "deny"

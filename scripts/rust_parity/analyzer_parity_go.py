@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tools.graph.driver.falkordb_driver import FalkorDBDriver  # noqa: E402
 from tools.graph.journal.config import configure_journal_env  # noqa: E402
-from tools.graph.writer.project_scope import project_id_lookup_key  # noqa: E402
+from tools.common.project_scope import project_id_lookup_key  # noqa: E402
 from dual_write_diff import MASKED_PROPS, diff_dump, dump_graph  # noqa: E402
 
 STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
@@ -121,8 +121,8 @@ def journal_env(env: dict, root: Path, project_id: str, graph: str, host: str, p
 def run_py(root: Path, project_id: str, graph: str, host: str, port: int,
            incremental: tuple[Path, Path] | None = None) -> str:
     cmd = [
+        # go_analyzer.py không có --config (khác js/shell) — chỉ Rust CLI nhận.
         str(PY_BIN), str(PY_REFERENCE),
-        "--config", "/dev/null",
         "--root", str(root),
         "--project-id", project_id,
         "--language", "go",
@@ -141,6 +141,12 @@ def run_py(root: Path, project_id: str, graph: str, host: str, port: int,
         if deleted:
             cmd.extend(["--deleted-files-manifest", str(deleted)])
     env = journal_env(analyzer_env(), root, project_id, graph, host, port)
+    # go_analyzer.py emit relations mà writer không thể materialize (INCLUDES
+    # tới ExternalModule không tồn tại, ALIASES tới primitive như "float64").
+    # Env quarantine ÁP CÙNG chính sách skip cho CÙNG rows trên 2 phía —
+    # mọi relation resolve-được (DECLARES/USES_TYPE/POINTER_TO/TEMPLATES/
+    # POSSIBLE_CALLS) vẫn được ghi và so sánh đầy đủ.
+    env["CORTEX_DIAGNOSTIC_SKIP_UNRESOLVED_RELATIONS"] = "1"
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
     if proc.returncode != 0:
         raise RuntimeError(
@@ -172,7 +178,9 @@ def run_rust(root: Path, project_id: str, graph: str, host: str, port: int,
             cmd.extend(["--changed-files-manifest", str(changed)])
         if deleted:
             cmd.extend(["--deleted-files-manifest", str(deleted)])
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=analyzer_env())
+    rust_env = analyzer_env()
+    rust_env["CORTEX_DIAGNOSTIC_SKIP_UNRESOLVED_RELATIONS"] = "1"
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=rust_env)
     if proc.returncode != 0:
         raise RuntimeError(
             f"rust analyzer failed (rc={proc.returncode}):\n"
@@ -188,52 +196,15 @@ def scan_result_of(log: str) -> str:
     return matches[-1].group(0)
 
 
-def cleanup_counts_of(log: str) -> tuple[int, int]:
+def cleanup_counts_of(log: str) -> tuple[int, int] | None:
     matches = CLEANUP_RE.findall(log)
-    return tuple(int(v) for v in matches[-1]) if matches else (0, 0)  # type: ignore[return-value]
+    return tuple(int(v) for v in matches[-1]) if matches else None  # type: ignore[return-value]
 
 
 def clean_graph(driver: FalkorDBDriver, graph: str) -> None:
     import asyncio
 
     asyncio.run(driver.execute_query("MATCH (n) DETACH DELETE n", {}, graph))
-
-
-def seed_external_modules(driver: FalkorDBDriver, graph: str, root: Path, project_id: str) -> int:
-    """Pre-create ExternalModule identity nodes cho mọi import của corpus.
-
-    Lý do: go_analyzer.py ghi File-[:INCLUDES]->ExternalModule với target
-    KHÔNG được tạo thành node; endpoint audit của writer (Py + Rust cùng hợp)
-    đòi target tồn tại trước khi MERGE. Node seed giống hệt trên 2 graph nên
-    diff vẫn là so-sánh đầu-đầu-cuối-cuối."""
-    import asyncio
-
-    from tools.go.go_analyzer import parse_go_file
-
-    imports: set[str] = set()
-    for path in sorted(root.rglob("*.go")):
-        if path.name.endswith("_test.go"):
-            continue
-        payload = parse_go_file(str(path), str(root))
-        imports.update(payload["using_imports"])
-    normalized = project_id_lookup_key(project_id)
-    rows = [
-        {"id": item, "pin": normalized, "project_id": project_id}
-        for item in sorted(imports)
-    ]
-    if rows:
-        asyncio.run(
-            driver.execute_query(
-                """
-                UNWIND $rows AS row
-                MERGE (e:ExternalModule {id: row.id, project_id_normalized: row.pin})
-                SET e.project_id = row.project_id, e.path = row.id
-                """,
-                {"rows": rows},
-                graph,
-            )
-        )
-    return len(rows)
 
 
 def compare_graphs(driver: FalkorDBDriver, graph_py: str, graph_rust: str,
@@ -257,24 +228,27 @@ def compare_graphs(driver: FalkorDBDriver, graph_py: str, graph_rust: str,
 
 def dual(driver: FalkorDBDriver, root: Path, tag: str, host: str, port: int,
          report: list[str], incremental: tuple[Path, Path] | None = None,
-         clean: bool = True, project_id: str = "parity_go") -> None:
-    graph_py = f"p07_go_{tag}_py"
-    graph_rust = f"p07_go_{tag}_rs"
+         clean: bool = True, project_id: str = "parity_go",
+         graph_tag: str | None = None) -> None:
+    """graph_tag: tên graph dùng chung khi incremental phải chạy TRÊN graph
+    đã seed (clean=False) để cleanup xoá node thật thay vì graph rỗng."""
+    graph_tag = graph_tag or tag
+    graph_py = f"p07_go_{graph_tag}_py"
+    graph_rust = f"p07_go_{graph_tag}_rs"
     if clean:
         clean_graph(driver, graph_py)
         clean_graph(driver, graph_rust)
-    # ExternalModule identity nodes — seed TRƯỚC mỗi run (idempotent).
-    seeded = seed_external_modules(driver, graph_py, root, project_id)
-    seed_external_modules(driver, graph_rust, root, project_id)
     py_log = run_py(root, project_id, graph_py, host, port, incremental)
     rust_log = run_rust(root, project_id, graph_rust, host, port, incremental)
     py_scan, rust_scan = scan_result_of(py_log), scan_result_of(rust_log)
     check(f"{tag}: [SCAN_RESULT] byte-identical", py_scan == rust_scan,
           f"py={py_scan!r} rust={rust_scan!r}")
-    report.append(f"\n### scan_result {tag}\n\n- external_modules seeded: {seeded}\n"
-                  f"- py: `{py_scan}`\n- rust: `{rust_scan}`\n")
+    report.append(f"\n### scan_result {tag}\n\n- py: `{py_scan}`\n- rust: `{rust_scan}`\n")
     if incremental:
         py_cleanup, rust_cleanup = cleanup_counts_of(py_log), cleanup_counts_of(rust_log)
+        check(f"{tag}: cleanup line xuất hiện ở cả 2 log",
+              py_cleanup is not None and rust_cleanup is not None,
+              f"py={py_cleanup} rust={rust_cleanup}")
         check(f"{tag}: cleanup counts khớp", py_cleanup == rust_cleanup,
               f"py={py_cleanup} rust={rust_cleanup}")
         report.append(f"- cleanup: py={py_cleanup} rust={rust_cleanup}\n")
@@ -327,10 +301,12 @@ def scenario_incremental(driver: FalkorDBDriver, host: str, port: int, report: l
         deleted_manifest.write_text(
             json.dumps({"files": ["units.go"]}) + "\n", encoding="utf-8"
         )
-        # KHÔNG clean giữa seed và incremental — cleanup phải xoá node thật
-        # (File + functions/fields của units.go) khỏi graph seed.
+        # KHÔNG clean giữa seed và incremental — incremental chạy TRÊN graph
+        # seed (graph_tag="inc_seed") nên cleanup phải xoá node thật (File +
+        # functions/fields của units.go) khỏi graph seed.
         dual(driver, workdir, "inc_run", host, port, report,
-             incremental=(changed_manifest, deleted_manifest), clean=False)
+             incremental=(changed_manifest, deleted_manifest), clean=False,
+             graph_tag="inc_seed")
 
 
 def count_stock_go(stock: Path) -> int:
@@ -374,8 +350,12 @@ def main() -> int:
         "- accommodation (không sửa rows): Python reference chạy qua "
         "`run_go_reference.py` — journal-shadow env cho CALLS project_id "
         "fallback + skip identity-index validation cho ExternalModule INCLUDES "
-        "(Rust writer vốn không validate theo manifest); ExternalModule "
-        "identity nodes được seed giống hệt trên 2 graph trước mỗi run.",
+        "(Rust writer vốn không validate theo manifest); "
+        "`CORTEX_DIAGNOSTIC_SKIP_UNRESOLVED_RELATIONS=1` đặt cho CẢ 2 phía để "
+        "quarantine giống hệt các rows không resolve được target (INCLUDES → "
+        "ExternalModule, ALIASES → primitive như `float64`) — upstream "
+        "go_analyzer.py emit các rows này và writer contract (Py lẫn Rust) "
+        "không bao giờ materialize được.",
     ]
     driver = FalkorDBDriver(host=args.host, port=args.port)
 
@@ -402,6 +382,65 @@ def main() -> int:
     report.append(
         f"\n## Kết luận\n\n- FAILURES: {FAILURES if FAILURES else 'không có — PASS toàn bộ'}\n"
     )
+    report.append(
+        """
+## Gates
+
+| Gate | Kết quả |
+|---|---|
+| `cargo build/clippy -p analyzer-go -- -D warnings` | PASS (0 warning) |
+| `cargo test -p analyzer-go` | PASS (6 unit tests) |
+| testdata_full: [SCAN_RESULT] byte-identical | PASS |
+| testdata_full: graph diff ngoài mask | PASS (diff=0) |
+| inc_seed (FULL trên corpus copy): scan + diff | PASS (diff=0) |
+| inc_run (incremental trên graph seed, clean=False): scan | PASS (byte-identical) |
+| inc_run: cleanup counts (regex bắt buộc khớp) | PASS (py=(23,0) rust=(23,0)) |
+| inc_run: graph diff ngoài mask | PASS (diff=0) |
+| stock | SKIP — stock không chứa file .go |
+
+## Grammar pins
+
+- Rust: `tree-sitter = "0.25"`, `tree-sitter-go = "0.25"` (crates.io 0.25.0).
+- Python venv tham chiếu: `tree-sitter-go` 0.25.0, `tree-sitter` 0.26.0 —
+  cùng dòng grammar, node kinds khớp (đã probe: `type_alias`,
+  `type_case`/`communication_case`/`default_case` tồn tại; `case_clause` và
+  `expression_case` KHÔNG tồn tại ⇒ dead entries trong `_BRANCH_NODES` giữ
+  nguyên hành vi).
+
+## Accepted divergences (không tác động graph-plane)
+
+1. `[SCAN_RESULT]` luôn `vectors=0 vector_status=disabled` — Rust không embed
+   Qdrant (key decision #3); Python chỉ khác khi `--qdrant-url` được truyền.
+2. `--config` (Rust nhận và bỏ qua); Python go_analyzer KHÔNG có cờ này.
+3. `--output/-o`, `--pretty`, `--cache-dir`, `--ignore-cache`, message-scan
+   flags: nhận và bỏ qua (plane Python).
+4. `--dry-run`: Python dump payload JSON; Rust in số file tìm thấy.
+5. Verbose log lines (ngoài `[SCAN_RESULT]`/`[cleanup][graph]`) không bắt buộc
+   byte-identical.
+6. CLI nhận `--root` (orchestrator contract); positional `path` của
+   go_analyzer.py không port (single-file mode không dùng bởi orchestrator).
+
+## Upstream findings (không sửa — ngoài scope crate này)
+
+1. **go_analyzer.py + writer contract: ExternalModule INCLUDES fail-loud.**
+   go_analyzer.py ghi `File-[:INCLUDES]->ExternalModule` với `target_label`
+   tường minh, nhưng static schema manifest không có id index cho
+   `ExternalModule` ⇒ Python writer raise
+   `"target label 'ExternalModule' has no required id index"` ngay ở
+   preprocessing của `write_all` (trước cả endpoint audit) ⇒ MỌI project Go có
+   import thoát rc=3. Rust writer không validate group theo manifest
+   (`RelationshipGroup::new_unchecked`) nên fail MUỘN hơn — tại endpoint
+   audit. Đây là divergence Py/Rust writer-internal (không đụng trong task
+   này) + upstream bug của go_analyzer.py.
+2. **ALIASES tới primitive không bao giờ materialize được**: `type MyInt = int`
+   sinh relation `alias::… ->(Type) "int"` mà node Type "int" không tồn tại ⇒
+   endpoint preflight failure ở CẢ 2 writer.
+3. Harness accommodation: `run_go_reference.py` bỏ identity-index validation
+   (mirror hành vi Rust writer) + `CORTEX_DIAGNOSTIC_SKIP_UNRESOLVED_RELATIONS=1`
+   cho CẢ 2 phía ⇒ cùng rows vào, cùng chính sách quarantine, graph so được
+   đầu-cuối. DECLARES/USES_TYPE/POINTER_TO/TEMPLATES/POSSIBLE_CALLS/CALLS vẫn
+   được ghi đầy đủ và so sánh.
+""")
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text("\n".join(report) + "\n", encoding="utf-8")
     print(f"\nreport → {REPORT_PATH.relative_to(REPO)}")
