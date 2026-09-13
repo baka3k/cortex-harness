@@ -39,6 +39,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "analyzer-cobol"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-graph-writer",
+ "fancy-regex",
+ "libloading",
+ "regex",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "analyzer-cplus"
 version = "0.1.0"
 dependencies = [
@@ -52,6 +69,20 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-c",
  "tree-sitter-cpp",
+ "uuid",
+]
+
+[[package]]
+name = "analyzer-delphi"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-graph-writer",
+ "regex",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-pascal",
  "uuid",
 ]
 
@@ -80,6 +111,10 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-java",
 ]
+
+[[package]]
+name = "analyzer-jp1"
+version = "0.1.0"
 
 [[package]]
 name = "analyzer-js"
@@ -214,6 +249,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "analyzer-vb"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-graph-writer",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -280,6 +327,21 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "bit-set"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3"
+dependencies = [
+ "bit-vec",
+]
+
+[[package]]
+name = "bit-vec"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7"
 
 [[package]]
 name = "bitflags"
@@ -633,6 +695,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
+name = "fancy-regex"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e24cb5a94bcae1e5408b0effca5cd7172ea3c5755049c5f3af4cd283a165298"
+dependencies = [
+ "bit-set",
+ "regex-automata",
+ "regex-syntax",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -913,6 +986,16 @@ name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
 
 [[package]]
 name = "libsqlite3-sys"
@@ -1550,6 +1633,16 @@ name = "tree-sitter-language"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
+
+[[package]]
+name = "tree-sitter-pascal"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb51e9a57493fd237e4517566749f7f7453349261a72a427e5f11d3b34b72a8"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
 
 [[package]]
 name = "tree-sitter-php"

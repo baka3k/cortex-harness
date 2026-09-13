@@ -1,0 +1,1620 @@
+{
+ "files": [
+  {
+   "calls": [
+    {
+     "call_arity": 2,
+     "call_line": 21,
+     "callee_name": "WriteLn",
+     "callee_raw": "WriteLn",
+     "caller_id": "Runner::FailFast/1@Runner.dpr"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 22,
+     "callee_name": "Halt",
+     "callee_raw": "Halt",
+     "caller_id": "Runner::FailFast/1@Runner.dpr"
+    },
+    {
+     "call_arity": 2,
+     "call_line": 30,
+     "callee_name": "Create",
+     "callee_raw": "TCircle.Create",
+     "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 31,
+     "callee_name": "TCircle",
+     "callee_raw": "TCircle",
+     "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 33,
+     "callee_name": "FailFast",
+     "callee_raw": "FailFast",
+     "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 34,
+     "callee_name": "WriteLn",
+     "callee_raw": "WriteLn",
+     "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 42,
+     "callee_name": "Create",
+     "callee_raw": "TReporter.Create",
+     "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+    },
+    {
+     "call_arity": 2,
+     "call_line": 43,
+     "callee_name": "AddLine",
+     "callee_raw": "Reporter.AddLine",
+     "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+    },
+    {
+     "call_arity": 2,
+     "call_line": 44,
+     "callee_name": "AddLine",
+     "callee_raw": "Reporter.AddLine",
+     "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+    },
+    {
+     "call_arity": 2,
+     "call_line": 45,
+     "callee_name": "Render",
+     "callee_raw": "Reporter.Render",
+     "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+    }
+   ],
+   "fields": [
+    {
+     "symbol_id": "Runner::TRunnerState::Steps@Runner.dpr",
+     "type_signature": "Integer"
+    },
+    {
+     "symbol_id": "Runner::TRunnerState::Failed@Runner.dpr",
+     "type_signature": "Boolean"
+    }
+   ],
+   "functions": [
+    {
+     "arity": 1,
+     "end_line": 23,
+     "kind": "function",
+     "qualified_name": "Runner::FailFast",
+     "scope_name": "Runner",
+     "start_line": 18,
+     "symbol_id": "Runner::FailFast/1@Runner.dpr"
+    },
+    {
+     "arity": 0,
+     "end_line": 35,
+     "kind": "function",
+     "qualified_name": "Runner::RunCircleChecks",
+     "scope_name": "Runner",
+     "start_line": 24,
+     "symbol_id": "Runner::RunCircleChecks/0@Runner.dpr"
+    },
+    {
+     "arity": 1,
+     "end_line": 49,
+     "kind": "function",
+     "qualified_name": "Runner::RunReportChecks",
+     "scope_name": "Runner",
+     "start_line": 36,
+     "symbol_id": "Runner::RunReportChecks/1@Runner.dpr"
+    }
+   ],
+   "meta": {
+    "error_nodes": 2,
+    "has_error": true,
+    "implementation_ranges": [],
+    "interface_ranges": [],
+    "parser_available": true,
+    "parser_language": "delphi_tree_sitter",
+    "range_guided_by_tree": false
+   },
+   "rel": "Runner.dpr",
+   "relations": [
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Runner::TRunnerState",
+     "target_id": "Runner::TRunnerState::Steps@Runner.dpr"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Runner::TRunnerState",
+     "target_id": "Runner::TRunnerState::Failed@Runner.dpr"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Runner",
+     "target_id": "Runner::FailFast/1@Runner.dpr"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Runner",
+     "target_id": "Runner::RunCircleChecks/0@Runner.dpr"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Runner",
+     "target_id": "Runner::RunReportChecks/1@Runner.dpr"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "Runner::RunReportChecks/1@Runner.dpr",
+     "target_id": "TRunnerState"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Runner",
+     "target_id": "Runner::TRunnerState"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Runner",
+     "target_id": "Runner::TRunnerState::Steps@Runner.dpr"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Runner",
+     "target_id": "Runner::TRunnerState::Failed@Runner.dpr"
+    }
+   ],
+   "types": [
+    {
+     "end_line": 17,
+     "kind": "record",
+     "start_line": 14,
+     "symbol_id": "Runner::TRunnerState"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "TRunnerState"
+    }
+   ],
+   "uses": [
+    "SysUtils",
+    "geom.Shapes",
+    "Report"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call_arity": 2,
+     "call_line": 85,
+     "callee_name": "Format",
+     "callee_raw": "Format",
+     "caller_id": "Shapes::TShape::Describe/0@geom/Shapes.pas"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 96,
+     "callee_name": "Sqr",
+     "callee_raw": "Sqr",
+     "caller_id": "Shapes::TCircle::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 106,
+     "callee_name": "Create",
+     "callee_raw": "Create",
+     "caller_id": "Shapes::TRect::Create/2@geom/Shapes.pas"
+    },
+    {
+     "call_arity": 2,
+     "call_line": 118,
+     "callee_name": "Create",
+     "callee_raw": "TRect.Create",
+     "caller_id": "Shapes::TRect::Widen/1@geom/Shapes.pas"
+    }
+   ],
+   "fields": [
+    {
+     "symbol_id": "Shapes::TShape::FName@geom/Shapes.pas",
+     "type_signature": "string"
+    },
+    {
+     "symbol_id": "Shapes::TShape::FTags@geom/Shapes.pas",
+     "type_signature": "array of string"
+    },
+    {
+     "symbol_id": "Shapes::TCircle::FRadius@geom/Shapes.pas",
+     "type_signature": "Double"
+    },
+    {
+     "symbol_id": "Shapes::TRect::FWidth@geom/Shapes.pas",
+     "type_signature": "Double"
+    },
+    {
+     "symbol_id": "Shapes::TRect::FHeight@geom/Shapes.pas",
+     "type_signature": "Double"
+    },
+    {
+     "symbol_id": "Shapes::TPoint3D::X@geom/Shapes.pas",
+     "type_signature": "Double"
+    },
+    {
+     "symbol_id": "Shapes::TPoint3D::Y@geom/Shapes.pas",
+     "type_signature": "Double"
+    },
+    {
+     "symbol_id": "Shapes::TPoint3D::Z@geom/Shapes.pas",
+     "type_signature": "Double"
+    }
+   ],
+   "functions": [
+    {
+     "arity": 0,
+     "end_line": 18,
+     "kind": "declaration",
+     "qualified_name": "Shapes::TShape::GetArea",
+     "scope_name": "Shapes::TShape",
+     "start_line": 18,
+     "symbol_id": "Shapes::TShape::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 72,
+     "kind": "constructor_function",
+     "qualified_name": "Shapes::TShape::Create",
+     "scope_name": "Shapes::TShape",
+     "start_line": 66,
+     "symbol_id": "Shapes::TShape::Create/1@geom/Shapes.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 78,
+     "kind": "destructor_function",
+     "qualified_name": "Shapes::TShape::Destroy",
+     "scope_name": "Shapes::TShape",
+     "start_line": 73,
+     "symbol_id": "Shapes::TShape::Destroy/0@geom/Shapes.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 86,
+     "kind": "function",
+     "qualified_name": "Shapes::TShape::Describe",
+     "scope_name": "Shapes::TShape",
+     "start_line": 79,
+     "symbol_id": "Shapes::TShape::Describe/0@geom/Shapes.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 97,
+     "kind": "function",
+     "qualified_name": "Shapes::TCircle::GetArea",
+     "scope_name": "Shapes::TCircle",
+     "start_line": 93,
+     "symbol_id": "Shapes::TCircle::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 102,
+     "kind": "function",
+     "qualified_name": "Shapes::TCircle::Radius",
+     "scope_name": "Shapes::TCircle",
+     "start_line": 98,
+     "symbol_id": "Shapes::TCircle::Radius/0@geom/Shapes.pas"
+    },
+    {
+     "arity": 2,
+     "end_line": 109,
+     "kind": "constructor_function",
+     "qualified_name": "Shapes::TRect::Create",
+     "scope_name": "Shapes::TRect",
+     "start_line": 103,
+     "symbol_id": "Shapes::TRect::Create/2@geom/Shapes.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 114,
+     "kind": "function",
+     "qualified_name": "Shapes::TRect::GetArea",
+     "scope_name": "Shapes::TRect",
+     "start_line": 110,
+     "symbol_id": "Shapes::TRect::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 119,
+     "kind": "function",
+     "qualified_name": "Shapes::TRect::Widen",
+     "scope_name": "Shapes::TRect",
+     "start_line": 115,
+     "symbol_id": "Shapes::TRect::Widen/1@geom/Shapes.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 48,
+     "kind": "declaration",
+     "qualified_name": "Shapes::IShapeSink::OnShapeChanged",
+     "scope_name": "Shapes::IShapeSink",
+     "start_line": 48,
+     "symbol_id": "Shapes::IShapeSink::OnShapeChanged/1@geom/Shapes.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 124,
+     "kind": "function",
+     "qualified_name": "Shapes::DefaultSinkName",
+     "scope_name": "Shapes",
+     "start_line": 120,
+     "symbol_id": "Shapes::DefaultSinkName/0@geom/Shapes.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 134,
+     "kind": "function",
+     "qualified_name": "Shapes::Clamp01",
+     "scope_name": "Shapes",
+     "start_line": 125,
+     "symbol_id": "Shapes::Clamp01/1@geom/Shapes.pas"
+    }
+   ],
+   "meta": {
+    "error_nodes": 0,
+    "has_error": false,
+    "implementation_ranges": [],
+    "interface_ranges": [],
+    "parser_available": true,
+    "parser_language": "delphi_tree_sitter",
+    "range_guided_by_tree": false
+   },
+   "rel": "geom/Shapes.pas",
+   "relations": [
+    {
+     "properties": {},
+     "rel_type": "EXTENDS",
+     "source_id": "Shapes::TShape",
+     "target_id": "TObject"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TShape",
+     "target_id": "Shapes::TShape::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TShape::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TShape",
+     "target_id": "Shapes::TShape::Create/1@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TShape::Create/1@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TShape",
+     "target_id": "Shapes::TShape::Destroy/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TShape::Destroy/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TShape",
+     "target_id": "Shapes::TShape::Describe/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TShape::Describe/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TShape",
+     "target_id": "Shapes::TShape::FName@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TShape",
+     "target_id": "Shapes::TShape::FTags@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "EXTENDS",
+     "source_id": "Shapes::TCircle",
+     "target_id": "TShape"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TCircle",
+     "target_id": "Shapes::TCircle::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TCircle::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TCircle",
+     "target_id": "Shapes::TCircle::Radius/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TCircle::Radius/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TCircle",
+     "target_id": "Shapes::TCircle::FRadius@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "EXTENDS",
+     "source_id": "Shapes::TRect",
+     "target_id": "TShape"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TRect",
+     "target_id": "Shapes::TRect::Create/2@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TRect::Create/2@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TRect",
+     "target_id": "Shapes::TRect::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TRect::GetArea/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TRect",
+     "target_id": "Shapes::TRect::Widen/1@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TRect::Widen/1@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "Shapes::TRect::Widen/1@geom/Shapes.pas",
+     "target_id": "TRect"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TRect",
+     "target_id": "Shapes::TRect::FWidth@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TRect",
+     "target_id": "Shapes::TRect::FHeight@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "EXTENDS",
+     "source_id": "Shapes::IShapeSink",
+     "target_id": "IInterface"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::IShapeSink",
+     "target_id": "Shapes::IShapeSink::OnShapeChanged/1@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::IShapeSink::OnShapeChanged/1@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TPoint3D",
+     "target_id": "Shapes::TPoint3D::X@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TPoint3D",
+     "target_id": "Shapes::TPoint3D::Y@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Shapes::TPoint3D",
+     "target_id": "Shapes::TPoint3D::Z@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::DefaultSinkName/0@geom/Shapes.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::Clamp01/1@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TShape"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TCircle"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TRect"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::IShapeSink"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TPoint3D"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TShape::FName@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TShape::FTags@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TCircle::FRadius@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TRect::FWidth@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TRect::FHeight@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TPoint3D::X@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TPoint3D::Y@geom/Shapes.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Shapes",
+     "target_id": "Shapes::TPoint3D::Z@geom/Shapes.pas"
+    }
+   ],
+   "types": [
+    {
+     "end_line": 24,
+     "kind": "class",
+     "start_line": 13,
+     "symbol_id": "Shapes::TShape"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "TObject"
+    },
+    {
+     "end_line": 33,
+     "kind": "class",
+     "start_line": 25,
+     "symbol_id": "Shapes::TCircle"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "TShape"
+    },
+    {
+     "end_line": 43,
+     "kind": "class",
+     "start_line": 34,
+     "symbol_id": "Shapes::TRect"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "TRect"
+    },
+    {
+     "end_line": 49,
+     "kind": "interface",
+     "start_line": 46,
+     "symbol_id": "Shapes::IShapeSink"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "IInterface"
+    },
+    {
+     "end_line": 55,
+     "kind": "record",
+     "start_line": 50,
+     "symbol_id": "Shapes::TPoint3D"
+    }
+   ],
+   "uses": [
+    "SysUtils",
+    "Classes",
+    "Math"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call_arity": 1,
+     "call_line": 64,
+     "callee_name": "Step",
+     "callee_raw": "Step",
+     "caller_id": "AppLogic::TEngine::Step/1@logic/AppLogic.pas"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 69,
+     "callee_name": "Step",
+     "callee_raw": "Self.Step",
+     "caller_id": "AppLogic::TEngine::Step/0@logic/AppLogic.pas"
+    },
+    {
+     "call_arity": 2,
+     "call_line": 82,
+     "callee_name": "Format",
+     "callee_raw": "Format",
+     "caller_id": "AppLogic::TEngine::PeerName/0@logic/AppLogic.pas"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 100,
+     "callee_name": "Assigned",
+     "callee_raw": "Assigned",
+     "caller_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 102,
+     "callee_name": "Step",
+     "callee_raw": "AEngine.Step",
+     "caller_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+    },
+    {
+     "call_arity": 1,
+     "call_line": 103,
+     "callee_name": "WriteLn",
+     "callee_raw": "WriteLn",
+     "caller_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+    }
+   ],
+   "fields": [
+    {
+     "symbol_id": "AppLogic::TInternalCache::Key@logic/AppLogic.pas",
+     "type_signature": "string"
+    },
+    {
+     "symbol_id": "AppLogic::TInternalCache::Hits@logic/AppLogic.pas",
+     "type_signature": "Integer"
+    }
+   ],
+   "functions": [
+    {
+     "arity": 0,
+     "end_line": 21,
+     "kind": "declaration",
+     "qualified_name": "AppLogic::ResetGlobalState",
+     "scope_name": "AppLogic",
+     "start_line": 21,
+     "symbol_id": "AppLogic::ResetGlobalState/0@logic/AppLogic.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 22,
+     "kind": "declaration",
+     "qualified_name": "AppLogic::InstanceCount",
+     "scope_name": "AppLogic",
+     "start_line": 22,
+     "symbol_id": "AppLogic::InstanceCount/0@logic/AppLogic.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 23,
+     "kind": "declaration",
+     "qualified_name": "AppLogic::Step",
+     "scope_name": "AppLogic",
+     "start_line": 23,
+     "symbol_id": "AppLogic::Step/1@logic/AppLogic.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 24,
+     "kind": "declaration",
+     "qualified_name": "AppLogic::Step",
+     "scope_name": "AppLogic",
+     "start_line": 24,
+     "symbol_id": "AppLogic::Step/0@logic/AppLogic.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 25,
+     "kind": "declaration",
+     "qualified_name": "AppLogic::PeerName",
+     "scope_name": "AppLogic",
+     "start_line": 25,
+     "symbol_id": "AppLogic::PeerName/0@logic/AppLogic.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 104,
+     "kind": "function",
+     "qualified_name": "AppLogic::TouchEngine",
+     "scope_name": "AppLogic",
+     "start_line": 97,
+     "symbol_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 52,
+     "kind": "function",
+     "qualified_name": "AppLogic::TEngine::ResetGlobalState",
+     "scope_name": "AppLogic::TEngine",
+     "start_line": 48,
+     "symbol_id": "AppLogic::TEngine::ResetGlobalState/0@logic/AppLogic.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 57,
+     "kind": "function",
+     "qualified_name": "AppLogic::TEngine::InstanceCount",
+     "scope_name": "AppLogic::TEngine",
+     "start_line": 53,
+     "symbol_id": "AppLogic::TEngine::InstanceCount/0@logic/AppLogic.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 65,
+     "kind": "function",
+     "qualified_name": "AppLogic::TEngine::Step",
+     "scope_name": "AppLogic::TEngine",
+     "start_line": 58,
+     "symbol_id": "AppLogic::TEngine::Step/1@logic/AppLogic.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 70,
+     "kind": "function",
+     "qualified_name": "AppLogic::TEngine::Step",
+     "scope_name": "AppLogic::TEngine",
+     "start_line": 66,
+     "symbol_id": "AppLogic::TEngine::Step/0@logic/AppLogic.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 83,
+     "kind": "function",
+     "qualified_name": "AppLogic::TEngine::PeerName",
+     "scope_name": "AppLogic::TEngine",
+     "start_line": 71,
+     "symbol_id": "AppLogic::TEngine::PeerName/0@logic/AppLogic.pas"
+    }
+   ],
+   "meta": {
+    "error_nodes": 0,
+    "has_error": false,
+    "implementation_ranges": [],
+    "interface_ranges": [],
+    "parser_available": true,
+    "parser_language": "delphi_tree_sitter",
+    "range_guided_by_tree": false
+   },
+   "rel": "logic/AppLogic.pas",
+   "relations": [
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "AppLogic::TInternalCache",
+     "target_id": "AppLogic::TInternalCache::Key@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "AppLogic::TInternalCache",
+     "target_id": "AppLogic::TInternalCache::Hits@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": true
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::ResetGlobalState/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": true
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::InstanceCount/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::Step/1@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::Step/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::PeerName/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas",
+     "target_id": "TEngine"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "AppLogic::TEngine",
+     "target_id": "AppLogic::TEngine::ResetGlobalState/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": true
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TEngine::ResetGlobalState/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "AppLogic::TEngine",
+     "target_id": "AppLogic::TEngine::InstanceCount/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": true
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TEngine::InstanceCount/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "AppLogic::TEngine",
+     "target_id": "AppLogic::TEngine::Step/1@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TEngine::Step/1@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "AppLogic::TEngine",
+     "target_id": "AppLogic::TEngine::Step/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TEngine::Step/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "AppLogic::TEngine",
+     "target_id": "AppLogic::TEngine::PeerName/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TEngine::PeerName/0@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TEngine"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TInternalCache"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TInternalCache::Key@logic/AppLogic.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::AppLogic",
+     "target_id": "AppLogic::TInternalCache::Hits@logic/AppLogic.pas"
+    }
+   ],
+   "types": [
+    {
+     "end_line": 12,
+     "kind": "class",
+     "start_line": 12,
+     "symbol_id": "AppLogic::TEngine"
+    },
+    {
+     "end_line": 43,
+     "kind": "record",
+     "start_line": 40,
+     "symbol_id": "AppLogic::TInternalCache"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "TEngine"
+    }
+   ],
+   "uses": [
+    "SysUtils",
+    "Math"
+   ]
+  },
+  {
+   "calls": [
+    {
+     "call_arity": 2,
+     "call_line": 122,
+     "callee_name": "Pos",
+     "callee_raw": "Pos",
+     "caller_id": "Report::LooksShady/1@report/Report.pas"
+    }
+   ],
+   "fields": [
+    {
+     "symbol_id": "Report::TReportLine::Message@report/Report.pas",
+     "type_signature": "string"
+    },
+    {
+     "symbol_id": "Report::TReportLine::Severity@report/Report.pas",
+     "type_signature": "TSeverity"
+    },
+    {
+     "symbol_id": "Report::TReporter::FLines@report/Report.pas",
+     "type_signature": "array of TReportLine"
+    },
+    {
+     "symbol_id": "Report::TReporter::FTitle@report/Report.pas",
+     "type_signature": "string"
+    }
+   ],
+   "functions": [
+    {
+     "arity": 0,
+     "end_line": 62,
+     "kind": "function",
+     "qualified_name": "Report::TReporter::LineCount",
+     "scope_name": "Report::TReporter",
+     "start_line": 58,
+     "symbol_id": "Report::TReporter::LineCount/0@report/Report.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 57,
+     "kind": "constructor_function",
+     "qualified_name": "Report::TReporter::Create",
+     "scope_name": "Report::TReporter",
+     "start_line": 51,
+     "symbol_id": "Report::TReporter::Create/1@report/Report.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 99,
+     "kind": "function",
+     "qualified_name": "Report::TReporter::WorstSeverity",
+     "scope_name": "Report::TReporter",
+     "start_line": 90,
+     "symbol_id": "Report::TReporter::WorstSeverity/0@report/Report.pas"
+    },
+    {
+     "arity": 0,
+     "end_line": 35,
+     "kind": "declaration",
+     "qualified_name": "Report::TReporterClass::ResetCounter",
+     "scope_name": "Report::TReporterClass",
+     "start_line": 34,
+     "symbol_id": "Report::TReporterClass::ResetCounter/0@report/Report.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 36,
+     "kind": "declaration",
+     "qualified_name": "Report::TReporterClass::BuildSummary",
+     "scope_name": "Report::TReporterClass",
+     "start_line": 36,
+     "symbol_id": "Report::TReporterClass::BuildSummary/1@report/Report.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 37,
+     "kind": "declaration",
+     "qualified_name": "Report::TReporterClass::LooksShady",
+     "scope_name": "Report::TReporterClass",
+     "start_line": 37,
+     "symbol_id": "Report::TReporterClass::LooksShady/1@report/Report.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 114,
+     "kind": "function",
+     "qualified_name": "Report::BuildSummary",
+     "scope_name": "Report",
+     "start_line": 100,
+     "symbol_id": "Report::BuildSummary/1@report/Report.pas"
+    },
+    {
+     "arity": 1,
+     "end_line": 123,
+     "kind": "function",
+     "qualified_name": "Report::LooksShady",
+     "scope_name": "Report",
+     "start_line": 117,
+     "symbol_id": "Report::LooksShady/1@report/Report.pas"
+    }
+   ],
+   "meta": {
+    "error_nodes": 0,
+    "has_error": false,
+    "implementation_ranges": [],
+    "interface_ranges": [],
+    "parser_available": true,
+    "parser_language": "delphi_tree_sitter",
+    "range_guided_by_tree": false
+   },
+   "rel": "report/Report.pas",
+   "relations": [
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReportLine",
+     "target_id": "Report::TReportLine::Message@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReportLine",
+     "target_id": "Report::TReportLine::Severity@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "Report::TReportLine::Severity@report/Report.pas",
+     "target_id": "TSeverity"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporter",
+     "target_id": "Report::TReporter::LineCount/0@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporter::LineCount/0@report/Report.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporter",
+     "target_id": "Report::TReporter::Create/1@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporter::Create/1@report/Report.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporter",
+     "target_id": "Report::TReporter::WorstSeverity/0@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporter::WorstSeverity/0@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "Report::TReporter::WorstSeverity/0@report/Report.pas",
+     "target_id": "TSeverity"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporter",
+     "target_id": "Report::TReporter::FLines@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "Report::TReporter::FLines@report/Report.pas",
+     "target_id": "TReportLine"
+    },
+    {
+     "properties": {},
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporter",
+     "target_id": "Report::TReporter::FTitle@report/Report.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporterClass",
+     "target_id": "Report::TReporterClass::ResetCounter/0@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporterClass::ResetCounter/0@report/Report.pas"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporterClass",
+     "target_id": "Report::TReporterClass::BuildSummary/1@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporterClass::BuildSummary/1@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "Report::TReporterClass::BuildSummary/1@report/Report.pas",
+     "target_id": "TReportLine"
+    },
+    {
+     "properties": {
+      "declared_in_type": true
+     },
+     "rel_type": "DECLARES",
+     "source_id": "Report::TReporterClass",
+     "target_id": "Report::TReporterClass::LooksShady/1@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporterClass::LooksShady/1@report/Report.pas"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::BuildSummary/1@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "USES_TYPE",
+     "source_id": "Report::BuildSummary/1@report/Report.pas",
+     "target_id": "TReportLine"
+    },
+    {
+     "properties": {
+      "static": false
+     },
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::LooksShady/1@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReportLine"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporter"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporterClass"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReportLine::Message@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReportLine::Severity@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporter::FLines@report/Report.pas"
+    },
+    {
+     "properties": {},
+     "rel_type": "CONTAINS",
+     "source_id": "namespace::Report",
+     "target_id": "Report::TReporter::FTitle@report/Report.pas"
+    }
+   ],
+   "types": [
+    {
+     "end_line": 18,
+     "kind": "record",
+     "start_line": 14,
+     "symbol_id": "Report::TReportLine"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "TSeverity"
+    },
+    {
+     "end_line": 31,
+     "kind": "class",
+     "start_line": 19,
+     "symbol_id": "Report::TReporter"
+    },
+    {
+     "end_line": 0,
+     "kind": "external",
+     "start_line": 0,
+     "symbol_id": "TReportLine"
+    },
+    {
+     "end_line": 50,
+     "kind": "class",
+     "start_line": 32,
+     "symbol_id": "Report::TReporterClass"
+    }
+   ],
+   "uses": [
+    "Shapes",
+    "SysUtils",
+    "Classes",
+    "Math"
+   ]
+  }
+ ],
+ "resolution": [
+  {
+   "call_line": 21,
+   "callee_id": null,
+   "callee_raw": "WriteLn",
+   "caller_id": "Runner::FailFast/1@Runner.dpr"
+  },
+  {
+   "call_line": 22,
+   "callee_id": null,
+   "callee_raw": "Halt",
+   "caller_id": "Runner::FailFast/1@Runner.dpr"
+  },
+  {
+   "call_line": 30,
+   "callee_id": "Shapes::TRect::Create/2@geom/Shapes.pas",
+   "callee_raw": "TCircle.Create",
+   "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+  },
+  {
+   "call_line": 31,
+   "callee_id": null,
+   "callee_raw": "TCircle",
+   "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+  },
+  {
+   "call_line": 33,
+   "callee_id": "Runner::FailFast/1@Runner.dpr",
+   "callee_raw": "FailFast",
+   "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+  },
+  {
+   "call_line": 34,
+   "callee_id": null,
+   "callee_raw": "WriteLn",
+   "caller_id": "Runner::RunCircleChecks/0@Runner.dpr"
+  },
+  {
+   "call_line": 42,
+   "callee_id": "Shapes::TShape::Create/1@geom/Shapes.pas",
+   "callee_raw": "TReporter.Create",
+   "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+  },
+  {
+   "call_line": 43,
+   "callee_id": null,
+   "callee_raw": "Reporter.AddLine",
+   "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+  },
+  {
+   "call_line": 44,
+   "callee_id": null,
+   "callee_raw": "Reporter.AddLine",
+   "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+  },
+  {
+   "call_line": 45,
+   "callee_id": null,
+   "callee_raw": "Reporter.Render",
+   "caller_id": "Runner::RunReportChecks/1@Runner.dpr"
+  },
+  {
+   "call_line": 85,
+   "callee_id": null,
+   "callee_raw": "Format",
+   "caller_id": "Shapes::TShape::Describe/0@geom/Shapes.pas"
+  },
+  {
+   "call_line": 96,
+   "callee_id": null,
+   "callee_raw": "Sqr",
+   "caller_id": "Shapes::TCircle::GetArea/0@geom/Shapes.pas"
+  },
+  {
+   "call_line": 106,
+   "callee_id": "Shapes::TShape::Create/1@geom/Shapes.pas",
+   "callee_raw": "Create",
+   "caller_id": "Shapes::TRect::Create/2@geom/Shapes.pas"
+  },
+  {
+   "call_line": 118,
+   "callee_id": "Shapes::TRect::Create/2@geom/Shapes.pas",
+   "callee_raw": "TRect.Create",
+   "caller_id": "Shapes::TRect::Widen/1@geom/Shapes.pas"
+  },
+  {
+   "call_line": 64,
+   "callee_id": "AppLogic::TEngine::Step/1@logic/AppLogic.pas",
+   "callee_raw": "Step",
+   "caller_id": "AppLogic::TEngine::Step/1@logic/AppLogic.pas"
+  },
+  {
+   "call_line": 69,
+   "callee_id": "AppLogic::TEngine::Step/1@logic/AppLogic.pas",
+   "callee_raw": "Self.Step",
+   "caller_id": "AppLogic::TEngine::Step/0@logic/AppLogic.pas"
+  },
+  {
+   "call_line": 82,
+   "callee_id": null,
+   "callee_raw": "Format",
+   "caller_id": "AppLogic::TEngine::PeerName/0@logic/AppLogic.pas"
+  },
+  {
+   "call_line": 100,
+   "callee_id": null,
+   "callee_raw": "Assigned",
+   "caller_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+  },
+  {
+   "call_line": 102,
+   "callee_id": "AppLogic::Step/1@logic/AppLogic.pas",
+   "callee_raw": "AEngine.Step",
+   "caller_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+  },
+  {
+   "call_line": 103,
+   "callee_id": null,
+   "callee_raw": "WriteLn",
+   "caller_id": "AppLogic::TouchEngine/1@logic/AppLogic.pas"
+  },
+  {
+   "call_line": 122,
+   "callee_id": null,
+   "callee_raw": "Pos",
+   "caller_id": "Report::LooksShady/1@report/Report.pas"
+  }
+ ],
+ "scan": [
+  "Runner.dpr",
+  "geom/Shapes.pas",
+  "logic/AppLogic.pas",
+  "report/Report.pas"
+ ],
+ "stable_point_id_fixture": {
+  "input": "Shapes::TShape::Create/1@geom/Shapes.pas",
+  "output": "f8a9774f-26ca-52b3-821c-ba9835b3ddad"
+ },
+ "uses_resolved": {
+  "Runner.dpr": [
+   "geom/Shapes.pas",
+   "report/Report.pas"
+  ],
+  "geom/Shapes.pas": [],
+  "logic/AppLogic.pas": [],
+  "report/Report.pas": [
+   "geom/Shapes.pas"
+  ]
+ }
+}

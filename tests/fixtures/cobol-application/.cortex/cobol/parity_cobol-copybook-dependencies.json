@@ -1,0 +1,24 @@
+{
+  "dependencies": {
+    "common.cpy": [
+      "nested.copy"
+    ],
+    "cycle-a.copy": [
+      "cycle-b.copy"
+    ],
+    "cycle-b.copy": [
+      "cycle-a.copy"
+    ],
+    "main.cbl": [
+      "common.cpy"
+    ],
+    "malformed.cbl": [],
+    "missing-copy.cbl": [],
+    "nested.copy": [],
+    "payroll.cbl": [
+      "common.cpy"
+    ],
+    "subprog.cob": []
+  },
+  "schema_version": 1
+}

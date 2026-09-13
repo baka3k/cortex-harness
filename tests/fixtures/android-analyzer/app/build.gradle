@@ -1,0 +1,19 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.paritydemo'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.paritydemo"
+        minSdk 26
+    }
+}
+
+dependencies {
+    implementation 'com.squareup.retrofit2:retrofit:2.11.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    testImplementation 'junit:junit:4.13.2'
+}

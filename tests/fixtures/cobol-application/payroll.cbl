@@ -1,0 +1,45 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. PAYROLL.
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT PAY-FILE ASSIGN TO "payroll.dat"
+               ORGANIZATION IS LINE SEQUENTIAL.
+           SELECT RPT-FILE ASSIGN TO "report.txt".
+       DATA DIVISION.
+       FILE SECTION.
+       FD PAY-FILE.
+       01 PAY-REC PIC X(100).
+       FD RPT-FILE.
+       01 RPT-REC PIC X(132).
+       WORKING-STORAGE SECTION.
+       COPY COMMON REPLACING WS-NAME BY PAY-NAME.
+       01 WS-TOTALS.
+          05 WS-GROSS PIC 9(7)V99 VALUE ZERO.
+          05 WS-COUNT PIC 9(4) VALUE 0.
+          05 WS-EOF PIC X VALUE "N".
+       PROCEDURE DIVISION.
+       MAIN-CONTROL SECTION.
+       INIT-PARA.
+           OPEN INPUT PAY-FILE
+           OPEN OUTPUT RPT-FILE
+           PERFORM UNTIL WS-EOF = "Y"
+               READ PAY-FILE
+                   AT END MOVE "Y" TO WS-EOF
+                   NOT AT END PERFORM PROCESS-PARA
+               END-READ
+           END-PERFORM.
+       PROCESS-PARA.
+           ADD 1 TO WS-COUNT
+           IF WS-COUNT > 10
+               PERFORM SUMMARY-PARA VARYING WS-COUNT FROM 1 BY 1
+                   UNTIL WS-COUNT > 5
+           ELSE
+               MOVE PAY-REC TO RPT-REC
+           END-IF.
+       SUMMARY-PARA.
+           COMPUTE WS-GROSS = WS-GROSS + WS-COUNT
+           WRITE RPT-REC.
+       CLEANUP-PARA.
+           CLOSE PAY-FILE RPT-FILE
+           GOBACK.

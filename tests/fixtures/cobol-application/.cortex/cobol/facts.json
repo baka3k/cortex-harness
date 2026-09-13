@@ -1,0 +1,5007 @@
+{
+  "diagnostics": [
+    {
+      "code": "COBOL_COPYBOOK_CYCLE",
+      "details": {
+        "chain": [
+          "cycle-b.copy",
+          "cycle-a.copy",
+          "cycle-b.copy"
+        ]
+      },
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "cycle-a.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "message": "copybook cycle: cycle-b.copy -> cycle-a.copy -> cycle-b.copy",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_COPYBOOK_CYCLE",
+      "details": {
+        "chain": [
+          "cycle-a.copy",
+          "cycle-b.copy",
+          "cycle-a.copy"
+        ]
+      },
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "cycle-b.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "message": "copybook cycle: cycle-a.copy -> cycle-b.copy -> cycle-a.copy",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 206,
+        "end_column": 12,
+        "end_line": 7,
+        "file": "main.cbl",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 179,
+        "end_column": 40,
+        "end_line": 6,
+        "file": "main.cbl",
+        "start_byte": 178,
+        "start_column": 39,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 179,
+        "end_column": 40,
+        "end_line": 6,
+        "file": "main.cbl",
+        "start_byte": 178,
+        "start_column": 39,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 54,
+        "end_line": 6,
+        "file": "main.cbl",
+        "start_byte": 192,
+        "start_column": 53,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 54,
+        "end_line": 6,
+        "file": "main.cbl",
+        "start_byte": 192,
+        "start_column": 53,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 257,
+        "end_column": 20,
+        "end_line": 9,
+        "file": "main.cbl",
+        "start_byte": 248,
+        "start_column": 11,
+        "start_line": 9
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 535,
+        "end_column": 26,
+        "end_line": 18,
+        "file": "main.cbl",
+        "start_byte": 527,
+        "start_column": 18,
+        "start_line": 18
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_DYNAMIC_CALL",
+      "details": {
+        "target": "WS-PROGRAM"
+      },
+      "evidence": {
+        "end_byte": 719,
+        "end_column": 31,
+        "end_line": 24,
+        "file": "main.cbl",
+        "start_byte": 689,
+        "start_column": 1,
+        "start_line": 24
+      },
+      "message": "call target WS-PROGRAM is dynamic",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 791,
+        "end_column": 54,
+        "end_line": 26,
+        "file": "main.cbl",
+        "start_byte": 762,
+        "start_column": 25,
+        "start_line": 26
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 1196,
+        "end_column": 19,
+        "end_line": 41,
+        "file": "main.cbl",
+        "start_byte": 1185,
+        "start_column": 8,
+        "start_line": 41
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 174,
+        "end_column": 27,
+        "end_line": 6,
+        "file": "malformed.cbl",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_UNBALANCED_DELIMITER",
+      "details": {},
+      "evidence": {
+        "end_byte": 147,
+        "end_column": 32,
+        "end_line": 5,
+        "file": "malformed.cbl",
+        "start_byte": 116,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "message": "source contains unbalanced parentheses",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 173,
+        "end_column": 26,
+        "end_line": 6,
+        "file": "malformed.cbl",
+        "start_byte": 155,
+        "start_column": 8,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 262,
+        "end_column": 36,
+        "end_line": 9,
+        "file": "malformed.cbl",
+        "start_byte": 205,
+        "start_column": 12,
+        "start_line": 8
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_COPYBOOK_NOT_FOUND",
+      "details": {
+        "copybook": "DOES-NOT-EXIST"
+      },
+      "evidence": {
+        "end_byte": 144,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "missing-copy.cbl",
+        "start_byte": 117,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "message": "copybook DOES-NOT-EXIST was not found",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 255,
+        "end_column": 18,
+        "end_line": 8,
+        "file": "payroll.cbl",
+        "start_byte": 7,
+        "start_column": 8,
+        "start_line": 1
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 177,
+        "end_column": 39,
+        "end_line": 6,
+        "file": "payroll.cbl",
+        "start_byte": 176,
+        "start_column": 38,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 177,
+        "end_column": 39,
+        "end_line": 6,
+        "file": "payroll.cbl",
+        "start_byte": 176,
+        "start_column": 38,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 236,
+        "end_column": 47,
+        "end_line": 7,
+        "file": "payroll.cbl",
+        "start_byte": 188,
+        "start_column": 50,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 189,
+        "end_column": 51,
+        "end_line": 6,
+        "file": "payroll.cbl",
+        "start_byte": 188,
+        "start_column": 50,
+        "start_line": 6
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 300,
+        "end_column": 12,
+        "end_line": 9,
+        "file": "payroll.cbl",
+        "start_byte": 256,
+        "start_column": 19,
+        "start_line": 8
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 276,
+        "end_column": 39,
+        "end_line": 8,
+        "file": "payroll.cbl",
+        "start_byte": 275,
+        "start_column": 38,
+        "start_line": 8
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 287,
+        "end_column": 50,
+        "end_line": 8,
+        "file": "payroll.cbl",
+        "start_byte": 286,
+        "start_column": 49,
+        "start_line": 8
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 287,
+        "end_column": 50,
+        "end_line": 8,
+        "file": "payroll.cbl",
+        "start_byte": 286,
+        "start_column": 49,
+        "start_line": 8
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 350,
+        "end_column": 19,
+        "end_line": 11,
+        "file": "payroll.cbl",
+        "start_byte": 342,
+        "start_column": 11,
+        "start_line": 11
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 400,
+        "end_column": 19,
+        "end_line": 13,
+        "file": "payroll.cbl",
+        "start_byte": 392,
+        "start_column": 11,
+        "start_line": 13
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_COPY_REPLACING_PARTIAL",
+      "details": {
+        "replacement": "REPLACING WS-NAME BY PAY-NAME"
+      },
+      "evidence": {
+        "end_byte": 513,
+        "end_column": 50,
+        "end_line": 16,
+        "file": "payroll.cbl",
+        "start_byte": 464,
+        "start_column": 1,
+        "start_line": 16
+      },
+      "message": "COPY COMMON REPLACING is retained but substitution is not applied",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "details": {
+        "node_type": "ERROR"
+      },
+      "evidence": {
+        "end_byte": 683,
+        "end_column": 26,
+        "end_line": 21,
+        "file": "payroll.cbl",
+        "start_byte": 675,
+        "start_column": 18,
+        "start_line": 21
+      },
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "recoverable": true,
+      "severity": "warning"
+    },
+    {
+      "code": "COBOL_FILE_TARGET_UNRESOLVED",
+      "details": {},
+      "evidence": {
+        "end_byte": 1357,
+        "end_column": 26,
+        "end_line": 42,
+        "file": "payroll.cbl",
+        "start_byte": 1332,
+        "start_column": 1,
+        "start_line": 42
+      },
+      "message": "file target RPT-REC was not found",
+      "recoverable": true,
+      "severity": "warning"
+    }
+  ],
+  "edges": [
+    {
+      "confidence": 0.5,
+      "dynamic": true,
+      "evidence": {
+        "end_byte": 1117,
+        "end_column": 49,
+        "end_line": 37,
+        "file": "main.cbl",
+        "start_byte": 1069,
+        "start_column": 1,
+        "start_line": 37
+      },
+      "id": "cobol:edge:398e8d95c93c8bd3c0eedadb",
+      "properties": {
+        "altered_source": "STEP-B",
+        "dynamic": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "ALTERS",
+      "source_id": "cobol:cobolparagraph:9f0750e233490fed733d2787",
+      "target_id": "cobol:cobolparagraph:06df1cd091dea4e2f78c30e0"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 672,
+        "end_column": 46,
+        "end_line": 22,
+        "file": "main.cbl",
+        "start_byte": 627,
+        "start_column": 1,
+        "start_line": 22
+      },
+      "id": "cobol:edge:c42510a6e8c797922835f085",
+      "properties": {
+        "project_id": "parity_cobol",
+        "target_name": "SUBPROG"
+      },
+      "relationship": "CALLS",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:cobolprogram:c08cb34313f67e415323a0b6"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1083,
+        "end_column": 28,
+        "end_line": 34,
+        "file": "payroll.cbl",
+        "start_byte": 1056,
+        "start_column": 1,
+        "start_line": 34
+      },
+      "id": "cobol:edge:c40e7ad0d04455a85ed201b3",
+      "properties": {
+        "branch": "IF",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "CONDITIONAL",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1202,
+        "end_column": 16,
+        "end_line": 37,
+        "file": "payroll.cbl",
+        "start_byte": 1187,
+        "start_column": 1,
+        "start_line": 37
+      },
+      "id": "cobol:edge:d604bcd09f0744ec06ef7aa8",
+      "properties": {
+        "branch": "ELSE",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "CONDITIONAL",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 626,
+        "end_column": 28,
+        "end_line": 21,
+        "file": "main.cbl",
+        "start_byte": 599,
+        "start_column": 1,
+        "start_line": 21
+      },
+      "id": "cobol:edge:49bb5bcd4d1202a273848b1d",
+      "properties": {
+        "branch": "IF",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "CONDITIONAL",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 688,
+        "end_column": 16,
+        "end_line": 23,
+        "file": "main.cbl",
+        "start_byte": 673,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:a3fa170f9c7ca7bacd1b3e3d",
+      "properties": {
+        "branch": "ELSE",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "CONDITIONAL",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:72706c55b84c5b4e3d6dbca6",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:0efd9457d8aba7671a8833c9",
+      "target_id": "cobol:coboldataitem:1cdfd858c41aebfcaf45468d"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:72631f7606eb6304e634ea5c",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107",
+      "target_id": "cobol:coboldataitem:367318738187ad92ad5f578c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 92,
+        "end_column": 38,
+        "end_line": 3,
+        "file": "common.cpy",
+        "start_byte": 55,
+        "start_column": 1,
+        "start_line": 3
+      },
+      "id": "cobol:edge:9d9903370cb1d03c2ea26cee",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107",
+      "target_id": "cobol:coboldataitem:7badf8f80134487eeb4d19eb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 54,
+        "end_column": 32,
+        "end_line": 2,
+        "file": "common.cpy",
+        "start_byte": 23,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:9e9619994c71907607805fcf",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107",
+      "target_id": "cobol:coboldataitem:eece9070caa542ed7a084be7"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:de1ff9e6deeb6aceeaf95783",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:9ea57c9a4af247dfc430d111",
+      "target_id": "cobol:coboldataitem:bb136f2987dd7c7d8b2f27b1"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:703863789353617cd6ad779a",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolcopybook:c5b83e7a8e41ddd1f7780563",
+      "target_id": "cobol:coboldataitem:5bfa82060d382f95216bf34f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1018,
+        "end_column": 55,
+        "end_line": 33,
+        "file": "main.cbl",
+        "start_byte": 964,
+        "start_column": 1,
+        "start_line": 33
+      },
+      "id": "cobol:edge:e764e93898205b51fbd2aa15",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb",
+      "target_id": "cobol:cobolcicscommand:962607ad1732c0fbf680f1f3"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 963,
+        "end_column": 20,
+        "end_line": 32,
+        "file": "main.cbl",
+        "start_byte": 869,
+        "start_column": 1,
+        "start_line": 30
+      },
+      "id": "cobol:edge:1578159e3fb09b8fbfdd61e1",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb",
+      "target_id": "cobol:cobolsqlstatement:3baf94fb3e72f40935e4cd00"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:c7f1fabb86d7791f17269deb",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:571c105bbf0e3fc5459d9106",
+      "target_id": "cobol:cobolparagraph:518dd4216f0182a5771e7272"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:c9002621a944aff0b48319dd",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:571c105bbf0e3fc5459d9106",
+      "target_id": "cobol:cobolsection:6910fc510ab6d7a6cf234b11"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 288,
+        "end_column": 30,
+        "end_line": 10,
+        "file": "main.cbl",
+        "start_byte": 259,
+        "start_column": 1,
+        "start_line": 10
+      },
+      "id": "cobol:edge:99f7116f457cc8e51768f564",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:1507f9bd65b86148b936ef57"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 509,
+        "end_column": 32,
+        "end_line": 17,
+        "file": "main.cbl",
+        "start_byte": 478,
+        "start_column": 1,
+        "start_line": 17
+      },
+      "id": "cobol:edge:12cc7e31e7103b182dd27895",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:7e830369c28cb1c7bb114a91"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 453,
+        "end_column": 36,
+        "end_line": 15,
+        "file": "main.cbl",
+        "start_byte": 418,
+        "start_column": 1,
+        "start_line": 15
+      },
+      "id": "cobol:edge:869e328f79138131bba8eca6",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:900511b4886f7d3a04d78207"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 387,
+        "end_column": 47,
+        "end_line": 13,
+        "file": "main.cbl",
+        "start_byte": 341,
+        "start_column": 1,
+        "start_line": 13
+      },
+      "id": "cobol:edge:13c7c3a665d1b0bb03b76e26",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:d27bcfa3f390ac48606c49d6"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 194,
+        "end_column": 55,
+        "end_line": 6,
+        "file": "main.cbl",
+        "start_byte": 140,
+        "start_column": 1,
+        "start_line": 6
+      },
+      "id": "cobol:edge:2ca8c7375ba47318b3958631",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolfile:8e17a71fbd1e7550473625da"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1036,
+        "end_column": 18,
+        "end_line": 34,
+        "file": "main.cbl",
+        "start_byte": 1019,
+        "start_column": 1,
+        "start_line": 34
+      },
+      "id": "cobol:edge:a4ab13e322c3e5a21ec96b3a",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolparagraph:06df1cd091dea4e2f78c30e0"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1132,
+        "end_column": 15,
+        "end_line": 38,
+        "file": "main.cbl",
+        "start_byte": 1118,
+        "start_column": 1,
+        "start_line": 38
+      },
+      "id": "cobol:edge:55de63dfeae9a1ceb9a900e7",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolparagraph:762b8d0ebc7b8d9f237cf061"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 810,
+        "end_column": 18,
+        "end_line": 27,
+        "file": "main.cbl",
+        "start_byte": 793,
+        "start_column": 1,
+        "start_line": 27
+      },
+      "id": "cobol:edge:31b9140b83735117be8bc146",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1068,
+        "end_column": 15,
+        "end_line": 36,
+        "file": "main.cbl",
+        "start_byte": 1054,
+        "start_column": 1,
+        "start_line": 36
+      },
+      "id": "cobol:edge:afedfe3b1b8091dbbb912e02",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolparagraph:9f0750e233490fed733d2787"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:45a1a9539e1cbf1a8afe1e49",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolparagraph:c1ca0635195d183672acb088"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:e2e550ba31f02921266f2425",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolsection:4bf993663c3e548176895c61"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:854f329552cacb7e949416c8",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolsection:901f298707a999e973993824"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:edf7a1d708c82b776a993b66",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolsection:b5be7366d38c81b686c5606c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:6e8de3f3f4f076d576ac3921",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolsection:b7984cc002290e6f03be355f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:3bde98d0765edf6758797660",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolsection:f802e7b77e6741ba8ce9c4b4"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 147,
+        "end_column": 32,
+        "end_line": 5,
+        "file": "malformed.cbl",
+        "start_byte": 116,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:ddb2229d66c451dbbdfe8981",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:794bf658f98082d641e3cd34",
+      "target_id": "cobol:coboldataitem:dfd679b4f9ca646f58709f88"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:ecec63ee1f17859076cb6f10",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:794bf658f98082d641e3cd34",
+      "target_id": "cobol:cobolparagraph:e5bfdadb89c717c0aa5ddaaa"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:c73521f762164fa920e0f929",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:794bf658f98082d641e3cd34",
+      "target_id": "cobol:cobolsection:377c8a0337b45921b0b82f5a"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 431,
+        "end_column": 30,
+        "end_line": 14,
+        "file": "payroll.cbl",
+        "start_byte": 402,
+        "start_column": 1,
+        "start_line": 14
+      },
+      "id": "cobol:edge:1b96f9073d9183d08ee1ebd2",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:449b7d7462abfb3bbfb191fb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 534,
+        "end_column": 21,
+        "end_line": 17,
+        "file": "payroll.cbl",
+        "start_byte": 514,
+        "start_column": 1,
+        "start_line": 17
+      },
+      "id": "cobol:edge:8de9f8fd82ecb4f766b76831",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:552552886e04d272b50d3305"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 381,
+        "end_column": 30,
+        "end_line": 12,
+        "file": "payroll.cbl",
+        "start_byte": 352,
+        "start_column": 1,
+        "start_line": 12
+      },
+      "id": "cobol:edge:467bf488fcfe7e1e8b2e9272",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:8d052e6fb8303578a5e9be2b"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 620,
+        "end_column": 40,
+        "end_line": 19,
+        "file": "payroll.cbl",
+        "start_byte": 581,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:983940f508eafbe0a1586eac",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:c2e6808e3ee14425df397859"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 657,
+        "end_column": 37,
+        "end_line": 20,
+        "file": "payroll.cbl",
+        "start_byte": 621,
+        "start_column": 1,
+        "start_line": 20
+      },
+      "id": "cobol:edge:afa2fef0c51c2d2b9c595d40",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:f3426471118db8025ee51415"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 580,
+        "end_column": 46,
+        "end_line": 18,
+        "file": "payroll.cbl",
+        "start_byte": 535,
+        "start_column": 1,
+        "start_line": 18
+      },
+      "id": "cobol:edge:b425d52a213d660238e5da0e",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:fd2d5126a228d8892902182b"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 189,
+        "end_column": 51,
+        "end_line": 6,
+        "file": "payroll.cbl",
+        "start_byte": 139,
+        "start_column": 1,
+        "start_line": 6
+      },
+      "id": "cobol:edge:31c6cd4c3ebe4d242fcf9162",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:cobolfile:1d0daaf65d6a53808ebbb2ad"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 288,
+        "end_column": 51,
+        "end_line": 8,
+        "file": "payroll.cbl",
+        "start_byte": 238,
+        "start_column": 1,
+        "start_line": 8
+      },
+      "id": "cobol:edge:beb2783432e42e9f25466658",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:cobolfile:4da16d048d1b3c87b3cad725"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:81b4666417f1b0bb97acf101",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:cobolsection:210ecc5bb0385008290e0e5e"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:e05083017f5477a4225d1d31",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:cobolsection:3062b2bdd749031713875588"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:82a9bf06f72dbce70e8d7eee",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:cobolsection:6fd30a184bf494481f4bf940"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:16e29c682fe4743bd71e63c1",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:cobolsection:88495e150459695fb5cc1900"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:c68d623e41fe26b6ffd6c039",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:c08cb34313f67e415323a0b6",
+      "target_id": "cobol:coboldataitem:a11bcf443faa338bdf0021bc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:58f28846f4a26b2dfafd4198",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolprogram:c08cb34313f67e415323a0b6",
+      "target_id": "cobol:cobolsection:86c4c2700226807f5305c9fe"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1026,
+        "end_column": 21,
+        "end_line": 32,
+        "file": "payroll.cbl",
+        "start_byte": 1006,
+        "start_column": 1,
+        "start_line": 32
+      },
+      "id": "cobol:edge:e967088538ccd1279f5afdaa",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolsection:88495e150459695fb5cc1900",
+      "target_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1378,
+        "end_column": 21,
+        "end_line": 43,
+        "file": "payroll.cbl",
+        "start_byte": 1358,
+        "start_column": 1,
+        "start_line": 43
+      },
+      "id": "cobol:edge:f7cf599b73d850eaf7f8aa1a",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolsection:88495e150459695fb5cc1900",
+      "target_id": "cobol:cobolparagraph:73fd651da9669b39850ae6cc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1281,
+        "end_column": 21,
+        "end_line": 40,
+        "file": "payroll.cbl",
+        "start_byte": 1261,
+        "start_column": 1,
+        "start_line": 40
+      },
+      "id": "cobol:edge:40343ba7496b5590c8a5f677",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolsection:88495e150459695fb5cc1900",
+      "target_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:3e087a0fd3903cb9a639402f",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:cobolsection:88495e150459695fb5cc1900",
+      "target_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:6ecf0e5994662714a66150ac",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:09b49377aa29083baec9db98",
+      "target_id": "cobol:cobolcopybook:0efd9457d8aba7671a8833c9"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:edf2083400fc35b71ae5afd2",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:0c94a8faa63a9772971d01ac",
+      "target_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:e68596d2ec8e6a261ff0cebc",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:7cc302aad59a98d14fec7339",
+      "target_id": "cobol:cobolprogram:571c105bbf0e3fc5459d9106"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:61636724af3c4a614ca6b8ac",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:7e0a933c8dde16aa54db73f2",
+      "target_id": "cobol:cobolcopybook:c5b83e7a8e41ddd1f7780563"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "id": "cobol:edge:af245772eab4267318cc6cde",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:a820791af1e1f081f7e7ef93",
+      "target_id": "cobol:cobolprogram:c08cb34313f67e415323a0b6"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "id": "cobol:edge:b79fade70858804cbebbd7f0",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:c9a87f8e048d2c35adf151eb",
+      "target_id": "cobol:cobolprogram:736b19dc3de942ce07b93123"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:9fb689c2860c181d51b9c312",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:d66b71eff20a8b147191da5e",
+      "target_id": "cobol:cobolcopybook:9ea57c9a4af247dfc430d111"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "id": "cobol:edge:62b2e759199ab96bcdfd1830",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:f4a77514a31709bcd1e8c7c9",
+      "target_id": "cobol:cobolprogram:794bf658f98082d641e3cd34"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "id": "cobol:edge:5d834e452396bdf00d5b804f",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "DEFINES",
+      "source_id": "cobol:file:fb84aa0642027c7c6aa08494",
+      "target_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1053,
+        "end_column": 17,
+        "end_line": 35,
+        "file": "main.cbl",
+        "start_byte": 1037,
+        "start_column": 1,
+        "start_line": 35
+      },
+      "id": "cobol:edge:22ddaf9a832f865b6f5fab6f",
+      "properties": {
+        "project_id": "parity_cobol",
+        "terminal": false
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:06df1cd091dea4e2f78c30e0",
+      "target_id": "cobol:cobolprogram:736b19dc3de942ce07b93123"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 211,
+        "end_column": 21,
+        "end_line": 8,
+        "file": "missing-copy.cbl",
+        "start_byte": 191,
+        "start_column": 1,
+        "start_line": 8
+      },
+      "id": "cobol:edge:45014c38bd11a39945000e2c",
+      "properties": {
+        "project_id": "parity_cobol",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:518dd4216f0182a5771e7272",
+      "target_id": "cobol:cobolprogram:571c105bbf0e3fc5459d9106"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1432,
+        "end_column": 19,
+        "end_line": 45,
+        "file": "payroll.cbl",
+        "start_byte": 1414,
+        "start_column": 1,
+        "start_line": 45
+      },
+      "id": "cobol:edge:846c64859607a10c44b5f1fd",
+      "properties": {
+        "project_id": "parity_cobol",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:73fd651da9669b39850ae6cc",
+      "target_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1177,
+        "end_column": 19,
+        "end_line": 40,
+        "file": "main.cbl",
+        "start_byte": 1159,
+        "start_column": 1,
+        "start_line": 40
+      },
+      "id": "cobol:edge:ea96057b1bedf76289ce607f",
+      "properties": {
+        "project_id": "parity_cobol",
+        "terminal": true
+      },
+      "relationship": "EXITS",
+      "source_id": "cobol:cobolparagraph:762b8d0ebc7b8d9f237cf061",
+      "target_id": "cobol:cobolprogram:736b19dc3de942ce07b93123"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1053,
+        "end_column": 17,
+        "end_line": 35,
+        "file": "main.cbl",
+        "start_byte": 1037,
+        "start_column": 1,
+        "start_line": 35
+      },
+      "id": "cobol:edge:592a13ae25744d0528191d7b",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:06df1cd091dea4e2f78c30e0",
+      "target_id": "cobol:cobolparagraph:9f0750e233490fed733d2787"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1260,
+        "end_column": 19,
+        "end_line": 39,
+        "file": "payroll.cbl",
+        "start_byte": 1242,
+        "start_column": 1,
+        "start_line": 39
+      },
+      "id": "cobol:edge:2956915ef5621865a201b765",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1018,
+        "end_column": 55,
+        "end_line": 33,
+        "file": "main.cbl",
+        "start_byte": 964,
+        "start_column": 1,
+        "start_line": 33
+      },
+      "id": "cobol:edge:b5393a815da5d6ccec8578c9",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb",
+      "target_id": "cobol:cobolparagraph:06df1cd091dea4e2f78c30e0"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1117,
+        "end_column": 49,
+        "end_line": 37,
+        "file": "main.cbl",
+        "start_byte": 1069,
+        "start_column": 1,
+        "start_line": 37
+      },
+      "id": "cobol:edge:b44161286dc4c806a60836e3",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:9f0750e233490fed733d2787",
+      "target_id": "cobol:cobolparagraph:762b8d0ebc7b8d9f237cf061"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:455ffc1b6f2f34e823649355",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1357,
+        "end_column": 26,
+        "end_line": 42,
+        "file": "payroll.cbl",
+        "start_byte": 1332,
+        "start_column": 1,
+        "start_line": 42
+      },
+      "id": "cobol:edge:9b8310af4ad4e949cc0afe4a",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9",
+      "target_id": "cobol:cobolparagraph:73fd651da9669b39850ae6cc"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1005,
+        "end_column": 24,
+        "end_line": 31,
+        "file": "payroll.cbl",
+        "start_byte": 982,
+        "start_column": 1,
+        "start_line": 31
+      },
+      "id": "cobol:edge:84a3863bdc48f40185aabdc1",
+      "properties": {
+        "project_id": "parity_cobol"
+      },
+      "relationship": "FALLS_THROUGH",
+      "source_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "target_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": true,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:a4cad727be6a648405159302",
+      "properties": {
+        "dynamic": true,
+        "project_id": "parity_cobol",
+        "selector": "WS-STATUS"
+      },
+      "relationship": "GOES_TO_DYNAMIC",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:cobolparagraph:762b8d0ebc7b8d9f237cf061"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": true,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:82f6f1f514ba7e3ba3aa4362",
+      "properties": {
+        "dynamic": true,
+        "project_id": "parity_cobol",
+        "selector": "WS-STATUS"
+      },
+      "relationship": "GOES_TO_DYNAMIC",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:cobolparagraph:9f0750e233490fed733d2787"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 112,
+        "end_column": 20,
+        "end_line": 4,
+        "file": "common.cpy",
+        "start_byte": 93,
+        "start_column": 1,
+        "start_line": 4
+      },
+      "id": "cobol:edge:e16f02673cf1589abc3e6dd1",
+      "properties": {
+        "project_id": "parity_cobol",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107",
+      "target_id": "cobol:cobolcopybook:0efd9457d8aba7671a8833c9"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "cycle-a.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:211c46075c66dc3252a29e95",
+      "properties": {
+        "project_id": "parity_cobol",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolcopybook:9ea57c9a4af247dfc430d111",
+      "target_id": "cobol:cobolcopybook:c5b83e7a8e41ddd1f7780563"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 20,
+        "end_column": 21,
+        "end_line": 1,
+        "file": "cycle-b.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:c8ffc2947061702f165008b7",
+      "properties": {
+        "project_id": "parity_cobol",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolcopybook:c5b83e7a8e41ddd1f7780563",
+      "target_id": "cobol:cobolcopybook:9ea57c9a4af247dfc430d111"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 340,
+        "end_column": 20,
+        "end_line": 12,
+        "file": "main.cbl",
+        "start_byte": 321,
+        "start_column": 1,
+        "start_line": 12
+      },
+      "id": "cobol:edge:f188d26e17a4b103f365723f",
+      "properties": {
+        "project_id": "parity_cobol",
+        "replacing": ""
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 513,
+        "end_column": 50,
+        "end_line": 16,
+        "file": "payroll.cbl",
+        "start_byte": 464,
+        "start_column": 1,
+        "start_line": 16
+      },
+      "id": "cobol:edge:d918f5880ad59d77fcd1ed8b",
+      "properties": {
+        "project_id": "parity_cobol",
+        "replacing": "REPLACING WS-NAME BY PAY-NAME"
+      },
+      "relationship": "INCLUDES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1148,
+        "end_column": 65,
+        "end_line": 35,
+        "file": "payroll.cbl",
+        "start_byte": 1084,
+        "start_column": 1,
+        "start_line": 35
+      },
+      "id": "cobol:edge:ab4a70ffc9bb03d08ac59f73",
+      "properties": {
+        "loop": "varying",
+        "project_id": "parity_cobol",
+        "through": ""
+      },
+      "relationship": "PERFORMS",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 957,
+        "end_column": 51,
+        "end_line": 29,
+        "file": "payroll.cbl",
+        "start_byte": 907,
+        "start_column": 1,
+        "start_line": 29
+      },
+      "id": "cobol:edge:49b19488de53599443c82286",
+      "properties": {
+        "loop": "",
+        "project_id": "parity_cobol",
+        "through": ""
+      },
+      "relationship": "PERFORMS",
+      "source_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "target_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 598,
+        "end_column": 44,
+        "end_line": 20,
+        "file": "main.cbl",
+        "start_byte": 555,
+        "start_column": 1,
+        "start_line": 20
+      },
+      "id": "cobol:edge:269a897890723094a8f88337",
+      "properties": {
+        "loop": "",
+        "project_id": "parity_cobol",
+        "through": "INIT-EXIT"
+      },
+      "relationship": "PERFORMS_THRU",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1413,
+        "end_column": 35,
+        "end_line": 44,
+        "file": "payroll.cbl",
+        "start_byte": 1379,
+        "start_column": 1,
+        "start_line": 44
+      },
+      "id": "cobol:edge:eb321c1ad63d68a9eba7d35e",
+      "properties": {
+        "mode": "",
+        "operation": "CLOSE",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "READS",
+      "source_id": "cobol:cobolparagraph:73fd651da9669b39850ae6cc",
+      "target_id": "cobol:cobolfile:1d0daaf65d6a53808ebbb2ad"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 868,
+        "end_column": 26,
+        "end_line": 29,
+        "file": "main.cbl",
+        "start_byte": 843,
+        "start_column": 1,
+        "start_line": 29
+      },
+      "id": "cobol:edge:8db4c376fe0b382c794fc17b",
+      "properties": {
+        "mode": "",
+        "operation": "READ",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "READS",
+      "source_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb",
+      "target_id": "cobol:cobolfile:8e17a71fbd1e7550473625da"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 842,
+        "end_column": 32,
+        "end_line": 28,
+        "file": "main.cbl",
+        "start_byte": 811,
+        "start_column": 1,
+        "start_line": 28
+      },
+      "id": "cobol:edge:d6715abf5e9a2dcc66b4d278",
+      "properties": {
+        "mode": "INPUT",
+        "operation": "OPEN",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "READS",
+      "source_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb",
+      "target_id": "cobol:cobolfile:8e17a71fbd1e7550473625da"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 762,
+        "end_column": 31,
+        "end_line": 24,
+        "file": "payroll.cbl",
+        "start_byte": 732,
+        "start_column": 1,
+        "start_line": 24
+      },
+      "id": "cobol:edge:18fcf2f944f41a0f83240aba",
+      "properties": {
+        "mode": "INPUT",
+        "operation": "OPEN",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "READS",
+      "source_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "target_id": "cobol:cobolfile:1d0daaf65d6a53808ebbb2ad"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 861,
+        "end_column": 29,
+        "end_line": 27,
+        "file": "payroll.cbl",
+        "start_byte": 833,
+        "start_column": 1,
+        "start_line": 27
+      },
+      "id": "cobol:edge:d46220965c10fa2957d077fd",
+      "properties": {
+        "mode": "",
+        "operation": "READ",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "READS",
+      "source_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "target_id": "cobol:cobolfile:1d0daaf65d6a53808ebbb2ad"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:19f73928627d16bbfe5588e8",
+      "properties": {
+        "copybook_path": "nested.copy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107",
+      "target_id": "cobol:coboldataitem:1cdfd858c41aebfcaf45468d"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:7c20b8c090d9ee5c249a3b6a",
+      "properties": {
+        "copybook_path": "cycle-b.copy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolcopybook:9ea57c9a4af247dfc430d111",
+      "target_id": "cobol:coboldataitem:5bfa82060d382f95216bf34f"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:4ad2617baf4266555849d95f",
+      "properties": {
+        "copybook_path": "cycle-a.copy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolcopybook:c5b83e7a8e41ddd1f7780563",
+      "target_id": "cobol:coboldataitem:bb136f2987dd7c7d8b2f27b1"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1241,
+        "end_column": 39,
+        "end_line": 38,
+        "file": "payroll.cbl",
+        "start_byte": 1203,
+        "start_column": 1,
+        "start_line": 38
+      },
+      "id": "cobol:edge:73cb9083b07e1cdf1208d83e",
+      "properties": {
+        "access": "write",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:coboldataitem:449b7d7462abfb3bbfb191fb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1241,
+        "end_column": 39,
+        "end_line": 38,
+        "file": "payroll.cbl",
+        "start_byte": 1203,
+        "start_column": 1,
+        "start_line": 38
+      },
+      "id": "cobol:edge:8fef47666f2b231eaf8a4f46",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:coboldataitem:8d052e6fb8303578a5e9be2b"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1148,
+        "end_column": 65,
+        "end_line": 35,
+        "file": "payroll.cbl",
+        "start_byte": 1084,
+        "start_column": 1,
+        "start_line": 35
+      },
+      "id": "cobol:edge:677b41750b1f68f41fe7fbe1",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "perform"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:coboldataitem:c2e6808e3ee14425df397859"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1083,
+        "end_column": 28,
+        "end_line": 34,
+        "file": "payroll.cbl",
+        "start_byte": 1056,
+        "start_column": 1,
+        "start_line": 34
+      },
+      "id": "cobol:edge:679301a8fe135f98910040a5",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "conditional"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:coboldataitem:c2e6808e3ee14425df397859"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1186,
+        "end_column": 38,
+        "end_line": 36,
+        "file": "payroll.cbl",
+        "start_byte": 1149,
+        "start_column": 1,
+        "start_line": 36
+      },
+      "id": "cobol:edge:82ae329156772386e28f8be1",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:coboldataitem:c2e6808e3ee14425df397859"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1055,
+        "end_column": 29,
+        "end_line": 33,
+        "file": "payroll.cbl",
+        "start_byte": 1027,
+        "start_column": 1,
+        "start_line": 33
+      },
+      "id": "cobol:edge:95d2ec38f318cadc439f05e8",
+      "properties": {
+        "access": "read_write",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:coboldataitem:c2e6808e3ee14425df397859"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1158,
+        "end_column": 26,
+        "end_line": 39,
+        "file": "main.cbl",
+        "start_byte": 1133,
+        "start_column": 1,
+        "start_line": 39
+      },
+      "id": "cobol:edge:60b813866a2d4be83afc890d",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "io"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:762b8d0ebc7b8d9f237cf061",
+      "target_id": "cobol:coboldataitem:1507f9bd65b86148b936ef57"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 963,
+        "end_column": 20,
+        "end_line": 32,
+        "file": "main.cbl",
+        "start_byte": 869,
+        "start_column": 1,
+        "start_line": 30
+      },
+      "id": "cobol:edge:40b6d3b587d7b5010a2e6607",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "sql"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb",
+      "target_id": "cobol:coboldataitem:eece9070caa542ed7a084be7"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 626,
+        "end_column": 28,
+        "end_line": 21,
+        "file": "main.cbl",
+        "start_byte": 599,
+        "start_column": 1,
+        "start_line": 21
+      },
+      "id": "cobol:edge:383bdb3d2263e61270af7b78",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "conditional"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:coboldataitem:7badf8f80134487eeb4d19eb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 672,
+        "end_column": 46,
+        "end_line": 22,
+        "file": "main.cbl",
+        "start_byte": 627,
+        "start_column": 1,
+        "start_line": 22
+      },
+      "id": "cobol:edge:db4c74cd4da95e1e85b53546",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "call"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:coboldataitem:7badf8f80134487eeb4d19eb"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 792,
+        "end_column": 55,
+        "end_line": 26,
+        "file": "main.cbl",
+        "start_byte": 738,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:f114055caf87c1373c4063e6",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "goto"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:coboldataitem:7badf8f80134487eeb4d19eb"
+    },
+    {
+      "confidence": 0.6,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 719,
+        "end_column": 31,
+        "end_line": 24,
+        "file": "main.cbl",
+        "start_byte": 689,
+        "start_column": 1,
+        "start_line": 24
+      },
+      "id": "cobol:edge:8354817b64b19a5caa1ba037",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "call"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "target_id": "cobol:coboldataitem:d27bcfa3f390ac48606c49d6"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1357,
+        "end_column": 26,
+        "end_line": 42,
+        "file": "payroll.cbl",
+        "start_byte": 1332,
+        "start_column": 1,
+        "start_line": 42
+      },
+      "id": "cobol:edge:5a6bd098e24db5caf9608e54",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "io"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9",
+      "target_id": "cobol:coboldataitem:449b7d7462abfb3bbfb191fb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1331,
+        "end_column": 50,
+        "end_line": 41,
+        "file": "payroll.cbl",
+        "start_byte": 1282,
+        "start_column": 1,
+        "start_line": 41
+      },
+      "id": "cobol:edge:a4d86c94792fa9c330b34bad",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9",
+      "target_id": "cobol:coboldataitem:c2e6808e3ee14425df397859"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1331,
+        "end_column": 50,
+        "end_line": 41,
+        "file": "payroll.cbl",
+        "start_byte": 1282,
+        "start_column": 1,
+        "start_line": 41
+      },
+      "id": "cobol:edge:2d0cb60cd7d36b5487350d3f",
+      "properties": {
+        "access": "write",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9",
+      "target_id": "cobol:coboldataitem:fd2d5126a228d8892902182b"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 226,
+        "end_column": 33,
+        "end_line": 8,
+        "file": "malformed.cbl",
+        "start_byte": 194,
+        "start_column": 1,
+        "start_line": 8
+      },
+      "id": "cobol:edge:3686e46f111d921946a52500",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "conditional"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:e5bfdadb89c717c0aa5ddaaa",
+      "target_id": "cobol:coboldataitem:dfd679b4f9ca646f58709f88"
+    },
+    {
+      "confidence": 0.65,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 262,
+        "end_column": 36,
+        "end_line": 9,
+        "file": "malformed.cbl",
+        "start_byte": 227,
+        "start_column": 1,
+        "start_line": 9
+      },
+      "id": "cobol:edge:f858d6bb80ba7cdbccd2a2d0",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:e5bfdadb89c717c0aa5ddaaa",
+      "target_id": "cobol:coboldataitem:dfd679b4f9ca646f58709f88"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 832,
+        "end_column": 38,
+        "end_line": 26,
+        "file": "payroll.cbl",
+        "start_byte": 795,
+        "start_column": 1,
+        "start_line": 26
+      },
+      "id": "cobol:edge:247c49fa8e7a33703a019aac",
+      "properties": {
+        "access": "read",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "target_id": "cobol:coboldataitem:f3426471118db8025ee51415"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 906,
+        "end_column": 45,
+        "end_line": 28,
+        "file": "payroll.cbl",
+        "start_byte": 862,
+        "start_column": 1,
+        "start_line": 28
+      },
+      "id": "cobol:edge:71d8d25da295458637bf22e3",
+      "properties": {
+        "access": "write",
+        "project_id": "parity_cobol",
+        "statement_kind": "statement"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "target_id": "cobol:coboldataitem:f3426471118db8025ee51415"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:e9e7bafca3107313864660f7",
+      "properties": {
+        "copybook_path": "nested.copy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:1cdfd858c41aebfcaf45468d"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:eff07e9521710c4f06b58332",
+      "properties": {
+        "copybook_path": "common.cpy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:367318738187ad92ad5f578c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 92,
+        "end_column": 38,
+        "end_line": 3,
+        "file": "common.cpy",
+        "start_byte": 55,
+        "start_column": 1,
+        "start_line": 3
+      },
+      "id": "cobol:edge:b2cdbed13203d3df433090ae",
+      "properties": {
+        "copybook_path": "common.cpy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:7badf8f80134487eeb4d19eb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 54,
+        "end_column": 32,
+        "end_line": 2,
+        "file": "common.cpy",
+        "start_byte": 23,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:b69c327b328411bbc13efcfe",
+      "properties": {
+        "copybook_path": "common.cpy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "target_id": "cobol:coboldataitem:eece9070caa542ed7a084be7"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:1b63a593482035d72967c0c1",
+      "properties": {
+        "copybook_path": "nested.copy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:1cdfd858c41aebfcaf45468d"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "id": "cobol:edge:f3e4bc5415a681a3aaf53e94",
+      "properties": {
+        "copybook_path": "common.cpy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:367318738187ad92ad5f578c"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 92,
+        "end_column": 38,
+        "end_line": 3,
+        "file": "common.cpy",
+        "start_byte": 55,
+        "start_column": 1,
+        "start_line": 3
+      },
+      "id": "cobol:edge:e0537e4c3201c422b82b5922",
+      "properties": {
+        "copybook_path": "common.cpy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:7badf8f80134487eeb4d19eb"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 54,
+        "end_column": 32,
+        "end_line": 2,
+        "file": "common.cpy",
+        "start_byte": 23,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "id": "cobol:edge:97d36f0515020b68216e24ea",
+      "properties": {
+        "copybook_path": "common.cpy",
+        "imported": true,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "REFERENCES",
+      "source_id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "target_id": "cobol:coboldataitem:eece9070caa542ed7a084be7"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 598,
+        "end_column": 44,
+        "end_line": 20,
+        "file": "main.cbl",
+        "start_byte": 555,
+        "start_column": 1,
+        "start_line": 20
+      },
+      "id": "cobol:edge:2cad0a767041531fbe83939b",
+      "properties": {
+        "caller": "MAIN-PARA",
+        "continuation_line": 20,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "RETURNS",
+      "source_id": "cobol:cobolparagraph:06df1cd091dea4e2f78c30e0",
+      "target_id": "cobol:cobolparagraph:c1ca0635195d183672acb088"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 957,
+        "end_column": 51,
+        "end_line": 29,
+        "file": "payroll.cbl",
+        "start_byte": 907,
+        "start_column": 1,
+        "start_line": 29
+      },
+      "id": "cobol:edge:3035fdd436704d408e1a3d7d",
+      "properties": {
+        "caller": "INIT-PARA",
+        "continuation_line": 29,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "RETURNS",
+      "source_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "target_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1148,
+        "end_column": 65,
+        "end_line": 35,
+        "file": "payroll.cbl",
+        "start_byte": 1084,
+        "start_column": 1,
+        "start_line": 35
+      },
+      "id": "cobol:edge:e493efb4900b7303c93c270d",
+      "properties": {
+        "caller": "PROCESS-PARA",
+        "continuation_line": 35,
+        "project_id": "parity_cobol"
+      },
+      "relationship": "RETURNS",
+      "source_id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9",
+      "target_id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 1158,
+        "end_column": 26,
+        "end_line": 39,
+        "file": "main.cbl",
+        "start_byte": 1133,
+        "start_column": 1,
+        "start_line": 39
+      },
+      "id": "cobol:edge:7b53ddd8b2a09a4af2a6227e",
+      "properties": {
+        "mode": "",
+        "operation": "WRITE",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "WRITES",
+      "source_id": "cobol:cobolparagraph:762b8d0ebc7b8d9f237cf061",
+      "target_id": "cobol:cobolfile:8e17a71fbd1e7550473625da"
+    },
+    {
+      "confidence": 1.0,
+      "dynamic": false,
+      "evidence": {
+        "end_byte": 794,
+        "end_column": 32,
+        "end_line": 25,
+        "file": "payroll.cbl",
+        "start_byte": 763,
+        "start_column": 1,
+        "start_line": 25
+      },
+      "id": "cobol:edge:8418fcc430cf77cedcadd5f6",
+      "properties": {
+        "mode": "OUTPUT",
+        "operation": "OPEN",
+        "project_id": "parity_cobol"
+      },
+      "relationship": "WRITES",
+      "source_id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "target_id": "cobol:cobolfile:4da16d048d1b3c87b3cad725"
+    }
+  ],
+  "nodes": [
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1018,
+        "end_column": 55,
+        "end_line": 33,
+        "file": "main.cbl",
+        "start_byte": 964,
+        "start_column": 1,
+        "start_line": 33
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolcicscommand:962607ad1732c0fbf680f1f3",
+      "label": "CobolCicsCommand",
+      "name": "LINK",
+      "properties": {
+        "end_line": 33,
+        "file_path": "main.cbl",
+        "host_variables": [],
+        "language": "cobol",
+        "name": "LINK",
+        "operation": "LINK",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "LINK",
+        "raw_text": "EXEC CICS LINK PROGRAM('SUBPROG') END-EXEC.",
+        "start_line": 33,
+        "targets": [
+          "SUBPROG"
+        ]
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "common.cpy",
+      "id": "cobol:cobolcopybook:8cd10ee16fc1eda192b30107",
+      "label": "CobolCopybook",
+      "name": "COMMON",
+      "properties": {
+        "end_line": 1,
+        "file_path": "common.cpy",
+        "language": "cobol",
+        "name": "COMMON",
+        "path": "common.cpy",
+        "project_id": "parity_cobol",
+        "qualified_name": "COMMON",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "cycle-a.copy",
+      "id": "cobol:cobolcopybook:9ea57c9a4af247dfc430d111",
+      "label": "CobolCopybook",
+      "name": "CYCLE-A",
+      "properties": {
+        "end_line": 2,
+        "file_path": "cycle-a.copy",
+        "language": "cobol",
+        "name": "CYCLE-A",
+        "path": "cycle-a.copy",
+        "project_id": "parity_cobol",
+        "qualified_name": "CYCLE-A",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "cycle-b.copy",
+      "id": "cobol:cobolcopybook:c5b83e7a8e41ddd1f7780563",
+      "label": "CobolCopybook",
+      "name": "CYCLE-B",
+      "properties": {
+        "end_line": 2,
+        "file_path": "cycle-b.copy",
+        "language": "cobol",
+        "name": "CYCLE-B",
+        "path": "cycle-b.copy",
+        "project_id": "parity_cobol",
+        "qualified_name": "CYCLE-B",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "nested.copy",
+      "id": "cobol:cobolcopybook:0efd9457d8aba7671a8833c9",
+      "label": "CobolCopybook",
+      "name": "NESTED",
+      "properties": {
+        "end_line": 1,
+        "file_path": "nested.copy",
+        "language": "cobol",
+        "name": "NESTED",
+        "path": "nested.copy",
+        "project_id": "parity_cobol",
+        "qualified_name": "NESTED",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "common.cpy",
+      "id": "cobol:coboldataitem:367318738187ad92ad5f578c",
+      "label": "CobolDataItem",
+      "name": "WS-CUSTOMER",
+      "properties": {
+        "end_line": 1,
+        "file_path": "common.cpy",
+        "language": "cobol",
+        "level": 1,
+        "name": "WS-CUSTOMER",
+        "occurs": "",
+        "path": "common.cpy",
+        "picture": "",
+        "project_id": "parity_cobol",
+        "qualified_name": "COMMON.COPYBOOK.WS-CUSTOMER",
+        "redefines": "",
+        "start_line": 1,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 92,
+        "end_column": 38,
+        "end_line": 3,
+        "file": "common.cpy",
+        "start_byte": 55,
+        "start_column": 1,
+        "start_line": 3
+      },
+      "file_path": "common.cpy",
+      "id": "cobol:coboldataitem:7badf8f80134487eeb4d19eb",
+      "label": "CobolDataItem",
+      "name": "WS-STATUS",
+      "properties": {
+        "end_line": 3,
+        "file_path": "common.cpy",
+        "language": "cobol",
+        "level": 5,
+        "name": "WS-STATUS",
+        "occurs": "",
+        "path": "common.cpy",
+        "picture": "9",
+        "project_id": "parity_cobol",
+        "qualified_name": "COMMON.COPYBOOK.WS-STATUS",
+        "redefines": "",
+        "start_line": 3,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": "0"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 54,
+        "end_column": 32,
+        "end_line": 2,
+        "file": "common.cpy",
+        "start_byte": 23,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "common.cpy",
+      "id": "cobol:coboldataitem:eece9070caa542ed7a084be7",
+      "label": "CobolDataItem",
+      "name": "WS-NAME",
+      "properties": {
+        "end_line": 2,
+        "file_path": "common.cpy",
+        "language": "cobol",
+        "level": 5,
+        "name": "WS-NAME",
+        "occurs": "",
+        "path": "common.cpy",
+        "picture": "X(40)",
+        "project_id": "parity_cobol",
+        "qualified_name": "COMMON.COPYBOOK.WS-NAME",
+        "redefines": "",
+        "start_line": 2,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "cycle-a.copy",
+      "id": "cobol:coboldataitem:bb136f2987dd7c7d8b2f27b1",
+      "label": "CobolDataItem",
+      "name": "CYCLE-A-FIELD",
+      "properties": {
+        "end_line": 2,
+        "file_path": "cycle-a.copy",
+        "language": "cobol",
+        "level": 1,
+        "name": "CYCLE-A-FIELD",
+        "occurs": "",
+        "path": "cycle-a.copy",
+        "picture": "X",
+        "project_id": "parity_cobol",
+        "qualified_name": "CYCLE-A.COPYBOOK.CYCLE-A-FIELD",
+        "redefines": "",
+        "start_line": 2,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "cycle-b.copy",
+      "id": "cobol:coboldataitem:5bfa82060d382f95216bf34f",
+      "label": "CobolDataItem",
+      "name": "CYCLE-B-FIELD",
+      "properties": {
+        "end_line": 2,
+        "file_path": "cycle-b.copy",
+        "language": "cobol",
+        "level": 1,
+        "name": "CYCLE-B-FIELD",
+        "occurs": "",
+        "path": "cycle-b.copy",
+        "picture": "X",
+        "project_id": "parity_cobol",
+        "qualified_name": "CYCLE-B.COPYBOOK.CYCLE-B-FIELD",
+        "redefines": "",
+        "start_line": 2,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 288,
+        "end_column": 30,
+        "end_line": 10,
+        "file": "main.cbl",
+        "start_byte": 259,
+        "start_column": 1,
+        "start_line": 10
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:coboldataitem:1507f9bd65b86148b936ef57",
+      "label": "CobolDataItem",
+      "name": "CUST-REC",
+      "properties": {
+        "end_line": 10,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "CUST-REC",
+        "occurs": "",
+        "path": "main.cbl",
+        "picture": "X(80)",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.FILE.CUST-REC",
+        "redefines": "",
+        "start_line": 10,
+        "storage": "FILE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 509,
+        "end_column": 32,
+        "end_line": 17,
+        "file": "main.cbl",
+        "start_byte": 478,
+        "start_column": 1,
+        "start_line": 17
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:coboldataitem:7e830369c28cb1c7bb114a91",
+      "label": "CobolDataItem",
+      "name": "LINK-VALUE",
+      "properties": {
+        "end_line": 17,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "LINK-VALUE",
+        "occurs": "",
+        "path": "main.cbl",
+        "picture": "X(10)",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.LINKAGE.LINK-VALUE",
+        "redefines": "",
+        "start_line": 17,
+        "storage": "LINKAGE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 453,
+        "end_column": 36,
+        "end_line": 15,
+        "file": "main.cbl",
+        "start_byte": 418,
+        "start_column": 1,
+        "start_line": 15
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:coboldataitem:900511b4886f7d3a04d78207",
+      "label": "CobolDataItem",
+      "name": "LOCAL-FLAG",
+      "properties": {
+        "end_line": 15,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "LOCAL-FLAG",
+        "occurs": "",
+        "path": "main.cbl",
+        "picture": "9",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.LOCAL-STORAGE.LOCAL-FLAG",
+        "redefines": "",
+        "start_line": 15,
+        "storage": "LOCAL-STORAGE",
+        "usage": "",
+        "value": "0"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 387,
+        "end_column": 47,
+        "end_line": 13,
+        "file": "main.cbl",
+        "start_byte": 341,
+        "start_column": 1,
+        "start_line": 13
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:coboldataitem:d27bcfa3f390ac48606c49d6",
+      "label": "CobolDataItem",
+      "name": "WS-PROGRAM",
+      "properties": {
+        "end_line": 13,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "WS-PROGRAM",
+        "occurs": "",
+        "path": "main.cbl",
+        "picture": "X(8)",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.WORKING-STORAGE.WS-PROGRAM",
+        "redefines": "",
+        "start_line": 13,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": "\"DYNAMIC\""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 147,
+        "end_column": 32,
+        "end_line": 5,
+        "file": "malformed.cbl",
+        "start_byte": 116,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "malformed.cbl",
+      "id": "cobol:coboldataitem:dfd679b4f9ca646f58709f88",
+      "label": "CobolDataItem",
+      "name": "BROKEN-FIELD",
+      "properties": {
+        "end_line": 5,
+        "file_path": "malformed.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "BROKEN-FIELD",
+        "occurs": "",
+        "path": "malformed.cbl",
+        "picture": "X(10",
+        "project_id": "parity_cobol",
+        "qualified_name": "MALFORMED.WORKING-STORAGE.BROKEN-FIELD",
+        "redefines": "",
+        "start_line": 5,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "nested.copy",
+      "id": "cobol:coboldataitem:1cdfd858c41aebfcaf45468d",
+      "label": "CobolDataItem",
+      "name": "WS-COUNTER",
+      "properties": {
+        "end_line": 1,
+        "file_path": "nested.copy",
+        "language": "cobol",
+        "level": 1,
+        "name": "WS-COUNTER",
+        "occurs": "",
+        "path": "nested.copy",
+        "picture": "9(4)",
+        "project_id": "parity_cobol",
+        "qualified_name": "NESTED.COPYBOOK.WS-COUNTER",
+        "redefines": "",
+        "start_line": 1,
+        "storage": "COPYBOOK",
+        "usage": "",
+        "value": "0"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 431,
+        "end_column": 30,
+        "end_line": 14,
+        "file": "payroll.cbl",
+        "start_byte": 402,
+        "start_column": 1,
+        "start_line": 14
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:coboldataitem:449b7d7462abfb3bbfb191fb",
+      "label": "CobolDataItem",
+      "name": "RPT-REC",
+      "properties": {
+        "end_line": 14,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "RPT-REC",
+        "occurs": "",
+        "path": "payroll.cbl",
+        "picture": "X(132)",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.FILE.RPT-REC",
+        "redefines": "",
+        "start_line": 14,
+        "storage": "FILE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 534,
+        "end_column": 21,
+        "end_line": 17,
+        "file": "payroll.cbl",
+        "start_byte": 514,
+        "start_column": 1,
+        "start_line": 17
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:coboldataitem:552552886e04d272b50d3305",
+      "label": "CobolDataItem",
+      "name": "WS-TOTALS",
+      "properties": {
+        "end_line": 17,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "WS-TOTALS",
+        "occurs": "",
+        "path": "payroll.cbl",
+        "picture": "",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.WORKING-STORAGE.WS-TOTALS",
+        "redefines": "",
+        "start_line": 17,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 381,
+        "end_column": 30,
+        "end_line": 12,
+        "file": "payroll.cbl",
+        "start_byte": 352,
+        "start_column": 1,
+        "start_line": 12
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:coboldataitem:8d052e6fb8303578a5e9be2b",
+      "label": "CobolDataItem",
+      "name": "PAY-REC",
+      "properties": {
+        "end_line": 12,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "level": 1,
+        "name": "PAY-REC",
+        "occurs": "",
+        "path": "payroll.cbl",
+        "picture": "X(100)",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.FILE.PAY-REC",
+        "redefines": "",
+        "start_line": 12,
+        "storage": "FILE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 620,
+        "end_column": 40,
+        "end_line": 19,
+        "file": "payroll.cbl",
+        "start_byte": 581,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:coboldataitem:c2e6808e3ee14425df397859",
+      "label": "CobolDataItem",
+      "name": "WS-COUNT",
+      "properties": {
+        "end_line": 19,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "level": 5,
+        "name": "WS-COUNT",
+        "occurs": "",
+        "path": "payroll.cbl",
+        "picture": "9(4)",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.WORKING-STORAGE.WS-COUNT",
+        "redefines": "",
+        "start_line": 19,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": "0"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 657,
+        "end_column": 37,
+        "end_line": 20,
+        "file": "payroll.cbl",
+        "start_byte": 621,
+        "start_column": 1,
+        "start_line": 20
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:coboldataitem:f3426471118db8025ee51415",
+      "label": "CobolDataItem",
+      "name": "WS-EOF",
+      "properties": {
+        "end_line": 20,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "level": 5,
+        "name": "WS-EOF",
+        "occurs": "",
+        "path": "payroll.cbl",
+        "picture": "X",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.WORKING-STORAGE.WS-EOF",
+        "redefines": "",
+        "start_line": 20,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": "\"N\""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 580,
+        "end_column": 46,
+        "end_line": 18,
+        "file": "payroll.cbl",
+        "start_byte": 535,
+        "start_column": 1,
+        "start_line": 18
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:coboldataitem:fd2d5126a228d8892902182b",
+      "label": "CobolDataItem",
+      "name": "WS-GROSS",
+      "properties": {
+        "end_line": 18,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "level": 5,
+        "name": "WS-GROSS",
+        "occurs": "",
+        "path": "payroll.cbl",
+        "picture": "9(7)V99",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.WORKING-STORAGE.WS-GROSS",
+        "redefines": "",
+        "start_line": 18,
+        "storage": "WORKING-STORAGE",
+        "usage": "",
+        "value": "ZERO"
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "subprog.cob",
+      "id": "cobol:coboldataitem:a11bcf443faa338bdf0021bc",
+      "label": "CobolDataItem",
+      "name": "ARG-STATUS",
+      "properties": {
+        "end_line": 5,
+        "file_path": "subprog.cob",
+        "language": "cobol",
+        "level": 1,
+        "name": "ARG-STATUS",
+        "occurs": "",
+        "path": "subprog.cob",
+        "picture": "9",
+        "project_id": "parity_cobol",
+        "qualified_name": "SUBPROG.LINKAGE.ARG-STATUS",
+        "redefines": "",
+        "start_line": 5,
+        "storage": "LINKAGE",
+        "usage": "",
+        "value": ""
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 194,
+        "end_column": 55,
+        "end_line": 6,
+        "file": "main.cbl",
+        "start_byte": 140,
+        "start_column": 1,
+        "start_line": 6
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolfile:8e17a71fbd1e7550473625da",
+      "label": "CobolFile",
+      "name": "CUST-FILE",
+      "properties": {
+        "assignment": "customers.dat",
+        "end_line": 6,
+        "file_path": "main.cbl",
+        "has_description": true,
+        "language": "cobol",
+        "name": "CUST-FILE",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.CUST-FILE",
+        "start_line": 6
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 189,
+        "end_column": 51,
+        "end_line": 6,
+        "file": "payroll.cbl",
+        "start_byte": 139,
+        "start_column": 1,
+        "start_line": 6
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolfile:1d0daaf65d6a53808ebbb2ad",
+      "label": "CobolFile",
+      "name": "PAY-FILE",
+      "properties": {
+        "assignment": "payroll.dat",
+        "end_line": 6,
+        "file_path": "payroll.cbl",
+        "has_description": true,
+        "language": "cobol",
+        "name": "PAY-FILE",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.PAY-FILE",
+        "start_line": 6
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 288,
+        "end_column": 51,
+        "end_line": 8,
+        "file": "payroll.cbl",
+        "start_byte": 238,
+        "start_column": 1,
+        "start_line": 8
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolfile:4da16d048d1b3c87b3cad725",
+      "label": "CobolFile",
+      "name": "RPT-FILE",
+      "properties": {
+        "assignment": "report.txt",
+        "end_line": 8,
+        "file_path": "payroll.cbl",
+        "has_description": true,
+        "language": "cobol",
+        "name": "RPT-FILE",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.RPT-FILE",
+        "start_line": 8
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1036,
+        "end_column": 18,
+        "end_line": 34,
+        "file": "main.cbl",
+        "start_byte": 1019,
+        "start_column": 1,
+        "start_line": 34
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolparagraph:06df1cd091dea4e2f78c30e0",
+      "label": "CobolParagraph",
+      "name": "INIT-EXIT",
+      "properties": {
+        "code": "EXIT.",
+        "end_line": 34,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "INIT-EXIT",
+        "ordinal": 2,
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.INIT-EXIT",
+        "section": "",
+        "start_line": 34
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1132,
+        "end_column": 15,
+        "end_line": 38,
+        "file": "main.cbl",
+        "start_byte": 1118,
+        "start_column": 1,
+        "start_line": 38
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolparagraph:762b8d0ebc7b8d9f237cf061",
+      "label": "CobolParagraph",
+      "name": "STEP-B",
+      "properties": {
+        "code": "WRITE CUST-REC\nGOBACK.\nEND PROGRAM MAINPROG.",
+        "end_line": 38,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "STEP-B",
+        "ordinal": 4,
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.STEP-B",
+        "section": "",
+        "start_line": 38
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 810,
+        "end_column": 18,
+        "end_line": 27,
+        "file": "main.cbl",
+        "start_byte": 793,
+        "start_column": 1,
+        "start_line": 27
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolparagraph:9d2803c0d981071f7de536cb",
+      "label": "CobolParagraph",
+      "name": "INIT-PARA",
+      "properties": {
+        "code": "OPEN INPUT CUST-FILE\nREAD CUST-FILE\nEXEC SQL\n        SELECT NAME INTO :WS-NAME FROM CUSTOMER\n    END-EXEC\nEXEC CICS LINK PROGRAM('SUBPROG') END-EXEC.",
+        "end_line": 27,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "INIT-PARA",
+        "ordinal": 1,
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.INIT-PARA",
+        "section": "",
+        "start_line": 27
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1068,
+        "end_column": 15,
+        "end_line": 36,
+        "file": "main.cbl",
+        "start_byte": 1054,
+        "start_column": 1,
+        "start_line": 36
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolparagraph:9f0750e233490fed733d2787",
+      "label": "CobolParagraph",
+      "name": "STEP-A",
+      "properties": {
+        "code": "ALTER STEP-B TO PROCEED TO INIT-EXIT.",
+        "end_line": 36,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "STEP-A",
+        "ordinal": 3,
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.STEP-A",
+        "section": "",
+        "start_line": 36
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolparagraph:c1ca0635195d183672acb088",
+      "label": "CobolParagraph",
+      "name": "MAIN-PARA",
+      "properties": {
+        "code": "PERFORM INIT-PARA THRU INIT-EXIT\nIF WS-STATUS = 0\nCALL \"SUBPROG\" USING WS-STATUS\nELSE\nCALL WS-PROGRAM\nEND-IF\nGO TO STEP-A STEP-B DEPENDING ON WS-STATUS.",
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "MAIN-PARA",
+        "ordinal": 0,
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.MAIN-PARA",
+        "section": "",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "malformed.cbl",
+      "id": "cobol:cobolparagraph:e5bfdadb89c717c0aa5ddaaa",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "IF BROKEN-FIELD = \"X\"\nDISPLAY BROKEN-FIELD",
+        "end_line": 7,
+        "file_path": "malformed.cbl",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "malformed.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MALFORMED.START-PARA",
+        "section": "",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "missing-copy.cbl",
+      "id": "cobol:cobolparagraph:518dd4216f0182a5771e7272",
+      "label": "CobolParagraph",
+      "name": "START-PARA",
+      "properties": {
+        "code": "STOP RUN.",
+        "end_line": 7,
+        "file_path": "missing-copy.cbl",
+        "language": "cobol",
+        "name": "START-PARA",
+        "ordinal": 0,
+        "path": "missing-copy.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MISSINGCPY.START-PARA",
+        "section": "",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1026,
+        "end_column": 21,
+        "end_line": 32,
+        "file": "payroll.cbl",
+        "start_byte": 1006,
+        "start_column": 1,
+        "start_line": 32
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolparagraph:078eb4b12ff03a6c82490ac5",
+      "label": "CobolParagraph",
+      "name": "PROCESS-PARA",
+      "properties": {
+        "code": "ADD 1 TO WS-COUNT\nIF WS-COUNT > 10\nPERFORM SUMMARY-PARA VARYING WS-COUNT FROM 1 BY 1\nUNTIL WS-COUNT > 5\nELSE\nMOVE PAY-REC TO RPT-REC\nEND-IF.",
+        "end_line": 32,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "PROCESS-PARA",
+        "ordinal": 1,
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.PROCESS-PARA",
+        "section": "MAIN-CONTROL",
+        "start_line": 32
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1378,
+        "end_column": 21,
+        "end_line": 43,
+        "file": "payroll.cbl",
+        "start_byte": 1358,
+        "start_column": 1,
+        "start_line": 43
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolparagraph:73fd651da9669b39850ae6cc",
+      "label": "CobolParagraph",
+      "name": "CLEANUP-PARA",
+      "properties": {
+        "code": "CLOSE PAY-FILE RPT-FILE\nGOBACK.",
+        "end_line": 43,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "CLEANUP-PARA",
+        "ordinal": 3,
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.CLEANUP-PARA",
+        "section": "MAIN-CONTROL",
+        "start_line": 43
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 1281,
+        "end_column": 21,
+        "end_line": 40,
+        "file": "payroll.cbl",
+        "start_byte": 1261,
+        "start_column": 1,
+        "start_line": 40
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolparagraph:d1d1d40b38f037541e89e7b9",
+      "label": "CobolParagraph",
+      "name": "SUMMARY-PARA",
+      "properties": {
+        "code": "COMPUTE WS-GROSS = WS-GROSS + WS-COUNT\nWRITE RPT-REC.",
+        "end_line": 40,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "SUMMARY-PARA",
+        "ordinal": 2,
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.SUMMARY-PARA",
+        "section": "MAIN-CONTROL",
+        "start_line": 40
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolparagraph:f08414db8c6d85dfe3bdbdf2",
+      "label": "CobolParagraph",
+      "name": "INIT-PARA",
+      "properties": {
+        "code": "OPEN INPUT PAY-FILE\nOPEN OUTPUT RPT-FILE\nPERFORM UNTIL WS-EOF = \"Y\"\nREAD PAY-FILE\nAT END MOVE \"Y\" TO WS-EOF\nNOT AT END PERFORM PROCESS-PARA\nEND-READ\nEND-PERFORM.",
+        "end_line": 23,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "INIT-PARA",
+        "ordinal": 0,
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.INIT-PARA",
+        "section": "MAIN-CONTROL",
+        "start_line": 23
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolprogram:736b19dc3de942ce07b93123",
+      "label": "CobolProgram",
+      "name": "MAINPROG",
+      "properties": {
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "MAINPROG",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "malformed.cbl",
+      "id": "cobol:cobolprogram:794bf658f98082d641e3cd34",
+      "label": "CobolProgram",
+      "name": "MALFORMED",
+      "properties": {
+        "end_line": 7,
+        "file_path": "malformed.cbl",
+        "language": "cobol",
+        "name": "MALFORMED",
+        "path": "malformed.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MALFORMED",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "missing-copy.cbl",
+      "id": "cobol:cobolprogram:571c105bbf0e3fc5459d9106",
+      "label": "CobolProgram",
+      "name": "MISSINGCPY",
+      "properties": {
+        "end_line": 7,
+        "file_path": "missing-copy.cbl",
+        "language": "cobol",
+        "name": "MISSINGCPY",
+        "path": "missing-copy.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MISSINGCPY",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolprogram:94d79376dc4c252c5e0e0460",
+      "label": "CobolProgram",
+      "name": "PAYROLL",
+      "properties": {
+        "end_line": 23,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "PAYROLL",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL",
+        "start_line": 23
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "subprog.cob",
+      "id": "cobol:cobolprogram:c08cb34313f67e415323a0b6",
+      "label": "CobolProgram",
+      "name": "SUBPROG",
+      "properties": {
+        "end_line": 5,
+        "file_path": "subprog.cob",
+        "language": "cobol",
+        "name": "SUBPROG",
+        "path": "subprog.cob",
+        "project_id": "parity_cobol",
+        "qualified_name": "SUBPROG",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolsection:4bf993663c3e548176895c61",
+      "label": "CobolSection",
+      "name": "LOCAL-STORAGE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "LOCAL-STORAGE",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.LOCAL-STORAGE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolsection:901f298707a999e973993824",
+      "label": "CobolSection",
+      "name": "LINKAGE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "LINKAGE",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.LINKAGE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolsection:b5be7366d38c81b686c5606c",
+      "label": "CobolSection",
+      "name": "FILE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "FILE",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.FILE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolsection:b7984cc002290e6f03be355f",
+      "label": "CobolSection",
+      "name": "WORKING-STORAGE",
+      "properties": {
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "WORKING-STORAGE",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.WORKING-STORAGE",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolsection:f802e7b77e6741ba8ce9c4b4",
+      "label": "CobolSection",
+      "name": "INPUT-OUTPUT",
+      "properties": {
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "INPUT-OUTPUT",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MAINPROG.INPUT-OUTPUT",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "malformed.cbl",
+      "id": "cobol:cobolsection:377c8a0337b45921b0b82f5a",
+      "label": "CobolSection",
+      "name": "WORKING-STORAGE",
+      "properties": {
+        "end_line": 7,
+        "file_path": "malformed.cbl",
+        "language": "cobol",
+        "name": "WORKING-STORAGE",
+        "path": "malformed.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MALFORMED.WORKING-STORAGE",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "missing-copy.cbl",
+      "id": "cobol:cobolsection:6910fc510ab6d7a6cf234b11",
+      "label": "CobolSection",
+      "name": "WORKING-STORAGE",
+      "properties": {
+        "end_line": 7,
+        "file_path": "missing-copy.cbl",
+        "language": "cobol",
+        "name": "WORKING-STORAGE",
+        "path": "missing-copy.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "MISSINGCPY.WORKING-STORAGE",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolsection:210ecc5bb0385008290e0e5e",
+      "label": "CobolSection",
+      "name": "WORKING-STORAGE",
+      "properties": {
+        "end_line": 23,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "WORKING-STORAGE",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.WORKING-STORAGE",
+        "start_line": 23
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolsection:3062b2bdd749031713875588",
+      "label": "CobolSection",
+      "name": "INPUT-OUTPUT",
+      "properties": {
+        "end_line": 23,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "INPUT-OUTPUT",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.INPUT-OUTPUT",
+        "start_line": 23
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolsection:6fd30a184bf494481f4bf940",
+      "label": "CobolSection",
+      "name": "FILE",
+      "properties": {
+        "end_line": 23,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "FILE",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.FILE",
+        "start_line": 23
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:cobolsection:88495e150459695fb5cc1900",
+      "label": "CobolSection",
+      "name": "MAIN-CONTROL",
+      "properties": {
+        "end_line": 23,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "MAIN-CONTROL",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "PAYROLL.MAIN-CONTROL",
+        "start_line": 23
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "subprog.cob",
+      "id": "cobol:cobolsection:86c4c2700226807f5305c9fe",
+      "label": "CobolSection",
+      "name": "LINKAGE",
+      "properties": {
+        "end_line": 5,
+        "file_path": "subprog.cob",
+        "language": "cobol",
+        "name": "LINKAGE",
+        "path": "subprog.cob",
+        "project_id": "parity_cobol",
+        "qualified_name": "SUBPROG.LINKAGE",
+        "start_line": 5
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 963,
+        "end_column": 20,
+        "end_line": 32,
+        "file": "main.cbl",
+        "start_byte": 869,
+        "start_column": 1,
+        "start_line": 30
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:cobolsqlstatement:3baf94fb3e72f40935e4cd00",
+      "label": "CobolSqlStatement",
+      "name": "SELECT",
+      "properties": {
+        "end_line": 32,
+        "file_path": "main.cbl",
+        "host_variables": [
+          "WS-NAME"
+        ],
+        "language": "cobol",
+        "name": "SELECT",
+        "operation": "SELECT",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "SELECT",
+        "raw_text": "EXEC SQL\n        SELECT NAME INTO :WS-NAME FROM CUSTOMER\n    END-EXEC",
+        "start_line": 30,
+        "targets": [
+          "CUSTOMER"
+        ]
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 22,
+        "end_column": 23,
+        "end_line": 1,
+        "file": "common.cpy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "common.cpy",
+      "id": "cobol:file:0c94a8faa63a9772971d01ac",
+      "label": "File",
+      "name": "common.cpy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 1,
+        "file_path": "common.cpy",
+        "language": "cobol",
+        "name": "common.cpy",
+        "path": "common.cpy",
+        "project_id": "parity_cobol",
+        "qualified_name": "common.cpy",
+        "source_format": "fixed",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-a.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "cycle-a.copy",
+      "id": "cobol:file:d66b71eff20a8b147191da5e",
+      "label": "File",
+      "name": "cycle-a.copy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 2,
+        "file_path": "cycle-a.copy",
+        "language": "cobol",
+        "name": "cycle-a.copy",
+        "path": "cycle-a.copy",
+        "project_id": "parity_cobol",
+        "qualified_name": "cycle-a.copy",
+        "source_format": "fixed",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 51,
+        "end_column": 31,
+        "end_line": 2,
+        "file": "cycle-b.copy",
+        "start_byte": 21,
+        "start_column": 1,
+        "start_line": 2
+      },
+      "file_path": "cycle-b.copy",
+      "id": "cobol:file:7e0a933c8dde16aa54db73f2",
+      "label": "File",
+      "name": "cycle-b.copy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 2,
+        "file_path": "cycle-b.copy",
+        "language": "cobol",
+        "name": "cycle-b.copy",
+        "path": "cycle-b.copy",
+        "project_id": "parity_cobol",
+        "qualified_name": "cycle-b.copy",
+        "source_format": "fixed",
+        "start_line": 2
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 554,
+        "end_column": 18,
+        "end_line": 19,
+        "file": "main.cbl",
+        "start_byte": 537,
+        "start_column": 1,
+        "start_line": 19
+      },
+      "file_path": "main.cbl",
+      "id": "cobol:file:c9a87f8e048d2c35adf151eb",
+      "label": "File",
+      "name": "main.cbl",
+      "properties": {
+        "dialect": "ibm-enterprise",
+        "encoding": "utf-8-sig",
+        "end_line": 19,
+        "file_path": "main.cbl",
+        "language": "cobol",
+        "name": "main.cbl",
+        "path": "main.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "main.cbl",
+        "source_format": "fixed",
+        "start_line": 19
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 193,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "malformed.cbl",
+        "start_byte": 175,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "malformed.cbl",
+      "id": "cobol:file:f4a77514a31709bcd1e8c7c9",
+      "label": "File",
+      "name": "malformed.cbl",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 7,
+        "file_path": "malformed.cbl",
+        "language": "cobol",
+        "name": "malformed.cbl",
+        "path": "malformed.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "malformed.cbl",
+        "source_format": "fixed",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 190,
+        "end_column": 19,
+        "end_line": 7,
+        "file": "missing-copy.cbl",
+        "start_byte": 172,
+        "start_column": 1,
+        "start_line": 7
+      },
+      "file_path": "missing-copy.cbl",
+      "id": "cobol:file:7cc302aad59a98d14fec7339",
+      "label": "File",
+      "name": "missing-copy.cbl",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 7,
+        "file_path": "missing-copy.cbl",
+        "language": "cobol",
+        "name": "missing-copy.cbl",
+        "path": "missing-copy.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "missing-copy.cbl",
+        "source_format": "fixed",
+        "start_line": 7
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 38,
+        "end_column": 39,
+        "end_line": 1,
+        "file": "nested.copy",
+        "start_byte": 0,
+        "start_column": 1,
+        "start_line": 1
+      },
+      "file_path": "nested.copy",
+      "id": "cobol:file:09b49377aa29083baec9db98",
+      "label": "File",
+      "name": "nested.copy",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 1,
+        "file_path": "nested.copy",
+        "language": "cobol",
+        "name": "nested.copy",
+        "path": "nested.copy",
+        "project_id": "parity_cobol",
+        "qualified_name": "nested.copy",
+        "source_format": "free",
+        "start_line": 1
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 731,
+        "end_column": 18,
+        "end_line": 23,
+        "file": "payroll.cbl",
+        "start_byte": 714,
+        "start_column": 1,
+        "start_line": 23
+      },
+      "file_path": "payroll.cbl",
+      "id": "cobol:file:fb84aa0642027c7c6aa08494",
+      "label": "File",
+      "name": "payroll.cbl",
+      "properties": {
+        "dialect": "ibm-enterprise",
+        "encoding": "utf-8-sig",
+        "end_line": 23,
+        "file_path": "payroll.cbl",
+        "language": "cobol",
+        "name": "payroll.cbl",
+        "path": "payroll.cbl",
+        "project_id": "parity_cobol",
+        "qualified_name": "payroll.cbl",
+        "source_format": "fixed",
+        "start_line": 23
+      }
+    },
+    {
+      "confidence": 1.0,
+      "evidence": {
+        "end_byte": 133,
+        "end_column": 28,
+        "end_line": 5,
+        "file": "subprog.cob",
+        "start_byte": 106,
+        "start_column": 1,
+        "start_line": 5
+      },
+      "file_path": "subprog.cob",
+      "id": "cobol:file:a820791af1e1f081f7e7ef93",
+      "label": "File",
+      "name": "subprog.cob",
+      "properties": {
+        "dialect": "ansi",
+        "encoding": "utf-8-sig",
+        "end_line": 5,
+        "file_path": "subprog.cob",
+        "language": "cobol",
+        "name": "subprog.cob",
+        "path": "subprog.cob",
+        "project_id": "parity_cobol",
+        "qualified_name": "subprog.cob",
+        "source_format": "fixed",
+        "start_line": 5
+      }
+    }
+  ],
+  "project_id": "parity_cobol",
+  "root": "/Users/hieplq1.aip/AI/cortex-harness/tests/fixtures/cobol-application",
+  "summary": {
+    "analyzer_version": "1.0.0",
+    "diagnostic_count": 31,
+    "edge_count": 122,
+    "invalidated_files": 0,
+    "node_count": 64,
+    "processed_files": 9,
+    "runtime": {
+      "architecture": "aarch64",
+      "grammar_abi": 14,
+      "library_path": "/Users/hieplq1.aip/AI/cortex-harness/code-tiny/tools/cobol/lib/cobol.cpython-310-darwin.so",
+      "library_sha256": "6f1a2c69976a3669383d3f529129ae2e58fe7acd32edd5094d67b3d076d8bcc6",
+      "platform": "macos",
+      "provider": "native-library",
+      "tree_sitter_version": "unknown"
+    },
+    "schema_version": "1",
+    "syntax_error_count": 25
+  }
+}
