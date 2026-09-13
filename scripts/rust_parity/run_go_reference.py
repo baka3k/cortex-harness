@@ -23,6 +23,12 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+for candidate in (_REPO / "code-tiny", _REPO / "scripts" / "rust_parity"):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
 
 from tools.graph.writer.query_contract import RelationshipGroup
 
