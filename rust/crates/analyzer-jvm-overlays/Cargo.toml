@@ -1,0 +1,39 @@
+[package]
+name = "analyzer-jvm-overlays"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của các framework-overlay JVM analyzers: spring, struts, servlet_jsp (phase 08 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-spring"
+path = "src/bin/analyzer-spring.rs"
+
+[[bin]]
+name = "analyzer-struts"
+path = "src/bin/analyzer-struts.rs"
+
+[[bin]]
+name = "analyzer-servlet-jsp"
+path = "src/bin/analyzer-servlet-jsp.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-falkordb = { path = "../cortex-falkordb" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+tree-sitter = "0.25"
+# Pin cùng version với analyzer-java (== fallback tree_sitter_java 0.23.5 của
+# venv Python) để parse tree byte-identical cho java identity/semantics.
+tree-sitter-java = "0.23.5"
+# Grammar XML (tree-sitter-grammars/tree-sitter-xml) — cùng grammar họ với
+# `tree_sitter_language_pack.get_parser("xml")` phía Python.
+tree-sitter-xml = "0.7"
+
+[lints.rust]
+unsafe_code = "deny"

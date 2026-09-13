@@ -1,0 +1,4 @@
+Plain text fixture cho doc-tiny parity.
+
+The SSI FastConnect API exposes the iOrder and ekos systems through n8n webhooks.
+Draft note trước khi publish lên wiki nội bộ.

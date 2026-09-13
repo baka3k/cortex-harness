@@ -1,8 +1,8 @@
 # Phase 08 — Spring overlay parity (python vs rust)
 
-- chạy: 2026-09-14 05:58:55
+- chạy: 2026-09-14 06:20:44
 - testdata: `tests/fixtures/java-spring-overlays`
-- rust bin: `/tmp/p08_ws/target/release/analyzer-spring`
+- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-spring`
 - base seed: java analyzer Python (journal shared-shadow) trên CẢ HAI graph
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']` + `_start_id`/`_end_id`
 

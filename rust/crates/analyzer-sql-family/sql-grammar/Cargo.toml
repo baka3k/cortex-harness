@@ -1,0 +1,17 @@
+[package]
+name = "sql-grammar-vendored"
+version = "0.3.11"
+edition = "2021"
+description = "Vendored tree-sitter SQL grammar (derekstride/tree-sitter-sql v0.3.11) — sinh từ sdist PyPI tree-sitter-sql 0.3.11 (parser.c @generated tree-sitter 0.25.10) vì git tag không commit src/parser.c (.gitignore). Cùng nguồn với fallback `_get_sql_parser` của venv Python."
+license = "MIT"
+publish = false
+links = "tree_sitter_sql"
+
+[lib]
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+tree-sitter-language = "0.1"

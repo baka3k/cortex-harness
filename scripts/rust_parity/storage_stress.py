@@ -314,6 +314,27 @@ def run_rust_suite(out_path: Path) -> dict:
         text=True,
         timeout=600,
     )
+    if proc.returncode != 0 and "cortex-storage" not in proc.stderr:
+        # Workspace contention: another agent's crate may be mid-scaffold and
+        # break workspace resolution. cortex-storage has no workspace path
+        # dependencies, so retry from a standalone copy.
+        import shutil
+
+        with tempfile.TemporaryDirectory(prefix="cortex-storage-standalone-") as tmp:
+            standalone = Path(tmp) / "cortex-storage"
+            shutil.copytree(
+                REPO_ROOT / "rust" / "crates" / "cortex-storage",
+                standalone,
+                ignore=shutil.ignore_patterns("target"),
+            )
+            proc = subprocess.run(
+                ["cargo", "test", "--test", "stress"],
+                cwd=standalone,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
     if proc.returncode != 0:
         print(proc.stdout[-4000:])
         print(proc.stderr[-4000:], file=sys.stderr)
