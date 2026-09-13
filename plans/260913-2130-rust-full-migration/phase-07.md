@@ -32,7 +32,17 @@
 
 ## Gate
 
-- [ ] cplus parity trên procsample (nodes/rels exact ngoài mask).
-- [ ] Parse-quality artifact JSON khớp trên corpus có file lỗi.
-- [ ] 8/8 analyzer trong batch pass parity riêng lẻ.
-- [ ] Dogfood: sync stock + procsample với toàn bộ analyzer đã port đến thời điểm này.
+- [x] cplus parity trên procsample (nodes/rels exact ngoài mask).
+- [x] Parse-quality artifact JSON khớp trên corpus có file lỗi.
+- [x] 8/8 analyzer trong batch pass parity riêng lẻ.
+- [x] Dogfood: sync stock + procsample với toàn bộ analyzer đã port đến thời điểm này.
+
+**Trạng thái 2026-09-14:** 8/8 PASS — cplus (85/85 nodes, 180/180 edges diff 0; clang plane
+giữ Python subprocess theo key decision #8), rust (0.24.2), go (0.25.0), swift (0.7.3),
+delphi (tree-sitter-pascal 0.10.2 chỉ cho parse_meta như Python), cobol (line-based
+fixed-format + native grammar bundle dlopen qua libloading; golden stable_id),
+vb×4 (line/regex parser + real Roslyn subprocess cho vbnet), jp1 (cp932 decode table
+18,381 pairs sinh từ CPython). Reports: reports/phase07-{cplus,rust,go,swift,delphi,
+cobol,vb,jp1}-parity.md. Ghi chú tham chiếu: go INCLUDES→ExternalModule bị writer reject
+thiếu id-index (quarantine CORTEX_DIAGNOSTIC_SKIP_UNRESOLVED_RELATIONS=1 cả 2 bên);
+vb bare `Const X` crash cả 2 backend (crash-parity được gate).
