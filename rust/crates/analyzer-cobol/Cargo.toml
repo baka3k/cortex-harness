@@ -1,0 +1,31 @@
+[package]
+name = "analyzer-cobol"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của code-tiny/tools/cobol/cobol_analyzer.py — staged COBOL semantic analyzer (phase 07 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-cobol"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+# Python `re` có lookahead ((?=...)) trong _DATA_RE value/occurs — crate
+# `regex` không hỗ trợ, dùng fancy-regex cho toàn bộ pattern.
+fancy-regex = "0.14"
+regex = "1"
+serde_json = "1"
+sha2 = "0.10"
+tree-sitter = "0.25"
+tree-sitter-language = "0.1"
+# Python reference dlopen bundle `code-tiny/tools/cobol/lib/*.so` (grammar ABI 14)
+# qua ctypes — Rust dlopen cùng library qua libloading để đảm bảo byte-exact
+# grammar parity (không có tree-sitter-cobol grammar crate trên crates.io).
+libloading = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

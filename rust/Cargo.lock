@@ -115,6 +115,14 @@ dependencies = [
 [[package]]
 name = "analyzer-jp1"
 version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-graph-writer",
+ "fancy-regex",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "analyzer-js"
@@ -128,6 +136,22 @@ dependencies = [
  "serde_json",
  "tree-sitter",
  "tree-sitter-javascript",
+]
+
+[[package]]
+name = "analyzer-jvm-overlays"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-graph-writer",
+ "regex",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tree-sitter",
+ "tree-sitter-java",
+ "tree-sitter-xml",
 ]
 
 [[package]]
@@ -1689,6 +1713,16 @@ name = "tree-sitter-typescript"
 version = "0.23.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c5f76ed8d947a75cc446d5fccd8b602ebf0cde64ccf2ffa434d873d7a575eff"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-xml"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e670041f591d994f54d597ddcd8f4ebc930e282c4c76a42268743b71f0c8b6b3"
 dependencies = [
  "cc",
  "tree-sitter-language",
