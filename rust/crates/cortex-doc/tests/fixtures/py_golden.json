@@ -1,0 +1,231 @@
+{
+ "assembly": {
+  "args": {
+   "merge_entities": true,
+   "normalize_mode": "aggressive",
+   "project_id_normalized": "p14doc"
+  },
+  "input": {
+   "entities": [
+    {
+     "confidence": 0.9,
+     "end_char": 12,
+     "name": "Acme Systems",
+     "start_char": 0,
+     "type": "ORG"
+    },
+    {
+     "confidence": 0.95,
+     "end_char": 37,
+     "name": "ACME SYSTEMS CORP",
+     "start_char": 20,
+     "type": "ORG"
+    },
+    {
+     "name": "Plug&Charge",
+     "type": "TECH"
+    },
+    {
+     "confidence": 0.8,
+     "end_char": 53,
+     "name": "Plug & Charge",
+     "start_char": 40,
+     "type": "TECH"
+    },
+    {
+     "name": "",
+     "type": "ORG"
+    },
+    {
+     "confidence": 0.7,
+     "end_char": 66,
+     "name": "Berlin",
+     "start_char": 60,
+     "type": "GPE"
+    },
+    {
+     "name": "ISO 15118",
+     "type": "STANDARD"
+    }
+   ],
+   "relations": [
+    {
+     "relation": "LOCATED_IN",
+     "source": "Acme Systems",
+     "target": "Berlin"
+    },
+    {
+     "relation": "",
+     "source": "acme systems",
+     "target": "Unknown Target"
+    },
+    {
+     "source": "Plug&Charge",
+     "target": "ISO 15118"
+    },
+    {
+     "source": "",
+     "target": "Berlin"
+    },
+    {
+     "relation": "X",
+     "source": "Berlin",
+     "target": "  "
+    }
+   ]
+  },
+  "node_keys_in_order": [
+   "p14doc::ORG::acme systems",
+   "p14doc::ORG::acme systems corp",
+   "p14doc::TECH::plug charge",
+   "p14doc::GPE::berlin",
+   "p14doc::STANDARD::iso 15118",
+   "p14doc::UNKNOWN::unknown target"
+  ],
+  "nodes": [
+   {
+    "confidence": 0.9,
+    "id": "38ce0028-3907-5071-9e25-2c6b0a9d299f",
+    "mentions": [
+     {
+      "confidence": 0.9,
+      "end_char": 12,
+      "start_char": 0,
+      "surface": "Acme Systems"
+     }
+    ],
+    "name": "Acme Systems",
+    "name_norm": "acme systems",
+    "type": "ORG"
+   },
+   {
+    "confidence": 0.95,
+    "id": "3ec3d648-f875-526b-ab79-1b25afa056f1",
+    "mentions": [
+     {
+      "confidence": 0.95,
+      "end_char": 37,
+      "start_char": 20,
+      "surface": "ACME SYSTEMS CORP"
+     }
+    ],
+    "name": "ACME SYSTEMS CORP",
+    "name_norm": "acme systems corp",
+    "type": "ORG"
+   },
+   {
+    "confidence": 0.8,
+    "id": "4e817613-7127-5a6d-8e02-409552a48e7e",
+    "mentions": [
+     {
+      "confidence": 0.8,
+      "end_char": 53,
+      "start_char": 40,
+      "surface": "Plug & Charge"
+     }
+    ],
+    "name": "Plug & Charge",
+    "name_norm": "plug charge",
+    "type": "TECH"
+   },
+   {
+    "confidence": 0.7,
+    "id": "4862d41b-b38c-5fc0-9e6a-24c2b2a6c702",
+    "mentions": [
+     {
+      "confidence": 0.7,
+      "end_char": 66,
+      "start_char": 60,
+      "surface": "Berlin"
+     }
+    ],
+    "name": "Berlin",
+    "name_norm": "berlin",
+    "type": "GPE"
+   },
+   {
+    "confidence": null,
+    "id": "7c78650f-e270-58c3-ad54-f3c1390a056e",
+    "mentions": [],
+    "name": "ISO 15118",
+    "name_norm": "iso 15118",
+    "type": "STANDARD"
+   },
+   {
+    "confidence": null,
+    "id": "d8876dc8-f107-5d38-b484-d56393c6b8ff",
+    "mentions": [],
+    "name": "Unknown Target",
+    "name_norm": "unknown target",
+    "type": "UNKNOWN"
+   }
+  ],
+  "relations": [
+   {
+    "source_id": "38ce0028-3907-5071-9e25-2c6b0a9d299f",
+    "target_id": "4862d41b-b38c-5fc0-9e6a-24c2b2a6c702",
+    "type": "LOCATED_IN"
+   },
+   {
+    "source_id": "38ce0028-3907-5071-9e25-2c6b0a9d299f",
+    "target_id": "d8876dc8-f107-5d38-b484-d56393c6b8ff",
+    "type": "RELATED"
+   },
+   {
+    "source_id": "4e817613-7127-5a6d-8e02-409552a48e7e",
+    "target_id": "7c78650f-e270-58c3-ad54-f3c1390a056e",
+    "type": "RELATED"
+   }
+  ]
+ },
+ "entity_id": {
+  "namespaced": "4e817613-7127-5a6d-8e02-409552a48e7e",
+  "simple": "bf9d8b43-9cef-59e4-aa9c-920a61b0e237",
+  "unknown": "fceaffd6-26e6-5fb9-abb4-19815c5c2004"
+ },
+ "normalize_entity_name": {
+  "aggressive_amp": "plug charge",
+  "basic_mode": "plug&charge",
+  "blank": "",
+  "iso": "iso iec 18013 5",
+  "mixed": "acme corp systems",
+  "quotes": "hello world",
+  "unicode_quotes": "berlin"
+ },
+ "select_primary_mention": {
+  "by_confidence": {
+   "confidence": 0.9,
+   "start_char": 50
+  },
+  "empty": {},
+  "no_confidence": {
+   "start_char": 2
+  },
+  "tie_by_start": {
+   "confidence": 0.5,
+   "start_char": 10
+  }
+ },
+ "split_paragraphs": {
+  "basic": [
+   "Para one.",
+   "Para two.",
+   "Para three."
+  ],
+  "empty": [],
+  "long": [
+   "AAAAAAAAAA",
+   "AAAAAAAAAA",
+   "AAAAA B B",
+   "B B B"
+  ],
+  "tabs": [
+   "one\ttwo",
+   "three"
+  ],
+  "unicode": [
+   "Xin chào thế giới.",
+   "Tiếng Việt có dấu."
+  ]
+ }
+}

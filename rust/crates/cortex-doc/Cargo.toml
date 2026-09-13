@@ -1,0 +1,28 @@
+[package]
+name = "cortex-doc"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của doc-tiny GraphRAG pipeline (phase 14 Scope A): ingest CLI, entity providers, graph assembly + FalkorDB writes, project contract"
+license = "MIT"
+publish = false
+
+[dependencies]
+cortex-falkordb = { path = "../cortex-falkordb" }
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.2"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "json",
+    "rustls-tls",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "deny"
