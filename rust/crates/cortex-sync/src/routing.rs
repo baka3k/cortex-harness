@@ -53,11 +53,10 @@ impl AndroidPathClassifier {
             return false;
         }
         let module_dir = self.module_dir_from_path(&rel);
-        if let Some(module_dir) = &module_dir {
-            if self.module_has_android_manifest(module_dir) {
+        if let Some(module_dir) = &module_dir
+            && self.module_has_android_manifest(module_dir) {
                 return true;
             }
-        }
         let file_dir = match rel.rfind('/') {
             Some(index) => rel[..index].to_string(),
             None => String::new(),

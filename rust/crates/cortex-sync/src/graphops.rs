@@ -9,6 +9,7 @@ use serde_json::json;
 
 use crate::cli::Args;
 
+#[allow(dead_code)]
 pub struct GraphContext {
     pub provider: String,
     pub falkordb_uri: Option<String>,

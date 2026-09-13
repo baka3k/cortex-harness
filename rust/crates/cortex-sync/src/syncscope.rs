@@ -41,11 +41,10 @@ pub fn resolve_sync_cache_dir(cache_dir: Option<&str>, root: &Path) -> PathBuf {
 }
 
 fn shellexpand_home(input: &str) -> String {
-    if let Some(rest) = input.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
+    if let Some(rest) = input.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME") {
             return Path::new(&home).join(rest).to_string_lossy().to_string();
         }
-    }
     input.to_string()
 }
 
@@ -73,13 +72,11 @@ pub fn read_lock_metadata(path: &Path) -> serde_json::Value {
     let mut candidates = vec![PathBuf::from(format!("{}.metadata.json", path.to_string_lossy()))];
     candidates.push(path.to_path_buf());
     for candidate in candidates {
-        if let Ok(text) = std::fs::read_to_string(&candidate) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                if value.is_object() {
+        if let Ok(text) = std::fs::read_to_string(&candidate)
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                && value.is_object() {
                     return value;
                 }
-            }
-        }
     }
     json!({})
 }
@@ -199,11 +196,10 @@ pub fn safe_cache_root(
         _ => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join(".cache"),
     };
     let mut root = base_root.join(default_name);
-    if let Some(project_root) = project_root {
-        if let Some(segment) = project_cache_segment(project_root) {
+    if let Some(project_root) = project_root
+        && let Some(segment) = project_cache_segment(project_root) {
             root = root.join(segment);
         }
-    }
     std::fs::create_dir_all(&root).ok();
     root
 }
@@ -224,4 +220,5 @@ fn project_cache_segment(project_root: &Path) -> Option<String> {
 }
 
 /// Key ordering helper for deterministic JSON maps.
+#[allow(dead_code)]
 pub type JsonMap = BTreeMap<String, serde_json::Value>;

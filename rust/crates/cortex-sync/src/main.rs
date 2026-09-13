@@ -128,12 +128,11 @@ fn load_harness_config(config_path: &str) {
             }
         }
         for key in ["NEO4J_URI", "NEO4J_USER", "NEO4J_PASS", "NEO4J_DB"] {
-            if let Some(value) = env_str(&code_env, key) {
-                if std::env::var(key).is_err() {
+            if let Some(value) = env_str(&code_env, key)
+                && std::env::var(key).is_err() {
                     // SAFETY: single-threaded startup.
                     unsafe { std::env::set_var(key, value) };
                 }
-            }
         }
     } else {
         for (key, _) in std::env::vars() {
@@ -144,12 +143,11 @@ fn load_harness_config(config_path: &str) {
         }
         for key in ["FALKORDB_GRAPH", "FALKORDB_DATABASE"] {
             let value = env_str(&code_env, key).or_else(|| env_str(&doc_env, key));
-            if let Some(value) = value {
-                if std::env::var(key).is_err() {
+            if let Some(value) = value
+                && std::env::var(key).is_err() {
                     // SAFETY: single-threaded startup.
                     unsafe { std::env::set_var(key, value) };
                 }
-            }
         }
     }
     let _ = BTreeMap::<String, String>::new();

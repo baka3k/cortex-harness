@@ -59,7 +59,7 @@ fn cpu_default_parse_quality_workers() -> i64 {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2);
-    std::cmp::max(1, std::cmp::min(4, (cpus as i64) / 2))
+    ((cpus as i64) / 2).clamp(1, 4)
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -171,6 +171,7 @@ pub struct RawArgs {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Args {
     pub root: String,
     pub config: Option<String>,

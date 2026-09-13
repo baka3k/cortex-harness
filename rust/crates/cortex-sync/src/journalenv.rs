@@ -118,7 +118,7 @@ fn canonical_remote_endpoint(value: &str, default_scheme: &str) -> Result<(Strin
     }
     // authority = up to the first '/', '?' or '#'.
     let authority_end = rest
-        .find(|c| c == '/' || c == '?' || c == '#')
+        .find(['/', '?', '#'])
         .unwrap_or(rest.len());
     let authority = &rest[..authority_end];
     let path = &rest[authority_end..];
@@ -199,6 +199,7 @@ fn principal_fingerprint(value: Option<&str>) -> Option<String> {
 
 /// `EffectiveStorageTarget`.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EffectiveStorageTarget {
     pub component: String,
     pub provider: String,
@@ -363,6 +364,7 @@ pub fn physical_target_from_env(env: &BTreeMap<String, String>) -> Result<String
 
 // ── configure_journal_env ─────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub struct JournalEnvConfig {
     pub mode: String,
     pub path: PathBuf,

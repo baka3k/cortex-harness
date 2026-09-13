@@ -11,18 +11,16 @@ use crate::util;
 /// `<repo>/rust/target/release/cortex-sync`. Overridable via
 /// `CORTEX_REPO_ROOT` for non-standard target dirs.
 pub fn repo_root() -> PathBuf {
-    if let Ok(from_env) = std::env::var("CORTEX_REPO_ROOT") {
-        if !from_env.trim().is_empty() {
+    if let Ok(from_env) = std::env::var("CORTEX_REPO_ROOT")
+        && !from_env.trim().is_empty() {
             return PathBuf::from(from_env);
         }
-    }
     if let Ok(exe) = std::env::current_exe() {
         // exe = <repo>/rust/target/{release,debug}/cortex-sync
-        if let Some(repo) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent()) {
-            if repo.join("code-tiny/tools/sync/incremental_sync.py").is_file() {
+        if let Some(repo) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent())
+            && repo.join("code-tiny/tools/sync/incremental_sync.py").is_file() {
                 return repo.to_path_buf();
             }
-        }
     }
     PathBuf::from(".")
 }
@@ -32,6 +30,7 @@ fn code_tiny_tools(name: &str) -> String {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AnalyzerConfig {
     pub parser: String,
     pub script_path: String,
@@ -67,6 +66,7 @@ impl AnalyzerConfig {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FrameworkAnalyzerConfig {
     pub framework: &'static str,
     pub script_path: String,
@@ -334,6 +334,7 @@ pub fn selected_parsers(parsers_arg: &str) -> Result<(BTreeSet<String>, bool), S
 
 const ROOT_HASH_LEN: usize = 10;
 
+#[allow(dead_code)]
 fn per_project_scheme_active() -> bool {
     std::env::var("HYPERPACK_COLLECTION_SCHEME")
         .unwrap_or_default()
@@ -372,6 +373,7 @@ pub fn repository_name(project_name: &str, root: &std::path::Path) -> String {
     format!("{project_name}/{base}")
 }
 
+#[allow(dead_code)]
 pub struct BuiltCmd {
     pub program: String,
     pub args: Vec<String>,
