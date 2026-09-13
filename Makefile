@@ -26,7 +26,8 @@ endif
 endif
 
 .PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc sync-code-stop sync-doc-stop \
-	rust-build rust-test rust-clippy rust-check rust-pyo3 rust-fixtures rust-clean
+	rust-build rust-test rust-clippy rust-check rust-pyo3 rust-fixtures rust-clean \
+	journal-shadow-diff
 
 help:
 	@$(LIFECYCLE) help
@@ -147,3 +148,20 @@ rust-fixtures:
 
 rust-clean:
 	$(CARGO) clean --manifest-path $(RUST_DIR)/Cargo.toml
+
+# Journal Rust shadow (Track B, phase 1309-2104): replay JSONL capture qua
+# journal core Rust thành shadow store rồi diff DB-state với store Python.
+# Usage: make journal-shadow-diff INPUT=<capture.jsonl> PYTHON_STORE=<python.sqlite3> RUST_STORE=<rust.sqlite3> [STRICT_TIME=1]
+journal-shadow-diff:
+ifndef INPUT
+	$(error Usage: make journal-shadow-diff INPUT=<capture.jsonl> PYTHON_STORE=<python.sqlite3> RUST_STORE=<rust.sqlite3> [STRICT_TIME=1])
+endif
+ifndef PYTHON_STORE
+	$(error PYTHON_STORE is required)
+endif
+ifndef RUST_STORE
+	$(error RUST_STORE is required)
+endif
+	$(RUST_LINK_ENV) $(CARGO) build --release -p cortex-graph-driver --bin replay_journal --manifest-path $(RUST_DIR)/Cargo.toml
+	$(RUST_DIR)/target/release/replay_journal --input $(INPUT) --output $(RUST_STORE)
+	$(PYTHON) $(PARITY_DIR)/diff_journal_stores.py $(PYTHON_STORE) $(RUST_STORE) $(if $(filter 1,$(STRICT_TIME)),--strict-time)
