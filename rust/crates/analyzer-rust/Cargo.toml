@@ -1,0 +1,26 @@
+[package]
+name = "analyzer-rust"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/rust/rust_analyzer.py — Rust call graph analyzer (phase 07 rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-rust"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-falkordb = { path = "../cortex-falkordb" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tree-sitter = "0.25"
+# PyPI venv tham chiếu chạy tree-sitter-rust 0.24.2 — crates.io có đúng 0.24.2.
+tree-sitter-rust = "0.24"
+
+[lints.rust]
+unsafe_code = "deny"

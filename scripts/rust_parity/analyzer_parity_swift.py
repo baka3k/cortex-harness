@@ -201,10 +201,28 @@ def clean_graph(driver: FalkorDBDriver, graph: str) -> None:
     asyncio.run(driver.execute_query("MATCH (n) DETACH DELETE n", {}, graph))
 
 
+# `_start_id`/`_end_id` là internal node-id của FalkorDB (auto-increment qua
+# DETACH DELETE ⇒ lệch khi graph từng được ghi dở trước đó) — cùng bản chất
+# volatile với `_src`/`_dst` trong MASKED_PROPS nhưng dual_write_diff chưa
+# mask; harness tự strip trước khi diff (không sửa file dùng chung).
+VOLATILE_EDGE_PROPS = {"_start_id", "_end_id"}
+
+
+def sanitize_dump(dump: dict) -> dict:
+    return {
+        "nodes": dump["nodes"],
+        "edges": {
+            key: {k: v for k, v in props.items() if k not in VOLATILE_EDGE_PROPS}
+            for key, props in dump["edges"].items()
+        },
+        "_duplicates_skipped": dump.get("_duplicates_skipped", 0),
+    }
+
+
 def compare_graphs(driver: FalkorDBDriver, graph_py: str, graph_rust: str,
                    label: str, report: list[str]) -> None:
-    py_dump = dump_graph(driver, graph_py)
-    rust_dump = dump_graph(driver, graph_rust)
+    py_dump = sanitize_dump(dump_graph(driver, graph_py))
+    rust_dump = sanitize_dump(dump_graph(driver, graph_rust))
     diff = diff_dump(py_dump, rust_dump)
     diff_total = sum(len(v) for k, v in diff.items() if not k.startswith("_"))
     check(f"{label}: graph diff rỗng ngoài mask", diff_total == 0,
