@@ -20,8 +20,11 @@ Public API
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _tokenize(text: str) -> List[str]:
@@ -49,6 +52,13 @@ class BM25Ranker:
             self._available = True
         except ImportError:
             self._BM25Okapi = None
+            # Không bao giờ silent-disable: hybrid search mất bm25 signal
+            # mà không ai biết là regression khó bắt (đã xảy ra thật khi
+            # rank-bm25 vắng mặt trong venv).
+            logger.warning(
+                "rank-bm25 is not installed — BM25 ranking disabled "
+                "(score() returns {}). Install it via `pip install rank-bm25>=0.2.2`."
+            )
 
     @property
     def available(self) -> bool:
