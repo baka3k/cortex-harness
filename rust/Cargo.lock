@@ -724,6 +724,7 @@ name = "cortex-doc"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "cortex-embed",
  "cortex-falkordb",
  "getrandom 0.2.17",
  "regex",
@@ -795,6 +796,7 @@ name = "cortex-mcp"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cortex-embed",
  "cortex-falkordb",
  "cortex-graph-writer",
  "cortex-retrieval",
