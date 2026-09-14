@@ -1,0 +1,576 @@
+{
+ "parsers": [
+  ".net",
+  "ajs",
+  "android",
+  "android-kotlin",
+  "apache-struts",
+  "apache_struts",
+  "asp.net-core",
+  "asp.net-framework",
+  "aspnet-core",
+  "aspnet-framework",
+  "aspnet_core",
+  "aspnet_framework",
+  "aspnetcore",
+  "aspnetframework",
+  "bash",
+  "c",
+  "c#",
+  "c++",
+  "clang",
+  "cobol",
+  "cobol85",
+  "cplus",
+  "cpp",
+  "cs",
+  "csharp",
+  "dart",
+  "delphi",
+  "django",
+  "dotnet",
+  "express",
+  "express.js",
+  "fastapi",
+  "flask",
+  "flutter",
+  "flutter-dart",
+  "flutter_dart",
+  "gnucobol",
+  "go",
+  "ibm-cobol",
+  "java",
+  "javascript",
+  "jobnet",
+  "jp1",
+  "js",
+  "jsp",
+  "jvm",
+  "kotlin",
+  "kotlin-android",
+  "laravel",
+  "my-batis",
+  "mybatis",
+  "nest.js",
+  "nestjs",
+  "node",
+  "nodejs",
+  "oracle-plsql",
+  "pascal",
+  "perl",
+  "php",
+  "pl/sql",
+  "plsql",
+  "pro*c",
+  "pro-c",
+  "proc",
+  "py",
+  "python",
+  "rust",
+  "servlet",
+  "servlet-jsp",
+  "servlet_jsp",
+  "sh",
+  "shell",
+  "spring",
+  "spring-boot",
+  "spring_boot",
+  "sql",
+  "struts",
+  "struts2",
+  "swift",
+  "symfony",
+  "ts",
+  "tsx",
+  "typescript",
+  "vb6",
+  "vba",
+  "vbnet",
+  "vbscript",
+  "visual_basic"
+ ],
+ "detail_level": "summary",
+ "capability_contract_version": 1,
+ "default_query_engine": "graph_generic",
+ "active_parser_type": null,
+ "active_capability": {
+  "requested_parser": null,
+  "canonical_parser": null,
+  "query_engine": "graph_generic",
+  "support_level": "generic",
+  "support": {
+   "symbols": "generic",
+   "calls": "generic",
+   "endpoints": "none",
+   "database": "none"
+  }
+ },
+ "capabilities": [
+  {
+   "canonical_parser": "android",
+   "aliases": [
+    "android",
+    "android-kotlin",
+    "kotlin-android"
+   ],
+   "query_engine": "android_graph",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "aspnet_core",
+   "aliases": [
+    "asp.net-core",
+    "aspnet-core",
+    "aspnet_core",
+    "aspnetcore"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "full",
+    "database": "full"
+   },
+   "generation_scoped": true
+  },
+  {
+   "canonical_parser": "aspnet_framework",
+   "aliases": [
+    "asp.net-framework",
+    "aspnet-framework",
+    "aspnet_framework",
+    "aspnetframework"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "full",
+    "database": "full"
+   },
+   "generation_scoped": true
+  },
+  {
+   "canonical_parser": "cobol",
+   "aliases": [
+    "cobol",
+    "cobol85",
+    "gnucobol",
+    "ibm-cobol"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "cplus",
+   "aliases": [
+    "c",
+    "c++",
+    "clang",
+    "cplus",
+    "cpp",
+    "pro*c",
+    "pro-c",
+    "proc"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "none",
+    "database": "full"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "csharp",
+   "aliases": [
+    ".net",
+    "c#",
+    "cs",
+    "csharp",
+    "dotnet"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "partial",
+    "database": "partial"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "delphi",
+   "aliases": [
+    "delphi",
+    "pascal"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "flutter",
+   "aliases": [
+    "dart",
+    "flutter",
+    "flutter-dart",
+    "flutter_dart"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "go",
+   "aliases": [
+    "go"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "javascript",
+   "aliases": [
+    "express",
+    "express.js",
+    "javascript",
+    "js",
+    "node",
+    "nodejs"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "partial",
+   "support": {
+    "symbols": "full",
+    "calls": "partial",
+    "endpoints": "partial",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "jp1",
+   "aliases": [
+    "ajs",
+    "jobnet",
+    "jp1"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "jvm",
+   "aliases": [
+    "java",
+    "jvm",
+    "kotlin"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "mybatis",
+   "aliases": [
+    "my-batis",
+    "mybatis"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "none",
+    "database": "full"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "perl",
+   "aliases": [
+    "perl"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "php",
+   "aliases": [
+    "laravel",
+    "php",
+    "symfony"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "partial",
+   "support": {
+    "symbols": "full",
+    "calls": "partial",
+    "endpoints": "partial",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "plsql",
+   "aliases": [
+    "oracle-plsql",
+    "pl/sql",
+    "plsql"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "none",
+    "endpoints": "none",
+    "database": "full"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "python",
+   "aliases": [
+    "django",
+    "fastapi",
+    "flask",
+    "py",
+    "python"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "partial",
+   "support": {
+    "symbols": "full",
+    "calls": "partial",
+    "endpoints": "partial",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "rust",
+   "aliases": [
+    "rust"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "servlet_jsp",
+   "aliases": [
+    "jsp",
+    "servlet",
+    "servlet-jsp",
+    "servlet_jsp"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "full",
+    "database": "none"
+   },
+   "generation_scoped": true
+  },
+  {
+   "canonical_parser": "shell",
+   "aliases": [
+    "bash",
+    "sh",
+    "shell"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "spring",
+   "aliases": [
+    "spring",
+    "spring-boot",
+    "spring_boot"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "full",
+    "database": "full"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "sql",
+   "aliases": [
+    "sql"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "none",
+    "endpoints": "none",
+    "database": "full"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "struts",
+   "aliases": [
+    "apache-struts",
+    "apache_struts",
+    "struts",
+    "struts2"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "full",
+    "database": "full"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "swift",
+   "aliases": [
+    "swift"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "typescript",
+   "aliases": [
+    "nest.js",
+    "nestjs",
+    "ts",
+    "tsx",
+    "typescript"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "full",
+   "support": {
+    "symbols": "full",
+    "calls": "full",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "vbnet",
+   "aliases": [
+    "vbnet"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  },
+  {
+   "canonical_parser": "visual_basic",
+   "aliases": [
+    "vb6",
+    "vba",
+    "vbscript",
+    "visual_basic"
+   ],
+   "query_engine": "graph_generic",
+   "support_level": "generic",
+   "support": {
+    "symbols": "generic",
+    "calls": "generic",
+    "endpoints": "none",
+    "database": "none"
+   },
+   "generation_scoped": false
+  }
+ ]
+}
