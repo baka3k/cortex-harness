@@ -1331,14 +1331,21 @@ _RUST_ANALYZER_BINARIES = {
 
 
 def _rust_analyzer_binary(analyzer: AnalyzerConfig) -> Optional[str]:
-    """Resolve Rust analyzer binary khi backend swap được bật qua env.
+    """Resolve Rust analyzer binary theo backend đang chọn.
 
-    ``CORTEX_RUST_ANALYZER=rust`` chọn backend Rust cho các parser đã port;
-    binary không tồn tại ⇒ fallback Python (rollback tức thì). Graph target
-    args và mọi flag khác giữ nguyên — CLI contract 2 backend giống từng chữ.
+    Phase-14 flip defaults: ``CORTEX_RUST_ANALYZER`` UNSET → tự chọn backend
+    Rust cho các parser đã port **khi binary đã build** (không có binary ⇒
+    fallback Python tức thì). ``CORTEX_RUST_ANALYZER=python`` là cờ rollback:
+    ép backend Python bất kể binary có tồn tại. ``=rust`` giữ nghĩa cũ (chọn
+    Rust nếu binary sẵn sàng). Graph target args và mọi flag khác giữ nguyên —
+    CLI contract 2 backend giống từng chữ.
     """
     mode = (os.environ.get("CORTEX_RUST_ANALYZER") or "").strip().lower()
-    if mode != "rust":
+    if mode == "python":
+        # Rollback flag: luôn Python backend.
+        return None
+    if mode not in ("", "rust"):
+        # Giá trị lạ: giữ hành vi trước phase-14 (không swap).
         return None
     binary_name = _RUST_ANALYZER_BINARIES.get(analyzer.parser)
     if not binary_name:

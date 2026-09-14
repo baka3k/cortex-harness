@@ -1,0 +1,25 @@
+[package]
+name = "cortex-migrate"
+version = "0.1.0"
+edition = "2024"
+description = "cortex migrate — FalkorDBLite .rdb → Ladybug cutover migration (phase 14 scope B rust-full-migration)"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "cortex-migrate"
+path = "src/main.rs"
+
+[dependencies]
+cortex-falkordb = { path = "../cortex-falkordb" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+cortex-storage = { path = "../cortex-storage" }
+lbug = "0.20.4"
+redis = { version = "1.7", default-features = false, features = ["script"] }
+serde_json = "1"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[dev-dependencies]
+tempfile = "3"
