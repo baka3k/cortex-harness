@@ -6,6 +6,7 @@
 
 mod cmds;
 mod config;
+mod env;
 mod help;
 mod parser;
 mod pyexec;
@@ -17,6 +18,25 @@ use parser::{ParseOutcome, Level};
 use std::io::Write;
 
 fn main() {
+    // Parity-harness hook (not part of the CLI surface): dump the native
+    // env payload the way the retired pyexec ops did, so
+    // scripts/rust_parity/dev_cli_parity.py can diff Python vs Rust per key.
+    if let Ok(role) = std::env::var("CORTEX_DEV_PARITY_ENV") {
+        if matches!(role.as_str(), "code" | "doc" | "status") {
+            let project_dir = std::path::PathBuf::from(
+                std::env::var("CORTEX_DEV_PARITY_PROJECT").unwrap_or_else(|_| ".".to_string()),
+            );
+            let payload = match role.as_str() {
+                "code" => env::code_env(&project_dir),
+                "doc" => env::doc_env(&project_dir),
+                _ => env::status_env_payload(&project_dir),
+            };
+            println!("{}", sorted_json(&payload));
+            let _ = std::io::stdout().flush();
+            return;
+        }
+    }
+
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let prog = "dev";
 
@@ -46,6 +66,29 @@ fn dynamic_defaults(canonical: &str) -> Option<String> {
         "--parse-quality-workers" => Some(cmds::sync::default_workers().to_string()),
         _ => None,
     }
+}
+
+/// Sort object keys recursively so parity diffs are byte-stable
+/// (`json.dumps(..., sort_keys=True)` equivalent).
+fn sorted_json(v: &serde_json::Value) -> String {
+    fn sort(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut keys: Vec<&String> = map.keys().collect();
+                keys.sort();
+                let mut out = serde_json::Map::new();
+                for k in keys {
+                    out.insert(k.clone(), sort(&map[k]));
+                }
+                serde_json::Value::Object(out)
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(sort).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    serde_json::to_string(&sort(v)).unwrap_or_else(|_| "{}".to_string())
 }
 
 fn dispatch(levels: &[Level<'static>]) {
