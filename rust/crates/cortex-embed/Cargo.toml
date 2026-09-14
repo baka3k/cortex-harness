@@ -1,0 +1,26 @@
+[package]
+name = "cortex-embed"
+version = "0.1.0"
+edition = "2024"
+description = "Embedder Rust native (ort + tokenizers) cho spike ONNX embedding: thay Python sidecar trên đường query/mind/doc, gate parity cosine >= 0.999 so với Python (plans/260914-1706-onnx-embedding-spike)"
+license = "MIT"
+publish = false
+
+[dependencies]
+# `ort` không có bản stable trên crates.io (chỉ 2.0.0-rc.*, xem findings C5) => pin exact.
+# load-dynamic: dlopen libonnxruntime do `make build` provision (hoặc .venv), không tải
+# ORT lúc compile — CI không cần network cho phần này.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = [
+    "std",
+    "load-dynamic",
+    "ndarray",
+] }
+tokenizers = "0.23.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "deny"
