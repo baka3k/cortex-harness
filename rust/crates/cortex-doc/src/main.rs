@@ -13,7 +13,7 @@ use cortex_doc::entity::build_graph_components_from_entities;
 use cortex_doc::ingest::{IngestConfig, process_text};
 use cortex_doc::langextract::{LangextractProvider, llm_generate};
 use cortex_doc::providers::{
-    EntityProvider, FixtureProvider, GlinerProvider, SpacyProvider, python_binary,
+    EntityProvider, FixtureProvider, GlinerProvider, SpacyProvider,
 };
 use cortex_doc::store::{DocGraphStore, build_generation_prompt, format_graph_context};
 use cortex_doc::text_reader::{iter_input_files, read_text_file, safe_source_id};
@@ -75,7 +75,7 @@ enum Command {
         #[arg(long)]
         langextract_model_url: Option<String>,
     },
-    /// Embed texts via the Python bge-m3 sidecar (Plan B).
+    /// Embed texts via bge-m3 (`CORTEX_EMBED_BACKEND=python` sidecar | `onnx` native).
     Embed {
         /// Texts to encode (repeatable).
         #[arg(long = "text")]
@@ -413,7 +413,7 @@ fn run() -> Result<(), String> {
                 "{}",
                 canonical_json(&serde_json::json!({
                     "dimension": dimension,
-                    "python": python_binary(),
+                    "python": cortex_doc::embed::backend_label(),
                     "vectors": vectors,
                 }))
             );

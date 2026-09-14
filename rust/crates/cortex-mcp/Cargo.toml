@@ -11,6 +11,7 @@ name = "cortex-mcp"
 path = "src/main.rs"
 
 [dependencies]
+cortex-embed = { path = "../cortex-embed" }
 cortex-graph-writer = { path = "../cortex-graph-writer" }
 cortex-falkordb = { path = "../cortex-falkordb" }
 cortex-retrieval = { path = "../cortex-retrieval" }

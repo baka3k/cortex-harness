@@ -39,7 +39,11 @@ impl Default for SessionConfig {
                         .unwrap_or(4)
                 }),
             inter_threads: 1,
-            deterministic: true,
+            // Bật mặc định để golden vector tái lập được; tắt qua env khi đo
+            // benchmark vì ORT bỏ qua một số optimization khi deterministic.
+            deterministic: crate::backend::read_env("CORTEX_EMBED_ORT_DETERMINISTIC")
+                .map(|raw| !matches!(raw.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
+                .unwrap_or(true),
         }
     }
 }
