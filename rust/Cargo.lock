@@ -740,7 +740,10 @@ name = "cortex-mcp"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cortex-falkordb",
  "cortex-graph-writer",
+ "cortex-retrieval",
+ "redis",
  "rmcp",
  "serde",
  "serde_json",

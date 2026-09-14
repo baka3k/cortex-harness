@@ -36,6 +36,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -46,9 +47,118 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import contract_query_set as query_set  # noqa: E402
+from contract_query_set import UNREGISTERED_PROJECT as UNREGISTERED  # noqa: E402
 
 VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 HEALTH_TIMEOUT_SECONDS = 180.0
+
+
+# ---------------------------------------------------------------------------
+# Stray-graph cleanup
+# ---------------------------------------------------------------------------
+
+
+def _redislite_bin(name: str) -> Optional[Path]:
+    venv_bin = REPO_ROOT / ".venv" / "bin" / name
+    if venv_bin.is_file():
+        return venv_bin
+    for python in sorted((REPO_ROOT / ".venv" / "lib").iterdir()):
+        candidate = python / "site-packages" / "redislite" / "bin" / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _discover_data_files() -> List[Path]:
+    """Same discovery as graph/runtime.rs (primary instance first)."""
+    home = Path(os.environ.get("CORTEX_DATA_HOME") or Path.home() / ".cortext-harness")
+    instance = os.environ.get("CORTEX_STORAGE_INSTANCE", "").strip() or "default"
+    root = home / "v1" / "instances"
+    files: List[Path] = []
+    primary = root / instance / "falkordb" / "code" / "data.rdb"
+    if primary.is_file():
+        files.append(primary)
+    for directory in sorted(p for p in root.iterdir() if p.is_dir()):
+        candidate = directory / "falkordb" / "code" / "data.rdb"
+        if candidate.is_file() and candidate not in files:
+            files.append(candidate)
+    return files
+
+
+def cleanup_stray_graphs(graph_names: List[str]) -> List[str]:
+    """Delete stray graphs the live Python server auto-created mid-recording.
+
+    The unified contract treats an unknown ``project_id`` as an out-of-band
+    shard, so replaying e.g. ``get_symbol.project_not_registered`` makes the
+    driver touch (and FalkorDB auto-create) an empty graph named after the
+    id. redislite persists it on shutdown, which would then break
+    ``list_databases``-shaped fixtures. Boot the embedded engine per
+    discovered ``data.rdb`` (redislite binaries, like graph/runtime.rs),
+    ``GRAPH.DELETE`` the named graphs, and persist only when something was
+    deleted.
+    """
+    server_bin = _redislite_bin("redis-server")
+    module_bin = _redislite_bin("falkordb.so")
+    cli_bin = _redislite_bin("redis-cli")
+    if not (server_bin and module_bin and cli_bin):
+        return []
+    removed: List[str] = []
+    wanted = set(graph_names)
+    for index, data_rdb in enumerate(_discover_data_files()):
+        port = 6990 + index
+        with tempfile.TemporaryDirectory(prefix="record-cleanup-") as temp_dir:
+            config = Path(temp_dir) / "redis.config"
+            config.write_text(
+                f"port {port}\nbind 127.0.0.1\n"
+                f"dir {data_rdb.parent}\ndbfilename {data_rdb.name}\n"
+                f'save ""\nappendonly no\n'
+                f"logfile {temp_dir}/redis.log\ndaemonize no\n",
+                encoding="utf-8",
+            )
+            process = subprocess.Popen(
+                [str(server_bin), str(config), "--loadmodule", str(module_bin)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            deleted_here: List[str] = []
+            try:
+                deadline = time.time() + 60.0
+                ready = False
+                while time.time() < deadline:
+                    probe = subprocess.run(
+                        [str(cli_bin), "-h", "127.0.0.1", "-p", str(port), "PING"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    if probe.returncode == 0 and "PONG" in probe.stdout:
+                        ready = True
+                        break
+                    time.sleep(0.5)
+                if not ready:
+                    continue
+                listing = subprocess.run(
+                    [str(cli_bin), "-h", "127.0.0.1", "-p", str(port), "GRAPH.LIST"],
+                    capture_output=True, text=True, timeout=30,
+                )
+                existing = set(listing.stdout.split())
+                for name in sorted(wanted & existing):
+                    subprocess.run(
+                        [str(cli_bin), "-h", "127.0.0.1", "-p", str(port),
+                         "GRAPH.DELETE", name],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    deleted_here.append(name)
+            finally:
+                shutdown = ["SHUTDOWN"] + (["SAVE"] if deleted_here else ["NOSAVE"])
+                subprocess.run(
+                    [str(cli_bin), "-h", "127.0.0.1", "-p", str(port), *shutdown],
+                    capture_output=True, text=True, timeout=30,
+                )
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+            removed.extend(deleted_here)
+    return removed
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +392,20 @@ def record(
     fixtures: List[Dict[str, Any]] = []
     live_failures: List[str] = []
     metadata = query_set.server_metadata()
+
+    def restart_live_server() -> None:
+        nonlocal process
+        if process is not None:
+            stop_live_server(process)
+            # The unified server's redislite persists stray graphs created by
+            # unregistered-project probes on shutdown — purge them from disk
+            # so the relaunched server boots the deterministic state.
+            cleanup_stray_graphs([query_set.UNREGISTERED_PROJECT])
+        process = launch_live_server(port)
+        if not wait_for_server(port, HEALTH_TIMEOUT_SECONDS):
+            raise RuntimeError("live Python server failed to restart")
+
+    pollutes_graph_state = False
     try:
         if live_available:
             metadata["initialize"] = live_initialize(port)
@@ -296,6 +420,22 @@ def record(
             if case.get("notes"):
                 fixture["notes"] = case["notes"]
             expected: Optional[Dict[str, Any]] = None
+            touches_unknown_project = (
+                UNREGISTERED in str(case["arguments"].values())
+            )
+            if (
+                live_available
+                and case["recorded_via"] == "live-python-server"
+                and touches_unknown_project
+                and pollutes_graph_state
+            ):
+                # A prior unknown-project call auto-created an empty graph
+                # (kept in the live server's memory and persisted on
+                # shutdown); restart so schema introspection observes the
+                # deterministic graph-missing state.
+                print("[record] restarting live server (unknown-project state reset)")
+                restart_live_server()
+                pollutes_graph_state = False
             if live_available and case["recorded_via"] == "live-python-server":
                 try:
                     expected = call_tool_live_with_retry(
@@ -306,6 +446,8 @@ def record(
                     live_failures.append(f"{case['id']}: {error}")
                     if not keep_going:
                         raise
+                if touches_unknown_project:
+                    pollutes_graph_state = True
             if expected is None:
                 expected = contract_layer_envelope(case)
             fixture["expected"] = expected
@@ -314,6 +456,12 @@ def record(
     finally:
         if process is not None:
             stop_live_server(process)
+        # Live calls against unknown project ids auto-create stray graphs
+        # (out-of-band db fallback) that redislite persists on shutdown —
+        # delete them so list_databases-shaped fixtures stay stable.
+        removed = cleanup_stray_graphs([query_set.UNREGISTERED_PROJECT])
+        if removed:
+            print(f"[record] removed stray graphs: {removed}")
 
     payload = {
         "recorded_at_epoch": time.time(),

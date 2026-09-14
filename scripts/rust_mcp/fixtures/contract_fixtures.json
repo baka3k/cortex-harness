@@ -1,5 +1,5 @@
 {
- "recorded_at_epoch": 1789341819.4783208,
+ "recorded_at_epoch": 1789368779.9918,
  "mode": "live-python-server",
  "server_metadata": {
   "server_name": "graph_mcp",
@@ -11550,21 +11550,52 @@
     "node_id": "n1",
     "project_id": "phase11_unregistered_project"
    },
-   "recorded_via": "contract-layer",
-   "notes": "Python ground truth: ProjectNotRegisteredError from tools.common.project_registry.resolve_project_targets → mcp_contract.normalize_error (exception path, details {})",
+   "recorded_via": "live-python-server",
+   "notes": "Phase-11 recorded the ProjectNotRegisteredError contract layer; the unified search contract now treats an unknown project_id as an out-of-band shard (raw db fallback), so this case replays live like the phase-12 graph fixtures.",
    "expected": {
-    "content_text": "project_id 'phase11_unregistered_project' is not registered. Known projects: cortext. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
+    "content_text": "Success. Read structuredContent.data.",
     "structured_content": {
-     "ok": false,
-     "data": null,
-     "error": {
-      "code": "project_not_registered",
-      "message": "project_id 'phase11_unregistered_project' is not registered. Known projects: cortext. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
-      "retryable": false,
-      "details": {}
-     }
+     "ok": true,
+     "data": {
+      "parsers_searched": [
+       "android",
+       "cplus"
+      ],
+      "parsers_failed": [],
+      "parser_results": {
+       "android": {
+        "db": null,
+        "found": false,
+        "node": null,
+        "message": "Node n1 not found in any db."
+       },
+       "cplus": {
+        "db": null,
+        "found": false,
+        "node": null,
+        "message": "Node n1 not found in any db."
+       }
+      },
+      "parser_errors": {},
+      "query_engine": "graph_fanout",
+      "found": false,
+      "message": "Node n1 not found in any db.",
+      "capability": {
+       "requested_parser": null,
+       "canonical_parser": null,
+       "query_engine": "graph_generic",
+       "support_level": "generic",
+       "support": {
+        "symbols": "generic",
+        "calls": "generic",
+        "endpoints": "none",
+        "database": "none"
+       }
+      }
+     },
+     "error": null
     },
-    "is_error": true,
+    "is_error": false,
     "meta": {
      "contract": "cortex.mcp.tool-result",
      "contractVersion": "1.0",
@@ -11580,21 +11611,33 @@
     "parser_type": "cplus",
     "project_id": "cortext"
    },
-   "recorded_via": "contract-layer",
-   "notes": "phase-11 graph stub: ground truth is mcp_contract.normalize_error applied to the documented legacy payload",
+   "recorded_via": "live-python-server",
+   "notes": "phase-11 stub probe; phase-12 replaced the stub with the real graph query engine, so the live payload is recorded",
    "expected": {
-    "content_text": "Tool 'search_functions' requires the graph query engine, which is not part of the phase-11 MCP framework build; graph tools land in phase 12.",
+    "content_text": "Success: 0 results. Read structuredContent.data.",
     "structured_content": {
-     "ok": false,
-     "data": null,
-     "error": {
-      "code": "capability_unavailable",
-      "message": "Tool 'search_functions' requires the graph query engine, which is not part of the phase-11 MCP framework build; graph tools land in phase 12.",
-      "retryable": false,
-      "details": {}
-     }
+     "ok": true,
+     "data": {
+      "db": "cortext",
+      "results": [],
+      "ids": [],
+      "query_engine": "graph_generic",
+      "capability": {
+       "requested_parser": "cplus",
+       "canonical_parser": "cplus",
+       "query_engine": "graph_generic",
+       "support_level": "full",
+       "support": {
+        "symbols": "full",
+        "calls": "full",
+        "endpoints": "none",
+        "database": "full"
+       }
+      }
+     },
+     "error": null
     },
-    "is_error": true,
+    "is_error": false,
     "meta": {
      "contract": "cortex.mcp.tool-result",
      "contractVersion": "1.0",
@@ -11609,21 +11652,62 @@
     "project_id": "phase11_unregistered_project",
     "parser_type": "cplus"
    },
-   "recorded_via": "contract-layer",
-   "notes": "same project_not_registered shape, project-context tool",
+   "recorded_via": "live-python-server",
+   "notes": "same phase-12 fanout contract as get_symbol.project_not_registered — unregistered id resolves to the raw db and the project-context fanout returns empty results",
    "expected": {
-    "content_text": "project_id 'phase11_unregistered_project' is not registered. Known projects: cortext. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
+    "content_text": "Success. Read structuredContent.data.",
     "structured_content": {
-     "ok": false,
-     "data": null,
-     "error": {
-      "code": "project_not_registered",
-      "message": "project_id 'phase11_unregistered_project' is not registered. Known projects: cortext. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
-      "retryable": false,
-      "details": {}
-     }
+     "ok": true,
+     "data": {
+      "project_id": "phase11_unregistered_project",
+      "modules": [],
+      "total": 0,
+      "offset": 0,
+      "limit": 50,
+      "has_more": false,
+      "capability": {
+       "requested_parser": "cplus",
+       "canonical_parser": "cplus",
+       "query_engine": "graph_generic",
+       "support_level": "full",
+       "support": {
+        "symbols": "full",
+        "calls": "full",
+        "endpoints": "none",
+        "database": "full"
+       }
+      },
+      "capability_diagnostics": {
+       "schema_status": "available",
+       "support_status": "unsupported",
+       "explicit_request": false,
+       "requested_relationships": [
+        "HAS_DESCRIPTOR",
+        "DEPENDS_ON"
+       ],
+       "available_relationships": [],
+       "required_relationships": [
+        "HAS_DESCRIPTOR"
+       ],
+       "missing_required_relationships": [],
+       "required_labels": [
+        "ProjectModule",
+        "BuildDescriptor"
+       ],
+       "missing_required_labels": [
+        "ProjectModule",
+        "BuildDescriptor"
+       ],
+       "label_schema_status": "available",
+       "available_labels": [],
+       "warnings": [
+        "Provider does not expose required labels: ProjectModule, BuildDescriptor — the query runs anyway and simply contributes no rows."
+       ]
+      }
+     },
+     "error": null
     },
-    "is_error": true,
+    "is_error": false,
     "meta": {
      "contract": "cortex.mcp.tool-result",
      "contractVersion": "1.0",

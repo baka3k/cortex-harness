@@ -346,21 +346,27 @@ def contract_layer_cases() -> List[Dict[str, Any]]:
             "id": "get_symbol.project_not_registered",
             "tool": "get_symbol",
             "arguments": {"node_id": "n1", "project_id": UNREGISTERED_PROJECT},
-            "recorded_via": "contract-layer",
+            # Phase-12 contract: unregistered project ids resolve via the
+            # naming convention (`code_graph == project_id`) and fan out —
+            # recorded live like every other graph case.
+            "recorded_via": "live-python-server",
             "notes": (
-                "Python ground truth: ProjectNotRegisteredError from "
-                "tools.common.project_registry.resolve_project_targets → "
-                "mcp_contract.normalize_error (exception path, details {})"
+                "Phase-11 recorded the ProjectNotRegisteredError contract "
+                "layer; the unified search contract now treats an unknown "
+                "project_id as an out-of-band shard (raw db fallback), so "
+                "this case replays live like the phase-12 graph fixtures."
             ),
         },
         {
             "id": f"{STUB_TOOL}.capability_unavailable_stub",
             "tool": STUB_TOOL,
             "arguments": STUB_TOOL_ARGUMENTS,
-            "recorded_via": "contract-layer",
+            # Phase-12 wired the real graph engine — the stub envelope no
+            # longer exists on either server, so record live.
+            "recorded_via": "live-python-server",
             "notes": (
-                "phase-11 graph stub: ground truth is mcp_contract.normalize_error "
-                "applied to the documented legacy payload"
+                "phase-11 stub probe; phase-12 replaced the stub with the "
+                "real graph query engine, so the live payload is recorded"
             ),
         },
         {
@@ -370,8 +376,12 @@ def contract_layer_cases() -> List[Dict[str, Any]]:
                 "project_id": UNREGISTERED_PROJECT,
                 "parser_type": "cplus",
             },
-            "recorded_via": "contract-layer",
-            "notes": "same project_not_registered shape, project-context tool",
+            "recorded_via": "live-python-server",
+            "notes": (
+                "same phase-12 fanout contract as get_symbol."
+                "project_not_registered — unregistered id resolves to the "
+                "raw db and the project-context fanout returns empty results"
+            ),
         },
     ]
     return cases
