@@ -1,10 +1,11 @@
-//! `dev status` — native transcript plus the Python storage layer (via the
-//! pyexec bridge) for the per-process environment values, exactly as dev.py
-//! reads them from `_code_env_for_process` / `_doc_env_for_process`.
+//! `dev status` — native transcript with the native storage layer
+//! (`cortex_storage` + `env.rs`) for the per-process environment values,
+//! exactly as dev.py reads them from `_code_env_for_process` /
+//! `_doc_env_for_process`.
 
 use crate::config::*;
+use crate::env;
 use crate::parser::Matches;
-use crate::pyexec;
 use crate::util::{echo, echo_err};
 use serde_json::Value;
 use std::path::Path;
@@ -33,10 +34,7 @@ pub fn run(m: &Matches) {
         echo(&format!("  {}{}", name, if active { " [ACTIVE]" } else { "" }));
     }
 
-    let payload = pyexec::call_json(
-        "status_env",
-        &serde_json::json!({ "project_dir": project_path.to_string_lossy() }),
-    );
+    let payload = env::status_env_payload(&project_path);
 
     let proj = payload.get("project").cloned().unwrap_or(Value::Null);
     let config_name = payload

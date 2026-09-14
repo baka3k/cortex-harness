@@ -193,6 +193,91 @@ FIXTURE_DEV_CONFIG = {
     "ignore": {"folders": ["legacy"]},
 }
 
+# Variants for the env-payload gate (phase-01 D2): stock FalkorDB, embedded
+# Ladybug, and a remote-backed project (the three shapes the plan requires).
+ENV_FIXTURE_VARIANTS = {
+    "stock_falkordb": None,
+    "ladybug": lambda cfg: (
+        cfg["code"]["env"].update(
+            {
+                "GRAPH_PROVIDER": "ladybug",
+                "CODE_GRAPH_PROVIDER": "ladybug",
+                "LADYBUG_GRAPH": "parity_project",
+            }
+        ),
+        cfg["doc"]["env"].update(
+            {
+                "GRAPH_PROVIDER": "ladybug",
+                "DOC_GRAPH_PROVIDER": "ladybug",
+                "LADYBUG_GRAPH": "parity_project_doc",
+            }
+        ),
+    ),
+    "remote_backend": lambda cfg: (
+        cfg.update(
+            {
+                "storage_backend": "remote",
+                "remote": {
+                    "qdrant_url": "https://qdrant.example.cloud:6333",
+                    "qdrant_api_key": "parity-key",
+                    "falkordb_uri": "redis://falkordb.example.cloud:6379",
+                    "falkordb_password": "parity-pass",
+                    "falkordb_ssl": True,
+                },
+            }
+        ),
+        cfg["code"]["env"].pop("FALKORDB_GRAPH", None),
+        cfg["doc"]["env"].pop("FALKORDB_GRAPH", None),
+    ),
+}
+
+
+def make_env_fixture(base: Path, variant: str | None) -> Path:
+    cfg_dir = base / ".cortext-harness" / "config"
+    cfg_dir.mkdir(parents=True)
+    dev = json.loads(json.dumps(FIXTURE_DEV_CONFIG))
+    mutate = ENV_FIXTURE_VARIANTS.get(variant or "stock_falkordb")
+    if mutate is not None:
+        mutate(dev)
+    (cfg_dir / "dev.json").write_text(json.dumps(dev, indent=2, ensure_ascii=False))
+    return base
+
+
+_PY_ENV_PAYLOAD_SCRIPT = r"""
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from cortex_harness.dev import (
+    _code_env_for_process,
+    _doc_env_for_process,
+    _load_active_config,
+)
+project = Path(sys.argv[2])
+role = sys.argv[3]
+cfg, path = _load_active_config(project)
+if role == "code":
+    payload = _code_env_for_process(cfg, project)
+else:
+    payload = _doc_env_for_process(cfg, project)
+payload["CORTEX_HARNESS_CONFIG_PATH"] = str(Path(path).resolve())
+print(json.dumps(payload, sort_keys=True, default=str))
+"""
+
+
+def env_payload_py(project: Path, role: str) -> tuple[int, str, str]:
+    script = f"import sys; sys.argv = ['x', {str(REPO)!r}, {str(project)!r}, {role!r}]\n" + _PY_ENV_PAYLOAD_SCRIPT
+    env = dict(os.environ)
+    return run([str(PY), "-c", script])
+
+
+def env_payload_rust(rust_bin: Path, project: Path, role: str) -> tuple[int, str, str]:
+    env = dict(os.environ)
+    env["CORTEX_DEV_PARITY_ENV"] = role
+    env["CORTEX_DEV_PARITY_PROJECT"] = str(project)
+    env["CORTEX_HARNESS_REPO_ROOT"] = str(REPO)
+    proc = subprocess.run([str(rust_bin)], capture_output=True, text=True, env=env)
+    return proc.returncode, proc.stdout, proc.stderr
+
 
 def make_fixture(base: Path) -> Path:
     cfg_dir = base / ".cortext-harness" / "config"
@@ -405,6 +490,55 @@ def main() -> int:
         "orchestrator parity harness (incremental_sync.py is invoked "
         "unchanged); skipped here by design."
     )
+
+    # ── Gate 6: per-process env payload parity (phase-01, plan D2) ───────
+    g6 = Gate("GATE 6 — code/doc env payload per key (3 config shapes)")
+    for variant in ("stock_falkordb", "ladybug", "remote_backend"):
+        tmp_py6 = Path(tempfile.mkdtemp(prefix=f"cortex-dev-parity-env-{variant}-py-"))
+        tmp_rs6 = Path(tempfile.mkdtemp(prefix=f"cortex-dev-parity-env-{variant}-rs-"))
+        make_env_fixture(tmp_py6, variant)
+        make_env_fixture(tmp_rs6, variant)
+        try:
+            for role in ("code", "doc"):
+                rc_py, out_py, err_py = env_payload_py(tmp_py6, role)
+                rc_rs, out_rs, err_rs = env_payload_rust(rust_bin, tmp_rs6, role)
+                if rc_py != 0 or rc_rs != 0:
+                    g6.add(
+                        f"{variant}/{role} exit",
+                        False,
+                        f"py={rc_py} err={err_py.strip()[:200]} | rust={rc_rs} err={err_rs.strip()[:200]}",
+                    )
+                    continue
+                try:
+                    py_env = json.loads(out_py)
+                    rs_env = json.loads(out_rs)
+                except json.JSONDecodeError as exc:
+                    g6.add(f"{variant}/{role} json", False, f"decode: {exc}; py={out_py[:120]!r} rs={out_rs[:120]!r}")
+                    continue
+                # The two fixtures live in different temp dirs; only the
+                # config-path prefix differs by construction.
+                for env_obj, base_dir in ((py_env, tmp_py6), (rs_env, tmp_rs6)):
+                    cfg_path = env_obj.get("CORTEX_HARNESS_CONFIG_PATH", "")
+                    env_obj["CORTEX_HARNESS_CONFIG_PATH"] = cfg_path.replace(str(base_dir), "<FIXTURE>")
+                ok = py_env == rs_env
+                detail = ""
+                if not ok:
+                    py_keys, rs_keys = set(py_env), set(rs_env)
+                    diffs = [
+                        f"    {k}: py={py_env[k]!r} rs={rs_env.get(k, '<missing>')!r}"
+                        for k in sorted(py_keys & rs_keys)
+                        if py_env[k] != rs_env.get(k)
+                    ]
+                    if py_keys - rs_keys:
+                        diffs.append(f"    py-only keys: {sorted(py_keys - rs_keys)}")
+                    if rs_keys - py_keys:
+                        diffs.append(f"    rs-only keys: {sorted(rs_keys - py_keys)}")
+                    detail = "\n".join(diffs[:25])
+                g6.add(f"{variant}/{role}", ok, detail)
+        finally:
+            shutil.rmtree(tmp_py6, ignore_errors=True)
+            shutil.rmtree(tmp_rs6, ignore_errors=True)
+    gates.append(g6)
 
     # ── report ───────────────────────────────────────────────────────────
     if args.json:

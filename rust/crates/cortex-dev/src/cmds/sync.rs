@@ -893,10 +893,7 @@ pub fn sync_code(m: &Matches) {
     let (cfg, _) = load_active_config(&project_path);
     let code_cfg = cfg.get("code").cloned().unwrap_or(json!({}));
     let env = code_cfg.get("env").cloned().unwrap_or(json!({}));
-    let process_env = pyexec::call_json(
-        "code_env",
-        &json!({ "project_dir": project_path.to_string_lossy() }),
-    );
+    let process_env = crate::env::code_env(&project_path);
     let process_env = with_extra_ignores(&cfg, &process_env);
     let project = cfg.get("project").cloned().unwrap_or(json!({}));
     let folders = crate::config::source_folders(code_cfg.get("source").unwrap_or(&json!({})));
@@ -1024,10 +1021,7 @@ pub fn sync_code_all(m: &Matches) {
     let (cfg, _) = load_active_config(&project_path);
     let code_cfg = cfg.get("code").cloned().unwrap_or(json!({}));
     let env = code_cfg.get("env").cloned().unwrap_or(json!({}));
-    let process_env = pyexec::call_json(
-        "code_env",
-        &json!({ "project_dir": project_path.to_string_lossy() }),
-    );
+    let process_env = crate::env::code_env(&project_path);
     let process_env = with_extra_ignores(&cfg, &process_env);
     let project = cfg.get("project").cloned().unwrap_or(json!({}));
     let folders = dedupe_scan_roots(
@@ -1176,10 +1170,7 @@ pub fn sync_code_all(m: &Matches) {
 
 pub fn sync_code_stop(m: &Matches) {
     let project_path = super::init::resolve_path(Path::new(&m.value_or("--project-dir", ".")));
-    let process_env = pyexec::call_json(
-        "code_env",
-        &json!({ "project_dir": project_path.to_string_lossy() }),
-    );
+    let process_env = crate::env::code_env(&project_path);
     stop_sync_command("code", &project_path, &process_env);
 }
 
@@ -1200,10 +1191,7 @@ pub fn sync_doc_impl(m: &Matches, force_full: bool) {
     let project_path = super::init::resolve_path(Path::new(&project_dir));
     let (cfg, _) = load_active_config(&project_path);
     let doc_cfg = cfg.get("doc").cloned().unwrap_or(json!({}));
-    let env = pyexec::call_json(
-        "doc_env",
-        &json!({ "project_dir": project_path.to_string_lossy() }),
-    );
+    let env = crate::env::doc_env(&project_path);
     let env = with_extra_ignores(&cfg, &env);
     let extra_ignores = ignore_folders(&cfg);
     let project = cfg.get("project").cloned().unwrap_or(json!({}));
@@ -1262,10 +1250,7 @@ pub fn sync_doc_impl(m: &Matches, force_full: bool) {
 
 pub fn sync_doc_stop(m: &Matches) {
     let project_path = super::init::resolve_path(Path::new(&m.value_or("--project-dir", ".")));
-    let env = pyexec::call_json(
-        "doc_env",
-        &json!({ "project_dir": project_path.to_string_lossy() }),
-    );
+    let env = crate::env::doc_env(&project_path);
     stop_sync_command("doc", &project_path, &env);
 }
 
@@ -1573,64 +1558,7 @@ fn sorted_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn embed_device_cli_arg(env: &Value) -> String {
-    normalize_embed_device(env.get("device").and_then(|v| v.as_str()).unwrap_or("cpu"))
-}
-
-/// dev.py `_normalize_embed_device` without importing torch: "auto" and
-/// unavailable accelerators resolve on the analyzer side; pass non-accelerator
-/// values through and keep mps/cuda only when they cannot be checked here.
-fn normalize_embed_device(device: &str) -> String {
-    let value = device.trim().to_lowercase();
-    if value == "auto" {
-        // The Python launcher resolves auto via torch; the Rust launcher
-        // forwards to the venv probe so analyzer CLIs never receive "auto".
-        return python_resolve_device("auto");
-    }
-    if value != "mps" && value != "cuda" {
-        return device.to_string();
-    }
-    python_resolve_device(&value)
-}
-
-fn python_resolve_device(device: &str) -> String {
-    let script = "import json; d='cpu'\ntry:\n import torch\n d='mps' if (getattr(torch.backends,'mps',None) and torch.backends.mps.is_available()) else ('cuda' if torch.cuda.is_available() else 'cpu')\nexcept Exception:\n d='cpu'\nprint(json.dumps({'device': d}))";
-    let output = Command::new(pyexec::venv_python(&pyexec::repo_root()))
-        .arg("-c")
-        .arg(script)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => {
-            let parsed: Value =
-                serde_json::from_slice(&o.stdout).unwrap_or(json!({"device": "cpu"}));
-            if device == "auto" {
-                parsed
-                    .get("device")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("cpu")
-                    .to_string()
-            } else {
-                // Explicit mps/cuda: keep when available, else fall back.
-                let resolved = parsed
-                    .get("device")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("cpu");
-                if resolved == device {
-                    device.to_string()
-                } else if resolved == "cuda" {
-                    "cuda".to_string()
-                } else {
-                    "cpu".to_string()
-                }
-            }
-        }
-        _ => {
-            if device == "auto" {
-                "cpu".to_string()
-            } else {
-                device.to_string()
-            }
-        }
-    }
+    crate::env::normalize_embed_device(env.get("device").and_then(|v| v.as_str()).unwrap_or("cpu"))
 }
 
 // ---------------------------------------------------------------------------
