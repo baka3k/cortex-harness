@@ -115,8 +115,11 @@ fn encode_query_onnx(query: &str) -> Result<Vec<f64>, String> {
     if let Some(note) = Backend::device_note(Plane::Doc) {
         eprintln!("[mind.embed] {note}");
     }
+    let trace = cortex_embed::trace_enabled();
+    let lock_started = std::time::Instant::now();
     let holder = EMBEDDER.get_or_init(|| Mutex::new(None));
     let mut guard = holder.lock().map_err(|_| "embedder lock poisoned".to_string())?;
+    let lock_ms = lock_started.elapsed().as_secs_f64() * 1000.0;
     if guard.is_none() {
         let spec = spec_from_env(Plane::Doc).map_err(|error| error.to_string())?;
         let embedder = OnnxEmbedder::new(spec).map_err(|error| error.to_string())?;
@@ -124,9 +127,16 @@ fn encode_query_onnx(query: &str) -> Result<Vec<f64>, String> {
         *guard = Some(embedder);
     }
     let embedder = guard.as_ref().ok_or("onnx embedder unavailable")?;
+    let embed_started = std::time::Instant::now();
     let vectors = embedder
         .embed(&[query.to_string()])
         .map_err(|error| error.to_string())?;
+    if trace {
+        eprintln!(
+            "[mind.embed.trace] lock_wait={lock_ms:.1}ms embed={:.1}ms",
+            embed_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     vectors
         .into_iter()
         .next()
