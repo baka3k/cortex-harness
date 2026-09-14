@@ -565,7 +565,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "b2b00236fb4b78a2264d8a6566cc55ec",
+        "fencing_token": "f0cd94d77d70686cdf12d5aa7c9c8a46",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [],
@@ -581,7 +581,7 @@
       "op": "renew_lease",
       "args": {
         "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
-        "fencing_token": "b2b00236fb4b78a2264d8a6566cc55ec",
+        "fencing_token": "f0cd94d77d70686cdf12d5aa7c9c8a46",
         "lease_seconds": 60
       },
       "result": {
@@ -600,7 +600,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "b2b00236fb4b78a2264d8a6566cc55ec",
+        "fencing_token": "f0cd94d77d70686cdf12d5aa7c9c8a46",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [],
@@ -616,7 +616,7 @@
       "op": "ack_batch",
       "args": {
         "job_id": "job_15ac6eff5e4f0936da15d0383164b5bfec46ce8399b28e948cc3bca7e67927df",
-        "fencing_token": "b2b00236fb4b78a2264d8a6566cc55ec",
+        "fencing_token": "f0cd94d77d70686cdf12d5aa7c9c8a46",
         "elapsed_ms": 120
       },
       "result": {
@@ -669,7 +669,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "2d2cd96ee072b117317b3966580c91bf",
+        "fencing_token": "bce861a291c7281c2824c0d264ead31c",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [
@@ -685,7 +685,7 @@
       "op": "ack_batch",
       "args": {
         "job_id": "job_16b364a46d9f0ae6a9687b2865afd07a224bd0a66aa6efe791dcec9decb971a5",
-        "fencing_token": "2d2cd96ee072b117317b3966580c91bf",
+        "fencing_token": "bce861a291c7281c2824c0d264ead31c",
         "elapsed_ms": null
       },
       "result": {
@@ -1110,7 +1110,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "b4f4b2a92b36394700b75e49a70ec9c1",
+        "fencing_token": "5ad354c8531206d509a50cabfb02c16d",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [],
@@ -1130,7 +1130,7 @@
       "op": "mark_reconciling",
       "args": {
         "job_id": "job_7c2a01a4478785420a3e5a31843558b5ca00e3ddc6253cd7e079257bdbc09fab",
-        "fencing_token": "b4f4b2a92b36394700b75e49a70ec9c1"
+        "fencing_token": "5ad354c8531206d509a50cabfb02c16d"
       },
       "result": {
         "job_id": "job_7c2a01a4478785420a3e5a31843558b5ca00e3ddc6253cd7e079257bdbc09fab",
@@ -1148,7 +1148,7 @@
         "status": "reconciling",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "b4f4b2a92b36394700b75e49a70ec9c1",
+        "fencing_token": "5ad354c8531206d509a50cabfb02c16d",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [],
@@ -1168,7 +1168,7 @@
       "op": "schedule_reconciliation_retry",
       "args": {
         "job_id": "job_7c2a01a4478785420a3e5a31843558b5ca00e3ddc6253cd7e079257bdbc09fab",
-        "fencing_token": "b4f4b2a92b36394700b75e49a70ec9c1",
+        "fencing_token": "5ad354c8531206d509a50cabfb02c16d",
         "retry_at": "2026-09-13T12:00:00+00:00",
         "error_code": "invalid_contract"
       },
@@ -1226,7 +1226,7 @@
         "status": "reconciling",
         "attempt": 2,
         "max_attempts": 5,
-        "fencing_token": "d746d0967e778ea54ed8b758e115028d",
+        "fencing_token": "103b60dc02e6b8964b23caa067881e54",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": "2026-09-13T12:00:00.000000+00:00",
         "required_barriers": [],
@@ -1246,7 +1246,7 @@
       "op": "ack_batch",
       "args": {
         "job_id": "job_7c2a01a4478785420a3e5a31843558b5ca00e3ddc6253cd7e079257bdbc09fab",
-        "fencing_token": "d746d0967e778ea54ed8b758e115028d",
+        "fencing_token": "103b60dc02e6b8964b23caa067881e54",
         "elapsed_ms": 100
       },
       "result": {
@@ -1303,7 +1303,7 @@
         "status": "leased",
         "attempt": 1,
         "max_attempts": 5,
-        "fencing_token": "1aaaed60bc56b21f68c5f4d7a268061c",
+        "fencing_token": "1a83c9c568b741ff9ab037688334c830",
         "lease_until": "2026-09-13T12:01:00.000000+00:00",
         "next_attempt_at": null,
         "required_barriers": [],
@@ -1320,7 +1320,7 @@
       "op": "ack_batch",
       "args": {
         "job_id": "job_ad9b0719ba1765ed0823492613a7794bba71b34bf7d31867b7f0cfaeb3afa4e5",
-        "fencing_token": "1aaaed60bc56b21f68c5f4d7a268061c",
+        "fencing_token": "1a83c9c568b741ff9ab037688334c830",
         "elapsed_ms": null
       },
       "result": {
@@ -1475,7 +1475,7 @@
           "artifact_bytes": 109,
           "journal_bytes": 988616,
           "oldest_unfinished_at": "2026-09-13T12:00:00.000000+00:00",
-          "oldest_unfinished_age_seconds": 11269.335994,
+          "oldest_unfinished_age_seconds": 79030.608395,
           "next_action": "inspect_error_and_acknowledge_or_purge_after_retention",
           "error_code": "invalid_contract"
         },
