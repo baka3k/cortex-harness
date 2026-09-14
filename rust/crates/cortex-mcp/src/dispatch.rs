@@ -412,6 +412,9 @@ pub enum ToolOutcome {
     RawError { content_text: String },
     /// Legacy payload dict → `wrap_dispatch_result`.
     Payload(Value),
+    /// Prebuilt canonical error envelope (mind `_standard_tool` exception
+    /// path: `normalize_error(exc)` before the middleware).
+    EnvelopeError { envelope: Value, content_text: String },
 }
 
 /// Signature-level validation (FastMCP layer, before the middleware).

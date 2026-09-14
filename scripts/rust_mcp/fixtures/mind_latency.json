@@ -1,0 +1,7 @@
+{
+ "python_p50_ms": 51.8,
+ "python_p95_ms": 54.2,
+ "rust_p50_ms": 50.0,
+ "rust_p95_ms": 50.6,
+ "rounds": 12
+}

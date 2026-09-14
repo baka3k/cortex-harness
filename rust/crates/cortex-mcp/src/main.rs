@@ -59,6 +59,10 @@ async fn main() {
         "FASTMCP_STREAMABLE_HTTP_PATH",
         "/mcp",
     ));
+    // Server flavor: `--server mind` (or MCP_SERVER_NAME=mind_mcp) serves the
+    // doc/mind tool surface (`doc-tiny/mcp_graph_rag.py`); default = unified.
+    let server_name = arg_value("--server", "MCP_SERVER_NAME", "");
+    let flavor = cortex_mcp::server::ServerFlavor::resolve(Some(&server_name));
 
     // Python unified serves `stateless_http=True, json_response=True`:
     // no session state, plain application/json responses.
@@ -67,7 +71,7 @@ async fn main() {
     config.legacy_session_mode = false;
     config.json_response = true;
     let service = StreamableHttpService::new(
-        || Ok(CortexMcpServer::new()),
+        move || Ok(CortexMcpServer::with_flavor(flavor)),
         Arc::new(NeverSessionManager::default()),
         config,
     );
@@ -101,7 +105,13 @@ async fn main() {
         .unwrap_or_else(|error| {
             panic!("Failed to bind {host}:{port}: {error}");
         });
-    println!("Starting MCP server: graph_mcp");
+    println!(
+        "Starting MCP server: {}",
+        match flavor {
+            cortex_mcp::server::ServerFlavor::Mind => "mind_mcp",
+            cortex_mcp::server::ServerFlavor::Graph => "graph_mcp",
+        }
+    );
     println!("Transport: streamable-http");
     println!("Endpoint: http://{host}:{port}{path}");
 

@@ -1,0 +1,4173 @@
+{
+ "recorded_at_epoch": 1789372769.428551,
+ "mode": "live-python-mind-server",
+ "server_metadata": {
+  "initialize": {
+   "server_name": "mind_mcp",
+   "server_version": "1.29.0",
+   "instructions": null
+  },
+  "tools_list": {
+   "tools": [
+    {
+     "name": "list_source_ids",
+     "description": "List available source_id values from Neo4j (Paragraph nodes).",
+     "properties": [
+      "limit",
+      "project_id"
+     ]
+    },
+    {
+     "name": "list_qdrant_collections",
+     "description": "List Qdrant collections.\n\n        Per the unified ingest/query contract:\n        - ``project_id`` is optional. When omitted (or empty), returns every\n          collection (``None`` semantics = full-search across all projects).\n        - When supplied AND registered, filters to that project's collection.\n        - When supplied but not registered, fails closed with the project\n          registry error instead of silently querying another project's data.\n        ",
+     "properties": [
+      "project_id"
+     ]
+    },
+    {
+     "name": "semantic_search",
+     "description": "Vector-only search in Qdrant. Returns passages without graph expansion.\n\n        Per Phase 05 of the unified ingest/query contract plan, ``project_id``\n        scopes the query to one project's shard; omit it to search across all\n        projects. The Qdrant collection is resolved through the registry when\n        ``project_id`` is given; the explicit ``collection`` arg still wins as\n        an escape hatch.\n        ",
+     "properties": [
+      "collection",
+      "include_entity_ids",
+      "include_entity_mentions",
+      "max_passage_chars",
+      "project_id",
+      "query",
+      "source_id",
+      "top_k"
+     ]
+    },
+    {
+     "name": "query_graph_rag_langextract",
+     "description": "\n        Query Qdrant for top-k passages with entity_ids payload, then fetch related\n        entity context from Neo4j. Returns context only (no LLM generation).\n        ",
+     "properties": [
+      "collection",
+      "entity_types",
+      "expand_related",
+      "graph_depth",
+      "include_entities",
+      "include_relations",
+      "max_passage_chars",
+      "min_entity_occurrences",
+      "min_score_to_expand",
+      "project_id",
+      "query",
+      "related_k",
+      "rerank",
+      "rerank_confidence_weight",
+      "rerank_entity_weight",
+      "rerank_length_penalty",
+      "rerank_type_weight",
+      "source_id",
+      "top_k"
+     ]
+    },
+    {
+     "name": "get_paragraph_text",
+     "description": "Fetch a paragraph's text by source_id + paragraph_id from Neo4j.",
+     "properties": [
+      "paragraph_id",
+      "project_id",
+      "source_id"
+     ]
+    }
+   ]
+  }
+ },
+ "environment": {
+  "CORTEX_HARNESS_CONFIG_PATH": "/Users/hieplq1.aip/AI/cortex-harness/scripts/rust_mcp/fixtures/mind_config",
+  "CORTEX_DATA_HOME": "/Users/hieplq1.aip/AI/cortex-harness/scripts/rust_mcp/fixtures/mind_local_store",
+  "CORTEX_STORAGE_INSTANCE": "default",
+  "FALKORDB_URI": "redis://127.0.0.1:6379",
+  "FALKORDB_GRAPH": "mindfix_doc",
+  "PYTHONHASHSEED": "0",
+  "EMBEDDING_MODEL": "BAAI/bge-m3",
+  "EMBEDDING_DEVICE": "cpu",
+  "MCP_SERVER_NAME": "mind_mcp",
+  "FASTMCP_PORT": "8797"
+ },
+ "cases": [
+  {
+   "id": "list_qdrant_collections.unscoped",
+   "tool": "list_qdrant_collections",
+   "arguments": {},
+   "expected": {
+    "content_text": "Success: 0 items. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": [],
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "list_qdrant_collections"
+    }
+   }
+  },
+  {
+   "id": "list_qdrant_collections.scoped",
+   "tool": "list_qdrant_collections",
+   "arguments": {
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 1 item. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": [
+      "mindfix_doc"
+     ],
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "list_qdrant_collections"
+    }
+   }
+  },
+  {
+   "id": "list_qdrant_collections.prefix",
+   "tool": "list_qdrant_collections",
+   "arguments": {
+    "project_id": "mind"
+   },
+   "expected": {
+    "content_text": "project_id 'mind' is not registered. Known projects: mindfix. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
+    "structured_content": {
+     "ok": false,
+     "data": null,
+     "error": {
+      "code": "project_not_registered",
+      "message": "project_id 'mind' is not registered. Known projects: mindfix. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
+      "retryable": false,
+      "details": {}
+     }
+    },
+    "is_error": true,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "list_qdrant_collections"
+    }
+   }
+  },
+  {
+   "id": "list_source_ids.default",
+   "tool": "list_source_ids",
+   "arguments": {},
+   "expected": {
+    "content_text": "Success: 6 items. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": [
+      "mindfix__deerflow-architecture.md",
+      "mindfix__digital-key-overview.md",
+      "mindfix__falkordb-ops.md",
+      "mindfix__guides__security-baseline.md",
+      "mindfix__n8n-stock-api.md",
+      "mindfix__qdrant-vector-search.md"
+     ],
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "list_source_ids"
+    }
+   }
+  },
+  {
+   "id": "list_source_ids.limit2",
+   "tool": "list_source_ids",
+   "arguments": {
+    "limit": 2
+   },
+   "expected": {
+    "content_text": "Success: 2 items. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": [
+      "mindfix__deerflow-architecture.md",
+      "mindfix__digital-key-overview.md"
+     ],
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "list_source_ids"
+    }
+   }
+  },
+  {
+   "id": "list_source_ids.scoped",
+   "tool": "list_source_ids",
+   "arguments": {
+    "limit": 10,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 6 items. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": [
+      "mindfix__deerflow-architecture.md",
+      "mindfix__digital-key-overview.md",
+      "mindfix__falkordb-ops.md",
+      "mindfix__guides__security-baseline.md",
+      "mindfix__n8n-stock-api.md",
+      "mindfix__qdrant-vector-search.md"
+     ],
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "list_source_ids"
+    }
+   }
+  },
+  {
+   "id": "list_source_ids.zero_limit",
+   "tool": "list_source_ids",
+   "arguments": {
+    "limit": 0
+   },
+   "expected": {
+    "content_text": "Success: 0 items. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": [],
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "list_source_ids"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.basic",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "Digital Key 3.0 dùng chuẩn gì?",
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "Digital Key 3.0 dùng chuẩn gì?",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "passages": [
+       {
+        "text": "# Digital Key 3.0 overview",
+        "score": 0.7892131,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "Digital Key 3.0 là chuẩn mới cho phép người dùng mở khóa xe thông qua\nđiện thoại, dựa trên nền tảng BLE và UWB của Apple và Samsung. Chuẩn\nISO 15118 định nghĩa giao thức Plug&Charge cho việc xác thực và thanh\ntoán tự động giữa xe và trạm sạc.",
+        "score": 0.7289145,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+         "3af20062-fb41-5aa7-988e-15b0be50754a",
+         "1af3787b-6982-58bd-8f42-0561f02f0780",
+         "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+         "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+         "40214b82-8c54-5ea2-b432-7d1da68ef87d"
+        ]
+       },
+       {
+        "text": "Hệ sinh thái Digital Key 3.0 bao gồm Car Connectivity Consortium\n(CCC) làm cơ quan chuẩn hóa, cùng các nhà sản xuất như BMW, Audi và\nGenesis. Ở Việt Nam, Viettel и VinFast đã công bố thử nghiệm khóa xe\nsố trên mẫu SUV điện mới.",
+        "score": 0.62961936,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+         "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+         "a2ce5bdc-8da7-5f61-9bef-16d54c2cced8",
+         "4bfda787-63af-5f5d-abc1-29683d121acf",
+         "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb"
+        ]
+       },
+       {
+        "text": "Chuẩn ISO 15118 và Digital Key 3.0 yêu cầu bảo vệ giao tiếp bằng\nTLS 1.3; certificate của CCC root CA được pin trong firmware của\nBMW, Audi và Genesis. Thiết bị không tuân thủ sẽ bị từ chối khi\nthực hiện Plug&Charge.",
+        "score": 0.61837375,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+         "3af20062-fb41-5aa7-988e-15b0be50754a",
+         "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+         "1af3787b-6982-58bd-8f42-0561f02f0780",
+         "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+         "4dfb66c8-0cff-528f-8584-4872341d2efe",
+         "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+         "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb"
+        ]
+       },
+       {
+        "text": "Ứng dụng Digital Key trên iOS sử dụng Secure Enclave để lưu trữ\nkhóa riêng, trong khi Android dùng StrongBox. Cả hai nền tảng đều\nyêu cầu xác thực sinh trắc học trước khi phát tín hiệu BLE/UWB.",
+        "score": 0.5421928,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "40214b82-8c54-5ea2-b432-7d1da68ef87d",
+         "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+         "3957fd8a-2d60-5db0-95d2-829257d2291b",
+         "73d25bba-e1a4-599b-9b5b-3947917475ee"
+        ]
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.topk20",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "Qdrant vector search HNSW cosine",
+    "top_k": 20,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 20 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "Qdrant vector search HNSW cosine",
+      "top_k": 20,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "passages": [
+       {
+        "text": "Qdrant là vector database hỗ trợ HNSW index với khoảng cách cosine\nvà euclid. Mỗi point trong Qdrant gồm vector 1024 chiều (bge-m3) và\npayload JSON chứa source_id, paragraph_id và entity_mentions.",
+        "score": 0.66456586,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "5a01e19b-2ba7-539f-bfcc-3b77ebf8abcb",
+         "2fabae2d-8887-571e-99af-489cd049c51e",
+         "f6ceb97b-116d-56b7-a923-10fe57934b5e"
+        ]
+       },
+       {
+        "text": "# Qdrant vector search internals",
+        "score": 0.6575099,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "Collection trong Qdrant được shard theo project: collection mindfix_doc\nchứa tài liệu của project này. Khi truy vấn semantic_search, hệ thống\nembed câu hỏi bằng bge-m3 rồi search top-k trong collection tương ứng.",
+        "score": 0.48104787,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "2fabae2d-8887-571e-99af-489cd049c51e"
+        ]
+       },
+       {
+        "text": "Backup của FalkorDB chạy hằng tuần bằng GRAPH.DUMP sang S3, trong khi\nQdrant backup vector collection cùng lúc để đảm bảo tính nhất quán\ngiữa graph và vector index của DeerFlow.",
+        "score": 0.40513787,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+         "2fabae2d-8887-571e-99af-489cd049c51e",
+         "34220a23-fce2-50c2-93b6-7d036bfa0c46"
+        ]
+       },
+       {
+        "text": "Để tối ưu Qdrant, DeerFlow bật on-disk payload index cho trường\nsource_id và quantization scalar int8, giúp giảm RAM 4 lần mà mất\nchưa tới 1% độ chính xác recall@10.",
+        "score": 0.4036368,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "2fabae2d-8887-571e-99af-489cd049c51e",
+         "1fbd8895-bc3e-5518-9b03-6b6fc62cc365"
+        ]
+       },
+       {
+        "text": "DeerFlow là deep-research pipeline gồm 4 tầng: planner, researcher,\ncoder và reporter. Tầng researcher dùng DeerFlow retrieval kết hợp\nFalkorDB graph context và Qdrant vector context để tổng hợp câu trả\nlời có trích dẫn.",
+        "score": 0.4004984,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "2fabae2d-8887-571e-99af-489cd049c51e",
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a"
+        ]
+       },
+       {
+        "text": "Short.",
+        "score": 0.37775204,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 4,
+        "entity_ids": []
+       },
+       {
+        "text": "# n8n stock API integration",
+        "score": 0.3520732,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "# FalkorDB operations runbook",
+        "score": 0.35206634,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "# DeerFlow system architecture",
+        "score": 0.34256417,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "# Security baseline",
+        "score": 0.34161863,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "Mọi webhook của n8n phải xác thực JWT trước khi xử lý payload.\nKhóa ký JWT xoay mỗi 30 ngày và lưu trong Vault của HashiCorp.\nAudit log ghi tại /var/log/deerflow/audit.jsonl.",
+        "score": 0.33615458,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "e8da9a2a-4578-53c3-9068-92513b7f6978",
+         "f18c736c-5846-5c40-8f8d-dc945c424f44",
+         "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+         "539f612a-0cbd-5942-93ba-511c1b683902"
+        ]
+       },
+       {
+        "text": "Rate limits: SSI FastConnect allows 5 requests per second per token\nfor iOrder market data and 30 requests per minute for ekos account\nqueries. Backoff uses exponential jitter in the n8n function node.",
+        "score": 0.33458024,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "f18c736c-5846-5c40-8f8d-dc945c424f44",
+         "1b19aef1-c66a-51a1-a54b-bfc5d9312480"
+        ]
+       },
+       {
+        "text": "FalkorDB là graph database chạy trên Redis, hỗ trợ truy vấn Cypher với\nextension GRAPH.QUERY. Cụm production của DeerFlow sử dụng FalkorDB 4.0\ntrên EC2 với persistent storage qua AOF everysec.",
+        "score": 0.33237362,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "95a20a2e-6560-517a-aa0d-67a38aa27385",
+         "cd301ab5-1be0-5066-a300-c2dab9e34621",
+         "6286c1a5-9063-5374-bdbe-b266f3ea2124",
+         "5fd10e20-1ac8-531a-959b-f6030bf1d3d5"
+        ]
+       },
+       {
+        "text": "Planner của DeerFlow chạy trên LLM GPT-4o với prompt template quản\nlý bằng LangExtract. Coder thực thi sandbox Python trên Docker,\nghi kết quả vào MinIO trước khi reporter tổng hợp báo cáo cuối.",
+        "score": 0.32783648,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+         "75732ac7-b4c7-5f1d-9277-b47e970a40c9",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+         "48f0ad75-aae3-54d3-965f-b64b1d673382",
+         "a6797417-0962-5104-b07c-26039a8d8816",
+         "c4c1c679-6624-5abe-b80a-7bd90135f9d7"
+        ]
+       },
+       {
+        "text": "Cảnh báo bảo mật gửi tới Grafana OnCall và kênh Slack #deerflow-sec\ntrong vòng 5 phút kể từ khi Qdrant hoặc FalkorDB phát hiện truy\nvấn bất thường.",
+        "score": 0.3223777,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "2fabae2d-8887-571e-99af-489cd049c51e",
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+         "52f377d8-40fc-5ee5-b0f1-fecf2b28e289"
+        ]
+       },
+       {
+        "text": "Chuẩn ISO 15118 và Digital Key 3.0 yêu cầu bảo vệ giao tiếp bằng\nTLS 1.3; certificate của CCC root CA được pin trong firmware của\nBMW, Audi và Genesis. Thiết bị không tuân thủ sẽ bị từ chối khi\nthực hiện Plug&Charge.",
+        "score": 0.31855595,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+         "3af20062-fb41-5aa7-988e-15b0be50754a",
+         "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+         "1af3787b-6982-58bd-8f42-0561f02f0780",
+         "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+         "4dfb66c8-0cff-528f-8584-4872341d2efe",
+         "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+         "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb"
+        ]
+       },
+       {
+        "text": "Toàn bộ DeerFlow chạy trên AWS ap-southeast-1, EC2 c6i.2xlarge,\nvới Grafana giám sát và S3 lưu artifact. Deploy dùng Docker\nCompose trong dev và EKS cho production.",
+        "score": 0.31587404,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "edf8ce6f-086b-58d5-a8dd-b13fbc8a1a47",
+         "be632864-a84a-5e84-8485-ee045a4d2c52",
+         "48f0ad75-aae3-54d3-965f-b64b1d673382"
+        ]
+       },
+       {
+        "text": "The SSI FastConnect API exposes the iOrder and ekos systems through\nn8n webhooks. Each webhook signs its payload with JWT tokens issued\nby the SSI OAuth2 endpoint, refreshed every 23 hours by a cron node.",
+        "score": 0.30008084,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "e8da9a2a-4578-53c3-9068-92513b7f6978",
+         "f18c736c-5846-5c40-8f8d-dc945c424f44",
+         "b010aa73-6682-5f1d-bc74-4b835824a378",
+         "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+         "539f612a-0cbd-5942-93ba-511c1b683902",
+         "2b5387d0-7da8-5f0e-b941-9dc1cad799ec",
+         "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+         "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b"
+        ]
+       },
+       {
+        "text": "Hệ sinh thái Digital Key 3.0 bao gồm Car Connectivity Consortium\n(CCC) làm cơ quan chuẩn hóa, cùng các nhà sản xuất như BMW, Audi và\nGenesis. Ở Việt Nam, Viettel и VinFast đã công bố thử nghiệm khóa xe\nsố trên mẫu SUV điện mới.",
+        "score": 0.29484206,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+         "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+         "a2ce5bdc-8da7-5f61-9bef-16d54c2cced8",
+         "4bfda787-63af-5f5d-abc1-29683d121acf",
+         "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb"
+        ]
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.source_filter",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "graph database Cypher operations",
+    "source_id": "mindfix__falkordb-ops.md",
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 4 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "graph database Cypher operations",
+      "top_k": 5,
+      "source_id": "mindfix__falkordb-ops.md",
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "passages": [
+       {
+        "text": "FalkorDB là graph database chạy trên Redis, hỗ trợ truy vấn Cypher với\nextension GRAPH.QUERY. Cụm production của DeerFlow sử dụng FalkorDB 4.0\ntrên EC2 với persistent storage qua AOF everysec.",
+        "score": 0.58305746,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "95a20a2e-6560-517a-aa0d-67a38aa27385",
+         "cd301ab5-1be0-5066-a300-c2dab9e34621",
+         "6286c1a5-9063-5374-bdbe-b266f3ea2124",
+         "5fd10e20-1ac8-531a-959b-f6030bf1d3d5"
+        ]
+       },
+       {
+        "text": "# FalkorDB operations runbook",
+        "score": 0.5656183,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "Backup của FalkorDB chạy hằng tuần bằng GRAPH.DUMP sang S3, trong khi\nQdrant backup vector collection cùng lúc để đảm bảo tính nhất quán\ngiữa graph và vector index của DeerFlow.",
+        "score": 0.5028419,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+         "2fabae2d-8887-571e-99af-489cd049c51e",
+         "34220a23-fce2-50c2-93b6-7d036bfa0c46"
+        ]
+       },
+       {
+        "text": "Khi FalkorDB hết bộ nhớ, thao tác GRAPH.RO_QUERY sẽ trả lỗi OOM và\ncần restart service bằng systemd. Log của FalkorDB ghi tại\n/var/log/falkordb/redis.log và được ship sang Grafana qua Loki.",
+        "score": 0.4715046,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+         "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+         "58253acb-061b-5ebd-a74b-8ae4fe3b7031",
+         "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+         "b8400e72-8a6e-565d-8cb3-1173be0aa594"
+        ]
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.entity_mentions",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "n8n webhook JWT authentication",
+    "include_entity_ids": false,
+    "include_entity_mentions": true,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "n8n webhook JWT authentication",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "passages": [
+       {
+        "text": "Mọi webhook của n8n phải xác thực JWT trước khi xử lý payload.\nKhóa ký JWT xoay mỗi 30 ngày và lưu trong Vault của HashiCorp.\nAudit log ghi tại /var/log/deerflow/audit.jsonl.",
+        "score": 0.6699227,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 1,
+        "entity_mentions": [
+         {
+          "id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+          "name": "webhook",
+          "type": "TECH",
+          "start_char": 4,
+          "end_char": 11,
+          "confidence": 0.87
+         },
+         {
+          "id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+          "name": "n8n",
+          "type": "TECH",
+          "start_char": 16,
+          "end_char": 19,
+          "confidence": 0.87
+         },
+         {
+          "id": "539f612a-0cbd-5942-93ba-511c1b683902",
+          "name": "JWT",
+          "type": "TECH",
+          "start_char": 34,
+          "end_char": 37,
+          "confidence": 0.87
+         },
+         {
+          "id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+          "name": "Vault",
+          "type": "TECH",
+          "start_char": 105,
+          "end_char": 110,
+          "confidence": 0.87
+         },
+         {
+          "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+          "name": "deerflow",
+          "type": "TECH",
+          "start_char": 153,
+          "end_char": 161,
+          "confidence": 0.87
+         }
+        ]
+       },
+       {
+        "text": "The SSI FastConnect API exposes the iOrder and ekos systems through\nn8n webhooks. Each webhook signs its payload with JWT tokens issued\nby the SSI OAuth2 endpoint, refreshed every 23 hours by a cron node.",
+        "score": 0.62582016,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 1,
+        "entity_mentions": [
+         {
+          "id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+          "name": "FastConnect API",
+          "type": "ORG",
+          "start_char": 8,
+          "end_char": 23,
+          "confidence": 0.87
+         },
+         {
+          "id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+          "name": "n8n",
+          "type": "TECH",
+          "start_char": 68,
+          "end_char": 71,
+          "confidence": 0.87
+         },
+         {
+          "id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+          "name": "webhooks",
+          "type": "TECH",
+          "start_char": 72,
+          "end_char": 80,
+          "confidence": 0.87
+         },
+         {
+          "id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+          "name": "webhook",
+          "type": "TECH",
+          "start_char": 72,
+          "end_char": 79,
+          "confidence": 0.87
+         },
+         {
+          "id": "539f612a-0cbd-5942-93ba-511c1b683902",
+          "name": "JWT",
+          "type": "TECH",
+          "start_char": 118,
+          "end_char": 121,
+          "confidence": 0.87
+         },
+         {
+          "id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+          "name": "OAuth2",
+          "type": "TECH",
+          "start_char": 147,
+          "end_char": 153,
+          "confidence": 0.87
+         },
+         {
+          "id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+          "name": "SSI",
+          "type": "TECH",
+          "start_char": 4,
+          "end_char": 7,
+          "confidence": 0.87
+         },
+         {
+          "id": "2b5387d0-7da8-5f0e-b941-9dc1cad799ec",
+          "name": "API",
+          "type": "TECH",
+          "start_char": 20,
+          "end_char": 23,
+          "confidence": 0.87
+         }
+        ]
+       },
+       {
+        "text": "# n8n stock API integration",
+        "score": 0.5567643,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 0,
+        "entity_mentions": []
+       },
+       {
+        "text": "The n8n workflow streams order book updates into DeerFlow, which\nclassifies them with DeerFlow's DeerFlow NLU layer before writing\nsummaries to the DeerFlow document store. Failures page the on-call\nengineer through Grafana OnCall.",
+        "score": 0.45834857,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 2,
+        "entity_mentions": [
+         {
+          "id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+          "name": "n8n",
+          "type": "TECH",
+          "start_char": 4,
+          "end_char": 7,
+          "confidence": 0.87
+         },
+         {
+          "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+          "name": "DeerFlow",
+          "type": "TECH",
+          "start_char": 49,
+          "end_char": 57,
+          "confidence": 0.87
+         },
+         {
+          "id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+          "name": "Grafana",
+          "type": "TECH",
+          "start_char": 216,
+          "end_char": 223,
+          "confidence": 0.87
+         },
+         {
+          "id": "508a1f90-262e-56e8-a72d-03482d91efba",
+          "name": "NLU",
+          "type": "TECH",
+          "start_char": 106,
+          "end_char": 109,
+          "confidence": 0.87
+         }
+        ]
+       },
+       {
+        "text": "Chuẩn ISO 15118 và Digital Key 3.0 yêu cầu bảo vệ giao tiếp bằng\nTLS 1.3; certificate của CCC root CA được pin trong firmware của\nBMW, Audi và Genesis. Thiết bị không tuân thủ sẽ bị từ chối khi\nthực hiện Plug&Charge.",
+        "score": 0.43951494,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 2,
+        "entity_mentions": [
+         {
+          "id": "1af3787b-6982-58bd-8f42-0561f02f0780",
+          "name": "ISO 15118",
+          "type": "STANDARD",
+          "start_char": 6,
+          "end_char": 15,
+          "confidence": 0.87
+         },
+         {
+          "id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+          "name": "Digital Key 3.0",
+          "type": "TECH",
+          "start_char": 19,
+          "end_char": 34,
+          "confidence": 0.87
+         },
+         {
+          "id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+          "name": "Plug&Charge",
+          "type": "TECH",
+          "start_char": 204,
+          "end_char": 215,
+          "confidence": 0.87
+         },
+         {
+          "id": "3af20062-fb41-5aa7-988e-15b0be50754a",
+          "name": "ISO",
+          "type": "TECH",
+          "start_char": 6,
+          "end_char": 9,
+          "confidence": 0.87
+         },
+         {
+          "id": "4dfb66c8-0cff-528f-8584-4872341d2efe",
+          "name": "TLS",
+          "type": "TECH",
+          "start_char": 65,
+          "end_char": 68,
+          "confidence": 0.87
+         },
+         {
+          "id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+          "name": "CCC",
+          "type": "TECH",
+          "start_char": 90,
+          "end_char": 93,
+          "confidence": 0.87
+         },
+         {
+          "id": "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+          "name": "CA",
+          "type": "TECH",
+          "start_char": 99,
+          "end_char": 101,
+          "confidence": 0.87
+         },
+         {
+          "id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+          "name": "BMW",
+          "type": "TECH",
+          "start_char": 130,
+          "end_char": 133,
+          "confidence": 0.87
+         }
+        ]
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.max_passage_chars",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "DeerFlow system architecture planner researcher",
+    "max_passage_chars": 120,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "DeerFlow system architecture planner researcher",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "passages": [
+       {
+        "text": "# DeerFlow system architecture",
+        "score": 0.7674505,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 0,
+        "entity_ids": []
+       },
+       {
+        "text": "DeerFlow là deep-research pipeline gồm 4 tầng: planner, researcher,\ncoder và reporter. Tầng researcher dùng DeerFlow ret",
+        "score": 0.6978354,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 1,
+        "entity_ids": [
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "2fabae2d-8887-571e-99af-489cd049c51e",
+         "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a"
+        ]
+       },
+       {
+        "text": "Planner của DeerFlow chạy trên LLM GPT-4o với prompt template quản\nlý bằng LangExtract. Coder thực thi sandbox Python tr",
+        "score": 0.6562886,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+         "75732ac7-b4c7-5f1d-9277-b47e970a40c9",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+         "48f0ad75-aae3-54d3-965f-b64b1d673382",
+         "a6797417-0962-5104-b07c-26039a8d8816",
+         "c4c1c679-6624-5abe-b80a-7bd90135f9d7"
+        ]
+       },
+       {
+        "text": "Toàn bộ DeerFlow chạy trên AWS ap-southeast-1, EC2 c6i.2xlarge,\nvới Grafana giám sát và S3 lưu artifact. Deploy dùng Doc",
+        "score": 0.61464065,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 3,
+        "entity_ids": [
+         "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "edf8ce6f-086b-58d5-a8dd-b13fbc8a1a47",
+         "be632864-a84a-5e84-8485-ee045a4d2c52",
+         "48f0ad75-aae3-54d3-965f-b64b1d673382"
+        ]
+       },
+       {
+        "text": "The n8n workflow streams order book updates into DeerFlow, which\nclassifies them with DeerFlow's DeerFlow NLU layer befo",
+        "score": 0.57088506,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 2,
+        "entity_ids": [
+         "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+         "508a1f90-262e-56e8-a72d-03482d91efba",
+         "f18c736c-5846-5c40-8f8d-dc945c424f44",
+         "52f377d8-40fc-5ee5-b0f1-fecf2b28e289"
+        ]
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.unscoped",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "FalkorDB backup strategy"
+   },
+   "expected": {
+    "content_text": "Success: 0 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "FalkorDB backup strategy",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "documents",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "passages": []
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.explicit_collection",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "Plug&Charge xác thực",
+    "collection": "mindfix_doc"
+   },
+   "expected": {
+    "content_text": "Requested document collection is not ingested or unavailable: mindfix_doc",
+    "structured_content": {
+     "ok": false,
+     "data": null,
+     "error": {
+      "code": "collection_unavailable",
+      "message": "Requested document collection is not ingested or unavailable: mindfix_doc",
+      "retryable": false,
+      "details": {}
+     }
+    },
+    "is_error": true,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.missing_collection",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "x",
+    "collection": "no_such_collection_p13"
+   },
+   "expected": {
+    "content_text": "Requested document collection is not ingested or unavailable: no_such_collection_p13",
+    "structured_content": {
+     "ok": false,
+     "data": null,
+     "error": {
+      "code": "collection_unavailable",
+      "message": "Requested document collection is not ingested or unavailable: no_such_collection_p13",
+      "retryable": false,
+      "details": {}
+     }
+    },
+    "is_error": true,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.unregistered_project",
+   "tool": "semantic_search",
+   "arguments": {
+    "query": "test query",
+    "project_id": "mindfix_unknown_zz"
+   },
+   "expected": {
+    "content_text": "project_id 'mindfix_unknown_zz' is not registered. Known projects: mindfix. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
+    "structured_content": {
+     "ok": false,
+     "data": null,
+     "error": {
+      "code": "project_not_registered",
+      "message": "project_id 'mindfix_unknown_zz' is not registered. Known projects: mindfix. Add a project section to .cortext-harness/config/*.json or pass an explicit override.",
+      "retryable": false,
+      "details": {}
+     }
+    },
+    "is_error": true,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "semantic_search"
+    }
+   }
+  },
+  {
+   "id": "semantic_search.missing_query",
+   "tool": "semantic_search",
+   "arguments": {},
+   "expected": {
+    "content_text": "Error executing tool semantic_search: 1 validation error for semantic_searchArguments\nquery\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing",
+    "structured_content": null,
+    "is_error": true,
+    "meta": null
+   }
+  },
+  {
+   "id": "query_graph_rag.basic",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "Chuẩn ISO 15118 và Plug&Charge hoạt động thế nào?",
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "Chuẩn ISO 15118 và Plug&Charge hoạt động thế nào?",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": null,
+      "rerank_applied": false,
+      "rerank_strategy": null,
+      "passages": [
+       {
+        "text": "Digital Key 3.0 là chuẩn mới cho phép người dùng mở khóa xe thông qua\nđiện thoại, dựa trên nền tảng BLE và UWB của Apple và Samsung. Chuẩn\nISO 15118 định nghĩa giao thức Plug&Charge cho việc xác thực và thanh\ntoán tự động giữa xe và trạm sạc.",
+        "score": 0.675547,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "Chuẩn ISO 15118 và Digital Key 3.0 yêu cầu bảo vệ giao tiếp bằng\nTLS 1.3; certificate của CCC root CA được pin trong firmware của\nBMW, Audi và Genesis. Thiết bị không tuân thủ sẽ bị từ chối khi\nthực hiện Plug&Charge.",
+        "score": 0.6510386,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 2
+       },
+       {
+        "text": "Mọi webhook của n8n phải xác thực JWT trước khi xử lý payload.\nKhóa ký JWT xoay mỗi 30 ngày và lưu trong Vault của HashiCorp.\nAudit log ghi tại /var/log/deerflow/audit.jsonl.",
+        "score": 0.44851544,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "The SSI FastConnect API exposes the iOrder and ekos systems through\nn8n webhooks. Each webhook signs its payload with JWT tokens issued\nby the SSI OAuth2 endpoint, refreshed every 23 hours by a cron node.",
+        "score": 0.4479627,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "Hệ sinh thái Digital Key 3.0 bao gồm Car Connectivity Consortium\n(CCC) làm cơ quan chuẩn hóa, cùng các nhà sản xuất như BMW, Audi và\nGenesis. Ở Việt Nam, Viettel и VinFast đã công bố thử nghiệm khóa xe\nsố trên mẫu SUV điện mới.",
+        "score": 0.43931362,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 2
+       }
+      ],
+      "entities": [
+       {
+        "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "name": "DeerFlow",
+        "type": "TECH"
+       },
+       {
+        "id": "3af20062-fb41-5aa7-988e-15b0be50754a",
+        "name": "ISO",
+        "type": "TECH"
+       },
+       {
+        "id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "name": "Plug&Charge",
+        "type": "TECH"
+       },
+       {
+        "id": "40214b82-8c54-5ea2-b432-7d1da68ef87d",
+        "name": "UWB",
+        "type": "TECH"
+       },
+       {
+        "id": "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+        "name": "BLE",
+        "type": "TECH"
+       },
+       {
+        "id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "name": "Digital Key 3.0",
+        "type": "TECH"
+       },
+       {
+        "id": "1af3787b-6982-58bd-8f42-0561f02f0780",
+        "name": "ISO 15118",
+        "type": "STANDARD"
+       },
+       {
+        "id": "4bfda787-63af-5f5d-abc1-29683d121acf",
+        "name": "SUV",
+        "type": "TECH"
+       },
+       {
+        "id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+        "name": "BMW",
+        "type": "TECH"
+       },
+       {
+        "id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "name": "CCC",
+        "type": "TECH"
+       },
+       {
+        "id": "a2ce5bdc-8da7-5f61-9bef-16d54c2cced8",
+        "name": "Connectivity Consortium",
+        "type": "ORG"
+       },
+       {
+        "id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "name": "Vault",
+        "type": "TECH"
+       },
+       {
+        "id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "name": "JWT",
+        "type": "TECH"
+       },
+       {
+        "id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "name": "n8n",
+        "type": "TECH"
+       },
+       {
+        "id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "name": "webhook",
+        "type": "TECH"
+       },
+       {
+        "id": "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+        "name": "CA",
+        "type": "TECH"
+       },
+       {
+        "id": "4dfb66c8-0cff-528f-8584-4872341d2efe",
+        "name": "TLS",
+        "type": "TECH"
+       },
+       {
+        "id": "2b5387d0-7da8-5f0e-b941-9dc1cad799ec",
+        "name": "API",
+        "type": "TECH"
+       },
+       {
+        "id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "name": "SSI",
+        "type": "TECH"
+       },
+       {
+        "id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+        "name": "OAuth2",
+        "type": "TECH"
+       },
+       {
+        "id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "name": "webhooks",
+        "type": "TECH"
+       },
+       {
+        "id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "name": "FastConnect API",
+        "type": "ORG"
+       }
+      ],
+      "relations": [
+       {
+        "source_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "source": "Digital Key 3.0",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "target": "Plug&Charge",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "source": "Digital Key 3.0",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+        "target": "BLE",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "source": "Digital Key 3.0",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1af3787b-6982-58bd-8f42-0561f02f0780",
+        "target": "ISO 15118",
+        "target_type": "STANDARD"
+       },
+       {
+        "source_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "source": "Digital Key 3.0",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "target": "CCC",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "source": "Digital Key 3.0",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "a2ce5bdc-8da7-5f61-9bef-16d54c2cced8",
+        "target": "Connectivity Consortium",
+        "target_type": "ORG"
+       },
+       {
+        "source_id": "3af20062-fb41-5aa7-988e-15b0be50754a",
+        "source": "ISO",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "target": "Plug&Charge",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "3af20062-fb41-5aa7-988e-15b0be50754a",
+        "source": "ISO",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4dfb66c8-0cff-528f-8584-4872341d2efe",
+        "target": "TLS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1af3787b-6982-58bd-8f42-0561f02f0780",
+        "source": "ISO 15118",
+        "source_type": "STANDARD",
+        "relation": "CO_OCCURS",
+        "target_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "target": "Digital Key 3.0",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+        "source": "BLE",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "40214b82-8c54-5ea2-b432-7d1da68ef87d",
+        "target": "UWB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+        "source": "BLE",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "target": "Digital Key 3.0",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+        "source": "BLE",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "3957fd8a-2d60-5db0-95d2-829257d2291b",
+        "target": "StrongBox",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "source": "Plug&Charge",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "3af20062-fb41-5aa7-988e-15b0be50754a",
+        "target": "ISO",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "source": "Plug&Charge",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "40214b82-8c54-5ea2-b432-7d1da68ef87d",
+        "target": "UWB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "source": "Plug&Charge",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "target": "Digital Key 3.0",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "40214b82-8c54-5ea2-b432-7d1da68ef87d",
+        "source": "UWB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "target": "Plug&Charge",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "40214b82-8c54-5ea2-b432-7d1da68ef87d",
+        "source": "UWB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+        "target": "BLE",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+        "source": "CA",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+        "target": "BMW",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+        "source": "CA",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "target": "CCC",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+        "source": "BMW",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4bfda787-63af-5f5d-abc1-29683d121acf",
+        "target": "SUV",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+        "source": "BMW",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "target": "CCC",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+        "source": "BMW",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+        "target": "CA",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "4dfb66c8-0cff-528f-8584-4872341d2efe",
+        "source": "TLS",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "3af20062-fb41-5aa7-988e-15b0be50754a",
+        "target": "ISO",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "4dfb66c8-0cff-528f-8584-4872341d2efe",
+        "source": "TLS",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "target": "CCC",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "source": "CCC",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "target": "Digital Key 3.0",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "source": "CCC",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+        "target": "BMW",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "source": "CCC",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+        "target": "CA",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "source": "CCC",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4dfb66c8-0cff-528f-8584-4872341d2efe",
+        "target": "TLS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "target": "LangExtract",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "target": "AWS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "target": "Vault",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "target": "RAM",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "source": "webhook",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "target": "JWT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "source": "webhook",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "source": "webhook",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "target": "webhooks",
+        "target_type": "TECH"
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.depth2",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "FalkorDB Qdrant DeerFlow kiến trúc",
+    "graph_depth": 2,
+    "related_k": 100,
+    "project_id": "mindfix"
+   },
+   "relations_multiset": true,
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "FalkorDB Qdrant DeerFlow kiến trúc",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 2,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": null,
+      "rerank_applied": false,
+      "rerank_strategy": null,
+      "passages": [
+       {
+        "text": "# DeerFlow system architecture",
+        "score": 0.7246474,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 0
+       },
+       {
+        "text": "Backup của FalkorDB chạy hằng tuần bằng GRAPH.DUMP sang S3, trong khi\nQdrant backup vector collection cùng lúc để đảm bảo tính nhất quán\ngiữa graph và vector index của DeerFlow.",
+        "score": 0.7242065,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 3
+       },
+       {
+        "text": "DeerFlow là deep-research pipeline gồm 4 tầng: planner, researcher,\ncoder và reporter. Tầng researcher dùng DeerFlow retrieval kết hợp\nFalkorDB graph context và Qdrant vector context để tổng hợp câu trả\nlời có trích dẫn.",
+        "score": 0.6852122,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "FalkorDB là graph database chạy trên Redis, hỗ trợ truy vấn Cypher với\nextension GRAPH.QUERY. Cụm production của DeerFlow sử dụng FalkorDB 4.0\ntrên EC2 với persistent storage qua AOF everysec.",
+        "score": 0.67032504,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "Để tối ưu Qdrant, DeerFlow bật on-disk payload index cho trường\nsource_id và quantization scalar int8, giúp giảm RAM 4 lần mà mất\nchưa tới 1% độ chính xác recall@10.",
+        "score": 0.6026911,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 3
+       }
+      ],
+      "entities": [
+       {
+        "id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "name": "Qdrant",
+        "type": "TECH"
+       },
+       {
+        "id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "name": "FalkorDB",
+        "type": "TECH"
+       },
+       {
+        "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "name": "DeerFlow",
+        "type": "TECH"
+       },
+       {
+        "id": "6286c1a5-9063-5374-bdbe-b266f3ea2124",
+        "name": "AOF",
+        "type": "TECH"
+       },
+       {
+        "id": "cd301ab5-1be0-5066-a300-c2dab9e34621",
+        "name": "QUERY",
+        "type": "TECH"
+       },
+       {
+        "id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "name": "GRAPH",
+        "type": "TECH"
+       },
+       {
+        "id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "name": "Redis",
+        "type": "TECH"
+       },
+       {
+        "id": "34220a23-fce2-50c2-93b6-7d036bfa0c46",
+        "name": "DUMP",
+        "type": "TECH"
+       },
+       {
+        "id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "name": "RAM",
+        "type": "TECH"
+       }
+      ],
+      "relations": [
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "target": "LangExtract",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "target": "AWS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "target": "Vault",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "target": "RAM",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "source": "GRAPH",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "source": "GRAPH",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "cd301ab5-1be0-5066-a300-c2dab9e34621",
+        "target": "QUERY",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "source": "GRAPH",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "58253acb-061b-5ebd-a74b-8ae4fe3b7031",
+        "target": "OOM",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "source": "GRAPH",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "b8400e72-8a6e-565d-8cb3-1173be0aa594",
+        "target": "Loki",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "source": "GRAPH",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "34220a23-fce2-50c2-93b6-7d036bfa0c46",
+        "target": "DUMP",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f6ceb97b-116d-56b7-a923-10fe57934b5e",
+        "target": "HNSW",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "34220a23-fce2-50c2-93b6-7d036bfa0c46",
+        "source": "DUMP",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "source": "Redis",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "source": "Redis",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "cd301ab5-1be0-5066-a300-c2dab9e34621",
+        "source": "QUERY",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "6286c1a5-9063-5374-bdbe-b266f3ea2124",
+        "target": "AOF",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "cd301ab5-1be0-5066-a300-c2dab9e34621",
+        "source": "QUERY",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "6286c1a5-9063-5374-bdbe-b266f3ea2124",
+        "source": "AOF",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "cd301ab5-1be0-5066-a300-c2dab9e34621",
+        "target": "QUERY",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "source": "RAM",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "b8400e72-8a6e-565d-8cb3-1173be0aa594",
+        "source": "Loki",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "b8400e72-8a6e-565d-8cb3-1173be0aa594",
+        "source": "Loki",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "58253acb-061b-5ebd-a74b-8ae4fe3b7031",
+        "source": "OOM",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "source": "AWS",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "source": "AWS",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "source": "LangExtract",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "source": "LangExtract",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+        "target": "Python",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f6ceb97b-116d-56b7-a923-10fe57934b5e",
+        "source": "HNSW",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f6ceb97b-116d-56b7-a923-10fe57934b5e",
+        "source": "HNSW",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5a01e19b-2ba7-539f-bfcc-3b77ebf8abcb",
+        "target": "JSON",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "target": "JWT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "target": "webhook",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "target": "SSI",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "target": "webhooks",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "target": "FastConnect API",
+        "target_type": "ORG"
+       },
+       {
+        "source_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "source": "Vault",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "source": "Vault",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "target": "JWT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "target": "Docker",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "target": "AWS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "b8400e72-8a6e-565d-8cb3-1173be0aa594",
+        "target": "Loki",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "508a1f90-262e-56e8-a72d-03482d91efba",
+        "target": "NLU",
+        "target_type": "TECH"
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.rerank",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "DeerFlow chạy trên hạ tầng nào?",
+    "rerank": true,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "DeerFlow chạy trên hạ tầng nào?",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": null,
+      "rerank_applied": true,
+      "rerank_strategy": "heuristic",
+      "passages": [
+       {
+        "text": "Planner của DeerFlow chạy trên LLM GPT-4o với prompt template quản\nlý bằng LangExtract. Coder thực thi sandbox Python trên Docker,\nghi kết quả vào MinIO trước khi reporter tổng hợp báo cáo cuối.",
+        "score": 0.58522236,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 2,
+        "rerank_score": 1.8574223600000004
+       },
+       {
+        "text": "FalkorDB là graph database chạy trên Redis, hỗ trợ truy vấn Cypher với\nextension GRAPH.QUERY. Cụm production của DeerFlow sử dụng FalkorDB 4.0\ntrên EC2 với persistent storage qua AOF everysec.",
+        "score": 0.55045027,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 1,
+        "rerank_score": 1.6730502700000003
+       },
+       {
+        "text": "Toàn bộ DeerFlow chạy trên AWS ap-southeast-1, EC2 c6i.2xlarge,\nvới Grafana giám sát và S3 lưu artifact. Deploy dùng Docker\nCompose trong dev và EKS cho production.",
+        "score": 0.6717217,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 3,
+        "rerank_score": 1.6499217
+       },
+       {
+        "text": "DeerFlow là deep-research pipeline gồm 4 tầng: planner, researcher,\ncoder và reporter. Tầng researcher dùng DeerFlow retrieval kết hợp\nFalkorDB graph context và Qdrant vector context để tổng hợp câu trả\nlời có trích dẫn.",
+        "score": 0.63261485,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 1,
+        "rerank_score": 1.2996148500000002
+       },
+       {
+        "text": "# DeerFlow system architecture",
+        "score": 0.7365966,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 0,
+        "rerank_score": 0.7305966
+       }
+      ],
+      "entities": [
+       {
+        "id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "name": "Qdrant",
+        "type": "TECH"
+       },
+       {
+        "id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "name": "FalkorDB",
+        "type": "TECH"
+       },
+       {
+        "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "name": "DeerFlow",
+        "type": "TECH"
+       },
+       {
+        "id": "75732ac7-b4c7-5f1d-9277-b47e970a40c9",
+        "name": "GPT",
+        "type": "TECH"
+       },
+       {
+        "id": "c4c1c679-6624-5abe-b80a-7bd90135f9d7",
+        "name": "LLM",
+        "type": "TECH"
+       },
+       {
+        "id": "a6797417-0962-5104-b07c-26039a8d8816",
+        "name": "MinIO",
+        "type": "TECH"
+       },
+       {
+        "id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "name": "Docker",
+        "type": "TECH"
+       },
+       {
+        "id": "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+        "name": "Python",
+        "type": "TECH"
+       },
+       {
+        "id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "name": "LangExtract",
+        "type": "TECH"
+       },
+       {
+        "id": "edf8ce6f-086b-58d5-a8dd-b13fbc8a1a47",
+        "name": "EKS",
+        "type": "TECH"
+       },
+       {
+        "id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "name": "Grafana",
+        "type": "TECH"
+       },
+       {
+        "id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "name": "AWS",
+        "type": "TECH"
+       },
+       {
+        "id": "6286c1a5-9063-5374-bdbe-b266f3ea2124",
+        "name": "AOF",
+        "type": "TECH"
+       },
+       {
+        "id": "cd301ab5-1be0-5066-a300-c2dab9e34621",
+        "name": "QUERY",
+        "type": "TECH"
+       },
+       {
+        "id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "name": "GRAPH",
+        "type": "TECH"
+       },
+       {
+        "id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "name": "Redis",
+        "type": "TECH"
+       }
+      ],
+      "relations": [
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "target": "Docker",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "target": "AWS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "b8400e72-8a6e-565d-8cb3-1173be0aa594",
+        "target": "Loki",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "source": "Grafana",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "508a1f90-262e-56e8-a72d-03482d91efba",
+        "target": "NLU",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "target": "LangExtract",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "target": "AWS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "target": "Vault",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "target": "RAM",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "edf8ce6f-086b-58d5-a8dd-b13fbc8a1a47",
+        "source": "EKS",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "target": "Docker",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "source": "AWS",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "source": "AWS",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "source": "Docker",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "a6797417-0962-5104-b07c-26039a8d8816",
+        "target": "MinIO",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "source": "Docker",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+        "target": "Python",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "source": "Docker",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "edf8ce6f-086b-58d5-a8dd-b13fbc8a1a47",
+        "target": "EKS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "source": "Docker",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f6ceb97b-116d-56b7-a923-10fe57934b5e",
+        "target": "HNSW",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+        "source": "Python",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "target": "Docker",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+        "source": "Python",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "target": "LangExtract",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "75732ac7-b4c7-5f1d-9277-b47e970a40c9",
+        "source": "GPT",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "c4c1c679-6624-5abe-b80a-7bd90135f9d7",
+        "target": "LLM",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "source": "LangExtract",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "source": "LangExtract",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "23961b7b-4400-5d90-a48a-e9f1ccabcf83",
+        "target": "Python",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "a6797417-0962-5104-b07c-26039a8d8816",
+        "source": "MinIO",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "c4c1c679-6624-5abe-b80a-7bd90135f9d7",
+        "target": "LLM",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "a6797417-0962-5104-b07c-26039a8d8816",
+        "source": "MinIO",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "48f0ad75-aae3-54d3-965f-b64b1d673382",
+        "target": "Docker",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "c4c1c679-6624-5abe-b80a-7bd90135f9d7",
+        "source": "LLM",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "75732ac7-b4c7-5f1d-9277-b47e970a40c9",
+        "target": "GPT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "c4c1c679-6624-5abe-b80a-7bd90135f9d7",
+        "source": "LLM",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "a6797417-0962-5104-b07c-26039a8d8816",
+        "target": "MinIO",
+        "target_type": "TECH"
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.rerank_weights",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "Digital Key 3.0 của hãng xe nào?",
+    "rerank": true,
+    "rerank_entity_weight": 0.2,
+    "rerank_type_weight": 0.05,
+    "rerank_confidence_weight": 0.5,
+    "rerank_length_penalty": 0.001,
+    "entity_types": "ORG,STANDARD",
+    "top_k": 8,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 8 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "Digital Key 3.0 của hãng xe nào?",
+      "top_k": 8,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": null,
+      "rerank_applied": true,
+      "rerank_strategy": "heuristic",
+      "passages": [
+       {
+        "text": "Chuẩn ISO 15118 và Digital Key 3.0 yêu cầu bảo vệ giao tiếp bằng\nTLS 1.3; certificate của CCC root CA được pin trong firmware của\nBMW, Audi và Genesis. Thiết bị không tuân thủ sẽ bị từ chối khi\nthực hiện Plug&Charge.",
+        "score": 0.57253516,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 2,
+        "rerank_score": 2.44153516
+       },
+       {
+        "text": "The SSI FastConnect API exposes the iOrder and ekos systems through\nn8n webhooks. Each webhook signs its payload with JWT tokens issued\nby the SSI OAuth2 endpoint, refreshed every 23 hours by a cron node.",
+        "score": 0.370965,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 1,
+        "rerank_score": 2.2519649999999998
+       },
+       {
+        "text": "Digital Key 3.0 là chuẩn mới cho phép người dùng mở khóa xe thông qua\nđiện thoại, dựa trên nền tảng BLE và UWB của Apple và Samsung. Chuẩn\nISO 15118 định nghĩa giao thức Plug&Charge cho việc xác thực và thanh\ntoán tự động giữa xe và trạm sạc.",
+        "score": 0.66651213,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 1,
+        "rerank_score": 2.10951213
+       },
+       {
+        "text": "Hệ sinh thái Digital Key 3.0 bao gồm Car Connectivity Consortium\n(CCC) làm cơ quan chuẩn hóa, cùng các nhà sản xuất như BMW, Audi và\nGenesis. Ở Việt Nam, Viettel и VinFast đã công bố thử nghiệm khóa xe\nsố trên mẫu SUV điện mới.",
+        "score": 0.6897801,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 2,
+        "rerank_score": 1.9477801
+       },
+       {
+        "text": "FalkorDB là graph database chạy trên Redis, hỗ trợ truy vấn Cypher với\nextension GRAPH.QUERY. Cụm production của DeerFlow sử dụng FalkorDB 4.0\ntrên EC2 với persistent storage qua AOF everysec.",
+        "score": 0.3626815,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 1,
+        "rerank_score": 1.8056815000000002
+       },
+       {
+        "text": "Mọi webhook của n8n phải xác thực JWT trước khi xử lý payload.\nKhóa ký JWT xoay mỗi 30 ngày và lưu trong Vault của HashiCorp.\nAudit log ghi tại /var/log/deerflow/audit.jsonl.",
+        "score": 0.36750072,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 1,
+        "rerank_score": 1.62850072
+       },
+       {
+        "text": "Ứng dụng Digital Key trên iOS sử dụng Secure Enclave để lưu trữ\nkhóa riêng, trong khi Android dùng StrongBox. Cả hai nền tảng đều\nyêu cầu xác thực sinh trắc học trước khi phát tín hiệu BLE/UWB.",
+        "score": 0.44951448,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 3,
+        "rerank_score": 1.49151448
+       },
+       {
+        "text": "# Digital Key 3.0 overview",
+        "score": 0.7069922,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 0,
+        "rerank_score": 0.6809921999999999
+       }
+      ],
+      "entities": [
+       {
+        "id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "name": "FalkorDB",
+        "type": "TECH"
+       },
+       {
+        "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "name": "DeerFlow",
+        "type": "TECH"
+       },
+       {
+        "id": "3af20062-fb41-5aa7-988e-15b0be50754a",
+        "name": "ISO",
+        "type": "TECH"
+       },
+       {
+        "id": "e4aad45c-4e39-5cb2-a92b-1f4221dd1455",
+        "name": "Plug&Charge",
+        "type": "TECH"
+       },
+       {
+        "id": "40214b82-8c54-5ea2-b432-7d1da68ef87d",
+        "name": "UWB",
+        "type": "TECH"
+       },
+       {
+        "id": "a56d6f48-301b-51e1-b4b0-19ece047ec2d",
+        "name": "BLE",
+        "type": "TECH"
+       },
+       {
+        "id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "name": "Digital Key 3.0",
+        "type": "TECH"
+       },
+       {
+        "id": "1af3787b-6982-58bd-8f42-0561f02f0780",
+        "name": "ISO 15118",
+        "type": "STANDARD"
+       },
+       {
+        "id": "4bfda787-63af-5f5d-abc1-29683d121acf",
+        "name": "SUV",
+        "type": "TECH"
+       },
+       {
+        "id": "2b5c4cf0-2870-549e-aa5f-f1907f064223",
+        "name": "BMW",
+        "type": "TECH"
+       },
+       {
+        "id": "9eb7b85b-80c4-56da-8e6c-7f0295c5d4bb",
+        "name": "CCC",
+        "type": "TECH"
+       },
+       {
+        "id": "a2ce5bdc-8da7-5f61-9bef-16d54c2cced8",
+        "name": "Connectivity Consortium",
+        "type": "ORG"
+       },
+       {
+        "id": "3957fd8a-2d60-5db0-95d2-829257d2291b",
+        "name": "StrongBox",
+        "type": "TECH"
+       },
+       {
+        "id": "73d25bba-e1a4-599b-9b5b-3947917475ee",
+        "name": "Secure Enclave",
+        "type": "TECH"
+       },
+       {
+        "id": "6286c1a5-9063-5374-bdbe-b266f3ea2124",
+        "name": "AOF",
+        "type": "TECH"
+       },
+       {
+        "id": "cd301ab5-1be0-5066-a300-c2dab9e34621",
+        "name": "QUERY",
+        "type": "TECH"
+       },
+       {
+        "id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "name": "GRAPH",
+        "type": "TECH"
+       },
+       {
+        "id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "name": "Redis",
+        "type": "TECH"
+       },
+       {
+        "id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "name": "Vault",
+        "type": "TECH"
+       },
+       {
+        "id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "name": "JWT",
+        "type": "TECH"
+       },
+       {
+        "id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "name": "n8n",
+        "type": "TECH"
+       },
+       {
+        "id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "name": "webhook",
+        "type": "TECH"
+       },
+       {
+        "id": "1496132e-daf6-5e51-b0cc-9340f0e53cc5",
+        "name": "CA",
+        "type": "TECH"
+       },
+       {
+        "id": "4dfb66c8-0cff-528f-8584-4872341d2efe",
+        "name": "TLS",
+        "type": "TECH"
+       },
+       {
+        "id": "2b5387d0-7da8-5f0e-b941-9dc1cad799ec",
+        "name": "API",
+        "type": "TECH"
+       },
+       {
+        "id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "name": "SSI",
+        "type": "TECH"
+       },
+       {
+        "id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+        "name": "OAuth2",
+        "type": "TECH"
+       },
+       {
+        "id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "name": "webhooks",
+        "type": "TECH"
+       },
+       {
+        "id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "name": "FastConnect API",
+        "type": "ORG"
+       }
+      ],
+      "relations": [
+       {
+        "source_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "source": "Digital Key 3.0",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1af3787b-6982-58bd-8f42-0561f02f0780",
+        "target": "ISO 15118",
+        "target_type": "STANDARD"
+       },
+       {
+        "source_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "source": "Digital Key 3.0",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "a2ce5bdc-8da7-5f61-9bef-16d54c2cced8",
+        "target": "Connectivity Consortium",
+        "target_type": "ORG"
+       },
+       {
+        "source_id": "a2ce5bdc-8da7-5f61-9bef-16d54c2cced8",
+        "source": "Connectivity Consortium",
+        "source_type": "ORG",
+        "relation": "CO_OCCURS",
+        "target_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "target": "Digital Key 3.0",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1af3787b-6982-58bd-8f42-0561f02f0780",
+        "source": "ISO 15118",
+        "source_type": "STANDARD",
+        "relation": "CO_OCCURS",
+        "target_id": "9f58349c-41e9-525d-8c2b-6a71492c4dee",
+        "target": "Digital Key 3.0",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "target": "FastConnect API",
+        "target_type": "ORG"
+       },
+       {
+        "source_id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "source": "FastConnect API",
+        "source_type": "ORG",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.entity_types_list",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "webhook JWT SSI FastConnect",
+    "entity_types": [
+     "ORG",
+     "TECH"
+    ],
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "webhook JWT SSI FastConnect",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": null,
+      "rerank_applied": false,
+      "rerank_strategy": null,
+      "passages": [
+       {
+        "text": "The SSI FastConnect API exposes the iOrder and ekos systems through\nn8n webhooks. Each webhook signs its payload with JWT tokens issued\nby the SSI OAuth2 endpoint, refreshed every 23 hours by a cron node.",
+        "score": 0.7254391,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "Mọi webhook của n8n phải xác thực JWT trước khi xử lý payload.\nKhóa ký JWT xoay mỗi 30 ngày và lưu trong Vault của HashiCorp.\nAudit log ghi tại /var/log/deerflow/audit.jsonl.",
+        "score": 0.57038134,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "Rate limits: SSI FastConnect allows 5 requests per second per token\nfor iOrder market data and 30 requests per minute for ekos account\nqueries. Backoff uses exponential jitter in the n8n function node.",
+        "score": 0.5461127,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 3
+       },
+       {
+        "text": "Short.",
+        "score": 0.42213035,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 4
+       },
+       {
+        "text": "Cảnh báo bảo mật gửi tới Grafana OnCall và kênh Slack #deerflow-sec\ntrong vòng 5 phút kể từ khi Qdrant hoặc FalkorDB phát hiện truy\nvấn bất thường.",
+        "score": 0.41759607,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 3
+       }
+      ],
+      "entities": [
+       {
+        "id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "name": "Qdrant",
+        "type": "TECH"
+       },
+       {
+        "id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "name": "FalkorDB",
+        "type": "TECH"
+       },
+       {
+        "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "name": "DeerFlow",
+        "type": "TECH"
+       },
+       {
+        "id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "name": "Grafana",
+        "type": "TECH"
+       },
+       {
+        "id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "name": "Vault",
+        "type": "TECH"
+       },
+       {
+        "id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "name": "JWT",
+        "type": "TECH"
+       },
+       {
+        "id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "name": "n8n",
+        "type": "TECH"
+       },
+       {
+        "id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "name": "webhook",
+        "type": "TECH"
+       },
+       {
+        "id": "2b5387d0-7da8-5f0e-b941-9dc1cad799ec",
+        "name": "API",
+        "type": "TECH"
+       },
+       {
+        "id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "name": "SSI",
+        "type": "TECH"
+       },
+       {
+        "id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+        "name": "OAuth2",
+        "type": "TECH"
+       },
+       {
+        "id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "name": "webhooks",
+        "type": "TECH"
+       },
+       {
+        "id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "name": "FastConnect API",
+        "type": "ORG"
+       }
+      ],
+      "relations": [
+       {
+        "source_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "source": "webhook",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "target": "JWT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "source": "webhook",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "source": "webhook",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "target": "webhooks",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "target": "JWT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "target": "webhook",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "target": "SSI",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "target": "webhooks",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "source": "n8n",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "target": "FastConnect API",
+        "target_type": "ORG"
+       },
+       {
+        "source_id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "source": "webhooks",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "b010aa73-6682-5f1d-bc74-4b835824a378",
+        "source": "webhooks",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "target": "webhook",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "source": "SSI",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "source": "SSI",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2b5387d0-7da8-5f0e-b941-9dc1cad799ec",
+        "target": "API",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "source": "SSI",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+        "target": "OAuth2",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "source": "JWT",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "target": "Vault",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "source": "JWT",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "source": "JWT",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "target": "webhook",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "source": "JWT",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+        "target": "OAuth2",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2b5387d0-7da8-5f0e-b941-9dc1cad799ec",
+        "source": "API",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "target": "SSI",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+        "source": "OAuth2",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "target": "JWT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "9c7a6b8e-fee7-5525-9210-dac0c086a404",
+        "source": "OAuth2",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1b19aef1-c66a-51a1-a54b-bfc5d9312480",
+        "target": "SSI",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "e008f3cd-a6ab-5d99-b5ad-c6e5df43974b",
+        "source": "FastConnect API",
+        "source_type": "ORG",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "target": "LangExtract",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "target": "AWS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "target": "Vault",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "target": "RAM",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "source": "Vault",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "source": "Vault",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "target": "JWT",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "source": "Qdrant",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f6ceb97b-116d-56b7-a923-10fe57934b5e",
+        "target": "HNSW",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.no_expand",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "Qdrant quantization on-disk payload index",
+    "expand_related": false,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "Qdrant quantization on-disk payload index",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": null,
+      "rerank_applied": false,
+      "rerank_strategy": null,
+      "passages": [
+       {
+        "text": "Để tối ưu Qdrant, DeerFlow bật on-disk payload index cho trường\nsource_id và quantization scalar int8, giúp giảm RAM 4 lần mà mất\nchưa tới 1% độ chính xác recall@10.",
+        "score": 0.6633818,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 3
+       },
+       {
+        "text": "Qdrant là vector database hỗ trợ HNSW index với khoảng cách cosine\nvà euclid. Mỗi point trong Qdrant gồm vector 1024 chiều (bge-m3) và\npayload JSON chứa source_id, paragraph_id và entity_mentions.",
+        "score": 0.615874,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "# Qdrant vector search internals",
+        "score": 0.5386197,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 0
+       },
+       {
+        "text": "Collection trong Qdrant được shard theo project: collection mindfix_doc\nchứa tài liệu của project này. Khi truy vấn semantic_search, hệ thống\nembed câu hỏi bằng bge-m3 rồi search top-k trong collection tương ứng.",
+        "score": 0.5003185,
+        "source_id": "mindfix__qdrant-vector-search.md",
+        "paragraph_id": 2
+       },
+       {
+        "text": "Mọi webhook của n8n phải xác thực JWT trước khi xử lý payload.\nKhóa ký JWT xoay mỗi 30 ngày và lưu trong Vault của HashiCorp.\nAudit log ghi tại /var/log/deerflow/audit.jsonl.",
+        "score": 0.47304112,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 1
+       }
+      ],
+      "entities": [
+       {
+        "id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "name": "Qdrant",
+        "type": "TECH"
+       },
+       {
+        "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "name": "DeerFlow",
+        "type": "TECH"
+       },
+       {
+        "id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "name": "Vault",
+        "type": "TECH"
+       },
+       {
+        "id": "539f612a-0cbd-5942-93ba-511c1b683902",
+        "name": "JWT",
+        "type": "TECH"
+       },
+       {
+        "id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "name": "n8n",
+        "type": "TECH"
+       },
+       {
+        "id": "e8da9a2a-4578-53c3-9068-92513b7f6978",
+        "name": "webhook",
+        "type": "TECH"
+       },
+       {
+        "id": "5a01e19b-2ba7-539f-bfcc-3b77ebf8abcb",
+        "name": "JSON",
+        "type": "TECH"
+       },
+       {
+        "id": "f6ceb97b-116d-56b7-a923-10fe57934b5e",
+        "name": "HNSW",
+        "type": "TECH"
+       },
+       {
+        "id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "name": "RAM",
+        "type": "TECH"
+       }
+      ],
+      "relations": []
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.no_entities",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "Grafana Loki monitoring",
+    "include_entities": false,
+    "include_relations": false,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "Grafana Loki monitoring",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": null,
+      "rerank_applied": false,
+      "rerank_strategy": null,
+      "passages": [
+       {
+        "text": "Khi FalkorDB hết bộ nhớ, thao tác GRAPH.RO_QUERY sẽ trả lỗi OOM và\ncần restart service bằng systemd. Log của FalkorDB ghi tại\n/var/log/falkordb/redis.log và được ship sang Grafana qua Loki.",
+        "score": 0.5206771,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 2
+       },
+       {
+        "text": "Cảnh báo bảo mật gửi tới Grafana OnCall và kênh Slack #deerflow-sec\ntrong vòng 5 phút kể từ khi Qdrant hoặc FalkorDB phát hiện truy\nvấn bất thường.",
+        "score": 0.49316394,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 3
+       },
+       {
+        "text": "Toàn bộ DeerFlow chạy trên AWS ap-southeast-1, EC2 c6i.2xlarge,\nvới Grafana giám sát và S3 lưu artifact. Deploy dùng Docker\nCompose trong dev và EKS cho production.",
+        "score": 0.4714889,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 3
+       },
+       {
+        "text": "# FalkorDB operations runbook",
+        "score": 0.42944664,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 0
+       },
+       {
+        "text": "The n8n workflow streams order book updates into DeerFlow, which\nclassifies them with DeerFlow's DeerFlow NLU layer before writing\nsummaries to the DeerFlow document store. Failures page the on-call\nengineer through Grafana OnCall.",
+        "score": 0.42474034,
+        "source_id": "mindfix__n8n-stock-api.md",
+        "paragraph_id": 2
+       }
+      ],
+      "entities": [],
+      "relations": []
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.min_score_to_expand",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "Digital Key 3.0",
+    "min_score_to_expand": 2.0,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "Digital Key 3.0",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": 2.0,
+      "min_entity_occurrences": null,
+      "rerank_applied": false,
+      "rerank_strategy": null,
+      "passages": [
+       {
+        "text": "# Digital Key 3.0 overview",
+        "score": 0.8434163,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 0
+       },
+       {
+        "text": "Digital Key 3.0 là chuẩn mới cho phép người dùng mở khóa xe thông qua\nđiện thoại, dựa trên nền tảng BLE và UWB của Apple và Samsung. Chuẩn\nISO 15118 định nghĩa giao thức Plug&Charge cho việc xác thực và thanh\ntoán tự động giữa xe và trạm sạc.",
+        "score": 0.64926076,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "Hệ sinh thái Digital Key 3.0 bao gồm Car Connectivity Consortium\n(CCC) làm cơ quan chuẩn hóa, cùng các nhà sản xuất như BMW, Audi và\nGenesis. Ở Việt Nam, Viettel и VinFast đã công bố thử nghiệm khóa xe\nsố trên mẫu SUV điện mới.",
+        "score": 0.61777055,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 2
+       },
+       {
+        "text": "Chuẩn ISO 15118 và Digital Key 3.0 yêu cầu bảo vệ giao tiếp bằng\nTLS 1.3; certificate của CCC root CA được pin trong firmware của\nBMW, Audi và Genesis. Thiết bị không tuân thủ sẽ bị từ chối khi\nthực hiện Plug&Charge.",
+        "score": 0.55672926,
+        "source_id": "mindfix__guides__security-baseline.md",
+        "paragraph_id": 2
+       },
+       {
+        "text": "Ứng dụng Digital Key trên iOS sử dụng Secure Enclave để lưu trữ\nkhóa riêng, trong khi Android dùng StrongBox. Cả hai nền tảng đều\nyêu cầu xác thực sinh trắc học trước khi phát tín hiệu BLE/UWB.",
+        "score": 0.5059471,
+        "source_id": "mindfix__digital-key-overview.md",
+        "paragraph_id": 3
+       }
+      ],
+      "entities": [],
+      "relations": []
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "query_graph_rag.min_entity_occurrences",
+   "tool": "query_graph_rag_langextract",
+   "arguments": {
+    "query": "FalkorDB và Qdrant trong DeerFlow",
+    "min_entity_occurrences": 3,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success: 5 passages. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "query": "FalkorDB và Qdrant trong DeerFlow",
+      "top_k": 5,
+      "source_id": null,
+      "collection": "mindfix_doc",
+      "collections_searched": [
+       "mindfix_doc"
+      ],
+      "graph_depth": 1,
+      "min_score_to_expand": null,
+      "min_entity_occurrences": 3,
+      "rerank_applied": false,
+      "rerank_strategy": null,
+      "passages": [
+       {
+        "text": "Backup của FalkorDB chạy hằng tuần bằng GRAPH.DUMP sang S3, trong khi\nQdrant backup vector collection cùng lúc để đảm bảo tính nhất quán\ngiữa graph và vector index của DeerFlow.",
+        "score": 0.7726414,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 3
+       },
+       {
+        "text": "FalkorDB là graph database chạy trên Redis, hỗ trợ truy vấn Cypher với\nextension GRAPH.QUERY. Cụm production của DeerFlow sử dụng FalkorDB 4.0\ntrên EC2 với persistent storage qua AOF everysec.",
+        "score": 0.70033157,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "DeerFlow là deep-research pipeline gồm 4 tầng: planner, researcher,\ncoder và reporter. Tầng researcher dùng DeerFlow retrieval kết hợp\nFalkorDB graph context và Qdrant vector context để tổng hợp câu trả\nlời có trích dẫn.",
+        "score": 0.6922508,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 1
+       },
+       {
+        "text": "# DeerFlow system architecture",
+        "score": 0.65227824,
+        "source_id": "mindfix__deerflow-architecture.md",
+        "paragraph_id": 0
+       },
+       {
+        "text": "# FalkorDB operations runbook",
+        "score": 0.64560217,
+        "source_id": "mindfix__falkordb-ops.md",
+        "paragraph_id": 0
+       }
+      ],
+      "entities": [
+       {
+        "id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "name": "FalkorDB",
+        "type": "TECH"
+       },
+       {
+        "id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "name": "DeerFlow",
+        "type": "TECH"
+       }
+      ],
+      "relations": [
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "target": "DeerFlow",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "source": "FalkorDB",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "2fabae2d-8887-571e-99af-489cd049c51e",
+        "target": "Qdrant",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "8c97d72e-7aa7-5ed6-8a7c-ea32f527344a",
+        "target": "FalkorDB",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "4a494a8c-ea8d-5911-99e0-1105fbf082be",
+        "target": "LangExtract",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "52f377d8-40fc-5ee5-b0f1-fecf2b28e289",
+        "target": "Grafana",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "be632864-a84a-5e84-8485-ee045a4d2c52",
+        "target": "AWS",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "5fd10e20-1ac8-531a-959b-f6030bf1d3d5",
+        "target": "GRAPH",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "95a20a2e-6560-517a-aa0d-67a38aa27385",
+        "target": "Redis",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "0a4e2df4-c9a5-595a-90cb-8175bfe11683",
+        "target": "Vault",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "f18c736c-5846-5c40-8f8d-dc945c424f44",
+        "target": "n8n",
+        "target_type": "TECH"
+       },
+       {
+        "source_id": "085f9d92-5db1-5081-a97f-6d03ad0d9689",
+        "source": "DeerFlow",
+        "source_type": "TECH",
+        "relation": "CO_OCCURS",
+        "target_id": "1fbd8895-bc3e-5518-9b03-6b6fc62cc365",
+        "target": "RAM",
+        "target_type": "TECH"
+       }
+      ]
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "query_graph_rag_langextract"
+    }
+   }
+  },
+  {
+   "id": "get_paragraph_text.found",
+   "tool": "get_paragraph_text",
+   "arguments": {
+    "source_id": "mindfix__digital-key-overview.md",
+    "paragraph_id": 0,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "text": "# Digital Key 3.0 overview",
+      "short": true,
+      "source_id": "mindfix__digital-key-overview.md",
+      "paragraph_id": 0,
+      "found": true
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "get_paragraph_text"
+    }
+   }
+  },
+  {
+   "id": "get_paragraph_text.missing",
+   "tool": "get_paragraph_text",
+   "arguments": {
+    "source_id": "mindfix__digital-key-overview.md",
+    "paragraph_id": 999,
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "source_id": "mindfix__digital-key-overview.md",
+      "paragraph_id": 999,
+      "text": null,
+      "found": false
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "get_paragraph_text"
+    }
+   }
+  },
+  {
+   "id": "get_paragraph_text.no_source_id",
+   "tool": "get_paragraph_text",
+   "arguments": {},
+   "expected": {
+    "content_text": "Error executing tool get_paragraph_text: 2 validation errors for get_paragraph_textArguments\nsource_id\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing\nparagraph_id\n  Field required [type=missing, input_value={}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/missing",
+    "structured_content": null,
+    "is_error": true,
+    "meta": null
+   }
+  },
+  {
+   "id": "get_paragraph_text.string_paragraph_id",
+   "tool": "get_paragraph_text",
+   "arguments": {
+    "source_id": "mindfix__guides__security-baseline.md",
+    "paragraph_id": "0",
+    "project_id": "mindfix"
+   },
+   "expected": {
+    "content_text": "Success. Read structuredContent.data.",
+    "structured_content": {
+     "ok": true,
+     "data": {
+      "text": "# Security baseline",
+      "short": true,
+      "source_id": "mindfix__guides__security-baseline.md",
+      "paragraph_id": 0,
+      "found": true
+     },
+     "error": null
+    },
+    "is_error": false,
+    "meta": {
+     "contract": "cortex.mcp.tool-result",
+     "contractVersion": "1.0",
+     "tool": "get_paragraph_text"
+    }
+   }
+  }
+ ]
+}
