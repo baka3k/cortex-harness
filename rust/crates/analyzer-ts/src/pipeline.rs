@@ -271,7 +271,7 @@ struct IndexEntry {
 pub fn build_call_graph(
     ctx: &TsPipeline,
     root: &Path,
-    writer: &mut LanguageCodeWriter,
+    mut writer: Option<&mut LanguageCodeWriter>,
 ) -> Result<(), String> {
     let all_scanned_files = scan_ts_files(root);
     let all_rel_paths: Vec<String> = all_scanned_files
@@ -330,15 +330,18 @@ pub fn build_call_graph(
         );
     }
 
-    // Cleanup changed ∪ deleted
+    // Cleanup changed ∪ deleted — skip khi graphless (embedding pass).
     let cleanup_targets: Vec<String> = ctx
         .changed_set
         .union(&ctx.deleted_set)
         .cloned()
         .collect();
     if ctx.incremental && !cleanup_targets.is_empty() {
+        let Some(store) = writer.as_mut().map(|w| w.store.as_mut()) else {
+            return Ok(());
+        };
         cortex_analyzer_framework::cleanup::cleanup_graph_files(
-            writer.store.as_mut(),
+            store,
             &ctx.project_id,
             &cleanup_targets,
         )
@@ -1019,6 +1022,20 @@ pub fn build_call_graph(
         }
     }
 
+    let Some(writer) = writer else {
+        // Graphless (CORTEX_DISABLE_GRAPH): vẫn in [SCAN_RESULT] như Python.
+        let fn_total: usize = selected_payloads
+            .iter()
+            .map(|payload| payload.functions.len())
+            .sum();
+        println!(
+            "[SCAN_RESULT] parser={} files={} functions={} classes=0",
+            ctx.language,
+            selected_payloads.len(),
+            fn_total
+        );
+        return Ok(());
+    };
     writer.ensure_schema().map_err(|e| e.to_string())?;
     writer
         .write_all(&WriteAllPayload {
