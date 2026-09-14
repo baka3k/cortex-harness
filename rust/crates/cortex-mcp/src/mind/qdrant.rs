@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
@@ -154,11 +154,15 @@ impl RemoteClient {
         if let Some(api_key) = &self.api_key {
             request = request.set("api-key", api_key);
         }
+        let trace = cortex_embed::trace_enabled();
+        let send_started = std::time::Instant::now();
         let response = match body {
             Some(payload) => request.send_json(payload.clone()),
             None => request.call(),
         };
-        match response {
+        let send_ms = send_started.elapsed().as_secs_f64() * 1000.0;
+        let read_started = std::time::Instant::now();
+        let parsed = match response {
             Ok(response) => {
                 let mut raw = String::new();
                 use std::io::Read as _;
@@ -183,7 +187,15 @@ impl RemoteClient {
                 "qdrant connection failed to {}: {err}",
                 self.url
             ))),
+        };
+        if trace {
+            eprintln!(
+                "[mind.qdrant.trace] send={send_ms:.1}ms read={:.1}ms total={:.1}ms",
+                read_started.elapsed().as_secs_f64() * 1000.0,
+                send_started.elapsed().as_secs_f64() * 1000.0
+            );
         }
+        parsed
     }
 }
 
@@ -251,6 +263,52 @@ pub fn list_collection_names(backend: &QdrantBackend) -> Result<Vec<String>, Qdr
             Ok(names)
         }
     }
+}
+
+/// TTL (ms) của cache danh sách collection cho đường search —
+/// `CORTEX_MCP_QDRANT_LIST_TTL_MS`, 0 = tắt cache. Default 30s: dài hơn một
+/// phiên benchmark/tool-call điển hình để không phổi p95, đủ ngắn để ingest
+/// tạo collection mới không bị mù quá lâu.
+fn list_ttl_ms() -> u64 {
+    static TTL: OnceLock<u64> = OnceLock::new();
+    *TTL.get_or_init(|| {
+        std::env::var("CORTEX_MCP_QDRANT_LIST_TTL_MS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .unwrap_or(30_000)
+    })
+}
+
+/// Danh sách collection dùng để lọc/erro trong `qdrant_search_entity_payload` —
+/// KHÔNG phải tool-facing (`list_qdrant_collections` gọi thẳng
+/// `list_collection_names`, không cache). Cache TTL bắt buộc về mặt latency:
+/// GET nhỏ trên connection keep-alive vừa idle ~20-50ms (đúng khoảng embed)
+/// dính stall ~45ms delayed-ACK/Nagle qua ssh-tunnel colima (phase-02 mục 3b:
+/// toàn bộ +40ms rơi vào GET, không phải ORT).
+pub fn collection_names_cached(backend: &QdrantBackend) -> Option<Vec<String>> {
+    let QdrantBackend::Remote { url, api_key } = backend else {
+        // Local mode là directory scan (không mạng) — đọc thẳng.
+        return list_collection_names(backend).ok();
+    };
+    if list_ttl_ms() == 0 {
+        return list_collection_names(backend).ok();
+    }
+
+    type NamesCache = Mutex<BTreeMap<(String, Option<String>), (Instant, Vec<String>)>>;
+    static CACHE: OnceLock<NamesCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let key = (url.clone(), api_key.clone());
+    let ttl = Duration::from_millis(list_ttl_ms());
+
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((stamp, names)) = guard.get(&key) {
+        if stamp.elapsed() < ttl {
+            return Some(names.clone());
+        }
+    }
+    let names = list_collection_names(backend).ok()?;
+    guard.insert(key, (Instant::now(), names.clone()));
+    Some(names)
 }
 
 /// One qdrant search hit (`hit.score` / `hit.payload`).
