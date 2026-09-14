@@ -28,6 +28,28 @@
 
 Đọc thô (1 trong 3 lần, size 10k): Rust `elapsed_s≈1.60`, Python `elapsed_s≈2.33`.
 
+## Re-evaluation 2026-09-14 — bench VỚI manifest staging thật
+
+Sau khi rust-full-migration P02 port manifest staging (`journal_manifest`),
+bench generator được sửa để mang operation payload thật (shape từ capture
+executor-driven; trước đây `operation: {}` nên staging không chạy — che mất
+phần chi phí). Generator chỉ sinh node batches (files/functions) vì
+relationship/calls staging đòi endpoint identity thật giữa các node đã stage
+— row tổng hợp không có → staging rejected đúng contract admission gate.
+
+| ops | input bytes | Rust ops/s | Python ops/s | Rust MB/s | Python MB/s | Rust faster |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 45,638 | 5,000 | 3,704 | 2.18 | 1.61 | 1.3x |
+| 1,000 | 456,579 | 5,952 | 4,016 | 2.59 | 1.75 | 1.5x |
+| 10,000 | 4,613,079 | 4,065 | 3,109 | 1.79 | 1.37 | 1.3x |
+
+**Kết luận:** với staging thật, lợi thế Rust thậm chí HƠI THẤP HƠN lần đo
+operation rỗng (1.3–1.5x vs 1.4–1.6x) — xác nhận chi phí trội là fsync
+(`synchronous=FULL`) + artifact I/O của CẢ HAI side; hiệu năng không bao giờ
+là lập luận flip. Parity DB-state full-surface (kể cả bảng manifest) đã được
+chứng minh ở phase-B3 addendum: fixture 45 ops → 57 rows, capture thật 30 ops
+→ 58 rows, khớp 100% strict-time.
+
 ## Phân tích
 
 - Rust nhanh hơn **~1.4–1.6x** — có lợi thế nhưng KHÔNG phải bậc độ lớn.
