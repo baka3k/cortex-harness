@@ -26,7 +26,8 @@
 
 ## Gate
 
-- [ ] doc-tiny ingest + query parity trên stock_doc thật.
+- [x] doc-tiny ingest + query parity trên stock_doc thật (stages deterministic;
+      LLM disable đối xứng — reports/phase14-doc-tiny-parity.md).
 - [ ] Migration script chạy trên 1 local instance thật (cortex/bakatrans) — dữ liệu đọc được
       bởi runtime Rust.
 - [ ] 1 kỳ dogfood đầy đủ (sync + MCP + doctor) toàn-Rust trên stock không lỗi trong 1 tuần.

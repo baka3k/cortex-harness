@@ -33,7 +33,16 @@ khác biệt.
 
 ## Gate
 
-- [ ] Server Rust lên được :8788 (hoặc port test), MCP client bắt tay + list tools khớp catalog.
-- [ ] Contract fixtures cho error paths: project_not_registered, invalid_parameters,
+- [x] Server Rust lên được :8788 (port test 8791 trong harness), MCP client bắt tay +
+      list tools khớp catalog (39/39 tools, serverInfo + instructions byte-match).
+- [x] Contract fixtures error paths: project_not_registered, invalid_parameters,
+      capability_unavailable — byte-match (106/106 fixtures, live Python server mode).
+- [x] `dev mcp start/stop/gates` quản được server Rust qua cùng interface.
+
+**Trạng thái 2026-09-14:** PASS — `cortex-mcp` rmcp 3.3.0 streamable HTTP (stateless +
+json_response như Python), protocol 2025-06-18; contract envelope v1.0 byte-match;
+catalog 43 entries; capability registry 27 profiles; project registry tái dùng
+cortex_graph_writer::project_scope; graph tools stub capability_unavailable chờ phase 12.
+52 tests + clippy sạch. Report: reports/phase11-mcp-framework-parity.md.
       capability_unavailable — byte-match.
 - [ ] `dev mcp start/stop/gates` quản được server Rust qua cùng interface.

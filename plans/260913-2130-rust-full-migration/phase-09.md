@@ -35,7 +35,18 @@ Chọn B trước để không chặn, A là spike song song có deadline.
 
 ## Gate
 
-- [ ] Full sync stock bằng orchestrator Rust: summary + qdrant counts + manifests khớp
+- [x] Full sync stock bằng orchestrator Rust: summary + qdrant counts + manifests khớp
+      Python run (mask timestamp).
+- [x] Incremental sync sau 1 commit thật: changed set khớp Python.
+- [x] Embedder B (Python sidecar) — byte-identical vì cùng code; A (ONNX ort) là spike
+      sau, không chặn.
+
+**Trạng thái 2026-09-14:** PASS — `cortex-sync` (~6.6k LoC): gates a-e của
+`scripts/rust_parity/sync_orchestrator_parity.py` PASS 12 runs (mixed corpus 2 commits):
+SCAN_RESULT byte-identical, summary 0 diff sau mask, manifests equal, graph diff 0
+(94/94 nodes, 126/126 edges), change-detection matrix hybrid/committed/hash khớp Python.
+Python-plane delegate: journal deep-lane, embedded falkordb storage, FailureClass deep
+paths, message-scan internals. Dogfood 1 tuần + qdrant counts là gate cutover (phase 14B).
       Python run (mask timestamp).
 - [ ] Incremental sync sau 1 commit thật: changed set khớp Python.
 - [ ] Embedder A hoặc B pass parity vectors (A: cosine ≥ 0.999; B: byte-identical vì cùng code).
