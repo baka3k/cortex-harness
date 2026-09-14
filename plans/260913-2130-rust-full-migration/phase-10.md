@@ -34,7 +34,16 @@ ignore, harness, help.
 
 ## Gate
 
-- [ ] `dev --help` surface khớp (21 commands); status/doctor/storage-layout output text khớp.
-- [ ] Stress suite 4 kịch bản trên pass; so hành vi với Python trên cùng kịch bản.
-- [ ] `dev doctor` tất cả check ok với storage Rust.
-- [ ] `dev sync code` (orchestrator Phase 09) chạy qua CLI Rust end-to-end trên stock.
+- [x] `dev --help` surface khớp (21 commands); status/doctor/storage-layout output text khớp.
+- [x] Stress suite 4 kịch bản trên pass; so hành vi với Python trên cùng kịch bản.
+- [x] `dev doctor` tất cả check ok với storage Rust.
+- [ ] `dev sync code` (orchestrator Phase 09) chạy qua CLI Rust end-to-end trên stock —
+      qua Python orchestrator bridge hiện tại OK (cortex-sync swap test riêng ở phase 09);
+      gate cuối gắn cutover 1-tuần dogfood.
+
+**Trạng thái 2026-09-14:** Scope A `cortex-dev` 67/67 parity checks (help surface 55/55,
+status/doctor/storage-layout text, init scaffold + active-flip byte-equal, ignore) —
+reports/phase10-devcli-parity.md. Scope B `cortex-storage` 17 modules + stress 4/4 khớp
+Python 16/16 điểm (lease race 8 process 1 winner, generation swap pinned reader,
+BoundedLane saturation + timeout codes, kill -9 recover_expired_leases) —
+reports/phase10-storage-parity.md.

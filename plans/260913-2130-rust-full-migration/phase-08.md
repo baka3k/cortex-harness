@@ -32,7 +32,18 @@ sql/plsql/database_schema (độc lập) → spring + fastapi_django + express_j
 
 ## Gate
 
-- [ ] Detector: cùng input → cùng quyết định gate (bật/tắt overlay) trên stock + procsample
+- [x] 12/12 overlay analyzer pass golden contract trên testdata riêng.
+
+**Trạng thái 2026-09-14:** PASS toàn bộ — spring/struts/servlet_jsp (JVM overlays,
+`analyzer-jvm-overlays`, parity 9/9 gates mỗi overlay: output lines + artifact
+byte-identical + graph diff 0 với base java seed trước), mybatis/database_schema/sql/plsql
+(`analyzer-sql-family`, 4 binaries + vendored sql grammar 0.3.11), fastapi_django/
+express_js/laravel/aspnet_framework/aspnet_core (`analyzer-web-overlays`, 5 binaries,
+aspnet chạy real Roslyn worker subprocess). Reports: reports/phase08-*.md (12 files).
+XML/YAML: xml_dom ElementTree-compat + yamlmini PyYAML-1.1 subset.
+Ghi chú tham chiếu: spring writer fail trên dict properties (fixture tránh derived
+query names); struts Interceptor/... thiếu id-index trong schema (fixture giới hạn
+subset indexable) — 2 quirk Python giữ nguyên.
       + testdata (bảng quyết định so exact).
 - [ ] 10/10 overlay parity pass (diff rỗng ngoài mask).
 - [ ] **Wave D đóng**: `dev sync code all` (orchestrator Python) chạy với TOÀN BỘ analyzers
