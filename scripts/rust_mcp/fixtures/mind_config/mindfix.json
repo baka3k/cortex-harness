@@ -1,0 +1,19 @@
+{
+ "active": true,
+ "project": {
+  "code": "mindfix"
+ },
+ "storage_backend": "remote",
+ "remote": {
+  "qdrant_url": "http://127.0.0.1:6333",
+  "falkordb_uri": "redis://127.0.0.1:6379"
+ },
+ "doc": {
+  "env": {
+   "FALKORDB_GRAPH": "mindfix_doc",
+   "QDRANT_COLLECTION": "mindfix_doc",
+   "EMBEDDING_MODEL": "BAAI/bge-m3",
+   "device": "cpu"
+  }
+ }
+}

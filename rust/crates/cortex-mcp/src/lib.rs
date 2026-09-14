@@ -22,13 +22,19 @@
 //! Phase-11 boundary: tools that need the graph run the exact Python
 //! pre-flight (defaults → list coercion → missing-required → parser →
 //! project resolution) and then return the canonical
-//! `capability_unavailable` envelope; real graph tools land in phase 12.
+//! `capability_unavailable` envelope; real graph tools landed in phase 12.
+//!
+//! Phase-13 addition: [`mind`] — the `mind_mcp` doc-server flavor
+//! (`doc-tiny/mcp_graph_rag.py`): semantic_search / query_graph_rag /
+//! list_source_ids / get_paragraph_text / list_qdrant_collections, served by
+//! the same binary in `--server mind` mode.
 
 pub mod catalog;
 pub mod contract;
 pub mod dispatch;
 pub mod framework_registry;
 pub mod graph;
+pub mod mind;
 pub mod planner;
 pub mod project_registry;
 pub mod server;
