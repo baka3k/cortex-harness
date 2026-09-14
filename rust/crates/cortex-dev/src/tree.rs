@@ -731,6 +731,27 @@ static CMD_IMPORT: Cmd = Cmd {
     runs_without_sub: false,
 };
 
+// ---------------------------------------------------------------------------
+// migrate (phase 14 scope B: falkordblite .rdb → ladybug cutover)
+// ---------------------------------------------------------------------------
+
+static CMD_MIGRATE: Cmd = Cmd {
+    name: "migrate",
+    desc: "Migrate a local harness instance from legacy FalkorDBLite .rdb to Ladybug.\n\n\nBoots each <instance>/falkordb/<owner>/data.rdb read-only (redislite +\nfalkordb.so, SHUTDOWN NOSAVE), enumerates every graph, and writes it into\n<instance>/ladybug/<owner>/<owner>.lbug/<graph>. Node/rel counts are verified\nper graph (and per label / rel type) and a migration report is printed.\n\nThe source .rdb is never modified or deleted. Migration writes a NEW store\nfile — an existing target is refused unless --overwrite.\n\nRequires the cortex-migrate binary (cargo build --release -p cortex-migrate,\nor set CORTEX_MIGRATE_BIN).\n\nExamples:\n  dev migrate --dry-run               # list graphs + counts, write nothing\n  dev migrate                         # migrate code+doc lanes of the instance\n  dev migrate --owner code --overwrite",
+    opts: &[
+        opt!(&["--dry-run"], OptMeta::Flag, help = "List what would migrate (graphs + counts); write nothing."),
+        opt!(&["--overwrite"], OptMeta::Flag, help = "Replace an existing Ladybug store file instead of erroring."),
+        opt!(&["--data-root"], OptMeta::Value("PATH"), help = "Harness data root (default: $CORTEX_DATA_HOME or ~/.cortext-harness)."),
+        opt!(&["--instance"], OptMeta::Value("NAME"), help = "Instance id (default: $CORTEX_STORAGE_INSTANCE or 'default')."),
+        opt!(&["--owner"], OptMeta::Choice(&["code", "doc", "both"]), default = "both", help = "Which lane to migrate."),
+        opt!(&["--graph"], OptMeta::Value("NAME"), help = "Migrate only the named graphs (repeatable; default: all)."),
+        HELP_OPT,
+    ],
+    args: &[],
+    subs: &[],
+    runs_without_sub: false,
+};
+
 static ROOT_DESC: &str = "dev - CortexHarness ingestion CLI.\n\nQuick start:\n  dev init              # configure project + scaffold folder structure\n  dev status            # show active config\n  dev sync code         # interactive: pick folders, auto incremental/full\n  dev sync code all     # ALL analyzers on all folders (incremental if baseline)\n  dev sync doc          # ingest documents -> Neo4j + Qdrant\n  dev build             # create/sync the repository virtualenv\n  dev storage-init      # initialize centralized local Qdrant/FalkorDBLite storage\n  dev storage-layout    # show instance paths, manifest, and leases\n  dev start             # open code-tiny + doc-tiny from any directory\n  dev stop              # stop MCP processes started by dev/make start\n  dev doctor            # check local storage from any directory";
 
 pub static ROOT: Cmd = Cmd {
@@ -756,6 +777,7 @@ pub static ROOT: Cmd = Cmd {
         &CMD_JOURNAL,
         &CMD_MCP,
         &CMD_MCP_GATES,
+        &CMD_MIGRATE,
         &CMD_START,
         &CMD_STATUS,
         &CMD_STOP,

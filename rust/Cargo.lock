@@ -755,6 +755,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-migrate"
+version = "0.1.0"
+dependencies = [
+ "cortex-falkordb",
+ "cortex-graph-writer",
+ "cortex-storage",
+ "lbug",
+ "redis",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "cortex-retrieval"
 version = "0.1.0"
 dependencies = [
