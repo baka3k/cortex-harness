@@ -1,18 +1,22 @@
-//! Query embedding for the mind tools — **Plan B** (phase-13 decision):
-//! the bge-m3 embedder stays a Python sidecar (`torch`/sentence-transformers
-//! never enter the Rust runtime); ONNX `ort` is a later spike and is
-//! intentionally NOT implemented here.
+//! Query embedding for the mind tools — **hai backend sau một seam**, chọn bằng
+//! `CORTEX_EMBED_BACKEND=python|onnx` (plans/260914-1706-onnx-embedding-spike
+//! phase-02):
 //!
-//! Unlike the phase-14 one-shot sidecar (`cortex_doc::embed`), this worker is
-//! **persistent**: the Rust server spawns `scripts/rust_mcp/embed_worker.py`
-//! once and exchanges newline-delimited JSON over stdin/stdout, so the model
-//! load cost is amortized across queries (required for the P95 latency gate).
-//! Model/device resolution mirrors `doc-tiny/embedding_utils.py` +
-//! `mcp_graph_rag.get_embedder` (the worker reads the same env vars).
+//! - `python` (mặc định = Plan B phase-13, giữ nguyên để rollback tức thì):
+//!   bge-m3 vẫn là Python sidecar; `torch`/sentence-transformers không vào Rust.
+//! - `onnx`: `cortex_embed::OnnxEmbedder` (ort, CPU) — hết spawn worker.
+//!
+//! `python` dùng worker **persistent** (`scripts/rust_mcp/embed_worker.py`): spawn
+//! một lần, NDJSON qua stdin/stdout, để chi phí load model trải trên nhiều query —
+//! điều kiện của gate P95. `onnx` cache session trong `OnceLock` vì cùng lý do
+//! (load lại 2.27GB mỗi query là không thể đạt gate). Model/device resolution
+//! mirror `doc-tiny/embedding_utils.py` + `mcp_graph_rag.get_embedder`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+
+use cortex_embed::{Backend, Embedder, OnnxEmbedder, Plane, spec_from_env};
 
 /// A held sidecar process with a serialized request/response channel.
 struct EmbedWorker {
@@ -96,8 +100,41 @@ fn worker() -> Result<&'static Mutex<Option<EmbedWorker>>, String> {
     Ok(holder)
 }
 
-/// `embedder.encode([query])[0].tolist()` — one query vector.
+/// `embedder.encode([query])[0].tolist()` — one query vector, qua backend đang
+/// được `CORTEX_EMBED_BACKEND` chọn.
 pub fn encode_query(query: &str) -> Result<Vec<f64>, String> {
+    match Backend::from_env() {
+        Backend::Onnx => encode_query_onnx(query),
+        Backend::Python => encode_query_worker(query),
+    }
+}
+
+/// Đường ONNX native: session dựng một lần rồi giữ cho cả process.
+fn encode_query_onnx(query: &str) -> Result<Vec<f64>, String> {
+    static EMBEDDER: OnceLock<Mutex<Option<OnnxEmbedder>>> = OnceLock::new();
+    if let Some(note) = Backend::device_note(Plane::Doc) {
+        eprintln!("[mind.embed] {note}");
+    }
+    let holder = EMBEDDER.get_or_init(|| Mutex::new(None));
+    let mut guard = holder.lock().map_err(|_| "embedder lock poisoned".to_string())?;
+    if guard.is_none() {
+        let spec = spec_from_env(Plane::Doc).map_err(|error| error.to_string())?;
+        let embedder = OnnxEmbedder::new(spec).map_err(|error| error.to_string())?;
+        eprintln!("[mind.embed] onnx backend loaded model={}", embedder.spec().id);
+        *guard = Some(embedder);
+    }
+    let embedder = guard.as_ref().ok_or("onnx embedder unavailable")?;
+    let vectors = embedder
+        .embed(&[query.to_string()])
+        .map_err(|error| error.to_string())?;
+    vectors
+        .into_iter()
+        .next()
+        .map(|vector| vector.into_iter().map(f64::from).collect())
+        .ok_or_else(|| "onnx embedder returned no vector".to_string())
+}
+
+fn encode_query_worker(query: &str) -> Result<Vec<f64>, String> {
     let holder = worker()?;
     let mut guard = holder.lock().map_err(|_| "embed worker lock poisoned")?;
     if guard.is_none() {
