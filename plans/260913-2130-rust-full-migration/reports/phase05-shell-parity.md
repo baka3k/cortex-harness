@@ -1,6 +1,6 @@
 # Phase 05 — shell analyzer parity (python vs rust)
 
-- chạy: 2026-09-14 02:33:49
+- chạy: 2026-09-14 16:22:49
 - testdata: `tests/fixtures/shell-application` (có program-mapping ledger)
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']`
 
