@@ -1296,6 +1296,47 @@ def human_file_size(path_value: object) -> str:
     return f"{size} B"
 
 
+def doctor_embedding_backend() -> None:
+    """Report which embedding backend `cortex-embed`/sidecar seams will use.
+
+    Missing ONNX artifacts are only a *failure* when the operator explicitly asked
+    for the onnx backend; otherwise the spike stays informational (default path is
+    still the Python sidecar).
+    """
+    backend = (os.environ.get("CORTEX_EMBED_BACKEND") or "python").strip() or "python"
+    if backend != "onnx":
+        doctor_check(
+            "embedding backend",
+            True,
+            f"python sidecar (CORTEX_EMBED_BACKEND={backend or 'unset'}; default)",
+            required=False,
+        )
+        return
+
+    dylib = os.environ.get("ORT_DYLIB_PATH")
+    dylib_root = Path(dylib) if dylib else None
+    if dylib_root is None:
+        ort_cache = ROOT / ".cache" / "ort"
+        candidates = sorted(ort_cache.glob("*/libonnxruntime*.dylib")) + sorted(
+            ort_cache.glob("*/libonnxruntime.so*")
+        ) + sorted(ROOT.glob(".venv/lib/python*/site-packages/onnxruntime/capi/libonnxruntime*.dylib"))
+        dylib_root = candidates[0] if candidates else None
+
+    graphs = {
+        "jina-v3": ROOT / ".cache" / "embed" / "jina-v3-onnx-fp32" / "model.onnx",
+        "bge-m3": ROOT / ".cache" / "embed" / "BAAI--bge-m3" / "model.onnx",
+    }
+    missing = [name for name, path in graphs.items() if not path.is_file()]
+    problems = [] if dylib_root else ["libonnxruntime not provisioned (make build)"]
+    if missing:
+        problems.append(f"missing graphs: {', '.join(missing)} (make embed-artifacts)")
+    detail = (
+        f"onnx; ort={Path(dylib_root).name if dylib_root else 'MISSING'}; "
+        + ", ".join(f"{name}={human_file_size(path)}" for name, path in graphs.items())
+    )
+    doctor_check("embedding backend", not problems, detail or "onnx", required=bool(problems))
+
+
 def doctor_mcp_checks(instances: list[dict[str, object]] | None = None) -> None:
     instances = running_mcp_instances() if instances is None else instances
     if not instances:
@@ -1472,6 +1513,7 @@ def invoke_doctor() -> None:
         except Exception as error:
             failures += doctor_check("ladybug round-trip", False, str(error))
 
+    doctor_embedding_backend()
     doctor_mcp_checks()
 
     if failures:
