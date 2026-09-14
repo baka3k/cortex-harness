@@ -73,10 +73,46 @@ def _artifact_ref(run: str, rows: list[dict]) -> ArtifactRef:
     return ArtifactRef(digest, f"{run}/{digest}.jsonl", len(hasher_total), len(rows))
 
 
+def _operation_payload(label: str) -> dict:
+    """Operation metadata thật (shape từ capture executor-driven) để bench
+    đo cả chi phí manifest staging — trước đây operation rỗng nên staging
+    không chạy (đã che mất phần CPU-bound, xem re-evaluation phase-B3)."""
+    if label == "relations:HAS_FILE":
+        node_label = None
+        reconciliation = "typed_relationship"
+        operation_key = "graph-write/v1/relationships/relations:HAS_FILE"
+    elif label == "calls":
+        node_label = None
+        reconciliation = "call_edge"
+        operation_key = "graph-write/v1/calls/calls"
+    else:
+        node_label = "File" if label == "files" else "Function"
+        reconciliation = "node_identity"
+        operation_key = f"graph-write/v1/nodes/{label}"
+    return {
+        "label": label,
+        "phase": "nodes" if node_label else "calls",
+        "version": 1,
+        "idempotent": True,
+        "operation_key": operation_key,
+        "reconciliation": reconciliation,
+        "node_label": node_label,
+        "identity_property": "id",
+        "row_identity_property": "id",
+        "row_properties_property": None,
+        "mutation_kind": "merge",
+        "query_fingerprint": None,
+    }
+
+
 def _batch_ops(run: str, fingerprint: str, sequence: int, cycle: int) -> list[dict]:
     """1 chu kỳ producer: create_artifact → enqueue → claim → ack."""
 
-    label = ("files", "functions", "calls", "relations:HAS_FILE")[cycle % 4]
+    # Chỉ node batches (files/functions) — relationship/calls staging đòi
+    # endpoint identity thật giữa các node đã stage; row tổng hợp không có
+    # → staging rejected đúng contract (admission gate). Node path là dominant
+    # của ingest thật nên bench đại diện được.
+    label = ("files", "functions")[cycle % 2]
     rows = [
         {
             "id": f"row-{cycle}-{ordinal}",
@@ -96,7 +132,7 @@ def _batch_ops(run: str, fingerprint: str, sequence: int, cycle: int) -> list[di
         "required_barriers": [],
         "produced_barriers": [],
         "max_attempts": 5,
-        "operation": {},
+        "operation": _operation_payload(label),
     }
     job_id = deterministic_job_id(
         run_fingerprint_value=fingerprint,

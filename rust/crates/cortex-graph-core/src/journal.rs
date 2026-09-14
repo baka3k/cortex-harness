@@ -605,6 +605,57 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
+/// Hinnant `days_from_civil` — ngày dân số → ngày Julius (số học thuần).
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = y - i64::from(if m <= 2 { 1 } else { 0 });
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = i64::from(m) + if m > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+/// ISO-8601 UTC (`Z` hoặc `±HH:MM`, có/không micro giây) → canonical
+/// microsecond UTC, replicate output của Python `_iso`. Trả `None` khi
+/// string không parse được — caller fail-closed.
+pub(crate) fn canonicalize_iso(value: &str) -> Option<String> {
+    let (date, rest) = value.split_once('T')?;
+    let rest = rest.strip_suffix('Z').unwrap_or(rest);
+    let sign_idx = rest.find(['+', '-'])?;
+    let (time, offset) = rest.split_at(sign_idx);
+    let mut time_parts = time.split('.');
+    let mut clock = time_parts.next()?.split(':');
+    let hour: i64 = clock.next()?.parse().ok()?;
+    let minute: i64 = clock.next()?.parse().ok()?;
+    let second: i64 = clock.next()?.parse().ok()?;
+    let micros: i64 = match time_parts.next() {
+        Some(frac) => format!("{:0<6}", frac.get(..6).unwrap_or(frac)).parse().ok()?,
+        None => 0,
+    };
+    let (offset_sign, offset_spec) = offset.split_at(1);
+    let mut offset_parts = offset_spec.split(':');
+    let offset_hour: i64 = offset_parts.next()?.parse().ok()?;
+    let offset_minute: i64 = offset_parts.next().unwrap_or("0").parse().ok()?;
+    let sign = match offset_sign {
+        "+" => 1,
+        "-" => -1,
+        _ => return None,
+    };
+    let mut date_parts = date.splitn(3, '-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: u32 = date_parts.next()?.parse().ok()?;
+    let day: u32 = date_parts.next()?.parse().ok()?;
+    let offset_micros = (offset_hour * 3_600 + offset_minute * 60) * 1_000_000;
+    let epoch_micros = days_from_civil(year, month, day) * 86_400_000_000
+        + hour * 3_600_000_000
+        + minute * 60_000_000
+        + second * 1_000_000
+        + micros
+        - sign * offset_micros;
+    Some(iso_from_epoch(epoch_micros as f64 / 1_000_000.0))
+}
+
 
 type Clock = Box<dyn Fn() -> f64 + Send>;
 
@@ -1997,6 +2048,15 @@ impl Journal {
         error_code: TerminalErrorCode,
     ) -> Result<BatchRecord, JournalError> {
         let now = self.now_iso();
+        // Canonical hoá retry_at về microsecond UTC — parity với Python
+        // `_iso(retry_at)` (python nhận datetime nên luôn định dạng đầy đủ;
+        // Rust nhận &str từ capture có thể thiếu micro giây).
+        let retry_at = canonicalize_iso(retry_at).ok_or_else(|| {
+            JournalError::new(
+                TerminalErrorCode::InvalidContract,
+                format!("retry_at không phải ISO-8601 UTC hợp lệ: {retry_at}"),
+            )
+        })?;
         self.transaction(|conn| {
             let owned = Self::owned_transition(conn, job_id, fencing_token, &now)?;
             let run_id_value = text_field(&owned, "run_id");

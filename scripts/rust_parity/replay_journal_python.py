@@ -6,8 +6,10 @@ vocabulary, cùng ràng buộc:
 - Header line (`_header` + `schema_version`) được verify; key prefix `_` bỏ qua.
 - `fencing_token` của op phụ thuộc dùng token do store đang replay sinh ra
   (track theo job_id); token trong capture chỉ là fallback.
-- Payload `operation` của `BatchSpec` bị strip (manifest staging chưa ported
-  sang Rust) — để DB-state so được với Rust store (xem phase-B2/B3).
+- Payload `operation` của `BatchSpec` được replay nguyên vẹn: manifest
+  staging + conservation đã port sang Rust (rust-full-migration phase-02,
+  module `journal_manifest`) nên DB-state so được full surface (cập nhật
+  re-evaluation phase-B3, bỏ strip của lần đánh giá đầu).
 - Op lỗi trong capture: verify store raise ĐÚNG code đã ghi.
 
 Dùng cho:
@@ -57,7 +59,7 @@ READONLY_OPS = frozenset(
     }
 )
 # Ops ghi có thật nhưng chưa hỗ trợ replay (khớp bin Rust).
-UNSUPPORTED_OPS = frozenset({"claim_reconciling_job", "schedule_reconciliation_retry"})
+UNSUPPORTED_OPS = frozenset()  # reconciliation ops đã wire (P02 rust-full-migration)
 
 
 def _enum(value: Any, enum_type: type) -> Any:
@@ -102,8 +104,8 @@ class Replay:
             self.journal.create_artifact(args["run_id"], args.get("rows") or [])
         elif op == "enqueue_batch":
             spec_data = dict(args["spec"])
-            # Manifest staging chưa ported — strip payload (khớp bin Rust).
-            spec_data["operation"] = {}
+            # operation replay nguyên vẹn — manifest staging chạy thật cả 2
+            # side (journal_manifest, phase-02 rust-full-migration).
             spec_data["phase"] = OperationPhase(spec_data["phase"])
             spec_data["artifact"] = ArtifactRef(**spec_data["artifact"])
             spec_data["required_barriers"] = list(spec_data.get("required_barriers") or ())
@@ -179,6 +181,40 @@ class Replay:
             self.journal.close_barrier(args["run_id"], args["name"])
         elif op == "complete_producers":
             self.journal.complete_producers(args["run_id"])
+        elif op == "claim_reconciling":
+            claimed = self.journal.claim_reconciling(
+                run_id_value=args.get("run_id"),
+                lease_seconds=int(args.get("lease_seconds") or 60),
+            )
+            if claimed is not None:
+                self._track(claimed)
+        elif op == "claim_reconciling_job":
+            claimed = self.journal.claim_reconciling_job(
+                args["job_id"],
+                lease_seconds=int(args.get("lease_seconds") or 300),
+            )
+            if claimed is not None:
+                self._track(claimed)
+        elif op == "schedule_reconciliation_retry":
+            retry_at = (
+                dt.datetime.fromtimestamp(args["retry_at_epoch"], tz=dt.timezone.utc)
+                if "retry_at_epoch" in args
+                else dt.datetime.fromisoformat(args["retry_at"])
+            )
+            record = self.journal.schedule_reconciliation_retry(
+                args["job_id"],
+                self._token(args["job_id"], args.get("fencing_token")),
+                retry_at=retry_at,
+                error_code=TerminalErrorCode(args["error_code"]),
+            )
+            self._track(record)
+        elif op == "seal_endpoint_audit":
+            self.journal.seal_endpoint_audit(
+                args["run_id"],
+                manifest_digest=args.get("manifest_digest"),
+                receipt_count=args.get("receipt_count"),
+                audited_rows=args.get("audited_rows"),
+            )
         elif op in READONLY_OPS:
             self.skipped_readonly += 1
         elif op in UNSUPPORTED_OPS:

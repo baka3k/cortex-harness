@@ -104,3 +104,55 @@ Rủi ro còn mở:
 (7.1k/7.0k/6.3k ops/s vs 4.5k/5.2k/4.3k ops/s ở 100/1k/10k ops); decision
 record DEFER flip; `make rust-check` + pytest (161 passed) + `make rust-pyo3`
 đều xanh.
+
+## Re-evaluation 2026-09-14 — sau khi rust-full-migration P01–P14 code-complete
+
+Bối cảnh: plan `260913-2130-rust-full-migration` đã port xong đúng các khoảng
+trống mà decision record trên liệt kê. Replay harness được nâng cấp để kiểm
+chứng lại full-surface, không còn strip gì:
+
+**Đã làm (thay đổi code):**
+1. Bỏ strip `operation` payload trong `replay_journal.rs` +
+   `replay_journal_python.py` — manifest staging giờ chạy thật cả 2 side.
+2. Wire các op P02 còn thiếu vào replay: `claim_reconciling`,
+   `claim_reconciling_job`, `schedule_reconciliation_retry`,
+   `seal_endpoint_audit` (trước đây rơi vào unsupported/skip).
+3. `journal.rs`: thêm `canonicalize_iso` (parse ISO → microsecond UTC chuẩn
+   `_iso` của Python, qua `days_from_civil`/`iso_from_epoch`) —
+   `schedule_reconciliation_retry` canonical hoá `retry_at` fail-closed,
+   sửa drift format `12:00:00+00:00` vs `12:00:00.000000+00:00`.
+4. Fix bin theo signature P02: `mark_reconciling` nhận `error_code` optional.
+5. Bench generator mang operation payload thật (shape từ capture).
+
+**Bằng chứng parity full-surface (không strip):**
+- Fixture P02 (45 ops — gồm mark_reconciling/schedule_reconciliation_retry/
+  claim_reconciling/seal_endpoint_audit/conservation_summary): replay 0
+  unsupported → **10 tables, 57 rows khớp 100% strict-time**.
+- Capture executor-driven 30 ops với operation thật (72 manifest entries):
+  **10 tables, 58 rows khớp 100% strict-time** — node_manifest/
+  edge_manifest/producer_completion đều so được và khớp.
+- Bench lại với staging thật: Rust 1.3–1.5x (thấp hơn lần đo operation rỗng)
+  — xem `reports/bench-journal.md`.
+
+**Điều kiện tiên quyết flip (theo danh sách 5 điều kiện ở trên):**
+1. Manifest staging + conservation gate — ✅ P02 port + parity 100% qua harness này.
+2. Node-first endpoint audit + close-run — ✅ `seal_endpoint_audit`,
+   `endpoint_audit_status`, `conservation_summary`,
+   `recover_run_leases_as_ambiguous` replay parity (fixture 45 ops).
+3. Reader/reconciliation path — ✅ về core API (`claim_reconciling*`,
+   `schedule_reconciliation_retry` parity qua fixture); ⚠️ consumer-side
+   capture (drain stream) vẫn chưa có — recovery loop thực chiến chưa được
+   capture toàn diện.
+4. Dogfood full-ingest ≥ 1 tuần qua shadow — ⬜ còn mở, thuộc vận hành.
+5. Bench lại — ✅ làm (1.3–1.5x, I/O-bound — hiệu năng không phải lập luận flip).
+
+**Quyết định cập nhật: SẴN SÀNG FLIP về mặt kỹ thuật journal-core; flip
+thực hành NHẬP VÀO P14B cutover của rust-full-migration** (đang ở gate vận
+hành dogfood 1 tuần) thay vì plan riêng: `journal-shadow-diff` xanh hằng
+ngày trong cửa sổ dogfood của P14B là gate đủ; không mở plan mới. Việc còn
+lợi ích biên duy nhất ngoài P14B: xây consumer/drain-side capture nếu muốn
+parity cả recovery loop thực chiến — không chặn flip (write path là đường
+chính, drain vẫn có thể giữ Python hybrid theo điều kiện 3).
+
+Gates re-eval: `make rust-check` exit 0, pytest 161 passed, `make rust-pyo3`
+pass, fixture + capture diff 100% strict-time như trên.
