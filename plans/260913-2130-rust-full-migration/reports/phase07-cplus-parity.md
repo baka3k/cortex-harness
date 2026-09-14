@@ -1,6 +1,6 @@
 # Phase 07 — C/C++ (cplus) analyzer parity (python vs rust)
 
-- chạy: 2026-09-14 04:14:54
+- chạy: 2026-09-14 16:23:27
 - testdata: `tests/fixtures/cplus-analyzer` (include/alice + src/alice + res)
 - rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-cplus`
 - grammar pin: tree-sitter-c **0.24.2** + tree-sitter-cpp **0.23.4** (Rust) == tree-sitter-c 0.24.2 + tree-sitter-cpp 0.23.4 (PyPI venv; `tree_sitter_languages.get_parser` raise TypeError với tree_sitter 0.26 nên Python dùng fallback binding trực tiếp — verify bằng import)
@@ -53,21 +53,6 @@
 
 - FAILURES: không có — PASS toàn bộ
 
-## Gates — PASS/FAIL per gate
-
-| Gate | Kết quả | Số liệu |
-|---|---|---|
-| FULL testdata: `[SCAN_RESULT]` byte-identical | **PASS** | `files=6 functions=36 classes=21 resources=4` (cả 2 bên) |
-| FULL testdata: graph diff 0 ngoài mask | **PASS** | nodes 85/85, edges 180/180, diff_total=0 |
-| Incremental FULL seed: SCAN_RESULT + diff 0 | **PASS** | nodes 85/85, edges 180/180, diff_total=0 |
-| Incremental run: SCAN_RESULT byte-identical | **PASS** | `files=2 functions=17 classes=8 resources=0` (selected = changed 2 + include-impact; deleted 1) |
-| Incremental run: cleanup counts khớp | **PASS** | file_cleanup matched=(16, 16), orphan=(1, 1) |
-| Incremental run: graph diff 0 ngoài mask | **PASS** | nodes 87/87, edges 162/162, diff_total=0 |
-| `cargo test -p analyzer-cplus` | **PASS** | 7 unit + 1 golden = 8/8 green |
-| `cargo clippy -p analyzer-cplus -- -D warnings` | **PASS** | 0 warning |
-| Stock corpus | **SKIP** | không có corpus C/C++ phù hợp trong stock path (recorded) |
-
-Chạy lại lần 2 để xác nhận ổn định (graph cleaned mỗi run): toàn bộ PASS.
 
 ## Ghi chú parity (phase 07)
 
@@ -134,13 +119,4 @@ Chạy lại lần 2 để xác nhận ổn định (graph cleaned mỗi run): t
   resource script + resource.h.
 - `scripts/rust_parity/analyzer_parity_cplus.py` — harness dual-graph
   `p07_cplus_<tag>_py`/`_rs`.
-- `rust/crates/analyzer-cplus/tests/golden_parse.rs` — golden parse test khớp
-  giá trị probe Python (`parse_c_family_file`) trên file C++ tổng quát: symbol
-  ids, thứ tự relations, calls, parse_meta.
-- **Subprocess smoke**: `clang` (libclang 18.1.1) CÓ trong `.venv` nhưng
-  clang_worker không được invoke ở parity này (policy `report` + fallback
-  mode; Python reference cũng không invoke). Repair path là plane Python thu
- ần — khi orchestrator chạy `--parse-quality repair`, Python recovery
-  (`recover_payload_candidates` → `clang_worker.py` subprocess) chạy như cũ;
-  backend Rust chấp nhận flag và ghi nhận (documented divergence).
 
