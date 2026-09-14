@@ -169,6 +169,18 @@ impl ShellArgs {
         self.output.as_ref().or(self.output_short.as_ref())
     }
 
+    /// `graph_writes_disabled` — CORTEX_DISABLE_GRAPH (embedding pass).
+    fn graph_writes_disabled(&self) -> bool {
+        matches!(
+            std::env::var("CORTEX_DISABLE_GRAPH")
+                .unwrap_or_default()
+                .trim()
+                .to_lowercase()
+                .as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    }
+
     fn open_store(&self, graph: &str) -> Result<Box<dyn cortex_graph_writer::store::GraphStore>, String> {
         match self.graph_provider.to_lowercase().as_str() {
             "ladybug" => {
@@ -298,7 +310,7 @@ fn run(args: &ShellArgs) -> i32 {
         }
 
     let vector_count = 0usize;
-    if !args.dry_run {
+    if !args.dry_run && !args.graph_writes_disabled() {
         let graph = args
             .falkordb_graph
             .clone()

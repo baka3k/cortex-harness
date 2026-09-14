@@ -80,14 +80,21 @@ fn run(args: &AnalyzerArgs) -> i32 {
         return 0;
     }
 
+    if args.graph_writes_disabled() {
+        println!("[graph] CORTEX_DISABLE_GRAPH — parse-only");
+    }
     let store = match args.open_store() {
-        Ok(store) => store,
+        Ok(store) => Some(store),
         Err(error) => {
-            eprintln!("[graph] open store failed: {error}");
-            return 1;
+            if args.graph_writes_disabled() {
+                None
+            } else {
+                eprintln!("[graph] open store failed: {error}");
+                return 1;
+            }
         }
     };
-    let mut writer = LanguageCodeWriter::new(store, None, 1000, verbose);
+    let mut writer = store.map(|store| LanguageCodeWriter::new(store, None, 1000, verbose));
 
     let changed_set: BTreeSet<String> = if args.incremental {
         args.changed_files_manifest
@@ -135,7 +142,7 @@ fn run(args: &AnalyzerArgs) -> i32 {
         deleted_set,
     };
     let root_for_pipeline = root.clone();
-    if let Err(error) = pipeline::build_call_graph(&ctx, &root_for_pipeline, &mut writer) {
+    if let Err(error) = pipeline::build_call_graph(&ctx, &root_for_pipeline, writer.as_mut()) {
         eprintln!("[graph] pipeline failed: {error}");
         return 1;
     }
