@@ -19,19 +19,21 @@
 //! - `fencing_token` do store sinh ra tại thời điểm claim; replay dùng token
 //!   của store đang replay (track theo job_id) cho các op phụ thuộc — token
 //!   trong capture chỉ là fallback. Diff tool chuẩn hoá cột này.
-//! - Payload `operation` của `BatchSpec` bị strip (manifest staging chưa
-//!   được port sang Rust — phase-07); CẢ HAI replay side làm như nhau nên
-//!   DB-state vẫn so được (giới hạn ghi nhận ở phase-B3).
+//! - Payload `operation` của `BatchSpec` được replay nguyên vẹn: manifest
+//!   staging + conservation + endpoint audit đã port (rust-full-migration
+//!   phase-02, module `journal_manifest`) nên DB-state so được full surface
+//!   (cập nhật re-evaluation phase-B3, bỏ strip của lần đánh giá đầu).
 //! - Op ghi lỗi trong capture: replay verify Rust lỗi ĐÚNG code đã ghi.
-//! - Op chưa hỗ trợ replay (`claim_reconciling_job`,
-//!   `schedule_reconciliation_retry`) → lỗi, trừ khi `--skip-unsupported`.
+//! - Reconciliation ops (`claim_reconciling_job`,
+//!   `schedule_reconciliation_retry`) đã wire (P02 rust-full-migration có
+//!   đủ API core) — `--skip-unsupported` chỉ còn là forward-compat.
 
 use cortex_graph_core::journal::{Journal, JOURNAL_SCHEMA_VERSION};
 use cortex_graph_core::models::{
     BatchRecord, BatchSpec, JournalLimits, RetryClass, RunMetadata, TerminalErrorCode,
 };
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -388,12 +390,11 @@ fn dispatch(
         }
         "enqueue_batch" => {
             let run_id = arg_str(op_args, "run_id")?;
-            let mut spec: BatchSpec =
+            let spec: BatchSpec =
                 serde_json::from_value(op_args.get("spec").cloned().unwrap_or(Value::Null))
                     .map_err(|e| ReplayError::msg(format!("enqueue_batch.spec: {e}")))?;
-            // Manifest staging chưa ported — strip payload; side Python replay
-            // cũng làm tương tự (xem docstring đầu file).
-            spec.operation = BTreeMap::new();
+            // operation replay nguyên vẹn — manifest staging chạy thật cả 2
+            // side (journal_manifest, phase-02 rust-full-migration).
             let record = journal
                 .enqueue_batch(run_id, spec)
                 .map_err(ReplayError::journal)?;
@@ -455,13 +456,16 @@ fn dispatch(
         "mark_reconciling" => {
             let job_id = arg_str(op_args, "job_id")?;
             let token = token_for(state, job_id, op_args.get("fencing_token").and_then(Value::as_str));
-            let error_code = enum_from_value(
-                op_args.get("error_code").and_then(Value::as_str),
-                TerminalErrorCode::from_value,
-                "error_code",
-            )?;
+            // error_code là Option trong core — capture cũ (fixture) có thể
+            // không mang field này.
+            let error_code = match op_args.get("error_code").and_then(Value::as_str) {
+                Some(raw) => Some(TerminalErrorCode::from_value(raw).ok_or_else(|| {
+                    ReplayError::msg(format!("error_code không hợp lệ: {raw:?}"))
+                })?),
+                None => None,
+            };
             let record = journal
-                .mark_reconciling(job_id, &token, Some(error_code))
+                .mark_reconciling(job_id, &token, error_code)
                 .map_err(ReplayError::journal)?;
             track_batch(state, &record);
             Ok(())
@@ -526,12 +530,67 @@ fn dispatch(
                 .map_err(ReplayError::journal)?;
             Ok(())
         }
+        // ── endpoint audit seal (P02 rust-full-migration — write op) ─────
+        "seal_endpoint_audit" => {
+            let run_id = arg_str(op_args, "run_id")?;
+            let manifest_digest = op_args.get("manifest_digest").and_then(Value::as_str);
+            let receipt_count = op_args.get("receipt_count").and_then(Value::as_i64);
+            let audited_rows = op_args.get("audited_rows").and_then(Value::as_i64);
+            journal
+                .seal_endpoint_audit(run_id, manifest_digest, receipt_count, audited_rows)
+                .map_err(ReplayError::journal)?;
+            Ok(())
+        }
         // ── ops chỉ-đọc / no-op trên store replay mới ───────────────────
         "get_run" | "list_runs" | "find_resumable_run" | "get_batch" | "get_barrier"
         | "list_open_producers" | "list_batches" | "status_counts" | "status_summary"
         | "list_events" | "inspect" | "conservation_summary" | "endpoint_audit_status"
         | "recover_expired_leases" | "recover_run_leases_as_ambiguous" | "close" => {
             counters.readonly += 1;
+            Ok(())
+        }
+        // ── reconciliation (P02 rust-full-migration) ─────────────────────
+        "claim_reconciling" => {
+            let run_id = op_args.get("run_id").and_then(Value::as_str);
+            let lease = arg_i64(op_args, "lease_seconds", 60);
+            let claimed = journal
+                .claim_reconciling(run_id, lease)
+                .map_err(ReplayError::journal)?;
+            if let Some(record) = claimed {
+                track_batch(state, &record);
+            }
+            Ok(())
+        }
+        "claim_reconciling_job" => {
+            let job_id = arg_str(op_args, "job_id")?;
+            let lease = arg_i64(op_args, "lease_seconds", 300);
+            let claimed = journal
+                .claim_reconciling_job(job_id, lease)
+                .map_err(ReplayError::journal)?;
+            if let Some(record) = claimed {
+                if record.job_id != job_id {
+                    eprintln!(
+                        "warn: capture claim_reconciling_job({job_id}) nhưng claim được {} — thứ tự stream lệch",
+                        record.job_id
+                    );
+                }
+                track_batch(state, &record);
+            }
+            Ok(())
+        }
+        "schedule_reconciliation_retry" => {
+            let job_id = arg_str(op_args, "job_id")?;
+            let token = token_for(state, job_id, op_args.get("fencing_token").and_then(Value::as_str));
+            let retry_at = arg_str(op_args, "retry_at")?;
+            let error_code = enum_from_value(
+                op_args.get("error_code").and_then(Value::as_str),
+                TerminalErrorCode::from_value,
+                "error_code",
+            )?;
+            let record = journal
+                .schedule_reconciliation_retry(job_id, &token, retry_at, error_code)
+                .map_err(ReplayError::journal)?;
+            track_batch(state, &record);
             Ok(())
         }
         // ── chưa port / ngoài scope replay ──────────────────────────────
