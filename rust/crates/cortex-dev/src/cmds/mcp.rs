@@ -219,20 +219,14 @@ fn start_rust_one(svc: &McpService, binary: &Path, project_dir: &Path, force_res
     // `_mcp_start_one` layering).
     let svc_dir = pyexec::repo_root().join(svc.rel_dir);
     let mut env_overrides = load_dotenv(&svc_dir);
-    match pyexec::try_call_json(
-        "mcp_env",
-        &json!({ "project_dir": project_dir.to_string_lossy(), "service": svc.name }),
-    ) {
-        Ok(extra) => {
-            if let Some(map) = extra.as_object() {
-                for (key, value) in map {
-                    if let Some(text) = value.as_str() {
-                        env_overrides.push((key.clone(), text.to_string()));
-                    }
-                }
-            }
+    let extra = crate::env::mcp_env_from_config(project_dir, svc.name);
+    if extra.is_empty() {
+        echo("  [warn] could not resolve harness config env; using inherited env");
+    }
+    for (key, value) in &extra {
+        if let Some(text) = value.as_str() {
+            env_overrides.push((key.clone(), text.to_string()));
         }
-        Err(_) => echo("  [warn] could not resolve harness config env; using inherited env"),
     }
 
     let instance_id = env_overrides
