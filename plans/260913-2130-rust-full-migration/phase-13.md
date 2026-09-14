@@ -28,6 +28,20 @@ contract `{text, labels, threshold} → [{entity, type, score, span}]` như adde
 
 ## Gate
 
-- [ ] mind tools pass golden contract byte-level (trừ scores tolerance 1e-9).
-- [ ] Decision record A/B: nếu A — parity vectors + benchmark; nếu B — sidecar contract test.
-- [ ] Query latency P95 ≤ Python (đo trên stock_doc + collection lớn hơn nếu có).
+- [x] mind tools pass golden contract byte-level (trừ scores tolerance 1e-9).
+- [x] Decision record: **Plan B** — embedding sidecar Python (persistent worker
+      `embed_worker.py`, newline-JSON stdio, cùng embedding_utils model/device → vectors
+      identical); ONNX `ort` là spike sau, không chặn. GLiNER giữ Python sidecar
+      (byte-identical cùng code — verify-once PASS).
+- [x] Query latency P95: **Rust 49.8ms** (P50 48.7) vs Python 57.0ms (P50 52.6) trên
+      fixture corpus — Rust nhanh hơn.
+
+**Trạng thái 2026-09-14:** PASS toàn bộ — mind tools 30/30 call byte-parity, 5/5
+tools/list metadata, initialize `mind_mcp`/1.29.0 khớp. Architecture: `--server mind`
+flavor trong cortex-mcp (ureq REST qdrant client mirror cortex-storage::qdrant_remote,
+FalkorDB store reads qua cortex-falkordb với Cypher byte-identical, heuristic rerank
+math chính xác, FastMCP-signature error text). Regression: cortex-mcp 65/65 tests,
+contract 106/106, graph 38/38, workspace 390 tests. Report:
+reports/phase13-mind-tools-parity.md. Ghi chú tham chiếu: get_qdrant/get_neo4j bắt
+nhầm class ProjectNotRegisteredError (cùng tên, khác module) — fallback dead code,
+Rust replicate hành vi quan sát được.

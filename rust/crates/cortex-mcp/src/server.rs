@@ -93,15 +93,104 @@ fn json_type_of(catalog_type: Option<&str>) -> &'static str {
     }
 }
 
+/// Server flavor — the Python deployment runs two servers: the unified
+/// `graph_mcp` (`code-tiny/mcp/unified_mcp.py`) and the doc `mind_mcp`
+/// (`doc-tiny/mcp_graph_rag.py`). The Rust binary mirrors the split.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ServerFlavor {
+    /// Unified code-graph server (phases 11/12).
+    #[default]
+    Graph,
+    /// Doc/mind server (`mcp_graph_rag.py`, phase 13).
+    Mind,
+}
+
+impl ServerFlavor {
+    /// Resolve from the `--server` value / `MCP_SERVER_NAME` env:
+    /// `mind`|`mind_mcp` → [`ServerFlavor::Mind`], anything else → graph.
+    pub fn resolve(value: Option<&str>) -> Self {
+        let normalized = value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        if normalized == "mind" || normalized == "mind_mcp" {
+            Self::Mind
+        } else {
+            Self::Graph
+        }
+    }
+
+    fn server_info_name(self) -> &'static str {
+        match self {
+            Self::Graph => "graph_mcp",
+            Self::Mind => "mind_mcp",
+        }
+    }
+}
+
+/// Tools served by the mind server (`mcp_graph_rag.py::register_tools`) —
+/// name + description + schema entries.
+pub fn mind_served_tools() -> Vec<Tool> {
+    crate::mind::catalog::mind_tool_entries()
+        .into_iter()
+        .map(|(name, description, schema)| {
+            Tool::new_with_raw(name, Some(Cow::Owned(description)), Arc::new(schema))
+        })
+        .collect()
+}
+
+/// One deterministic mind tool call, from arguments to the wire result
+/// (mirrors `_standard_tool`: tool body → success envelope; exception →
+/// canonical error envelope).
+pub fn call_mind_tool_payload(tool_name: &str, arguments: &Value) -> CallToolResult {
+    match crate::mind::dispatch_mind_tool(tool_name, arguments) {
+        dispatch::ToolOutcome::RawError { content_text } => {
+            let mut result = CallToolResult::error(vec![ContentBlock::text(content_text)]);
+            result.result_type = None;
+            result
+        }
+        dispatch::ToolOutcome::EnvelopeError { envelope, content_text } => {
+            let mut result = CallToolResult::error(vec![ContentBlock::text(content_text)]);
+            result.structured_content = Some(envelope);
+            result.meta = Some(rmcp::model::MetaObject(crate::contract::result_meta(Some(tool_name))));
+            result.result_type = None;
+            result
+        }
+        dispatch::ToolOutcome::Payload(payload) => {
+            let wire = dispatch::wrap_dispatch_result(&payload, tool_name);
+            if wire.is_error {
+                let mut result = CallToolResult::error(vec![ContentBlock::text(wire.content_text)]);
+                result.structured_content = wire.structured_content;
+                result.meta = Some(rmcp::model::MetaObject(wire.meta));
+                result.result_type = None;
+                return result;
+            }
+            let mut result =
+                CallToolResult::structured(wire.structured_content.clone().unwrap_or(Value::Null));
+            result.content = vec![ContentBlock::text(wire.content_text)];
+            result.meta = Some(rmcp::model::MetaObject(wire.meta));
+            result.result_type = None;
+            result
+        }
+    }
+}
+
 /// `CortexMcpServer` — stateless handler (the streamable service factory
 /// creates one per request, no session state, mirroring
 /// `stateless_http=True` in `unified_mcp.py`).
 #[derive(Debug, Clone, Default)]
-pub struct CortexMcpServer;
+pub struct CortexMcpServer {
+    flavor: ServerFlavor,
+}
 
 impl CortexMcpServer {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    pub fn with_flavor(flavor: ServerFlavor) -> Self {
+        Self { flavor }
     }
 }
 
@@ -138,8 +227,15 @@ pub fn call_tool_payload(tool_name: &str, arguments: &Value) -> CallToolResult {
         _ => match dispatch::dispatch_tool_outcome(tool_name, arguments) {
             dispatch::ToolOutcome::Payload(payload) => payload,
             dispatch::ToolOutcome::RawError { content_text } => {
-                let mut result =
-                    CallToolResult::error(vec![ContentBlock::text(content_text)]);
+                let mut result = CallToolResult::error(vec![ContentBlock::text(content_text)]);
+                result.result_type = None;
+                return result;
+            }
+            // The unified dispatch never returns prebuilt envelopes; treat
+            // defensively as an error result.
+            dispatch::ToolOutcome::EnvelopeError { envelope, content_text } => {
+                let mut result = CallToolResult::error(vec![ContentBlock::text(content_text)]);
+                result.structured_content = Some(envelope);
                 result.result_type = None;
                 return result;
             }
@@ -169,10 +265,18 @@ impl ServerHandler for CortexMcpServer {
         info.protocol_version = ProtocolVersion::V_2025_06_18;
         info.capabilities = capabilities;
         info.server_info = Implementation::new(
-            catalog::unified().server_name.clone(),
-            catalog::unified().server_version.clone(),
+            self.flavor.server_info_name(),
+            match self.flavor {
+                // Python: FastMCP(name) — server_version is the fastmcp lib
+                // version of the reference environment (mcp_graph_rag.py).
+                ServerFlavor::Mind => "1.29.0",
+                ServerFlavor::Graph => catalog::unified().server_version.as_str(),
+            },
         );
-        info.instructions = Some(instructions().to_string());
+        // The mind server (plain FastMCP) sends no instructions.
+        if self.flavor == ServerFlavor::Graph {
+            info.instructions = Some(instructions().to_string());
+        }
         info
     }
 
@@ -196,8 +300,11 @@ impl ServerHandler for CortexMcpServer {
         let tool_name = request.name.as_ref().to_string();
         let arguments: Value = Value::Object(request.arguments.unwrap_or_default());
         // Argument validation intentionally bypassed (`get_tool` returns the
-        // default `None`): the Python server validates inside dispatch and
-        // returns the canonical error envelope, not a transport-level error.
+        // default `None`): the Python servers validate inside dispatch and
+        // return the canonical error envelope, not a transport-level error.
+        if self.flavor == ServerFlavor::Mind {
+            return Ok(call_mind_tool_payload(&tool_name, &arguments).into());
+        }
         Ok(call_tool_payload(&tool_name, &arguments).into())
     }
 
@@ -206,13 +313,17 @@ impl ServerHandler for CortexMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
+        let tools = match self.flavor {
+            ServerFlavor::Graph => served_tools(),
+            ServerFlavor::Mind => mind_served_tools(),
+        };
         Ok(ListToolsResult {
             result_type: None,
             meta: None,
             next_cursor: None,
             ttl_ms: None,
             cache_scope: None,
-            tools: served_tools(),
+            tools,
         })
     }
 }
