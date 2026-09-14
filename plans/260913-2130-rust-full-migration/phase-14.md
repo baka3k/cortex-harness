@@ -28,7 +28,16 @@
 
 - [x] doc-tiny ingest + query parity trên stock_doc thật (stages deterministic;
       LLM disable đối xứng — reports/phase14-doc-tiny-parity.md).
-- [ ] Migration script chạy trên 1 local instance thật (cortex/bakatrans) — dữ liệu đọc được
-      bởi runtime Rust.
-- [ ] 1 kỳ dogfood đầy đủ (sync + MCP + doctor) toàn-Rust trên stock không lỗi trong 1 tuần.
-- [ ] Rollback flag được test (flip về Python vẫn chạy).
+- [x] Migration script chạy trên local instance thật: `cortex-migrate` — dry-run
+      default (15 graphs) + cortex (3) + bakatrans (97,559 nodes / 268,548 rels,
+      754MB ladybug store, 37/37 breakdowns src==dst); synthetic round-trip test.
+- [ ] 1 kỳ dogfood đầy đủ (sync + MCP + doctor) toàn-Rust trên stock không lỗi trong 1 tuần —
+      **vận hành, chờ chạy** (runbook: docs/cutover-runbook.md).
+- [x] Rollback flag được test (flip về Python vẫn chạy) — tests/test_phase14_rust_analyzer_flip.py.
+
+**Trạng thái 2026-09-14:** Code cutover hoàn tất — `cortex-migrate` (falkor_boot +
+ladybug_writer, dry-run/overwrite, verify counts), flip defaults: `CORTEX_RUST_ANALYZER`
+unset → auto-Rust (binary present) / `=python` rollback; `CORTEX_MCP_BACKEND` tương tự
+qua `dev mcp start` (`--server unified` :8788 / `--server mind` :8789).
+Runbook vận hành: docs/cutover-runbook.md. Report:
+reports/phase14-cutover-parity.md.

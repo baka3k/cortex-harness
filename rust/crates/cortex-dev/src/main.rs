@@ -67,7 +67,12 @@ fn dispatch(levels: &[Level<'static>]) {
         ["dev", "storage-backup"] => cmds::lifecycle::storage_backup(m),
         ["dev", "storage-stop"] => cmds::lifecycle::storage_stop(),
         ["dev", "start"] => cmds::lifecycle::start(m),
-        ["dev", "stop"] => cmds::lifecycle::stop(m),
+        ["dev", "stop"] => {
+            // Rust-backend MCP processes (cortex-mcp) không match pattern
+            // python của lifecycle stop — dọn trước, rồi lifecycle như cũ.
+            cmds::mcp::stop_rust_mcp(m.value("--name"));
+            cmds::lifecycle::stop(m)
+        }
         ["dev", "doctor"] => cmds::lifecycle::doctor(),
         ["dev", "mcp-gates"] => cmds::lifecycle::mcp_gates(),
         ["dev", "init"] => cmds::init::run(m),
@@ -91,6 +96,7 @@ fn dispatch(levels: &[Level<'static>]) {
         ["dev", "mcp"] => unreachable!("bare mcp group handled by parser"),
         ["dev", "mcp", "start"] => cmds::mcp::start(m),
         ["dev", "mcp", "add"] => cmds::mcp::add(m),
+        ["dev", "migrate"] => cmds::migrate::run(m),
         ["dev", "harness"] => unreachable!("bare harness group handled by parser"),
         ["dev", "harness", "init"] => cmds::harness::init(m),
         ["dev", "harness", "status"] => cmds::harness::status(m),
