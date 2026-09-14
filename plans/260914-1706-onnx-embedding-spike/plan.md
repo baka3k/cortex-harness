@@ -1,6 +1,6 @@
 ---
 title: "ONNX embedding spike — Rust ort native (jina-v3 int8, bge-m3 dense) + GLiNER ONNX evaluation"
-status: planned
+status: partially-done
 created: 2026-09-14
 target: "rust/crates/cortex-embed (mới), cortex-mcp (mind/graph), cortex-doc, cortex-sync (seam), scripts/rust_mcp, scripts/rust_parity — code-tiny/doc-tiny giữ làm tham chiếu parity"
 blockedBy: []
@@ -106,6 +106,20 @@ không có. Qdrant: `QDRANT_CODE_PATH`, `QDRANT_DOC_PATH`, `QDRANT_COLLECTION_DO
 | 03 | S2 | **GLiNER ONNX**: export (fp32 trước, int8 sau), port decode Rust, so span/score/label | contract `{entity,type,score,span}` khớp Python (kể cả span backfill + SSI→CRYPTO); go/no-go rõ |
 | 04 | S2 | Un-empty Rust MCP vector lanes (#6, #7) bằng ort query embed; re-baseline golden fixtures; dim-cross-plane filter fixture | MCP golden contract re-record + match; không phá phase-12/13 parity đã pass |
 | 05 | S2 | Quyết định sync-path: port chunk+payload+upsert (`primary_vector_sync` + hash fallback) vào Rust sau `Embedder` trait, hay giữ Python child vĩnh viễn; benchmark; docs; dogfood add-on | Decision record + benchmark + runbook cập nhật |
+
+## Trạng thái sau phiên 2026-09-14 (P01+P02+P03+P05; P04 defer vì dogfood)
+
+| Phase | Verdict | Số chính | Report |
+|---|---|---|---|
+| 01 | **PASS** | token-id 840/840 drift=0; cosine worst 0.9999994; batch8 38.1 vs 38.1 texts/s; cold 0.46s vs 3.82s | `reports/phase01-jina-parity.md` |
+| 02 | **PARTIAL** — parity đạt, **không flip** | cosine doc 320 case OK; query p95 25.1 vs 41.2ms; nhưng `mind tools/call` 14/30 fail ở drift 1e-7 + latency server chậm hơn 25–31ms | `reports/phase02-bgem3-parity.md` |
+| 03 | **GO fp32 / NO-GO int8** | fp32 848/848 exact, Δscore 1.3e-05, 1.89× nhanh; int8 mất 87.5% entity (848→106) | `reports/phase03-gliner-onnx.md` |
+| 04 | **DEFERRED** | decision #7: dogfood rust-full-migration chưa xong | — |
+| 05 | **NO-GO port ingest** | ingest batch8 không nhanh hơn (1.00×), rủi ro redaction/point-id/hash fallback; ort thắng ở query+NER+cold start | `reports/phase05-sync-decision.md` |
+
+Hệ quả kiến trúc đã đổi so với plan gốc: jina-v3 **phải tự export** graph (artifact HF
+không dùng được), số học là mean+normalize 8194 (không phải 2 đường 512), bge-m3 là
+**CLS+normalize 8192**, và `CORTEX_EMBED_BACKEND` vẫn mặc định `python`.
 
 ## Key architectural decisions
 
