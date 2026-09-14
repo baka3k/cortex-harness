@@ -332,8 +332,8 @@ fn raw_graph_list(client: &mut FalkorDbClient) -> Result<Vec<String>, String> {
 // ---------------------------------------------------------------------------
 
 pub struct GraphRuntime {
-    /// `data.rdb path → (client, embedded server handle)`.
-    clients: Vec<(PathBuf, FalkorDbClient, EmbeddedFalkor)>,
+    /// `data.rdb path hoặc label remote → (client, embedded handle — None nếu remote)`.
+    clients: Vec<(String, FalkorDbClient, Option<EmbeddedFalkor>)>,
     /// graph name → client index, theo thứ tự đăng ký (primary file wins).
     graph_clients: Vec<(String, usize)>,
     /// Default graph (`FALKORDB_GRAPH` env của unified/cplus boot).
@@ -347,6 +347,34 @@ impl GraphRuntime {
         let default_graph = std::env::var("FALKORDB_GRAPH")
             .or_else(|_| std::env::var("FALKORDB_DATABASE"))
             .unwrap_or_else(|_| "hyper_graph".to_string());
+        // Remote FALKORDB_URI (mirror cplus_mcp._get_graph_driver): remote set
+        // → embedded siblings DISABLED (config path=None phía Python).
+        let remote_uri = std::env::var("FALKORDB_URI")
+            .or_else(|_| std::env::var("FALKORDB_URL"))
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        if let Some(uri) = remote_uri {
+            let (host, port) = parse_remote_uri(&uri);
+            let mut client = FalkorDbClient::connect(&host, port).map_err(|error| {
+                format!("connect remote {host}:{port}: {error}")
+            })?;
+            let mut graph_clients: Vec<(String, usize)> = Vec::new();
+            match raw_graph_list(&mut client) {
+                Ok(names) => {
+                    for name in names {
+                        graph_clients.push((name, 0));
+                    }
+                }
+                Err(error) => {
+                    return Err(format!("list_graphs remote {host}:{port}: {error}"));
+                }
+            }
+            return Ok(Self {
+                clients: vec![(format!("remote://{host}:{port}"), client, None)],
+                graph_clients,
+                default_graph,
+            });
+        }
         let files = discover_falkordb_data_files();
         if files.is_empty() {
             // Không có data file nào: runtime rỗng (mọi query → lỗi db) —
@@ -357,7 +385,7 @@ impl GraphRuntime {
                 default_graph,
             });
         }
-        let mut clients: Vec<(PathBuf, FalkorDbClient, EmbeddedFalkor)> = Vec::new();
+        let mut clients: Vec<(String, FalkorDbClient, Option<EmbeddedFalkor>)> = Vec::new();
         let mut graph_clients: Vec<(String, usize)> = Vec::new();
         for path in &files {
             let embedded = launch_embedded_falkordb(path).map_err(|error| {
@@ -381,7 +409,7 @@ impl GraphRuntime {
                     return Err(format!("list_graphs {}: {error}", path.display()));
                 }
             }
-            clients.push((path.clone(), client, embedded));
+            clients.push((path.to_string_lossy().to_string(), client, Some(embedded)));
         }
         Ok(Self {
             clients,
@@ -657,4 +685,16 @@ pub fn json_f64(value: f64) -> Value {
 /// Slice helper cho `run_cypher_first` dbs param.
 pub fn dbs_slice(database: Option<&str>) -> Vec<String> {
     database.map(str::to_string).into_iter().collect()
+}
+
+/// `scheme://host:port` / `host:port` / `host` → (host, port); default 6379.
+fn parse_remote_uri(uri: &str) -> (String, u16) {
+    let cleaned = uri.split("://").last().unwrap_or(uri);
+    let cleaned = cleaned.trim_end_matches('/');
+    match cleaned.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+            (host.to_string(), port.parse().unwrap_or(6379))
+        }
+        _ => (cleaned.to_string(), 6379),
+    }
 }

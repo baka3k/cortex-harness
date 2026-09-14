@@ -103,10 +103,13 @@ impl Analyzer for PythonAnalyzer {
         }
 
         // ── Incremental cleanup (changed ∪ deleted) ─────────────────────────
-        if args.incremental && (!ctx.changed_files.is_empty() || !ctx.deleted_files.is_empty()) {
-            let Some(store) = ctx.store.as_deref_mut() else {
-                return Err("[cleanup][graph] graphless mode nhưng có cleanup targets".into());
-            };
+        if args.incremental
+            && (!ctx.changed_files.is_empty() || !ctx.deleted_files.is_empty())
+            && ctx.store.is_some()
+        {
+            // Python: cleanup chỉ chạy `if code_writer` — embedding pass
+            // (CORTEX_DISABLE_GRAPH) không có writer ⇒ skip im silent.
+            let store = ctx.store.as_deref_mut().expect("checked");
             let mut targets: Vec<String> = ctx
                 .changed_files
                 .union(&ctx.deleted_files)
@@ -119,8 +122,12 @@ impl Analyzer for PythonAnalyzer {
                     targets.len()
                 );
             }
-            let (deleted_nodes, deleted_unknown) =
-                cortex_analyzer_framework::cleanup::cleanup_graph_files(store, &project_id, &targets).map_err(|e| e.to_string())?;
+            let (deleted_nodes, deleted_unknown) = cortex_analyzer_framework::cleanup::cleanup_graph_files(
+                store,
+                &project_id,
+                &targets,
+            )
+            .map_err(|e| e.to_string())?;
             if verbose {
                 println!(
                     "[cleanup][graph] deleted_nodes={deleted_nodes} deleted_unknown_functions={deleted_unknown}"
