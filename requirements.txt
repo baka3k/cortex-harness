@@ -34,6 +34,15 @@ python-multipart
 requests
 torch
 transformers>=4.41,<4.56
+# ONNX graph tooling for the Rust `ort` embedding spike
+# (plans/260914-1706-onnx-embedding-spike): int8 quantization via
+# onnxruntime.quantization + artifact inspection. fp32 graphs come from the
+# official HF `onnx/` subtree, not from a local export.
+onnx>=1.17
+# torch 2.13 routes torch.onnx.export through the dynamo exporter, which imports
+# onnxscript unconditionally; the legacy TorchScript exporter crashes on
+# jina-embeddings-v3 (_jit_pass_peephole). See scripts/rust_parity/export_jina_onnx.py.
+onnxscript>=0.7
 # Existing dependencies
 tree-sitter
 tree-sitter-rust

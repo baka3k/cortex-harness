@@ -8,6 +8,7 @@ blocks: []
 relatedPlans:
   - "260913-1715-rust-retrieval-graph-port"
   - "260913-1538-ladybug-graph-provider"
+  - "260914-1706-onnx-embedding-spike"
 predictionReport: "reports/prediction_report_20260913-1553.md"
 ---
 

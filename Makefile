@@ -27,12 +27,15 @@ endif
 
 .PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc sync-code-stop sync-doc-stop \
 	rust-build rust-test rust-clippy rust-check rust-pyo3 rust-fixtures rust-clean \
+	ort-ensure embed-artifacts embed-jina-onnx embed-bge-onnx embed-parity \
 	journal-shadow-diff
 
 help:
 	@$(LIFECYCLE) help
 
-build:
+# `build` also provisions ONNX Runtime for cortex-embed: everything the runtime
+# needs to load a graph is installed here, model weights are not (see embed-artifacts).
+build: ort-ensure
 	$(LIFECYCLE) build
 
 install:
@@ -131,6 +134,31 @@ rust-clippy:
 	$(CARGO) clippy --manifest-path $(RUST_DIR)/Cargo.toml --workspace --all-targets -- -D warnings
 
 rust-check: rust-clippy rust-test
+
+# --- ONNX embedding spike (plans/260914-1706-onnx-embedding-spike) --------
+# cortex-embed runs ONNX Runtime through `ort` load-dynamic, so a shared library
+# must exist at runtime. `make build` provisions it from the pinned `onnxruntime`
+# wheel (same ORT build the parity fixtures were measured with).
+ort-ensure:
+	$(PYTHON) scripts/ensure_ort.py
+
+# Model graphs are multi-GB and deliberately NOT part of `build`:
+#   jina-v3  -> must be self-exported (the official HF ONNX requires a `task_id`
+#               input and cannot express "LoRA off"; see findings C3)
+#   bge-m3   -> official HF `onnx/` subtree is clean, just download it
+embed-artifacts: embed-jina-onnx embed-bge-onnx
+
+embed-jina-onnx:
+	$(PYTHON) scripts/rust_parity/export_jina_onnx.py --verify
+
+embed-bge-onnx:
+	$(PYTHON) scripts/rust_parity/fetch_bge_onnx.py
+
+# Re-run the Python reference dump + the Rust cosine/token-id gate. Needs both
+# artifacts above; the Rust half is `#[ignore]`d so CI stays weights-free.
+embed-parity: ort-ensure
+	$(PYTHON) scripts/rust_parity/gen_embed_fixtures.py --limit 500
+	$(CARGO) test -p cortex-embed --manifest-path $(RUST_DIR)/Cargo.toml --test embed_golden -- --ignored --nocapture --test-threads=1
 
 # Build cortex-retrieval-py (PyO3) into scripts/rust_parity/, then replay
 # the Python↔Rust parity suite against the Python reference implementation.
