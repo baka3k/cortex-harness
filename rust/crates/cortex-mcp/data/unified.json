@@ -1,0 +1,114 @@
+{
+ "server_name": "graph_mcp",
+ "server_version": "1.2.0",
+ "instructions": "Unified MCP for multi-language code graphs (single server/port).\n\nDiscovery first:\n- Call `list_mcp_functions` at session start to get the exact, current tool set and parameter docs.\n- Call `list_parsers` to inspect canonical profiles, aliases, query engines, dimensional support, and feature gates.\n\nRouting:\n- Pass `parser_type` on every call to select a query profile (stateless — no session defaults). Omit to fan out across query engines (results deduplicated by node id; `parsers_searched` lists engine representatives).\n- Project-context tools (get_project_modules, get_public_apis, get_endpoints, get_module_architecture_summary, get_project_special_files, get_framework_context) require `parser_type`.\n- Parser mapping:\n  - android/android-kotlin/kotlin-android -> android_graph query engine\n  - Other registered profiles -> graph_generic query engine with parser-aware labels and traversal defaults\n- A parser profile describes graph capabilities; it does not imply a separate MCP server.\n- Provider schema filtering is reported through capability_diagnostics when relationships are omitted.\n\nTool families available in unified MCP:\n- Symbol/graph queries: search/get/subgraph/paths/module-path/entrypoint\n- Flow and workflow analysis: trace_flow, find_screen_workflows, reconstruct_flow, analyze_workflow_impact, find_workflows_containing\n- Dependency planning: compute_scc, topological_sort, plan_dependency_order, plan_file_dependency_order, plan_function_dependency_order\n- Fullstack bridge analysis: find_callers_of_endpoint, get_api_call_chain\n- Semantic/vector utilities: explore_graph, semantic_search, list_qdrant_collections\n\n\nInput contract:\n- Tools accept typed top-level parameters.\n- Empty string values are treated as \"not provided\".\n",
+ "tool_names": [
+  "analyze_workflow_impact",
+  "annotate_node",
+  "compute_scc",
+  "explore_graph",
+  "find_callers_of_endpoint",
+  "find_path_between_module",
+  "find_paths",
+  "find_screen_workflows",
+  "find_workflows_containing",
+  "get_api_call_chain",
+  "get_endpoints",
+  "get_framework_context",
+  "get_ipc_message",
+  "get_module_architecture_summary",
+  "get_node_details",
+  "get_project_modules",
+  "get_project_special_files",
+  "get_public_apis",
+  "get_symbol",
+  "inspect_parser_capabilities",
+  "list_databases",
+  "list_mcp_functions",
+  "list_parsers",
+  "list_possible_calls",
+  "list_qdrant_collections",
+  "list_up_entrypoint",
+  "listup_class_matching_path",
+  "listup_symbols_matching_file_path",
+  "plan_dependency_order",
+  "plan_file_dependency_order",
+  "plan_function_dependency_order",
+  "query_subgraph",
+  "reconstruct_flow",
+  "search_by_code",
+  "search_functions",
+  "semantic_search",
+  "topological_sort",
+  "trace_flow",
+  "trace_flow_between_module"
+ ],
+ "parameter_guidelines": {
+  "always_call_first": "list_mcp_functions",
+  "rules": [
+   "Use exact parameter names from tool metadata; avoid inventing aliases.",
+   "Send required fields explicitly on every call.",
+   "Pass parser_type on every call to select a query profile (see list_parsers for aliases).",
+   "When list-like params are accepted, prefer arrays over comma-separated strings.",
+   "On error.invalid_parameters, follow required_params + example and retry once."
+  ]
+ },
+ "wire_descriptions": {
+  "list_mcp_functions": "List all available MCP functions/tools with their descriptions, inputs (parameters), and outputs.",
+  "list_parsers": "List available parser types supported by unified MCP.",
+  "inspect_parser_capabilities": "Compare a parser profile's advertised support with labels and relationships observed in the active graph provider.",
+  "explore_graph": "Intent-aware, multi-strategy Graph Explorer search. Accepts natural language, paragraphs, or vague descriptions (English or Vietnamese). Extracts entities, domain signals, and actions from the query, then fuses semantic vector search + BM25 keyword search + call-graph expansion. Returns explainable ranked nodes with per-node WHY reasons, entry points, related graph paths, and overall confidence score.",
+  "reconstruct_flow": "Reconstruct POSSIBLE execution flows from candidate graph paths (output of find_paths / query_subgraph). Returns grounded, traceable flows consumable by AI agents for reasoning and impact analysis.",
+  "get_project_modules": "Return canonical project modules, descriptors, and dependencies.",
+  "get_public_apis": "Return strict source-level public/exported APIs by module.",
+  "get_endpoints": "Return normalized HTTP, route, page, service, and gRPC endpoints.",
+  "get_module_architecture_summary": "Return bounded indexed-graph architecture context.",
+  "get_project_special_files": "Return decisive project files with redaction-safe summaries.",
+  "get_framework_context": "Return framework instances and dimension-specific context.",
+  "find_callers_of_endpoint": "Return all frontend functions / screens that call a specific backend API endpoint. Traverses: Function -[CALLS_API]-> ApiCall -[MATCHES]-> ApiEndpoint. Useful for answering: 'Which screens call /api/users/:id?'",
+  "get_api_call_chain": "Return the end-to-end fullstack call chain for a component or endpoint. Traverses: Screen/Component → (Function CALLS chain) → ApiCall → ApiEndpoint → Controller → Service → Repository → Database. Use to answer: 'What DB does this button ultimately query?'",
+  "analyze_workflow_impact": "Analyze the full impact of changing a function/screen on all workflows. Returns function-level call graph expansion PLUS workflow-level severity, navigator route impacts, shared-screen cascade detection, an overall_risk_score, and a rule-based recommendation.",
+  "find_workflows_containing": "Find all workflows that contain this function as a step — directly (HAS_STEP) or indirectly (via CALLS chain). Useful before making changes: 'which workflows will I break?'"
+ },
+ "fanout_search_tool_names": [
+  "find_path_between_module",
+  "find_paths",
+  "get_node_details",
+  "get_symbol",
+  "list_possible_calls",
+  "list_up_entrypoint",
+  "listup_class_matching_path",
+  "listup_symbols_matching_file_path",
+  "query_subgraph",
+  "search_by_code",
+  "search_functions",
+  "trace_flow",
+  "trace_flow_between_module"
+ ],
+ "fanout_parser_type_input": {
+  "name": "parser_type",
+  "type": "str",
+  "required": false,
+  "description": "Parser alias to scope this call (e.g. 'python', 'spring', 'android'). Omit to fan out across query engines (results deduplicated by node id). See list_parsers."
+ },
+ "android_overrides": {
+  "trace_flow": {
+   "description": "Trace a call/interaction flow across Android graph edges (UI resources, routes, intents, events, broadcasts, handler messages, etc.).",
+   "use_cases": [
+    "Trace Android Intent flows",
+    "Follow broadcast sender → receiver chains",
+    "Trace NavRoute → Fragment navigation",
+    "Follow handler message dispatch"
+   ],
+   "example": "trace_flow(start_id='activityA', end_id='serviceB', rel_types=['STARTS_INTENT', 'CALLS'])"
+  },
+  "trace_flow_between_module": {
+   "description": "Trace flow paths between functions in two modules using Android interaction edges (CALLS, routes, intents, events, etc.).",
+   "use_cases": [
+    "Trace cross-module Android IPC",
+    "Find inter-module event flows"
+   ],
+   "example": "trace_flow_between_module(source_modules=['ui/'], target_modules=['service/'])"
+  }
+ }
+}

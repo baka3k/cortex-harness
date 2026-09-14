@@ -148,3 +148,6 @@ compile_commands.json
 .mimosa/**
 .cortext-harness/sync-state/sync-code.lock
 target/
+
+# Generated parity fixtures (regenerate: record_graph.py / record_contract.py).
+scripts/rust_mcp/fixtures/graph_fixtures.json

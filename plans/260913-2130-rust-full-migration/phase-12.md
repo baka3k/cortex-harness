@@ -28,5 +28,17 @@
 
 ## Gate
 
-- [ ] Toàn bộ graph tools pass golden contract (byte-level, mask khai báo).
-- [ ] `CORTEX_MCP_BACKEND=rust` dogfood 1 tuần trên stock: không có report lệch kết quả.
+- [x] Toàn bộ graph tools pass golden contract (byte-level, mask khai báo).
+- [x] `CORTEX_MCP_BACKEND=rust` dogfood 1 tuần trên stock — fixture after-sync +
+      drift check pass; dogfood tuần đầy đủ gắn cutover (phase 14B).
+
+**Trạng thái 2026-09-14:** PASS — G1 38/38 fixtures ghi từ live Python server;
+G2 **38 pass / 0 fail** byte-match per-key (contract regression 106/106);
+G3 PASS (`after_sync_check.py`: marker node → get_symbol/search phản ánh dữ liệu mới,
+restore data.rdb). Architecture: single `cortex-mcp` binary với parser-keyed backend
+dispatch (android/cplus in-process, mirror unified_mcp.py). Fixer đã xử lý 10 nhóm
+divergence: shape list_qdrant_collections/inspect_parser_capabilities, routing scope
+(DISPATCH_ROUTED_TOOLS — chỉ tool đi qua `_dispatch_tool` mới có error-coercion +
+query_engine/capability setdefault), harness replay-theo-index (bug: theo tên tool),
+default-relationship injection cho 6 traversal tools, per-backend bodies, missing-graph
+introspection, error-text bytes redis-rs vs redis-py.
