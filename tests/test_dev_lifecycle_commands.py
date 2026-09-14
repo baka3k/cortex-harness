@@ -125,7 +125,13 @@ class DevLifecycleCommandTests(unittest.TestCase):
     def test_every_make_lifecycle_target_is_exposed_by_dev(self):
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         phony = next(line for line in makefile.splitlines() if line.startswith(".PHONY:"))
-        make_targets = set(phony.removeprefix(".PHONY:").split())
+        # Dấu `\` nối dòng là syntax của Makefile, không phải tên target: để lại
+        # nó trong tập hợp thì assertion_fail kể cả khi Makefile không có target lạ.
+        make_targets = {
+            token
+            for token in phony.removeprefix(".PHONY:").split()
+            if token != "\\"
+        }
         make_only_sync_aliases = {"code", "doc", "sync-code-stop", "sync-doc-stop"}
         self.assertEqual(
             make_targets - set(cli.commands) - make_only_sync_aliases,

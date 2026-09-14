@@ -18,6 +18,19 @@
 | | `rust` | ép Rust; binary vắng → fallback Python kèm cảnh báo |
 | `CORTEX_MIGRATE_BIN` | path | override vị trí binary `cortex-migrate` cho `dev migrate` |
 | `CORTEX_MCP_BIN` | path | override vị trí binary `cortex-mcp` cho `dev mcp start` |
+| `CORTEX_EMBED_BACKEND` | *(unset)* hoặc `python` | **mặc định hiện tại**: embedding qua Python sidecar (`embed_worker.py` persistent cho mind MCP, one-shot cho `cortex-doc embed`) |
+| | `onnx` | embedder Rust native (`cortex-embed`: ort + tokenizers, CPU). **Chưa bật mặc định** — xem ghi chú dưới bảng |
+| `ORT_DYLIB_PATH` | path | override `libonnxruntime`; mặc định tìm `.cache/ort/<ver>/` rồi `.venv/.../onnxruntime/capi/` |
+| `CORTEX_EMBED_ORT_THREADS` | int | intra-op threads của ORT session (mặc định `min(cpus, 8)`) |
+
+**Trạng thái `CORTEX_EMBED_BACKEND`** (spike `plans/260914-1706-onnx-embedding-spike`):
+parity số học đã đạt (cosine worst **0.9999994** trên 840 vector; GLiNER contract
+**848/848** khớp), nhưng mặc định vẫn là `python` vì hai lý do đo bằng số trong
+`plans/260914-1706-onnx-embedding-spike/reports/phase02-bgem3-parity.md`:
+(1) điểm tool-result dịch ở **chữ số thứ 7** → phải re-baseline golden fixture
+phase-12/13 (phase-04 của spike, đợi dogfood xong); (2) latency end-to-end của MCP
+server khi bật onnx **chậm hơn ~25–31ms/tool-call** ở steady state, chưa giải thích
+được. Bật `onnx` trước khi xử lý 2 việc đó là làm vỡ hợp đồng đã pass.
 
 ---
 
