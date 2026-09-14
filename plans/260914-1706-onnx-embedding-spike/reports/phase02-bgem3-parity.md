@@ -86,3 +86,8 @@ khi `python`). **Nhưng `CORTEX_EMBED_BACKEND` vẫn phải giữ mặc định 
 flip sang `onnx` cần (1) re-baseline fixture của phase-04 cho drift ~1e-7 và
 (2) tìm ra nguyên nhân regression latency 25-31ms/tool-call ở mục 3(b).
 Không có hai thứ đó thì bật onnx là làm vỡ hợp đồng phase-13 đã pass.
+
+> **Follow-up 2026-09-14:** mục 3(b) đã root-cause và xử lý — stall nằm ở GET
+> `/collections` qua ssh-tunnel colima, không phải ORT. Xem
+> [`phase02b-latency-rootcause.md`](phase02b-latency-rootcause.md). Việc flip
+> vẫn chờ (1) = P04.

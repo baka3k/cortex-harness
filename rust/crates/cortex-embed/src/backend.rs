@@ -2,6 +2,8 @@
 //! cộng với selection qua env `CORTEX_EMBED_BACKEND=python|onnx` (default
 //! `python` — rollback tức thì, cùng pattern `CORTEX_RUST_ANALYZER`).
 
+use std::sync::OnceLock;
+
 use crate::error::Result;
 use crate::model::{resolve_model_source, spec_from_env, Plane};
 use crate::onnx::OnnxEmbedder;
@@ -76,6 +78,28 @@ pub fn read_env(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// `0|false|no|off` (hoa/thường tùy ý) ⇒ `false`, giá trị khác ⇒ `true`,
+/// không set/rỗng ⇒ `default`. Hợp đồng chung cho các env bật-tắt của crate
+/// (`CORTEX_EMBED_ORT_DETERMINISTIC`, `CORTEX_EMBED_ORT_SPIN`,
+/// `CORTEX_EMBED_TRACE`) để chúng hành xử giống nhau.
+pub(crate) fn parse_flag(raw: Option<&str>, default: bool) -> bool {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        None => default,
+        Some(value) => !matches!(
+            value.to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+    }
+}
+
+/// Bật stage-timing (`embed_batch` + caller in thêm dòng của riêng nó) — dùng khi
+/// khoan latency server thật (phase-02 mục 3b), mặc định tắt để không tốn syscall
+/// clock cho đường sản xuất.
+pub fn trace_enabled() -> bool {
+    static TRACE: OnceLock<bool> = OnceLock::new();
+    *TRACE.get_or_init(|| parse_flag(read_env("CORTEX_EMBED_TRACE").as_deref(), false))
+}
+
 /// Embedder theo env hiện tại cho một plane. Không hardcode model: chuỗi env của
 /// plane đó quyết định model, để Rust và Python luôn so trên cùng artifact.
 pub fn embedder_for(plane: Plane) -> Result<Box<dyn Embedder>> {
@@ -99,4 +123,30 @@ pub fn embedder_for(plane: Plane) -> Result<Box<dyn Embedder>> {
 #[must_use]
 pub fn model_for(plane: Plane) -> String {
     resolve_model_source(plane, &|key| std::env::var(key).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_flag;
+
+    #[test]
+    fn flag_unset_or_empty_falls_back_to_default() {
+        assert!(parse_flag(None, true));
+        assert!(!parse_flag(None, false));
+        assert!(parse_flag(Some("   "), true));
+    }
+
+    #[test]
+    fn flag_falsey_values_are_case_insensitive() {
+        for raw in ["0", "false", "FALSE", "No", "off", " OFF "] {
+            assert!(!parse_flag(Some(raw), true), "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn flag_anything_else_is_truthy() {
+        for raw in ["1", "true", "yes", "on", "weird"] {
+            assert!(parse_flag(Some(raw), false), "raw={raw:?}");
+        }
+    }
 }

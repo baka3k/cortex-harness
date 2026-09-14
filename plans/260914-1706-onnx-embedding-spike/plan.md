@@ -112,7 +112,7 @@ không có. Qdrant: `QDRANT_CODE_PATH`, `QDRANT_DOC_PATH`, `QDRANT_COLLECTION_DO
 | Phase | Verdict | Số chính | Report |
 |---|---|---|---|
 | 01 | **PASS** | token-id 840/840 drift=0; cosine worst 0.9999994; batch8 38.1 vs 38.1 texts/s; cold 0.46s vs 3.82s | `reports/phase01-jina-parity.md` |
-| 02 | **PARTIAL** — parity đạt, **không flip** | cosine doc 320 case OK; query p95 25.1 vs 41.2ms; nhưng `mind tools/call` 14/30 fail ở drift 1e-7 + latency server chậm hơn 25–31ms | `reports/phase02-bgem3-parity.md` |
+| 02 | **PARTIAL → (b) RESOLVED** — parity đạt, root-cause latency đã xử lý; **flip vẫn chờ P04** | cosine doc 320 case OK; query p95 25.1 vs 41.2ms; regression +25-31ms/tool-call đã root-cause: GET `/collections` nhỏ trên keep-alive idle 20-50ms dính stall ~45ms delayed-ACK/Nagle qua ssh-tunnel colima (không phải ORT) → cache TTL 30s cho availability list; sau fix onnx p50/p95 **25.1/26.1ms — nhanh nhất** (python ref 50.3/51.6); 14 fail drift 1e-7 chờ P04 | `reports/phase02-bgem3-parity.md`, `reports/phase02b-latency-rootcause.md` |
 | 03 | **GO fp32 / NO-GO int8** | fp32 848/848 exact, Δscore 1.3e-05, 1.89× nhanh; int8 mất 87.5% entity (848→106) | `reports/phase03-gliner-onnx.md` |
 | 04 | **DEFERRED** | decision #7: dogfood rust-full-migration chưa xong | — |
 | 05 | **NO-GO port ingest** | ingest batch8 không nhanh hơn (1.00×), rủi ro redaction/point-id/hash fallback; ort thắng ở query+NER+cold start | `reports/phase05-sync-decision.md` |

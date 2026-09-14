@@ -357,7 +357,7 @@ pub fn qdrant_search_entity_payload(
         Some(json!({ "must": must_conditions }))
     };
 
-    let available: Option<Vec<String>> = qdrant::list_collection_names(&backend).ok();
+    let available: Option<Vec<String>> = qdrant::collection_names_cached(&backend);
     if let Some(available) = &available {
         let missing: Vec<&String> = collection_names
             .iter()
@@ -661,8 +661,12 @@ pub fn tool_semantic_search(arguments: &Value) -> Result<Value, ToolError> {
     let collection = optional_string(arguments.get("collection"));
     let project_id = optional_string(arguments.get("project_id"));
 
+    let trace = cortex_embed::trace_enabled();
+    let body_started = std::time::Instant::now();
     let q_vec = super::embed::encode_query(&query).map_err(ToolError::embed)?;
+    let embed_ms = body_started.elapsed().as_secs_f64() * 1000.0;
 
+    let search_started = std::time::Instant::now();
     let payloads = qdrant_search_entity_payload(
         &q_vec,
         top_k.max(0) as usize,
@@ -670,6 +674,7 @@ pub fn tool_semantic_search(arguments: &Value) -> Result<Value, ToolError> {
         collection.as_deref(),
         project_id.as_deref(),
     )?;
+    let search_ms = search_started.elapsed().as_secs_f64() * 1000.0;
 
     let mut passages: Vec<Value> = Vec::new();
     for row in &payloads {
@@ -700,6 +705,13 @@ pub fn tool_semantic_search(arguments: &Value) -> Result<Value, ToolError> {
         passages.push(Value::Object(passage));
     }
 
+    if trace {
+        eprintln!(
+            "[mind.tools.trace] embed={embed_ms:.1}ms qdrant={search_ms:.1}ms \
+             body={:.1}ms",
+            body_started.elapsed().as_secs_f64() * 1000.0
+        );
+    }
     Ok(json!({
         "query": query,
         "top_k": top_k,

@@ -23,7 +23,9 @@ mod onnx;
 mod pooling;
 mod sidecar;
 
-pub use backend::{Backend, Embedder, BACKEND_ENV, embedder_for, model_for, read_env};
+pub use backend::{
+    Backend, Embedder, BACKEND_ENV, embedder_for, model_for, read_env, trace_enabled,
+};
 pub use error::{EmbedError, Result};
 pub use model::{
     BGE_MAX_TOKENS, CODE_MAX_CHARS, EMBEDDING_DIMENSION, JINA_MAX_TOKENS, ModelSpec, Plane,

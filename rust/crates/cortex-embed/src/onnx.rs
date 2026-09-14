@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 
 use ort::session::Session;
 use tokenizers::{Tokenizer, TruncationParams};
@@ -25,6 +26,12 @@ pub struct SessionConfig {
     pub inter_threads: usize,
     /// Bật để ORT reduce theo thứ tự cố định — parity gate đòi kết quả đo lại được.
     pub deterministic: bool,
+    /// Cho phép intra-op pool của ORT **spin-wait** sau mỗi `run()`. Default on
+    /// (hành vi ORT gốc). Phase-02b đã đo: spin on/off KHÔNG đổi latency server
+    /// (+25-31ms/tool-call lúc đó đến từ GET `/collections` qua ssh-tunnel,
+    /// không phải spin) và KHÔNG đổi số học (golden 3/3 cả hai cấu hình) — knob
+    /// giữ lại để benchmark/tuning, không phải fix.
+    pub spin: bool,
 }
 
 impl Default for SessionConfig {
@@ -41,9 +48,14 @@ impl Default for SessionConfig {
             inter_threads: 1,
             // Bật mặc định để golden vector tái lập được; tắt qua env khi đo
             // benchmark vì ORT bỏ qua một số optimization khi deterministic.
-            deterministic: crate::backend::read_env("CORTEX_EMBED_ORT_DETERMINISTIC")
-                .map(|raw| !matches!(raw.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"))
-                .unwrap_or(true),
+            deterministic: crate::backend::parse_flag(
+                crate::backend::read_env("CORTEX_EMBED_ORT_DETERMINISTIC").as_deref(),
+                true,
+            ),
+            spin: crate::backend::parse_flag(
+                crate::backend::read_env("CORTEX_EMBED_ORT_SPIN").as_deref(),
+                true,
+            ),
         }
     }
 }
@@ -185,6 +197,11 @@ impl OnnxEmbedder {
                 .with_deterministic_compute(true)
                 .map_err(|error| EmbedError::new(error.to_string()))?;
         }
+        if !config.spin {
+            builder = builder
+                .with_intra_op_spinning(false)
+                .map_err(|error| EmbedError::new(error.to_string()))?;
+        }
         let session = builder.commit_from_file(&spec.graph)?;
 
         Ok(Self {
@@ -232,7 +249,10 @@ impl OnnxEmbedder {
     }
 
     fn embed_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let trace = crate::backend::trace_enabled();
+        let tokenize_started = Instant::now();
         let (sequences, longest) = self.tokenize(texts)?;
+        let tokenize_ms = elapsed_ms(trace, tokenize_started);
         let batch = sequences.len();
         let width = longest.max(1);
 
@@ -249,6 +269,7 @@ impl OnnxEmbedder {
         let input_ids = ort::value::Tensor::from_array(([batch, width], ids))?;
         let attention_mask = ort::value::Tensor::from_array(([batch, width], mask))?;
 
+        let run_started = Instant::now();
         let mut session = self
             .session
             .lock()
@@ -257,6 +278,7 @@ impl OnnxEmbedder {
             "input_ids" => input_ids,
             "attention_mask" => attention_mask,
         ])?;
+        let run_ms = elapsed_ms(trace, run_started);
         let (shape, hidden_states) = outputs[0].try_extract_tensor::<f32>()?;
         let hidden_size = *shape
             .last()
@@ -274,6 +296,7 @@ impl OnnxEmbedder {
             )));
         }
 
+        let pool_started = Instant::now();
         let mut vectors = Vec::with_capacity(batch);
         for (index, sequence) in sequences.iter().enumerate() {
             let start = index * width * hidden_size;
@@ -292,7 +315,26 @@ impl OnnxEmbedder {
             }
             vectors.push(vector);
         }
+        if trace {
+            let pool_ms = elapsed_ms(true, pool_started);
+            let total_ms = elapsed_ms(true, tokenize_started);
+            eprintln!(
+                "[cortex-embed.trace] model={} batch={batch} width={width} \
+                 tokenize={tokenize_ms:.1}ms run={run_ms:.1}ms pool={pool_ms:.1}ms \
+                 total={total_ms:.1}ms",
+                self.spec.id
+            );
+        }
         Ok(vectors)
+    }
+}
+
+/// Trace tắt thì trả 0.0 — giữ format dòng log ổn định mà không in số rác.
+fn elapsed_ms(enabled: bool, started: Instant) -> f64 {
+    if enabled {
+        started.elapsed().as_secs_f64() * 1000.0
+    } else {
+        0.0
     }
 }
 
