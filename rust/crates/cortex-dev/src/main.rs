@@ -76,6 +76,29 @@ fn main() {
                 let _ = std::io::stdout().flush();
                 return;
             }
+            // Phase-07 synthetic-table probe: run embedded-FalkorDB discovery
+            // against a fabricated process record (sandbox-safe — no live
+            // child needed). `CORTEX_DEV_PARITY_ARGV` is '|'-separated.
+            "procinfo_synth" => {
+                let db_path = std::path::PathBuf::from(
+                    std::env::var("CORTEX_DEV_PARITY_DB").unwrap_or_default(),
+                );
+                let argv: Vec<String> = std::env::var("CORTEX_DEV_PARITY_ARGV")
+                    .unwrap_or_default()
+                    .split('|')
+                    .map(|s| s.to_string())
+                    .collect();
+                let record = procinfo::ProcessRecord { pid: 9999, ppid: 1, argv };
+                let mut table = std::collections::BTreeMap::new();
+                table.insert(9999i64, record);
+                let pids = procinfo::embedded_falkordb_pids(&db_path, Some(&table));
+                println!(
+                    "{}",
+                    sorted_json(&serde_json::json!({ "pids": pids }))
+                );
+                let _ = std::io::stdout().flush();
+                return;
+            }
             // Phase-02 parity probe: `_mcp_pids` discovery (`CORTEX_DEV_PARITY_PATTERN`).
             "mcp_pids" => {
                 let pattern =

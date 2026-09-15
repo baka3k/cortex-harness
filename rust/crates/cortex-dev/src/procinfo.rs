@@ -486,7 +486,9 @@ pub fn pid_instance_id(pid: i64) -> Option<String> {
     if pid <= 0 {
         return None;
     }
-    let cache_dir = PathBuf::from(".cache");
+    // dev.py walks MCP_LOG_DIR (REPO_ROOT/.cache) — stay repo-anchored so
+    // `dev mcp stop` from a subdirectory still finds sidecar instance ids.
+    let cache_dir = crate::util::repo_root().join(".cache");
     if let Ok(entries) = std::fs::read_dir(&cache_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();

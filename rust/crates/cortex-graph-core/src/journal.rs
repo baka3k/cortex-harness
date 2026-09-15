@@ -1203,16 +1203,21 @@ impl Journal {
             Ok(refs)
         })?;
         for reference in &refs {
-            if let Ok(path) = self.artifacts.path_for(reference) {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => {
-                        return Err(JournalError::new(
-                            TerminalErrorCode::PermissionDenied,
-                            format!("cannot remove artifact {}: {e}", path.display()),
-                        ));
-                    }
+            // Python `ArtifactStore.remove` raises when the reference cannot
+            // be resolved — abort the purge instead of deleting the run row
+            // with files left behind.
+            let path = self
+                .artifacts
+                .path_for(reference)
+                .map_err(|e| JournalError::new(TerminalErrorCode::PermissionDenied, e.message))?;
+            match std::fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(JournalError::new(
+                        TerminalErrorCode::PermissionDenied,
+                        format!("cannot remove artifact {}: {e}", path.display()),
+                    ));
                 }
             }
         }

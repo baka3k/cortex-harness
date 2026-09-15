@@ -486,7 +486,14 @@ pub fn mcp_start_one(
         for key in crate::env::REMOTE_STORAGE_KEYS {
             env.remove(key);
         }
-        let mut has_uri = false;
+        let mut has_uri = env
+            .get("FALKORDB_URI")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+            || env
+                .get("FALKORDB_URL")
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
         for (key, value) in explicit_remote {
             if key == "FALKORDB_URI" || key == "FALKORDB_URL" {
                 has_uri = true;
