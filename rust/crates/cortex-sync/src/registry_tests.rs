@@ -84,21 +84,26 @@ fn assert_vec_str(cmd_args: &[String], expected: &[&str]) {
 }
 
 #[test]
-fn primary_map_covers_24_parsers_with_bin_names() {
+fn primary_map_covers_25_parsers_with_bin_names() {
     let expected: BTreeSet<&str> = [
         "python", "shell", "ts", "js", "php", "perl", "java", "kotlin", "android", "go",
         "rust", "swift", "delphi", "cobol", "jp1", "vbnet", "vb6", "vba", "vbscript",
-        "cplus", "sql", "plsql", "dart", "csharp",
+        "cplus", "sql", "plsql", "dart", "csharp", "project_topology",
     ]
     .into_iter()
     .collect();
     let map = rust_analyzer_binaries();
     let keys: BTreeSet<&str> = map.keys().copied().collect();
     assert_eq!(keys, expected);
+    // Per-parser binary name resolution is verified by
+    // `flip_matrix_rust_*_resolves*` tests below — the primary map's binary
+    // names are not uniform across all keys (e.g. `project_topology` →
+    // `analyzer-topology` drops the `project_` prefix), so we only assert
+    // key parity here and rely on the per-parser tests for the contract.
     for (parser, binary) in &map {
         assert!(
-            binary.starts_with(&format!("analyzer-{parser}")),
-            "binary name '{binary}' should share the parser token '{parser}'"
+            binary.starts_with("analyzer-"),
+            "binary '{binary}' should begin with 'analyzer-' for parser '{parser}'"
         );
     }
 }
@@ -215,14 +220,36 @@ fn flip_matrix_rust_unmapped_parser_falls_back_to_python() {
     let dir = TempBinDir::with(&[]);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
     set_env("CORTEX_RUST_ANALYZER", Some("rust"));
-    let topology = rust_analyzer_binary(&analyzer("project_topology"));
-    let topology_shadow = rust_analyzer_binary(&analyzer("project_topology"));
+    // Pick a parser key that no release of the registry maps. Phase-04
+    // brought `project_topology` into the map, so a hypothetical future
+    // parser exercises the warn-fallback path without colliding with any
+    // real entry.
+    let future = rust_analyzer_binary(&analyzer("future_parser"));
+    let future_shadow = rust_analyzer_binary(&analyzer("future_parser"));
     set_env("CORTEX_RUST_ANALYZER", None);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
-    assert_eq!(topology.expect("unmapped falls back"), None);
+    assert_eq!(future.expect("unmapped falls back"), None);
     assert_eq!(
-        topology_shadow.expect("second call still unmapped"),
+        future_shadow.expect("second call still unmapped"),
         None
+    );
+}
+
+#[test]
+fn flip_matrix_rust_project_topology_resolves_analyzer_topology() {
+    // Phase-04 wiring: `project_topology` is a real entry in the map (not a
+    // framework overlay) so it resolves through `rust_analyzer_binaries()`
+    // exactly like the primary parsers above.
+    let _guard = env_lock();
+    let dir = TempBinDir::with(&["analyzer-topology"]);
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
+    set_env("CORTEX_RUST_ANALYZER", Some("rust"));
+    let resolved = rust_analyzer_binary(&analyzer("project_topology"));
+    set_env("CORTEX_RUST_ANALYZER", None);
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
+    assert_eq!(
+        resolved.expect("mapped topology binary present").as_deref(),
+        Some(dir.path.join("analyzer-topology").to_str().unwrap())
     );
 }
 

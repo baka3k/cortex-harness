@@ -276,40 +276,80 @@ FOREACH (node IN nodes | DETACH DELETE node)
 RETURN size(nodes) AS count
 "#;
 
+/// `json.dumps(value, ensure_ascii=True)` — non-ASCII escape \uXXXX (Python
+/// json.dumps default; writer module dùng cho graph values + canonical rows).
+fn py_json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) <= 0x7f => out.push(c),
+            c => {
+                let code = c as u32;
+                if code <= 0xffff {
+                    out.push_str(&format!("\\u{code:04x}"));
+                } else {
+                    let reduced = code - 0x10000;
+                    let high = 0xd800 + (reduced >> 10);
+                    let low = 0xdc00 + (reduced & 0x3ff);
+                    out.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+                }
+            }
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// `json.dumps(value, sort_keys=True, separators=(",", ":"))` — đệ quy cho
+/// array lẫn object (Python dumps TOÀN BỘ list, keys sort ở mọi tầng).
+fn py_dumps_compact(value: &Value) -> String {
+    match value {
+        Value::Object(map) => canonical_json(map),
+        Value::Array(items) => {
+            let rendered: Vec<String> = items.iter().map(py_dumps_compact).collect();
+            format!("[{}]", rendered.join(","))
+        }
+        Value::String(text) => py_json_string(text),
+        other => other.to_string(),
+    }
+}
+
 /// `_graph_value` — map/tuple-of-non-scalars → canonical JSON string.
 fn graph_value(value: &Value) -> Value {
     match value {
         Value::Object(map) => Value::String(canonical_json(map)),
         Value::Array(items) => {
-            if items.iter().all(|item| {
+            let all_scalar = items.iter().all(|item| {
                 item.is_null()
                     || item.is_string()
                     || item.is_i64()
                     || item.is_u64()
                     || item.is_f64()
                     || item.is_boolean()
-            }) {
+            });
+            if all_scalar {
+                // Python: list scalar → giữ nguyên list.
                 value.clone()
             } else {
-                // tuple/list không scalar-only: render như JSON array map
-                // (Python dumps cả list lồng nhau).
-                let rendered: Vec<Value> = items
-                    .iter()
-                    .map(|item| match item {
-                        Value::Object(map) => Value::String(canonical_json(map)),
-                        other => other.clone(),
-                    })
-                    .collect();
-                Value::String(
-                    serde_json::to_string(&rendered).unwrap_or_else(|_| "[]".to_string()),
-                )
+                // Python: json.dumps TOÀN BỘ list (keys sort đệ quy) — không
+                // per-item stringify như bản port trước (phase-04 fix).
+                Value::String(py_dumps_compact(value))
             }
         }
         other => other.clone(),
     }
 }
 
-/// `json.dumps(value, sort_keys=True, separators=(",", ":"))`.
+/// `json.dumps(value, sort_keys=True, separators=(",", ":"))` cho map.
 fn canonical_json(map: &Map<String, Value>) -> String {
     let sorted: BTreeMap<&String, &Value> = map.iter().collect();
     let mut out = String::from("{");
@@ -317,13 +357,9 @@ fn canonical_json(map: &Map<String, Value>) -> String {
         if index > 0 {
             out.push(',');
         }
-        let key_json = serde_json::to_string(key).unwrap_or_default();
-        out.push_str(&key_json);
+        out.push_str(&py_json_string(key));
         out.push(':');
-        match value {
-            Value::Object(inner) => out.push_str(&canonical_json(inner)),
-            other => out.push_str(&other.to_string()),
-        }
+        out.push_str(&py_dumps_compact(value));
     }
     out.push('}');
     out
@@ -868,5 +904,26 @@ mod tests {
         let value = graph_value(&json!({"k": 1}));
         assert_eq!(value, json!(r#"{"k":1}"#));
         assert_eq!(graph_value(&json!([1, 2])), json!([1, 2]));
+    }
+
+    #[test]
+    fn graph_value_list_of_dicts_dumps_whole_list() {
+        // Python: json.dumps toàn bộ list → '[{"a":1},{"a":2}]' (keys sort),
+        // KHÔNG per-item stringify (phase-04 parity fix).
+        let value = graph_value(&json!([
+            {"end_line": null, "file_path": "a.proto", "source": "static", "start_line": 5},
+            {"b": "x", "a": true},
+        ]));
+        assert_eq!(
+            value,
+            json!(r#"[{"end_line":null,"file_path":"a.proto","source":"static","start_line":5},{"a":true,"b":"x"}]"#)
+        );
+    }
+
+    #[test]
+    fn canonical_json_escapes_non_ascii_like_python() {
+        let mut map = Map::new();
+        map.insert("é".to_string(), json!("x"));
+        assert_eq!(canonical_json(&map), r#"{"\u00e9":"x"}"#);
     }
 }

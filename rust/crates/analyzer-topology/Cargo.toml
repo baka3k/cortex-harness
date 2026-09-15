@@ -1,0 +1,26 @@
+[package]
+name = "analyzer-topology"
+version = "0.1.0"
+edition = "2024"
+description = "Rust port của tools/project_topology/topology_analyzer.py — project_topology analyzer half (phase 04 analyzer-layer-rust-cutover); write path tái dùng cortex-graph-writer::topology"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "analyzer-topology"
+path = "src/main.rs"
+
+[dependencies]
+cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
+cortex-falkordb = { path = "../cortex-falkordb" }
+cortex-graph-writer = { path = "../cortex-graph-writer" }
+clap = { version = "4", features = ["derive"] }
+encoding_rs = "0.8"
+fancy-regex = "0.14"
+quick-xml = "0.37"
+regex = "1"
+serde_json = "1"
+sha2 = "0.10"
+
+[lints.rust]
+unsafe_code = "deny"
