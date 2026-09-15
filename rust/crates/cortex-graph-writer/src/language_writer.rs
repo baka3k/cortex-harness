@@ -18,8 +18,9 @@ use cortex_graph_core::schema_manifest::code_graph_schema;
 use crate::json_row::{as_i64, row_get, Row};
 use crate::project_scope::project_id_lookup_key;
 use crate::query_contract::{
-    compile_evidence_edge_upsert, compile_relationship_endpoint_audit,
-    compile_relationship_upsert, group_evidence_edges, group_typed_relations,
+    compile_evidence_edge_upsert, compile_evidence_edge_upsert_ladybug,
+    compile_relationship_endpoint_audit, compile_relationship_upsert,
+    compile_relationship_upsert_ladybug, group_evidence_edges, group_typed_relations,
     RelationshipGroup,
 };
 use crate::store::{GraphStore, StoreError};
@@ -686,6 +687,25 @@ impl LanguageCodeWriter {
         let groups = group_typed_relations(&filtered, default_project_id)
             .map_err(WriterError::Contract)?;
 
+        // Ladybug rel table bind chặt endpoint pair ngay từ lần tạo: pre-create
+        // mọi (rel, source, target) của session trước khi ghi từng group, nếu
+        // không group sau sẽ "violates schema" với endpoint của group đầu.
+        if self.store.provider() == "ladybug" {
+            let mut pairs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+            for (group, _) in groups.iter() {
+                pairs.entry(group.relationship_type.as_str()).or_default().insert(
+                    format!("FROM `{}` TO `{}`", group.source_label, group.target_label),
+                );
+            }
+            for (rel, endpoints) in pairs {
+                let statement = format!(
+                    "CREATE REL TABLE IF NOT EXISTS `{rel}` ({})",
+                    endpoints.into_iter().collect::<Vec<_>>().join(", ")
+                );
+                self.store.execute_query(&statement, &BTreeMap::new(), self.database.as_deref())?;
+            }
+        }
+
         let mut total_written = 0usize;
         for (relationship_group, rows) in groups {
             let state_key = relationship_group.state_key();
@@ -827,7 +847,24 @@ impl LanguageCodeWriter {
             }
         }
 
-        let query = compile_relationship_upsert(group);
+        let ladybug = self.store.provider() == "ladybug";
+        let query = if ladybug {
+            // Fail-closed: variant ladybug không áp dynamic properties.
+            if batch.iter().any(|row| {
+                row.get("properties")
+                    .and_then(Value::as_object)
+                    .map(|props| !props.is_empty())
+                    .unwrap_or(false)
+            }) {
+                return Err(WriterError::Contract(format!(
+                    "ladybug provider does not support typed relation row properties \
+                     (state_key={state_key}); drop the properties or extend the writer"
+                )));
+            }
+            compile_relationship_upsert_ladybug(group)
+        } else {
+            compile_relationship_upsert(group)
+        };
         let count = self.exec_rows_count(&query, &batch)?;
         if count != batch.len() as i64 {
             let unresolved = (batch.len() as i64 - count).abs();
@@ -1113,9 +1150,48 @@ impl LanguageCodeWriter {
             return Ok(0);
         }
         let groups = group_evidence_edges(edges).map_err(WriterError::Contract)?;
+        if self.store.provider() == "ladybug" {
+            let mut pairs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+            for (group, _) in groups.iter() {
+                pairs
+                    .entry(group.relationship_type.as_str())
+                    .or_default()
+                    .insert(format!(
+                        "FROM `{}` TO `{}`",
+                        group.source_label, group.target_label
+                    ));
+            }
+            for (rel, endpoints) in pairs {
+                let statement = format!(
+                    "CREATE REL TABLE IF NOT EXISTS `{rel}` ({})",
+                    endpoints.into_iter().collect::<Vec<_>>().join(", ")
+                );
+                self.store
+                    .execute_query(&statement, &BTreeMap::new(), self.database.as_deref())?;
+            }
+        }
         let mut written = 0usize;
         for (group, rows) in groups {
-            let query = compile_evidence_edge_upsert(&group);
+            let ladybug = self.store.provider() == "ladybug";
+            if ladybug
+                && rows.iter().any(|row| {
+                    row.get("props")
+                        .and_then(Value::as_object)
+                        .map(|props| !props.is_empty())
+                        .unwrap_or(false)
+                })
+            {
+                return Err(WriterError::Contract(
+                    "ladybug provider does not support evidence edge props; \
+                     drop the props or extend the writer"
+                        .to_string(),
+                ));
+            }
+            let query = if ladybug {
+                compile_evidence_edge_upsert_ladybug(&group)
+            } else {
+                compile_evidence_edge_upsert(&group)
+            };
             let state_key = group.state_key();
             written += self.write_batch_if_any(&state_key, &rows, Self::simple_batch_fn_owned(query))?;
         }

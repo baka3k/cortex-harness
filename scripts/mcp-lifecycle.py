@@ -2066,7 +2066,7 @@ def start_options(arguments: list[str]) -> argparse.Namespace:
     parser.add_argument("--doc-port", type=port_number)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--path", default="/mcp")
-    parser.add_argument("--provider", choices=("falkordb", "neo4j"))
+    parser.add_argument("--provider", choices=("falkordb", "neo4j", "ladybug"))
     parser.add_argument("--collection")
     parser.add_argument("--code-collection")
     parser.add_argument("--doc-collection")

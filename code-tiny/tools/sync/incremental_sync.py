@@ -943,6 +943,26 @@ def _detect_default_before(root: str, after_sha: str) -> str:
         return _EMPTY_TREE_SHA
 
 
+def _ladybug_driver_config(
+    args: argparse.Namespace, database: Optional[str]
+) -> Dict[str, Any]:
+    """Embedded/local-only driver config for the Ladybug provider."""
+
+    graph = (
+        getattr(args, "ladybug_graph", None)
+        or getattr(args, "neo4j_db", None)
+        or database
+    )
+    return {
+        "path": getattr(args, "ladybug_path", None),
+        "graph": graph,
+        "database": graph,
+        "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+        "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+        "query_timeout_ms": os.environ.get("LADYBUG_QUERY_TIMEOUT_MS"),
+    }
+
+
 async def _query_impacted_files(
     *,
     graph_provider: Optional[str],
@@ -952,6 +972,8 @@ async def _query_impacted_files(
     neo4j_db: Optional[str],
     falkordb_path: Optional[str] = None,
     falkordb_uri: Optional[str] = None,
+    ladybug_path: Optional[str] = None,
+    ladybug_graph: Optional[str] = None,
     project_id: str,
     changed_paths: Sequence[str],
 ) -> Set[str]:
@@ -986,6 +1008,15 @@ async def _query_impacted_files(
                 "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
                 "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
             }
+    elif provider == GraphProvider.LADYBUG:
+        graph = ladybug_graph or neo4j_db
+        config = {
+            "path": ladybug_path,
+            "graph": graph,
+            "database": graph,
+            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+        }
     else:
         config = {
             "uri": neo4j_uri,
@@ -1061,6 +1092,8 @@ async def _project_topology_bootstrap_needed(
             "password": getattr(args, "neo4j_password", None),
             "database": database,
         }
+    elif provider == GraphProvider.LADYBUG:
+        config = _ladybug_driver_config(args, database)
     else:
         graph_name = getattr(args, "falkordb_graph", None) or database
         falkordb_uri = resolved_falkordb_uri(args)
@@ -1123,6 +1156,8 @@ async def _resume_configured_journal(args: argparse.Namespace, config: Any) -> i
             "password": getattr(args, "neo4j_password", None),
             "database": database,
         }
+    elif provider == GraphProvider.LADYBUG:
+        driver_config = _ladybug_driver_config(args, database)
     else:
         falkordb_uri = resolved_falkordb_uri(args)
         if falkordb_uri:
@@ -1185,45 +1220,56 @@ def _build_analyzer_env(args: argparse.Namespace) -> Dict[str, str]:
             "NEO4J_USER",
             "NEO4J_PASS",
             "NEO4J_DB",
+            "LADYBUG_PATH",
+            "LADYBUG_GRAPH",
         ):
             env.pop(key, None)
         return env
     if getattr(args, "graph_provider", None):
         env["CODE_GRAPH_PROVIDER"] = args.graph_provider
         env["GRAPH_PROVIDER"] = args.graph_provider
-    if args.neo4j_uri:
-        env["NEO4J_URI"] = args.neo4j_uri
-    if args.neo4j_user:
-        env["NEO4J_USER"] = args.neo4j_user
-    if args.neo4j_password:
-        env["NEO4J_PASS"] = args.neo4j_password
-    if args.neo4j_db:
-        env["NEO4J_DB"] = args.neo4j_db
-    explicit_falkordb_target = getattr(args, "_explicit_falkordb_target", None)
-    falkordb_uri = ""
-    if explicit_falkordb_target != "path":
-        falkordb_uri = (
-            getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
-        ).strip()
-    if falkordb_uri:
-        # Remote FalkorDB: children must not fall back to the embedded path
-        # (FalkorDBLite is unavailable on win32).
-        env["FALKORDB_URI"] = falkordb_uri
-        env.pop("FALKORDB_PATH", None)
-        password = getattr(args, "falkordb_password", None) or os.environ.get(
-            "FALKORDB_PASSWORD"
-        )
-        if password:
-            env["FALKORDB_PASSWORD"] = str(password)
-        if getattr(args, "falkordb_ssl", False):
-            env["FALKORDB_SSL"] = "1"
-    elif getattr(args, "falkordb_path", None):
-        env["FALKORDB_PATH"] = str(args.falkordb_path)
-        env.pop("FALKORDB_URI", None)
-        env.pop("FALKORDB_PASSWORD", None)
-        env.pop("FALKORDB_SSL", None)
-    if getattr(args, "falkordb_graph", None):
-        env["FALKORDB_GRAPH"] = str(args.falkordb_graph)
+    selected_provider = str(getattr(args, "graph_provider", "") or "").strip().casefold()
+    if selected_provider in {"lbug", "lady-bug", "kuzu"}:
+        selected_provider = "ladybug"
+    if selected_provider == "ladybug":
+        if getattr(args, "ladybug_path", None):
+            env["LADYBUG_PATH"] = str(args.ladybug_path)
+        if getattr(args, "ladybug_graph", None):
+            env["LADYBUG_GRAPH"] = str(args.ladybug_graph)
+    if selected_provider != "ladybug":
+        if args.neo4j_uri:
+            env["NEO4J_URI"] = args.neo4j_uri
+        if args.neo4j_user:
+            env["NEO4J_USER"] = args.neo4j_user
+        if args.neo4j_password:
+            env["NEO4J_PASS"] = args.neo4j_password
+        if args.neo4j_db:
+            env["NEO4J_DB"] = args.neo4j_db
+        explicit_falkordb_target = getattr(args, "_explicit_falkordb_target", None)
+        falkordb_uri = ""
+        if explicit_falkordb_target != "path":
+            falkordb_uri = (
+                getattr(args, "falkordb_uri", None) or os.environ.get("FALKORDB_URI") or ""
+            ).strip()
+        if falkordb_uri:
+            # Remote FalkorDB: children must not fall back to the embedded path
+            # (FalkorDBLite is unavailable on win32).
+            env["FALKORDB_URI"] = falkordb_uri
+            env.pop("FALKORDB_PATH", None)
+            password = getattr(args, "falkordb_password", None) or os.environ.get( # sensitive-guard:allow -- local test database
+                "FALKORDB_PASSWORD" # sensitive-guard:allow -- local test database
+            )
+            if password:
+                env["FALKORDB_PASSWORD"] = str(password)
+            if getattr(args, "falkordb_ssl", False):
+                env["FALKORDB_SSL"] = "1"
+        elif getattr(args, "falkordb_path", None):
+            env["FALKORDB_PATH"] = str(args.falkordb_path)
+            env.pop("FALKORDB_URI", None)
+            env.pop("FALKORDB_PASSWORD", None)
+            env.pop("FALKORDB_SSL", None)
+        if getattr(args, "falkordb_graph", None):
+            env["FALKORDB_GRAPH"] = str(args.falkordb_graph)
     if args.qdrant_url:
         env["QDRANT_CODE_PATH"] = args.qdrant_url
     if args.cache_dir:
@@ -1300,6 +1346,13 @@ def _graph_target_cli_args(args: argparse.Namespace) -> List[str]:
         graph = str(getattr(args, "falkordb_graph", None) or "").strip()
         if graph:
             result.extend(["--falkordb-graph", graph])
+    elif provider == GraphProvider.LADYBUG:
+        ladybug_path = str(getattr(args, "ladybug_path", None) or "").strip()
+        if ladybug_path:
+            result.extend(["--ladybug-path", ladybug_path])
+        graph = str(getattr(args, "ladybug_graph", None) or "").strip()
+        if graph:
+            result.extend(["--ladybug-graph", graph])
     return result
 
 
@@ -1499,6 +1552,36 @@ WITH p, r
 MERGE (p)-[:HAS_REPOSITORY]->(r)
 """
 
+# Ladybug requires the node primary key (``id``) inside the MERGE pattern,
+# so the merge keys are the synthetic identity columns and the natural keys
+# become ON CREATE SET values.  ``timestamp()`` with no arguments is a
+# FalkorDB-ism — Ladybug parses an ISO string via ``timestamp($param)``.
+_LADYBUG_PROJECT_REPOSITORY_SETUP_QUERY = """
+MERGE (p:Project {id: $project_id})
+ON CREATE SET
+    p.project_id            = $project_id,
+    p.name                  = $project_name,
+    p.slug                  = $project_slug,
+    p.project_id_normalized = $project_id_normalized,
+    p.created_at            = timestamp($created_at)
+ON MATCH SET
+    p.name                  = $project_name,
+    p.slug                  = $project_slug,
+    p.project_id_normalized = $project_id_normalized
+WITH p
+MERGE (r:Repository {id: $repo_name})
+ON CREATE SET
+    r.name                  = $repo_name,
+    r.project_id            = $project_id,
+    r.project_id_normalized = $project_id_normalized,
+    r.created_at            = timestamp($created_at)
+ON MATCH SET
+    r.project_id            = $project_id,
+    r.project_id_normalized = $project_id_normalized
+WITH p, r
+MERGE (p)-[:HAS_REPOSITORY]->(r)
+"""
+
 _NEO4J_PROJECT_REPOSITORY_CONSTRAINTS = (
     "CREATE CONSTRAINT unique_project_id IF NOT EXISTS "
     "FOR (p:Project) REQUIRE p.project_id IS UNIQUE",
@@ -1575,15 +1658,22 @@ async def _ensure_project_repository_graph(
                 os.environ.get("CORTEX_GRAPH_JOURNAL_MODE") or ""
             ).strip().casefold() in REQUIRED_MODES
         if not required_mode:
+            setup_params: Dict[str, Any] = {
+                "project_id": project_id,
+                "project_id_normalized": project_id_lookup_key(project_id),
+                "project_name": project_name,
+                "project_slug": _normalize_slug(project_name),
+                "repo_name": repo_name,
+            }
+            setup_query = _PROJECT_REPOSITORY_SETUP_QUERY
+            if provider == GraphProvider.LADYBUG:
+                from datetime import datetime, timezone
+
+                setup_query = _LADYBUG_PROJECT_REPOSITORY_SETUP_QUERY
+                setup_params["created_at"] = datetime.now(timezone.utc).isoformat()
             await driver.execute_query(
-                _PROJECT_REPOSITORY_SETUP_QUERY,
-                {
-                    "project_id": project_id,
-                    "project_id_normalized": project_id_lookup_key(project_id),
-                    "project_name": project_name,
-                    "project_slug": _normalize_slug(project_name),
-                    "repo_name": repo_name,
-                },
+                setup_query,
+                setup_params,
                 database=resolved_graph,
             )
             project_setup_mutated = True
@@ -2080,12 +2170,21 @@ async def _run_incremental(args: argparse.Namespace) -> int:
             continued=True,
         )
         component_failures.append((exc, failure))
+        stderr_tail = ""
+        if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+            stderr_tail = str(exc.stderr)[-4_000:].strip()
         print(
             f"[continue] component={role}:{name} failed: {exc}; "
             "continuing remaining components",
             file=sys.stderr,
             flush=True,
         )
+        if stderr_tail:
+            print(
+                f"[continue] component={role}:{name} stderr tail:\n{stderr_tail}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def capture_journal_status(
         info: Dict[str, object], component_env: Mapping[str, str]
@@ -2683,6 +2782,8 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                 neo4j_db=args.neo4j_db,
                 falkordb_path=getattr(args, "falkordb_path", None),
                 falkordb_uri=resolved_falkordb_uri(args),
+                ladybug_path=getattr(args, "ladybug_path", None),
+                ladybug_graph=getattr(args, "ladybug_graph", None),
                 project_id=project_id,
                 changed_paths=sorted(changed_paths),
             )

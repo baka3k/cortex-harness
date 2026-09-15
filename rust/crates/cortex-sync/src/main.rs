@@ -110,8 +110,11 @@ fn load_harness_config(config_path: &str) {
     let provider = match provider.as_str() {
         "falkordb" | "falkor" | "local" | "embedded" => "falkordb",
         "neo4j" | "neo" => "neo4j",
+        "ladybug" | "lbug" | "lady-bug" | "kuzu" => "ladybug",
         other => {
-            eprintln!("Unsupported graph provider '{other}'. Expected 'falkordb' or 'neo4j'.");
+            eprintln!(
+                "Unsupported graph provider '{other}'. Expected 'falkordb', 'ladybug', or 'neo4j'."
+            );
             std::process::exit(2);
         }
     };
@@ -129,6 +132,21 @@ fn load_harness_config(config_path: &str) {
         }
         for key in ["NEO4J_URI", "NEO4J_USER", "NEO4J_PASS", "NEO4J_DB"] {
             if let Some(value) = env_str(&code_env, key)
+                && std::env::var(key).is_err() {
+                    // SAFETY: single-threaded startup.
+                    unsafe { std::env::set_var(key, value) };
+                }
+        }
+    } else if provider == "ladybug" {
+        for (key, _) in std::env::vars() {
+            if key.starts_with("FALKORDB_") || key.starts_with("NEO4J_") {
+                // SAFETY: single-threaded startup.
+                unsafe { std::env::remove_var(&key) };
+            }
+        }
+        for key in ["LADYBUG_PATH", "LADYBUG_GRAPH"] {
+            let value = env_str(&code_env, key).or_else(|| env_str(&doc_env, key));
+            if let Some(value) = value
                 && std::env::var(key).is_err() {
                     // SAFETY: single-threaded startup.
                     unsafe { std::env::set_var(key, value) };
