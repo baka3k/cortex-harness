@@ -1,0 +1,20 @@
+[package]
+name = "dart-grammar-vendored"
+version = "0.1.0"
+edition = "2021"
+description = "Vendored tree-sitter Dart grammar (efrenbl/tree-sitter-dart v0.1.0) — sinh từ sdist PyPI tree-sitter-dart 0.1.0 (parser.c LANGUAGE_VERSION 15) vì crates.io tree-sitter-dart build từ grammar KHÁC (official Dart spec) — node types không khớp phía Python. Cùng nguồn với `tree_sitter_dart.language()` của venv Python (flutter_analyzer/dart_parser)."
+license = "MIT"
+publish = false
+links = "tree_sitter_dart"
+
+[lib]
+path = "src/lib.rs"
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[dev-dependencies]
+tree-sitter = "0.25"
