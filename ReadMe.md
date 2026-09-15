@@ -84,18 +84,25 @@ dev sync-processes      \ REM ingests into the embedded LadybugDB store
 git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
-uv --version      # uv is required; install it first if this command is unavailable
-make build       # create/reuse .venv and install dependencies with uv
+make build       # build the cortex-dev binary (cargo workspace) + provision the ONNX Runtime dylib
 make storage-init # create ~/.cortext-harness/v1/instances/default and its manifest
 make storage-layout # show resolved owner paths, manifest, and leases
-make install     # create/reuse .venv, install dependencies, and install global dev command
+make install     # install the cortex-dev binary + the global `dev` command (~/.local/bin)
 make doctor      # isolated Qdrant/graph round-trips (FalkorDBLite + LadybugDB) plus MCP port diagnostics
 make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
 make stop        # stop MCP terminal/processes started by make start
 make uninstall   # remove the global dev command installed by make install
 ```
 
-Set `UV` when the executable is not on the default `PATH`, for example `make build UV=/opt/homebrew/bin/uv`.
+The dev/make layer is the **cortex-dev binary** (phase-06 cutover): `dev.sh`,
+`dev.bat`/`dev.ps1`, the global wrappers, and every Makefile lifecycle target
+resolve the binary via `CORTEX_DEV_BIN` → `~/.local/bin/cortex-dev` →
+`rust/target/release/`. There is no Python entrypoint rollback; to downgrade,
+reinstall the previous release binary (see `docs/cutover-runbook.md`). The
+Python source tree remains only as the parity reference for
+`scripts/rust_parity/` plus a small documented forced list (torch device
+probe, `.harness` project scripts, the doc-tiny ingestor and the
+required-journal consumer until their Rust ports land).
 
 The default persistent-data tree is independent of every indexed source checkout:
 

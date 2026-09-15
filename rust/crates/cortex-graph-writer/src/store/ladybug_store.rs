@@ -57,6 +57,84 @@ fn missing_rel_bind_re() -> &'static Regex {
     })
 }
 
+fn merge_node_pattern_re() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"MERGE \((\w+):(\w+) \{(\w+): ([^}]+)\}\)").unwrap()
+    })
+}
+
+/// Ladybug yêu cầu primary key (`id`) xuất hiện trực tiếp trong MERGE
+/// pattern, còn các upsert port từ FalkorDB merge trên natural key
+/// (Project.project_id, CallSite.site_id, Workflow.workflow_id, …).
+/// Rewrite merge key sang `id` (cùng giá trị expr) rồi SET lại natural key
+/// ngay sau merge — matching semantics giữ nguyên vì natural key chính là
+/// identity của node type đó trong corpus.
+fn rewrite_merge_natural_keys(query: &str) -> String {
+    struct Inject {
+        var: String,
+        key: String,
+        expr: String,
+    }
+    struct Rewritten {
+        start: usize,
+        end: usize,
+        replacement: String,
+        inject: Inject,
+    }
+
+    let mut rewrites: Vec<Rewritten> = Vec::new();
+    for caps in merge_node_pattern_re().captures_iter(query) {
+        let whole = caps.get(0).unwrap();
+        let var = caps[1].to_string();
+        let key = caps[3].to_string();
+        if key == "id" {
+            continue;
+        }
+        let expr = caps[4].to_string();
+        rewrites.push(Rewritten {
+            start: whole.start(),
+            end: whole.end(),
+            replacement: format!("MERGE ({}:{} {{id: {}}})", var, &caps[2], expr),
+            inject: Inject { var, key, expr },
+        });
+    }
+    if rewrites.is_empty() {
+        return query.to_string();
+    }
+
+    let mut out = String::with_capacity(query.len());
+    let mut cursor = 0usize;
+    for r in rewrites {
+        out.push_str(&query[cursor..r.start]);
+        out.push_str(&r.replacement);
+        let rest = &query[r.end..];
+        let trimmed = rest.trim_start();
+        let ws = rest.len() - trimmed.len();
+        let inject = format!("{}.{} = {},", r.inject.var, r.inject.key, r.inject.expr);
+        if let Some(_tail) = trimmed.strip_prefix("ON CREATE SET") {
+            out.push_str(&rest[..ws + "ON CREATE SET".len()]);
+            out.push(' ');
+            out.push_str(&inject);
+            cursor = r.end + ws + "ON CREATE SET".len();
+        } else if trimmed.starts_with("ON MATCH SET") {
+            // Natural key là identity — node match đã có sẵn key từ lúc
+            // create; không chèn SET (và không phá vị trí ON MATCH SET).
+            cursor = r.end;
+        } else if trimmed.starts_with("SET") {
+            out.push_str(&rest[..ws + 3]);
+            out.push(' ');
+            out.push_str(&inject);
+            cursor = r.end + ws + 3;
+        } else {
+            out.push_str(&format!("\nSET {}.{} = {}\n", r.inject.var, r.inject.key, r.inject.expr));
+            cursor = r.end;
+        }
+    }
+    out.push_str(&query[cursor..]);
+    out
+}
+
 fn rel_var_re(var: &str) -> Regex {
     Regex::new(&format!(
         r"(?i)-\[\s*`?{}`?\s*:\s*`?([A-Za-z_][A-Za-z0-9_]*)`?",
@@ -134,7 +212,8 @@ impl LadybugStore {
         query: &str,
         parameters: &BTreeMap<String, Value>,
     ) -> Result<String, StoreError> {
-        let normalized = normalize_call_importing_subqueries(query);
+        let query = rewrite_merge_natural_keys(query);
+        let normalized = normalize_call_importing_subqueries(&query);
         let scoped = prepare_project_scope_parameters(parameters);
         // datetime() rewrite — inline timestamp('<iso>') như docstring.
         let timestamp = if normalized.contains("datetime()") {
@@ -192,6 +271,7 @@ impl LadybugStore {
                             "auto-DDL budget exhausted; last error: {message}"
                         )));
                     }
+                    eprintln!("[ladybug auto-DDL] {ddl}");
                     connection
                         .query(&ddl)
                         .map_err(|e| {
@@ -483,6 +563,10 @@ fn render_uniform_with_query(value: &Value, query: &str) -> Result<String, Strin
 #[derive(Default)]
 struct SchemaNode {
     children: BTreeMap<String, SchemaNode>,
+    /// Field từng chứa string element (trực tiếp hoặc trong array) — dùng
+    /// để type-tag array rỗng: ladybug unify `[]` thành INT64[] và vỡ khi
+    /// batch trộn với STRING[] giữa các row (implicit cast not supported).
+    saw_string_element: bool,
 }
 
 /// Loại NULL-typed theo hint từ query: `coalesce(row.<field>, <default>)`
@@ -551,9 +635,13 @@ impl SchemaNode {
             }
             Value::Array(items) => {
                 for item in items {
+                    if item.is_string() {
+                        self.saw_string_element = true;
+                    }
                     self.absorb(item);
                 }
             }
+            Value::String(_) => self.saw_string_element = true,
             _ => {}
         }
     }
@@ -582,11 +670,21 @@ impl SchemaNode {
             }
             Value::String(s) => quote_cypher(s),
             Value::Array(items) => {
+                if items.is_empty() && self.saw_string_element {
+                    // Batch có string element ở row khác — tag kiểu để
+                    // UNWIND không unify array rỗng thành INT64[].
+                    return "CAST([] AS STRING[])".to_string();
+                }
                 let rendered: Vec<String> =
                     items.iter().map(|item| self.render(item, hints)).collect();
                 format!("[{}]", rendered.join(", "))
             }
             Value::Object(map) => {
+                if map.is_empty() {
+                    // Ladybug không có literal map rỗng `{}` (parse error) —
+                    // NULL thay thế: consumer đọc field này qua coalesce.
+                    return "NULL".to_string();
+                }
                 let mut parts = Vec::new();
                 for (key, child) in &self.children {
                     let value = map.get(key).unwrap_or(&Value::Null);
@@ -843,6 +941,47 @@ pub fn index_name(label: &str, props: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_natural_key_rewrite_set_continuation() {
+        let query = "UNWIND $rows AS row\nMERGE (p:Project {project_id: row.id})\nSET p.name = row.name\nRETURN count(p) as count";
+        let out = rewrite_merge_natural_keys(query);
+        assert!(out.contains("MERGE (p:Project {id: row.id})"), "{out}");
+        assert!(
+            out.contains("SET p.project_id = row.id, p.name = row.name"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn merge_natural_key_rewrite_map_union_continuation() {
+        let query = "UNWIND $rows AS row\nMERGE (site:CallSite {site_id: row.site_id})\nSET site += row.props";
+        let out = rewrite_merge_natural_keys(query);
+        assert!(out.contains("MERGE (site:CallSite {id: row.site_id})"), "{out}");
+        assert!(
+            out.contains("SET site.site_id = row.site_id, site += row.props"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn merge_natural_key_rewrite_on_create_continuation() {
+        let query = "MERGE (p:Project {project_id: $project_id})\nON CREATE SET\n    p.name = $name\nON MATCH SET\n    p.name = $name";
+        let out = rewrite_merge_natural_keys(query);
+        assert!(out.contains("MERGE (p:Project {id: $project_id})"), "{out}");
+        assert!(
+            out.contains("ON CREATE SET p.project_id = $project_id,"),
+            "{out}"
+        );
+        // ON MATCH SET giữ nguyên vị trí ngay sau khối ON CREATE SET.
+        assert!(out.contains("    p.name = $name\nON MATCH SET"), "{out}");
+    }
+
+    #[test]
+    fn merge_id_keyed_patterns_untouched() {
+        let query = "MERGE (f:File {id: row.id})\nMERGE (p)-[:HAS_REPOSITORY]->(r)\nMERGE (p:RouteParam {id: row.symbol_id + '::' + row.route_name})";
+        assert_eq!(rewrite_merge_natural_keys(query), query);
+    }
 
     #[test]
     fn uniform_render_rows_union_keys() {

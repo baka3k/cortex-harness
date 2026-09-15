@@ -9,6 +9,7 @@ relatedPlans:
   - "260913-1715-rust-retrieval-graph-port"
   - "260913-1538-ladybug-graph-provider"
   - "260914-1706-onnx-embedding-spike"
+  - "260914-2259-dev-make-python-cutover"  # con của Scope B cutover: entrypoint dev/make + xoá pyexec bridge + port mcp-lifecycle
 predictionReport: "reports/prediction_report_20260913-1553.md"
 ---
 

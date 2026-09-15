@@ -8,9 +8,9 @@
   "code": {
     "env": {
       "CORTEX_STORAGE_INSTANCE": "cortex",
-      "GRAPH_PROVIDER": "falkordb",
-      "CODE_GRAPH_PROVIDER": "falkordb",
-      "FALKORDB_GRAPH": "cortext",
+      "GRAPH_PROVIDER": "ladybug",
+      "CODE_GRAPH_PROVIDER": "ladybug",
+      "LADYBUG_GRAPH": "cortext",
       "QDRANT_COLLECTION": "cortext",
       "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
       "BATCH_SIZE": "1",
@@ -31,9 +31,9 @@
   "doc": {
     "env": {
       "CORTEX_STORAGE_INSTANCE": "cortex",
-      "GRAPH_PROVIDER": "falkordb",
-      "DOC_GRAPH_PROVIDER": "falkordb",
-      "FALKORDB_GRAPH": "cortext_doc",
+      "GRAPH_PROVIDER": "ladybug",
+      "DOC_GRAPH_PROVIDER": "ladybug",
+      "LADYBUG_GRAPH": "cortext_doc",
       "EMBEDDING_MODEL": "BAAI/bge-m3",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",

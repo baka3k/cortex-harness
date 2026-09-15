@@ -166,6 +166,25 @@ pub fn compile_relationship_upsert(group: &RelationshipGroup) -> String {
     )
 }
 
+/// Ladybug không hỗ trợ `SET r += …` trên relationship và không có literal
+/// map rỗng — variant này bỏ dynamic properties (caller phải fail-closed
+/// khi row mang properties khác rỗng).
+pub fn compile_relationship_upsert_ladybug(group: &RelationshipGroup) -> String {
+    format!(
+        "UNWIND $rows AS row \
+         MATCH (a:{source} {{id: row.source_id, project_id_normalized: row.project_id_normalized}}) \
+         WITH row, a \
+         MATCH (b:{target} {{id: row.target_id, project_id_normalized: row.project_id_normalized}}) \
+         MERGE (a)-[r:{rel}]->(b) \
+         SET r.project_id = row.project_id, \
+         r.project_id_normalized = row.project_id_normalized \
+         RETURN count(r) AS count",
+        source = group.source_label,
+        target = group.target_label,
+        rel = group.relationship_type,
+    )
+}
+
 /// `compile_relationship_endpoint_audit` — read-only query nhận diện
 /// non-unique endpoints (mutation fail-closed khi count lệch submitted).
 pub fn compile_relationship_endpoint_audit(group: &RelationshipGroup) -> String {
@@ -382,6 +401,37 @@ pub fn compile_evidence_edge_upsert(group: &EvidenceEdgeGroup) -> String {
         target_property = group.target_property,
     )
 }
+
+/// Ladybug: `SET r += …` trên relationship + map rỗng đều không được hỗ
+/// trợ — variant bỏ dynamic props (caller fail-closed khi props khác rỗng).
+pub fn compile_evidence_edge_upsert_ladybug(group: &EvidenceEdgeGroup) -> String {
+    let edge_pattern = if !group.edge_property.is_empty() {
+        format!(
+            "MERGE (a)-[r:{rel} {{{prop}: row.edge_id}}]->(b) ",
+            rel = group.relationship_type,
+            prop = group.edge_property,
+        )
+    } else {
+        format!("MERGE (a)-[r:{}]->(b) ", group.relationship_type)
+    };
+    format!(
+        "UNWIND $rows AS row \
+         MATCH (a:{source_label} {{{source_property}: row.source_id, project_id_normalized: row.project_id_normalized}}) \
+         WITH row, a \
+         MATCH (b:{target_label} {{{target_property}: row.target_id, project_id_normalized: row.project_id_normalized}}) \
+         {edge_pattern}\
+         SET r.project_id = row.project_id, \
+         r.updated_at = datetime() \
+         RETURN count(r) AS count",
+        source_label = group.source_label,
+        source_property = group.source_property,
+        target_label = group.target_label,
+        target_property = group.target_property,
+    )
+}
+
+/// Ladybug: `SET r += …` trên relationship + map rỗng đều không được hỗ
+/// trợ — variant bỏ dynamic props (caller fail-closed khi props khác rỗng).
 
 /// `compile_evidence_edge_readback`.
 pub fn compile_evidence_edge_readback(group: &EvidenceEdgeGroup) -> String {
