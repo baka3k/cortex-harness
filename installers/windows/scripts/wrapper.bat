@@ -49,15 +49,18 @@ if not exist "%CORTEX_DIR%" (
     exit /b 1
 )
 
-REM Set up Python environment
-set "PYTHON_EXE=%CORTEX_DIR%\.venv\Scripts\python.exe"
-set "DEV_MODULE=%CORTEX_DIR%\cortex_harness\dev.py"
-
-REM Check if Python exists
-if not exist "%PYTHON_EXE%" (
-    REM Try system Python as fallback
-    set "PYTHON_EXE=python"
+REM Binary-only entry (phase-06): exec cortex-dev.exe per D1 resolution.
+if exist "%CORTEX_DIR%\rust\target\release\cortex-dev.exe" (
+    "%CORTEX_DIR%\rust\target\release\cortex-dev.exe" %*
+    exit /b %ERRORLEVEL%
 )
+if exist "%USERPROFILE%\.local\bin\cortex-dev.exe" (
+    "%USERPROFILE%\.local\bin\cortex-dev.exe" %*
+    exit /b %ERRORLEVEL%
+)
+echo Error: cortex-dev.exe not found. Install CortexHarness or set CORTEX_DEV_BIN.
+pause
+exit /b 1
 
 REM Display execution information
 echo ============================================

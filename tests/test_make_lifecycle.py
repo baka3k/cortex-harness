@@ -112,7 +112,9 @@ class MakeLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("make build", result.stdout)
 
-    def test_all_make_targets_dispatch_to_python(self):
+    def test_all_make_targets_dispatch_to_the_dev_binary(self):
+        """Phase-06 cutover: the make layer dispatches the cortex-dev binary
+        (binary-only; the mcp-lifecycle.py path is retired from make)."""
         targets = (
             "help",
             "build",
@@ -138,15 +140,14 @@ class MakeLifecycleTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("pwsh", result.stdout)
-        expected_python = ".venv/bin/python" if (ROOT / ".venv/bin/python").exists() else "python3"
+        self.assertNotIn("mcp-lifecycle.py", result.stdout)
         for target in targets:
-            self.assertIn(
-                f"{expected_python} scripts/mcp-lifecycle.py {target}",
+            self.assertRegex(
                 result.stdout,
+                rf"cortex-dev(?:\.exe)? {target}\b",
             )
 
     def test_make_sync_stop_aliases_dispatch_to_scoped_dev_commands(self):
-        expected_python = ".venv/bin/python" if (ROOT / ".venv/bin/python").exists() else "python3"
         for goals, owner in ((["sync", "code", "stop"], "code"), (["sync", "doc", "stop"], "doc")):
             with self.subTest(owner=owner):
                 result = subprocess.run(
@@ -157,11 +158,16 @@ class MakeLifecycleTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(
-                    f"{expected_python} cortex_harness/dev.py sync {owner} stop",
+                self.assertNotIn("cortex_harness/dev.py", result.stdout)
+                self.assertRegex(
                     result.stdout,
+                    rf"cortex-dev(?:\.exe)? sync {owner} stop\b",
                 )
 
+    # NOTE (phase-06): the tests below pin the PYTHON lifecycle reference
+    # (`scripts/mcp-lifecycle.py` invoke_build internals). `make build` now
+    # dispatches the native binary; these stay green until the reference is
+    # archived together with this suite's python-plane half in phase-07.
     def test_build_creates_and_populates_the_venv_with_uv(self):
         with tempfile.TemporaryDirectory() as directory:
             venv_dir = Path(directory) / ".venv"

@@ -1,5 +1,20 @@
 # Cutover Runbook — Python → Rust (phase 14, rust-full-migration)
 
+> **Phase-06 cập nhật (plans/260914-2259-dev-make-python-cutover):** từ cutover này
+> **dev/make layer chạy binary-only** (`cortex-dev`) — mọi entrypoint (dev.sh/bat/ps1,
+> dev-global.cmd, wrapper.bat, inno shortcuts, scoop shim, Makefile `DEV`/`LIFECYCLE`,
+> `ort-ensure`) resolve binary theo D1: `CORTEX_DEV_BIN` → `~/.local/bin/cortex-dev`
+> → `rust/target/release/`. Không có python rollback ở tầng entrypoint:
+> **flag `CORTEX_DEV_BACKEND` không tồn tại**, entrypoint không còn trỏ `dev.py`.
+>
+> **Downgrade path (2 bước)** khi binary release có lỗi trên máy user:
+> 1. `CORTEX_DEV_BIN=/path/to/previous-release/cortex-dev` (trỏ release cũ), hoặc
+> 2. cài lại release binary trước đó: thay `~/.local/bin/cortex-dev` (và
+>    `rust/target/release/cortex-dev`) bằng binary của release trước.
+> Installer giữ previous release binary cho mục đích này. `dev.py` còn trong repo
+> chỉ là **parity reference** (phục vụ `scripts/rust_parity/dev_cli_parity.py`),
+> không entrypoint nào gọi nó.
+
 > Áp dụng cho repo `cortex-harness`. Mục tiêu: chuyển toàn bộ runtime vận hành
 > (analyzer sync + MCP server + storage graph) sang binary Rust, giữ Python làm
 > rollback tối thiểu 1 release, sau đó archive code Python theo khối.

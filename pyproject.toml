@@ -34,9 +34,6 @@ falkordb-remote = ["falkordb"]
 # FalkorDBLite never shipped there, so the marker keeps installable parity.
 falkordb-local = ["falkordblite==0.10.0 ; sys_platform != 'win32'"]
 
-[project.scripts]
-dev = "cortex_harness.dev:cli"
-
 [dependency-groups]
 dev = [
     "pytest>=9.0,<10",

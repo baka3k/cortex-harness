@@ -64,12 +64,24 @@ echo.
 echo Creating global CLI command...
 set CORTEX_PATH=C:\ai\cortex-harness
 
-REM Create batch wrapper
+REM Create batch wrapper (binary-only, phase-06)
 echo @echo off > C:\Users\%USERNAME%\dev-global.bat
 echo set CORTEX_HARNESS_DIR=%CORTEX_PATH% >> C:\Users\%USERNAME%\dev-global.bat
-echo set PYTHON_EXE=%%CORTEX_HARNESS_DIR%%\.venv\Scripts\python.exe >> C:\Users\%USERNAME%\dev-global.bat
-echo set DEV_MODULE=%%CORTEX_HARNESS_DIR%%\cortex_harness\dev.py >> C:\Users\%USERNAME%\dev-global.bat
-echo "%%PYTHON_EXE%%" "%%DEV_MODULE%%" %%* >> C:\Users\%USERNAME%\dev-global.bat
+echo if defined CORTEX_DEV_BIN if exist "%%CORTEX_DEV_BIN%%" ^( >> C:\Users\%USERNAME%\dev-global.bat
+echo   "%%CORTEX_DEV_BIN%%" %%* >> C:\Users\%USERNAME%\dev-global.bat
+echo   goto :end >> C:\Users\%USERNAME%\dev-global.bat
+echo ^) >> C:\Users\%USERNAME%\dev-global.bat
+echo if exist "%%USERPROFILE%%\.local\bin\cortex-dev.exe" ^( >> C:\Users\%USERNAME%\dev-global.bat
+echo   "%%USERPROFILE%%\.local\bin\cortex-dev.exe" %%* >> C:\Users\%USERNAME%\dev-global.bat
+echo   goto :end >> C:\Users\%USERNAME%\dev-global.bat
+echo ^) >> C:\Users\%USERNAME%\dev-global.bat
+echo if exist "%%CORTEX_HARNESS_DIR%%\rust\target\release\cortex-dev.exe" ^( >> C:\Users\%USERNAME%\dev-global.bat
+echo   "%%CORTEX_HARNESS_DIR%%\rust\target\release\cortex-dev.exe" %%* >> C:\Users\%USERNAME%\dev-global.bat
+echo   goto :end >> C:\Users\%USERNAME%\dev-global.bat
+echo ^) >> C:\Users\%USERNAME%\dev-global.bat
+echo echo [error] cortex-dev binary not found. Install it or set CORTEX_DEV_BIN. 1^>^2 >> C:\Users\%USERNAME%\dev-global.bat
+echo exit /b 1 >> C:\Users\%USERNAME%\dev-global.bat
+echo :end >> C:\Users\%USERNAME%\dev-global.bat
 
 echo Created wrapper: C:\Users\%USERNAME%\dev-global.bat
 echo Add C:\Users\%USERNAME% to your PATH or use the full path to run dev commands
