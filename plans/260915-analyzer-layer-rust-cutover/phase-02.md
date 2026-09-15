@@ -1,5 +1,18 @@
 # Phase 02 — Port analyzer-dart (dart primary + flutter overlay)
 
+> **Status 2026-09-15: entry criteria 1/3 PASS — implementation đang tiếp.**
+> - Entry 1 (grammar pin) ✅ **PASS**: crates.io `tree-sitter-dart` build từ grammar KHÁC
+>   (official Dart spec) — không dùng được. Đã **vendor grammar từ chính sdist PyPI
+>   tree-sitter-dart 0.1.0** (nguồn efrenbl/tree-sitter-dart, parser.c @LV15) vào crate
+>   `dart-grammar-vendored`; AST golden test khớp dump Python (`ast_shape_matches_python_reference_dump`).
+>   Pin ghi `rust/grammar-versions.toml [dart]`.
+> - Entry 2 (coordinate plan flutter) ⏳: plan `260714-1603` vẫn in_progress — cần freeze
+>   baseline trước khi chạy parity dual-run (scripts parity sẽ ghim commit tham chiếu).
+> - Entry 3 (`--mode all`) — quyết định: Rust binary hỗ trợ `dart|flutter`; `all` → error
+>   hướng dẫn chạy 2 mode riêng (orchestrator chỉ gọi dart/flutter, không bao giờ gọi all).
+> - Còn lại: implementation crate `analyzer-dart` (port dart_parser 641 LOC + flutter_analyzer
+>   + normalizer/detector), parity harness dual-run, orchestrator leg — session tiếp.
+
 ## Mục tiêu
 
 Crate `analyzer-dart` thay `code-tiny/tools/flutter/` (1,659 LOC) cho cả mode `dart` (primary) và `flutter` (overlay).
