@@ -120,8 +120,8 @@ pub fn write_message_artifact(
         "messages": messages,
     });
 
-    let serialized = serde_json::to_string_pretty(&payload)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let serialized =
+        serde_json::to_string_pretty(&payload).map_err(std::io::Error::other)?;
     let temp_path = output_path.with_extension("json.tmp");
     fs::write(&temp_path, serialized)?;
     fs::rename(&temp_path, &output_path)?;

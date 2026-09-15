@@ -86,6 +86,7 @@ pub struct MessageRecord {
 }
 
 impl MessageRecord {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         project_id: &str,
         language: &str,
