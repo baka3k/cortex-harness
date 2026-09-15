@@ -81,6 +81,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "analyzer-csharp"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-falkordb",
+ "cortex-graph-writer",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "analyzer-dart"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-falkordb",
+ "cortex-graph-writer",
+ "dart-grammar-vendored",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tree-sitter",
+]
+
+[[package]]
 name = "analyzer-delphi"
 version = "0.1.0"
 dependencies = [
@@ -279,6 +306,22 @@ dependencies = [
  "serde_json",
  "tree-sitter",
  "tree-sitter-swift",
+]
+
+[[package]]
+name = "analyzer-topology"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "cortex-analyzer-framework",
+ "cortex-falkordb",
+ "cortex-graph-writer",
+ "encoding_rs",
+ "fancy-regex",
+ "quick-xml",
+ "regex",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -869,6 +912,7 @@ dependencies = [
  "cortex-graph-writer",
  "getrandom 0.2.17",
  "libc",
+ "once_cell",
  "redis",
  "regex",
  "serde",
@@ -1074,6 +1118,15 @@ dependencies = [
  "darling_core 0.24.1",
  "quote",
  "syn 3.0.5",
+]
+
+[[package]]
+name = "dart-grammar-vendored"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "tree-sitter",
+ "tree-sitter-language",
 ]
 
 [[package]]
