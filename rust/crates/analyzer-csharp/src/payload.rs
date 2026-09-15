@@ -52,7 +52,7 @@ fn str_list(value: Option<&Value>) -> Vec<Value> {
     }
 }
 
-fn raw_list<'a>(value: Option<&'a Value>) -> &'a [Value] {
+fn raw_list(value: Option<&Value>) -> &[Value] {
     match value {
         Some(Value::Array(items)) => items,
         _ => &[],
@@ -627,7 +627,8 @@ pub fn roslyn_evidence_to_payload(evidence: &Value) -> Value {
 }
 
 /// `project_metadata_to_payload`.
-pub fn project_metadata_to_payload(project: Option<&Value>) -> Value {
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
+fn project_metadata_to_payload(project: Option<&Value>) -> Value {
     let Some(project) = project.filter(|value| !value.is_null()) else {
         return json!({"packages": [], "project_references": []});
     };
