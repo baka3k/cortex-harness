@@ -1440,35 +1440,79 @@ def _rust_binary_path(bin_dir: str, binary_name: str) -> Optional[str]:
 
 
 def _rust_analyzer_binary(analyzer: AnalyzerConfig) -> Optional[str]:
-    """Resolve Rust analyzer binary theo backend đang chọn.
+    """Resolve Rust analyzer binary theo backend đang chọn (post-phase-08).
 
-    Phase-14 flip defaults: ``CORTEX_RUST_ANALYZER`` UNSET → tự chọn backend
-    Rust cho các parser đã port **khi binary đã build** (không có binary ⇒
-    fallback Python tức thì). ``CORTEX_RUST_ANALYZER=python`` là cờ rollback:
-    ép backend Python bất kể binary có tồn tại. ``=rust`` giữ nghĩa cũ (chọn
-    Rust nếu binary sẵn sàng). Graph target args và mọi flag khác giữ nguyên —
-    CLI contract 2 backend giống từng chữ.
+    Phase-08 cutover: Python analyzer scripts are retired. The flip matrix
+    is loud and fail-closed for every cell except unset/binary-present:
 
-    Phase-07 mirror đầy đủ ``cortex-sync`` registry: thêm dart/csharp/topology/
-    overlays + framework key resolution + ``.exe`` probing (Windows).
+    | `CORTEX_RUST_ANALYZER` | behavior |
+    |---|---|
+    | unset | Rust-if-binary; missing binary → raises ``_RetiredError`` |
+    | `rust` | Rust binary; missing → raises ``_RetiredError`` (with build hint) |
+    | `python` hoặc giá trị khác | raises ``_RetiredError`` immediately |
+
+    Red-team S3/S4: any path that would resolve to the deleted Python child
+    is a hard ``_RetiredError`` so operators never silently re-enable the
+    archived plane. Mirror of ``cortex-sync::rust_analyzer_binary``.
     """
     mode = (os.environ.get("CORTEX_RUST_ANALYZER") or "").strip().lower()
-    if mode == "python":
-        # Rollback flag: luôn Python backend.
-        return None
     if mode not in ("", "rust"):
-        # Giá trị lạ: giữ hành vi trước phase-14 (không swap).
-        return None
+        raise _RetiredError(
+            analyzer.parser,
+            reason=(
+                f"CORTEX_RUST_ANALYZER={mode!r} is retired; "
+                "Python analyzer plane was archived at the phase-08 cutover."
+            ),
+        )
     binary_name = _resolve_rust_binary_name(analyzer)
     if not binary_name:
-        return None
+        raise _RetiredError(
+            analyzer.parser,
+            reason=(
+                f"parser '{analyzer.parser}' is not mapped to a Rust analyzer binary; "
+                "the Python entry was retired at the phase-08 cutover."
+            ),
+        )
     # _ROOT_DIR trỏ vào code-tiny; repo root là thư mục cha.
     repo_root = os.path.dirname(_ROOT_DIR)
     bin_dir = (
         os.environ.get("CORTEX_RUST_ANALYZER_BIN_DIR")
         or os.path.join(repo_root, "rust", "target", "release")
     )
-    return _rust_binary_path(bin_dir, binary_name)
+    resolved = _rust_binary_path(bin_dir, binary_name)
+    if resolved is None:
+        if mode == "rust":
+            raise _RetiredError(
+                analyzer.parser,
+                reason=(
+                    f"CORTEX_RUST_ANALYZER=rust but binary '{binary_name}' "
+                    f"for parser '{analyzer.parser}' is missing in {bin_dir}; "
+                    f"build it with: cargo build --release -p {binary_name}"
+                ),
+            )
+        raise _RetiredError(
+            analyzer.parser,
+            reason=(
+                f"unset CORTEX_RUST_ANALYZER expects binary '{binary_name}' "
+                f"for parser '{analyzer.parser}' but it is missing in {bin_dir}; "
+                "Python fallback is retired."
+            ),
+        )
+    return resolved
+
+
+class _RetiredError(RuntimeError):
+    """Raised when a code path would resolve to the retired Python analyzer plane.
+
+    The message tells the operator which parser was requested and which
+    binary should be built / installed; it never silently falls back to a
+    Python script (post-phase-08 all such scripts are deleted).
+    """
+
+    def __init__(self, parser: str, *, reason: str):
+        super().__init__(f"[{parser}] {reason}")
+        self.parser = parser
+        self.reason = reason
 
 
 def _build_analyzer_cmd(

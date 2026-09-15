@@ -348,66 +348,77 @@ fn analyzer_bin_dir() -> PathBuf {
 }
 
 /// Phase-08 flip switch: when `true`, an unset `CORTEX_RUST_ANALYZER` selects
-/// the Rust binary for mapped parsers. Phases 01–07 keep the legacy default
-/// (unset = Python child) so the default path never changes before the
-/// composition gate + dogfood pass.
-const AUTO_FLIP_DEFAULT: bool = false;
+/// the Rust binary for mapped parsers. The Python analyzer scripts were
+/// archived at this commit (`RETIRED_AT_COMMIT`) — any value of
+/// `CORTEX_RUST_ANALYZER` that does not select the Rust binary is a hard
+/// error pointing the operator at the rollback path (`git revert`).
+const AUTO_FLIP_DEFAULT: bool = true;
 
-fn warn_unmapped_once(parser: &str) {
-    use std::sync::{Mutex, OnceLock};
-    static WARNED: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
-    let warned = WARNED.get_or_init(|| Mutex::new(BTreeSet::new()));
-    let mut guard = match warned.lock() {
-        Ok(g) => g,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if guard.insert(parser.to_string()) {
-        eprintln!(
-            "[registry] no Rust analyzer port for '{parser}' yet — using the Python child (CORTEX_RUST_ANALYZER=rust)"
-        );
-    }
+/// Git short SHA baked at build time (`build.rs`); surfaced in retire errors
+/// so operators know exactly which commit to revert if they need to roll
+/// back. Default is the workspace commit when the env var is absent.
+const RETIRED_AT_COMMIT: &str = match option_env!("CORTEX_BUILD_COMMIT") {
+    Some(sha) if !sha.is_empty() => sha,
+    _ => "unknown",
+};
+
+/// Build the human-readable retire hint that points the operator at the
+/// rollback path. Phrased the same way in both cortex-sync and the
+/// delegation target so messages are consistent across the fleet.
+pub fn retire_hint(parser: &str) -> String {
+    format!(
+        "Python analyzer plane retired at commit {RETIRED_AT_COMMIT} (parser '{parser}'); \
+         rollback = `git revert {RETIRED_AT_COMMIT}` (then rebuild Rust binaries)."
+    )
 }
 
-/// `_rust_analyzer_binary` — flip matrix (phase-01..07 semantics; phase-08
-/// flips `AUTO_FLIP_DEFAULT`):
+/// `_rust_analyzer_binary` — phase-08 flip matrix (post-cutover):
 ///
 /// | `CORTEX_RUST_ANALYZER` | mapped parser | unmapped |
 /// |---|---|---|
-/// | unset | Python (until AUTO_FLIP_DEFAULT) | Python |
-/// | `rust` | Rust binary, **Err when the binary is missing** | Python + one-time warn |
-/// | `python` | Python | Python |
-/// | other | Python | Python |
+/// | unset | Rust binary, **Err when missing** | retire error |
+/// | `rust` | Rust binary, **Err when missing + build hint** | retire error |
+/// | `python` | retire error | retire error |
+/// | other | retire error | retire error |
 ///
-/// `Err` means the operator explicitly forced the Rust backend and a declared
-/// binary is absent (stale/partial build) — callers must fail hard, never
-/// silently fall back to Python.
+/// Post-phase-08 the Python analyzer scripts are deleted; any path that
+/// would resolve to `script_path` (the legacy Python entry) is a retire
+/// error so operators never silently re-enable the archived plane.
 pub fn rust_analyzer_binary(analyzer: &AnalyzerConfig) -> Result<Option<String>, String> {
     let mode = std::env::var("CORTEX_RUST_ANALYZER")
         .unwrap_or_default()
         .trim()
         .to_lowercase();
-    if mode == "python" {
-        return Ok(None);
+    // `python` or any unrecognised value → retire error (red-team S3/S4).
+    if !mode.is_empty() && mode != "rust" {
+        return Err(retire_hint(&analyzer.parser));
     }
     let rust_requested = mode == "rust" || (mode.is_empty() && AUTO_FLIP_DEFAULT);
     if !rust_requested {
-        return Ok(None);
+        // Should be unreachable given `AUTO_FLIP_DEFAULT = true`, but kept
+        // for completeness — if a future build flips it back, fall through
+        // to the retired-error path (Python scripts are gone).
+        return Err(retire_hint(&analyzer.parser));
     }
     let Some(binary_name) = mapped_binary_name(&analyzer.parser) else {
-        if mode == "rust" {
-            warn_unmapped_once(&analyzer.parser);
-        }
-        return Ok(None);
+        return Err(retire_hint(&analyzer.parser));
     };
     let candidate = analyzer_binary_path(&analyzer_bin_dir(), binary_name);
     match candidate {
         Some(path) => Ok(Some(path.to_string_lossy().to_string())),
-        None => Err(format!(
-            "CORTEX_RUST_ANALYZER=rust but binary '{binary_name}' for parser '{}' is missing in {} — build it with: cargo build --release -p {}",
-            analyzer.parser,
-            analyzer_bin_dir().display(),
-            binary_name,
-        )),
+        None => {
+            // Distinguish explicit opt-in (`rust`) → build hint vs unset
+            // → retire error, per the phase-08 table.
+            if mode == "rust" {
+                Err(format!(
+                    "CORTEX_RUST_ANALYZER=rust but binary '{binary_name}' for parser '{}' is missing in {} — build it with: cargo build --release -p {binary_name}",
+                    analyzer.parser,
+                    analyzer_bin_dir().display(),
+                ))
+            } else {
+                Err(retire_hint(&analyzer.parser))
+            }
+        }
     }
 }
 

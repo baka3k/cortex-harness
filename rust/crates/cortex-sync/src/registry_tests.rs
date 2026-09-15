@@ -1,6 +1,7 @@
 //! Unit tests for the analyzer backend registry: flip matrix, `.exe`
 //! probing, map parity, the embedding `force_python` pin, and the overlay
-//! `extra_args` carrier (plan 260915-analyzer-layer-rust-cutover phase-01).
+//! `extra_args` carrier (plan 260915-analyzer-layer-rust-cutover phase-01,
+//! post-cutover semantics from phase-08).
 //!
 //! The resolver reads `CORTEX_RUST_ANALYZER` / `CORTEX_RUST_ANALYZER_BIN_DIR`
 //! from process env, so every env-touching test holds `ENV_LOCK`.
@@ -95,11 +96,6 @@ fn primary_map_covers_25_parsers_with_bin_names() {
     let map = rust_analyzer_binaries();
     let keys: BTreeSet<&str> = map.keys().copied().collect();
     assert_eq!(keys, expected);
-    // Per-parser binary name resolution is verified by
-    // `flip_matrix_rust_*_resolves*` tests below — the primary map's binary
-    // names are not uniform across all keys (e.g. `project_topology` →
-    // `analyzer-topology` drops the `project_` prefix), so we only assert
-    // key parity here and rely on the per-parser tests for the contract.
     for (parser, binary) in &map {
         assert!(
             binary.starts_with("analyzer-"),
@@ -115,7 +111,6 @@ fn framework_map_entries_and_shared_database_schema() {
     assert_eq!(map.get("database_sql"), Some(&"analyzer-database-schema"));
     assert_eq!(map.get("database_plsql"), Some(&"analyzer-database-schema"));
     assert_eq!(map.get("fastapi_django"), Some(&"analyzer-fastapi-django"));
-    // flutter joined together with the analyzer-dart binary (phase-02).
     assert_eq!(map.get("flutter"), Some(&"analyzer-dart"));
 }
 
@@ -123,17 +118,17 @@ fn framework_map_entries_and_shared_database_schema() {
 fn binary_path_probes_bare_then_exe() {
     let dir = TempBinDir::with(&["analyzer-java"]);
     assert_eq!(
-        binary_probe(&dir.path),
+        binary_probe(&dir.path, "java"),
         Some(dir.path.join("analyzer-java"))
     );
     let exe_dir = TempBinDir::with(&["analyzer-java.exe"]);
     assert_eq!(
-        binary_probe(&exe_dir.path),
+        binary_probe(&exe_dir.path, "java"),
         Some(exe_dir.path.join("analyzer-java.exe"))
     );
     let both = TempBinDir::with(&["analyzer-java", "analyzer-java.exe"]);
     assert_eq!(
-        binary_probe(&both.path),
+        binary_probe(&both.path, "java"),
         Some(both.path.join("analyzer-java"))
     );
     // Empty dir: mapped parser + `=rust` + missing binary is the hard-error
@@ -148,11 +143,11 @@ fn binary_path_probes_bare_then_exe() {
     assert!(resolved.is_err(), "missing binary under =rust must hard-error");
 }
 
-fn binary_probe(bin_dir: &Path) -> Option<PathBuf> {
+fn binary_probe(bin_dir: &Path, parser: &str) -> Option<PathBuf> {
     let _guard = env_lock();
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(bin_dir.to_str().unwrap()));
     set_env("CORTEX_RUST_ANALYZER", Some("rust"));
-    let resolved = rust_analyzer_binary(&analyzer("java"));
+    let resolved = rust_analyzer_binary(&analyzer(parser));
     set_env("CORTEX_RUST_ANALYZER", None);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
     match resolved {
@@ -163,24 +158,50 @@ fn binary_probe(bin_dir: &Path) -> Option<PathBuf> {
 }
 
 #[test]
-fn flip_matrix_unset_defaults_to_python_in_phase_01() {
-    let _guard = env_lock();
-    set_env("CORTEX_RUST_ANALYZER", None);
-    let resolved = rust_analyzer_binary(&analyzer("java")).expect("no hard error");
-    set_env("CORTEX_RUST_ANALYZER", None);
-    assert_eq!(resolved, None, "unset must keep the Python default until phase-08");
-}
-
-#[test]
-fn flip_matrix_python_and_other_values_stay_python() {
+fn flip_matrix_unset_resolves_when_binary_present() {
+    // Phase-08: unset → auto-flip to Rust; binary present → resolved.
     let _guard = env_lock();
     let dir = TempBinDir::with(&["analyzer-java"]);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
-    for mode in ["python", "1", "true", "RUST_AUTO"] {
+    set_env("CORTEX_RUST_ANALYZER", None);
+    let resolved = rust_analyzer_binary(&analyzer("java"));
+    set_env("CORTEX_RUST_ANALYZER", None);
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
+    assert_eq!(
+        resolved.expect("unset + binary present").as_deref(),
+        Some(dir.path.join("analyzer-java").to_str().unwrap())
+    );
+}
+
+#[test]
+fn flip_matrix_unset_missing_binary_is_retire_error() {
+    // Phase-08: unset + binary missing → retire error (not silent Python
+    // fallback — the Python analyzer scripts are deleted).
+    let _guard = env_lock();
+    let dir = TempBinDir::with(&[]);
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
+    set_env("CORTEX_RUST_ANALYZER", None);
+    let resolved = rust_analyzer_binary(&analyzer("java"));
+    set_env("CORTEX_RUST_ANALYZER", None);
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
+    let message = resolved.expect_err("unset + missing binary must retire-error");
+    assert!(message.contains("retired"), "error names the retire condition: {message}");
+    assert!(message.contains("rollback"), "error carries the rollback hint: {message}");
+}
+
+#[test]
+fn flip_matrix_python_and_other_values_are_retire_errors() {
+    // Phase-08: `python` and any non-`rust` value → retire error.
+    let _guard = env_lock();
+    let dir = TempBinDir::with(&["analyzer-java"]);
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
+    for mode in ["python", "Python", "1", "true", "RUST_AUTO", "rollback"] {
         set_env("CORTEX_RUST_ANALYZER", Some(mode));
-        let resolved = rust_analyzer_binary(&analyzer("java")).expect("no hard error");
+        let resolved = rust_analyzer_binary(&analyzer("java"));
         set_env("CORTEX_RUST_ANALYZER", None);
-        assert_eq!(resolved, None, "mode '{mode}' must select Python");
+        let message = resolved.unwrap_err_or("mode '{mode}' must retire-error");
+        assert!(message.contains("retired"), "mode '{mode}' retire message: {message}");
+        assert!(message.contains("rollback"), "mode '{mode}' rollback hint: {message}");
     }
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
 }
@@ -202,6 +223,8 @@ fn flip_matrix_rust_with_binary_present_resolves() {
 
 #[test]
 fn flip_matrix_rust_missing_mapped_binary_is_hard_error() {
+    // Phase-08: `=rust` + mapped parser + missing binary → hard error
+    // (build hint) — operator explicitly opted in, so they own the build.
     let _guard = env_lock();
     let dir = TempBinDir::with(&[]);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
@@ -215,24 +238,18 @@ fn flip_matrix_rust_missing_mapped_binary_is_hard_error() {
 }
 
 #[test]
-fn flip_matrix_rust_unmapped_parser_falls_back_to_python() {
+fn flip_matrix_unmapped_parser_under_rust_is_retire_error() {
+    // Phase-08: unmapped parser + `=rust` → retire error (Python scripts are
+    // deleted; there is no fallback lane).
     let _guard = env_lock();
     let dir = TempBinDir::with(&[]);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
     set_env("CORTEX_RUST_ANALYZER", Some("rust"));
-    // Pick a parser key that no release of the registry maps. Phase-04
-    // brought `project_topology` into the map, so a hypothetical future
-    // parser exercises the warn-fallback path without colliding with any
-    // real entry.
-    let future = rust_analyzer_binary(&analyzer("future_parser"));
-    let future_shadow = rust_analyzer_binary(&analyzer("future_parser"));
+    let resolved = rust_analyzer_binary(&analyzer("future_parser"));
     set_env("CORTEX_RUST_ANALYZER", None);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
-    assert_eq!(future.expect("unmapped falls back"), None);
-    assert_eq!(
-        future_shadow.expect("second call still unmapped"),
-        None
-    );
+    let message = resolved.expect_err("unmapped parser must retire-error post-cutover");
+    assert!(message.contains("retired"), "unmapped retire message: {message}");
 }
 
 #[test]
@@ -255,6 +272,9 @@ fn flip_matrix_rust_project_topology_resolves_analyzer_topology() {
 
 #[test]
 fn force_python_beats_flip_in_build_cmd() {
+    // `force_python` still pins the embedding pass + message lane to Python
+    // children — it survives the phase-08 flip so the orchestrator keeps
+    // those planes on their proven implementations until they are ported.
     let _guard = env_lock();
     let dir = TempBinDir::with(&["analyzer-java"]);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
@@ -299,7 +319,12 @@ fn force_python_beats_flip_in_build_cmd() {
 
 #[test]
 fn overlay_extra_args_carried_into_cmd() {
+    // Phase-08: unset now auto-flips to the Rust binary. The overlay
+    // ``extra_args`` carrier is still verified, just via the Rust backend
+    // (the binary stub lives in a temp bin dir so the resolver succeeds).
     let _guard = env_lock();
+    let dir = TempBinDir::with(&["analyzer-fastapi-django"]);
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
     set_env("CORTEX_RUST_ANALYZER", None);
     let mut config = analyzer("fastapi_django");
     config.extra_args = vec!["--framework", "fastapi_django"];
@@ -334,7 +359,12 @@ fn overlay_extra_args_carried_into_cmd() {
         &[],
     );
     set_env("CORTEX_RUST_ANALYZER", None);
-    assert_eq!(cmd.program, "/venv/bin/python");
+    set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
+    assert_eq!(
+        cmd.program,
+        dir.path.join("analyzer-fastapi-django").to_str().unwrap(),
+        "post-cutover unset selects the Rust binary"
+    );
     let flags: Vec<&str> = cmd.args.iter().map(String::as_str).collect();
     let pos = flags
         .iter()
@@ -393,4 +423,17 @@ fn overlay_flip_resolves_rust_binary_with_extra_args() {
         flags.windows(2).any(|w| w[0] == "--framework" && w[1] == "fastapi_django"),
         "rust overlay backend still receives its required extra_args"
     );
+}
+
+trait ResultExt<T> {
+    fn unwrap_err_or(self, msg: &str) -> String;
+}
+
+impl<T> ResultExt<T> for Result<Option<T>, String> {
+    fn unwrap_err_or(self, msg: &str) -> String {
+        match self {
+            Ok(_) => panic!("{msg}: got Ok(_)"),
+            Err(e) => e,
+        }
+    }
 }

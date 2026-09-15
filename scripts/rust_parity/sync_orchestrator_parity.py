@@ -26,6 +26,15 @@ Usage (repo root):
         [--keep] [--corpus-dir PATH] [--rust-bin rust/target/release/cortex-sync]
 """
 
+# === Phase-08 archive notice (2026-09-15) ===
+# PY side archived at phase-08 cutover, fixtures = golden.
+# Python analyzer entry points were retired at the phase-08 cutover;
+# fixtures under tests/fixtures/ are now the golden reference.
+# Do not attempt to re-run the Python side — tools/<lang>/<lang>_analyzer.py
+# no longer exists. See plans/260915-analyzer-layer-rust-cutover/reports/phase08-cutover.md.
+# === end archive notice ===
+
+
 from __future__ import annotations
 
 import argparse

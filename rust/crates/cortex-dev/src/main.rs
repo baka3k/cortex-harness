@@ -11,6 +11,7 @@ mod ensure_ort;
 mod env;
 mod help;
 mod journalx;
+mod mcp_state;
 mod parser;
 mod procinfo;
 mod spec;

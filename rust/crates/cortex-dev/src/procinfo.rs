@@ -225,13 +225,13 @@ fn pid_alive(pid: i64) -> bool {
 /// kill(2) wrapper. Crate denies `unsafe_code` globally; the libc call is
 /// confined here (signal delivery to a numeric pid, rc-checked).
 #[allow(unsafe_code)]
-fn send_signal(pid: i64, sig: i32) -> bool {
+pub(crate) fn send_signal(pid: i64, sig: i32) -> bool {
     // kill(pid, 0) performs no delivery — existence check only.
     let rc = unsafe { libc::kill(pid as libc::pid_t, sig) };
     rc == 0
 }
 
-const SIGTERM: i32 = libc::SIGTERM;
+pub(crate) const SIGTERM: i32 = libc::SIGTERM;
 const SIGKILL: i32 = libc::SIGKILL;
 
 /// `stop_sync_processes` — terminate matching workers and descendants,
