@@ -1,3 +1,8 @@
+# PARITY-REFERENCE-ONLY (phase-07 of plans/260914-2259-dev-make-python-cutover).
+# No entrypoint routes here any more: dev.sh/bat/ps1, dev-global.cmd, wrapper.bat,
+# inno shortcuts, the scoop shim, and the Makefile all dispatch the cortex-dev
+# binary. This file exists for `scripts/rust_parity/dev_cli_parity.py` golden
+# comparisons only; do NOT add runtime callers.
 #!/usr/bin/env python3
 """dev - unified CLI for CortexHarness ingestion (code + documents)."""
 
@@ -2657,7 +2662,7 @@ def storage_stop():
 @click.option("--doc-port", type=click.IntRange(1, 65535), help="doc-tiny port.")
 @click.option("--host", help="Bind host for selected MCP servers.")
 @click.option("--path", "mcp_path", help="Streamable HTTP route.")
-@click.option("--provider", type=click.Choice(["falkordb", "neo4j"]), help="Graph provider override.")
+@click.option("--provider", type=click.Choice(["falkordb", "neo4j", "ladybug"]), help="Graph provider override.")
 @click.option("--collection", help="Vector collection used by every selected server.")
 @click.option("--code-collection", help="Vector collection override for code-tiny.")
 @click.option("--doc-collection", help="Vector collection override for doc-tiny.")
@@ -2775,7 +2780,11 @@ def init(env, project_dir, path):
         else:
             value = default
         value = str(value).strip().lower()
-        return "falkordb" if value in {"falkor", "falkordb"} else "neo4j"
+        if value in {"falkor", "falkordb"}:
+            return "falkordb"
+        if value in _LADYBUG_PROVIDER_ALIASES:
+            return "ladybug"
+        return "neo4j"
 
     def _prompt_graph_env(
         section: str,
@@ -2786,9 +2795,14 @@ def init(env, project_dir, path):
         provider = click.prompt(
             "GRAPH_PROVIDER",
             default=_provider_default(section, scoped_key, provider_default),
-            type=click.Choice(["neo4j", "falkordb"], case_sensitive=False),
+            type=click.Choice(["neo4j", "falkordb", "ladybug"], case_sensitive=False),
         ).lower()
         graph_env = {"GRAPH_PROVIDER": provider, scoped_key: provider}
+        if provider == "ladybug" and storage_backend == "remote":
+            click.echo(
+                "     [warn] ladybug is embedded/local-only; a remote backend "
+                "connects via remote.falkordb_uri instead."
+            )
         if provider == "neo4j":
             graph_env.update({
                 "NEO4J_URI":  _p("NEO4J_URI",  [section, "env", "NEO4J_URI"],  "bolt://localhost:7687"),
@@ -2796,6 +2810,14 @@ def init(env, project_dir, path):
                 "NEO4J_USER": _p("NEO4J_USER", [section, "env", "NEO4J_USER"], "neo4j"),
                 "NEO4J_PASS": _p("NEO4J_PASS", [section, "env", "NEO4J_PASS"], ""),
             })
+            return provider, graph_env
+        if provider == "ladybug":
+            # Embedded/local-only: blank path keeps the runtime storage-layout
+            # default (`<root>/<owner>.lbug/<graph>` via resolve_storage()).
+            ladybug_path = _p("LADYBUG_PATH (blank = storage default)", [section, "env", "LADYBUG_PATH"], "")
+            if ladybug_path:
+                graph_env["LADYBUG_PATH"] = ladybug_path
+            graph_env["LADYBUG_GRAPH"] = _p("LADYBUG_GRAPH", [section, "env", "LADYBUG_GRAPH"], graph_default)
             return provider, graph_env
 
         falkordb_graph = _p("FALKORDB_GRAPH", [section, "env", "FALKORDB_GRAPH"], graph_default)

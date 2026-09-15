@@ -15,7 +15,6 @@ export UV
 # Resolution: CORTEX_DEV_BIN -> installed prefix -> repo release build.
 # PYTHON stays only for the deliberate Python-reference targets (parity/embed).
 CORTEX_DEV_BIN ?= $(firstword $(wildcard rust/target/release/cortex-dev$(BIN_SUFFIX)) $(wildcard rust/target/debug/cortex-dev$(BIN_SUFFIX)) $(HOME)/.local/bin/cortex-dev$(BIN_SUFFIX))
-DEV := $(CORTEX_DEV_BIN)
 LIFECYCLE := $(CORTEX_DEV_BIN)
 
 # Rust workspace (graph core + retrieval brain + PyO3 bindings).
@@ -70,22 +69,22 @@ storage-backup:
 	$(LIFECYCLE) storage-backup $(OWNER_OPTION) $(or $(OWNER),code)
 
 export-db:
-	$(DEV) export-db $(if $(OUTPUT),--output $(OUTPUT)) $(if $(PROJECT_ID),--project-id $(PROJECT_ID)) $(if $(ROLE),--role $(ROLE))
+	$(CORTEX_DEV_BIN) export-db $(if $(OUTPUT),--output $(OUTPUT)) $(if $(PROJECT_ID),--project-id $(PROJECT_ID)) $(if $(ROLE),--role $(ROLE))
 
 export:
-	$(DEV) export $(PROJECT_ID) $(if $(OUTPUT),--output $(OUTPUT)) $(if $(ROLE),--role $(ROLE))
+	$(CORTEX_DEV_BIN) export $(PROJECT_ID) $(if $(OUTPUT),--output $(OUTPUT)) $(if $(ROLE),--role $(ROLE))
 
 import-db:
 ifndef ARCHIVE
 	$(error Usage: make import-db ARCHIVE=/path/to/project.cortexdb [OVERWRITE=1] [ROLE=code|doc|both])
 endif
-	$(DEV) import-db --archive $(ARCHIVE) $(if $(filter 1 true yes,$(OVERWRITE)),--overwrite) $(if $(ROLE),--role $(ROLE))
+	$(CORTEX_DEV_BIN) import-db --archive $(ARCHIVE) $(if $(filter 1 true yes,$(OVERWRITE)),--overwrite) $(if $(ROLE),--role $(ROLE))
 
 import:
 ifndef ARCHIVE
 	$(error Usage: make import ARCHIVE=/path/to/project.cortexdb [OVERWRITE=1] [ROLE=code|doc|both])
 endif
-	$(DEV) import $(ARCHIVE) $(if $(filter 1 true yes,$(OVERWRITE)),--overwrite) $(if $(ROLE),--role $(ROLE))
+	$(CORTEX_DEV_BIN) import $(ARCHIVE) $(if $(filter 1 true yes,$(OVERWRITE)),--overwrite) $(if $(ROLE),--role $(ROLE))
 
 doctor:
 	$(LIFECYCLE) doctor
@@ -96,9 +95,9 @@ doctor:
 sync:
 ifeq ($(word 3,$(MAKECMDGOALS)),stop)
 ifeq ($(word 2,$(MAKECMDGOALS)),code)
-	$(DEV) sync code stop
+	$(CORTEX_DEV_BIN) sync code stop
 else ifeq ($(word 2,$(MAKECMDGOALS)),doc)
-	$(DEV) sync doc stop
+	$(CORTEX_DEV_BIN) sync doc stop
 else
 	$(error Usage: make sync code stop OR make sync doc stop)
 endif
@@ -110,10 +109,10 @@ code doc:
 	@:
 
 sync-code-stop:
-	$(DEV) sync code stop
+	$(CORTEX_DEV_BIN) sync code stop
 
 sync-doc-stop:
-	$(DEV) sync doc stop
+	$(CORTEX_DEV_BIN) sync doc stop
 
 start:
 	$(LIFECYCLE) start $(START_ARGS)

@@ -1,7 +1,6 @@
 //! `dev harness` — .harness/ bootstrap, task backlog, orchestrator delegates.
 
 use crate::parser::Matches;
-use crate::pyexec;
 use crate::util::{echo, echo_err};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -57,11 +56,11 @@ fn next_task_id(features: &[Value]) -> String {
 }
 
 fn scripts_dir() -> PathBuf {
-    crate::pyexec::repo_root().join("harness").join("scripts")
+    crate::util::repo_root().join("harness").join("scripts")
 }
 
 fn templates_dir() -> PathBuf {
-    crate::pyexec::repo_root().join("harness").join("templates")
+    crate::util::repo_root().join("harness").join("templates")
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +465,7 @@ pub fn run(m: &Matches) {
         std::process::exit(1);
     }
 
-    let python = pyexec::venv_python(&pyexec::repo_root());
+    let python = crate::util::harness_python(&crate::util::repo_root());
     let mut cmd = Command::new(&python);
     cmd.arg(&orchestrator)
         .args(["--root", &project_path.to_string_lossy()])
@@ -512,7 +511,7 @@ pub fn context(m: &Matches) {
     let task_id = m.positionals().first().cloned().unwrap_or_default();
     let output = m.value_or("--output", "-");
 
-    let python = pyexec::venv_python(&pyexec::repo_root());
+    let python = crate::util::harness_python(&crate::util::repo_root());
     let mut cmd = Command::new(python);
     cmd.arg(&selector)
         .args(["--state", ".harness/state/feature_list.json"])

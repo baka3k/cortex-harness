@@ -21,27 +21,6 @@ class DevLifecycleCommandTests(unittest.TestCase):
     def setUp(self):
         self.runner = CliRunner()
 
-    def test_infra_up_dispatches_from_repository_root(self):
-        completed = subprocess.CompletedProcess([], 0)
-        with mock.patch("cortex_harness.dev.sys.platform", "win32"), mock.patch(
-            "cortex_harness.dev.shutil.which", return_value="powershell.exe"
-        ), mock.patch("cortex_harness.dev.subprocess.run", return_value=completed) as run:
-            result = self.runner.invoke(cli, ["infra-up"])
-
-        self.assertEqual(result.exit_code, 0, result.output)
-        run.assert_called_once_with(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(REPO_ROOT / "scripts" / "mcp-lifecycle.ps1"),
-                "infra-up",
-            ],
-            cwd=str(REPO_ROOT),
-        )
-
     def test_doctor_dispatches_to_python_from_caller_directory_on_non_windows(self):
         completed = subprocess.CompletedProcess([], 0)
         with mock.patch("cortex_harness.dev.sys.platform", "linux"), mock.patch(
@@ -100,20 +79,6 @@ class DevLifecycleCommandTests(unittest.TestCase):
             "start",
             ["--server", "code", "--name", "shop-code", "--project", "SHOP", "--port", "8790"],
         )
-
-    def test_windows_custom_start_translates_options_for_powershell(self):
-        completed = subprocess.CompletedProcess([], 0)
-        with mock.patch("cortex_harness.dev.sys.platform", "win32"), mock.patch(
-            "cortex_harness.dev.shutil.which", return_value="powershell.exe"
-        ), mock.patch("cortex_harness.dev.subprocess.run", return_value=completed) as run:
-            result = self.runner.invoke(
-                cli,
-                ["start", "--server", "doc", "--name", "shop-doc", "--project", "SHOP", "--port", "8791"],
-            )
-
-        self.assertEqual(result.exit_code, 0, result.output)
-        command = run.call_args.args[0]
-        self.assertEqual(command[-8:], ["-Server", "doc", "-Name", "shop-doc", "-Project", "SHOP", "-Port", "8791"])
 
     def test_named_stop_forwards_only_the_instance_name(self):
         with mock.patch("cortex_harness.dev._run_lifecycle") as run:
@@ -223,34 +188,6 @@ class DevLifecycleCommandTests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 7)
 
-    def test_windows_start_applies_active_config_after_service_env(self):
-        lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
-
-        helper_offset = lifecycle.index("mcp_runtime_config.py")
-        service_env_offset = lifecycle.index("$envFile = Join-Path")
-        active_env_offset = lifecycle.index("$runtimeEnvironment = Get-Content")
-        self.assertLess(helper_offset, service_env_offset)
-        self.assertLess(service_env_offset, active_env_offset)
-        self.assertIn("export CORTEX_HARNESS_ENV_FILE=$runtimeEnvFile", lifecycle)
-        self.assertIn("[Environment]::SetEnvironmentVariable(`$_.Name", lifecycle)
-        self.assertIn("RuntimeConfig = $runtimeJsonPath", lifecycle)
-
-    def test_windows_start_uses_caller_config_and_keeps_project_ids_equal(self):
-        lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
-
-        self.assertIn("function Resolve-StartConfig", lifecycle)
-        self.assertIn("--config $startConfig.Path", lifecycle)
-        self.assertIn("$overrides.CORTEX_STORAGE_PROJECT_ID = $Project", lifecycle)
-
-    def test_windows_lifecycle_has_no_container_runtime_behavior(self):
-        lifecycle = (REPO_ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
-        executable_lines = "\n".join(
-            line for line in lifecycle.splitlines() if not line.lstrip().startswith("#")
-        )
-        self.assertNotIn("docker", executable_lines.casefold())
-        for action in ("storage-layout", "storage-init", "storage-migrate-layout", "storage-backup"):
-            self.assertIn(f'"{action}"', lifecycle)
-
     def test_git_bash_does_not_rewrite_the_mcp_route(self):
         for relative_path in ("code-tiny/mcp.sh", "doc-tiny/mcp.sh"):
             with self.subTest(script=relative_path):
@@ -264,19 +201,6 @@ class DevLifecycleCommandTests(unittest.TestCase):
         doc_server = (REPO_ROOT / "doc-tiny" / "mcp_graph_rag.py").read_text(encoding="utf-8")
         self.assertIn('os.getenv("MCP_SERVER_NAME", "graph_mcp")', code_server)
         self.assertIn('os.getenv("MCP_SERVER_NAME", "mind_mcp")', doc_server)
-
-    def test_windows_mcp_pid_discovery_uses_python_command_lines(self):
-        completed = subprocess.CompletedProcess([], 0, stdout="101\n202\n")
-        with mock.patch("cortex_harness.dev.sys.platform", "win32"), mock.patch(
-            "cortex_harness.dev.shutil.which", return_value="powershell.exe"
-        ), mock.patch("cortex_harness.dev.subprocess.run", return_value=completed) as run:
-            result = _mcp_pids("unified_mcp.py")
-
-        self.assertEqual(result, [101, 202])
-        command = run.call_args.args[0]
-        self.assertEqual(command[:3], ["powershell.exe", "-NoProfile", "-Command"])
-        self.assertIn("python", command[3])
-        self.assertIn("unified_mcp.py", command[3])
 
     def test_posix_mcp_pid_discovery_ignores_its_own_process_match(self):
         completed = subprocess.CompletedProcess(

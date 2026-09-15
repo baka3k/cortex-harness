@@ -13,7 +13,6 @@ use super::sync::{
 };
 use crate::config::{ignore_folders, load_active_config};
 use crate::parser::Matches;
-use crate::pyexec;
 use crate::util::{
     echo, echo_err, git_head, git_status_since, iso_utc_now, is_excluded_dir_name, is_sensitive,
     load_state, match_any, prompt, save_state,
@@ -56,7 +55,7 @@ pub fn sync_doc_impl(m: &Matches, force_full: bool) {
         return;
     }
 
-    let doc_ingestor = pyexec::repo_file("doc-tiny/graphrag_ingest_langextract.py");
+    let doc_ingestor = crate::util::repo_root().join("doc-tiny/graphrag_ingest_langextract.py");
     if !doc_ingestor.exists() {
         echo_err(&format!("[error] Ingestor not found: {}", doc_ingestor.display()));
         std::process::exit(1);
@@ -78,7 +77,7 @@ pub fn sync_doc_impl(m: &Matches, force_full: bool) {
         return;
     }
 
-    let python = pyexec::venv_python(&pyexec::repo_root().join("doc-tiny"));
+    let python = crate::util::harness_python(&crate::util::repo_root().join("doc-tiny"));
     let mut summaries: Vec<Value> = Vec::new();
     let total_start = std::time::Instant::now();
 
@@ -153,7 +152,7 @@ pub(super) fn sync_doc_folder(
         .map(String::from)
         .unwrap_or_else(|| format!("{}_doc", project_id));
 
-    let doc_ingestor = pyexec::repo_file("doc-tiny/graphrag_ingest_langextract.py");
+    let doc_ingestor = crate::util::repo_root().join("doc-tiny/graphrag_ingest_langextract.py");
     let mut base_cmd = vec![
         python.to_string(),
         doc_ingestor.to_string_lossy().to_string(),
