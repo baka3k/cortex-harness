@@ -346,127 +346,229 @@ pub fn start(m: &Matches) {
         echo(&format!("\n-- {} (port {}) {}", svc.name, svc.port, dashes));
 
         if !pids.is_empty() && !force_restart {
-            let uptime = pyexec::call_raw(
-                "mcp_uptime",
-                &json!({ "pid": pids[0] }),
-            )
-            .stdout
-            .trim()
-            .to_string();
-            let uptime = if uptime.is_empty() { "?".to_string() } else { uptime };
+            let uptime = crate::procinfo::mcp_uptime(pids[0]);
             echo(&format!("  [running]  pid={}  uptime={}", pids[0], uptime));
             echo(&format!("  [url]      {}", svc.url));
             continue;
         }
 
         if !pids.is_empty() && force_restart {
-            let stopped = pyexec::call_json("mcp_stop", &json!({ "pattern": svc.pattern }));
-            let count = stopped.as_i64().unwrap_or(0);
+            let count = crate::procinfo::mcp_stop_pattern(svc.pattern, None);
             echo(&format!("  [stopped]  killed {} process(es)", count));
         }
 
         echo(&format!("  [starting] {} (backend: python)", svc.rel_cmd0));
-        let result = pyexec::call_json(
-            "mcp_start",
-            &json!({ "name": svc.name, "project_dir": project_dir.to_string_lossy() }),
-        );
-        let status = result.get("status").and_then(|s| s.as_str()).unwrap_or("");
-        if status == "started" {
+        let extra_env = crate::env::mcp_env_from_config(&project_dir, svc.name);
+        let result = mcp_start_one(svc.name, &extra_env);
+        if result.status == "started" {
             echo(&format!("  [ok]  url={}", svc.url));
-            if let Some(pid) = result.get("pid") {
-                echo(&format!("  [pid] {}", pid));
-            }
-            if let Some(log) = result.get("log").and_then(|l| l.as_str()) {
-                echo(&format!("  [log] {}", log));
-            }
+            echo(&format!("  [pid] {}", result.pid.map(|p| p.to_string()).unwrap_or_else(|| "?".to_string())));
+            echo(&format!("  [log] {}", result.log));
         } else {
-            let reason = result.get("reason").and_then(|r| r.as_str()).unwrap_or("?");
-            echo_err(&format!("  [error] {}", reason));
+            echo_err(&format!("  [error] {}", result.reason));
         }
     }
 }
 
-/// dev.py `_mcp_pids` POSIX branch: scan `ps -ax -o pid=,command=`, keep
-/// python processes whose command arguments contain the pattern file name.
+/// dev.py `_mcp_pids` POSIX branch — delegated to the native procinfo module.
 pub fn mcp_pids(pattern: &str, instance_id: Option<&str>) -> Vec<i64> {
-    let output = std::process::Command::new("ps")
-        .args(["-ax", "-o", "pid=,command="])
-        .output();
-    let Ok(out) = output else { return Vec::new() };
-    let mut pids = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let trimmed = line.trim();
-        let Some((pid_str, command)) = trimmed.split_once(char::is_whitespace) else {
-            continue;
+    crate::procinfo::mcp_pids(pattern, instance_id)
+}
+
+/// Shape-parity with the `_mcp_start_one` return dict (phase-02 port);
+/// some fields are only consumed by callers that mirror the Python output.
+#[allow(dead_code)]
+pub struct McpStartResult {
+    pub name: String,
+    pub status: String,
+    pub pid: Option<u32>,
+    pub url: String,
+    pub log: String,
+    pub reason: String,
+}
+
+/// Fixed launch args per service, mirroring dev.py `MCP_SERVICES[*]["cmd"]`
+/// (flag order included so child argv matches the Python launcher).
+fn service_args(name: &str, port: &str) -> Vec<&'static str> {
+    if name == "code-tiny" {
+        vec![
+            "--transport", "streamable-http",
+            "--host", "127.0.0.1",
+            "--port", "8788",
+            "--path", "/mcp",
+        ]
+    } else {
+        let _ = port;
+        vec![
+            "--host", "127.0.0.1",
+            "--port", "8789",
+            "--transport", "streamable-http",
+            "--path", "/mcp",
+        ]
+    }
+}
+
+/// dev.py `_mcp_start_one` — spawn the legacy Python MCP server for `name`
+/// (`code-tiny` / `doc-tiny` from the SERVICES catalog): entry script +
+/// harness venv, env = inherit -> service .env -> harness config overlay,
+/// provider isolation, remote-key hygiene, log redirect, pid + sidecar files.
+pub fn mcp_start_one(
+    name: &str,
+    extra_env: &serde_json::Map<String, serde_json::Value>,
+) -> McpStartResult {
+    use std::process::Stdio;
+
+    let Some(svc) = SERVICES.iter().find(|s| s.name == name) else {
+        return McpStartResult {
+            name: name.to_string(),
+            status: "error".to_string(),
+            pid: None,
+            url: String::new(),
+            log: String::new(),
+            reason: format!("unknown service: {name}"),
         };
-        let Ok(pid) = pid_str.trim().parse::<i64>() else { continue };
-        let Some(parts) = shlex_split(command) else { continue };
-        if parts.is_empty() {
-            continue;
-        }
-        let executable = Path::new(&parts[0])
-            .file_name()
-            .map(|n| n.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        if executable.contains("python")
-            && parts[1..].iter().any(|arg| {
-                Path::new(arg)
-                    .file_name()
-                    .map(|n| n == pattern)
-                    .unwrap_or(false)
-            })
-        {
-            pids.push(pid);
+    };
+    let svc_dir = pyexec::repo_root().join(svc.rel_dir);
+    let entry_script = svc_dir.join(svc.rel_cmd0);
+    if !entry_script.is_file() {
+        return McpStartResult {
+            name: name.to_string(),
+            status: "error".to_string(),
+            pid: None,
+            url: String::new(),
+            log: String::new(),
+            reason: format!("entry not found: {}", entry_script.display()),
+        };
+    }
+
+    // env = {**os.environ, **dotenv, **extra_env}
+    let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    for (key, value) in load_dotenv(&svc_dir) {
+        env.insert(key, value);
+    }
+    for (key, value) in extra_env {
+        if let Some(text) = value.as_str() {
+            env.insert(key.clone(), text.to_string());
         }
     }
 
-    if instance_id.is_none() || legacy_pause_by_instance_disabled() {
-        return pids;
-    }
-    let wanted = instance_id.unwrap();
-    pids.into_iter()
-        .filter(|pid| pid_instance_id(*pid).as_deref() == Some(wanted))
-        .collect()
-}
-
-fn legacy_pause_by_instance_disabled() -> bool {
-    std::env::var("CORTEX_MCP_PAUSE_BY_INSTANCE")
-        .map(|v| v.trim() == "0")
-        .unwrap_or(false)
-}
-
-fn pid_instance_id(pid: i64) -> Option<String> {
-    let cache_dir = PathBuf::from(".cache");
-    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if !name.starts_with("dev-mcp-") || !name.ends_with(".pid") {
-                continue;
-            }
-            if let Ok(text) = std::fs::read_to_string(entry.path()) {
-                let mut recorded: Option<i64> = None;
-                let mut instance: Option<String> = None;
-                for line in text.lines() {
-                    let s = line.trim();
-                    if let Some(v) = s.strip_prefix("pid=") {
-                        recorded = v.trim().parse().ok();
-                    }
-                    if let Some(v) = s.strip_prefix("instance_id=") {
-                        instance = Some(v.trim().to_string());
-                    }
-                }
-                if recorded == Some(pid) {
-                    return instance.or_else(|| {
-                        name.trim_end_matches(".pid")
-                            .split('-')
-                            .next_back()
-                            .map(String::from)
-                    });
-                }
+    // Provider isolation over the merged env (graph-provider scoping).
+    let scoped_provider = if name == "doc-tiny" {
+        "DOC_GRAPH_PROVIDER"
+    } else {
+        "CODE_GRAPH_PROVIDER"
+    };
+    let mut provider_map: std::collections::BTreeMap<String, serde_json::Value> = env
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    let provider =
+        crate::env::isolate_graph_provider_environment(&mut provider_map, scoped_provider);
+    let mut env: std::collections::BTreeMap<String, String> = provider_map
+        .into_iter()
+        .map(|(k, v)| {
+            let text = match v {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            (k, text)
+        })
+        .collect();
+    if provider == "falkordb" {
+        // Explicit remote endpoints handed to the launcher always win over
+        // inherited stale ones; otherwise strip remote keys entirely.
+        let mut explicit_remote: Vec<(String, String)> = Vec::new();
+        for (key, value) in extra_env {
+            let Some(text) = value.as_str() else { continue };
+            if crate::env::REMOTE_STORAGE_KEYS.contains(&key.as_str()) && !text.trim().is_empty() {
+                explicit_remote.push((key.clone(), text.to_string()));
             }
         }
+        for key in crate::env::REMOTE_STORAGE_KEYS {
+            env.remove(key);
+        }
+        let mut has_uri = false;
+        for (key, value) in explicit_remote {
+            if key == "FALKORDB_URI" || key == "FALKORDB_URL" {
+                has_uri = true;
+            }
+            env.insert(key, value);
+        }
+        if has_uri {
+            for key in ["FALKORDB_PATH", "FALKORDB_CODE_PATH", "FALKORDB_DOC_PATH"] {
+                env.remove(key);
+            }
+        }
     }
-    None
+
+    let log_dir = mcp_log_dir();
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_file = log_dir.join(format!("dev-mcp-{name}.log"));
+    let pid_file = log_dir.join(format!("dev-mcp-{name}.pid"));
+    let instance_id = env
+        .get("CORTEX_STORAGE_INSTANCE")
+        .cloned()
+        .or_else(|| std::env::var("CORTEX_STORAGE_INSTANCE").ok())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    let sidecar_pid_file = log_dir.join(format!("dev-mcp-{name}-{instance_id}.pid"));
+
+    let log = std::fs::OpenOptions::new().create(true).append(true).open(&log_file);
+    let port = svc.port.to_string();
+    let mut command = std::process::Command::new(pyexec::venv_python(&svc_dir));
+    command
+        .arg(&entry_script)
+        .args(service_args(name, &port))
+        .current_dir(&svc_dir);
+    for (key, value) in &env {
+        command.env(key, value);
+    }
+    match log {
+        Ok(log) => {
+            if let Ok(log_err) = log.try_clone() {
+                command.stderr(Stdio::from(log_err));
+            } else {
+                command.stderr(Stdio::null());
+            }
+            command.stdout(Stdio::from(log));
+        }
+        Err(_) => {
+            command.stdout(Stdio::null());
+            command.stderr(Stdio::null());
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    match command.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            let _ = std::fs::write(&pid_file, pid.to_string());
+            let _ = std::fs::write(
+                &sidecar_pid_file,
+                format!("pid={pid}\ninstance_id={instance_id}\n"),
+            );
+            McpStartResult {
+                name: name.to_string(),
+                status: "started".to_string(),
+                pid: Some(pid),
+                url: svc.url.to_string(),
+                log: log_file.to_string_lossy().to_string(),
+                reason: String::new(),
+            }
+        }
+        Err(error) => McpStartResult {
+            name: name.to_string(),
+            status: "error".to_string(),
+            pid: None,
+            url: svc.url.to_string(),
+            log: String::new(),
+            reason: format!("failed to launch: {error}"),
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------

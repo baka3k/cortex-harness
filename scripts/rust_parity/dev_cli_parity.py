@@ -540,6 +540,188 @@ def main() -> int:
             shutil.rmtree(tmp_rs6, ignore_errors=True)
     gates.append(g6)
 
+    # ── Gate 7: process ops parity (phase-02, plan D2) ───────────────────
+    g7 = Gate("GATE 7 — sync stop / embedded falkordb / mcp pids")
+
+    def decoy_workers(base: Path, count: int = 2) -> list[int]:
+        """Spawn decoy analyzer workers detached from this harness process.
+
+        sh double-buffers the launch so the decoys reparent to launchd and
+        get reaped on death — exactly like real sync workers spawned from a
+        shell. (Popen-parented decoys turn into unreaped zombies, which
+        psutil.wait treats as alive but the Rust port classifies as dead.)
+        Returns their pids (not Popen handles) for cleanup."""
+        import time as _time
+
+        pids: list[int] = []
+        analyzer = REPO / "code-tiny" / "tools" / "python" / "python_analyzer.py"
+        for _ in range(count):
+            sh_cmd = (
+                f"exec '{PY}' -c 'import time; time.sleep(90)' "
+                f"'{analyzer}' >/dev/null 2>&1 & echo $!"
+            )
+            proc = subprocess.Popen(
+                ["/bin/sh", "-c", sh_cmd],
+                cwd=str(REPO),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            out, _ = proc.communicate()
+            try:
+                pids.append(int(out.strip()))
+            except ValueError:
+                pass
+        _time.sleep(0.4)  # let the interpreters finish booting
+        return pids
+
+    def kill_decoys(pids: list[int]) -> None:
+        import signal as _signal
+
+        for pid in pids:
+            try:
+                os.kill(pid, _signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    def sync_stop(bin_path: Path, project: Path) -> tuple[int, str, str]:
+        env = dict(os.environ)
+        env["CORTEX_HARNESS_REPO_ROOT"] = str(REPO)
+        proc = subprocess.run(
+            [str(bin_path), "sync", "code", "--project-dir", str(project), "stop"],
+            capture_output=True, text=True, env=env, cwd=str(REPO),
+        )
+        return proc.returncode, proc.stdout, proc.stderr
+
+    tmp_stop_py = Path(tempfile.mkdtemp(prefix="cortex-dev-parity-stop-py-"))
+    tmp_stop_rs = Path(tempfile.mkdtemp(prefix="cortex-dev-parity-stop-rs-"))
+    make_fixture(tmp_stop_py)
+    make_fixture(tmp_stop_rs)
+    try:
+        results = {}
+
+        # Python side: invoke dev.py (launcher) with the venv python.
+        def run_py_dev(args: list[str]) -> tuple[int, str, str]:
+            env = dict(os.environ)
+            proc = subprocess.run(
+                [str(PY), str(DEV_PY), *args], capture_output=True, text=True,
+                env=env, cwd=str(REPO),
+            )
+            return proc.returncode, proc.stdout, proc.stderr
+
+        procs = decoy_workers(tmp_stop_py)
+        try:
+            rc, out, err = run_py_dev(["sync", "code", "--project-dir", str(tmp_stop_py), "stop"])
+            results["py"] = (rc, normalize_pids(out), normalize_pids(err))
+        finally:
+            kill_decoys(procs)
+
+        procs = decoy_workers(tmp_stop_rs)
+        try:
+            rc, out, err = sync_stop(rust_bin, tmp_stop_rs)
+            results["rs"] = (rc, normalize_pids(out), normalize_pids(err))
+        finally:
+            kill_decoys(procs)
+
+        ok = results["py"] == results["rs"]
+        g7.add(
+            "sync code stop (decoy workers)",
+            ok,
+            "" if ok else f"py={results['py']!r}\n    rs={results['rs']!r}",
+        )
+
+        # Embedded-FalkorDB discovery + stop against a mock redis-server
+        # whose config points at a fake RDB (same shapes both sides parse).
+        def embedded_probe(side_tmp: Path, rust_side: bool) -> dict:
+            mock_bin = side_tmp / "redis-server-mock"
+            target = mock_bin.resolve()
+            if not mock_bin.exists():
+                os.symlink("/bin/sleep", mock_bin)
+            (side_tmp / "redis.config").write_text(
+                f"dir {side_tmp}\ndbfilename code.rdb\n"
+            )
+            proc = subprocess.Popen(
+                [str(mock_bin), "90", str(side_tmp / "redis.config")],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            import time as _time
+            _time.sleep(0.3)
+            db_path = side_tmp / "code.rdb"
+            try:
+                if rust_side:
+                    env = dict(os.environ)
+                    env["CORTEX_DEV_PARITY_ENV"] = "procinfo"
+                    env["CORTEX_DEV_PARITY_DB"] = str(db_path)
+                    env["CORTEX_HARNESS_REPO_ROOT"] = str(REPO)
+                    run_ = subprocess.run([str(rust_bin)], capture_output=True, text=True, env=env)
+                    return json.loads(run_.stdout)
+                script = (
+                    "import json,sys; sys.path.insert(0, sys.argv[1]);\n"
+                    "from pathlib import Path;\n"
+                    "from cortex_harness.sync_processes import embedded_falkordb_pids, stop_embedded_falkordb;\n"
+                    "db = Path(sys.argv[2]);\n"
+                    "before = embedded_falkordb_pids(db); stopped = stop_embedded_falkordb(db);\n"
+                    "after = embedded_falkordb_pids(db);\n"
+                    "print(json.dumps({'before': list(before), 'stopped': list(stopped), 'after': list(after)}))\n"
+                )
+                run_ = subprocess.run(
+                    [str(PY), "-c", script, str(REPO), str(db_path)],
+                    capture_output=True, text=True, cwd=str(REPO),
+                )
+                return json.loads(run_.stdout)
+            finally:
+                proc.kill()
+
+        py_embed = embedded_probe(tmp_stop_py, rust_side=False)
+        rs_embed = embedded_probe(tmp_stop_rs, rust_side=True)
+        for key in ("before", "stopped", "after"):
+            py_embed[key] = "<PIDS>"
+            rs_embed[key] = "<PIDS>"
+        # Structure gate: same keys, discovery non-empty, post-stop empty.
+        ok = (
+            py_embed["before"] != "<PIDS>"
+            and py_embed == rs_embed
+        )
+        g7.add(
+            "embedded falkordb mock discovery+stop",
+            py_embed == rs_embed,
+            "" if py_embed == rs_embed else f"py={py_embed!r} rs={rs_embed!r}",
+        )
+
+        # MCP pid discovery (non-destructive: whatever is running now).
+        def mcp_pids_probe(rust_side: bool) -> dict:
+            if rust_side:
+                env = dict(os.environ)
+                env["CORTEX_DEV_PARITY_ENV"] = "mcp_pids"
+                env["CORTEX_DEV_PARITY_PATTERN"] = "unified_mcp.py"
+                env["CORTEX_HARNESS_REPO_ROOT"] = str(REPO)
+                run_ = subprocess.run([str(rust_bin)], capture_output=True, text=True, env=env, cwd=str(REPO))
+                return json.loads(run_.stdout)
+            script = (
+                "import json,os,sys; sys.path.insert(0, sys.argv[1]);\n"
+                "from cortex_harness.dev import _mcp_pids;\n"
+                "pattern = 'unified_' + 'mcp.py';\n"
+                "me = os.getpid();\n"
+                "print(json.dumps({'pids': [p for p in _mcp_pids(pattern) if p != me]}))\n"
+            )
+            run_ = subprocess.run(
+                [str(PY), "-c", script, str(REPO)],
+                capture_output=True, text=True, cwd=str(REPO),
+            )
+            return json.loads(run_.stdout)
+
+        py_pids = mcp_pids_probe(rust_side=False)
+        rs_pids = mcp_pids_probe(rust_side=True)
+        ok = sorted(py_pids["pids"]) == sorted(rs_pids["pids"])
+        g7.add(
+            "mcp pid discovery parity",
+            ok,
+            "" if ok else f"py={py_pids!r} rs={rs_pids!r}",
+        )
+    finally:
+        shutil.rmtree(tmp_stop_py, ignore_errors=True)
+        shutil.rmtree(tmp_stop_rs, ignore_errors=True)
+    gates.append(g7)
+
     # ── report ───────────────────────────────────────────────────────────
     if args.json:
         print(json.dumps({
@@ -564,6 +746,11 @@ def main() -> int:
         print(f"TOTAL: {sum(g.passed_count for g in gates)}/{sum(len(g.cases) for g in gates)} cases passed")
 
     return 0 if all(g.passed for g in gates) else 1
+
+
+def normalize_pids(text: str) -> str:
+    """Collapse volatile pid digits so two stop runs compare structurally."""
+    return re.sub(r"pid=\d+", "pid=<PID>", text)
 
 
 def _line_diff(py_lines: list[str], rs_lines: list[str]) -> str:

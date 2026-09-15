@@ -714,6 +714,8 @@ dependencies = [
 name = "cortex-dev"
 version = "0.1.0"
 dependencies = [
+ "cortex-storage",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
