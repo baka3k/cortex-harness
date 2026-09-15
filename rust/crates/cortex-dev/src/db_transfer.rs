@@ -434,6 +434,9 @@ pub fn import_project(project_dir: &Path, archive: &Path, overwrite: bool, role:
     std::fs::create_dir_all(&staging).map_err(|e| DbTransferError(e.to_string()))?;
     let result = (|| -> Result_<(String, Value)> {
         for member in safe_member_names(&archive_path)? {
+            if member.trim().is_empty() {
+                continue;
+            }
             safe_member_name(&member)?;
         }
         run_tar(&[
@@ -606,16 +609,20 @@ fn backup_if_needed(target: &Path, backups_root: &Path, overwrite: bool) -> Resu
     Ok(Some(backup_path))
 }
 
+/// List archive members with type info (`tar -tv`). Equivalent of Python's
+/// `tarfile.filter="data"` gate: members that are not regular files or
+/// directories (symlinks, hardlinks, devices, fifos) are refused before any
+/// extraction happens, so a crafted bundle cannot write through a link.
 fn safe_member_names(archive: &Path) -> Result_<Vec<String>> {
     let output = std::process::Command::new("tar")
-        .args(["-tzf", &archive.to_string_lossy()])
+        .args(["-tvzf", &archive.to_string_lossy()])
         .output()
         .map_err(|e| DbTransferError(e.to_string()))?;
     let listing = if output.status.success() {
         String::from_utf8_lossy(&output.stdout).to_string()
     } else {
         let output = std::process::Command::new("tar")
-            .args(["-tf", &archive.to_string_lossy()])
+            .args(["-tvf", &archive.to_string_lossy()])
             .output()
             .map_err(|e| DbTransferError(e.to_string()))?;
         String::from_utf8_lossy(&output.stdout).to_string()
@@ -623,8 +630,41 @@ fn safe_member_names(archive: &Path) -> Result_<Vec<String>> {
     Ok(listing.lines().map(|l| l.to_string()).collect())
 }
 
-fn safe_member_name(name: &str) -> Result_<()> {
-    if name.starts_with('/') || name.starts_with('\\') || name.split('/').any(|part| part == "..") {
+/// The member path is the trailing field of a `-tv` line (link targets appear
+/// after a ` -> ` separator and are cut off).
+fn listing_member_name(listing_line: &str) -> &str {
+    let entry = listing_line.split(" -> ").next().unwrap_or(listing_line);
+    let mut rest = entry.trim();
+    // perms
+    let idx = rest.find(char::is_whitespace).unwrap_or(0);
+    rest = rest[idx..].trim_start();
+    // skip size/owner/group/date tokens; the remainder is `time path` or `path`.
+    for _ in 0..5 {
+        let ws = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        rest = rest[ws..].trim_start();
+        if rest.is_empty() {
+            break;
+        }
+    }
+    match rest.find(char::is_whitespace) {
+        Some(i) => rest[i..].trim_start(),
+        None => rest,
+    }
+}
+
+fn safe_member_name(listing_line: &str) -> Result_<()> {
+    let entry = listing_line.split(" -> ").next().unwrap_or(listing_line);
+    let type_char = entry.trim_start().chars().next().unwrap_or('-');
+    if !matches!(type_char, '-' | 'd') {
+        return err(format!(
+            "Unsafe archive member (not a regular file or directory): {listing_line:?}"
+        ));
+    }
+    let name = listing_member_name(listing_line);
+    if name.starts_with('/')
+        || name.starts_with('\\')
+        || name.split('/').any(|part| part == "..")
+    {
         return err(format!("Unsafe archive member name: {name:?}"));
     }
     Ok(())
