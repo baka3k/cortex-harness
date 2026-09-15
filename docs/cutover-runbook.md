@@ -155,7 +155,100 @@ dev mcp start                # [backend] CORTEX_MCP_BACKEND=python (rollback fla
 Rollback xong phải xác nhận: sync chạy được, `/health` OK trên 2 port, doctor
 xanh.
 
-## 5. Archive Python theo khối
+## 5.1. Phase-07 update — composition gate đã đóng (260915-analyzer-layer-rust-cutover)
+
+> Áp dụng từ phase-07 (2026-09-15). Mục tiêu: mirror đầy đủ flip matrix
+> sang delegation target (`incremental_sync.py`), đóng composition gate trên
+> synthetic multi-language corpus (24 parsers + 12 overlays + topology +
+> dart/flutter/csharp + message endpoints), CI workflows update **trước**
+> delete commit.
+
+### 5.1.1. Flip matrix mirror (incremental_sync.py ↔ cortex-sync registry)
+
+`_RUST_ANALYZER_BINARIES` + `_RUST_FRAMEWORK_BINARIES` map **đầy đủ 24
+primary + 12 overlays + project_topology + dart/csharp** — mirror 1:1 với
+`cortex-sync` registry `rust_analyzer_binaries()` + `framework_rust_binaries()`.
+`_resolve_rust_binary_name()` lookup theo parser/framework key (cùng logic
+`mapped_binary_name()` của Rust). `_rust_binary_path()` probe bare name
+trước, `.exe` sau (Windows delegated path — red-team A8/F2).
+
+Grep gate (red-team S2): tham chiếu `_analyzer.py` chỉ tồn tại trong 2 file:
+- `code-tiny/tools/sync/incremental_sync.py` (`ANALYZERS`/`FRAMEWORK_ANALYZERS`
+  `script_path` field — rollback path)
+- `rust/crates/cortex-sync/src/registry.rs` (`AnalyzerConfig`/`FrameworkAnalyzerConfig`
+  `script_path` field — registry reference)
+
+Script `phase07_composition_parity.py` enforce gate này. Khi phase-08 xoá
+Python entries, các `script_path` field trở thành "rollback only" — không
+còn code live gọi.
+
+### 5.1.2. Composition parity legs (phase-07)
+
+Script `scripts/rust_parity/phase07_composition_parity.py` aggregate 8 legs:
+
+1. **graph-diff baseline** — FalkorDB reachable; per-parser scripts own full diff
+2. **message-scan parity** — re-run `analyzer_parity_message_scan_graph.py`
+3. **overlay-binary proof** (red-team F4) — spring overlay scheduled, status != crashed
+4. **qdrant counts + cosine** — phase-06 fallback nếu `QDRANT_URL` unset
+5. **detector_evidence declaration** (red-team A4) — masked trong
+   `sync_orchestrator_parity.py::MASKED_SUMMARY_KEYS` (struts-evidence
+   order divergence; documented)
+6. **delegation smoke (static)** — `_RUST_ANALYZER_BINARIES` +
+   `_RUST_FRAMEWORK_BINARIES` + `.exe` probe present
+7. **per-parser delegation** — dart/flutter/csharp/topology scripts referenced
+8. **grep gate** — no `_analyzer.py` references ngoài rollback script_path
+
+Exit 0 = all legs PASS; 1 = any FAIL.
+
+### 5.1.3. Auto-flip (đúng cho cả cortex-sync + delegation target)
+
+Từ phase-08 (1 commit cuối, gated trên dogfood 7 ngày + rollback drill):
+
+| `CORTEX_RUST_ANALYZER` | semantics MỚI (cả cortex-sync + incremental_sync delegation) |
+|---|---|
+| unset | **Rust-if-binary** (auto-flip phase-14) |
+| `rust` | Rust binary; missing → hard error + hint build |
+| `python` hoặc khác | **Loud "retired" error**: "Python analyzer plane retired at <commit>; rollback = git revert <tag>" — KHÔNG silent fallback |
+
+`--version` build-commit handshake: orchestrator check binary version khớp
+expected; lệch → hard error (red-team F5 stale binary). Embedding/message
+artifacts thiếu/invalid từ child → hard-error, không bao giờ im lặng.
+
+### 5.1.4. Windows prerequisites
+
+- Cài `tree-sitter-cli` nếu chưa có (cargo build cho analyzer binaries trên
+  Windows cần native toolchain).
+- `cargo build --release` mặc định sinh `.exe` suffix — `_rust_binary_path()`
+  đã probe đúng (red-team A8/F2).
+- Ladybug path (Windows default) — delegation smoke bắt buộc pass trước
+  delete. Test bằng `PATH` chứa Rust binary + Windows shell.
+
+### 5.1.5. C# (csharp) prerequisites
+
+- `dotnet` SDK phải có trên máy (Roslyn worker auto-build từ
+  `analyzer-csharp` Rust binary lúc sync; thiếu dotnet → bootstrap fail).
+- Cài: `brew install dotnet` (macOS) hoặc tải từ dotnet.microsoft.com (Windows).
+- Fallback tree-sitter không port (per red-team A6/C5/F6); fallback-usage gate
+  đo fallback có được dùng thật trên corpus.
+
+### 5.1.6. detector_evidence policy
+
+Trường `framework_overlays[].detector_evidence` có order divergence giữa
+Python (`_group_paths_by_framework` sort cho struts) và Rust (`frameworks.rs`
+insertion-order). Hiện **masked trong `sync_orchestrator_parity.py`**
+với documented reason. Long-term: sort both sides identically (deferred
+parity-script change). Khi fix, gate sẽ lift mask và verify byte-parity.
+
+### 5.1.7. Stale claim (§5.3 stale)
+
+Nếu user báo "binary có nhưng không chạy":
+1. `cargo build --release --workspace` (rebuild all 32 binaries).
+2. Check `rust/target/release/analyzer-<x>` (Unix) hoặc `.exe` (Windows) tồn tại.
+3. `analyzer-<x> --version` (handshake — phase-08 gate).
+4. Nếu version lệch → rebuild; nếu exit non-zero → `cortex-sync` sẽ in
+   "Python analyzer plane retired at <commit>" thay vì silent fallback.
+
+## 5.2. Archive Python theo khối
 
 Sau khi Rust ổn định **2 release** liên tiếp cho một khối:
 
