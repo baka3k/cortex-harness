@@ -69,7 +69,7 @@ fn py_repr(v: &Value) -> String {
     }
 }
 
-fn env_map_of<'a>(cfg: &'a Value, section: &str) -> Map<String, Value> {
+fn env_map_of(cfg: &Value, section: &str) -> Map<String, Value> {
     cfg.get(section)
         .and_then(|s| s.get("env"))
         .and_then(|e| e.as_object())
@@ -595,6 +595,9 @@ pub fn doc_env_for_process(
 /// `(doc_graph, doc_qdrant_collection)` for `project_id`, or `None` when the
 /// registry exists but the project is not registered (Python raises, the
 /// caller catches → `targets = None`).
+/// One merged project entry: `(project_id, code_env, doc_env)`.
+type ProjectEnvEntry = (String, Map<String, Value>, Map<String, Value>);
+
 fn resolve_project_doc_targets(config_dir: Option<&Path>, project_id: &str) -> Option<(String, String)> {
     let lookup = project_id.trim().to_lowercase();
     if lookup.is_empty() {
@@ -609,7 +612,7 @@ fn resolve_project_doc_targets(config_dir: Option<&Path>, project_id: &str) -> O
         .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false) && p.is_file())
         .collect();
     names.sort();
-    let mut entries: Vec<(String, Map<String, Value>, Map<String, Value>)> = Vec::new();
+    let mut entries: Vec<ProjectEnvEntry> = Vec::new();
     for path in names {
         // Python `_read_config_files`/`_project_entries` skip malformed json
         // and entries without a project id — never abort the whole lookup.

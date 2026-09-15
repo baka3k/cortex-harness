@@ -24,7 +24,7 @@ use java_analyzer::JavaExtraArgs;
 
 /// CLI đầy đủ: contract chung (AnalyzerArgs) flatten + cờ java-specific.
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct JavaArgs {
     #[command(flatten)]
     common: AnalyzerArgs,

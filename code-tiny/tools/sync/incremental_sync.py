@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -671,6 +672,56 @@ def _path_in_module(path: str, module_root: str) -> bool:
     return module in {"", "."} or normalized == module or normalized.startswith(module + "/")
 
 
+_WARNED_RETIRED_DETECTORS: Set[str] = set()
+
+
+def _warn_retired_detector_once(module_name: str) -> None:
+    """Phase-08 cutover: a deleted detector module is being routed around.
+
+    Loud (stderr, once per module per process) — never silent — but not an
+    error: strong-candidate heuristics keep the delegated lane functional,
+    and `git revert <cutover>` restores the full detectors.
+    """
+    if module_name in _WARNED_RETIRED_DETECTORS:
+        return
+    _WARNED_RETIRED_DETECTORS.add(module_name)
+    print(
+        f"[phase-08] detector module '{module_name}' retired with the Python "
+        "analyzer plane; routing on strong-candidate heuristics "
+        "(rollback = git revert of the phase-08 cutover commit)",
+        file=sys.stderr,
+    )
+
+
+def _optional_detector_class(module_name: str, attribute: str):
+    """Resolve a (possibly retired) detector attribute, or ``None``.
+
+    Phase-08 cutover: detector modules deleted with the Python analyzer
+    plane resolve to ``None`` so the caller routes on strong-candidate
+    heuristics. A module that still EXISTS but fails to import (transitive
+    breakage, e.g. after a `git revert` rollback) raises loudly — only true
+    absence degrades, so a half-restored tree is never silently weakened.
+    """
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except ModuleNotFoundError:
+        # Parent package deleted with the analyzer plane (find_spec imports
+        # parents to walk dotted names) — same disposition as spec=None.
+        spec = None
+    if spec is None:
+        _warn_retired_detector_once(module_name)
+        return None
+    return getattr(importlib.import_module(module_name), attribute)
+
+
+def _optional_detector(module_name: str, attribute: str, root: str):
+    """`_optional_detector_class` instantiated with ``root`` when present."""
+    detector_cls = _optional_detector_class(module_name, attribute)
+    if detector_cls is None:
+        return None
+    return detector_cls(root)
+
+
 def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[str, Set[str]], Dict[str, List[str]]]:
     """Route candidate paths to every detected framework overlay.
 
@@ -684,18 +735,26 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
     if not normalized_paths:
         return grouped, evidence
 
-    from tools.mybatis.detector import MyBatisProjectDetector
-    from tools.servlet_jsp.detector import ServletJspProjectDetector
-    from tools.spring.detector import SpringProjectDetector
-
     detectors = {
-        "spring": SpringProjectDetector(root),
-        "servlet_jsp": ServletJspProjectDetector(root),
-        "mybatis": MyBatisProjectDetector(root),
+        "spring": _optional_detector("tools.spring.detector", "SpringProjectDetector", root),
+        "servlet_jsp": _optional_detector("tools.servlet_jsp.detector", "ServletJspProjectDetector", root),
+        "mybatis": _optional_detector("tools.mybatis.detector", "MyBatisProjectDetector", root),
     }
     for framework, detector in detectors.items():
         candidates = {path for path in normalized_paths if _is_framework_candidate(framework, path)}
         if not candidates:
+            continue
+        if detector is None:
+            for path in candidates:
+                name = os.path.basename(path).lower()
+                if (
+                    (framework == "mybatis" and (name.endswith("mapper.xml") or "mybatis" in name))
+                    or (framework == "servlet_jsp" and (name == "web.xml" or name.endswith((".jsp", ".jspx", ".jspf", ".tag", ".tagx"))))
+                    or (framework == "spring" and name.startswith("application") and name.endswith((".properties", ".yml", ".yaml")))
+                ):
+                    grouped[framework].add(path)
+                    evidence[framework].append(f"{path}:strong-candidate")
+            evidence[framework] = list(dict.fromkeys(evidence[framework]))
             continue
         modules = detector.discover_modules()
         module_roots = [str(item.get("rel_path") or ".") for item in modules]
@@ -765,11 +824,18 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
         evidence["struts"] = [f"{path}:strong-candidate" for path in sorted(strong)]
 
     flutter_candidates = {path for path in normalized_paths if _is_framework_candidate("flutter", path)}
-    from tools.flutter.detector import detect_flutter_project
+    # Phase-08 cutover: `tools/flutter/` was deleted with the Python analyzer
+    # plane; when retired, route on the pubspec.yaml strong candidate only.
+    detect_flutter_project = _optional_detector_class(
+        "tools.flutter.detector", "detect_flutter_project"
+    )
 
-    try:
-        flutter_project = detect_flutter_project(Path(root))
-    except (OSError, ValueError):
+    if detect_flutter_project is not None:
+        try:
+            flutter_project = detect_flutter_project(Path(root))
+        except (OSError, ValueError):
+            flutter_project = None
+    else:
         flutter_project = None
     if flutter_project is not None:
         grouped["flutter"].update(flutter_candidates)
@@ -779,16 +845,34 @@ def _group_paths_by_framework(paths: Iterable[str], *, root: str) -> Tuple[Dict[
         grouped["flutter"].update(strong)
         evidence["flutter"] = [f"{path}:strong-candidate" for path in sorted(strong)]
 
-    from tools.aspnet_core.detector import AspNetCoreDetector, is_strong_deleted_candidate as is_core_deleted
-    from tools.aspnet_framework.detector import (
-        AspNetFrameworkDetector,
-        is_strong_deleted_candidate as is_framework_deleted,
-    )
+    # Phase-08 cutover: the aspnet detector modules were deleted with the
+    # Python analyzer plane; missing modules route on strong-candidate names.
+    aspnet_detectors = {}
+    for framework, module_name, class_name in (
+        ("aspnet_framework", "tools.aspnet_framework.detector", "AspNetFrameworkDetector"),
+        ("aspnet_core", "tools.aspnet_core.detector", "AspNetCoreDetector"),
+    ):
+        detector_cls = _optional_detector_class(module_name, class_name)
+        if detector_cls is None:
+            continue
+        deleted_candidate = _optional_detector_class(
+            module_name, "is_strong_deleted_candidate"
+        )
+        aspnet_detectors[framework] = (detector_cls(root), deleted_candidate)
 
-    aspnet_detectors = {
-        "aspnet_framework": (AspNetFrameworkDetector(root), is_framework_deleted),
-        "aspnet_core": (AspNetCoreDetector(root), is_core_deleted),
-    }
+    for framework in ("aspnet_framework", "aspnet_core"):
+        if framework in aspnet_detectors:
+            continue
+        _aspnet_strong_names = {"web.config", "global.asax", "startup.cs", "program.cs"}
+        candidates = {path for path in normalized_paths if _is_framework_candidate(framework, path)}
+        strong = {
+            path for path in candidates
+            if os.path.basename(path).lower() in _aspnet_strong_names
+            or (path.endswith(".csproj") and os.path.isfile(os.path.join(root, path)))
+        }
+        grouped[framework].update(strong)
+        evidence[framework] = [f"{path}:strong-candidate" for path in sorted(strong)]
+
     for framework, (detector, deleted_candidate) in aspnet_detectors.items():
         candidates = {path for path in normalized_paths if _is_framework_candidate(framework, path)}
         modules = detector.discover_modules()

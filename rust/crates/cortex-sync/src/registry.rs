@@ -372,6 +372,12 @@ pub fn retire_hint(parser: &str) -> String {
     )
 }
 
+/// The orchestrator's own baked build commit — the expected stamp in the
+/// phase-08 `--version` build-commit handshake with analyzer children.
+pub fn retired_at_commit() -> &'static str {
+    RETIRED_AT_COMMIT
+}
+
 /// `_rust_analyzer_binary` — phase-08 flip matrix (post-cutover):
 ///
 /// | `CORTEX_RUST_ANALYZER` | mapped parser | unmapped |

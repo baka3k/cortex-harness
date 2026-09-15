@@ -1,7 +1,9 @@
-//! Build script that bakes the source commit short SHA into the binary so the
-//! registry can surface it in retire errors and verify it in the analyzer
-//! build-commit handshake. Resolution order:
-//! 1. `CORTEX_BUILD_COMMIT` env var (CI / cutover commits inject this).
+//! Build script that bakes the source commit short SHA into the framework so
+//! every analyzer binary can answer `--version` with it — the orchestrator
+//! (`cortex-sync`) compares this against its own stamp before spawning a
+//! child (phase-08 build-commit handshake, red-team F5 stale binary).
+//! Resolution order mirrors `cortex-sync/build.rs`:
+//! 1. `CORTEX_BUILD_COMMIT` env var (CI / cutover builds inject this).
 //! 2. `git rev-parse --short HEAD` when the build runs inside the repo.
 //! 3. Literal "unknown" when neither is available.
 

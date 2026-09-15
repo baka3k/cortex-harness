@@ -24,7 +24,7 @@ use kotlin_analyzer::KotlinExtraArgs;
 
 /// CLI đầy đủ: contract chung (AnalyzerArgs) flatten + cờ kotlin-specific.
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct KotlinArgs {
     #[command(flatten)]
     common: AnalyzerArgs,

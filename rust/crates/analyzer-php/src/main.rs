@@ -26,7 +26,7 @@ use php_analyzer::PhpAnalyzer;
 /// theo contract, phần không tác động graph-plane chỉ giữ để orchestrator gọi
 /// được 2 backend thay thế cho nhau.
 #[derive(Debug, Clone, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct PhpArgs {
     #[command(flatten)]
     base: AnalyzerArgs,

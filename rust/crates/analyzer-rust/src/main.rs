@@ -60,7 +60,7 @@ pub struct RustExtraArgs {
 }
 
 #[derive(Debug, ClapParser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct RustAnalyzerArgs {
     #[command(flatten)]
     common: AnalyzerArgs,

@@ -23,6 +23,9 @@ use python_analyzer::PythonAnalyzer;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    if cortex_analyzer_framework::print_version_probe("analyzer-python", &argv) {
+        return;
+    }
     let args = AnalyzerArgs::parse_from(&argv);
     let code = run(&args);
     std::process::exit(code);

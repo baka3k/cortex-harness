@@ -30,7 +30,7 @@ use analyzer_cplus::{analyzer, CplusExtraArgs};
 
 /// CLI đầy đủ: contract chung (AnalyzerArgs) flatten + cờ cplus-specific.
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct CplusCli {
     #[command(flatten)]
     common: AnalyzerArgs,

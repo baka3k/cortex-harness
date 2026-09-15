@@ -87,7 +87,7 @@ pub struct CsharpExtraArgs {
 }
 
 #[derive(Debug, ClapParser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct CsharpAnalyzerArgs {
     #[command(flatten)]
     common: AnalyzerArgs,

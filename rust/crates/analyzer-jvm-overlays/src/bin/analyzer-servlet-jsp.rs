@@ -24,7 +24,7 @@ use analyzer_jvm_overlays::servlet_jsp::pipeline::run_servlet_jsp_analysis;
 use analyzer_jvm_overlays::servlet_jsp::writer::ServletJspFactWriter;
 
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct ServletJspArgs {
     #[arg(long, required = true)]
     root: String,

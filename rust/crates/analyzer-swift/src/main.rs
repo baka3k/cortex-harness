@@ -60,7 +60,7 @@ pub struct SwiftExtraArgs {
 }
 
 #[derive(Debug, ClapParser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct SwiftAnalyzerArgs {
     #[command(flatten)]
     common: AnalyzerArgs,

@@ -233,11 +233,14 @@ pub fn purge(journal_path: &str, run_id: &str, project_id: &str, root: &str) -> 
         .join("incremental_sync_locks")
         .join(format!("{scope_id}.lock"));
     let mut ownership = ProjectRunLock::new(lock_path, &scope_id);
-    if let Err(_) = ownership.acquire(
-        &format!("journal purge project_id={project_id}"),
-        &canonical_root_path,
-        0.0,
-    ) {
+    if ownership
+        .acquire(
+            &format!("journal purge project_id={project_id}"),
+            &canonical_root_path,
+            0.0,
+        )
+        .is_err()
+    {
         return Err(
             "Error: journal scope is active; wait for sync/consumer completion".to_string(),
         );

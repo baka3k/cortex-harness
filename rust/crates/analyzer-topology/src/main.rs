@@ -124,6 +124,11 @@ pub struct TopologyArgs {
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+    // Phase-08 build-commit handshake: probe before parse — `disable_help_flag`
+    // parity keeps clap from owning `--version` here.
+    if cortex_analyzer_framework::print_version_probe("analyzer-topology", &argv) {
+        return;
+    }
     let args = match TopologyArgs::try_parse_from(&argv) {
         Ok(args) => args,
         Err(error) => {

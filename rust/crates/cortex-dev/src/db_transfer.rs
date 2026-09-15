@@ -285,7 +285,7 @@ fn format_count(n: u64) -> String {
     let text = n.to_string();
     let mut out = String::new();
     for (i, c) in text.chars().enumerate() {
-        if i > 0 && (text.len() - i) % 3 == 0 {
+        if i > 0 && (text.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -494,11 +494,11 @@ pub fn import_project(project_dir: &Path, archive: &Path, overwrite: bool, role:
             let src_qdrant = staging.join("qdrant").join(lane_name);
             if src_qdrant.exists() {
                 let backup = backup_if_needed(qdrant_dest, &resolved.backups_path, overwrite)?;
-                if let Some(backup) = backup {
-                    if restored["backup"].is_null() {
-                        restored["backup"] =
-                            json!(backup.parent().map(|p| p.to_string_lossy().to_string()));
-                    }
+                if let Some(backup) = backup
+                    && restored["backup"].is_null()
+                {
+                    restored["backup"] =
+                        json!(backup.parent().map(|p| p.to_string_lossy().to_string()));
                 }
                 if qdrant_dest.exists() {
                     std::fs::remove_dir_all(qdrant_dest).map_err(|e| DbTransferError(e.to_string()))?;
@@ -509,11 +509,11 @@ pub fn import_project(project_dir: &Path, archive: &Path, overwrite: bool, role:
             let src_falkor = staging.join("falkordb").join(format!("{lane_name}.rdb"));
             if src_falkor.exists() {
                 let backup = backup_if_needed(falkordb_dest, &resolved.backups_path, overwrite)?;
-                if let Some(backup) = backup {
-                    if restored["backup"].is_null() {
-                        restored["backup"] =
-                            json!(backup.parent().map(|p| p.to_string_lossy().to_string()));
-                    }
+                if let Some(backup) = backup
+                    && restored["backup"].is_null()
+                {
+                    restored["backup"] =
+                        json!(backup.parent().map(|p| p.to_string_lossy().to_string()));
                 }
                 if falkordb_dest.exists() {
                     std::fs::remove_file(falkordb_dest).map_err(|e| DbTransferError(e.to_string()))?;

@@ -278,7 +278,7 @@ pub fn stop_sync_processes(
     }
     if !remaining.is_empty() {
         let kill_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs_f64(timeout.min(2.0).max(0.0));
+            std::time::Instant::now() + std::time::Duration::from_secs_f64(if timeout.is_nan() { 2.0 } else { timeout.clamp(0.0, 2.0) });
         while std::time::Instant::now() < kill_deadline {
             remaining.retain(|pid| pid_alive(*pid));
             if remaining.is_empty() {
@@ -395,7 +395,7 @@ pub fn stop_embedded_falkordb(db_path: &Path, timeout: f64) -> Vec<i64> {
     }
     if !remaining.is_empty() {
         let kill_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs_f64(timeout.min(2.0).max(0.0));
+            std::time::Instant::now() + std::time::Duration::from_secs_f64(if timeout.is_nan() { 2.0 } else { timeout.clamp(0.0, 2.0) });
         while std::time::Instant::now() < kill_deadline {
             remaining.retain(|pid| pid_alive(*pid));
             if remaining.is_empty() {
@@ -409,10 +409,10 @@ pub fn stop_embedded_falkordb(db_path: &Path, timeout: f64) -> Vec<i64> {
 
 fn expand_home(path: &Path) -> PathBuf {
     let text = path.to_string_lossy().to_string();
-    if let Some(rest) = text.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+    if let Some(rest) = text.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return PathBuf::from(home).join(rest);
     }
     path.to_path_buf()
 }

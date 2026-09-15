@@ -1,6 +1,6 @@
 ---
 title: "Flutter Analyzer Parser Tool Plan"
-status: in_progress
+status: reference-only  # phase-08 (260915-analyzer-layer-rust-cutover) đã xoá script analyzer Python — kế hoạch giữ lại làm tài liệu tham khảo thiết kế; triển khai thực tế là analyzer-dart/analyzer-flutter Rust (phase-02)
 created: 2026-07-14
 mode: hi-plan --fast
 source: /Users/account/Downloads/Flutter_Analyzer_Design_Spec.md

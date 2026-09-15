@@ -170,12 +170,7 @@ fn download_wheel(version: &str) -> Result<PathBuf, String> {
     let (url, expected_sha256) = pick_asset(&payload)?;
     let staging = cache_root().join(format!("download-{version}"));
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    let wheel_path = staging.join(
-        url.rsplit('/')
-            .next()
-            .unwrap_or("onnxruntime.whl")
-            .to_string(),
-    );
+    let wheel_path = staging.join(url.rsplit('/').next().unwrap_or("onnxruntime.whl"));
     if !wheel_path.is_file() {
         run_ok(&[
             "curl".to_string(),
@@ -281,30 +276,30 @@ fn print_path_of(target: &Path, stable: &Path) {
 /// Entry: `dev ensure-ort [--force] [--print-path]`.
 pub fn run(force: bool, print_path: bool) -> i32 {
     // 1) explicit dylib wins.
-    if let Ok(explicit) = std::env::var("ORT_DYLIB_PATH") {
-        if Path::new(&explicit).is_file() {
-            if print_path {
-                println!("{explicit}");
-            } else {
-                println!("[ort] ORT_DYLIB_PATH set: {explicit}");
-            }
-            return 0;
+    if let Ok(explicit) = std::env::var("ORT_DYLIB_PATH")
+        && Path::new(&explicit).is_file()
+    {
+        if print_path {
+            println!("{explicit}");
+        } else {
+            println!("[ort] ORT_DYLIB_PATH set: {explicit}");
         }
+        return 0;
     }
 
     // 2) already provisioned cache.
     let target_dir = cache_root().join(PINNED_ORT_VERSION);
-    if !force {
-        if let Some(existing) = find_dylib(&target_dir) {
-            let stable = stable_name_for(&existing);
-            let stable_path = target_dir.join(&stable);
-            if print_path {
-                print_path_of(&stable_path, &existing);
-            } else {
-                println!("[ort] already provisioned: {}", existing.display());
-            }
-            return 0;
+    if !force
+        && let Some(existing) = find_dylib(&target_dir)
+    {
+        let stable = stable_name_for(&existing);
+        let stable_path = target_dir.join(&stable);
+        if print_path {
+            print_path_of(&stable_path, &existing);
+        } else {
+            println!("[ort] already provisioned: {}", existing.display());
         }
+        return 0;
     }
 
     // 3) copy from the venv wheel; 4) download the pinned PyPI wheel.

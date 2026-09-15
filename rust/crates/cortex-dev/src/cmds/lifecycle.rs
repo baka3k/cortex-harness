@@ -348,16 +348,16 @@ fn resolve_active_storage() -> Result<ResolvedStorage, String> {
             if value.is_empty() {
                 continue;
             }
-            if let Some(previous) = flat.get(key) {
-                if previous != &value {
-                    let shown = config_path
-                        .as_ref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default();
-                    return Err(format!(
-                        "Active config {shown} has conflicting {key} values in code/doc sections"
-                    ));
-                }
+            if let Some(previous) = flat.get(key)
+                && previous != &value
+            {
+                let shown = config_path
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Active config {shown} has conflicting {key} values in code/doc sections"
+                ));
             }
             flat.insert(key.to_string(), value);
         }
@@ -684,11 +684,11 @@ fn hasher_update(hasher: &mut sha2::Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-fn collect_files(base: &Path, root: &Path, out: &mut Vec<PathBuf>) {
+fn collect_files(base: &Path, _root: &Path, out: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(base).into_iter().flatten().flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_files(&path, root, out);
+            collect_files(&path, _root, out);
         } else {
             out.push(path);
         }

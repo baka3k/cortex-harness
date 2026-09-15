@@ -24,7 +24,7 @@ use danalyzer::DelphiExtraArgs;
 
 /// CLI đầy đủ: contract chung (AnalyzerArgs) flatten + cờ delphi-specific.
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct DelphiArgs {
     #[command(flatten)]
     base: cortex_analyzer_framework::cli::AnalyzerArgs,

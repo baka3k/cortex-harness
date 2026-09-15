@@ -34,6 +34,7 @@ use crate::pipeline::run_perl_analysis;
 #[command(
     no_binary_name = true,
     name = "analyzer-perl",
+    version = cortex_analyzer_framework::BUILD_COMMIT,
     about = "Perl 5 Tree-sitter structural analyzer"
 )]
 struct PerlArgs {
