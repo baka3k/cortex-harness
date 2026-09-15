@@ -10,21 +10,24 @@
 //! - [`record`] — `MessageRecord` + `stable_message_id` + `hash_vector`.
 //! - [`artifact`] — `write_message_artifact` (atomic JSON write).
 //! - [`extensions`] — parser → file extension map.
+//! - [`graph`] — graph emission `Message` + `MessageEndpoint` qua
+//!   `cortex_graph_writer::store::GraphStore` (byte-parity với
+//!   `upsert_messages_to_neo4j` / cleanup queries của Python).
 //!
 //! ## Ownership
 //!
 //! Plan phase-05 chuyển message-scan từ Python children sang native code ở
 //! tầng orchestrator. Lane này chạy **sau** primary parser phase, đọc trực
 //! tiếp source files (không qua artifact). Graph upsert (`Message` +
-//! `MessageEndpoint` nodes/rels) và Qdrant vector upsert sẽ land ở phase-06
-//! cùng cortex-embed ownership; phase-05 freeze contract cho các entry point
-//! (`upsert_messages_to_graph`, `upsert_messages_to_qdrant` — sẽ implement
-//! khi phase-06 chốt ownership).
+//! `MessageEndpoint` nodes/rels) chạy native qua [`graph`]. Qdrant vector
+//! upsert thuộc ownership của phase-06 (cortex-embed) — quyết định được ghi
+//! trong report `phase05-message-scan-parity.md` phần "Ownership resolution".
 
 pub mod artifact;
 pub mod collect;
 pub mod detectors;
 pub mod extensions;
+pub mod graph;
 pub mod record;
 
 use std::path::Path;
@@ -62,7 +65,11 @@ pub fn safe_segment(value: &str) -> String {
 pub use artifact::write_message_artifact;
 pub use collect::collect_messages_for_parser;
 pub use detectors::{get_detector, has_specific_detector, supported_parsers};
-pub use extensions::{file_matches_parser, parser_extensions};
+pub use extensions::{file_matches_parser, message_language, parser_extensions};
+pub use graph::{
+    cleanup_all_message_nodes, cleanup_message_nodes, message_endpoint_id,
+    upsert_messages_to_graph,
+};
 pub use record::{
     stable_message_id, MessageRecord, DEFAULT_MESSAGE_VECTOR_SIZE, MESSAGE_SCHEMA_VERSION,
 };
