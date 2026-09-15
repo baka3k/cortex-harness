@@ -17,13 +17,15 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 pub const CSHARP_ROSLYN_PROTOCOL_VERSION: &str = "csharp-v1";
-pub const CSHARP_ROSLYN_MODEL_VERSION: &str = "csharp-primary-v1";
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
+const CSHARP_ROSLYN_MODEL_VERSION: &str = "csharp-primary-v1";
 pub const CSHARP_ROSLYN_CACHE_VERSION: &str = "csharp-v2026-09-10-1";
 
 pub const DEFAULT_WORKSPACE_TIMEOUT_MS: i64 = 120_000;
 pub const DEFAULT_FILE_TIMEOUT_MS: i64 = 60_000;
 pub const DEFAULT_MAX_FILE_BYTES: i64 = 2 * 1024 * 1024;
-pub const DEFAULT_TIMEOUT_SEC: f64 = 600.0;
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
+const DEFAULT_TIMEOUT_SEC: f64 = 600.0;
 
 /// `DOTNET_ROLL_FORWARD` — worker target framework có thể mới hơn runtime
 /// đang cài; aspnet parity đã chứng minh env này cần thiết.

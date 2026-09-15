@@ -68,10 +68,7 @@ impl FunctionIndex {
             Some(arity) if self.by_name_arity.contains_key(&(callee_name.to_string(), arity)) => {
                 &self.by_name_arity[&(callee_name.to_string(), arity)]
             }
-            _ => match self.by_name.get(callee_name) {
-                Some(entries) => entries,
-                None => return None,
-            },
+            _ => self.by_name.get(callee_name)?,
         };
         match candidates {
             [] => None,
@@ -549,7 +546,8 @@ pub fn graph_writes_disabled() -> bool {
 }
 
 /// build_graph_rows cần root string như Python `all_projects[0]["root"]`.
-pub fn root_string(root: &Path) -> String {
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
+fn root_string(root: &Path) -> String {
     root.to_string_lossy().to_string()
 }
 
