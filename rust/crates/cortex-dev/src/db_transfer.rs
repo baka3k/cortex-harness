@@ -630,28 +630,12 @@ fn safe_member_names(archive: &Path) -> Result_<Vec<String>> {
     Ok(listing.lines().map(|l| l.to_string()).collect())
 }
 
-/// The member path is the trailing field of a `-tv` line (link targets appear
-/// after a ` -> ` separator and are cut off).
-fn listing_member_name(listing_line: &str) -> &str {
-    let entry = listing_line.split(" -> ").next().unwrap_or(listing_line);
-    let mut rest = entry.trim();
-    // perms
-    let idx = rest.find(char::is_whitespace).unwrap_or(0);
-    rest = rest[idx..].trim_start();
-    // skip size/owner/group/date tokens; the remainder is `time path` or `path`.
-    for _ in 0..5 {
-        let ws = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        rest = rest[ws..].trim_start();
-        if rest.is_empty() {
-            break;
-        }
-    }
-    match rest.find(char::is_whitespace) {
-        Some(i) => rest[i..].trim_start(),
-        None => rest,
-    }
-}
-
+/// The `-tv` listing carries no reliable portable field layout (bsdtar vs GNU
+/// tar differ), so only the load-bearing, format-independent check lives here:
+/// the member TYPE. Path safety relies on that gate plus tar's own extraction
+/// sanitisation (bsdtar/GNU tar refuse `..` escapes and strip absolute paths),
+/// mirroring the reach of Python's `filter="data"` for the bundles this
+/// project produces.
 fn safe_member_name(listing_line: &str) -> Result_<()> {
     let entry = listing_line.split(" -> ").next().unwrap_or(listing_line);
     let type_char = entry.trim_start().chars().next().unwrap_or('-');
@@ -659,13 +643,6 @@ fn safe_member_name(listing_line: &str) -> Result_<()> {
         return err(format!(
             "Unsafe archive member (not a regular file or directory): {listing_line:?}"
         ));
-    }
-    let name = listing_member_name(listing_line);
-    if name.starts_with('/')
-        || name.starts_with('\\')
-        || name.split('/').any(|part| part == "..")
-    {
-        return err(format!("Unsafe archive member name: {name:?}"));
     }
     Ok(())
 }

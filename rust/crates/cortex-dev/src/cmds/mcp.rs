@@ -486,14 +486,9 @@ pub fn mcp_start_one(
         for key in crate::env::REMOTE_STORAGE_KEYS {
             env.remove(key);
         }
-        let mut has_uri = env
-            .get("FALKORDB_URI")
-            .map(|v| !v.trim().is_empty())
-            .unwrap_or(false)
-            || env
-                .get("FALKORDB_URL")
-                .map(|v| !v.trim().is_empty())
-                .unwrap_or(false);
+        // dev.py checks the URI only among the EXPLICIT remote keys handed to
+        // the launcher (inherited ones were already stripped above).
+        let mut has_uri = false;
         for (key, value) in explicit_remote {
             if key == "FALKORDB_URI" || key == "FALKORDB_URL" {
                 has_uri = true;
