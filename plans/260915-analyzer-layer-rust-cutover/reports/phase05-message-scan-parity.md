@@ -1,8 +1,8 @@
 # Phase 05 — Message-scan native parity report
 
 **Plan:** `260915-analyzer-layer-rust-cutover` · phase-05 · red-team Critical #2
-**Status:** PASS (collect + artifact parity) · graph / vector upsert deferred to phase-06
-**Date:** 2026-09-15
+**Status:** PASS (collect + artifact + graph-emission parity) · message vectors deferred to phase-06 (ownership resolved, see "Ownership resolution")
+**Date:** 2026-09-15 (updated: graph emission leg)
 
 ## Vấn đề gốc
 
@@ -21,10 +21,10 @@ Port native trong plan này — flip chỉ xảy ra khi parity pass.
 | `_safe_segment` + extensions map | **Ported** | `rust/crates/cortex-sync/src/message_scan/{mod,extensions}.rs` |
 | `collect_messages_for_parser` (cross-parser scanner) | **Ported** | `rust/crates/cortex-sync/src/message_scan/collect.rs` |
 | `write_message_artifact` (atomic JSON) | **Ported** | `rust/crates/cortex-sync/src/message_scan/artifact.rs` |
+| Graph upsert (`Message` + `MessageEndpoint` MERGE + `File`-`CONTAINS` + cleanup) | **Ported** (graph leg) | `rust/crates/cortex-sync/src/message_scan/graph.rs` |
 | Orchestrator native lane (`run_native_message_scan_lane`) | **Wired** | `rust/crates/cortex-sync/src/orchestrator.rs:2640` |
 | Public library surface (choí integration tests + future embed lane) | **Wired** | `rust/crates/cortex-sync/src/lib.rs` |
-| Graph upsert (`Message` + `MessageEndpoint` MERGE) | **Deferred** | phase-06 (cortex-embed ownership) |
-| Qdrant vector upsert | **Deferred** | phase-06 (cortex-embed ownership) |
+| Qdrant vector upsert | **Deferred** | phase-06 (cortex-embed ownership — xem "Ownership resolution") |
 
 ## Parity gate
 
@@ -64,6 +64,46 @@ PARITY PASS — all 17 records match Python baseline byte-for-byte
 Python: 17 records, Rust: 17 records
 ```
 
+### Graph emission parity leg (Message/MessageEndpoint trên FalkorDB)
+
+**Tool:** `scripts/rust_parity/analyzer_parity_message_scan_graph.py` (FalkorDB
+127.0.0.1:6379, graph `p05msg_py` vs `p05msg_rs`, dump/diff qua
+`dual_write_diff.dump_graph` + mask volatile/`_start_id`/`_end_id`).
+
+- **Baseline (old path):** Python orchestrator chạy graph pass, rồi Python children
+  (java/ts/python) được gọi trực tiếp với `--enable-message-scan` — đúng cách
+  `incremental_sync.py` wire message flags cho embedding children (`_build_analyzer_cmd`)
+- **Candidate:** rust orchestrator `cortex-sync` với `CORTEX_RUST_ANALYZER=rust` — rust
+  children viết code graph, native lane viết message graph
+- **Leg 1 (full @ commit 1)** + **Leg 2 (incremental sau commit 2** — rename notify,
+  thêm publish/fanout/broadcast, exercised stale-message cleanup**)**
+
+Kết quả:
+
+```
+[gate graph_diff_full] message_plane_pass=True whole_graph_diff_total=18
+  py_message_plane={'message_nodes': 7, 'endpoint_nodes': 4, 'sends_message': 7, 'targets_endpoint': 5}
+  rs_message_plane={'message_nodes': 7, 'endpoint_nodes': 4, 'sends_message': 7, 'targets_endpoint': 5}
+[gate graph_diff_inc]  message_plane_pass=True whole_graph_diff_total=20
+  py_message_plane={'message_nodes': 20, 'endpoint_nodes': 13, 'sends_message': 20, 'targets_endpoint': 17}
+  rs_message_plane={'message_nodes': 20, 'endpoint_nodes': 13, 'sends_message': 20, 'targets_endpoint': 17}
+[gate message_plane_exercised] pass=True
+[gates] all_pass=True
+```
+
+**PASS — message-plane diff = 0 (nodes + rels, mọi property ngoài mask) trên cả 2 legs.**
+Baseline và candidate cho cùng node identity (msg::/msg_endpoint:: ids), cùng property
+values (language="typescript", repo, confidence float, project_id_normalized), cùng rel
+shape (CONTAINS/SENDS_MESSAGE/TARGETS_ENDPOINT) — gồm cả conservation: messages stale
+của file đổi bị cleanup đúng, không duplicate/stale sót.
+
+Residual `whole_graph_diff_total` (18/20) nằm ở **code-graph plane** (Function/Type/File
+nodes — semantic summary/note text giữa python children vs rust children trên corpus
+message này) — thuộc parity scope phase-04 (children), không phải message-scan; được
+script report dạng diagnostic, không gate.
+
+Message vectors KHÔNG gate ở đây — ownership phase-06 (xem "Ownership resolution").
+
 ## Review cycle history (reviewer fix log)
 
 Reviewer role (mandatory cho `--full` mode) flag 6 Critical + 3 High; tất cả đã xử lý trong
@@ -87,8 +127,8 @@ Final score sau fix: parity test PASS, all unit tests PASS, 0 Critical remaining
 ### Test surface
 
 ```
-running 27 tests   (unit tests in src/message_scan/*)
-test result: ok. 27 passed; 0 failed
+running 35 tests   (unit tests in src/message_scan/*)
+test result: ok. 35 passed; 0 failed
 
 running 4 tests    (integration tests/message_scan_parity.rs)
 test empty_root_returns_empty_records ... ok
@@ -151,27 +191,109 @@ if args.sync_messages && !args.no_graph && run_graph_pass {
 ```
 
 Behavior:
-- Chạy cho mọi parser ∈ `registry::message_enabled_parsers()` (17 parsers)
-- Mỗi parser: collect_messages_for_parser + write_message_artifact
-- Output: `summary["native_message_scan"]` chứa `{parsers: [...], total_messages, output_dir, qdrant_collection, graph_upsert: "deferred-phase-06", vector_upsert: "deferred-phase-06"}`
-- Incremental: skip parser nếu không có file thay đổi
+- Chạy cho mọi parser ∈ `registry::message_enabled_parsers()` (17 parsers), duyệt theo
+  `PARSER_ITERATION_ORDER` (thứ tự launch children của Python orchestrator — quan trọng
+  vì full-scan message plane là order-sensitive, xem "Graph emission leg")
+- Mỗi parser: graph cleanup → collect_messages_for_parser → graph upsert → write_message_artifact
+  (đúng thứ tự pipeline Python `run_message_scan_pipeline`)
+- Output: `summary["native_message_scan"]` chứa `{parsers: [...], total_messages,
+  total_graph_upserted, output_dir, qdrant_collection, graph_upsert: "native-falkordb",
+  vector_upsert: "deferred-phase-06"}`; mỗi parser entry có `graph_upserted`,
+  `deleted_messages`, `deleted_endpoints`
+- Incremental (`!full_scan || recovery_full_scan` — cùng effective signal của children):
+  cleanup `Message` theo changed ∪ deleted paths; full: `cleanup_all` toàn project
+- Parsers không có file scan/deleted bị skip (mirror điều kiện launch children của
+  Python — children không chạy thì message pipeline + cleanup_all của parser đó cũng
+  không chạy)
 - Failures: aggregate đầu tiên được raise là error (mirror các phase khác)
 
-## Deferred to phase-06 (ownership)
+## Graph emission leg (graph half — landed)
+
+Port `upsert_messages_to_neo4j` + `cleanup_message_nodes_neo4j` +
+`cleanup_all_message_nodes_neo4j` sang `rust/crates/cortex-sync/src/message_scan/graph.rs`,
+thực thi qua `cortex_graph_writer::store::GraphStore` (FalkorDbStore) — **cùng write path**
+với language/topology writer, không có write path riêng:
+
+- Query text giữ nguyên từng chữ Python (byte-parity; `datetime()` được rewrite thành
+  `$__falkordb_now` ISO-8601 bởi store, giống `_prepare_falkordb_query` của Python)
+- `prepare_project_scope_parameters` inject đệ quy `project_id_normalized` vào từng row
+  `$rows` ở CẢ HAI backend (falkordb-py và FalkorDbStore cùng hành vi) — thuộc tính
+  `project_id_normalized` trên `Message`/`MessageEndpoint` khớp wire
+- `confidence` được round-recover qua f64 (`(f32 as f64 * 1e4).round() / 1e4`) để param
+  float wire-identical với Python `round(confidence, 4)` (f32→f64 thô của 0.95 là
+  0.949999988079071 ≠ 0.95)
+- Node identity: `Message {id: msg::<sha1[:24]>}`, `MessageEndpoint {id:
+  msg_endpoint::<project_id>::<sha1(sender|receiver)[:16]>` (sender rỗng → `"unknown"`,
+  receiver rỗng → không có receiver endpoint); rels: `(f:File)-[:CONTAINS]->(m)` khi File
+  tồn tại cùng project, `(s)-[:SENDS_MESSAGE]->(m)`, `(m)-[:TARGETS_ENDPOINT]->(r)`
+- Batch 500 rows/query như Python
+
+### Ngữ nghĩa order-sensitive của full scan (đã mirror đúng)
+
+Pipeline Python chạy cleanup_all **per parser** (last-parser-wins trong 1 full run) và
+Python orchestrator chỉ launch children có file scan/deleted. Native lane mirror cả hai:
+duyệt `PARSER_ITERATION_ORDER` filter message-enabled + skip parser không có file —
+trên corpus java,ts,python: java → python → ts, graph cuối cùng chỉ còn messages của `ts`.
+
+### Language + repo parity
+
+- `Message.language`: children truyền default language name riêng (ts child →
+  `"typescript"`, js → `"javascript"`, android → `"android-kotlin"`, còn lại → tên parser)
+  — `message_scan::message_language()` mirror mapping này
+- `Message.repo`: Python `os.path.abspath(args.root)` trên **raw** `--root` (không resolve
+  symlink — `/var/...` giữ nguyên, không thành `/private/var/...`); lane dùng
+  `util::absolute(args.root)` trên raw string, không phải `root_str` đã realpath
+
+## Ownership resolution (message vectors — final)
+
+**Quyết định (chốt cho phase-06):** message **vector** lane (Qdrant upsert + cleanup +
+point-id/redaction/hash_vector/wall-time/provenance gates) thuộc ownership của
+**phase-06 — cortex-embed embed engine**. Graph lane (`Message`/`MessageEndpoint`) đã
+land native ở phase-05 này (xem "Graph emission leg") — không còn nằm trong deferred.
+
+| Lane | Owner | Trạng thái |
+|---|---|---|
+| Graph upsert `Message` + `MessageEndpoint` + `File`-`CONTAINS` | phase-05 (native lane) | **DONE** — `message_scan/graph.rs` |
+| Cleanup `Message` theo file path + prune endpoint mồ côi | phase-05 (native lane) | **DONE** — `message_scan/graph.rs` |
+| Qdrant vector upsert (`upsert_messages_to_qdrant`, `_hash_vector`, point-id `uuid5(NAMESPACE_URL, record.id)`) | **phase-06 (cortex-embed)** | Deferred — ownership đã chốt |
+| Qdrant cleanup theo file/project (`cleanup_qdrant_for_files`, `_qdrant_delete_by_project`) | **phase-06 (cortex-embed)** | Deferred — đi cùng vector upsert |
+| Message vector parity gate (cosine/counts theo ngưỡng phase-06) | **phase-06 component gates** | Move-out khỏi phase-05 — phase-05.md sanction rõ option này |
+
+Lý do chốt cortex-embed (thay vì Python embed sidecar tạm):
+- phase-05 đã freeze contract đủ chắc: `MessageRecord` + `hash_vector` + payload shape +
+  `PROJECT_ID_NORMALIZED_FIELD` đã ported + tested; cortex-embed chỉ cần cắm embed_texts
+- Phase-05.md thiết kế nói rõ: "nếu phase-06 pass trước thì message vectors dùng luôn
+  cortex-embed … ownership GHI RÕ (red-team A7)" — đây chính là ghi rõ đó
+- Giữ Python embed sidecar tạm cho message vectors sẽ kéo thêm một lane pin-cũ qua
+  phase-06/08, trong khi children message pipeline (graph half) không còn cần thiết sau
+  flip — tốn chi phí retire mà không gate thêm gì
+
+Tạm thời Python children tiếp tục chạy message **vector** plane qua embedding pass với
+`force_python=true` (đã có ở `orchestrator.rs:1925`); graph half phía Python children
+cũng còn chạy trên embedding pass (orchestrator chỉ wire `--enable-message-scan` cho
+embedding children — `incremental_sync.py` `_build_analyzer_cmd` tại vector loop) cho tới
+khi phase-06 ship vector lane và phase-08 retired-error đóng Python path.
+
+## Deferred to phase-06 (history — trước khi graph leg landed)
+
+> Cập nhật: 2 hàng đầu dưới đây đã DONE trong phase-05 (bảng "Ownership resolution");
+> giữ lại để lưu bối cảnh review ban đầu.
 
 | Lane | Owner | Why deferred |
 |---|---|---|
-| Graph upsert `Message` + `MessageEndpoint` MERGE | cortex-embed (phase-06) | Cần `cortex-graph-writer` Message/MessageEndpoint label support (không có sẵn) + dialect-specific Cypher; phase-06 chốt ownership với cortex-embed |
+| Graph upsert `Message` + `MessageEndpoint` MERGE | cortex-embed (phase-06) | ~~Cần `cortex-graph-writer` Message/MessageEndpoint label support~~ — đã solve: schema đã có label + store write path dùng được chung |
+| Cleanup `Message` nodes by file path | cortex-embed (phase-06) | ~~Phụ thuộc graph upsert~~ — đã land cùng graph leg |
 | Qdrant vector upsert | cortex-embed (phase-06) | Cần `cortex-embed` để ghi đúng embed (component gates: point-id uuid5, redaction, hash_vector, wall-time, provenance) — phase-05 chỉ pin artifact contract |
-| Cleanup `Message` nodes by file path | cortex-embed (phase-06) | Phụ thuộc graph upsert + Qdrant cleanup contract |
-
-Tạm thời Python children tiếp tục chạy message-scan plane qua embedding pass với `force_python=true` (đã có ở `orchestrator.rs:1925`). Phase-08 retired-error sẽ đóng Python path này sau dogfood.
 
 ## Exit criteria
 
 - [x] Parity PASS — collect + artifact byte-exact với Python baseline
+- [x] Parity PASS — graph emission leg: Message/MessageEndpoint nodes + rels diff 0
+      giữa python-children path và rust native path, full + incremental (FalkorDB)
 - [x] Message-scan flags với rust children có ý nghĩa — orchestrator native lane chạy độc lập với primary/embedding pass
-- [x] Ownership message vectors ghi rõ — graph upsert + qdrant lane deferred sang phase-06 (cortex-embed component gates)
+- [x] Ownership message vectors ghi rõ — **graph upsert + cleanup land native ở phase-05;
+      qdrant vector lane deferred sang phase-06 (cortex-embed component gates)** — xem
+      "Ownership resolution"
 - [x] Fallback path rõ ràng — nếu phase-06 FAIL, fallback end-state giữ message-enabled parsers trên Python children, plan dừng trước flip
 
 ## Files changed (this phase)
@@ -181,15 +303,17 @@ Tạm thời Python children tiếp tục chạy message-scan plane qua embeddin
 | `rust/crates/cortex-sync/Cargo.toml` | +1 dep (`once_cell`) | Lazy regex compilation |
 | `rust/crates/cortex-sync/src/lib.rs` | +14 | Public library surface |
 | `rust/crates/cortex-sync/src/main.rs` | -110 (refactored) | Re-exports via lib.rs |
-| `rust/crates/cortex-sync/src/message_scan/mod.rs` | +160 | Public API: collect, write_artifact, detectors |
+| `rust/crates/cortex-sync/src/message_scan/mod.rs` | +170 | Public API: collect, write_artifact, detectors, graph |
 | `rust/crates/cortex-sync/src/message_scan/detectors.rs` | +1.5k | 17 detector ngôn ngữ + GenericMessageDetector + helpers |
 | `rust/crates/cortex-sync/src/message_scan/record.rs` | +150 | MessageRecord + stable_message_id + hash_vector |
 | `rust/crates/cortex-sync/src/message_scan/collect.rs` | +340 | collect_messages_for_parser + walk + split_args |
 | `rust/crates/cortex-sync/src/message_scan/artifact.rs` | +140 | write_message_artifact (atomic JSON) |
-| `rust/crates/cortex-sync/src/message_scan/extensions.rs` | +35 | parser → extensions map |
-| `rust/crates/cortex-sync/src/orchestrator.rs` | +120 | run_native_message_scan_lane + wire-in |
+| `rust/crates/cortex-sync/src/message_scan/extensions.rs` | +55 | parser → extensions map + message_language() |
+| `rust/crates/cortex-sync/src/message_scan/graph.rs` | +330 (graph leg) | upsert_messages_to_graph + cleanup queries qua cortex_graph_writer store |
+| `rust/crates/cortex-sync/src/orchestrator.rs` | +230 | run_native_message_scan_lane (cleanup → collect → graph upsert → artifact) + wire-in |
 | `rust/crates/cortex-sync/tests/message_scan_parity.rs` | +150 | End-to-end parity fixture test |
 | `rust/crates/cortex-sync/tests/fixtures/message_scan/expected_records.json` | +150 | Golden snapshot (17 records) |
+| `scripts/rust_parity/analyzer_parity_message_scan_graph.py` | +430 (graph leg) | Parity leg: graph diff trên Message/MessageEndpoint (full + incremental) |
 
 ## Repro commands
 
@@ -202,6 +326,10 @@ cargo test -p cortex-sync --lib
 
 # Integration tests (including parity)
 cargo test -p cortex-sync --test message_scan_parity
+
+# Graph emission parity leg (FalkorDB 127.0.0.1:6379 phải UP)
+cargo build --release -p cortex-sync -p analyzer-java -p analyzer-ts -p analyzer-python
+.venv/bin/python scripts/rust_parity/analyzer_parity_message_scan_graph.py
 
 # Cross-check với Python baseline
 PYTHONPATH=code-tiny .venv/bin/python -c "

@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "dependencies": {
     "tests/fixtures/cobol-application/common.cpy": [
       "tests/fixtures/cobol-application/nested.copy"
@@ -15,11 +16,13 @@
     "tests/fixtures/cobol-application/malformed.cbl": [],
     "tests/fixtures/cobol-application/missing-copy.cbl": [],
     "tests/fixtures/cobol-application/nested.copy": [],
+    "tests/fixtures/cobol-application/payroll.cbl": [
+      "tests/fixtures/cobol-application/common.cpy"
+    ],
     "tests/fixtures/cobol-application/subprog.cob": [],
     "tests/fixtures/cobol-dialects/ansi-free.cbl": [],
     "tests/fixtures/cobol-dialects/gnucobol-free.cob": [],
     "tests/fixtures/cobol-dialects/ibm-fixed.cbl": [],
     "tests/fixtures/cobol-dialects/micro-focus.cob": []
-  },
-  "schema_version": 1
+  }
 }

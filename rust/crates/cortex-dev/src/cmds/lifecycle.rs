@@ -162,33 +162,6 @@ pub fn build() {
     }
 }
 
-/// D1 binary resolution (frozen contract): `CORTEX_DEV_BIN` env → installed
-/// prefix `<prefix>/bin/cortex-dev[.exe]` → repo `rust/target/release/`.
-pub fn resolve_dev_binary() -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("CORTEX_DEV_BIN") {
-        let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
-    if let Ok(home) = std::env::var("HOME") {
-        let installed = PathBuf::from(home).join(".local").join("bin").join(format!("cortex-dev{exe_suffix}"));
-        if installed.is_file() {
-            return Some(installed);
-        }
-    }
-    let repo_release = repo_root()
-        .join("rust")
-        .join("target")
-        .join("release")
-        .join(format!("cortex-dev{exe_suffix}"));
-    if repo_release.is_file() {
-        return Some(repo_release);
-    }
-    None
-}
-
 pub fn install() {
     build();
     let home = std::env::var("HOME").unwrap_or_default();
@@ -199,23 +172,65 @@ pub fn install() {
     let bin_dir = PathBuf::from(&home).join(".local").join("bin");
     let _ = std::fs::create_dir_all(&bin_dir);
 
-    let Some(binary) = resolve_dev_binary() else {
+    // Install the binary itself into the user prefix (D1 step 2 target).
+    // The source must never resolve to the destination itself: fs::copy onto
+    // itself truncates the file to zero bytes while still returning Ok. The
+    // D1 installed-prefix step is also skipped — the fresh repo build always
+    // wins over whatever the prefix already holds.
+    let installed = bin_dir.join("cortex-dev");
+    let exe_suffix = if cfg!(windows) { ".exe" } else { "" };
+    let mut sources: Vec<PathBuf> = Vec::new();
+    if let Ok(explicit) = std::env::var("CORTEX_DEV_BIN") {
+        sources.push(PathBuf::from(explicit));
+    }
+    sources.push(
+        repo_root()
+            .join("rust")
+            .join("target")
+            .join("release")
+            .join(format!("cortex-dev{exe_suffix}")),
+    );
+    let Some(binary) = sources.into_iter().find(|p| p.is_file() && *p != installed) else {
         echo_err(
             "[error] cortex-dev binary not found after build (rust/target/release). \
              Build with: cargo build --release -p cortex-dev, or set CORTEX_DEV_BIN.",
         );
         std::process::exit(1);
     };
-    // Install the binary itself into the user prefix (D1 step 2 target).
-    let installed = bin_dir.join("cortex-dev");
-    if std::fs::copy(&binary, &installed).is_ok() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755));
-        }
-        echo(&format!("[install] Installed binary: {}", installed.display()));
+    let source_len = std::fs::metadata(&binary).map(|m| m.len()).unwrap_or(0);
+    // Never rewrite the destination inode in place: macOS caches the code
+    // signature per vnode, so an in-place overwrite makes every later exec
+    // of the installed binary die with SIGKILL even though the file itself
+    // is valid. Stage + rename swaps in a fresh inode (atomic replace).
+    let staged = bin_dir.join(format!(".cortex-dev.staged.{}", std::process::id()));
+    let _ = std::fs::remove_file(&staged);
+    let copied_ok = match std::fs::copy(&binary, &staged) {
+        Ok(n) => n > 0 && n == source_len,
+        Err(_) => false,
+    };
+    if !copied_ok {
+        let _ = std::fs::remove_file(&staged);
+        echo_err(&format!(
+            "[error] cannot copy {} -> {}",
+            binary.display(),
+            installed.display()
+        ));
+        std::process::exit(1);
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
+    }
+    if std::fs::rename(&staged, &installed).is_err() {
+        let _ = std::fs::remove_file(&staged);
+        echo_err(&format!(
+            "[error] cannot move staged binary into place at {}",
+            installed.display()
+        ));
+        std::process::exit(1);
+    }
+    echo(&format!("[install] Installed binary: {}", installed.display()));
 
     // `dev` launcher implementing the D1 resolution order.
     let root = repo_root().to_string_lossy().to_string();

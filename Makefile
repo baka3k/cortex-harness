@@ -31,13 +31,35 @@ RUST_LINK_ENV := RUSTFLAGS="$${RUSTFLAGS:-} -C link-arg=-undefined -C link-arg=d
 endif
 endif
 
-.PHONY: help build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc sync-code-stop sync-doc-stop \
+.PHONY: help update build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc sync-code-stop sync-doc-stop \
 	rust-build rust-test rust-clippy rust-check rust-pyo3 rust-fixtures rust-clean \
 	ort-ensure embed-artifacts embed-jina-onnx embed-bge-onnx embed-parity \
 	journal-shadow-diff
 
 help:
 	@$(LIFECYCLE) help
+
+# `update` refreshes the working tree and every dependency layer in one shot:
+#   git pull -> cargo fetch (rust crates) -> uv venv + pip install (python).
+# The Python layer follows the dev-lifecycle convention: create `.venv` via
+# `uv venv` when missing, then install root + code-tiny + doc-tiny
+# requirements plus the editable root in one `uv pip install --python`
+# invocation. Heavy weights (models, ONNX runtime) stay with `make build` /
+# embed-artifacts; run those afterwards when the runtime itself must update.
+ifeq ($(OS),Windows_NT)
+VENV_READY := $(wildcard .venv/Scripts/python.exe)
+else
+VENV_READY := $(wildcard .venv/bin/python)
+endif
+
+update:
+	git pull --ff-only
+	$(CARGO) fetch --manifest-path $(RUST_DIR)/Cargo.toml
+ifeq ($(VENV_READY),)
+	$(UV) venv
+endif
+	$(UV) pip install --python $(PYTHON) -r requirements.txt -r code-tiny/requirements.txt -r doc-tiny/requirements.txt -e .
+	@echo "update: code + dependencies refreshed. Run 'make build' to rebuild the cortex-dev binary (and 'make install' if it is installed)."
 
 # `build` also provisions ONNX Runtime for cortex-embed: everything the runtime
 # needs to load a graph is installed here, model weights are not (see embed-artifacts).
