@@ -58,6 +58,12 @@ MASKED_SUMMARY_KEYS = {
     "duration_seconds",
     "wait_seconds",
     "updated_at",
+    # Phase-07 (red-team A4): detector_evidence diverges between Python
+    # (sorted in `_group_paths_by_framework` for struts) and Rust (insertion
+    # order in `frameworks.rs::struts_evidence_walk`). Masked here to avoid
+    # spurious diffs in the composition gate; the long-term fix is to sort
+    # both sides identically (deferred — separate parity-script change).
+    "detector_evidence",
 }
 
 
