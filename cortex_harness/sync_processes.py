@@ -76,6 +76,12 @@ def _is_code_worker(record: ProcessRecord, root: Path) -> bool:
         "clang_worker.py",
         "incremental_sync.py",
     }
+    # Phase-08: the Python analyzer entry points (`*_analyzer.py`) were
+    # retired along with their script_path references; the legacy
+    # ``_analyzer.py`` suffix filter below is therefore a harmless no-op
+    # kept for documentation — actual analyzer processes are now
+    # `analyzer-*` Rust binaries spawned by ``incremental_sync.py`` /
+    # ``cortex-sync`` and are matched by the incremental_sync entry above.
     for argument in record.argv:
         path = _resolved_argument(argument)
         if path is None or code_root not in path.parents:

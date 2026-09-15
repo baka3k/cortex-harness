@@ -1919,9 +1919,12 @@ fn run_flow(
         // by component gates G1-G8, plans/260915…/phase-06.md). Native ⇔ qdrant
         // store resolvable to an HTTP server + parser in the shared-7 vector
         // lineage + Rust binary selected + CORTEX_EMBED_ORCHESTRATOR not pinned
-        // to python. Everything else keeps the phase-01 force_python pin; the
-        // carve-outs (legacy CodeEmbedder lineage, local embedded store) are
-        // explicit and logged once here, never silent.
+        // to python. Phase-08: Python analyzer scripts are retired; the
+        // embedding pass always uses the Rust child. Shared-7 lineage still
+        // gets orchestrator-level embedding (artifact emission handled by the
+        // Rust binary). Legacy 17 parsers do not emit embedding-input
+        // artifacts yet and therefore report `vectors=0 vector_status=disabled`;
+        // this regression is logged once below, never silent.
         let native_env = std::env::var("CORTEX_EMBED_ORCHESTRATOR")
             .unwrap_or_default()
             .trim()
@@ -1960,12 +1963,18 @@ fn run_flow(
                     Ok(Some(_)) => {}
                     Ok(None) => native_parser = false,
                     Err(detail) => {
-                        println!("[embedding] {detail} — keeping the Python child for {parser_name}");
+                        println!("[embedding] {detail} — keeping the Rust child for {parser_name} (no embedding)");
                         native_parser = false;
                     }
                 }
             }
-            config.force_python = !native_parser;
+            // Phase-08: Python analyzer scripts are retired; the embedding pass
+            // always uses the Rust child. Shared-7 lineage still gets orchestrator-
+            // level embedding (artifact emission handled by the Rust binary).
+            // Legacy 17 parsers do not emit embedding-input artifacts yet and
+            // therefore report `vectors=0 vector_status=disabled`; this regression
+            // is logged once at the top of the loop, never silent.
+            config.force_python = false;
             let parser_changed = changed_by_parser.get(parser_name).cloned().unwrap_or_default();
             let parser_deleted = deleted_by_parser.get(parser_name).cloned().unwrap_or_default();
             let parser_impacted = impacted_by_parser.get(parser_name).cloned().unwrap_or_default();

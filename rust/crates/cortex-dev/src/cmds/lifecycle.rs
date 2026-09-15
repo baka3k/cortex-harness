@@ -5,18 +5,19 @@
 //!
 //! Native: help, build (new semantics: cargo workspace + native ensure-ort),
 //! install/uninstall (D1 launcher), storage-init/layout/migrate-layout/
-//! backup/stop, ensure-ort.
-//! Shimmed: doctor, start, stop, infra-up, infra-down.
+//! backup/stop, ensure-ort, start, stop (phase-05b).
+//! Shimmed: doctor, infra-up, infra-down.
 
 use crate::parser::Matches;
 use crate::util::repo_root;
 use crate::util::{echo, echo_err, fail};
+use crate::mcp_state;
 use cortex_storage::config::{resolve_storage, ConfigMap, ResolvedStorage};
 use cortex_storage::lease::StorageLease;
 use cortex_storage::layout::{ensure_layout, load_manifest};
 use cortex_storage::migration::migrate_legacy_layout;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -698,40 +699,616 @@ pub fn storage_stop() {
     echo("[storage-stop] Local storage has no lifecycle to stop.");
 }
 
-pub fn start(m: &Matches) {
-    let values: [(&str, Option<String>); 14] = [
-        ("--name", m.value("--name").map(String::from)),
-        ("--project", m.value("--project").map(String::from)),
-        ("--database", m.value("--database").map(String::from)),
-        ("--code-database", m.value("--code-database").map(String::from)),
-        ("--doc-database", m.value("--doc-database").map(String::from)),
-        ("--port", m.value("--port").map(String::from)),
-        ("--code-port", m.value("--code-port").map(String::from)),
-        ("--doc-port", m.value("--doc-port").map(String::from)),
-        ("--host", m.value("--host").map(String::from)),
-        ("--path", m.value("--path").map(String::from)),
-        ("--provider", m.value("--provider").map(String::from)),
-        ("--collection", m.value("--collection").map(String::from)),
-        ("--code-collection", m.value("--code-collection").map(String::from)),
-        ("--doc-collection", m.value("--doc-collection").map(String::from)),
-    ];
-    let mut arguments: Vec<String> = values
-        .into_iter()
-        .filter_map(|(option, value)| value.map(|v| vec![option.to_string(), v]))
-        .flatten()
-        .collect();
-    let server = m.value_or("--server", "all");
-    if server != "all" {
-        arguments.splice(0..0, ["--server".to_string(), server]);
+// ---------------------------------------------------------------------------
+// start / stop — phase-05b native port of `_invoke_start` / `_invoke_stop`
+// ---------------------------------------------------------------------------
+
+/// dev.py `SERVERS` — the lifecycle launcher runs `<svc>/mcp.sh`, which is a
+/// different surface from `dev mcp start`'s `SERVICES` (direct entry script +
+/// rust/python backend switch).
+#[derive(Debug)]
+struct LifecycleServer {
+    name: &'static str,
+    work_dir: PathBuf,
+    script: PathBuf,
+    port: u16,
+}
+
+fn lifecycle_servers() -> Vec<LifecycleServer> {
+    let root = repo_root();
+    ["code-tiny", "doc-tiny"]
+        .iter()
+        .map(|name| LifecycleServer {
+            name,
+            work_dir: root.join(name),
+            script: root.join(name).join("mcp.sh"),
+            port: if *name == "code-tiny" { 8788 } else { 8789 },
+        })
+        .collect()
+}
+
+/// dev.py `start_options` namespace.
+struct StartOptions {
+    server: String,
+    name: Option<String>,
+    project: Option<String>,
+    database: Option<String>,
+    code_database: Option<String>,
+    doc_database: Option<String>,
+    port: Option<u16>,
+    code_port: Option<u16>,
+    doc_port: Option<u16>,
+    host: String,
+    path: String,
+    provider: Option<String>,
+    collection: Option<String>,
+    code_collection: Option<String>,
+    doc_collection: Option<String>,
+}
+
+/// argparse treats `""` as absent for every `or`-chain default.
+fn text(value: Option<&str>) -> Option<String> {
+    value.filter(|v| !v.is_empty()).map(|v| v.to_string())
+}
+
+fn parse_port(option: &str, value: Option<&str>) -> Option<u16> {
+    let raw = text(value)?;
+    match raw.parse::<u16>() {
+        Ok(port) if (1..=65535).contains(&port) => Some(port),
+        _ => usage_error(&format!("{option} must be between 1 and 65535")),
     }
-    run_lifecycle("start", &arguments);
+}
+
+/// argparse `parser.error` equivalent — usage exit code 2.
+fn usage_error(message: &str) -> ! {
+    echo_err(&format!("Error: {message}"));
+    echo_err("Try 'dev start --help' for help.");
+    std::process::exit(2);
+}
+
+/// Runtime errors surface as `[error] …` on stdout with exit 1, exactly like
+/// `mcp-lifecycle.py`'s `main()` handler.
+fn runtime_error(message: &str) -> ! {
+    echo(&format!("[error] {message}"));
+    std::process::exit(1);
+}
+
+impl StartOptions {
+    fn from_matches(m: &Matches) -> StartOptions {
+        let mut path = m.value_or("--path", "/mcp");
+        if !path.starts_with('/') {
+            path = format!("/{path}");
+        }
+        let server = m.value_or("--server", "all");
+        if server == "code" && m.value("--doc-port").is_some() {
+            usage_error("--doc-port cannot be used with --server code");
+        }
+        if server == "doc" && m.value("--code-port").is_some() {
+            usage_error("--code-port cannot be used with --server doc");
+        }
+        StartOptions {
+            server,
+            name: text(m.value("--name")),
+            project: text(m.value("--project")),
+            database: text(m.value("--database")),
+            code_database: text(m.value("--code-database")),
+            doc_database: text(m.value("--doc-database")),
+            port: parse_port("--port", m.value("--port")),
+            code_port: parse_port("--code-port", m.value("--code-port")),
+            doc_port: parse_port("--doc-port", m.value("--doc-port")),
+            host: m.value_or("--host", "127.0.0.1"),
+            path,
+            provider: text(m.value("--provider")),
+            collection: text(m.value("--collection")),
+            code_collection: text(m.value("--code-collection")),
+            doc_collection: text(m.value("--doc-collection")),
+        }
+    }
+}
+
+fn string_env(payload: &serde_json::Map<String, Value>) -> BTreeMap<String, String> {
+    payload
+        .iter()
+        .map(|(key, value)| {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            (key.clone(), text)
+        })
+        .collect()
+}
+
+/// dev.py `_selected_servers`.
+fn selected_servers(options: &StartOptions) -> Result<Vec<LifecycleServer>, String> {
+    let mut selected: Vec<LifecycleServer> = lifecycle_servers()
+        .into_iter()
+        .filter(|server| options.server == "all" || server.name.starts_with(&options.server))
+        .collect();
+    if options.port.is_some() && options.server == "all" {
+        return Err(
+            "--port requires --server code or --server doc; use --code-port/--doc-port for both."
+                .to_string(),
+        );
+    }
+    if let Some(port) = options.port
+        && let Some(first) = selected.first_mut()
+    {
+        first.port = port;
+    }
+    for server in &mut selected {
+        if server.name == "code-tiny"
+            && let Some(port) = options.code_port
+        {
+            if options.port.is_some() {
+                return Err("Use either --port or --code-port, not both.".to_string());
+            }
+            server.port = port;
+        }
+        if server.name == "doc-tiny"
+            && let Some(port) = options.doc_port
+        {
+            if options.port.is_some() {
+                return Err("Use either --port or --doc-port, not both.".to_string());
+            }
+            server.port = port;
+        }
+    }
+    let ports: Vec<u16> = selected.iter().map(|server| server.port).collect();
+    if ports.iter().collect::<BTreeSet<_>>().len() != ports.len() {
+        return Err("Each selected MCP server must use a different port.".to_string());
+    }
+    Ok(selected)
+}
+
+/// dev.py `_default_graph_env_exports` — the last-resort defaults for a launch
+/// with no harness config (the generated `.active.env` wins when present).
+fn default_graph_env_exports(server_name: &str) -> String {
+    let scoped_provider = if server_name == "doc-tiny" {
+        "DOC_GRAPH_PROVIDER"
+    } else {
+        "CODE_GRAPH_PROVIDER"
+    };
+    format!(
+        "# Default local graph backend for make start.\n\
+         export GRAPH_PROVIDER=\"${{GRAPH_PROVIDER:-{default}}}\"\n\
+         export {scoped_provider}=\"${{{scoped_provider}:-${{GRAPH_PROVIDER}}}}\"\n\
+         export FALKORDB_GRAPH=\"${{FALKORDB_GRAPH:-hyper_graph}}\"\n",
+        default = "falkordb"
+    )
+}
+
+/// dev.py `_runtime_overrides`. The graph key follows the active provider, so a
+/// `--database` on a ladybug launch lands on `LADYBUG_GRAPH` (the Python shim
+/// wrote `NEO4J_DB` for anything that was not falkordb).
+fn runtime_overrides(
+    options: &StartOptions,
+    server_name: &str,
+    instance: &str,
+    multiple_servers: bool,
+    environment: &serde_json::Map<String, Value>,
+) -> Result<Vec<(String, String)>, String> {
+    let is_code = server_name == "code-tiny";
+    let scoped_provider = if is_code {
+        "CODE_GRAPH_PROVIDER"
+    } else {
+        "DOC_GRAPH_PROVIDER"
+    };
+    let database = {
+        let specific = if is_code {
+            options.code_database.clone()
+        } else {
+            options.doc_database.clone()
+        };
+        specific.or_else(|| options.database.clone()).or_else(|| options.project.clone())
+    };
+    let collection = {
+        let specific = if is_code {
+            options.code_collection.clone()
+        } else {
+            options.doc_collection.clone()
+        };
+        specific.or_else(|| options.collection.clone()).or_else(|| options.project.clone())
+    };
+    let mcp_name = if multiple_servers {
+        format!("{instance}-{}", if is_code { "code" } else { "doc" })
+    } else {
+        instance.to_string()
+    };
+    let mut overrides: Vec<(String, String)> = vec![
+        ("CORTEX_MCP_NAME".to_string(), mcp_name),
+        (
+            "CORTEX_STORAGE_INSTANCE".to_string(),
+            instance.to_lowercase().replace('.', "-"),
+        ),
+        (
+            "CORTEX_STORAGE_OWNER".to_string(),
+            if is_code { "code" } else { "doc" }.to_string(),
+        ),
+    ];
+    if let Some(project) = &options.project {
+        for key in ["PROJECT_ID", "CORTEX_STORAGE_PROJECT_ID", "PROJECT_NAME"] {
+            overrides.push((key.to_string(), project.clone()));
+        }
+    }
+    let mut provider_environment = environment.clone();
+    if let Some(provider) = &options.provider {
+        provider_environment.insert("GRAPH_PROVIDER".to_string(), Value::String(provider.clone()));
+        provider_environment
+            .insert(scoped_provider.to_string(), Value::String(provider.clone()));
+    }
+    let provider = crate::config::graph_provider(&Value::Object(provider_environment), scoped_provider)?;
+    if let Some(database) = database {
+        overrides.push((
+            mcp_state::graph_key(&provider).to_string(),
+            database,
+        ));
+    }
+    if let Some(collection) = collection {
+        overrides.push((
+            if is_code {
+                "QDRANT_COLLECTION"
+            } else {
+                "QDRANT_COLLECTION_DOC"
+            }
+            .to_string(),
+            collection,
+        ));
+    }
+    if let Some(provider_value) = &options.provider {
+        overrides.push(("GRAPH_PROVIDER".to_string(), provider_value.clone()));
+        overrides.push((scoped_provider.to_string(), provider_value.clone()));
+    }
+    Ok(overrides)
+}
+
+/// dev.py `_terminal_command` — macOS opens a Terminal.app window, POSIX
+/// desktops fall back to a terminal emulator, and the wrapper reports its own
+/// pid so the record survives the `exec bash mcp.sh` hand-over.
+fn terminal_command(wrapper: &Path) -> Result<Vec<String>, String> {
+    let wrapper_path = wrapper.to_string_lossy().to_string();
+    #[cfg(target_os = "macos")]
+    {
+        let Some(osascript) = which("osascript") else {
+            return Err(
+                "osascript was not found; cannot open macOS Terminal windows.".to_string(),
+            );
+        };
+        let quoted = mcp_state::shlex_quote(&wrapper_path);
+        let script = format!(
+            "tell application \"Terminal\" to do script {}",
+            serde_json::to_string(&quoted).unwrap_or_else(|_| format!("\"{quoted}\""))
+        );
+        Ok(vec![
+            osascript.to_string_lossy().to_string(),
+            "-e".to_string(),
+            script,
+        ])
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        for name in ["gnome-terminal", "x-terminal-emulator", "xterm"] {
+            let Some(executable) = which(name) else {
+                continue;
+            };
+            let arguments: Vec<&str> = if name == "gnome-terminal" {
+                vec!["--", "bash", wrapper_path.as_str()]
+            } else {
+                vec!["-e", "bash", wrapper_path.as_str()]
+            };
+            let mut command = vec![executable.to_string_lossy().to_string()];
+            command.extend(arguments.iter().map(|value| (*value).to_string()));
+            return Ok(command);
+        }
+        Err(
+            "No supported terminal emulator found (gnome-terminal, x-terminal-emulator, or xterm)."
+                .to_string(),
+        )
+    }
+}
+
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var("PATH").ok()?;
+    for directory in std::env::split_paths(&path) {
+        let candidate = directory.join(name);
+        if is_executable(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn is_executable(candidate: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(candidate) {
+        Ok(metadata) => {
+            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn is_executable(candidate: &Path) -> bool {
+    candidate.is_file()
+}
+
+fn bare_start_options() -> StartOptions {
+    StartOptions {
+        server: "all".to_string(),
+        name: None,
+        project: None,
+        database: None,
+        code_database: None,
+        doc_database: None,
+        port: None,
+        code_port: None,
+        doc_port: None,
+        host: "127.0.0.1".to_string(),
+        path: "/mcp".to_string(),
+        provider: None,
+        collection: None,
+        code_collection: None,
+        doc_collection: None,
+    }
+}
+
+fn invoke_start(options: Option<StartOptions>) -> Result<(), String> {
+    // dev.py distinguishes a bare `start` (reuse running servers, auto-advance
+    // ports) from any parameterized invocation (stop-then-start, hard port
+    // conflict) by whether argv carried options at all.
+    let custom = options.is_some();
+    let options = options.unwrap_or_else(bare_start_options);
+
+    let directory = mcp_state::state_dir();
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let caller = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let (config_root, config_path) = crate::env::resolve_start_config(&caller, &repo_root());
+    if !config_path.is_file() {
+        return Err(format!("MCP config not found: {}", config_path.display()));
+    }
+
+    let servers = selected_servers(&options)?;
+    let multiple_servers = servers.len() > 1;
+    let mut runtime_environments: BTreeMap<String, serde_json::Map<String, Value>> = BTreeMap::new();
+    for server in &servers {
+        runtime_environments.insert(
+            server.name.to_string(),
+            crate::env::mcp_env_from_config(&config_root, server.name),
+        );
+    }
+
+    let (instance, mut records) = if custom {
+        let requested = options
+            .name
+            .clone()
+            .or_else(|| options.project.clone())
+            .or_else(|| options.database.clone())
+            .unwrap_or_default();
+        let instance = mcp_state::validate_instance_name(&requested)?;
+        mcp_state::stop(Some(instance.as_str()));
+        (instance, mcp_state::read_records())
+    } else {
+        let first = runtime_environments
+            .get(servers[0].name)
+            .cloned()
+            .unwrap_or_default();
+        let scoped = if servers[0].name == "doc-tiny" {
+            "DOC_GRAPH_PROVIDER"
+        } else {
+            "CODE_GRAPH_PROVIDER"
+        };
+        let provider = crate::config::graph_provider(&Value::Object(first.clone()), scoped)
+            .unwrap_or_else(|_| "falkordb".to_string());
+        (
+            mcp_state::config_instance(
+                &string_env(&first),
+                mcp_state::graph_key(&provider),
+            )?,
+            mcp_state::read_records(),
+        )
+    };
+
+    let processes = crate::procinfo::process_table();
+    let mut reserved: BTreeSet<u16> = BTreeSet::new();
+
+    for server in servers {
+        let mut runtime_env = runtime_environments
+            .remove(server.name)
+            .unwrap_or_default();
+        if custom {
+            for (key, value) in runtime_overrides(
+                &options,
+                server.name,
+                &instance,
+                multiple_servers,
+                &runtime_env,
+            )? {
+                runtime_env.insert(key, Value::String(value));
+            }
+        }
+        let script = server.script.clone();
+        if !script.is_file() {
+            return Err(format!("MCP script not found: {}", script.display()));
+        }
+        let scoped_provider = if server.name == "doc-tiny" {
+            "DOC_GRAPH_PROVIDER"
+        } else {
+            "CODE_GRAPH_PROVIDER"
+        };
+        let provider =
+            crate::env::isolate_graph_provider_environment(&mut runtime_env, scoped_provider);
+        let graph = runtime_env
+            .get(mcp_state::graph_key(&provider))
+            .map(|value| match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default();
+
+        if !custom {
+            let reused = records.iter().find(|record| {
+                record
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    == server.name
+                    && record
+                        .get("graph")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        == graph
+                    && mcp_state::record_is_live(record, &processes)
+            });
+            if let Some(existing) = reused {
+                let host = existing
+                    .get("host")
+                    .and_then(Value::as_str)
+                    .unwrap_or(options.host.as_str());
+                let port = existing.get("port").and_then(Value::as_i64).unwrap_or(0);
+                echo(&format!(
+                    "[start] Reusing {instance}/{} on {host}:{port} (graph={graph})",
+                    server.name
+                ));
+                continue;
+            }
+        }
+
+        let port = if custom {
+            if mcp_state::tcp_port_open(&options.host, server.port) {
+                return Err(format!(
+                    "Port already in use: {}:{}",
+                    options.host, server.port
+                ));
+            }
+            server.port
+        } else {
+            mcp_state::next_available_port(&options.host, server.port, &mut reserved)?
+        };
+
+        let (wrapper, pid_path, runtime_env_path, _) =
+            mcp_state::state_paths(&instance, server.name);
+        let exports = mcp_state::format_bash_exports(&string_env(&runtime_env))?;
+        // Python appends the trailing newline only for a non-empty overlay.
+        let exports = if runtime_env.is_empty() {
+            exports
+        } else {
+            format!("{exports}\n")
+        };
+        mcp_state::write_active_env(&runtime_env_path, &exports)
+            .map_err(|error| error.to_string())?;
+
+        let activate = repo_root()
+            .join(".venv")
+            .join("bin")
+            .join("activate")
+            .to_string_lossy()
+            .to_string();
+        let activate = mcp_state::shlex_quote(&activate);
+        let mut body = String::from("#!/usr/bin/env bash\nset -euo pipefail\n");
+        body.push_str(&format!(
+            "printf '%s' \"$$\" > {}\n",
+            mcp_state::shlex_quote(&pid_path.to_string_lossy())
+        ));
+        body.push_str(&format!("if [ -f {activate} ]; then\n  source {activate}\nfi\n"));
+        body.push_str(&default_graph_env_exports(server.name));
+        body.push_str(&format!(
+            "export CORTEX_HARNESS_ENV_FILE={}\n",
+            mcp_state::shlex_quote(&runtime_env_path.to_string_lossy())
+        ));
+        body.push_str(&format!(
+            "cd {}\n",
+            mcp_state::shlex_quote(&server.work_dir.to_string_lossy())
+        ));
+        body.push_str(&format!(
+            "exec bash {} --host {} --port {} --path {}\n",
+            mcp_state::shlex_quote(&script.to_string_lossy()),
+            mcp_state::shlex_quote(&options.host),
+            port,
+            mcp_state::shlex_quote(&options.path),
+        ));
+        mcp_state::write_executable(&wrapper, &body).map_err(|error| error.to_string())?;
+        let _ = std::fs::remove_file(&pid_path);
+
+        let command = terminal_command(&wrapper)?;
+        let status = Command::new(&command[0])
+            .args(&command[1..])
+            .current_dir(&caller)
+            .status()
+            .map_err(|error| error.to_string())?;
+        if !status.success() {
+            return Err(format!(
+                "Terminal launch failed ({} exited {}).",
+                command[0],
+                status.code().unwrap_or(1)
+            ));
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !pid_path.is_file() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if !pid_path.is_file() {
+            return Err(format!(
+                "Terminal opened, but {} did not report its process ID.",
+                server.name
+            ));
+        }
+        let pid_text = std::fs::read_to_string(&pid_path).map_err(|error| error.to_string())?;
+        let pid: i64 = pid_text
+            .trim()
+            .parse()
+            .map_err(|_| format!("{} reported an invalid pid.", server.name))?;
+
+        records.push(json!({
+            "name": server.name,
+            "instance": instance,
+            "pid": pid,
+            "script": script.to_string_lossy(),
+            "port": port,
+            "host": options.host,
+            "path": options.path,
+            "endpoint": format!("http://{}:{}{}", options.host, port, options.path),
+            "graph": graph,
+            "config_path": config_path.to_string_lossy(),
+            "runtime_env_path": runtime_env_path.to_string_lossy(),
+            "project_id": string_env(&runtime_env)
+                .get("PROJECT_ID")
+                .cloned()
+                .unwrap_or_default(),
+        }));
+        echo(&format!(
+            "[start] Started {instance}/{} in terminal PID {pid} on {port} (graph={graph})",
+            server.name
+        ));
+    }
+
+    mcp_state::write_records(&records);
+    echo("[start] MCP terminals opened. Logs are visible in their own windows.");
+    Ok(())
+}
+
+pub fn start(m: &Matches) {
+    let options = if m.opts.is_empty() {
+        None
+    } else {
+        Some(StartOptions::from_matches(m))
+    };
+    if let Err(error) = invoke_start(options) {
+        runtime_error(&error);
+    }
 }
 
 pub fn stop(m: &Matches) {
-    match m.value("--name") {
-        Some(name) => run_lifecycle("stop", &["--name".to_string(), name.to_string()]),
-        None => run_lifecycle("stop", &[]),
-    }
+    let instance = match text(m.value("--name")) {
+        Some(name) => match mcp_state::validate_instance_name(&name) {
+            Ok(validated) => Some(validated),
+            Err(error) => runtime_error(&error),
+        },
+        None => None,
+    };
+    mcp_state::stop(instance.as_deref());
 }
 
 pub fn doctor() {
@@ -774,4 +1351,131 @@ pub fn mcp_gates() {
             "unset (pause by instance on)"
         }
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options() -> StartOptions {
+        bare_start_options()
+    }
+
+    fn graph_env(provider: &str) -> serde_json::Map<String, Value> {
+        let mut env = serde_json::Map::new();
+        env.insert("GRAPH_PROVIDER".to_string(), Value::String(provider.to_string()));
+        env.insert(
+            "CODE_GRAPH_PROVIDER".to_string(),
+            Value::String(provider.to_string()),
+        );
+        env.insert("PROJECT_ID".to_string(), Value::String("cortext".to_string()));
+        env
+    }
+
+    #[test]
+    fn selected_servers_keeps_the_python_validation_messages() {
+        let mut both = options();
+        both.port = Some(8790);
+        assert_eq!(
+            selected_servers(&both).unwrap_err(),
+            "--port requires --server code or --server doc; use --code-port/--doc-port for both."
+        );
+
+        let mut code_only = options();
+        code_only.server = "code".to_string();
+        code_only.port = Some(8790);
+        code_only.code_port = Some(8791);
+        assert_eq!(
+            selected_servers(&code_only).unwrap_err(),
+            "Use either --port or --code-port, not both."
+        );
+
+        let mut colliding = options();
+        colliding.code_port = Some(8789);
+        assert_eq!(
+            selected_servers(&colliding).unwrap_err(),
+            "Each selected MCP server must use a different port."
+        );
+
+        let servers = selected_servers(&options()).unwrap();
+        assert_eq!(servers.len(), 2);
+        assert_eq!((servers[0].port, servers[1].port), (8788, 8789));
+
+        let mut doc_only = options();
+        doc_only.server = "doc".to_string();
+        doc_only.doc_port = Some(9001);
+        let servers = selected_servers(&doc_only).unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!((servers[0].name, servers[0].port), ("doc-tiny", 9001));
+    }
+
+    #[test]
+    fn database_override_follows_the_active_graph_provider() {
+        let mut start = options();
+        start.database = Some("shop-db".to_string());
+
+        let ladybug =
+            runtime_overrides(&start, "code-tiny", "shop", false, &graph_env("ladybug")).unwrap();
+        assert!(ladybug.contains(&("LADYBUG_GRAPH".to_string(), "shop-db".to_string())));
+        assert!(!ladybug.iter().any(|(key, _)| key == "NEO4J_DB"));
+
+        let falkor =
+            runtime_overrides(&start, "code-tiny", "shop", false, &graph_env("falkordb")).unwrap();
+        assert!(falkor.contains(&("FALKORDB_GRAPH".to_string(), "shop-db".to_string())));
+
+        let neo =
+            runtime_overrides(&start, "code-tiny", "shop", false, &graph_env("neo4j")).unwrap();
+        assert!(neo.contains(&("NEO4J_DB".to_string(), "shop-db".to_string())));
+
+        // An unsupported provider fails closed instead of picking a default.
+        assert!(runtime_overrides(&start, "code-tiny", "shop", false, &graph_env("redisgraph"))
+            .is_err());
+    }
+
+    #[test]
+    fn overrides_match_the_python_key_and_value_defaults() {
+        let mut start = options();
+        start.project = Some("SHOP".to_string());
+        start.collection = Some("shop-vec".to_string());
+        let overrides =
+            runtime_overrides(&start, "doc-tiny", "a.b", true, &graph_env("ladybug")).unwrap();
+        let map: BTreeMap<String, String> = overrides.into_iter().collect();
+        // Multiple servers suffix the MCP name; the instance dot becomes a dash.
+        assert_eq!(map["CORTEX_MCP_NAME"], "a.b-doc");
+        assert_eq!(map["CORTEX_STORAGE_INSTANCE"], "a-b");
+        assert_eq!(map["CORTEX_STORAGE_OWNER"], "doc");
+        assert_eq!(map["PROJECT_ID"], "SHOP");
+        assert_eq!(map["PROJECT_NAME"], "SHOP");
+        assert_eq!(map["QDRANT_COLLECTION_DOC"], "shop-vec");
+        assert!(!map.contains_key("QDRANT_COLLECTION"));
+    }
+
+    #[test]
+    fn wrapper_graph_defaults_stay_byte_compatible() {
+        assert_eq!(
+            default_graph_env_exports("code-tiny"),
+            "# Default local graph backend for make start.\n\
+             export GRAPH_PROVIDER=\"${GRAPH_PROVIDER:-falkordb}\"\n\
+             export CODE_GRAPH_PROVIDER=\"${CODE_GRAPH_PROVIDER:-${GRAPH_PROVIDER}}\"\n\
+             export FALKORDB_GRAPH=\"${FALKORDB_GRAPH:-hyper_graph}\"\n"
+        );
+        assert!(default_graph_env_exports("doc-tiny").contains("export DOC_GRAPH_PROVIDER="));
+    }
+
+    #[test]
+    fn instance_name_derives_from_the_provider_graph_key() {
+        let mut env = graph_env("ladybug");
+        env.insert("PROJECT_ID".to_string(), Value::String(String::new()));
+        env.insert("LADYBUG_GRAPH".to_string(), Value::String("shop_graph".to_string()));
+        let map = string_env(&env);
+        assert_eq!(
+            mcp_state::config_instance(&map, mcp_state::graph_key("ladybug")).unwrap(),
+            "shop_graph"
+        );
+        // The same env seen through the falkordb key has no graph value to use.
+        assert_eq!(
+            mcp_state::config_instance(&map, mcp_state::graph_key("falkordb")).unwrap(),
+            "cortext"
+        );
+    }
 }

@@ -1,84 +1,56 @@
-# Analyzer CLI reference
+# Analyzer CLI reference (Rust binaries — phase-08 cutover)
 
-## Common flags (all analyzers)
+The Python analyzer entry points (`tools/<lang>/<lang>_analyzer.py`) were
+retired at the phase-08 cutover. This reference now describes the
+`analyzer-<lang>` Rust binaries that replace them; the CLI contract is
+byte-for-byte compatible for the flags that survived the port.
+
+## Common flags (all analyzer binaries)
 - `--root` (required)
-- `--neo4j-uri`, `--neo4j-user`, `--neo4j-pass`, `--neo4j-db`
+- `--falkordb-uri`, `--falkordb-graph`, `--ladybug-path`, `--ladybug-graph`,
+  `--graph-provider`
 - `--qdrant-url`, `--qdrant-collection`
-- `--embed-model`, `--max-embed-chars`, `--chunk-embed`
-- `--device`
-- `--batch-size`
-- `--neo4j-batch-size`
-- `--neo4j-state`, `--disable-neo4j-resume`
-- `--qdrant-batch-size`, `--qdrant-timeout`, `--qdrant-retries`, `--qdrant-retry-sleep`
+- `--embed-model`, `--max-embed-chars`, `--device`, `--batch-size`
+- `--incremental`, `--changed-files-manifest`, `--deleted-files-manifest`
+- `--enable-message-scan`, `--disable-message-scan`, `--message-output-dir`,
+  `--message-qdrant-collection`
 - `--cache-dir`, `--keep-cache`, `--disable-parse-cache`
 - `--project-id`, `--project-name`, `--language`, `--repo`, `--build-system`
 - `--dry-run`, `--verbose`
 
-## Kotlin (`tools/kotlin/kotlin_analyzer.py`)
-- Default collection: `kotlin_functions`
+## Kotlin (`analyzer-kotlin`)
 - Default device: `auto` (resolves to `cuda`, `mps`, or `cpu`)
 - Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size derived from the embed model
 
-## Java (`tools/java/java_analyzer.py`)
-- Default collection: `java_functions`
-- Default device: `cpu`
-- Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size is fixed at 768 in code
+## Java (`analyzer-java`)
+- Vector lane (`cortex-embed` orchestrator-level) — see
+  `reports/phase08-cutover.md` for the embedding disposition.
 
-## TypeScript (`tools/ts/ts_analyzer.py`)
-- Default collection: `typescript_functions`
-- Default device: `auto` (resolves to `cuda`, `mps`, or `cpu`)
-- Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size derived from the embed model
+## TypeScript (`analyzer-ts`)
+- `--mode` selects the analyzer pipeline.
 
-## JavaScript (`tools/js/js_analyzer.py`)
-- Default collection: `javascript_functions`
-- Default device: `auto` (resolves to `cuda`, `mps`, or `cpu`)
-- Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size derived from the embed model
+## JavaScript (`analyzer-js`)
 
-## PHP (`tools/php/php_analyzer.py`)
-- Default collection: `php_functions`
-- Default device: `auto` (resolves to `cuda`, `mps`, or `cpu`)
-- Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size derived from the embed model
+## PHP (`analyzer-php`)
 
-## SQL (`tools/sql/sql_analyzer.py`)
-- Default collection: `sql_functions`
-- Default device: `auto` (resolves to `cuda`, `mps`, or `cpu`)
-- Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size derived from the embed model
+## SQL (`analyzer-sql`)
 
-## PL/SQL (`tools/plsql/plsql_analyzer.py`)
-- Default collection: `plsql_functions`
-- Default device: `auto` (resolves to `cuda`, `mps`, or `cpu`)
-- Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size derived from the embed model
-- Parser: regex-based heuristics (no tree-sitter dependency)
+## PL/SQL (`analyzer-plsql`)
 
-## C# (`tools/csharp/csharp_analyzer.py`)
-- Default collection: `csharp_functions`
-- Default device: `cpu`
-- Default `--batch-size`: 4
-- Default `--qdrant-batch-size`: 128
-- Vector size is fixed at 768 in code
+## C# (`analyzer-csharp`)
+- Spawns the Roslyn worker (`tools/csharp/roslyn_worker/`) + bootstrap build.
+- Requires the .NET SDK; see `docs/cutover-runbook.md` §5.1.5.
 
-## C/C++ (`tools/cplus/cplus_analyzer.py`)
-- Default collection: `cplus_functions`
-- Default device: `cpu`
-- Default `--batch-size`: 8
-- Default `--qdrant-batch-size`: 512
-- Vector size is fixed at 768 in code
-- Extra export flags:
-  - `--event-map` (JSON mapping file for cross-project events/IDL)
-  - `--call-stats-path` (write call resolution stats JSON)
-  - `--possible-calls-path` (write POSSIBLE_CALLS edges JSON)
-  - `--unresolved-calls-path` (write unresolved calls as JSONL)
+## C/C++ (`analyzer-cplus`)
+- Spawns the Python clang plane (`tools/cplus/clang_parser.py` +
+  `tools/cplus/semantic_worker.py` + `tools/cplus/proc_analyzer.py`).
+- Requires the cplus clang plane + parse-quality flags.
+
+## COBOL (`analyzer-cobol`)
+
+## Dart (`analyzer-dart`)
+- `--mode dart|flutter` (no `all`; orchestrator chooses per invocation).
+
+## Project topology (`analyzer-topology`)
+- Runs at end of sync; reads graph → computes topology → writes via
+  `cortex-graph-writer::topology`.
