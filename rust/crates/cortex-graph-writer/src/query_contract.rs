@@ -432,7 +432,6 @@ pub fn compile_evidence_edge_upsert_ladybug(group: &EvidenceEdgeGroup) -> String
 
 /// Ladybug: `SET r += …` trên relationship + map rỗng đều không được hỗ
 /// trợ — variant bỏ dynamic props (caller fail-closed khi props khác rỗng).
-
 /// `compile_evidence_edge_readback`.
 pub fn compile_evidence_edge_readback(group: &EvidenceEdgeGroup) -> String {
     let edge_match = if !group.edge_property.is_empty() {

@@ -692,7 +692,7 @@ impl LanguageCodeWriter {
         // không group sau sẽ "violates schema" với endpoint của group đầu.
         if self.store.provider() == "ladybug" {
             let mut pairs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
-            for (group, _) in groups.iter() {
+            for group in groups.keys() {
                 pairs.entry(group.relationship_type.as_str()).or_default().insert(
                     format!("FROM `{}` TO `{}`", group.source_label, group.target_label),
                 );
@@ -1152,7 +1152,7 @@ impl LanguageCodeWriter {
         let groups = group_evidence_edges(edges).map_err(WriterError::Contract)?;
         if self.store.provider() == "ladybug" {
             let mut pairs: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
-            for (group, _) in groups.iter() {
+            for group in groups.keys() {
                 pairs
                     .entry(group.relationship_type.as_str())
                     .or_default()
