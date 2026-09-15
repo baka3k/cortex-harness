@@ -56,13 +56,13 @@ Write-Host "`nCreating global CLI command..." -ForegroundColor Yellow
 $cortexPath = "C:\ai\cortex-harness"
 if (Test-Path "$env:USERPROFILE\scoop\shims") {
     Write-Host "Creating scoop shim..." -ForegroundColor Green
-    $shimContent = "path = `"$cortexPath\.venv\Scripts\dev.exe`""
+    $shimContent = "path = `"$cortexPath\rust\target\release\cortex-dev.exe`""
     $shimContent | Out-File -FilePath "$env:USERPROFILE\scoop\shims\dev.shim" -Encoding utf8
     Write-Host "Created scoop shim: dev.exe" -ForegroundColor Green
 } else {
     Write-Host "Scoop not found. You can create a PowerShell alias instead:" -ForegroundColor Yellow
     Write-Host "Add to your PowerShell profile:" -ForegroundColor White
-    Write-Host 'function dev { & "'"$cortexPath\.venv\Scripts\dev.exe"'" @Args }' -ForegroundColor Cyan
+    Write-Host 'function dev { & "'"$cortexPath\rust\target\release\cortex-dev.exe"'" @Args }' -ForegroundColor Cyan
 }
 
 # Test installation
@@ -71,4 +71,4 @@ python -c "import torch; print('PyTorch version:', torch.__version__); print('CU
 
 Write-Host "`n=== Installation Complete ===" -ForegroundColor Green
 Write-Host "You can now use 'dev --help' to test the CLI" -ForegroundColor Cyan
-Write-Host "For other projects, run: pip install -e $cortexPath" -ForegroundColor Yellow
+Write-Host "The dev CLI is the cortex-dev binary (no Python install needed)." -ForegroundColor Yellow

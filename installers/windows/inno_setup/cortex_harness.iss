@@ -80,13 +80,13 @@ Source: "..\..\docs\*"; DestDir: "{app}\docs"; Flags: recursesubdirs createallsu
 
 [Icons]
 ; Program shortcuts
-Name: "{group}\CortexHarness CLI"; Filename: "{cmd}"; Parameters: "/K ""cd /d ""{app}"" && .venv\Scripts\python.exe cortex_harness\dev.py --help"""; IconFilename: "{app}\app.ico"; Comment: "Open CortexHarness CLI"
+Name: "{group}\CortexHarness CLI"; Filename: "{cmd}"; Parameters: "/K ""cd /d ""{app}"" && rust\target\release\cortex-dev.exe --help"""; IconFilename: "{app}\app.ico"; Comment: "Open CortexHarness CLI"
 Name: "{group}\CortexHarness Documentation"; Filename: "{app}\docs\README.md"; IconFilename: "{app}\app.ico"; Comment: "View documentation"
 Name: "{group}\Uninstall CortexHarness"; Filename: "{uninstallexe}"; IconFilename: "{app}\app.ico"
 
 ; Desktop and Quick Launch icons
-Name: "{userdesktop}\CortexHarness CLI"; Filename: "{cmd}"; Parameters: "/K ""cd /d ""{app}"" && .venv\Scripts\python.exe cortex_harness\dev.py --help""; IconFilename: "{app}\app.ico"; Tasks: desktopicon; Comment: "Open CortexHarness CLI"
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\CortexHarness CLI"; Filename: "{cmd}"; Parameters: "/K ""cd /d ""{app}"" && .venv\Scripts\python.exe cortex_harness\dev.py --help""; IconFilename: "{app}\app.ico"; Tasks: quicklaunchicon
+Name: "{userdesktop}\CortexHarness CLI"; Filename: "{cmd}"; Parameters: "/K ""cd /d ""{app}"" && rust\target\release\cortex-dev.exe --help""; IconFilename: "{app}\app.ico"; Tasks: desktopicon; Comment: "Open CortexHarness CLI"
+Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\CortexHarness CLI"; Filename: "{cmd}"; Parameters: "/K ""cd /d ""{app}"" && rust\target\release\cortex-dev.exe --help""; IconFilename: "{app}\app.ico"; Tasks: quicklaunchicon
 
 [Registry]
 ; Context menu integration for directory right-click
@@ -208,7 +208,7 @@ begin
       CreateShortcut(
         ExpandConstant('{userdesktop}\CortexHarness CLI.lnk'),
         ExpandConstant('{cmd}'),
-        '/K ""cd /d "' + ExpandConstant('{app}') + '" && .venv\Scripts\python.exe cortex_harness\dev.py --help""',
+        '/K ""cd /d "' + ExpandConstant('{app}') + '" && rust\target\release\cortex-dev.exe --help""',
         ExpandConstant('{app}'),
         '', '', SW_SHOWNORMAL, 0);
     end;
@@ -217,7 +217,7 @@ begin
     CreateShortcut(
       ExpandConstant('{group}\CortexHarness CLI.lnk'),
       ExpandConstant('{cmd}'),
-      '/K ""cd /d "' + ExpandConstant('{app}') + '" && .venv\Scripts\python.exe cortex_harness\dev.py --help""',
+      '/K ""cd /d "' + ExpandConstant('{app}') + '" && rust\target\release\cortex-dev.exe --help""',
       ExpandConstant('{app}'),
       '', '', SW_SHOWNORMAL, 0);
   end;

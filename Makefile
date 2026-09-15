@@ -1,15 +1,22 @@
 ifeq ($(OS),Windows_NT)
 PYTHON ?= $(if $(wildcard .venv/Scripts/python.exe),.venv/Scripts/python.exe,python)
-LIFECYCLE := powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/mcp-lifecycle.ps1
 OWNER_OPTION := -Owner
+BIN_SUFFIX := .exe
 else
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
-LIFECYCLE := $(PYTHON) scripts/mcp-lifecycle.py
 OWNER_OPTION := --owner
+BIN_SUFFIX :=
 endif
 UV ?= uv
 export UV
-DEV := $(PYTHON) cortex_harness/dev.py
+
+# Phase-06 cutover: the dev/make layer is the cortex-dev binary only (no
+# Python rollback; downgrade = reinstall the previous release binary).
+# Resolution: CORTEX_DEV_BIN -> installed prefix -> repo release build.
+# PYTHON stays only for the deliberate Python-reference targets (parity/embed).
+CORTEX_DEV_BIN ?= $(firstword $(wildcard rust/target/release/cortex-dev$(BIN_SUFFIX)) $(wildcard rust/target/debug/cortex-dev$(BIN_SUFFIX)) $(HOME)/.local/bin/cortex-dev$(BIN_SUFFIX))
+DEV := $(CORTEX_DEV_BIN)
+LIFECYCLE := $(CORTEX_DEV_BIN)
 
 # Rust workspace (graph core + retrieval brain + PyO3 bindings).
 # Parity-first: golden fixtures are generated from the Python reference in
@@ -140,7 +147,7 @@ rust-check: rust-clippy rust-test
 # must exist at runtime. `make build` provisions it from the pinned `onnxruntime`
 # wheel (same ORT build the parity fixtures were measured with).
 ort-ensure:
-	$(PYTHON) scripts/ensure_ort.py
+	$(CORTEX_DEV_BIN) ensure-ort
 
 # Model graphs are multi-GB and deliberately NOT part of `build`:
 #   jina-v3  -> must be self-exported (the official HF ONNX requires a `task_id`
