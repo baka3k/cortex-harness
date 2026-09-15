@@ -223,3 +223,26 @@ cleanup sets correct), `jp1`. `dart` (the 7th) auto-inherits the framework hook
 when phase-02 lands its binary; the native pass keeps it on the Python child
 (loud log) until then. A missing binary for any shared parser degrades to the
 Python child, so child wiring never gates the component evidence.
+
+### Parity notes from the child-wiring review (accepted, not defects)
+
+1. **Category ORDER in the artifact differs from Python's dict order** for the
+   `WriteAllPayload`-derived children (Rust emits `namespaces, files, …`,
+   Python `files, namespaces, …`). Harmless: point ids are per-document
+   deterministic (`uuid5`), so upsert/stale results are order-invariant; only
+   the batch grouping changes (G5 join-by-id proved 80/80 and 71/71 anyway).
+   The shell child deliberately does NOT wrap through `WriteAllPayload` (it has
+   no `scripts`/`invocations`/`programs` slots) and emits Python's exact category
+   keys — verified against `shell_analyzer.py:144-150`.
+2. **`scanned_directory: true` is constant** in the children. Python's
+   `full_replace = not incremental and _scanned_directory`; that conjunct can
+   only be false on a single-FILE embedding run, which the orchestrator never
+   issues (it always points a child at the repo directory). shell/jp1 Python
+   don't even carry the conjunct (shell:323, jp1:95), so `true` is literal
+   parity there.
+3. **`hash_vector` now exists twice** in cortex-sync after the phase-05 merge:
+   `message_scan::record::hash_vector` (f32, ASCII-only lower, digest truncated
+   to 64 bits before `% size`) vs the G3 bit-exact `crate::hash_vector` (f64,
+   full-Unicode lower, exact 160-bit modulo, fixture-gated). The G3 one is
+   canonical — migrate the message-lane caller onto it in a phase-05 follow-up;
+   do not add a third variant.
