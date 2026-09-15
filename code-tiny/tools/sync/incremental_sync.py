@@ -1380,6 +1380,11 @@ _RUST_ANALYZER_BINARIES = {
     "cplus": "analyzer-cplus",
     "sql": "analyzer-sql",
     "plsql": "analyzer-plsql",
+    # Phase 04 (analyzer-layer-rust-cutover): `analyzer-topology` port
+    # replaces `tools/project_topology/topology_analyzer.py` for the
+    # topology overlay at end of sync. Mirrors `cortex-sync` registry
+    # `rust_analyzer_binaries()`.
+    "project_topology": "analyzer-topology",
 }
 
 
