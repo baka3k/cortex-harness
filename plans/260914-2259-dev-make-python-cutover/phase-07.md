@@ -33,4 +33,4 @@ umbrella). Rollback python đã bỏ từ phase-06 (validate) — phase này ch�
 - [ ] CI bridge-ban hoạt động (unit test hoặc commit vết giả thấy fail).
 - [ ] Docs nói đúng end-state + forced list; runbook ghi downgrade path (previous release binary).
 
-**Trạng thái:** draft (rev 2 — trước đây là phase-06)
+**Trạng thái:** draft (rev 2) — **PARTIAL (code-level) 2026-09-15**; archive lifecycle .py chờ 5 shim port (reports/phase-07.md)

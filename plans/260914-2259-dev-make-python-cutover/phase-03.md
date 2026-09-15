@@ -31,4 +31,4 @@
 - [ ] Sau phase này: `grep "call_json\|call_raw\|try_call_json" rust/crates/cortex-dev/src/cmds/`
       → 0 match (toàn bộ caller đã native; HELPER_SRC xoá ở phase-07).
 
-**Trạng thái:** draft (rev 2)
+**Trạng thái:** ready (rev 2) — **DONE 2026-09-15** (reports/phase-03.md)

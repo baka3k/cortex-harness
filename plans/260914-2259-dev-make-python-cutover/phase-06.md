@@ -52,4 +52,4 @@ Path resolution binary cho end-user: `CORTEX_DEV_BIN` env → installed prefix �
 - [ ] CI suites rewritten xanh; parity harness vẫn pass (dev.py reference chạy độc lập).
 - [ ] Bắt đầu dogfood 1 tuần (gộp window umbrella) — gate đóng khi sạch lỗi.
 
-**Trạng thái:** ready (rev 2 — validate chốt binary-only)
+**Trạng thái:** ready (rev 2) — **DONE (code) 2026-09-15**; Windows smoke + dogfood còn (reports/phase-06.md)
