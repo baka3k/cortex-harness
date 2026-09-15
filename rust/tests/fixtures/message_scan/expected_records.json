@@ -1,0 +1,193 @@
+{
+  "schema": "phase-05-message-scan-snapshot-v1",
+  "source": "python-baseline",
+  "records": [
+    {
+      "parser": "java",
+      "file": "src/main/java/com/example/Bus.java",
+      "line": 13,
+      "name": "evt-",
+      "sender": "emitEvent",
+      "receiver": "payload",
+      "payload": "payload",
+      "confidence": 0.95,
+      "id": "msg::831215d8895da8e3842dbeb4"
+    },
+    {
+      "parser": "java",
+      "file": "src/main/java/com/example/Bus.java",
+      "line": 14,
+      "name": "evt-...",
+      "sender": "emitEvent",
+      "receiver": "",
+      "payload": "\"evt-...\"",
+      "confidence": 0.85,
+      "id": "msg::fb183c7b4d92d5a5b01ced25"
+    },
+    {
+      "parser": "java",
+      "file": "src/main/java/com/example/Bus.java",
+      "line": 18,
+      "name": "msg",
+      "sender": "onMessage",
+      "receiver": "data",
+      "payload": "data",
+      "confidence": 0.75,
+      "id": "msg::b488c6ec2a79bf3e7a8cb07c"
+    },
+    {
+      "parser": "java",
+      "file": "src/main/java/com/example/Bus.java",
+      "line": 19,
+      "name": "msg",
+      "sender": "onMessage",
+      "receiver": "data",
+      "payload": "data",
+      "confidence": 0.75,
+      "id": "msg::ab74e49d51435da321d0d3fb"
+    },
+    {
+      "parser": "java",
+      "file": "src/main/java/com/example/Bus.java",
+      "line": 20,
+      "name": "done",
+      "sender": "onMessage",
+      "receiver": "payload",
+      "payload": "payload",
+      "confidence": 0.95,
+      "id": "msg::97c4b7fe509c3d6f4f26dba1"
+    },
+    {
+      "parser": "java",
+      "file": "src/main/java/com/example/Bus.java",
+      "line": 21,
+      "name": "done",
+      "sender": "onMessage",
+      "receiver": "payload",
+      "payload": "payload",
+      "confidence": 0.95,
+      "id": "msg::3d0ac9e658b76a9b17f5665d"
+    },
+    {
+      "parser": "python",
+      "file": "pkg/broker.py",
+      "line": 7,
+      "name": "msg",
+      "sender": "send_msg",
+      "receiver": "target",
+      "payload": "target",
+      "confidence": 0.75,
+      "id": "msg::74ee20119fb4136a2d00982f"
+    },
+    {
+      "parser": "python",
+      "file": "pkg/broker.py",
+      "line": 8,
+      "name": "msg",
+      "sender": "send_msg",
+      "receiver": "target",
+      "payload": "target",
+      "confidence": 0.75,
+      "id": "msg::8f76dc6724e3982652b9ec60"
+    },
+    {
+      "parser": "python",
+      "file": "pkg/broker.py",
+      "line": 11,
+      "name": "payload",
+      "sender": "broadcast",
+      "receiver": "peer",
+      "payload": "peer",
+      "confidence": 0.75,
+      "id": "msg::0b7f10cbcb3b90619dcf2ead"
+    },
+    {
+      "parser": "python",
+      "file": "pkg/broker.py",
+      "line": 12,
+      "name": "payload",
+      "sender": "broadcast",
+      "receiver": "peer",
+      "payload": "peer",
+      "confidence": 0.75,
+      "id": "msg::550e69d6a584505772053d18"
+    },
+    {
+      "parser": "ts",
+      "file": "web/src/Dispatcher.ts",
+      "line": 8,
+      "name": "topic: string",
+      "sender": "publish",
+      "receiver": "",
+      "payload": "payload: any",
+      "confidence": 0.65,
+      "id": "msg::9247c932d3fad8371523b4ec"
+    },
+    {
+      "parser": "ts",
+      "file": "web/src/Dispatcher.ts",
+      "line": 9,
+      "name": "topic",
+      "sender": "publish",
+      "receiver": "payload",
+      "payload": "payload",
+      "confidence": 0.75,
+      "id": "msg::7322bba043e3be632173bdf0"
+    },
+    {
+      "parser": "ts",
+      "file": "web/src/Dispatcher.ts",
+      "line": 10,
+      "name": "topic",
+      "sender": "publish",
+      "receiver": "payload",
+      "payload": "payload",
+      "confidence": 0.75,
+      "id": "msg::3811bc89d7fbe0e31eed83e4"
+    },
+    {
+      "parser": "ts",
+      "file": "web/src/Dispatcher.ts",
+      "line": 11,
+      "name": "topic",
+      "sender": "publish",
+      "receiver": "payload",
+      "payload": "payload",
+      "confidence": 0.75,
+      "id": "msg::23615d2765ddefefc23ef154"
+    },
+    {
+      "parser": "ts",
+      "file": "web/src/Dispatcher.ts",
+      "line": 14,
+      "name": "event: string",
+      "sender": "notify",
+      "receiver": "",
+      "payload": "peer: any",
+      "confidence": 0.65,
+      "id": "msg::96871d8314959a04e57331e1"
+    },
+    {
+      "parser": "ts",
+      "file": "web/src/Dispatcher.ts",
+      "line": 15,
+      "name": "event",
+      "sender": "notify",
+      "receiver": "peer",
+      "payload": "peer",
+      "confidence": 0.75,
+      "id": "msg::f24c49772b609a0ddbc0647a"
+    },
+    {
+      "parser": "ts",
+      "file": "web/src/Dispatcher.ts",
+      "line": 16,
+      "name": "event",
+      "sender": "notify",
+      "receiver": "peer",
+      "payload": "peer",
+      "confidence": 0.75,
+      "id": "msg::1e55482b94f0691af6928303"
+    }
+  ]
+}

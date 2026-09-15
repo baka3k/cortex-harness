@@ -10,6 +10,10 @@ publish = false
 name = "cortex-sync"
 path = "src/main.rs"
 
+[lib]
+name = "cortex_sync"
+path = "src/lib.rs"
+
 [dependencies]
 cortex-graph-core = { path = "../cortex-graph-core" }
 cortex-graph-writer = { path = "../cortex-graph-writer" }
@@ -17,6 +21,7 @@ cortex-falkordb = { path = "../cortex-falkordb" }
 clap = { version = "4", features = ["derive"] }
 getrandom = "0.2"
 libc = "0.2"
+once_cell = "1"
 redis = { version = "1.7", default-features = false, features = ["script"] }
 regex = "1"
 serde = { version = "1", features = ["derive"] }

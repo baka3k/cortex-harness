@@ -1,31 +1,7 @@
-//! cortex-sync — Rust port of `code-tiny/tools/sync/incremental_sync.py`
-//! (phase 09 of the rust-full-migration plan).
-//!
-//! Entry point mirrors the Python `__main__`: preload the harness config
-//! (pre-scanning `--root`/`--config`), then run the orchestrator.
-#![deny(unsafe_code)]
-// Test builds lift the deny: registry_tests mutates process env to exercise
-// the flip matrix (moved out of Cargo.toml [lints] so the source attribute
-// wins over the command-line flag it would otherwise emit).
-#![cfg_attr(test, allow(unsafe_code))]
+//! `_run_incremental` port — the incremental-sync orchestrator main line.
 
-mod cli;
-mod frameworks;
-mod gitdiff;
-mod graphops;
-mod inventory;
-mod journalenv;
-mod orchestrator;
-mod registry;
-#[cfg(test)]
-mod registry_tests;
-mod routing;
-mod state;
-mod syncscope;
-mod tsdetect;
-mod util;
-mod walk;
-
+use cortex_sync::cli;
+use cortex_sync::orchestrator;
 use std::collections::BTreeMap;
 
 fn main() {
