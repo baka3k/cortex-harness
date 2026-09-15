@@ -476,11 +476,11 @@ pub fn code_env_for_process(
         setdefault(&mut result, "CODE_EMBEDDING_MODEL", model.clone());
         setdefault(&mut result, "EMBED_MODEL", model);
     }
-    if let Some(device) = env.get("device").filter(|v| !v.is_null()) {
+    if !py_falsy(env.get("device")) {
         setdefault(
             &mut result,
             "EMBED_DEVICE",
-            normalize_embed_device(&py_str(device)),
+            normalize_embed_device(&py_str(env.get("device").unwrap_or(&Value::Null))),
         );
     }
     if !py_falsy(env.get("BATCH_SIZE")) {
@@ -527,11 +527,11 @@ pub fn doc_env_for_process(
     if !py_falsy(env.get("EMBEDDING_MODEL")) {
         setdefault(&mut result, "DOC_EMBEDDING_MODEL", py_str(env.get("EMBEDDING_MODEL").unwrap_or(&Value::Null)));
     }
-    if let Some(device) = env.get("device").filter(|v| !v.is_null()) {
+    if !py_falsy(env.get("device")) {
         setdefault(
             &mut result,
             "EMBED_DEVICE",
-            normalize_embed_device(&py_str(device)),
+            normalize_embed_device(&py_str(env.get("device").unwrap_or(&Value::Null))),
         );
     }
     let project_id = if cfg

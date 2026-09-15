@@ -265,7 +265,7 @@ pub fn purge(journal_path: &str, run_id: &str, project_id: &str, root: &str) -> 
             .metadata
             .parser
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
             .collect();
         if resolved
             .file_name()
