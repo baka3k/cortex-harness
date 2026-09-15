@@ -1356,8 +1356,11 @@ def _graph_target_cli_args(args: argparse.Namespace) -> List[str]:
     return result
 
 
-# Parsers đã có analyzer Rust port (phase 04–06 rust-full-migration).
+# Parsers đã có analyzer Rust port (phase 02–06 analyzer-layer-rust-cutover).
+# Mirror đầy đủ `cortex-sync` registry `rust_analyzer_binaries()` + `framework_rust_binaries()`
+# (red-team S3/S4/F10): mọi cell của flip matrix giống nhau giữa 2 implementation.
 _RUST_ANALYZER_BINARIES = {
+    # Primary parsers — phase 04–08 rust-full-migration
     "python": "analyzer-python",
     "shell": "analyzer-shell",
     "ts": "analyzer-ts",
@@ -1380,12 +1383,60 @@ _RUST_ANALYZER_BINARIES = {
     "cplus": "analyzer-cplus",
     "sql": "analyzer-sql",
     "plsql": "analyzer-plsql",
+    # Phase 02 (analyzer-layer-rust-cutover): `analyzer-dart` covers both
+    # primary `dart` parser + `flutter` overlay (same binary, `--mode` flips).
+    "dart": "analyzer-dart",
+    # Phase 03 (analyzer-layer-rust-cutover): `analyzer-csharp` entry port —
+    # spawns Roslyn worker + bootstrap build (no Python entry survives post-cutover).
+    "csharp": "analyzer-csharp",
     # Phase 04 (analyzer-layer-rust-cutover): `analyzer-topology` port
     # replaces `tools/project_topology/topology_analyzer.py` for the
     # topology overlay at end of sync. Mirrors `cortex-sync` registry
     # `rust_analyzer_binaries()`.
     "project_topology": "analyzer-topology",
 }
+
+# Framework overlay → Rust binary name (underscore key → dash binary).
+# Mirror đầy đủ `cortex-sync` registry `framework_rust_binaries()`.
+# Web/django frameworks (fastapi_django/express_js/laravel) chia sẻ
+# `analyzer-web-overlays` lib; binary name = shared entry point.
+# `flutter` overlay reuses `analyzer-dart` binary (cùng mode-flip contract).
+_RUST_FRAMEWORK_BINARIES = {
+    "spring": "analyzer-spring",
+    "servlet_jsp": "analyzer-servlet-jsp",
+    "mybatis": "analyzer-mybatis",
+    "struts": "analyzer-struts",
+    "aspnet_framework": "analyzer-aspnet-framework",
+    "aspnet_core": "analyzer-aspnet-core",
+    "fastapi_django": "analyzer-fastapi-django",
+    "express_js": "analyzer-express-js",
+    "laravel": "analyzer-laravel",
+    "database_sql": "analyzer-database-schema",
+    "database_plsql": "analyzer-database-schema",
+    # flutter overlay shares analyzer-dart binary
+    "flutter": "analyzer-dart",
+}
+
+
+def _resolve_rust_binary_name(analyzer: AnalyzerConfig) -> Optional[str]:
+    """Look up binary name theo parser/framework key — mirror `cortex-sync`
+    `mapped_binary_name()` (red-team S3)."""
+    name = _RUST_ANALYZER_BINARIES.get(analyzer.parser)
+    if name is not None:
+        return name
+    return _RUST_FRAMEWORK_BINARIES.get(analyzer.parser)
+
+
+def _rust_binary_path(bin_dir: str, binary_name: str) -> Optional[str]:
+    """Probe bare name first, then `.exe` (Windows cargo output, red-team A8/F2).
+    Returns None nếu cả 2 vắng — caller quyết định fallback vs error."""
+    bare = os.path.join(bin_dir, binary_name)
+    if os.path.isfile(bare):
+        return bare
+    exe = os.path.join(bin_dir, binary_name + ".exe")
+    if os.path.isfile(exe):
+        return exe
+    return None
 
 
 def _rust_analyzer_binary(analyzer: AnalyzerConfig) -> Optional[str]:
@@ -1397,6 +1448,9 @@ def _rust_analyzer_binary(analyzer: AnalyzerConfig) -> Optional[str]:
     ép backend Python bất kể binary có tồn tại. ``=rust`` giữ nghĩa cũ (chọn
     Rust nếu binary sẵn sàng). Graph target args và mọi flag khác giữ nguyên —
     CLI contract 2 backend giống từng chữ.
+
+    Phase-07 mirror đầy đủ ``cortex-sync`` registry: thêm dart/csharp/topology/
+    overlays + framework key resolution + ``.exe`` probing (Windows).
     """
     mode = (os.environ.get("CORTEX_RUST_ANALYZER") or "").strip().lower()
     if mode == "python":
@@ -1405,7 +1459,7 @@ def _rust_analyzer_binary(analyzer: AnalyzerConfig) -> Optional[str]:
     if mode not in ("", "rust"):
         # Giá trị lạ: giữ hành vi trước phase-14 (không swap).
         return None
-    binary_name = _RUST_ANALYZER_BINARIES.get(analyzer.parser)
+    binary_name = _resolve_rust_binary_name(analyzer)
     if not binary_name:
         return None
     # _ROOT_DIR trỏ vào code-tiny; repo root là thư mục cha.
@@ -1414,8 +1468,7 @@ def _rust_analyzer_binary(analyzer: AnalyzerConfig) -> Optional[str]:
         os.environ.get("CORTEX_RUST_ANALYZER_BIN_DIR")
         or os.path.join(repo_root, "rust", "target", "release")
     )
-    candidate = os.path.join(bin_dir, binary_name)
-    return candidate if os.path.isfile(candidate) else None
+    return _rust_binary_path(bin_dir, binary_name)
 
 
 def _build_analyzer_cmd(
