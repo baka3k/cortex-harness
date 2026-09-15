@@ -1,6 +1,7 @@
 //! Seam duy nhất mà mọi caller (mind MCP, cortex-doc, query lanes) chạm vào,
 //! cộng với selection qua env `CORTEX_EMBED_BACKEND=python|onnx` (default
-//! `python` — rollback tức thì, cùng pattern `CORTEX_RUST_ANALYZER`).
+//! `onnx` từ re-baseline vector-lane phase-02; `python` là rollback flag,
+//! cùng pattern `CORTEX_RUST_ANALYZER`).
 
 use std::sync::OnceLock;
 
@@ -30,18 +31,20 @@ pub enum Backend {
 pub const BACKEND_ENV: &str = "CORTEX_EMBED_BACKEND";
 
 impl Backend {
-    /// Default `python`: gate parity/perf chưa pass cho tới khi nói khác đi.
+    /// Default `onnx` (re-baseline vector-lane phase-02: parity cosine ≥ 0.999
+    /// PASS, latency p95 đã fix bằng TTL cache — plans/260914-1706 phase02b).
+    /// `CORTEX_EMBED_BACKEND=python` là rollback flag.
     pub fn from_env() -> Self {
         match read_env(BACKEND_ENV).as_deref() {
             Some("onnx") => Self::Onnx,
             Some("python") => Self::Python,
             Some(other) => {
                 eprintln!(
-                    "[cortex-embed] unknown {BACKEND_ENV}={other:?}; falling back to python"
+                    "[cortex-embed] unknown {BACKEND_ENV}={other:?}; falling back to onnx"
                 );
-                Self::Python
+                Self::Onnx
             }
-            None => Self::Python,
+            None => Self::Onnx,
         }
     }
 

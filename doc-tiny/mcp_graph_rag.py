@@ -381,19 +381,29 @@ def fetch_entities_by_ids(
     entities: List[Dict[str, Any]] = []
     seen = set()
     for store, owned in _graph_store_candidates(project_id):
+        project_key = project_id.strip().casefold() if project_id else None
         try:
             with store.session() as session:
-                result = session.run(
-                    """
-                    MATCH (e:Entity)
-                    WHERE e.id IN $ids
-                      AND ($project_id_normalized IS NULL OR
-                           e.project_id_normalized STARTS WITH $project_id_normalized)
-                    RETURN e.id AS id, e.name AS name, e.type AS type
-                    """,
-                    ids=entity_ids,
-                    project_id_normalized=(project_id.strip().casefold() if project_id else None),
-                )
+                if project_key:
+                    result = session.run(
+                        """
+                        MATCH (e:Entity)
+                        WHERE e.id IN $ids
+                          AND e.project_id_normalized STARTS WITH $project_id_normalized
+                        RETURN e.id AS id, e.name AS name, e.type AS type
+                        """,
+                        ids=entity_ids,
+                        project_id_normalized=project_key,
+                    )
+                else:
+                    result = session.run(
+                        """
+                        MATCH (e:Entity)
+                        WHERE e.id IN $ids
+                        RETURN e.id AS id, e.name AS name, e.type AS type
+                        """,
+                        ids=entity_ids,
+                    )
                 for record in result:
                     row = dict(record)
                     key = row.get("id") or (row.get("name"), row.get("type"))
@@ -419,29 +429,45 @@ def fetch_relations_by_entity_ids(
     relations: List[Dict[str, Any]] = []
     seen = set()
     for store, owned in _graph_store_candidates(project_id):
+        project_key = project_id.strip().casefold() if project_id else None
         remaining = related_k - len(relations)
         if remaining <= 0:
             break
         try:
             with store.session() as session:
-                result = session.run(
-                    """
-                    UNWIND $ids AS id
-                    MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)
-                    WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)
-                      AND ($project_id_normalized IS NULL OR
-                           (e.project_id_normalized STARTS WITH $project_id_normalized AND
-                            e2.project_id_normalized STARTS WITH $project_id_normalized))
-                    RETURN e.id AS source_id, e.name AS source, e.type AS source_type,
-                           r.type AS relation,
-                           e2.id AS target_id, e2.name AS target, e2.type AS target_type
-                    LIMIT $limit
-                    """,
-                    ids=entity_ids,
-                    types=entity_types,
-                    limit=remaining,
-                    project_id_normalized=(project_id.strip().casefold() if project_id else None),
-                )
+                if project_key:
+                    result = session.run(
+                        """
+                        UNWIND $ids AS id
+                        MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)
+                        WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)
+                          AND ((e.project_id_normalized STARTS WITH $project_id_normalized AND
+                                e2.project_id_normalized STARTS WITH $project_id_normalized))
+                        RETURN e.id AS source_id, e.name AS source, e.type AS source_type,
+                               r.type AS relation,
+                               e2.id AS target_id, e2.name AS target, e2.type AS target_type
+                        LIMIT $limit
+                        """,
+                        ids=entity_ids,
+                        types=entity_types,
+                        limit=remaining,
+                        project_id_normalized=project_key,
+                    )
+                else:
+                    result = session.run(
+                        """
+                        UNWIND $ids AS id
+                        MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)
+                        WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)
+                        RETURN e.id AS source_id, e.name AS source, e.type AS source_type,
+                               r.type AS relation,
+                               e2.id AS target_id, e2.name AS target, e2.type AS target_type
+                        LIMIT $limit
+                        """,
+                        ids=entity_ids,
+                        types=entity_types,
+                        limit=remaining,
+                    )
                 for record in result:
                     row = dict(record)
                     key = (
@@ -592,22 +618,35 @@ def fetch_paragraph_by_source(
     project_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     for store, owned in _graph_store_candidates(project_id):
+        project_key = project_id.strip().casefold() if project_id else None
         try:
             with store.session() as session:
-                result = session.run(
-                    """
-                    MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
-                    WHERE $project_id_normalized IS NULL OR
-                          p.project_id_normalized STARTS WITH $project_id_normalized
-                    RETURN p.text AS text,
-                           p.short AS short,
-                           p.source_id AS source_id,
-                           p.paragraph_id AS paragraph_id
-                    """,
-                    source_id=source_id,
-                    paragraph_id=paragraph_id,
-                    project_id_normalized=(project_id.strip().casefold() if project_id else None),
-                )
+                if project_key:
+                    result = session.run(
+                        """
+                        MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
+                        WHERE p.project_id_normalized STARTS WITH $project_id_normalized
+                        RETURN p.text AS text,
+                               p.short AS short,
+                               p.source_id AS source_id,
+                               p.paragraph_id AS paragraph_id
+                        """,
+                        source_id=source_id,
+                        paragraph_id=paragraph_id,
+                        project_id_normalized=project_key,
+                    )
+                else:
+                    result = session.run(
+                        """
+                        MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})
+                        RETURN p.text AS text,
+                               p.short AS short,
+                               p.source_id AS source_id,
+                               p.paragraph_id AS paragraph_id
+                        """,
+                        source_id=source_id,
+                        paragraph_id=paragraph_id,
+                    )
                 record = result.single()
                 if record:
                     return dict(record)
@@ -685,28 +724,45 @@ def register_tools(mcp: FastMCP) -> None:
         source_ids: List[str] = []
         seen = set()
         for store, owned in _graph_store_candidates(project_id):
+            project_key = project_id.strip().casefold() if project_id else None
             if len(source_ids) >= limit_val:
                 break
             try:
                 with store.session() as session:
-                    result = session.run(
-                        """
-                        MATCH (p:Paragraph)
-                        WHERE p.source_id IS NOT NULL
-                          AND ($project_id_normalized IS NULL OR
-                               p.project_id_normalized STARTS WITH $project_id_normalized)
-                        RETURN DISTINCT p.source_id AS source_id
-                        ORDER BY source_id
-                        LIMIT $limit
-                        """,
-                        limit=limit_val - len(source_ids),
-                        project_id_normalized=(project_id.strip().casefold() if project_id else None),
-                    )
+                    if project_key:
+                        result = session.run(
+                            """
+                            MATCH (p:Paragraph)
+                            WHERE p.source_id IS NOT NULL
+                              AND p.project_id_normalized STARTS WITH $project_id_normalized
+                            RETURN DISTINCT p.source_id AS source_id
+                            ORDER BY source_id
+                            LIMIT $limit
+                            """,
+                            limit=limit_val - len(source_ids),
+                            project_id_normalized=project_key,
+                        )
+                    else:
+                        result = session.run(
+                            """
+                            MATCH (p:Paragraph)
+                            WHERE p.source_id IS NOT NULL
+                            RETURN DISTINCT p.source_id AS source_id
+                            ORDER BY source_id
+                            LIMIT $limit
+                            """,
+                            limit=limit_val - len(source_ids),
+                        )
                     for record in result:
                         source_id = record["source_id"]
                         if source_id not in seen:
                             seen.add(source_id)
                             source_ids.append(source_id)
+            except Exception:
+                # Fail-soft fan-out: a registered project whose doc store was
+                # never created (e.g. pre-migration smoke projects) must not
+                # fail the whole listing — skip and keep the readable stores.
+                pass
             finally:
                 if owned:
                     store.close()

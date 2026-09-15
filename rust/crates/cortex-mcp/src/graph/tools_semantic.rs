@@ -30,8 +30,44 @@ use super::{
     payload_string, resolve_db_candidates, resolve_rel_types_with_diagnostics,
     run_cypher_first, unsupported_relationship_result, Backend,
 };
+use super::vector_lane;
 use crate::framework_registry::capability_for_parser;
 use super::runtime;
+
+/// `_format_collection_errors` — max 5 rows, `col: msg; …` suffix shape.
+fn format_collection_errors(errors: &[Value], max_items: usize) -> String {
+    if errors.is_empty() {
+        return String::new();
+    }
+    let items: Vec<String> = errors
+        .iter()
+        .take(max_items)
+        .map(|error| {
+            let collection = error
+                .get("collection")
+                .map(value_display)
+                .unwrap_or_else(|| "unknown".to_string());
+            let message = error.get("error").and_then(Value::as_str).unwrap_or("");
+            if message.is_empty() {
+                collection
+            } else {
+                format!("{collection}: {message}")
+            }
+        })
+        .collect();
+    let mut rendered = items.join("; ");
+    if errors.len() > max_items {
+        rendered.push_str(" ...");
+    }
+    rendered
+}
+
+fn value_display(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
 
 
 /// `_normalize_collections`.
@@ -261,10 +297,11 @@ pub fn tool_semantic_search(
         return Err("query is required.".to_string());
     }
     let mode = payload_str(payload, "mode").unwrap_or("combined").to_string();
-    let _top_k = payload
+    let top_k = payload
         .get("top_k")
         .and_then(Value::as_i64)
-        .unwrap_or(10);
+        .unwrap_or(10)
+        .max(0) as usize;
     let project_id = payload_string(payload, "project_id");
     let mut expand_graph = payload_bool(payload, "expand_graph");
     let graph_depth = payload.get("graph_depth").cloned().unwrap_or(json!(2));
@@ -302,10 +339,18 @@ pub fn tool_semantic_search(
         capability_diagnostics = Some(resolved.diagnostics);
     }
 
+    // Vector lane (phases 03/04): embed natively qua `cortex-embed` rồi
+    // search qdrant qua remote REST hoặc local sidecar — hợp đồng python
+    // được ghim bởi `compare_vector.py` golden replay.
+    let store = vector_lane::resolve_store(project_id.as_deref())?;
+    let vector = vector_lane::embed_query(&query)?;
+    let vector_len = vector.len();
+
     // `_resolve_base_collections`: collection override không khớp store →
     // ValueError với message byte-match Python.
-    let available = local_store_collections();
+    let available = vector_lane::list_collection_names(&store)?;
     let explicit_tokens = normalize_collections(payload.get("collection"));
+    let explicit_base = !explicit_tokens.is_empty();
     if !explicit_tokens.is_empty() {
         let resolved = resolve_collection_scopes(&explicit_tokens, &available);
         if resolved.is_empty() {
@@ -329,16 +374,142 @@ pub fn tool_semantic_search(
         );
     }
 
-    // Vector lane (Python-plane embedder): local store scopes với fixture
-    // project_id không có collection khớp → results rỗng như Python.
+    // Token bậc hai: explicit → env `QDRANT_COLLECTION` → mọi collection.
+    let mut base_tokens = explicit_tokens.clone();
+    if base_tokens.is_empty() {
+        let env_token = std::env::var("QDRANT_COLLECTION").unwrap_or_default();
+        base_tokens = normalize_collections(Some(&Value::String(env_token)));
+    }
+    let base_names: Vec<String> = if base_tokens.is_empty() {
+        available.clone()
+    } else {
+        let resolved = resolve_collection_scopes(&base_tokens, &available);
+        if resolved.is_empty() {
+            available.clone()
+        } else {
+            resolved
+        }
+    };
+    let (base_selected, base_errors) =
+        vector_lane::filter_collections_for_vector(&store, &base_names, vector_len);
+    if base_selected.is_empty() {
+        let details = format_collection_errors(&base_errors, 5);
+        let message = if explicit_base {
+            format!("Provided collections do not match embedding size {vector_len}.")
+        } else {
+            format!("No Qdrant collections match embedding size {vector_len}.")
+        };
+        let message = if details.is_empty() {
+            message
+        } else {
+            format!("{message} Details: {details}")
+        };
+        return Err(format!(
+            "{message} Use list_qdrant_collections(include_vectors=true) to verify sizes."
+        ));
+    }
+    let comment_tokens = normalize_collections(payload.get("collection_comment"));
+    let (comment_selected, comment_errors) = if comment_tokens.is_empty() {
+        (base_selected.clone(), Vec::new())
+    } else {
+        vector_lane::filter_collections_for_vector(&store, &comment_tokens, vector_len)
+    };
+    let code_tokens = normalize_collections(payload.get("collection_code"));
+    let (code_selected, code_errors) = if code_tokens.is_empty() {
+        (base_selected.clone(), Vec::new())
+    } else {
+        vector_lane::filter_collections_for_vector(&store, &code_tokens, vector_len)
+    };
+
     let mut results = Map::new();
     results.insert("mode".to_string(), json!(mode));
     results.insert("query".to_string(), json!(query));
-    results.insert("results".to_string(), json!([]));
     results.insert("content_mode".to_string(), json!(content_mode));
 
+    let search_targets: Vec<(String, Option<String>)> = match mode.as_str() {
+        "comment" => comment_selected,
+        "code" => code_selected,
+        _ => {
+            let mut combined: Vec<(String, Option<String>)> = Vec::new();
+            for entry in base_selected
+                .iter()
+                .chain(comment_selected.iter())
+                .chain(code_selected.iter())
+            {
+                if !combined.iter().any(|(name, _)| name == &entry.0) {
+                    combined.push(entry.clone());
+                }
+            }
+            combined
+        }
+    };
+    let filter = vector_lane::project_scope_filter(project_id.as_deref());
+    let mut per_collection: Vec<Vec<Value>> = Vec::new();
+    let mut search_errors: Vec<Value> = Vec::new();
+    for (collection, vector_name) in &search_targets {
+        match vector_lane::search_collection(
+            &store,
+            collection,
+            &vector,
+            vector_name.as_deref(),
+            top_k,
+            filter.as_ref(),
+        ) {
+            Ok(mut hits) => {
+                for hit in hits.iter_mut() {
+                    if let Some(object) = hit.as_object_mut() {
+                        object.insert("_collection".to_string(), json!(collection));
+                    }
+                }
+                per_collection.push(hits);
+            }
+            Err(error) => {
+                search_errors.push(json!({"collection": collection, "error": error}))
+            }
+        }
+    }
+    let mut items = vector_lane::merge_hits(per_collection, top_k);
+
+    // `_select_content` + prune trên top-k (python loop sau merge).
+    let include_raw_fields = payload_bool(payload, "include_raw_fields");
+    for item in items.iter_mut() {
+        let node_id = item
+            .get("payload")
+            .and_then(|payload| payload.get("symbol_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| item.get("id").and_then(Value::as_str).map(str::to_string))
+            .unwrap_or_default();
+        if let Some(payload_object) = item.get_mut("payload").and_then(Value::as_object_mut) {
+            payload_object.insert("content_mode".to_string(), json!(content_mode));
+            let content =
+                super::select_content(payload_object, Some(node_id.as_str()), &content_mode, true);
+            payload_object.insert("content".to_string(), json!(content));
+            if !include_raw_fields {
+                for key in ["summary", "comment", "code", "note", "text"] {
+                    payload_object.remove(key);
+                }
+            }
+        }
+    }
+
+    results.insert("results".to_string(), Value::Array(items.clone()));
+    let mut merged_errors = base_errors;
+    match mode.as_str() {
+        "comment" => merged_errors = comment_errors,
+        "code" => merged_errors = code_errors,
+        _ => {
+            merged_errors.extend(comment_errors);
+            merged_errors.extend(code_errors);
+        }
+    }
+    merged_errors.extend(search_errors);
+    if !merged_errors.is_empty() {
+        results.insert("errors".to_string(), Value::Array(merged_errors));
+    }
+
     // graph_expansion luôn được gắn (expand_semantic_results chạy mọi mode).
-    let items: Vec<Value> = Vec::new();
     let expansion = expand_semantic_results(
         runtime,
         &items,

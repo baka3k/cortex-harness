@@ -602,11 +602,11 @@ fn run_retrieval(
     };
     let active_project_id = lookup_key(project_id);
 
-    // 1. Qdrant lane — embedder là Python-plane (sentence-transformers); local
-    // store chỉ chứa collection khác scope, mọi fixture scope trả rỗng như
-    // Python (`_retrieve_qdrant` → [] khi không có collection khớp).
-    let seeds_qdrant: Vec<Candidate> = Vec::new();
-    let _ = collection;
+    // 1. Qdrant lane — embed qua `cortex-embed` rồi search store (local
+    // sidecar | remote REST); mọi lỗi → seeds rỗng đúng như python
+    // `_retrieve_qdrant` (try/except → []).
+    let seeds_qdrant: Vec<Candidate> =
+        qdrant_seeds(&embed_query, collection, top_k, project_id);
 
     // 2. Keyword lane.
     let keyword_nodes = graph_keyword_search(
@@ -698,6 +698,9 @@ fn run_retrieval(
 
     // 4. Graph expansion (graph_expanded mode only).
     let mut expansion_nodes: Vec<ExpandedNode> = Vec::new();
+    // Seeds keep hop_distance 0 (python `graph_expander` line 529): only
+    // nodes first discovered BY expansion take hop >= 1.
+    let seed_set: std::collections::HashSet<String> = order.iter().cloned().collect();
     if expand_graph && !order.is_empty() {
         let seeds: Vec<String> = order.iter().take(order.len().min(10)).cloned().collect();
         expansion_nodes = expand_seeds(
@@ -745,10 +748,15 @@ fn run_retrieval(
             let expansion = expansion_nodes
                 .iter()
                 .find(|node| node.candidate.node_id == result.node_id);
+            let is_seed = seed_set.contains(&result.node_id);
             ScoredOwned {
-                node_id: result.node_id,
+                node_id: result.node_id.clone(),
                 score: result.score,
-                hop_distance: expansion.map(|node| node.hop_distance).unwrap_or(0),
+                hop_distance: if is_seed {
+                    0
+                } else {
+                    expansion.map(|node| node.hop_distance).unwrap_or(0)
+                },
                 seed_id: expansion.map(|node| node.seed_id.clone()).unwrap_or_default(),
                 seed_ids: expansion
                     .map(|node| node.seed_ids.clone())
@@ -847,7 +855,7 @@ fn signal_value(candidate: &Candidate, key: &str) -> f64 {
     }
 }
 
-fn build_node_reason(candidate: &Candidate, node_id: &str, hop_distance: i64) -> String {
+fn build_node_reason(candidate: &Candidate, node_id: &str, hop_distance: Option<i64>) -> String {
     let mut active: Vec<String> = Vec::new();
     for (signal_key, label) in SIGNAL_LABELS {
         let value = signal_value(candidate, signal_key);
@@ -876,14 +884,19 @@ fn build_node_reason(candidate: &Candidate, node_id: &str, hop_distance: i64) ->
     } else {
         parts.push("Retrieved as a related graph neighbor.".to_string());
     }
-    if hop_distance == 0 {
-        parts.push("This is a direct seed node (entry point).".to_string());
-    } else if hop_distance == 1 {
-        parts.push("This is a 1-hop neighbor of a seed node.".to_string());
-    } else if hop_distance == 2 {
-        parts.push("This is a 2-hop neighbor discovered via graph expansion.".to_string());
-    } else if candidate.graph >= SIGNAL_PROXIMITY_HIGH {
-        parts.push("This node is closely connected to the matched cluster.".to_string());
+    // Raw-node hop parity: matched_nodes in the python flow never carry a
+    // hop_distance on the raw node (packager defaults the OUTPUT to 0), so
+    // the "direct seed" phrase never fires; only expansion-derived hops do.
+    match hop_distance {
+        Some(1) => parts.push("This is a 1-hop neighbor of a seed node.".to_string()),
+        Some(2) => {
+            parts.push("This is a 2-hop neighbor discovered via graph expansion.".to_string())
+        }
+        _ => {
+            if candidate.graph >= SIGNAL_PROXIMITY_HIGH {
+                parts.push("This node is closely connected to the matched cluster.".to_string());
+            }
+        }
     }
     if !candidate.file_path.is_empty() {
         parts.push(format!("Located in {}.", candidate.file_path));
@@ -891,10 +904,8 @@ fn build_node_reason(candidate: &Candidate, node_id: &str, hop_distance: i64) ->
     parts.join(" ")
 }
 
-fn is_entry_point(candidate: &Candidate, hop_distance: i64) -> bool {
-    if hop_distance == 0 {
-        return true;
-    }
+fn is_entry_point(candidate: &Candidate, hop_distance: Option<i64>) -> bool {
+    let _ = hop_distance; // raw matched nodes never carry hop in python
     if candidate.graph >= ENTRY_POINT_PROXIMITY_THRESHOLD {
         return true;
     }
@@ -948,8 +959,9 @@ fn pack_results(scored_results: &[ScoredOwned], understanding: &QueryUnderstandi
                 signals.insert(signal_key.to_string(), json!(round4(value)));
             }
         }
-        let reason = build_node_reason(&result.candidate, &result.node_id, result.hop_distance);
-        let is_entry = is_entry_point(&result.candidate, result.hop_distance);
+        let raw_hop = if result.hop_distance == 0 { None } else { Some(result.hop_distance) };
+        let reason = build_node_reason(&result.candidate, &result.node_id, raw_hop);
+        let is_entry = is_entry_point(&result.candidate, raw_hop);
         let name = if result.candidate.name.is_empty() {
             result.node_id.clone()
         } else {
@@ -964,6 +976,12 @@ fn pack_results(scored_results: &[ScoredOwned], understanding: &QueryUnderstandi
         properties.insert("project_id".to_string(), json!(result.candidate.project_id));
         properties.insert("language".to_string(), json!(result.candidate.language));
         properties.insert("bm25".to_string(), json!(result.candidate.bm25));
+        // python `_bm25_corpus_text` được ghi ngược vào candidate trước khi
+        // packager sao chép vào properties.
+        properties.insert(
+            "_bm25_text".to_string(),
+            json!(bm25_corpus_text(&result.candidate)),
+        );
         properties.insert("_source".to_string(), json!(result.candidate.source));
         let node = json!({
             "node_id": result.node_id,
@@ -1035,7 +1053,10 @@ fn build_explanation_summary(
     let n_total = scored_results.len();
     let n_entry = scored_results
         .iter()
-        .filter(|item| is_entry_point(&item.candidate, item.hop_distance))
+        .filter(|item| {
+            let raw_hop = if item.hop_distance == 0 { None } else { Some(item.hop_distance) };
+            is_entry_point(&item.candidate, raw_hop)
+        })
         .count();
     let n_expanded = scored_results.iter().filter(|item| item.hop_distance > 0).count();
     let confidence = compute_confidence(scored_results);
@@ -1100,3 +1121,180 @@ fn build_explanation_summary(
 // Keep imports referenced.
 #[allow(unused_imports)]
 use is_database_not_found_error as _is_db_not_found;
+
+// ---------------------------------------------------------------------------
+// Qdrant seed lane (`_retrieve_qdrant`, vector-lane phase-03)
+// ---------------------------------------------------------------------------
+
+fn is_project_scope_collection(scope: &str, collection: &str) -> bool {
+    let scope = scope.trim();
+    let collection = collection.trim();
+    if scope.is_empty() || collection.is_empty() {
+        return false;
+    }
+    if collection == format!("{scope}_mess") {
+        return true;
+    }
+    collection.starts_with(&format!("{scope}_"))
+        && collection.contains("__")
+        && collection.ends_with("_functions")
+}
+
+fn hit_node_id(hit: &Value, payload: &Value) -> String {
+    payload
+        .get("symbol_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| hit.get("id").and_then(Value::as_str).map(str::to_string))
+        .unwrap_or_default()
+}
+
+fn hit_to_candidate(hit: &Value, payload: &Value) -> Candidate {
+    let get_str = |key: &str| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    Candidate {
+        node_id: hit_node_id(hit, payload),
+        name: get_str("name"),
+        qualified_name: get_str("qualified_name"),
+        kind: get_str("kind"),
+        file_path: get_str("file_path"),
+        semantic: hit.get("score").and_then(Value::as_f64).unwrap_or(0.0),
+        keyword: 0.0,
+        graph: 0.0,
+        freshness: 0.0,
+        confidence: payload
+            .get("doc_confidence")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        usage: payload
+            .get("signals")
+            .and_then(|signals| signals.get("usage"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        bm25: 0.0,
+        intent: get_str("intent"),
+        exported: payload.get("exported").and_then(Value::as_bool).unwrap_or(false),
+        side_effect: payload
+            .get("side_effect")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        return_type: get_str("return_type"),
+        project_id: get_str("project_id"),
+        language: get_str("language"),
+        source: "qdrant".to_string(),
+    }
+}
+
+/// `_retrieve_qdrant` — embed query, search every resolved collection, dedupe
+/// by node_id keeping the higher score, cut to `top_k`. Every failure mode
+/// collapses to empty seeds exactly like the python `try/except → []`.
+fn qdrant_seeds(
+    embed_query: &str,
+    collection: &str,
+    top_k: usize,
+    project_id: Option<&str>,
+) -> Vec<Candidate> {
+    let vector = match super::vector_lane::embed_query(embed_query) {
+        Ok(vector) => vector,
+        Err(_) => return Vec::new(),
+    };
+    let store = match super::vector_lane::resolve_store(project_id) {
+        Ok(store) => store,
+        Err(_) => return Vec::new(),
+    };
+    let available = match super::vector_lane::list_collection_names(&store) {
+        Ok(names) => names,
+        Err(_) => return Vec::new(),
+    };
+    // `_resolve_qdrant_collections`: token → scope resolve; no token → all.
+    let tokens: Vec<String> = collection
+        .split(',')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .collect();
+    let collections: Vec<String> = if tokens.is_empty() {
+        available
+    } else if available.is_empty() {
+        tokens
+    } else {
+        let mut resolved: Vec<String> = Vec::new();
+        for token in &tokens {
+            if available.iter().any(|name| name == token) {
+                if !resolved.contains(token) {
+                    resolved.push(token.clone());
+                }
+            } else {
+                for name in &available {
+                    if is_project_scope_collection(token, name) && !resolved.contains(name) {
+                        resolved.push(name.clone());
+                    }
+                }
+            }
+        }
+        if resolved.is_empty() { tokens } else { resolved }
+    };
+    let filter = if project_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+    {
+        super::vector_lane::project_scope_filter(project_id)
+    } else {
+        None
+    };
+    let mut merged: Vec<(String, Value)> = Vec::new();
+    for name in &collections {
+        let hits = match super::vector_lane::search_collection(
+            &store,
+            name,
+            &vector,
+            None,
+            top_k,
+            filter.as_ref(),
+        ) {
+            Ok(hits) => hits,
+            Err(_) => continue,
+        };
+        for hit in hits {
+            let payload = hit
+                .get("payload")
+                .cloned()
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            let node_id = hit_node_id(&hit, &payload);
+            if node_id.is_empty() {
+                continue;
+            }
+            let score = hit.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+            match merged.iter_mut().find(|(id, _)| id == &node_id) {
+                Some((_, existing)) => {
+                    if score > existing.get("score").and_then(Value::as_f64).unwrap_or(0.0) {
+                        *existing = hit;
+                    }
+                }
+                None => merged.push((node_id, hit)),
+            }
+        }
+    }
+    merged.sort_by(|a, b| {
+        let score = |item: &(String, Value)| item.1.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+        score(b).partial_cmp(&score(a)).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    merged.truncate(top_k);
+    merged
+        .into_iter()
+        .map(|(_, hit)| {
+            let payload = hit
+                .get("payload")
+                .cloned()
+                .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+            hit_to_candidate(&hit, &payload)
+        })
+        .collect()
+}

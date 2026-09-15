@@ -449,6 +449,17 @@ impl GraphRuntime {
             .graph_clients
             .iter()
             .find(|(name, _)| name == &graph_name)
+            .or_else(|| {
+                // Registry graph names can diverge from the physical graph
+                // name inside a migrated Ladybug store — the python driver
+                // opens the file regardless of the requested name. Fall back
+                // to the store's own graph when it is unambiguous.
+                if self.graph_clients.len() == 1 {
+                    self.graph_clients.first()
+                } else {
+                    None
+                }
+            })
             .map(|(_, index)| *index);
         let result: Result<QueryResult, cortex_falkordb::client::ClientError> = match index {
             Some(index) => self.clients[index].1.ro_query(&graph_name, cypher, params),

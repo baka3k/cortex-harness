@@ -16,7 +16,7 @@ from framework_registry import (  # noqa: E402
     evaluate_capability_schema,
 )
 from tools.database_schema.pipeline import analyze_project as analyze_database  # noqa: E402
-from tools.sync.incremental_sync import ANALYZERS  # noqa: E402
+from tools.sync.incremental_sync import ANALYZERS, _RUST_ANALYZER_BINARIES  # noqa: E402
 from tools.web_framework.pipeline import analyze_project as analyze_web  # noqa: E402
 
 
@@ -37,7 +37,7 @@ ACCEPTANCE_MATRIX = {
     "javascript": _row("full", "partial", "partial", "none", "tests/fixtures/web-framework-application/js"),
     "typescript": _row("full", "full", "none", "none", "tests/test_primary_analyzer_vector_contract.py"),
     "php": _row("full", "partial", "partial", "none", "tests/fixtures/web-framework-application/php"),
-    "csharp": _row("full", "full", "none", "none", "tests/test_aspnet_fixture_analysis.py"),
+    "csharp": _row("full", "full", "partial", "partial", "tests/test_aspnet_fixture_analysis.py"),
     "sql": _row("full", "none", "none", "full", "tests/fixtures/database-schema-application/schema.sql"),
     "plsql": _row("full", "none", "none", "full", "tests/fixtures/database-schema-application/audit.pkb"),
     "jvm": _row("generic", "generic", "none", "none", "tests/test_framework_fixture_analysis.py"),
@@ -96,11 +96,14 @@ class McpAcceptanceMatrixTest(unittest.TestCase):
                 self.assertTrue((ROOT / row["evidence"]).exists(), row["evidence"])
 
     def test_every_primary_language_parser_maps_to_a_profile_and_real_entrypoint(self):
+        # Phase-08 analyzer cutover: the Python entry scripts are deleted and
+        # every primary parser dispatches through a Rust analyzer binary —
+        # the "real entrypoint" contract is now the binary registry.
         self.assertEqual(set(PRIMARY_TO_PROFILE), set(ANALYZERS))
         for parser, profile in PRIMARY_TO_PROFILE.items():
             with self.subTest(parser=parser):
                 self.assertIn(profile, ACCEPTANCE_MATRIX)
-                self.assertTrue(Path(ANALYZERS[parser].script_path).is_file())
+                self.assertIn(parser, _RUST_ANALYZER_BINARIES)
 
     def test_web_rows_are_backed_by_extracted_endpoint_and_handler_facts(self):
         fixture = ROOT / "tests" / "fixtures" / "web-framework-application"

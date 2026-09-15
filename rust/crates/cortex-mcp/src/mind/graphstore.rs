@@ -254,13 +254,23 @@ pub fn fetch_entities_by_ids(
     }
     let mut entities: Vec<Map<String, Value>> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    let query = "\n                    MATCH (e:Entity)\n                    WHERE e.id IN $ids\n                      AND ($project_id_normalized IS NULL OR\n                           e.project_id_normalized STARTS WITH $project_id_normalized)\n                    RETURN e.id AS id, e.name AS name, e.type AS type\n                    ";
+    // Ladybug binder types an unbound parameter BOOL on `IS NULL`, then
+    // rejects the STRING use in STARTS WITH — branch the query instead of
+    // ever passing a NULL string param (mirror of the python fix).
+    let project_key = project_id.map(str::trim).filter(|value| !value.is_empty());
+    let query = match project_key {
+        Some(_) => "\n                    MATCH (e:Entity)\n                    WHERE e.id IN $ids\n                      AND e.project_id_normalized STARTS WITH $project_id_normalized\n                    RETURN e.id AS id, e.name AS name, e.type AS type\n                    ",
+        None => "\n                    MATCH (e:Entity)\n                    WHERE e.id IN $ids\n                    RETURN e.id AS id, e.name AS name, e.type AS type\n                    ",
+    };
     for (store, _owned) in graph_store_candidates(project_id)? {
         let mut store = store;
-        let params = params_map(vec![
+        let mut params_vec = vec![
             ("ids", Param::List(entity_ids.iter().map(|id| Param::Str(id.clone())).collect())),
-            ("project_id_normalized", normalized_param(project_id)),
-        ]);
+        ];
+        if let Some(key) = project_key {
+            params_vec.push(("project_id_normalized", Param::Str(key.to_string())));
+        }
+        let params = params_map(params_vec);
         let result = store.run(query, params);
         let rows = result?;
         for row in rows {
@@ -293,7 +303,11 @@ pub fn fetch_relations_by_entity_ids(
     if entity_ids.is_empty() || related_k == 0 {
         return Ok(Vec::new());
     }
-    let query = "\n                    UNWIND $ids AS id\n                    MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)\n                    WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)\n                      AND ($project_id_normalized IS NULL OR\n                           (e.project_id_normalized STARTS WITH $project_id_normalized AND\n                            e2.project_id_normalized STARTS WITH $project_id_normalized))\n                    RETURN e.id AS source_id, e.name AS source, e.type AS source_type,\n                           r.type AS relation,\n                           e2.id AS target_id, e2.name AS target, e2.type AS target_type\n                    LIMIT $limit\n                    ";
+    let project_key = project_id.map(str::trim).filter(|value| !value.is_empty());
+    let query = match project_key {
+        Some(_) => "\n                    UNWIND $ids AS id\n                    MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)\n                    WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)\n                      AND ((e.project_id_normalized STARTS WITH $project_id_normalized AND\n                            e2.project_id_normalized STARTS WITH $project_id_normalized))\n                    RETURN e.id AS source_id, e.name AS source, e.type AS source_type,\n                           r.type AS relation,\n                           e2.id AS target_id, e2.name AS target, e2.type AS target_type\n                    LIMIT $limit\n                    ",
+        None => "\n                    UNWIND $ids AS id\n                    MATCH (e:Entity {id: id})-[r:RELATED]-(e2:Entity)\n                    WHERE ($types = [] OR e.type IN $types OR e2.type IN $types)\n                    RETURN e.id AS source_id, e.name AS source, e.type AS source_type,\n                           r.type AS relation,\n                           e2.id AS target_id, e2.name AS target, e2.type AS target_type\n                    LIMIT $limit\n                    ",
+    };
     let mut relations: Vec<Map<String, Value>> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for (store, _owned) in graph_store_candidates(project_id)? {
@@ -302,12 +316,15 @@ pub fn fetch_relations_by_entity_ids(
             break;
         }
         let mut store = store;
-        let params = params_map(vec![
+        let mut params_vec = vec![
             ("ids", Param::List(entity_ids.iter().map(|id| Param::Str(id.clone())).collect())),
             ("types", Param::List(entity_types.iter().map(value_to_param).collect())),
             ("limit", Param::Int(remaining as i64)),
-            ("project_id_normalized", normalized_param(project_id)),
-        ]);
+        ];
+        if let Some(key) = project_key {
+            params_vec.push(("project_id_normalized", Param::Str(key.to_string())));
+        }
+        let params = params_map(params_vec);
         let rows = store.run(query, params)?;
         for row in rows {
             let key = format!(
@@ -397,14 +414,21 @@ pub fn fetch_paragraph_by_source(
     paragraph_id: i64,
     project_id: Option<&str>,
 ) -> Result<Option<Map<String, Value>>, GraphError> {
-    let query = "\n                    MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})\n                    WHERE $project_id_normalized IS NULL OR\n                          p.project_id_normalized STARTS WITH $project_id_normalized\n                    RETURN p.text AS text,\n                           p.short AS short,\n                           p.source_id AS source_id,\n                           p.paragraph_id AS paragraph_id\n                    ";
+    let project_key = project_id.map(str::trim).filter(|value| !value.is_empty());
+    let query = match project_key {
+        Some(_) => "\n                    MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})\n                    WHERE p.project_id_normalized STARTS WITH $project_id_normalized\n                    RETURN p.text AS text,\n                           p.short AS short,\n                           p.source_id AS source_id,\n                           p.paragraph_id AS paragraph_id\n                    ",
+        None => "\n                    MATCH (p:Paragraph {source_id: $source_id, paragraph_id: $paragraph_id})\n                    RETURN p.text AS text,\n                           p.short AS short,\n                           p.source_id AS source_id,\n                           p.paragraph_id AS paragraph_id\n                    ",
+    };
     for (store, _owned) in graph_store_candidates(project_id)? {
         let mut store = store;
-        let params = params_map(vec![
+        let mut params_vec = vec![
             ("source_id", Param::Str(source_id.to_string())),
             ("paragraph_id", Param::Int(paragraph_id)),
-            ("project_id_normalized", normalized_param(project_id)),
-        ]);
+        ];
+        if let Some(key) = project_key {
+            params_vec.push(("project_id_normalized", Param::Str(key.to_string())));
+        }
+        let params = params_map(params_vec);
         let rows = store.run(query, params)?;
         let _ = _owned;
         // `result.single()` — first row or None.
@@ -421,17 +445,27 @@ pub fn list_source_ids_graph(
     project_id: Option<&str>,
 ) -> Result<Vec<String>, GraphError> {
     let mut source_ids: Vec<String> = Vec::new();
-    let query = "\n                        MATCH (p:Paragraph)\n                        WHERE p.source_id IS NOT NULL\n                          AND ($project_id_normalized IS NULL OR\n                               p.project_id_normalized STARTS WITH $project_id_normalized)\n                        RETURN DISTINCT p.source_id AS source_id\n                        ORDER BY source_id\n                        LIMIT $limit\n                        ";
+    let project_key = project_id.map(str::trim).filter(|value| !value.is_empty());
+    let query = match project_key {
+        Some(_) => "\n                        MATCH (p:Paragraph)\n                        WHERE p.source_id IS NOT NULL\n                          AND p.project_id_normalized STARTS WITH $project_id_normalized\n                        RETURN DISTINCT p.source_id AS source_id\n                        ORDER BY source_id\n                        LIMIT $limit\n                        ",
+        None => "\n                        MATCH (p:Paragraph)\n                        WHERE p.source_id IS NOT NULL\n                        RETURN DISTINCT p.source_id AS source_id\n                        ORDER BY source_id\n                        LIMIT $limit\n                        ",
+    };
     for (store, _owned) in graph_store_candidates(project_id)? {
         if source_ids.len() >= limit {
             break;
         }
         let mut store = store;
-        let params = params_map(vec![
-            ("limit", Param::Int((limit - source_ids.len()) as i64)),
-            ("project_id_normalized", normalized_param(project_id)),
-        ]);
-        let rows = store.run(query, params)?;
+        let mut params_vec = vec![("limit", Param::Int((limit - source_ids.len()) as i64))];
+        if let Some(key) = project_key {
+            params_vec.push(("project_id_normalized", Param::Str(key.to_string())));
+        }
+        let params = params_map(params_vec);
+        // Fail-soft fan-out: a registered project whose doc store was never
+        // created must not fail the whole listing (mirror of the python fix).
+        let rows = match store.run(query, params) {
+            Ok(rows) => rows,
+            Err(_) => continue,
+        };
         for row in rows {
             if let Some(source_id) = row.get("source_id").and_then(Value::as_str)
                 && !source_ids.iter().any(|existing| existing == source_id)
