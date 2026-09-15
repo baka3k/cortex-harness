@@ -21,7 +21,7 @@ use analyzer_jvm_overlays::struts::models::analysis_result_to_dict;
 use analyzer_jvm_overlays::struts::pipeline::run_struts_analysis;
 
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct StrutsArgs {
     #[arg(long)]
     root: String,

@@ -1,6 +1,6 @@
 ---
 title: "Rust full migration — analyzers, CLI/storage, MCP server (sau phase 01-07)"
-status: code-complete (P01-P14 xong toàn bộ; còn gate vận hành: dogfood 1 tuần trước khi flip default — runbook docs/cutover-runbook.md; chi tiết trong từng phase-XX.md)
+status: code-complete (P01-P14 xong toàn bộ; analyzer layer cutover + Wave-D gate closed by 260915-analyzer-layer-rust-cutover — flip default + DELETE Python analyzer scripts đã commit, rollback drill PASS; còn gate vận hành duy nhất: dogfood 7 ngày trên stock repo với default unset — runbook docs/cutover-runbook.md; chi tiết trong từng phase-XX.md)
 created: 2026-09-13
 target: "rust/ (mở rộng), code-tiny/tools + code-tiny/mcp + doc-tiny + cortex_harness (tham chiếu parity, xoá dần sau cutover)"
 blockedBy: []

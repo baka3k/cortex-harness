@@ -301,10 +301,10 @@ pub fn collection_names_cached(backend: &QdrantBackend) -> Option<Vec<String>> {
     let ttl = Duration::from_millis(list_ttl_ms());
 
     let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((stamp, names)) = guard.get(&key) {
-        if stamp.elapsed() < ttl {
-            return Some(names.clone());
-        }
+    if let Some((stamp, names)) = guard.get(&key)
+        && stamp.elapsed() < ttl
+    {
+        return Some(names.clone());
     }
     let names = list_collection_names(backend).ok()?;
     guard.insert(key, (Instant::now(), names.clone()));

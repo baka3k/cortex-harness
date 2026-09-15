@@ -23,7 +23,7 @@ use crate::models::ProgramMapping;
 use crate::pipeline::run_shell_analysis;
 
 #[derive(Debug, Clone, ClapParser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct ShellArgs {
     /// Vị trí lựa chọn khác --root (Python `path` positional).
     pub path: Option<String>,
