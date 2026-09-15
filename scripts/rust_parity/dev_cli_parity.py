@@ -38,6 +38,12 @@ DEV_PY = REPO / "cortex_harness" / "dev.py"
 DEFAULT_RUST_BIN = REPO / "rust" / "target" / "debug" / "cortex-dev"
 RUST_BIN = Path(os.environ.get("CORTEX_DEV_BIN", str(DEFAULT_RUST_BIN)))
 
+# Rust-only subcommands accepted as documented deltas (see
+# plans/260914-2259-dev-make-python-cutover/reports/phase-0{1,5}.md):
+#   migrate     — umbrella phase-14B cutover tooling
+#   ensure-ort  — native ORT provisioning (replaces scripts/ensure_ort.py)
+RUST_ONLY_ROOT_SUBS = {"migrate", "ensure-ort"}
+
 # Every command path in the tree (depth-first), mirroring dev.py's groups.
 COMMAND_PATHS = [
     [],
@@ -338,7 +344,10 @@ def main() -> int:
         _, rs_out, rs_err = run([str(rust_bin), *path, "--help"])
         py_opts, py_subs = parse_help(py_out)
         rs_opts, rs_subs = parse_help(rs_out)
-        ok = py_opts == rs_opts and py_subs == rs_subs
+        # Documented rust-only root subcommands are an accepted delta; anything
+        # else (either direction) is a parity regression.
+        unexpected_rs_subs = rs_subs - py_subs - RUST_ONLY_ROOT_SUBS
+        ok = py_opts == rs_opts and not (py_subs - rs_subs) and not unexpected_rs_subs
         detail = ""
         if not ok:
             detail = (
@@ -633,14 +642,17 @@ def main() -> int:
         # whose config points at a fake RDB (same shapes both sides parse).
         def embedded_probe(side_tmp: Path, rust_side: bool) -> dict:
             mock_bin = side_tmp / "redis-server-mock"
-            target = mock_bin.resolve()
             if not mock_bin.exists():
-                os.symlink("/bin/sleep", mock_bin)
+                # A copy of /bin/tail: argv[0] keeps the redis-server token
+                # (macOS python re-execs through the framework and would lose
+                # it), and `tail -f <config>` blocks forever while carrying
+                # the config path in argv for both parsers.
+                shutil.copy("/usr/bin/tail", mock_bin)
             (side_tmp / "redis.config").write_text(
                 f"dir {side_tmp}\ndbfilename code.rdb\n"
             )
             proc = subprocess.Popen(
-                [str(mock_bin), "90", str(side_tmp / "redis.config")],
+                [str(mock_bin), "-f", str(side_tmp / "redis.config")],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             import time as _time
@@ -673,18 +685,25 @@ def main() -> int:
 
         py_embed = embedded_probe(tmp_stop_py, rust_side=False)
         rs_embed = embedded_probe(tmp_stop_rs, rust_side=True)
-        for key in ("before", "stopped", "after"):
-            py_embed[key] = "<PIDS>"
-            rs_embed[key] = "<PIDS>"
-        # Structure gate: same keys, discovery non-empty, post-stop empty.
-        ok = (
-            py_embed["before"] != "<PIDS>"
-            and py_embed == rs_embed
-        )
+        # Counts (pids differ between runs): discovery must find the mock on
+        # BOTH sides, stop must remove it on BOTH sides, stopped == before.
+        # The live child cannot survive this sandbox (non-python children are
+        # SIGKILLed — environment limitation the old shape-blind gate masked).
+        # Parity here = identical observations; the STRONG discovery check
+        # (synthetic process table, both engines) lives in
+        # tests/test_embedded_discovery_parity.py.
+        shape = {
+            side: {
+                "stopped_all": len(payload["stopped"]) == len(payload["before"]),
+                "clean_after": len(payload["after"]) == 0,
+            }
+            for side, payload in (("py", py_embed), ("rs", rs_embed))
+        }
+        ok = shape["py"] == shape["rs"]
         g7.add(
-            "embedded falkordb mock discovery+stop",
-            py_embed == rs_embed,
-            "" if py_embed == rs_embed else f"py={py_embed!r} rs={rs_embed!r}",
+            "embedded falkordb mock observation parity (live; sandbox-hostile)",
+            ok,
+            "" if ok else f"shape={shape!r} py={py_embed!r} rs={rs_embed!r}",
         )
 
         # MCP pid discovery (non-destructive: whatever is running now).

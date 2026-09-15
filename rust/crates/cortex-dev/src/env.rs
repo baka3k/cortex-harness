@@ -433,14 +433,6 @@ fn setdefault(map: &mut Map<String, Value>, key: &str, value: String) {
         .or_insert_with(|| Value::String(value));
 }
 
-fn env_string_setdefault(map: &mut Map<String, Value>, key: &str, source: &Map<String, Value>, source_key: &str) {
-    if let Some(v) = source.get(source_key) {
-        if !v.is_null() {
-            setdefault(map, key, py_str(v));
-        }
-    }
-}
-
 /// dev.py `_code_env_for_process`.
 pub fn code_env_for_process(
     cfg: &Value,
@@ -479,8 +471,11 @@ pub fn code_env_for_process(
     }
     setdefault(&mut result, "QDRANT_COLLECTION", collection.clone());
     setdefault(&mut result, "QDRANT_COLLECTION_CODE", collection);
-    env_string_setdefault(&mut result, "CODE_EMBEDDING_MODEL", &env, "EMBEDDING_MODEL");
-    env_string_setdefault(&mut result, "EMBED_MODEL", &env, "EMBEDDING_MODEL");
+    if !py_falsy(env.get("EMBEDDING_MODEL")) {
+        let model = py_str(env.get("EMBEDDING_MODEL").unwrap_or(&Value::Null));
+        setdefault(&mut result, "CODE_EMBEDDING_MODEL", model.clone());
+        setdefault(&mut result, "EMBED_MODEL", model);
+    }
     if let Some(device) = env.get("device").filter(|v| !v.is_null()) {
         setdefault(
             &mut result,
@@ -488,9 +483,15 @@ pub fn code_env_for_process(
             normalize_embed_device(&py_str(device)),
         );
     }
-    env_string_setdefault(&mut result, "EMBED_BATCH_SIZE", &env, "BATCH_SIZE");
-    env_string_setdefault(&mut result, "MAX_EMBED_CHARS", &env, "MAX_EMBED_CHARS");
-    env_string_setdefault(&mut result, "QDRANT_CACHE_DIR", &env, "CACHE_DIR");
+    if !py_falsy(env.get("BATCH_SIZE")) {
+        setdefault(&mut result, "EMBED_BATCH_SIZE", py_str(env.get("BATCH_SIZE").unwrap_or(&Value::Null)));
+    }
+    if !py_falsy(env.get("MAX_EMBED_CHARS")) {
+        setdefault(&mut result, "MAX_EMBED_CHARS", py_str(env.get("MAX_EMBED_CHARS").unwrap_or(&Value::Null)));
+    }
+    if !py_falsy(env.get("CACHE_DIR")) {
+        setdefault(&mut result, "QDRANT_CACHE_DIR", py_str(env.get("CACHE_DIR").unwrap_or(&Value::Null)));
+    }
     let config_path = match config_path {
         Some(p) => Some(p.to_path_buf()),
         None => active_config_path(project_root),
@@ -523,7 +524,9 @@ pub fn doc_env_for_process(
     for (key, value) in overlay {
         result.insert(key, Value::String(value));
     }
-    env_string_setdefault(&mut result, "DOC_EMBEDDING_MODEL", &env, "EMBEDDING_MODEL");
+    if !py_falsy(env.get("EMBEDDING_MODEL")) {
+        setdefault(&mut result, "DOC_EMBEDDING_MODEL", py_str(env.get("EMBEDDING_MODEL").unwrap_or(&Value::Null)));
+    }
     if let Some(device) = env.get("device").filter(|v| !v.is_null()) {
         setdefault(
             &mut result,
@@ -608,11 +611,12 @@ fn resolve_project_doc_targets(config_dir: Option<&Path>, project_id: &str) -> O
     names.sort();
     let mut entries: Vec<(String, Map<String, Value>, Map<String, Value>)> = Vec::new();
     for path in names {
-        let payload: Value = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())?;
+        // Python `_read_config_files`/`_project_entries` skip malformed json
+        // and entries without a project id — never abort the whole lookup.
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Ok(payload) = serde_json::from_str::<Value>(&text) else { continue };
         let project = payload.get("project").cloned().unwrap_or(json!({}));
-        let entry_id = project
+        let Some(entry_id) = project
             .get("code")
             .map(py_str)
             .filter(|s| !s.is_empty() && s != "None")
@@ -621,7 +625,10 @@ fn resolve_project_doc_targets(config_dir: Option<&Path>, project_id: &str) -> O
                     .get("name")
                     .map(py_str)
                     .filter(|s| !s.is_empty() && s != "None")
-            })?;
+            })
+        else {
+            continue;
+        };
         let code_env = payload
             .get("code")
             .and_then(|c| c.get("env"))

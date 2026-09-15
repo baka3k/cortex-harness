@@ -141,10 +141,16 @@ fn download_wheel(version: &str) -> Result<PathBuf, String> {
             break;
         }
     }
-    let url = candidate
-        .and_then(|u| u.get("url"))
+    let entry = candidate
+        .ok_or_else(|| format!("no wheel for this platform among PyPI assets (want {wanted:?})"))?;
+    let url = entry
+        .get("url")
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("no wheel for this platform among PyPI assets (want {:?})", wanted))?;
+        .ok_or("PyPI asset has no url")?;
+    let expected_sha256 = entry
+        .pointer("/digests/sha256")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string());
     let staging = cache_root().join(format!("download-{version}"));
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let wheel_path = staging.join(
@@ -161,6 +167,15 @@ fn download_wheel(version: &str) -> Result<PathBuf, String> {
             wheel_path.to_string_lossy().to_string(),
             url.to_string(),
         ])?;
+    }
+    if let Some(expected) = &expected_sha256 {
+        let actual = file_sha256(&wheel_path)?;
+        if !actual.eq_ignore_ascii_case(expected) {
+            let _ = std::fs::remove_file(&wheel_path);
+            return Err(format!(
+                "onnxruntime wheel sha256 mismatch: expected {expected}, got {actual}"
+            ));
+        }
     }
     // Extract just the capi directory (bsdtar reads zip; unzip as fallback).
     let extract_ok = run_ok(&[
@@ -220,6 +235,14 @@ fn curl_to_string(url: &str) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn file_sha256(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn run_ok(args: &[String]) -> Result<(), String> {
