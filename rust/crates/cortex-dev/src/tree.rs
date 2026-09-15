@@ -752,6 +752,19 @@ static CMD_MIGRATE: Cmd = Cmd {
     runs_without_sub: false,
 };
 
+static CMD_ENSURE_ORT: Cmd = Cmd {
+    name: "ensure-ort",
+    desc: "Provision the ONNX Runtime dylib for cortex-embed into .cache/ort/<version>/\n\nResolution order: ORT_DYLIB_PATH env → already-provisioned cache (no network)\n→ the venv onnxruntime wheel → the pinned PyPI wheel (downloaded).\n\nExamples:\n  dev ensure-ort                 # idempotent provisioning\n  dev ensure-ort --force         # recopy even if present\n  dev ensure-ort --print-path    # print the dylib path only",
+    opts: &[
+        opt!(&["--force"], OptMeta::Flag, help = "Recopy even if the dylib is already provisioned."),
+        opt!(&["--print-path"], OptMeta::Flag, help = "Print the provisioned dylib path only."),
+        HELP_OPT,
+    ],
+    args: &[],
+    subs: &[],
+    runs_without_sub: false,
+};
+
 static ROOT_DESC: &str = "dev - CortexHarness ingestion CLI.\n\nQuick start:\n  dev init              # configure project + scaffold folder structure\n  dev status            # show active config\n  dev sync code         # interactive: pick folders, auto incremental/full\n  dev sync code all     # ALL analyzers on all folders (incremental if baseline)\n  dev sync doc          # ingest documents -> Neo4j + Qdrant\n  dev build             # create/sync the repository virtualenv\n  dev storage-init      # initialize centralized local Qdrant/FalkorDBLite storage\n  dev storage-layout    # show instance paths, manifest, and leases\n  dev start             # open code-tiny + doc-tiny from any directory\n  dev stop              # stop MCP processes started by dev/make start\n  dev doctor            # check local storage from any directory";
 
 pub static ROOT: Cmd = Cmd {
@@ -778,6 +791,7 @@ pub static ROOT: Cmd = Cmd {
         &CMD_MCP,
         &CMD_MCP_GATES,
         &CMD_MIGRATE,
+        &CMD_ENSURE_ORT,
         &CMD_START,
         &CMD_STATUS,
         &CMD_STOP,
