@@ -97,7 +97,36 @@ pub fn execute(args: &AnalyzerArgs, extra: &Jp1ExtraArgs) -> Result<i32, String>
     };
     let result = run_jp1_analysis(&root, &project_id, changed.as_deref(), &deleted)?;
 
+    // ── Phase-06 embedding-input artifact (only when orchestrator asked) ───
     if !args.dry_run {
+        if let Some(output) = args.embedding_input_output() {
+            let (_project_name, repo, units, _relations) = build_jp1_rows(args, &result);
+            if let Err(error) =
+                cortex_analyzer_framework::embedding_artifact::maybe_emit_embedding_artifact(
+                    Some(output),
+                    cortex_analyzer_framework::embedding_artifact::EmbeddingEmission {
+                        parser: "jp1",
+                        project_id: &result.project_id,
+                        root_scope: &repo,
+                        full_replace: !args.incremental,
+                        scanned_directory: true,
+                        files_selected: result.changed_paths.to_vec(),
+                        files_deleted: result.deleted_paths.to_vec(),
+                        categories: if units.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![(
+                                "units".to_string(),
+                                units.into_iter().map(Value::Object).collect(),
+                            )]
+                        },
+                    },
+                )
+            {
+                eprintln!("JP1 embedding-input artifact failed: {error}");
+                return Ok(1);
+            }
+        }
         write_graph(args, extra, &result)?;
     }
     // Vector sync — Python plane; Rust accept-and-ignore.
@@ -108,6 +137,46 @@ pub fn execute(args: &AnalyzerArgs, extra: &Jp1ExtraArgs) -> Result<i32, String>
         result.files.len()
     );
     Ok(0)
+}
+
+/// (project_name, repo, node rows, file rows) for the phase-06 embedding
+/// artifact — factored out to keep `build_jp1_rows` under the complexity lint.
+type Jp1EmbeddingScope = (String, String, Vec<Map<String, Value>>, Vec<Map<String, Value>>);
+
+/// Store-independent row build — mirrors Python `build_graph_rows`
+/// (`{"units":…, "relations":…}`, common fields per jp1_analyzer.py:25). Used
+/// by BOTH the graph write and the phase-06 embedding-input artifact so the
+/// two planes can never diverge on row shape or scope.
+fn build_jp1_rows(
+    args: &AnalyzerArgs,
+    result: &crate::pipeline::Jp1AnalysisResult,
+) -> Jp1EmbeddingScope {
+    let project_name = env_or(&args.project_name, "PROJECT_NAME")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| result.project_id.clone());
+    let repo = env_or(&args.repo, "PROJECT_REPO")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| result.project_id.clone());
+    let build_system = env_or(&args.build_system, "PROJECT_BUILD_SYSTEM")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "jp1".to_string());
+    let mut common = Map::new();
+    common.insert("project_id".into(), json!(result.project_id));
+    common.insert("project_name".into(), json!(project_name));
+    common.insert("language".into(), json!("jp1"));
+    common.insert("repo".into(), json!(repo));
+    common.insert("build_system".into(), json!(build_system));
+    let mut units: Vec<Map<String, Value>> = Vec::new();
+    let mut relations: Vec<Map<String, Value>> = Vec::new();
+    for file in &result.files {
+        for unit in &file.units {
+            units.push(unit_row(unit, &common));
+        }
+        for relation in &file.relations {
+            relations.push(relation_row(relation));
+        }
+    }
+    (project_name, repo, units, relations)
 }
 
 /// `build_graph_rows` + `_write_graph`.
@@ -127,15 +196,7 @@ fn write_graph(
         // cấu hình ⇒ RuntimeError; Rust fail-loud cùng ngưỡng.
         Err(error) => return Err(error.to_string()),
     };
-    let project_name = env_or(&args.project_name, "PROJECT_NAME")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| result.project_id.clone());
-    let repo = env_or(&args.repo, "PROJECT_REPO")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| result.project_id.clone());
-    let build_system = env_or(&args.build_system, "PROJECT_BUILD_SYSTEM")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "jp1".to_string());
+    let (_project_name, _repo, units, relations) = build_jp1_rows(args, result);
 
     // Python: cleanup chạy TRƯỚC writes (cleanup_neo4j_for_files trên driver
     // thô, không ensure schema) — Rust giữ nguyên thứ tự: cleanup với store
@@ -166,23 +227,6 @@ fn write_graph(
         args.verbose,
     );
 
-    let mut common = Map::new();
-    common.insert("project_id".into(), json!(result.project_id));
-    common.insert("project_name".into(), json!(project_name));
-    common.insert("language".into(), json!("jp1"));
-    common.insert("repo".into(), json!(repo));
-    common.insert("build_system".into(), json!(build_system));
-
-    let mut units: Vec<Map<String, Value>> = Vec::new();
-    let mut relations: Vec<Map<String, Value>> = Vec::new();
-    for file in &result.files {
-        for unit in &file.units {
-            units.push(unit_row(unit, &common));
-        }
-        for relation in &file.relations {
-            relations.push(relation_row(relation));
-        }
-    }
     // required_relations = properties.resolved is not False
     let required: Vec<Map<String, Value>> = relations
         .iter()

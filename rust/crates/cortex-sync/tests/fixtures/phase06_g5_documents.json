@@ -1,0 +1,237 @@
+{
+ "cases": [
+  {
+   "input_categories": [
+    [
+     "files",
+     [
+      {
+       "id": "src/a.go",
+       "path": "src/a.go",
+       "project_id": "p5",
+       "project_name": "p5",
+       "language": "go",
+       "repo": "p5/a",
+       "code": "package main\n",
+       "comment": "// file doc",
+       "summary": "",
+       "start_line": 1,
+       "end_line": 2
+      }
+     ]
+    ],
+    [
+     "namespaces",
+     [
+      {
+       "id": "ns:pkg",
+       "project_id": "p5",
+       "qualified_name": "pkg",
+       "kind": "namespace",
+       "name": "pkg"
+      }
+     ]
+    ],
+    [
+     "types",
+     [
+      {
+       "id": "ty:Server",
+       "project_id": "p5",
+       "name": "Server",
+       "code": "type Server struct {}",
+       "file_path": "src/a.go"
+      }
+     ]
+    ],
+    [
+     "functions",
+     [
+      {
+       "id": "fn:Serve",
+       "project_id": "p5",
+       "name": "Serve",
+       "qualified_name": "pkg.Server.Serve",
+       "summary": "Performs Serve operation (takes 1 parameters)",
+       "comment": "// Serve starts",
+       "note": "semantic note",
+       "code": "func (s *Server) Serve() {}",
+       "file_path": "src/a.go",
+       "start_line": 4,
+       "end_line": 6
+      }
+     ]
+    ],
+    [
+     "fields",
+     [
+      {
+       "id": "fld:x",
+       "project_id": "p5",
+       "name": "x",
+       "kind": ""
+      }
+     ]
+    ],
+    [
+     "aliases",
+     [
+      {
+       "id": "al:Alias",
+       "project_id": "p5",
+       "name": "Alias",
+       "code": "type Alias = int"
+      }
+     ]
+    ],
+    [
+     "templates",
+     []
+    ],
+    [
+     "relations",
+     [
+      {
+       "id": "REL",
+       "project_id": "p5"
+      }
+     ]
+    ],
+    [
+     "calls",
+     [
+      {
+       "id": "CALL",
+       "project_id": "p5"
+      }
+     ]
+    ]
+   ],
+   "parser": "go",
+   "root_scope": "p5/a",
+   "max_chars": 4000,
+   "expect_error": false,
+   "documents": [
+    {
+     "id": "34538b10-cb4f-540a-83b3-faad7239e984",
+     "text": "file: src/a.go\nfile: src/a.go\n// file doc\npackage main\n",
+     "payload": {
+      "node_type": "file",
+      "symbol_id": "src/a.go",
+      "project_id": "p5",
+      "project_id_normalized": "p5",
+      "project_name": "p5",
+      "language": "go",
+      "repo": "p5/a",
+      "file_path": "src/a.go",
+      "name": "src/a.go",
+      "qualified_name": "src/a.go",
+      "parser": "go",
+      "root_scope": "p5/a",
+      "text": "file: src/a.go\nfile: src/a.go\n// file doc\npackage main\n",
+      "start_line": 1,
+      "end_line": 2
+     }
+    },
+    {
+     "id": "56e9c257-f2a7-5cdb-9bac-294d90a1df16",
+     "text": "namespace: pkg",
+     "payload": {
+      "node_type": "namespace",
+      "symbol_id": "ns:pkg",
+      "project_id": "p5",
+      "project_id_normalized": "p5",
+      "project_name": "p5",
+      "language": "go",
+      "repo": "",
+      "file_path": "",
+      "name": "pkg",
+      "qualified_name": "pkg",
+      "parser": "go",
+      "root_scope": "p5/a",
+      "text": "namespace: pkg"
+     }
+    },
+    {
+     "id": "d425ec59-ef06-56e6-969c-9a0d034c5894",
+     "text": "type: Server\nfile: src/a.go\ntype Server struct {}",
+     "payload": {
+      "node_type": "type",
+      "symbol_id": "ty:Server",
+      "project_id": "p5",
+      "project_id_normalized": "p5",
+      "project_name": "p5",
+      "language": "go",
+      "repo": "",
+      "file_path": "src/a.go",
+      "name": "Server",
+      "qualified_name": "Server",
+      "parser": "go",
+      "root_scope": "p5/a",
+      "text": "type: Server\nfile: src/a.go\ntype Server struct {}"
+     }
+    },
+    {
+     "id": "84eb74a5-f4b4-5371-bfbe-fc98d03ac19d",
+     "text": "function: pkg.Server.Serve\nfile: src/a.go\nPerforms Serve operation (takes 1 parameters)\n// Serve starts\nsemantic note\nfunc (s *Server) Serve() {}",
+     "payload": {
+      "node_type": "function",
+      "symbol_id": "fn:Serve",
+      "project_id": "p5",
+      "project_id_normalized": "p5",
+      "project_name": "p5",
+      "language": "go",
+      "repo": "",
+      "file_path": "src/a.go",
+      "name": "Serve",
+      "qualified_name": "pkg.Server.Serve",
+      "parser": "go",
+      "root_scope": "p5/a",
+      "text": "function: pkg.Server.Serve\nfile: src/a.go\nPerforms Serve operation (takes 1 parameters)\n// Serve starts\nsemantic note\nfunc (s *Server) Serve() {}",
+      "start_line": 4,
+      "end_line": 6
+     }
+    },
+    {
+     "id": "53256165-ec6b-5545-a7f6-a87442e682bb",
+     "text": "field: x",
+     "payload": {
+      "node_type": "field",
+      "symbol_id": "fld:x",
+      "project_id": "p5",
+      "project_id_normalized": "p5",
+      "project_name": "p5",
+      "language": "go",
+      "repo": "",
+      "file_path": "",
+      "name": "x",
+      "qualified_name": "x",
+      "parser": "go",
+      "root_scope": "p5/a",
+      "text": "field: x"
+     }
+    },
+    {
+     "id": "a8442ab0-33af-5fc3-8da6-b22b355d2770",
+     "text": "aliase: Alias\ntype Alias = int",
+     "payload": {
+      "node_type": "aliase",
+      "symbol_id": "al:Alias",
+      "project_id": "p5",
+      "project_id_normalized": "p5",
+      "project_name": "p5",
+      "language": "go",
+      "repo": "",
+      "file_path": "",
+      "name": "Alias",
+      "qualified_name": "Alias",
+      "parser": "go",
+      "root_scope": "p5/a",
+      "text": "aliase: Alias\ntype Alias = int"
+     }
+    }
+   ]
+  }
+ ],
+ "scope_mismatch_true": true
+}

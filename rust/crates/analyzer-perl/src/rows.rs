@@ -346,7 +346,18 @@ pub fn write_graph(
             );
         }
     }
-    let payload = cortex_graph_writer::language_writer::WriteAllPayload {
+    let payload = build_payload(&rows);
+    writer.write_all(&payload).map_err(|error| error.to_string())
+}
+
+/// Category field mapping shared by BOTH planes: the graph `write_all` and the
+/// phase-06 embedding-input artifact. Only the categories perl's graph write
+/// populates (namespaces, files, functions, fields) — the rest are `&[]`, so
+/// `embedding_categories` yields exactly the document rows the Python
+/// `_prepare_write_rows` dict carried (relations/calls are skipped by the
+/// consumer regardless).
+fn build_payload<'a>(rows: &'a GraphRows) -> cortex_graph_writer::language_writer::WriteAllPayload<'a> {
+    cortex_graph_writer::language_writer::WriteAllPayload {
         projects: &[],
         packages: &[],
         namespaces: &rows.namespaces,
@@ -380,6 +391,19 @@ pub fn write_graph(
         proc_host_declarations: &[],
         use_full_writers: true,
         files_variant: cortex_graph_writer::language_writer::FilesVariant::Default,
-    };
-    writer.write_all(&payload).map_err(|error| error.to_string())
+    }
+}
+
+/// Phase-06 embedding-input categories for the graphless pass: builds rows the
+/// SAME way `write_graph` does (via `build_graph_rows`) and maps them through
+/// the shared [`build_payload`] so the artifact and the graph plane never
+/// diverge.
+pub fn embedding_categories(
+    result: &AnalysisResult,
+    project_name: &str,
+    repo: &str,
+    build_system: &str,
+) -> Vec<(String, Vec<Value>)> {
+    let rows = build_graph_rows(result, project_name, repo, build_system);
+    build_payload(&rows).embedding_categories()
 }

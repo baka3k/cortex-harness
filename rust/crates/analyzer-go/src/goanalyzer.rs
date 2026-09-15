@@ -174,6 +174,75 @@ pub fn execute(args: &AnalyzerArgs, extra: &GoExtraArgs) -> Result<i32, String> 
         .map(|path| goparse::parse_go_file(path, &root))
         .collect::<Result<_, _>>()?;
 
+    // ── Rows built for BOTH planes: graph write and the phase-06 native
+    // embedding pass (graphless). Rows are cheap to build and the embedding
+    // pass runs with the store closed, so we cannot hide construction behind
+    // `if store` anymore. ───────────────────────────────────────────────────
+    let graph = prepare_write_rows(
+        &payloads,
+        &scope.project_id,
+        &scope.project_name,
+        &scope.language,
+        &scope.repo,
+        &scope.build_system,
+    );
+
+    let payload = WriteAllPayload {
+        projects: &[],
+        packages: &[],
+        namespaces: &graph.namespaces,
+        files: &graph.files,
+        classes: &[],
+        types: &graph.types,
+        function_types: &[],
+        functions: &graph.functions,
+        fields: &graph.fields,
+        aliases: &graph.aliases,
+        templates: &graph.templates,
+        relations: &graph.relations,
+        calls: &graph.calls,
+        calls_with_site: &[],
+        properties: &[],
+        events: &[],
+        interfaces: &[],
+        enums: &[],
+        constants: &[],
+        variables: &[],
+        navigators: &[],
+        has_routes: &[],
+        param_lists: &[],
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::Default,
+    };
+
+    // ── Phase-06 embedding-input artifact (only when orchestrator asked) ───
+    if let Some(output) = args.embedding_input_output() {
+        let selected_rel: Vec<String> =
+            selected.iter().map(|path| rel_posix(&root, path)).collect();
+        cortex_analyzer_framework::embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            cortex_analyzer_framework::embedding_artifact::EmbeddingEmission {
+                parser: "go",
+                project_id: &scope.project_id,
+                root_scope: &scope.repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected: selected_rel,
+                files_deleted: deleted_manifest.iter().cloned().collect(),
+                categories: payload.embedding_categories(),
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
     // ── Store + incremental cleanup (changed ∪ deleted) ─────────────────────
     let store = open_store(args)?;
     if let Some(mut store) = store {
@@ -199,52 +268,9 @@ pub fn execute(args: &AnalyzerArgs, extra: &GoExtraArgs) -> Result<i32, String> 
             }
         }
 
-        // ── Rows + write_all ────────────────────────────────────────────────
-        let graph = prepare_write_rows(
-            &payloads,
-            &scope.project_id,
-            &scope.project_name,
-            &scope.language,
-            &scope.repo,
-            &scope.build_system,
-        );
+        // ── write_all ───────────────────────────────────────────────────────
         let mut writer =
             LanguageCodeWriter::new(store, args.neo4j_db.clone(), extra.neo4j_batch_size, verbose);
-        let payload = WriteAllPayload {
-            projects: &[],
-            packages: &[],
-            namespaces: &graph.namespaces,
-            files: &graph.files,
-            classes: &[],
-            types: &graph.types,
-            function_types: &[],
-            functions: &graph.functions,
-            fields: &graph.fields,
-            aliases: &graph.aliases,
-            templates: &graph.templates,
-            relations: &graph.relations,
-            calls: &graph.calls,
-            calls_with_site: &[],
-            properties: &[],
-            events: &[],
-            interfaces: &[],
-            enums: &[],
-            constants: &[],
-            variables: &[],
-            navigators: &[],
-            has_routes: &[],
-            param_lists: &[],
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::Default,
-        };
         match writer.write_all(&payload) {
             Ok(counts) => {
                 if verbose {

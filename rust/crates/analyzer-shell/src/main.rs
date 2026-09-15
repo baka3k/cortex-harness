@@ -143,9 +143,22 @@ struct ShellArgs {
     pub message_output_dir: Option<String>,
     #[arg(long, default_value = "")]
     pub message_qdrant_collection: Option<String>,
+
+    /// Phase-06 embedding-input artifact path — set only by the orchestrator
+    /// native embedding pass (graphless). Mirrors the framework contract.
+    #[arg(long)]
+    pub embedding_input_output: Option<String>,
 }
 
 impl ShellArgs {
+    /// Trimmed, non-empty embedding-input artifact path (None ⇒ no emission).
+    fn embedding_input_output(&self) -> Option<&str> {
+        self.embedding_input_output
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     fn resolved_project_id(&self, root: &str) -> String {
         self.project_id
             .clone()
@@ -310,6 +323,32 @@ fn run(args: &ShellArgs) -> i32 {
         }
 
     let vector_count = 0usize;
+    // ── Phase-06 embedding-input artifact (only when orchestrator asked) ───
+    if !args.dry_run
+        && let Some(output) = args.embedding_input_output()
+        && let Err(error) =
+            cortex_analyzer_framework::embedding_artifact::maybe_emit_embedding_artifact(
+                    Some(output),
+                    cortex_analyzer_framework::embedding_artifact::EmbeddingEmission {
+                        parser: "shell",
+                        project_id: &result.project_id,
+                        root_scope: &repo,
+                        full_replace: !args.incremental,
+                        scanned_directory: true,
+                        files_selected: result.changed_paths.to_vec(),
+                        files_deleted: result.deleted_paths.to_vec(),
+                        categories: rows::embedding_categories(
+                            &result,
+                            &project_name,
+                            &repo,
+                            &program_mappings,
+                        ),
+                    },
+                )
+            {
+                eprintln!("[embedding] shell artifact failed: {error}");
+                return 1;
+            }
     if !args.dry_run && !args.graph_writes_disabled() {
         let graph = args
             .falkordb_graph

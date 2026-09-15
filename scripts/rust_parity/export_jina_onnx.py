@@ -36,6 +36,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_OUT = REPO / ".cache" / "embed" / "jina-v3-onnx-fp32"
 MODEL = "jinaai/jina-embeddings-v3"
+# G7 (plan 260915-analyzer-layer-rust-cutover phase-06): the export is cut from
+# this exact HF snapshot revision — the same hash recorded in
+# rust/crates/cortex-embed/src/model.rs `model_pin`. Revisions make
+# `snapshot_download` byte-reproducible; without a pin, a cache refresh could
+# export different weights under the same name.
+# trust_remote_code review (2026-09-15, phase-06): jina-v3 remote code is the
+# repo's XLMRobertaLoRA modeling file, executed locally at export time only
+# (no network at forward, HF_HUB_OFFLINE=1 in verify); review scoped to that
+# snapshot revision. Re-review on every revision bump.
+MODEL_REVISION = "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6"
 
 # Corpus deliberately mixes the shapes the real lanes produce: short symbol docs,
 # long file-spanning docs, query strings, and non-ASCII.
@@ -68,7 +78,7 @@ def resolve_source(explicit: str | None) -> str:
     for candidate in (explicit, os.environ.get("CODE_EMBEDDING_MODEL_PATH")):
         if candidate and Path(candidate).expanduser().is_dir():
             return str(Path(candidate).expanduser())
-    return snapshot_download(MODEL)
+    return snapshot_download(MODEL, revision=MODEL_REVISION)
 
 
 def load_base_encoder(source: str):
@@ -159,6 +169,7 @@ def write_metadata(target: Path, out_dir: Path, source: str, opset: int, dynamo:
     }
     meta = {
         "model": MODEL,
+        "revision": MODEL_REVISION,
         "source": source,
         "opset": opset,
         "exporter": "torch.onnx.export",

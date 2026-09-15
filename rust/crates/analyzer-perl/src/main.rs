@@ -172,9 +172,22 @@ struct PerlArgs {
     /// Harness dev.json config — Python-side convenience; accept-and-ignore.
     #[arg(long, hide = true)]
     config: Option<String>,
+
+    /// Phase-06 embedding-input artifact path — set only by the orchestrator
+    /// native embedding pass (graphless). Mirrors the framework contract.
+    #[arg(long)]
+    embedding_input_output: Option<String>,
 }
 
 impl PerlArgs {
+    /// Trimmed, non-empty embedding-input artifact path (None ⇒ no emission).
+    fn embedding_input_output(&self) -> Option<&str> {
+        self.embedding_input_output
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     fn project_id_value(&self) -> Option<String> {
         self.project_id
             .clone()
@@ -445,6 +458,33 @@ fn run(args: &PerlArgs) -> i32 {
     let mut counts: BTreeSet<String> = BTreeSet::new();
     let mut vector_count = 0usize;
     if !args.dry_run {
+        // ── Phase-06 embedding-input artifact (only when orchestrator asked) ──
+        if let Some(output) = args.embedding_input_output() {
+            let (project_name, repo, build_system) = graph_scope(args, &root, &result);
+            if let Err(error) =
+                cortex_analyzer_framework::embedding_artifact::maybe_emit_embedding_artifact(
+                    Some(output),
+                    cortex_analyzer_framework::embedding_artifact::EmbeddingEmission {
+                        parser: "perl",
+                        project_id: &result.project_id,
+                        root_scope: &repo,
+                        full_replace: !args.incremental,
+                        scanned_directory: true,
+                        files_selected: result.changed_paths.to_vec(),
+                        files_deleted: result.deleted_paths.to_vec(),
+                        categories: rows::embedding_categories(
+                            &result,
+                            &project_name,
+                            &repo,
+                            &build_system,
+                        ),
+                    },
+                )
+            {
+                eprintln!("Perl embedding-input artifact failed: {error}");
+                return 4;
+            }
+        }
         match write_graph(args, &root, &result) {
             Ok(write_counts) => {
                 counts = write_counts.keys().cloned().collect();
@@ -483,16 +523,10 @@ fn run(args: &PerlArgs) -> i32 {
     0
 }
 
-/// `_write_graph` — mở store, rồi rows → cleanup → write_all.
-fn write_graph(
-    args: &PerlArgs,
-    root: &Path,
-    result: &AnalysisResult,
-) -> Result<std::collections::BTreeMap<String, i64>, String> {
-    let Some(store) = args.open_store(&result.project_id)? else {
-        // prepare_graph_args trả False (graph writes disabled).
-        return Ok(std::collections::BTreeMap::new());
-    };
+/// Graph-scope strings shared by the graph write and the phase-06 embedding
+/// artifact (project_name / repo / build_system must be byte-identical across
+/// the two planes or point ids drift). Mirrors Python `_write_graph` defaults.
+fn graph_scope(args: &PerlArgs, root: &Path, result: &AnalysisResult) -> (String, String, String) {
     // Python: project_name = args.project_name or result.project_id;
     //         repo = args.repo or f"{project_name}/{os.path.basename(args.root)}"
     let project_name = args
@@ -516,6 +550,20 @@ fn write_graph(
             value
         }
     };
+    (project_name, repo, build_system)
+}
+
+/// `_write_graph` — mở store, rồi rows → cleanup → write_all.
+fn write_graph(
+    args: &PerlArgs,
+    root: &Path,
+    result: &AnalysisResult,
+) -> Result<std::collections::BTreeMap<String, i64>, String> {
+    let Some(store) = args.open_store(&result.project_id)? else {
+        // prepare_graph_args trả False (graph writes disabled).
+        return Ok(std::collections::BTreeMap::new());
+    };
+    let (project_name, repo, build_system) = graph_scope(args, root, result);
     let mut writer = LanguageCodeWriter::new(store, None, args.neo4j_batch_size.max(1) as usize, args.verbose);
     let counts = rows::write_graph(
         &mut writer,

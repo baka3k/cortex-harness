@@ -121,10 +121,13 @@ fn venv_capi() -> Option<(PathBuf, String)> {
     None
 }
 
-fn download_wheel(version: &str) -> Result<PathBuf, String> {
-    let api = format!("https://pypi.org/pypi/onnxruntime/{version}/json");
-    let json = curl_to_string(&api)?;
-    let payload: Value = serde_json::from_str(&json).map_err(|e| format!("PyPI metadata parse: {e}"))?;
+/// Pick the platform wheel from the PyPI release JSON and take its sha256.
+///
+/// Phase-06 G7 (red-team S5): a MISSING PyPI digest fails CLOSED — the old
+/// `if let Some(expected)` shape only verified when a digest happened to be
+/// present, so a digest-less metadata response silently downloaded an
+/// unverified wheel.
+fn pick_asset(payload: &Value) -> Result<(String, String), String> {
     let urls = payload
         .get("urls")
         .and_then(Value::as_array)
@@ -150,7 +153,21 @@ fn download_wheel(version: &str) -> Result<PathBuf, String> {
     let expected_sha256 = entry
         .pointer("/digests/sha256")
         .and_then(Value::as_str)
-        .map(|s| s.to_string());
+        .map(str::trim)
+        .filter(|digest| digest.len() == 64)
+        .ok_or_else(|| {
+            "PyPI digests/sha256 missing or malformed for the matching onnxruntime wheel — \
+             refusing an unverified download (phase-06 G7 fail-closed)"
+                .to_string()
+        })?;
+    Ok((url.to_string(), expected_sha256.to_string()))
+}
+
+fn download_wheel(version: &str) -> Result<PathBuf, String> {
+    let api = format!("https://pypi.org/pypi/onnxruntime/{version}/json");
+    let json = curl_to_string(&api)?;
+    let payload: Value = serde_json::from_str(&json).map_err(|e| format!("PyPI metadata parse: {e}"))?;
+    let (url, expected_sha256) = pick_asset(&payload)?;
     let staging = cache_root().join(format!("download-{version}"));
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let wheel_path = staging.join(
@@ -168,14 +185,12 @@ fn download_wheel(version: &str) -> Result<PathBuf, String> {
             url.to_string(),
         ])?;
     }
-    if let Some(expected) = &expected_sha256 {
-        let actual = file_sha256(&wheel_path)?;
-        if !actual.eq_ignore_ascii_case(expected) {
-            let _ = std::fs::remove_file(&wheel_path);
-            return Err(format!(
-                "onnxruntime wheel sha256 mismatch: expected {expected}, got {actual}"
-            ));
-        }
+    let actual = file_sha256(&wheel_path)?;
+    if !actual.eq_ignore_ascii_case(&expected_sha256) {
+        let _ = std::fs::remove_file(&wheel_path);
+        return Err(format!(
+            "onnxruntime wheel sha256 mismatch: expected {expected_sha256}, got {actual}"
+        ));
     }
     // Extract just the capi directory (bsdtar reads zip; unzip as fallback).
     let extract_ok = run_ok(&[
@@ -366,5 +381,60 @@ fn stable_name_for(source: &Path) -> String {
         "onnxruntime.dll".to_string()
     } else {
         "libonnxruntime.so".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn asset(filename: &str, digest: Option<&str>) -> Value {
+        let mut entry = json!({
+            "filename": filename,
+            "url": format!("https://files.example/{filename}"),
+        });
+        if let Some(digest) = digest {
+            entry["digests"] = json!({"sha256": digest});
+        }
+        entry
+    }
+
+    fn platform_filename() -> String {
+        format!("onnxruntime-1.29.0-{}-abi3.whl", platform_wheel_tags()[0])
+    }
+
+    #[test]
+    fn pick_asset_returns_url_and_digest_when_present() {
+        let name = platform_filename();
+        let payload = json!({"urls": [asset(&name, Some(&"a".repeat(64)))]});
+        let (url, digest) = pick_asset(&payload).unwrap();
+        assert!(url.ends_with(&name));
+        assert_eq!(digest, "a".repeat(64));
+    }
+
+    #[test]
+    fn pick_asset_fails_closed_when_digest_missing() {
+        // G7 negative test: no `digests` block at all.
+        let name = platform_filename();
+        let payload = json!({"urls": [asset(&name, None)]});
+        let error = pick_asset(&payload).expect_err("missing digest must fail closed");
+        assert!(error.contains("refusing an unverified download"), "{error}");
+    }
+
+    #[test]
+    fn pick_asset_fails_closed_on_malformed_digest() {
+        let name = platform_filename();
+        let payload = json!({"urls": [asset(&name, Some("deadbeef"))]});
+        assert!(pick_asset(&payload).is_err(), "short digest must not verify");
+        let empty = json!({"urls": [asset(&name, Some("   "))]});
+        assert!(pick_asset(&empty).is_err(), "blank digest must not verify");
+    }
+
+    #[test]
+    fn pick_asset_fails_without_platform_wheel() {
+        let payload = json!({"urls": [asset("onnxruntime-1.29.0-cp999-some_exotic.whl", Some(&"b".repeat(64)))]});
+        let error = pick_asset(&payload).expect_err("exotic platform has no asset");
+        assert!(error.contains("no wheel for this platform"), "{error}");
     }
 }

@@ -1,0 +1,171 @@
+{
+ "generator": "rust_parity/gen_vector_plane_fixtures.py",
+ "cases": [
+  {
+   "input": [
+    "go",
+    "Proj",
+    "func:main",
+    "/repo"
+   ],
+   "expect_error": false,
+   "id": "66daf30b-28d0-50d1-9280-d0ec386ed7a0"
+  },
+  {
+   "input": [
+    "Go ",
+    " Proj ",
+    " func:main ",
+    " /repo "
+   ],
+   "expect_error": false,
+   "id": "66daf30b-28d0-50d1-9280-d0ec386ed7a0"
+  },
+  {
+   "input": [
+    "SWIFT",
+    "aws-sa-associate",
+    "cls:Foo/Bar",
+    "/x/y"
+   ],
+   "expect_error": false,
+   "id": "40159e61-01a8-52a1-a906-35cde7f58751"
+  },
+  {
+   "input": [
+    "perl",
+    "p\\é",
+    "sým:ból:ids",
+    "röot"
+   ],
+   "expect_error": false,
+   "id": "745ac224-71c4-5506-852a-680647793b8a"
+  },
+  {
+   "input": [
+    "shell",
+    "p",
+    "s",
+    "r "
+   ],
+   "expect_error": false,
+   "id": "5163e84d-4c38-5c65-a9ba-6a675b5e229f"
+  },
+  {
+   "input": [
+    "shell",
+    "p",
+    "s",
+    "rx"
+   ],
+   "expect_error": false,
+   "id": "c7b3a083-0761-5622-9e19-77cae7a754f3"
+  },
+  {
+   "input": [
+    "go",
+    "p",
+    "s",
+    "a\u001cb"
+   ],
+   "expect_error": false,
+   "id": "abd38f44-101f-59d4-8330-d602c8bc1ed0"
+  },
+  {
+   "input": [
+    "go",
+    "p\u001c",
+    "s",
+    "R"
+   ],
+   "expect_error": false,
+   "id": "4d43abde-61c8-5135-9484-52f648e6932a"
+  },
+  {
+   "input": [
+    "jp1",
+    "p",
+    "s",
+    "R\u001f"
+   ],
+   "expect_error": false,
+   "id": "d84125a1-98fa-534e-a038-f5faf7619057"
+  },
+  {
+   "input": [
+    "rust",
+    "İ",
+    "S",
+    "R"
+   ],
+   "expect_error": false,
+   "id": "fae6ef52-d6af-5b89-9ac3-c0ed59720386"
+  },
+  {
+   "input": [
+    "dart",
+    "ΑΣΒ",
+    "Σ",
+    "ς"
+   ],
+   "expect_error": false,
+   "id": "e4ab5043-4c43-5558-a4d5-a2f3b346ecff"
+  },
+  {
+   "input": [
+    "go",
+    "p",
+    "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss",
+    "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+   ],
+   "expect_error": false,
+   "id": "13b5d075-8860-542a-a5d1-be95d137bae8"
+  },
+  {
+   "input": [
+    "go ",
+    "p",
+    "s\t",
+    "r\n"
+   ],
+   "expect_error": false,
+   "id": "f7554e92-08cf-5410-9d15-db7142bae22e"
+  },
+  {
+   "input": [
+    "",
+    "p",
+    "s",
+    "r"
+   ],
+   "expect_error": true
+  },
+  {
+   "input": [
+    "go",
+    "   ",
+    "s",
+    "r"
+   ],
+   "expect_error": true
+  },
+  {
+   "input": [
+    "go",
+    "p",
+    "",
+    "r"
+   ],
+   "expect_error": true
+  },
+  {
+   "input": [
+    "go",
+    "p",
+    "s",
+    "\u001c\u001d\u001e\u001f"
+   ],
+   "expect_error": true
+  }
+ ]
+}

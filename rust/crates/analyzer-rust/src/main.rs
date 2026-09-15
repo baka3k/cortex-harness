@@ -169,6 +169,56 @@ fn finish(
     let verbose = args.verbose;
     let mut exit_code = 0;
 
+    // Scope resolved identically for BOTH the graph plane and the phase-06
+    // embedding-input artifact (the embedding pass runs with the store closed).
+    let project_id = non_empty(args.project_id.clone())
+        .or_else(|| basename_of(root))
+        .unwrap_or_else(|| "rust-project".to_string());
+    let project_name =
+        non_empty(args.project_name.clone()).unwrap_or_else(|| project_id.clone());
+    let language = non_empty(args.language.clone()).unwrap_or_else(|| "rust".to_string());
+    let repo =
+        non_empty(args.repo.clone()).unwrap_or_else(|| pipeline::repo_name(&project_name, root));
+    // Python parse_args: --build-system default = env
+    // PROJECT_BUILD_SYSTEM hoặc "cargo"; `args.build_system or ""`.
+    let build_system =
+        non_empty(args.build_system.clone()).unwrap_or_else(|| "cargo".to_string());
+    let cleanup_selected = selected_rel_paths.unwrap_or_default();
+    let config = pipeline::PipelineConfig {
+        project_id,
+        project_name,
+        language,
+        repo,
+        build_system,
+        incremental: args.incremental,
+        cleanup_selected: cleanup_selected.clone(),
+        cleanup_deleted: deleted_rel_paths.clone(),
+        neo4j_db: args.neo4j_db.clone(),
+        neo4j_batch_size: extra.neo4j_batch_size,
+        verbose,
+    };
+
+    // ── Phase-06 embedding-input artifact (only when orchestrator asked) ───
+    if let Some(output) = args.embedding_input_output()
+        && let Err(error) =
+            cortex_analyzer_framework::embedding_artifact::maybe_emit_embedding_artifact(
+                Some(output),
+                cortex_analyzer_framework::embedding_artifact::EmbeddingEmission {
+                    parser: "rust",
+                    project_id: &config.project_id,
+                    root_scope: &config.repo,
+                    full_replace: !args.incremental,
+                    scanned_directory: true,
+                    files_selected: config.cleanup_selected.iter().cloned().collect(),
+                    files_deleted: config.cleanup_deleted.iter().cloned().collect(),
+                    categories: pipeline::embedding_categories(&config, payloads),
+                },
+            )
+        {
+            eprintln!("Rust embedding-input artifact failed: {error}");
+            return 3;
+        }
+
     if !args.graph_writes_disabled() {
         let store = match args.open_store() {
             Ok(store) => Some(store),
@@ -177,37 +227,11 @@ fn finish(
                 return 3;
             }
         };
-        if let Some(store) = store {
-            let project_id = non_empty(args.project_id.clone())
-                .or_else(|| basename_of(root))
-                .unwrap_or_else(|| "rust-project".to_string());
-            let project_name =
-                non_empty(args.project_name.clone()).unwrap_or_else(|| project_id.clone());
-            let language = non_empty(args.language.clone()).unwrap_or_else(|| "rust".to_string());
-            let repo = non_empty(args.repo.clone())
-                .unwrap_or_else(|| pipeline::repo_name(&project_name, root));
-            // Python parse_args: --build-system default = env
-            // PROJECT_BUILD_SYSTEM hoặc "cargo"; `args.build_system or ""`.
-            let build_system =
-                non_empty(args.build_system.clone()).unwrap_or_else(|| "cargo".to_string());
-            let config = pipeline::PipelineConfig {
-                project_id,
-                project_name,
-                language,
-                repo,
-                build_system,
-                incremental: args.incremental,
-                cleanup_selected: selected_rel_paths.unwrap_or_default(),
-                cleanup_deleted: deleted_rel_paths,
-                neo4j_db: args.neo4j_db.clone(),
-                neo4j_batch_size: extra.neo4j_batch_size,
-                verbose,
-            };
-            if let Err(error) = pipeline::write_graph(&config, payloads, store) {
+        if let Some(store) = store
+            && let Err(error) = pipeline::write_graph(&config, payloads, store) {
                 eprintln!("Rust graph persistence failed: {error}");
                 exit_code = 3;
             }
-        }
     } else if verbose {
         println!("[graph] disabled; missing graph connection settings");
     }

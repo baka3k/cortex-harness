@@ -466,3 +466,35 @@ pub fn write_graph(
         unresolved_relations: unresolved_count,
     })
 }
+
+/// Phase-06 embedding-input categories. Python `_sync_vectors` builds embedding
+/// rows via `build_graph_rows(...)` DIRECTLY (it never runs `_verified_lineage_rows`,
+/// which is graph-write only), so this mirrors that: raw `build_graph_rows`, the
+/// document categories in the same insertion order the Python dict carried,
+/// minus `relations` (and `calls`, which shell has none of). The consumer
+/// (`documents_from_categories`) also drops relations/calls, so the two are
+/// belt-and-braces — the artifact simply never carries edge rows.
+pub fn embedding_categories(
+    result: &ShellAnalysisResult,
+    project_name: &str,
+    repo: &str,
+    program_mappings: &[ProgramMapping],
+) -> Vec<(String, Vec<Value>)> {
+    let rows = build_graph_rows(result, project_name, repo, program_mappings);
+    let mut out: Vec<(String, Vec<Value>)> = Vec::new();
+    for (name, category) in [
+        ("scripts", &rows.scripts),
+        ("functions", &rows.functions),
+        ("invocations", &rows.invocations),
+        ("programs", &rows.programs),
+        ("files", &rows.files),
+    ] {
+        if !category.is_empty() {
+            out.push((
+                name.to_string(),
+                category.iter().cloned().map(Value::Object).collect(),
+            ));
+        }
+    }
+    out
+}

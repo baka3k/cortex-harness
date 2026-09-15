@@ -21,6 +21,8 @@ use crate::syncscope::{
 };
 use crate::tsdetect;
 use crate::util;
+use crate::vector_store;
+use crate::vector_sync;
 use crate::walk;
 
 const MAX_OUTPUT_TAIL_CHARS: usize = 65_536;
@@ -1913,16 +1915,57 @@ fn run_flow(
     if run_embedding_pass {
         println!("[embedding] starting graph-disabled primary analyzer pass");
         let analyzers = registry::analyzers();
+        // Phase-06: orchestrator-level embedding pass (spike NO-GO overturned
+        // by component gates G1-G8, plans/260915…/phase-06.md). Native ⇔ qdrant
+        // store resolvable to an HTTP server + parser in the shared-7 vector
+        // lineage + Rust binary selected + CORTEX_EMBED_ORCHESTRATOR not pinned
+        // to python. Everything else keeps the phase-01 force_python pin; the
+        // carve-outs (legacy CodeEmbedder lineage, local embedded store) are
+        // explicit and logged once here, never silent.
+        let native_env = std::env::var("CORTEX_EMBED_ORCHESTRATOR")
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        let native_allowed =
+            !matches!(native_env.as_str(), "python" | "off" | "0" | "false" | "no");
+        let native_store = if !native_allowed {
+            println!("[embedding] native pass disabled by CORTEX_EMBED_ORCHESTRATOR={native_env:?}");
+            None
+        } else {
+            match vector_store::open_native_store(args.qdrant_url.as_deref()) {
+                vector_store::NativeStore::Remote(store) => Some(store),
+                vector_store::NativeStore::Unsupported(reason) => {
+                    println!("[embedding] native pass unavailable: {reason}");
+                    None
+                }
+            }
+        };
+        let mut native_embedder: Option<Box<dyn cortex_embed::Embedder>> = None;
         for parser_name in registry::PARSER_ITERATION_ORDER {
             let Some(config) = analyzers.get(parser_name) else { continue };
             if !parser_filter.contains(parser_name) || !config.writes_vectors {
                 continue;
             }
             let mut config = if parser_name == "ts" { resolve_ts_analyzer(root) } else { config.clone() };
-            // Vector + message lanes stay on Python children until the native
-            // planes land (plan phases 05–06) — Rust children do not embed or
-            // message-scan yet, so the flip must not select them here.
-            config.force_python = true;
+            // Phase-06 native pass replaces the phase-01 pin exactly for the
+            // shared-7 lineage when a Rust binary is selected for it; every
+            // other child keeps the pin (message lane included until the
+            // phase-05 plane lands). Missing binary under `=rust` keeps the
+            // pin loudly — the embedding pass never hard-fails on a cell the
+            // phase-01 semantics did not.
+            let mut native_parser = native_store.is_some()
+                && registry::SHARED_VECTOR_CLI_PARSERS.contains(&parser_name);
+            if native_parser {
+                match registry::rust_analyzer_binary(&config) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => native_parser = false,
+                    Err(detail) => {
+                        println!("[embedding] {detail} — keeping the Python child for {parser_name}");
+                        native_parser = false;
+                    }
+                }
+            }
+            config.force_python = !native_parser;
             let parser_changed = changed_by_parser.get(parser_name).cloned().unwrap_or_default();
             let parser_deleted = deleted_by_parser.get(parser_name).cloned().unwrap_or_default();
             let parser_impacted = impacted_by_parser.get(parser_name).cloned().unwrap_or_default();
@@ -1937,6 +1980,9 @@ fn run_flow(
             gitdiff::write_manifest_paths(&changed_manifest, &parser_scan).map_err(|e| e.to_string())?;
             gitdiff::write_manifest_paths(&deleted_manifest, &parser_deleted).map_err(|e| e.to_string())?;
             let collection = registry::code_collection_name(project_id, root, parser_name);
+            let embedding_artifact = native_parser.then(|| {
+                manifest_root.join(format!("{parser_name}_embedding_input_{artifact_token}.json"))
+            });
             let mut vector_info = serde_json::Map::new();
             vector_info.insert("parser".into(), json!(parser_name));
             vector_info.insert("role".into(), json!("embedding"));
@@ -1953,6 +1999,14 @@ fn run_flow(
             vector_info.insert("changed_manifest".into(), json!(changed_manifest.to_string_lossy()));
             vector_info.insert("deleted_manifest".into(), json!(deleted_manifest.to_string_lossy()));
             vector_info.insert("qdrant_collection".into(), json!(collection));
+            vector_info.insert(
+                "embedding_backend".into(),
+                json!(if native_parser { "orchestrator" } else { "python-children" }),
+            );
+            if let Some(path) = &embedding_artifact {
+                vector_info
+                    .insert("embedding_input_artifact".into(), json!(path.to_string_lossy()));
+            }
             vector_info.insert("writes_vectors".into(), json!(true));
             vector_info.insert(
                 "vector_status".into(),
@@ -1996,7 +2050,7 @@ fn run_flow(
             let run_incrementally = config.incremental_supported && (!full_scan || recovery_full_scan);
             let changed_manifest_str = changed_manifest.to_string_lossy().to_string();
             let deleted_manifest_str = deleted_manifest.to_string_lossy().to_string();
-            let cmd = registry::build_analyzer_cmd(
+            let mut cmd = registry::build_analyzer_cmd(
                 &args.python_bin,
                 &config,
                 root_str,
@@ -2026,22 +2080,56 @@ fn run_flow(
                 args.parse_quality_max_bytes,
                 &graph_target_args,
             );
+            if let Some(path) = &embedding_artifact {
+                cmd.args.push("--embedding-input-output".to_string());
+                cmd.args.push(path.to_string_lossy().to_string());
+            }
             let command_vec: Vec<String> =
                 std::iter::once(cmd.program.clone()).chain(cmd.args.iter().cloned()).collect();
             set_list_field(&mut vector_summaries, index, "command", json!(command_vec));
             sync_list(summary, "vector_embeddings", &vector_summaries);
-            match run_child(&command_vec, &run_cwd, args.verbose, &embedding_env) {
+            let mut lane_error: Option<String> = None;
+            let child_result = run_child(&command_vec, &run_cwd, args.verbose, &embedding_env);
+            match child_result {
                 Ok(output) => {
                     set_list_field(&mut vector_summaries, index, "status", json!("success"));
                     if args.qdrant_url.is_some() {
                         set_list_field(&mut vector_summaries, index, "vector_status", json!("success"));
                     }
-                    if let Some(count) = scan_result_vector_count(&output) {
-                        set_list_field(&mut vector_summaries, index, "vector_count", json!(count));
+                    if native_parser {
+                        match finish_native_embedding_pass(
+                            parser_name,
+                            project_id,
+                            &collection,
+                            embedding_artifact
+                                .as_ref()
+                                .expect("set above exactly when native_parser"),
+                            args.max_embed_chars,
+                            args.embed_model.as_deref(),
+                            &mut native_embedder,
+                            native_store.as_ref().expect("native_parser implies an open store"),
+                        ) {
+                            Ok(count) => {
+                                set_list_field(&mut vector_summaries, index, "vector_count", json!(count));
+                                propagate_vector_status(
+                                    &mut parser_summaries, parser_name, &vector_summaries[index],
+                                );
+                                sync_list(summary, "primary_parsers", &parser_summaries);
+                                executed_parsers.push(format!("{parser_name}:embedding"));
+                            }
+                            Err(error) => {
+                                println!("[embedding] {parser_name}: native pass failed: {error}");
+                                lane_error = Some(error);
+                            }
+                        }
+                    } else {
+                        if let Some(count) = scan_result_vector_count(&output) {
+                            set_list_field(&mut vector_summaries, index, "vector_count", json!(count));
+                        }
+                        propagate_vector_status(&mut parser_summaries, parser_name, &vector_summaries[index]);
+                        sync_list(summary, "primary_parsers", &parser_summaries);
+                        executed_parsers.push(format!("{parser_name}:embedding"));
                     }
-                    propagate_vector_status(&mut parser_summaries, parser_name, &vector_summaries[index]);
-                    sync_list(summary, "primary_parsers", &parser_summaries);
-                    executed_parsers.push(format!("{parser_name}:embedding"));
                 }
                 Err(error) => {
                     set_list_field(&mut vector_summaries, index, "vector_status", json!("failed"));
@@ -2059,6 +2147,22 @@ fn run_flow(
                     );
                     vector_summaries.insert(index, info);
                 }
+            }
+            if let Some(message) = lane_error {
+                set_list_field(&mut vector_summaries, index, "vector_status", json!("failed"));
+                propagate_vector_status(&mut parser_summaries, parser_name, &vector_summaries[index]);
+                sync_list(summary, "primary_parsers", &parser_summaries);
+                let mut info = vector_summaries.remove(index);
+                record_lane_failure(
+                    summary,
+                    &mut component_failures,
+                    info.as_object_mut().expect("object entry"),
+                    "embedding",
+                    parser_name,
+                    &message,
+                    true,
+                );
+                vector_summaries.insert(index, info);
             }
             set_list_field(&mut vector_summaries, index, "finished_at", json!(util::now_iso()));
             set_list_field(
@@ -2408,6 +2512,146 @@ fn resolve_ts_analyzer(root: &Path) -> AnalyzerConfig {
 fn scan_result_vector_count(output: &str) -> Option<i64> {
     let re = regex::Regex::new(r"(?m)^\[SCAN_RESULT\].*\bvectors=(\d+)\b").ok()?;
     re.captures(output)?.get(1)?.as_str().parse().ok()
+}
+
+/// Phase-06 native embedding pass: read the child's embedding-input artifact
+/// → documents (port of `primary_vector_sync` text/point-id construction) →
+/// embed via cortex-embed → upsert + stale-clean via cortex-storage. Returns
+/// the upserted document count (`vector_count`). The child itself succeeded;
+/// a failure here is a LANE failure, recorded via `record_lane_failure`.
+#[allow(clippy::too_many_arguments)] // artifact + pass-scoped slots; grouping adds no clarity
+fn finish_native_embedding_pass(
+    parser_name: &str,
+    project_id: &str,
+    collection: &str,
+    artifact_path: &Path,
+    max_embed_chars: i64,
+    embed_model: Option<&str>,
+    embedder_slot: &mut Option<Box<dyn cortex_embed::Embedder>>,
+    store: &cortex_storage::qdrant_remote::RemoteQdrantStore,
+) -> Result<usize, String> {
+    let text = std::fs::read_to_string(artifact_path).map_err(|error| {
+        format!(
+            "native embedding pass: child did not produce embedding artifact {}: {error}",
+            artifact_path.display()
+        )
+    })?;
+    let artifact =
+        cortex_analyzer_framework::embedding_artifact::EmbeddingInputArtifact::from_json_str(&text)?;
+    if artifact.parser != parser_name || artifact.project_id != project_id {
+        return Err(format!(
+            "embedding artifact scope mismatch (parser={:?}, project_id={:?}; expected {parser_name:?}/{project_id:?})",
+            artifact.parser, artifact.project_id
+        ));
+    }
+    let max_chars = usize::try_from(max_embed_chars)
+        .map_err(|_| format!("max-embed-chars must be positive, got {max_embed_chars}"))?;
+    let mut categories: Vec<(String, Vec<serde_json::Map<String, Value>>)> = Vec::new();
+    for (name, rows) in artifact.categories {
+        let mut typed = Vec::with_capacity(rows.len());
+        for row in rows {
+            typed.push(
+                row.as_object().cloned().ok_or_else(|| {
+                    format!("embedding artifact row in category {name:?} is not an object")
+                })?,
+            );
+        }
+        categories.push((name, typed));
+    }
+    let documents = vector_sync::documents_from_categories(
+        &categories,
+        parser_name,
+        &artifact.root_scope,
+        max_chars,
+    )?;
+    let mut cleanup: BTreeSet<String> =
+        artifact.files_selected.iter().cloned().collect::<BTreeSet<_>>();
+    cleanup.extend(artifact.files_deleted.iter().cloned());
+    if cleanup.is_empty() && !artifact.scanned_directory {
+        cleanup.extend(
+            documents
+                .iter()
+                .filter_map(|document| {
+                    document
+                        .payload
+                        .get("file_path")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect::<BTreeSet<String>>(),
+        );
+    }
+    if embedder_slot.is_none() {
+        let wanted = vector_store::embedding_model_name(embed_model);
+        let resolved = cortex_embed::model_for(cortex_embed::Plane::Code);
+        if wanted.trim() != resolved.trim() {
+            return Err(format!(
+                "native embedding pass embeds with the cortex-embed plane model {resolved:?} \
+                 but this sync requests {wanted:?} — align CODE_EMBEDDING_MODEL/--embed-model \
+                 or rerun with CORTEX_EMBED_ORCHESTRATOR=python"
+            ));
+        }
+        *embedder_slot = Some(vector_store::pass_embedder()?);
+        if let Some(embedder) = embedder_slot.as_ref() {
+            println!(
+                "[embedding] native pass embedder={} model={resolved:?}",
+                embedder.backend_name()
+            );
+        }
+    }
+    let embedder = embedder_slot.as_ref().expect("filled above");
+    vector_store::sync_vector_documents(
+        store,
+        &**embedder,
+        collection,
+        &documents,
+        parser_name,
+        project_id,
+        &artifact.root_scope,
+        &cleanup.into_iter().collect::<Vec<String>>(),
+        artifact.full_replace,
+    )
+}
+
+/// `record_component_failure` for lane errors that are NOT child-process
+/// failures — the child succeeded and the orchestrator-side embed/upsert
+/// stage failed. Keeps the parser-isolation envelope (continues the sync)
+/// but tags the exception type truthfully.
+#[allow(clippy::too_many_arguments)]
+fn record_lane_failure(
+    summary: &mut serde_json::Map<String, Value>,
+    component_failures: &mut Vec<(String, String)>,
+    info: &mut serde_json::Map<String, Value>,
+    role: &str,
+    name: &str,
+    message: &str,
+    continued: bool,
+) {
+    info.insert("status".into(), json!("failed"));
+    info.insert("error".into(), json!(message));
+    info.insert("failure_class".into(), json!("parser_isolation"));
+    info.insert("failure_code".into(), json!("analyzer_child_failed"));
+    info.insert("failure_artifacts".into(), json!([]));
+    if let Some(Value::Array(failures)) = summary.get_mut("component_failures") {
+        failures.push(json!({
+            "component": format!("{role}:{name}"),
+            "role": role,
+            "name": name,
+            "error": message,
+            "exception_type": "EmbeddingLaneError",
+            "failure_class": "parser_isolation",
+            "failure_code": "analyzer_child_failed",
+            "retryable": false,
+            "safe_action": "inspect the embedding-input artifact and the qdrant/embedding stage logs",
+            "continued": continued,
+            "details": {"exception_type": "EmbeddingLaneError"},
+            "artifacts": [],
+        }));
+    }
+    component_failures.push((format!("{role}:{name}"), message.to_string()));
+    eprintln!(
+        "[continue] component={role}:{name} failed: {message}; continuing remaining components"
+    );
 }
 
 /// `_build_analyzer_env`.

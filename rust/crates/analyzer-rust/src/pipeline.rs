@@ -381,6 +381,66 @@ impl PipelineConfig {
     }
 }
 
+/// Category field mapping shared by BOTH planes: the graph `write_all` and the
+/// phase-06 embedding-input artifact — so point-id/count/category order cannot
+/// drift between them. `empty` is the shared `&[]` slice for unused categories.
+fn build_payload<'a>(rows: &'a GraphRows, empty: &'a [Row]) -> WriteAllPayload<'a> {
+    WriteAllPayload {
+        projects: empty,
+        packages: empty,
+        namespaces: &rows.namespaces,
+        files: &rows.files,
+        classes: empty,
+        types: &rows.types,
+        function_types: empty,
+        functions: &rows.functions,
+        fields: &rows.fields,
+        aliases: &rows.aliases,
+        templates: &rows.templates,
+        relations: &rows.relations,
+        calls: &rows.calls,
+        calls_with_site: empty,
+        properties: empty,
+        events: empty,
+        interfaces: empty,
+        enums: empty,
+        constants: empty,
+        variables: empty,
+        navigators: empty,
+        has_routes: empty,
+        param_lists: empty,
+        workflows: empty,
+        workflow_steps: empty,
+        call_evidence_sites: empty,
+        call_evidence_observations: empty,
+        build_configurations: empty,
+        semantic_coverage: empty,
+        proc_function_joins: empty,
+        proc_host_declarations: empty,
+        use_full_writers: true,
+        files_variant: FilesVariant::Default,
+    }
+}
+
+/// Phase-06 embedding-input categories for the graphless pass: builds rows the
+/// SAME way `write_graph` does and maps them through the shared
+/// [`build_payload`] so the artifact and the graph plane never diverge.
+pub fn embedding_categories(
+    config: &PipelineConfig,
+    payloads: &[FilePayload],
+) -> Vec<(String, Vec<Value>)> {
+    let rows = prepare_write_rows(
+        payloads,
+        &config.project_id,
+        &config.project_name,
+        &config.language,
+        &config.repo,
+        &config.build_system,
+    );
+    let empty: Vec<Row> = Vec::new();
+    build_payload(&rows, &empty).embedding_categories()
+}
+
 /// `_write_graph` — cleanup + `write_all`; lỗi bọc thành message exit-3.
 pub fn write_graph(
     config: &PipelineConfig,
@@ -421,41 +481,7 @@ pub fn write_graph(
     let batch_size = config.neo4j_batch_size.max(1) as usize;
     let mut writer = LanguageCodeWriter::new(store, config.neo4j_db.clone(), batch_size, verbose);
     let empty: Vec<Row> = Vec::new();
-    let counts = writer.write_all(&WriteAllPayload {
-        projects: &empty,
-        packages: &empty,
-        namespaces: &rows.namespaces,
-        files: &rows.files,
-        classes: &empty,
-        types: &rows.types,
-        function_types: &empty,
-        functions: &rows.functions,
-        fields: &rows.fields,
-        aliases: &rows.aliases,
-        templates: &rows.templates,
-        relations: &rows.relations,
-        calls: &rows.calls,
-        calls_with_site: &empty,
-        properties: &empty,
-        events: &empty,
-        interfaces: &empty,
-        enums: &empty,
-        constants: &empty,
-        variables: &empty,
-        navigators: &empty,
-        has_routes: &empty,
-        param_lists: &empty,
-        workflows: &empty,
-        workflow_steps: &empty,
-        call_evidence_sites: &empty,
-        call_evidence_observations: &empty,
-        build_configurations: &empty,
-        semantic_coverage: &empty,
-        proc_function_joins: &empty,
-        proc_host_declarations: &empty,
-        use_full_writers: true,
-        files_variant: FilesVariant::Default,
-    });
+    let counts = writer.write_all(&build_payload(&rows, &empty));
     match counts {
         Ok(counts) => {
             if !counts.is_empty() && verbose {

@@ -24,6 +24,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 MODEL = "BAAI/bge-m3"
+# G7 (plan 260915-analyzer-layer-rust-cutover phase-06): pin the HF snapshot
+# the on-disk artifact was copied from — the same revision recorded in
+# rust/crates/cortex-embed/src/model.rs `model_pin`. snapshot_download takes no
+# `revision` argument otherwise, so a cache refresh could copy different bytes
+# under the same name. trust_remote_code is NOT used here: bge-m3 ships an
+# official onnx/ subtree, nothing executes.
+MODEL_REVISION = "5617a9f61b028005a4858fdac845db406aefb181"
 PATTERNS = ["onnx/model.onnx", "onnx/model.onnx_data"]
 OUT = REPO / ".cache" / "embed" / "BAAI--bge-m3"
 
@@ -48,8 +55,12 @@ def main() -> int:
 
     from huggingface_hub import snapshot_download
 
-    snapshot = snapshot_download(MODEL, allow_patterns=PATTERNS)
+    snapshot = snapshot_download(MODEL, revision=MODEL_REVISION, allow_patterns=PATTERNS)
     source = Path(snapshot)
+    if source.name != MODEL_REVISION:
+        raise SystemExit(
+            f"[bge] resolved snapshot {source.name} != pinned revision {MODEL_REVISION}"
+        )
     OUT.mkdir(parents=True, exist_ok=True)
     files = {}
     for pattern in PATTERNS:
@@ -62,6 +73,7 @@ def main() -> int:
 
     meta = {
         "model": MODEL,
+        "revision": MODEL_REVISION,
         "snapshot": source.name,
         "origin": "official Hugging Face onnx/ subtree (no local export)",
         "pooling": "cls",

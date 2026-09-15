@@ -1,0 +1,45 @@
+{
+ "cases": [
+  {
+   "case": "create fresh (env defaults)",
+   "calls": [
+    {
+     "vectors_config": {
+      "size": 1024,
+      "distance": "Cosine"
+     },
+     "kwargs": {}
+    }
+   ]
+  },
+  {
+   "case": "size drift",
+   "calls": "Qdrant collection 'c' has vector size default=1024, but the configured embedder produces 512"
+  },
+  {
+   "case": "exists, same size → no create",
+   "calls": []
+  },
+  {
+   "case": "scope index order",
+   "calls": [
+    {
+     "field": "project_id_normalized",
+     "wait": true
+    },
+    {
+     "field": "parser",
+     "wait": true
+    },
+    {
+     "field": "root_scope",
+     "wait": true
+    },
+    {
+     "field": "file_path",
+     "wait": true
+    }
+   ]
+  }
+ ]
+}

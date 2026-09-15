@@ -1,0 +1,23 @@
+{
+  "project": {
+    "code": "phase06go",
+    "name": "phase06go"
+  },
+  "storage_backend": "remote",
+  "remote": {
+    "qdrant_url": "http://127.0.0.1:6333",
+    "qdrant_api_key": null
+  },
+  "code": {
+    "env": {
+      "GRAPH_PROVIDER": "falkordb",
+      "CODE_GRAPH_PROVIDER": "falkordb",
+      "FALKORDB_URI": "redis://127.0.0.1:6379",
+      "QDRANT_COLLECTION": "phase06go",
+      "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
+      "BATCH_SIZE": "8",
+      "MAX_EMBED_CHARS": "4000",
+      "device": "cpu"
+    }
+  }
+}

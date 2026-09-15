@@ -1945,3 +1945,55 @@ pub struct WriteAllPayload<'a> {
     pub use_full_writers: bool,
     pub files_variant: FilesVariant,
 }
+
+impl WriteAllPayload<'_> {
+    /// Phase-06 embedding-input categories: every document category in
+    /// declaration order, minus `relations`/`calls` (edges never become
+    /// vector documents — `documents_from_rows` skips them; leaving them out
+    /// keeps the artifact small). Empty categories are dropped: they would
+    /// contribute zero documents either way.
+    #[must_use]
+    pub fn embedding_categories(&self) -> Vec<(String, Vec<serde_json::Value>)> {
+        let mut out: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
+        macro_rules! push {
+            ($name:literal, $rows:expr) => {
+                if !$rows.is_empty() {
+                    out.push((
+                        $name.to_string(),
+                        $rows.iter().cloned().map(serde_json::Value::Object).collect(),
+                    ));
+                }
+            };
+        }
+        push!("projects", self.projects);
+        push!("packages", self.packages);
+        push!("namespaces", self.namespaces);
+        push!("files", self.files);
+        push!("classes", self.classes);
+        push!("types", self.types);
+        push!("function_types", self.function_types);
+        push!("functions", self.functions);
+        push!("fields", self.fields);
+        push!("aliases", self.aliases);
+        push!("templates", self.templates);
+        push!("calls_with_site", self.calls_with_site);
+        push!("properties", self.properties);
+        push!("events", self.events);
+        push!("interfaces", self.interfaces);
+        push!("enums", self.enums);
+        push!("constants", self.constants);
+        push!("variables", self.variables);
+        push!("navigators", self.navigators);
+        push!("has_routes", self.has_routes);
+        push!("param_lists", self.param_lists);
+        push!("workflows", self.workflows);
+        push!("workflow_steps", self.workflow_steps);
+        push!("call_evidence_sites", self.call_evidence_sites);
+        push!("call_evidence_observations", self.call_evidence_observations);
+        push!("build_configurations", self.build_configurations);
+        push!("semantic_coverage", self.semantic_coverage);
+        push!("proc_function_joins", self.proc_function_joins);
+        push!("proc_host_declarations", self.proc_host_declarations);
+        out
+    }
+}
