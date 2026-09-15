@@ -2071,6 +2071,32 @@ fn run_flow(
         }
     }
 
+    // ── native message-scan lane (phase-05) ──
+    // Runs the Rust port of `tools.common.message_scan` cross-parser plane,
+    // independent of whether primary/embedding pass selected Python or Rust
+    // children. This is the lane that allows flipping default to Rust
+    // without losing message-scan capability (the embedding pass still
+    // delegates message-scan to Python children for backwards compatibility
+    // — phase-08 retired-error closes that gap).
+    if args.sync_messages
+        && !args.no_graph
+        && run_graph_pass
+    {
+        run_native_message_scan_lane(
+            args,
+            root_str,
+            project_id,
+            project_name,
+            &before_sha,
+            &after_sha,
+            &changed_by_parser,
+            &deleted_by_parser,
+            &message_output_dir,
+            &message_qdrant_collection,
+            summary,
+        )?;
+    }
+
     // ── final parser aggregation ──
     if args.sync_mode == "both" && !run_graph_pass {
         summary.insert("primary_parsers".into(), Value::Array(vector_summaries.clone()));
@@ -2565,4 +2591,148 @@ pub fn delegate_to_python(reason: &str) -> i32 {
             1
         }
     }
+}
+
+// ── phase-05 native message-scan lane ──────────────────────────────────────
+//
+// Independent cross-parser lane that scans source files via the Rust port of
+// `tools.common.message_scan`. Activated when `--sync-messages` is true
+// (default) and at least the graph pass ran.
+//
+// Today the lane only emits the per-parser artifact JSON
+// (`<output_dir>/<project>/<parser>_messages.json`). Graph upsert and
+// Qdrant vector lane are owned by phase-06 (cortex-embed component gates);
+// the Python children continue to write the graph MessageEndpoint nodes /
+// message vectors during the embedding pass until phase-08 retired-errors
+// the value.
+#[allow(clippy::too_many_arguments)]
+fn run_native_message_scan_lane(
+    args: &crate::cli::Args,
+    root: &str,
+    project_id: &str,
+    project_name: &str,
+    before_sha: &str,
+    after_sha: &str,
+    changed_by_parser: &BTreeMap<String, BTreeSet<String>>,
+    deleted_by_parser: &BTreeMap<String, BTreeSet<String>>,
+    message_output_dir: &str,
+    message_qdrant_collection: &str,
+    summary: &mut serde_json::Map<String, Value>,
+) -> Result<(), String> {
+    use crate::message_scan;
+
+    let root_path = std::path::Path::new(root);
+    let output_dir = std::path::Path::new(message_output_dir);
+    if let Err(e) = std::fs::create_dir_all(output_dir) {
+        return Err(format!("message-scan output dir: {e}"));
+    }
+    let mut lane_summaries: Vec<Value> = Vec::new();
+    let mut total_messages = 0u64;
+    let mut lane_failures: Vec<(String, String)> = Vec::new();
+    let enabled_parsers = crate::registry::message_enabled_parsers();
+
+    let run_incrementally = !args.full_scan;
+    for parser in enabled_parsers {
+        let changed = changed_by_parser
+            .get(parser)
+            .cloned()
+            .unwrap_or_default();
+        let deleted = deleted_by_parser
+            .get(parser)
+            .cloned()
+            .unwrap_or_default();
+        let mut target_files: Vec<String> = changed.iter().cloned().collect();
+        target_files.extend(deleted.iter().cloned());
+        if run_incrementally && target_files.is_empty() {
+            // No changed files in incremental — skip (mirrors Python behaviour).
+            continue;
+        }
+        let target_ref = if run_incrementally {
+            Some(target_files.as_slice())
+        } else {
+            None
+        };
+        let started = Instant::now();
+        let collect_result = message_scan::collect_messages_for_parser(
+            root_path,
+            parser,
+            project_id,
+            parser,
+            target_ref,
+        );
+        let records = match collect_result {
+            Ok(records) => records,
+            Err(error) => {
+                lane_failures.push((parser.to_string(), error.clone()));
+                let mut info = serde_json::Map::new();
+                info.insert("parser".into(), json!(parser));
+                info.insert("status".into(), json!("failed"));
+                info.insert("error".into(), json!(error));
+                info.insert(
+                    "duration_seconds".into(),
+                    json!(util::round_digits(started.elapsed().as_secs_f64(), 6)),
+                );
+                lane_summaries.push(Value::Object(info));
+                continue;
+            }
+        };
+        let artifact_result = message_scan::write_message_artifact(
+            root_path,
+            parser,
+            project_id,
+            project_name,
+            &records,
+            Some(output_dir),
+            None,
+            before_sha,
+            after_sha,
+        );
+        let mut info = serde_json::Map::new();
+        info.insert("parser".into(), json!(parser));
+        info.insert("message_count".into(), json!(records.len()));
+        info.insert(
+            "qdrant_collection".into(),
+            json!(message_qdrant_collection),
+        );
+        match artifact_result {
+            Ok(path) => {
+                info.insert("status".into(), json!("success"));
+                info.insert("artifact_path".into(), json!(path.to_string_lossy()));
+                total_messages += records.len() as u64;
+            }
+            Err(error) => {
+                info.insert("status".into(), json!("failed"));
+                info.insert("error".into(), json!(error.to_string()));
+                lane_failures.push((parser.to_string(), error.to_string()));
+            }
+        }
+        info.insert(
+            "duration_seconds".into(),
+            json!(util::round_digits(started.elapsed().as_secs_f64(), 6)),
+        );
+        lane_summaries.push(Value::Object(info));
+        if args.verbose {
+            println!(
+                "[message-scan][native] parser={} messages={}",
+                parser,
+                records.len()
+            );
+        }
+    }
+    summary.insert(
+        "native_message_scan".into(),
+        json!({
+            "parsers": lane_summaries,
+            "total_messages": total_messages,
+            "output_dir": message_output_dir,
+            "qdrant_collection": message_qdrant_collection,
+            "graph_upsert": "deferred-phase-06",
+            "vector_upsert": "deferred-phase-06",
+        }),
+    );
+    if !lane_failures.is_empty() {
+        let (parser, error) = lane_failures[0].clone();
+        return Err(format!("native message-scan[{parser}]: {error}"));
+    }
+    Ok(())
 }
