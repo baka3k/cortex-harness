@@ -147,6 +147,13 @@ fn sorted_json(v: &serde_json::Value) -> String {
     serde_json::to_string(&sort(v)).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Group-option fallback for sync subcommands (see `Matches::merged`).
+fn merged_with_group(levels: &[Level<'static>]) -> parser::Matches {
+    let group = &levels[levels.len() - 2].matches;
+    let child = &levels[levels.len() - 1].matches;
+    parser::Matches::merged(group, child)
+}
+
 fn dispatch(levels: &[Level<'static>]) {
     let names: Vec<&str> = levels.iter().map(|l| l.cmd.name).collect();
     let cur = levels.last().unwrap();
@@ -181,13 +188,31 @@ fn dispatch(levels: &[Level<'static>]) {
         ["dev", "journal", "purge"] => cmds::journal::purge(m),
         ["dev", "sync"] => unreachable!("bare sync group handled by parser"),
         ["dev", "sync", "code"] => cmds::sync::sync_code(m),
-        ["dev", "sync", "code", "all"] => cmds::sync::sync_code_all(m),
-        ["dev", "sync", "code", "stop"] => cmds::sync::sync_code_stop(m),
-        ["dev", "sync", "code", "add"] => cmds::sync::sync_code_add(m),
-        ["dev", "sync", "doc"] => cmds::sync::sync_doc(m, false),
-        ["dev", "sync", "doc", "all"] => cmds::sync::sync_doc(m, true),
-        ["dev", "sync", "doc", "stop"] => cmds::sync::sync_doc_stop(m),
-        ["dev", "sync", "doc", "add"] => cmds::sync::sync_doc_add(m),
+        ["dev", "sync", "code", "all"] => {
+            let m = merged_with_group(levels);
+            cmds::sync::sync_code_all(&m)
+        }
+        ["dev", "sync", "code", "stop"] => {
+            let m = merged_with_group(levels);
+            cmds::sync::sync_code_stop(&m)
+        }
+        ["dev", "sync", "code", "add"] => {
+            let m = merged_with_group(levels);
+            cmds::sync::sync_code_add(&m)
+        }
+        ["dev", "sync", "doc"] => cmds::docsync::sync_doc(m, false),
+        ["dev", "sync", "doc", "all"] => {
+            let m = merged_with_group(levels);
+            cmds::docsync::sync_doc(&m, true)
+        }
+        ["dev", "sync", "doc", "stop"] => {
+            let m = merged_with_group(levels);
+            cmds::docsync::sync_doc_stop(&m)
+        }
+        ["dev", "sync", "doc", "add"] => {
+            let m = merged_with_group(levels);
+            cmds::sync::sync_doc_add(&m)
+        }
         ["dev", "ignore"] => unreachable!("bare ignore group handled by parser"),
         ["dev", "ignore", "add"] => cmds::ignore::add(m),
         ["dev", "ignore", "remove"] => cmds::ignore::remove(m),

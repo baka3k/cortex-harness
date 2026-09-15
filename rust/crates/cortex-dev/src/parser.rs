@@ -43,6 +43,17 @@ impl Matches {
         &self.positionals
     }
 
+    /// Click group semantics: a subcommand handler sees its own options with
+    /// the parent group's options as fallback (dev.py reads
+    /// `ctx.parent.params` for `--project-dir` on `sync code all/stop/add`).
+    pub fn merged(parent: &Matches, child: &Matches) -> Matches {
+        let mut opts = parent.opts.clone();
+        for (key, values) in &child.opts {
+            opts.insert(key.clone(), values.clone());
+        }
+        Matches { opts, positionals: child.positionals.clone() }
+    }
+
     /// True when a Flag/FlagPair option was given (or given as `--no-x`).
     pub fn flag(&self, name: &str) -> bool {
         matches!(self.opts.get(name), Some(vals) if vals.last().map(|v| v == "1").unwrap_or(false))

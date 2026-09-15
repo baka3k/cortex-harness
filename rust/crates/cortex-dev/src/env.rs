@@ -795,3 +795,12 @@ pub fn code_env(project_dir: &Path) -> Value {
 pub fn doc_env(project_dir: &Path) -> Value {
     doc_env_payload(project_dir)
 }
+
+/// The analyzer-worker interpreter handed to `cortex-sync` (`--python-bin`,
+/// dev.py `_venv_python(CODE_TINY)` semantics: project venv → harness venv →
+/// ambient). Lives here so the sync command module stays free of bridge
+/// imports; cortex-sync needs a working venv python for its python-plane
+/// delegation seam and the `CORTEX_RUST_ANALYZER=python` rollback path.
+pub fn sync_python_bin() -> String {
+    pyexec::venv_python(&pyexec::repo_root().join("code-tiny"))
+}

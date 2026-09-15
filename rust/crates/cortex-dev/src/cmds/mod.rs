@@ -1,6 +1,7 @@
 //! Command implementations, one module per dev.py section.
 
 pub mod db;
+pub mod docsync;
 pub mod harness;
 pub mod ignore;
 pub mod init;
