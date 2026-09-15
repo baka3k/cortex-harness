@@ -7,6 +7,7 @@
 mod cmds;
 mod config;
 mod db_transfer;
+mod ensure_ort;
 mod env;
 mod help;
 mod journalx;
@@ -221,6 +222,7 @@ fn dispatch(levels: &[Level<'static>]) {
         ["dev", "mcp", "start"] => cmds::mcp::start(m),
         ["dev", "mcp", "add"] => cmds::mcp::add(m),
         ["dev", "migrate"] => cmds::migrate::run(m),
+        ["dev", "ensure-ort"] => cmds::lifecycle::ensure_ort(m),
         ["dev", "harness"] => unreachable!("bare harness group handled by parser"),
         ["dev", "harness", "init"] => cmds::harness::init(m),
         ["dev", "harness", "status"] => cmds::harness::status(m),
