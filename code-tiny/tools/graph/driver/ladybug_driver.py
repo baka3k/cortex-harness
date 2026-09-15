@@ -46,7 +46,7 @@ from collections.abc import Mapping
 from concurrent.futures import Future
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from tools.graph.core.base import GraphProvider
 from tools.graph.core.cypher_driver import CypherGraphDriver
@@ -507,11 +507,34 @@ class LadybugDriver(CypherGraphDriver):
             "qualified_name STRING, project_id STRING, project_id_normalized STRING, "
             "PRIMARY KEY(id)"
         )
-        for label in sorted({index.label for index in CODE_GRAPH_SCHEMA.indexes}):
+        base_props = {
+            "id",
+            "name",
+            "file_path",
+            "path",
+            "qualified_name",
+            "project_id",
+            "project_id_normalized",
+        }
+        # Index property columns must exist before ensure_schema creates the
+        # required indexes: CREATE INDEX does not run through the auto-DDL
+        # retry, so a missing column there fails the whole schema preflight.
+        index_props: Dict[str, set] = {}
+        for index in CODE_GRAPH_SCHEMA.indexes:
+            index_props.setdefault(index.label, set()).update(index.properties)
+        for label in sorted(index_props):
+            extra = sorted(index_props[label] - base_props)
+            columns = base_columns
+            if extra:
+                rendered = ", ".join(f"`{prop}` STRING" for prop in extra)
+                columns = base_columns.replace(
+                    "PRIMARY KEY(id)", f"{rendered}, PRIMARY KEY(id)"
+                )
             connection.execute(
-                f"CREATE NODE TABLE IF NOT EXISTS `{label}` ({base_columns})",
+                f"CREATE NODE TABLE IF NOT EXISTS `{label}` ({columns})",
                 {},
             )
+            self._alter_missing_index_columns(connection, label, extra)
         for name, source_labels, target_labels, _required in CODE_GRAPH_SCHEMA.relationship_types:
             pairs = ", ".join(
                 f"FROM `{src}` TO `{dst}`"
@@ -536,6 +559,48 @@ class LadybugDriver(CypherGraphDriver):
             len(CODE_GRAPH_SCHEMA.relationship_types),
             self._path,
         )
+
+    def _alter_missing_index_columns(
+        self, connection: Any, label: str, expected_props: Sequence[str]
+    ) -> None:
+        """Add manifest index columns missing from an older bootstrap's table.
+
+        Fresh stores declare these columns at CREATE time; stores created by
+        earlier bootstraps only carry the base columns, so heal them via the
+        same loud ALTER path as auto-DDL instead of failing schema preflight.
+        """
+
+        if not expected_props:
+            return
+        try:
+            result = connection.execute(f"CALL TABLE_INFO('{label}') RETURN *", {})
+            existing: set = set()
+            while result.has_next():
+                existing.add(str(result.get_next()[1]))
+        except Exception as exc:
+            logger.warning(
+                "LadybugDB TABLE_INFO(%s) failed; skipping index-column heal: %s", label, exc
+            )
+            return
+        for prop in expected_props:
+            if prop in existing:
+                continue
+            try:
+                connection.execute(
+                    f"ALTER TABLE `{label}` ADD `{prop}` STRING", {}
+                )
+                logger.warning(
+                    "LadybugDB bootstrap healed missing index column: "
+                    "ALTER TABLE `%s` ADD `%s` STRING",
+                    label,
+                    prop,
+                )
+            except Exception as exc:
+                if "already exists" in str(exc).casefold():
+                    continue
+                logger.warning(
+                    "LadybugDB index-column heal for %s(%s) failed: %s", label, prop, exc
+                )
 
     # ── Introspection helpers ───────────────────────────────────────────────
 
@@ -577,6 +642,18 @@ class LadybugDriver(CypherGraphDriver):
             return
         self._resources_closed = True
         try:
+            connections = list(self._connections.values()) + list(
+                self._sibling_connections.values()
+            )
+            if self._primary_connection is not None:
+                connections.append(self._primary_connection)
+            for connection in connections:
+                try:
+                    closer = getattr(connection, "close", None)
+                    if closer is not None:
+                        closer()
+                except Exception as exc:  # pragma: no cover - best-effort close
+                    logger.debug("Ladybug connection close() raised: %s", exc)
             for database in reversed(self._databases):
                 try:
                     closer = getattr(database, "close", None)

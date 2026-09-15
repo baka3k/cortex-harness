@@ -6,14 +6,19 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+_LADYBUG_PROVIDER_ALIASES = frozenset({"ladybug", "lbug", "lady-bug", "kuzu"})
+
+
 def _normalize_graph_provider(value: Any) -> str:
     normalized = str(value or "falkordb").strip().lower()
     if normalized in {"falkordb", "falkor", "local", "embedded"}:
         return "falkordb"
     if normalized in {"neo4j", "neo"}:
         return "neo4j"
+    if normalized in _LADYBUG_PROVIDER_ALIASES:
+        return "ladybug"
     raise ValueError(
-        f"Unsupported graph provider '{value}'. Expected 'falkordb' or 'neo4j'."
+        f"Unsupported graph provider '{value}'. Expected 'falkordb', 'ladybug', or 'neo4j'."
     )
 
 
@@ -58,6 +63,14 @@ def load_harness_config(config_path: str) -> None:
         for key in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASS", "NEO4J_DB"):
             if key in code_env and key not in os.environ:
                 os.environ[key] = str(code_env[key])
+    elif provider == "ladybug":
+        for key in tuple(os.environ):
+            if key.startswith("FALKORDB_") or key.startswith("NEO4J_"):
+                os.environ.pop(key, None)
+        for key in ("LADYBUG_PATH", "LADYBUG_GRAPH"):
+            value = code_env.get(key) or doc_env.get(key)
+            if value and key not in os.environ:
+                os.environ[key] = str(value)
     else:
         for key in tuple(os.environ):
             if key.startswith("NEO4J_"):
@@ -85,6 +98,9 @@ def load_harness_config(config_path: str) -> None:
             "FALKORDB_PATH",
             "FALKORDB_CODE_PATH",
             "FALKORDB_DOC_PATH",
+            "LADYBUG_PATH",
+            "LADYBUG_CODE_PATH",
+            "LADYBUG_DOC_PATH",
         }
     }
     config_file = Path(config_path).resolve()
@@ -109,8 +125,10 @@ def load_harness_config(config_path: str) -> None:
                 os.environ["FALKORDB_PASSWORD"] = remote_password
             if remote_section.get("falkordb_ssl") and "FALKORDB_SSL" not in os.environ:
                 os.environ["FALKORDB_SSL"] = "1"
-    for key, value in storage_overlay(resolved, owner="code").items():
+    for key, value in storage_overlay(resolved, owner="code", graph_provider=provider).items():
         if provider == "neo4j" and key.startswith("FALKORDB_"):
+            continue
+        if provider == "ladybug" and key.startswith("FALKORDB_"):
             continue
         if remote_uri and key.startswith("FALKORDB_") and key.endswith("_PATH"):
             # Remote graph projects must not fall back to embedded paths.

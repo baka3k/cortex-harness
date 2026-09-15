@@ -55,6 +55,23 @@ async def cleanup_neo4j_for_files(
     DETACH DELETE n
     RETURN count(n) AS deleted_nodes
     """
+    provider = str(getattr(driver, "provider", "") or "")
+    is_ladybug = "ladybug" in provider.casefold()
+    if is_ladybug:
+        # Ladybug: không có label predicate `n:File` trong WHERE (dùng
+        # `label(n)`), và DETACH DELETE phải chạy trực tiếp trên MATCH —
+        # pattern collect/UNWIND làm mất type node ở bước binder.
+        delete_query = """
+    MATCH (n)
+    WHERE n.project_id = $project_id
+      AND (
+        coalesce(n.file_path, '') IN $paths
+        OR coalesce(n.path, '') IN $paths
+        OR (label(n) = 'File' AND n.id IN $paths)
+      )
+    DETACH DELETE n
+    RETURN count(*) AS deleted_nodes
+    """
     records, _, _ = await driver.execute_query(
         delete_query,
         {"project_id": project_id, "paths": paths},
@@ -70,8 +87,25 @@ async def cleanup_neo4j_for_files(
     DETACH DELETE u
     RETURN count(u) AS deleted_unknown_functions
     """
-    records, _, _ = await driver.execute_query(prune_unknown_query, database=database)
-    deleted_unknown = int((records or [{}])[0].get("deleted_unknown_functions", 0))
+    skip_prune = False
+    if is_ladybug:
+        # Ladybug bind chặt rel table: khi UNKNOWN_CALL chưa từng được tạo
+        # (fresh store) pattern prune sẽ lỗi binder thay vì match rỗng như
+        # FalkorDB. Không có rel table = không có edge = bỏ qua prune.
+        tables, _, _ = await driver.execute_query(
+            "CALL show_tables() RETURN *", database=database
+        )
+        has_unknown_call = any(
+            (row or {}).get("name") == "UNKNOWN_CALL"
+            and str((row or {}).get("type", "")).upper() == "REL"
+            for row in (tables or [])
+        )
+        skip_prune = not has_unknown_call
+    if skip_prune:
+        deleted_unknown = 0
+    else:
+        records, _, _ = await driver.execute_query(prune_unknown_query, database=database)
+        deleted_unknown = int((records or [{}])[0].get("deleted_unknown_functions", 0))
 
     if verbose:
         print(
