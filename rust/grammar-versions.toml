@@ -49,3 +49,15 @@ runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25" }
 python-wheel = "tree-sitter-java==0.23.5"
 rust-crate = "tree-sitter-java@0.23.5"
 runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25" }
+
+[dart]
+# crates.io `tree-sitter-dart` KHÔNG dùng được: build từ grammar khác
+# (official Dart spec) so với nguồn Python — node types lệch, parity vỡ.
+# Vendor grammar từ chính sdist PyPI tree-sitter-dart 0.1.0
+# (nguồn efrenbl/tree-sitter-dart, parser.c @LANGUAGE_VERSION 15) vào
+# crate `dart-grammar-vendored` — parser.c byte-identical với wheel Python
+# mà dart_parser.py dùng. AST golden parity: tests::ast_shape_matches_
+# python_reference_dump (import_or_export/library_import/class_definition…).
+python-wheel = "tree-sitter-dart==0.1.0"
+rust-crate = "dart-grammar-vendored@0.1.0 (vendored, cùng sdist)"
+runtime = { python = "tree-sitter==0.26.0", rust = "tree-sitter@0.25" }
