@@ -98,6 +98,8 @@ tests/fixtures/**
 !tests/fixtures/aspnet-framework-application/**
 !tests/fixtures/perl-application/
 !tests/fixtures/perl-application/**
+!tests/fixtures/sync-plane-golden/
+!tests/fixtures/sync-plane-golden/**
 !tests/fixtures/web-framework-application/
 !tests/fixtures/web-framework-application/**
 !tests/fixtures/database-schema-application/

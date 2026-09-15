@@ -1,0 +1,10 @@
+{
+  "files": [
+    "articles/urls.py",
+    "articles/views.py",
+    "main.py",
+    "routers/legacy.py",
+    "routers/users.py",
+    "services.py"
+  ]
+}

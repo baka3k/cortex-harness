@@ -1,0 +1,1172 @@
+{
+  "run_id": "2d0443013de74e7fa272c0fc58f379e6",
+  "correlation_id": "2d0443013de74e7fa272c0fc58f379e6",
+  "phase": "parsing",
+  "project_id": "sp1golden",
+  "project_name": "sp1golden",
+  "root": "/private/tmp/sp1-golden",
+  "strict_mode": false,
+  "ignore_cache": false,
+  "full_scan": true,
+  "sync_mode": "both",
+  "bootstrap_full_scan": false,
+  "recovery_full_scan": false,
+  "started_at": "2026-09-15T23:34:37Z",
+  "finished_at": "2026-09-15T23:34:40Z",
+  "duration_seconds": 3.180188,
+  "status": "failed",
+  "outcome": "failed",
+  "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+  "before_sha": "full_scan",
+  "after_sha": "694378ae0041d6937f900ace93e2685c08bde55d",
+  "services": {
+    "graph_ready": true,
+    "neo4j_ready": true,
+    "qdrant_ready": true,
+    "impact_expansion_used": false,
+    "message_sync_enabled": true,
+    "message_qdrant_collection": "sp1golden_mess"
+  },
+  "diff": {
+    "entries": 6,
+    "changed": 6,
+    "deleted": 0
+  },
+  "impact": {
+    "expanded_impacted": 0
+  },
+  "parsers": [
+    {
+      "parser": "python",
+      "role": "primary",
+      "changed": 6,
+      "impacted": 0,
+      "scan": 6,
+      "deleted": 0,
+      "incremental_supported": true,
+      "status": "success",
+      "error": "",
+      "started_at": "2026-09-15T23:34:38Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.851603,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "qdrant_collection": "sp1golden_bcc6d37618__python_functions",
+      "writes_vectors": true,
+      "seeded_by": [],
+      "vector_status": "success",
+      "vector_count": null,
+      "message_scan_enabled": false,
+      "ignore_cache": false,
+      "message_qdrant_collection": "",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--graph-provider",
+        "ladybug",
+        "--ladybug-path",
+        "/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph",
+        "--ladybug-graph",
+        "sp1golden",
+        "--disable-message-scan"
+      ],
+      "journal_path": "/private/tmp/sp1-golden/.cache/graph-write-journal/9ecd97edc6737b51e1db1909/python.sqlite3"
+    },
+    {
+      "parser": "spring",
+      "framework": "spring",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java",
+        "kotlin"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions",
+        "sp1golden_bcc6d37618__kotlin_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "servlet_jsp",
+      "framework": "servlet_jsp",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "mybatis",
+      "framework": "mybatis",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java",
+        "kotlin"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions",
+        "sp1golden_bcc6d37618__kotlin_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "struts",
+      "framework": "struts",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "flutter",
+      "framework": "flutter",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "dart"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__dart_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "aspnet_framework",
+      "framework": "aspnet_framework",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "csharp"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__csharp_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "aspnet_core",
+      "framework": "aspnet_core",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "csharp"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__csharp_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "fastapi_django",
+      "framework": "fastapi_django",
+      "role": "overlay",
+      "changed": 6,
+      "impacted": 0,
+      "scan": 6,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "python"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__python_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [
+        "articles/urls.py:fastapi_django",
+        "articles/views.py:fastapi_django",
+        "main.py:fastapi_django",
+        "routers/users.py:fastapi_django"
+      ],
+      "status": "failed",
+      "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.894721,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--framework",
+        "fastapi_django",
+        "--graph-provider",
+        "ladybug",
+        "--ladybug-path",
+        "/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph",
+        "--ladybug-graph",
+        "sp1golden",
+        "--disable-message-scan"
+      ],
+      "journal_path": "/private/tmp/sp1-golden/.cache/graph-write-journal/9ecd97edc6737b51e1db1909/fastapi_django.sqlite3",
+      "failure_class": "parser_isolation",
+      "failure_code": "analyzer_child_failed",
+      "failure_artifacts": [
+        {
+          "kind": "debug",
+          "path": "/private/tmp/sp1-golden/.cache/incremental_sync_summaries/dev_9ecd97edc6737b51_80913_b41f32c82aba43c19924ac272cfcbf4c.json.overlay_fastapi_django.debug.log",
+          "sha256": "",
+          "byte_count": 6008,
+          "item_count": 1
+        }
+      ]
+    },
+    {
+      "parser": "express_js",
+      "framework": "express_js",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "js"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__js_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "laravel",
+      "framework": "laravel",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "php"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__php_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "database_sql",
+      "framework": "database_sql",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "sql"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__sql_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "database_plsql",
+      "framework": "database_plsql",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "plsql"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__plsql_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "project_topology",
+      "role": "topology_overlay",
+      "changed": 0,
+      "deleted": 0,
+      "bootstrap": false,
+      "incremental_supported": true,
+      "writes_vectors": false,
+      "vector_status": "disabled",
+      "status": "success",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:40Z",
+      "duration_seconds": 0.279921,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-topology",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--graph-provider",
+        "ladybug",
+        "--ladybug-path",
+        "/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph",
+        "--ladybug-graph",
+        "sp1golden",
+        "--disable-message-scan"
+      ],
+      "journal_path": "/private/tmp/sp1-golden/.cache/graph-write-journal/9ecd97edc6737b51e1db1909/project_topology.sqlite3"
+    },
+    {
+      "parser": "python",
+      "role": "embedding",
+      "changed": 6,
+      "impacted": 0,
+      "scan": 6,
+      "deleted": 0,
+      "incremental_supported": true,
+      "status": "success",
+      "error": "",
+      "started_at": "2026-09-15T23:34:40Z",
+      "finished_at": "2026-09-15T23:34:40Z",
+      "duration_seconds": 0.023316,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_embedding_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_embedding_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "qdrant_collection": "sp1golden_bcc6d37618__python_functions",
+      "writes_vectors": true,
+      "vector_status": "success",
+      "vector_count": null,
+      "graph_status": "disabled",
+      "message_scan_enabled": true,
+      "ignore_cache": false,
+      "message_qdrant_collection": "sp1golden_mess",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--qdrant-collection",
+        "sp1golden_bcc6d37618__python_functions",
+        "--enable-message-scan",
+        "--message-output-dir",
+        "/private/tmp/sp1-golden/.cache/message_scan_artifacts/sp1-golden_bcc6d3761809",
+        "--message-qdrant-collection",
+        "sp1golden_mess"
+      ]
+    }
+  ],
+  "primary_parsers": [
+    {
+      "parser": "python",
+      "role": "primary",
+      "changed": 6,
+      "impacted": 0,
+      "scan": 6,
+      "deleted": 0,
+      "incremental_supported": true,
+      "status": "success",
+      "error": "",
+      "started_at": "2026-09-15T23:34:38Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.851603,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "qdrant_collection": "sp1golden_bcc6d37618__python_functions",
+      "writes_vectors": true,
+      "seeded_by": [],
+      "vector_status": "success",
+      "vector_count": null,
+      "message_scan_enabled": false,
+      "ignore_cache": false,
+      "message_qdrant_collection": "",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--graph-provider",
+        "ladybug",
+        "--ladybug-path",
+        "/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph",
+        "--ladybug-graph",
+        "sp1golden",
+        "--disable-message-scan"
+      ],
+      "journal_path": "/private/tmp/sp1-golden/.cache/graph-write-journal/9ecd97edc6737b51e1db1909/python.sqlite3"
+    }
+  ],
+  "framework_overlays": [
+    {
+      "parser": "spring",
+      "framework": "spring",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java",
+        "kotlin"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions",
+        "sp1golden_bcc6d37618__kotlin_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "servlet_jsp",
+      "framework": "servlet_jsp",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "mybatis",
+      "framework": "mybatis",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java",
+        "kotlin"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions",
+        "sp1golden_bcc6d37618__kotlin_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "struts",
+      "framework": "struts",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "java"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__java_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "flutter",
+      "framework": "flutter",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "dart"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__dart_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "aspnet_framework",
+      "framework": "aspnet_framework",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "csharp"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__csharp_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "aspnet_core",
+      "framework": "aspnet_core",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "csharp"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__csharp_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "fastapi_django",
+      "framework": "fastapi_django",
+      "role": "overlay",
+      "changed": 6,
+      "impacted": 0,
+      "scan": 6,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "python"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__python_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [
+        "articles/urls.py:fastapi_django",
+        "articles/views.py:fastapi_django",
+        "main.py:fastapi_django",
+        "routers/users.py:fastapi_django"
+      ],
+      "status": "failed",
+      "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.894721,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--framework",
+        "fastapi_django",
+        "--graph-provider",
+        "ladybug",
+        "--ladybug-path",
+        "/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph",
+        "--ladybug-graph",
+        "sp1golden",
+        "--disable-message-scan"
+      ],
+      "journal_path": "/private/tmp/sp1-golden/.cache/graph-write-journal/9ecd97edc6737b51e1db1909/fastapi_django.sqlite3",
+      "failure_class": "parser_isolation",
+      "failure_code": "analyzer_child_failed",
+      "failure_artifacts": [
+        {
+          "kind": "debug",
+          "path": "/private/tmp/sp1-golden/.cache/incremental_sync_summaries/dev_9ecd97edc6737b51_80913_b41f32c82aba43c19924ac272cfcbf4c.json.overlay_fastapi_django.debug.log",
+          "sha256": "",
+          "byte_count": 6008,
+          "item_count": 1
+        }
+      ]
+    },
+    {
+      "parser": "express_js",
+      "framework": "express_js",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "js"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__js_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "laravel",
+      "framework": "laravel",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "php"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__php_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "database_sql",
+      "framework": "database_sql",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "sql"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__sql_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    },
+    {
+      "parser": "database_plsql",
+      "framework": "database_plsql",
+      "role": "overlay",
+      "changed": 0,
+      "impacted": 0,
+      "scan": 0,
+      "deleted": 0,
+      "incremental_supported": true,
+      "prerequisite_parsers": [
+        "plsql"
+      ],
+      "writes_vectors": false,
+      "qdrant_collection": "",
+      "semantic_seed_collections": [
+        "sp1golden_bcc6d37618__plsql_functions"
+      ],
+      "vector_status": "disabled",
+      "detector_evidence": [],
+      "status": "skipped",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:39Z",
+      "duration_seconds": 0.0,
+      "skip_reason": "no framework evidence in changed/deleted paths"
+    }
+  ],
+  "topology_overlays": [
+    {
+      "parser": "project_topology",
+      "role": "topology_overlay",
+      "changed": 0,
+      "deleted": 0,
+      "bootstrap": false,
+      "incremental_supported": true,
+      "writes_vectors": false,
+      "vector_status": "disabled",
+      "status": "success",
+      "error": "",
+      "started_at": "2026-09-15T23:34:39Z",
+      "finished_at": "2026-09-15T23:34:40Z",
+      "duration_seconds": 0.279921,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-topology",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--graph-provider",
+        "ladybug",
+        "--ladybug-path",
+        "/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph",
+        "--ladybug-graph",
+        "sp1golden",
+        "--disable-message-scan"
+      ],
+      "journal_path": "/private/tmp/sp1-golden/.cache/graph-write-journal/9ecd97edc6737b51e1db1909/project_topology.sqlite3"
+    }
+  ],
+  "vector_embeddings": [
+    {
+      "parser": "python",
+      "role": "embedding",
+      "changed": 6,
+      "impacted": 0,
+      "scan": 6,
+      "deleted": 0,
+      "incremental_supported": true,
+      "status": "success",
+      "error": "",
+      "started_at": "2026-09-15T23:34:40Z",
+      "finished_at": "2026-09-15T23:34:40Z",
+      "duration_seconds": 0.023316,
+      "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_embedding_changed_6c5c33e1d2d2_80934_87360101.json",
+      "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/python_embedding_deleted_6c5c33e1d2d2_80934_87360101.json",
+      "qdrant_collection": "sp1golden_bcc6d37618__python_functions",
+      "writes_vectors": true,
+      "vector_status": "success",
+      "vector_count": null,
+      "graph_status": "disabled",
+      "message_scan_enabled": true,
+      "ignore_cache": false,
+      "message_qdrant_collection": "sp1golden_mess",
+      "command": [
+        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "--root",
+        "/private/tmp/sp1-golden",
+        "--project-id",
+        "sp1golden",
+        "--project-name",
+        "sp1golden",
+        "--commit-sha-before",
+        "full_scan",
+        "--commit-sha-after",
+        "694378ae0041d6937f900ace93e2685c08bde55d",
+        "--qdrant-collection",
+        "sp1golden_bcc6d37618__python_functions",
+        "--enable-message-scan",
+        "--message-output-dir",
+        "/private/tmp/sp1-golden/.cache/message_scan_artifacts/sp1-golden_bcc6d3761809",
+        "--message-qdrant-collection",
+        "sp1golden_mess"
+      ]
+    }
+  ],
+  "component_failures": [
+    {
+      "component": "overlay:fastapi_django",
+      "role": "overlay",
+      "name": "fastapi_django",
+      "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "exception_type": "CalledProcessError",
+      "failure_class": "parser_isolation",
+      "failure_code": "analyzer_child_failed",
+      "retryable": false,
+      "safe_action": "inspect the child debug artifact and quarantine or correct the failing input",
+      "continued": true,
+      "details": {
+        "exception_type": "CalledProcessError"
+      },
+      "artifacts": [
+        {
+          "kind": "debug",
+          "path": "/private/tmp/sp1-golden/.cache/incremental_sync_summaries/dev_9ecd97edc6737b51_80913_b41f32c82aba43c19924ac272cfcbf4c.json.overlay_fastapi_django.debug.log",
+          "sha256": "",
+          "byte_count": 6008,
+          "item_count": 1
+        }
+      ]
+    }
+  ],
+  "state_before": {
+    "schema_version": 2,
+    "dirty": false,
+    "last_good_sha": "",
+    "snapshot_id": "",
+    "inventory_path": "",
+    "dirty_inventory_paths": [],
+    "migration_required": false,
+    "last_error": "",
+    "last_run_before": "",
+    "last_run_after": "",
+    "updated_at": ""
+  },
+  "state_after": {
+    "dirty": true,
+    "last_good_sha": "",
+    "inventory_path": "",
+    "dirty_inventory_paths": [
+      "/private/tmp/sp1-golden/.cache/inventories/6c5c33e1d2d2406e25f619f6f055889ead9ea75f7c36a468c563c84029a71a34.json"
+    ],
+    "last_error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+    "last_run_before": "full_scan",
+    "last_run_after": "694378ae0041d6937f900ace93e2685c08bde55d"
+  },
+  "dirty_marked": true,
+  "scope": {
+    "id": "9ecd97edc6737b51e1db1909",
+    "root": "/private/tmp/sp1-golden",
+    "cache_dir": "/private/tmp/sp1-golden/.cache"
+  },
+  "lock": {
+    "path": "/private/tmp/sp1-golden/.cache/incremental_sync_locks/9ecd97edc6737b51e1db1909.lock",
+    "acquired": true,
+    "wait_seconds": 0.000565,
+    "owner": {
+      "pid": 80934,
+      "scope_id": "9ecd97edc6737b51e1db1909",
+      "description": "project_id=sp1golden",
+      "root": "/private/tmp/sp1-golden",
+      "started_at": "2026-09-15T23:34:37.052268+00:00"
+    }
+  },
+  "change_detection": "hybrid",
+  "change_sources": {
+    "committed": 0,
+    "staged": 0,
+    "unstaged": 0,
+    "untracked": 0,
+    "inventory": 6
+  },
+  "repositories": [
+    {
+      "source_prefix": ".",
+      "root": "/private/tmp/sp1-golden",
+      "git_root": "/private/tmp/sp1-golden",
+      "git_pathspec": ".",
+      "before_sha": "",
+      "after_sha": "694378ae0041d6937f900ace93e2685c08bde55d"
+    }
+  ],
+  "coverage_warnings": [],
+  "reconciliation": {
+    "requested": false,
+    "performed": false
+  },
+  "parse_quality": {
+    "policy": "report",
+    "artifact": "/private/tmp/sp1-golden/.cache/parse_quality_artifacts/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/6c5c33e1d2d2_80934_87360101/manifest.json",
+    "artifacts": [],
+    "aggregates": {}
+  },
+  "change_detection_effective": "hybrid",
+  "run_result": {
+    "schema_version": "1.0",
+    "run_id": "2d0443013de74e7fa272c0fc58f379e6",
+    "correlation_id": "2d0443013de74e7fa272c0fc58f379e6",
+    "outcome": "failed_terminal",
+    "phase": "parsing",
+    "component": "incremental_sync",
+    "failure": {
+      "code": "analyzer_child_failed",
+      "class": "parser_isolation",
+      "phase": "parsing",
+      "component": "incremental_sync",
+      "retryable": false,
+      "run_id": "2d0443013de74e7fa272c0fc58f379e6",
+      "correlation_id": "2d0443013de74e7fa272c0fc58f379e6",
+      "summary": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "safe_action": "inspect the child debug artifact and quarantine or correct the failing input",
+      "artifacts": [
+        {
+          "kind": "debug",
+          "path": "/private/tmp/sp1-golden/.cache/incremental_sync_summaries/dev_9ecd97edc6737b51_80913_b41f32c82aba43c19924ac272cfcbf4c.json.debug.log",
+          "sha256": "",
+          "byte_count": 6008,
+          "item_count": 1
+        }
+      ],
+      "details": {
+        "exception_type": "CalledProcessError"
+      }
+    },
+    "phase_results": [],
+    "artifacts": [
+      {
+        "kind": "debug",
+        "path": "/private/tmp/sp1-golden/.cache/incremental_sync_summaries/dev_9ecd97edc6737b51_80913_b41f32c82aba43c19924ac272cfcbf4c.json.overlay_fastapi_django.debug.log",
+        "sha256": "",
+        "byte_count": 6008,
+        "item_count": 1
+      },
+      {
+        "kind": "debug",
+        "path": "/private/tmp/sp1-golden/.cache/incremental_sync_summaries/dev_9ecd97edc6737b51_80913_b41f32c82aba43c19924ac272cfcbf4c.json.debug.log",
+        "sha256": "",
+        "byte_count": 6008,
+        "item_count": 1
+      },
+      {
+        "kind": "parse_quality",
+        "path": "/private/tmp/sp1-golden/.cache/parse_quality_artifacts/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/6c5c33e1d2d2_80934_87360101/manifest.json",
+        "sha256": "",
+        "byte_count": 0,
+        "item_count": 0
+      }
+    ],
+    "current_generation": "",
+    "retained_generation": "",
+    "retry_after_seconds": null,
+    "started_at": "2026-09-15T23:34:37Z",
+    "finished_at": "2026-09-15T23:34:40Z"
+  }
+}
