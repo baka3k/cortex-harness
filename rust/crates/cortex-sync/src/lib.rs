@@ -6,6 +6,7 @@ pub mod cli;
 pub mod frameworks;
 pub mod gitdiff;
 pub mod graphops;
+pub mod hash_vector;
 pub mod inventory;
 pub mod journalenv;
 pub mod message_scan;
@@ -18,4 +19,8 @@ pub mod state;
 pub mod syncscope;
 pub mod tsdetect;
 pub mod util;
+#[cfg(test)]
+mod vector_fixtures;
+pub mod vector_store;
+pub mod vector_sync;
 pub mod walk;

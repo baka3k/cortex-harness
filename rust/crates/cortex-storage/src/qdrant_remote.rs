@@ -223,6 +223,15 @@ impl RemoteQdrantStore {
         Ok(())
     }
 
+    /// Create with the caller-owned full body (phase-06 native embedding
+    /// pass mirrors Python `_tuning_kwargs`: optional `hnsw_config` /
+    /// `quantization_config` siblings of `vectors`).
+    pub fn create_collection_body(&self, name: &str, body: &Value) -> StoreResult<()> {
+        self.client()
+            .request("PUT", &format!("/collections/{name}"), Some(body))?;
+        Ok(())
+    }
+
     pub fn recreate_collection(&self, name: &str, vectors_config: &Value) -> StoreResult<()> {
         let _ = self.delete_collection(name);
         self.create_collection(name, vectors_config)
@@ -237,10 +246,28 @@ impl RemoteQdrantStore {
     // ── points ──────────────────────────────────────────────────────────────
 
     pub fn upsert(&self, collection_name: &str, points: &[Value]) -> StoreResult<Value> {
+        self.upsert_wait(collection_name, points, true)
+    }
+
+    /// `wait=false` for intermediate batches — the phase-06 native embedding
+    /// pass reproduces Python's durability contract exactly: only the final
+    /// upsert batch of a sync waits for the flush.
+    pub fn upsert_wait(
+        &self,
+        collection_name: &str,
+        points: &[Value],
+        wait: bool,
+    ) -> StoreResult<Value> {
         let body = json!({"points": points});
+        // qdrant upsert is PUT /points; POST /points is the point-retrieve
+        // endpoint (expects {"ids": [...]}) and 400s on a points body — the
+        // phase-06 native pass caught this against a real server.
         self.client().request(
-            "POST",
-            &format!("/collections/{collection_name}/points?wait=true"),
+            "PUT",
+            &format!(
+                "/collections/{collection_name}/points?wait={}",
+                if wait { "true" } else { "false" }
+            ),
             Some(&body),
         )
     }
@@ -365,11 +392,13 @@ impl RemoteQdrantStore {
                 "delete requires point IDs or a filter selector".to_string(),
             ));
         }
-        let selector = match points_selector_ids {
+        // qdrant REST `PointsSelector` body: {"points": [...]} or
+        // {"filter": {...}} — the filter is sent directly, matching what the
+        // Python qdrant_client serializes for `filter_selector=FilterSelector`.
+        let body = match points_selector_ids {
             Some(ids) => json!({"points": ids}),
-            None => json!(filter_selector),
+            None => json!({"filter": filter_selector.unwrap_or(&Value::Null)}),
         };
-        let body = json!({"points": selector});
         self.client().request(
             "POST",
             &format!("/collections/{collection_name}/points/delete?wait=true"),

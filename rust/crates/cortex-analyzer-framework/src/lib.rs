@@ -16,6 +16,7 @@
 
 pub mod cleanup;
 pub mod cli;
+pub mod embedding_artifact;
 pub mod manifest;
 pub mod scan;
 pub mod semantic;

@@ -1,0 +1,184 @@
+{
+ "cases": [
+  {
+   "scenario": {
+    "full_replace": true,
+    "paths": [],
+    "keep": []
+   },
+   "calls": [
+    {
+     "filter": {
+      "must": [
+       {
+        "key": "project_id_normalized",
+        "match": {
+         "value": "p rój"
+        }
+       },
+       {
+        "key": "parser",
+        "match": {
+         "value": "go"
+        }
+       },
+       {
+        "key": "root_scope",
+        "match": {
+         "value": "/root"
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "scenario": {
+    "full_replace": false,
+    "paths": [
+     "b.go",
+     "a.go",
+     "b.go",
+     "sub\\c.go",
+     ""
+    ],
+    "keep": [
+     "id-1",
+     "id-2"
+    ]
+   },
+   "calls": [
+    {
+     "filter": {
+      "must": [
+       {
+        "key": "project_id_normalized",
+        "match": {
+         "value": "p rój"
+        }
+       },
+       {
+        "key": "parser",
+        "match": {
+         "value": "go"
+        }
+       },
+       {
+        "key": "root_scope",
+        "match": {
+         "value": "/root"
+        }
+       },
+       {
+        "key": "file_path",
+        "match": {
+         "any": [
+          "a.go",
+          "b.go",
+          "sub/c.go"
+         ]
+        }
+       }
+      ],
+      "must_not": [
+       {
+        "has_id": [
+         "id-1",
+         "id-2"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "scenario": {
+    "full_replace": false,
+    "paths": [
+     "a.go"
+    ],
+    "keep": []
+   },
+   "calls": [
+    {
+     "filter": {
+      "must": [
+       {
+        "key": "project_id_normalized",
+        "match": {
+         "value": "p rój"
+        }
+       },
+       {
+        "key": "parser",
+        "match": {
+         "value": "go"
+        }
+       },
+       {
+        "key": "root_scope",
+        "match": {
+         "value": "/root"
+        }
+       },
+       {
+        "key": "file_path",
+        "match": {
+         "any": [
+          "a.go"
+         ]
+        }
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "scenario": {
+    "full_replace": true,
+    "paths": [
+     "zz.go"
+    ],
+    "keep": [
+     "k"
+    ]
+   },
+   "calls": [
+    {
+     "filter": {
+      "must": [
+       {
+        "key": "project_id_normalized",
+        "match": {
+         "value": "p rój"
+        }
+       },
+       {
+        "key": "parser",
+        "match": {
+         "value": "go"
+        }
+       },
+       {
+        "key": "root_scope",
+        "match": {
+         "value": "/root"
+        }
+       }
+      ],
+      "must_not": [
+       {
+        "has_id": [
+         "k"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  }
+ ]
+}

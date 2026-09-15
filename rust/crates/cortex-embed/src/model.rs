@@ -153,8 +153,108 @@ impl ModelSpec {
                 )));
             }
         }
+        self.verify_provenance()
+    }
+
+    /// Phase-06 G7 (red-team S5): a pinned model must load the EXACT exported
+    /// graph recorded in-repo — existence checks let a swapped/regenerated
+    /// graph through silently, which is the "mất im lặng" class the spike
+    /// NO-GO flagged. The multi-GB external weights file is digested by the
+    /// `#[ignore]`d repro test (`embed_golden::provenance_pins`) instead of
+    /// every process load; the graph digest plus that test plus the HF
+    /// revision pins together are the provenance contract.
+    ///
+    /// `CORTEX_EMBED_VERIFY_SHA256=0|false|no|off` bypasses the load-time
+    /// check for re-pinning workflows and warns loudly.
+    pub fn verify_provenance(&self) -> Result<()> {
+        let raw = std::env::var("CORTEX_EMBED_VERIFY_SHA256")
+            .unwrap_or_default()
+            .trim()
+            .to_lowercase();
+        let bypass = matches!(raw.as_str(), "0" | "false" | "no" | "off");
+        self.verify_provenance_with(bypass)
+    }
+
+    /// Env-free core (unit tests exercise the fail-closed branch without
+    /// mutating process env under `unsafe_code = "deny"`).
+    pub fn verify_provenance_with(&self, bypass: bool) -> Result<()> {
+        if bypass {
+            eprintln!(
+                "[cortex-embed] WARNING: CORTEX_EMBED_VERIFY_SHA256 off — graph integrity \
+                 check skipped (re-pinning workflow only)"
+            );
+            return Ok(());
+        }
+        let Some(pin) = model_pin(&self.id) else {
+            return Ok(()); // custom/unpinned model (CODE_EMBEDDING_MODEL_PATH)
+        };
+        let actual = file_sha256(&self.graph)?;
+        if !actual.eq_ignore_ascii_case(pin.graph_sha256) {
+            return Err(EmbedError::new(format!(
+                "graph sha256 mismatch for {} — refusing to embed with an unpinned graph \
+                 (expected {}, got {}). Re-export with `make embed-jina-onnx` / \
+                 `make embed-bge-onnx`, review the provenance, then update \
+                 `model_pin` in cortex-embed/src/model.rs",
+                self.id, pin.graph_sha256, actual
+            )));
+        }
         Ok(())
     }
+}
+
+/// In-repo provenance pins (phase-06 G7): the self-exported / fetched graphs
+/// the parity fixtures were measured on. `weights_sha256` covers the external
+/// data file next to the graph; `hf_revision` is the snapshot the export was
+/// cut from (scripts pin the same revision).
+pub struct ModelPin {
+    pub graph_sha256: &'static str,
+    pub weights_file: &'static str,
+    pub weights_sha256: &'static str,
+    pub hf_revision: &'static str,
+}
+
+#[must_use]
+pub fn model_pin(id: &str) -> Option<ModelPin> {
+    match id {
+        "jinaai/jina-embeddings-v3" => Some(ModelPin {
+            graph_sha256: "be2de66d2b4e087d0e0582dd43af0046004ffd2847b79b26dfe32956c63c4fa4",
+            weights_file: "model.onnx.data",
+            weights_sha256: "a0497c9e634b6faab5a43c35cfaea46bad1c1382bc7b74b12d4ff440515881d6",
+            hf_revision: "ab036b023d30b4d1138c4c3bfa9f0c445ab455d6",
+        }),
+        "BAAI/bge-m3" => Some(ModelPin {
+            graph_sha256: "f84251230831afb359ab26d9fd37d5936d4d9bb5d1d5410e66442f630f24435b",
+            weights_file: "model.onnx_data",
+            weights_sha256: "1eebfb28493f67bba03ce0ef64bfdc7fc5a3bd9d7493f818bb1d78cd798416b4",
+            hf_revision: "5617a9f61b028005a4858fdac845db406aefb181",
+        }),
+        _ => None,
+    }
+}
+
+/// Streaming SHA-256 of a file (hex). Public so the phase-06 repro gate can
+/// digest the multi-GB weights file outside the load-time hot path.
+pub fn file_sha256(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| EmbedError::new(format!("open {}: {error}", path.display())))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 4 * 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| EmbedError::new(format!("read {}: {error}", path.display())))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 /// Bảng whitespace của CPython `str.strip()` (`Py_UNICODE_ISSPACE`), rộng hơn
@@ -325,6 +425,15 @@ fn pick_graph(root: &Path, snapshot: &Path, source: &str) -> Result<PathBuf> {
     if exported.is_file() {
         return Ok(exported);
     }
+    // Export scripts pick their own directory names (jina → `jina-v3-onnx-fp32`),
+    // which need not equal the HF slug `export_dir` derives. `metadata.json`
+    // records the source model, so scan for it — otherwise the resolver silently
+    // falls to the official snapshot graph (jina's needs a `task_id` input this
+    // embedder never passes) and only the G7 pin digest catches the substitution
+    // at load.
+    if let Some(found) = metadata_exported_graph(root, source) {
+        return Ok(found);
+    }
     let official = snapshot.join("onnx").join("model.onnx");
     if official.is_file() {
         return Ok(official);
@@ -334,6 +443,34 @@ fn pick_graph(root: &Path, snapshot: &Path, source: &str) -> Result<PathBuf> {
         exported.display(),
         official.display()
     )))
+}
+
+/// Find an exported graph under `.cache/embed/<dir>/` whose `metadata.json`
+/// declares `model == source`. Deterministic (sorted dir names).
+pub fn metadata_exported_graph(root: &Path, source: &str) -> Option<PathBuf> {
+    let embed_dir = root.join(".cache").join("embed");
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&embed_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    dirs.sort();
+    for dir in dirs {
+        let Ok(text) = std::fs::read_to_string(dir.join("metadata.json")) else {
+            continue;
+        };
+        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        if meta.get("model").and_then(serde_json::Value::as_str) == Some(source) {
+            let graph = dir.join("model.onnx");
+            if graph.is_file() {
+                return Some(graph);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -470,5 +607,48 @@ mod tests {
             error.0.contains("graph") && error.0.contains("make build"),
             "unhelpful error: {error}"
         );
+    }
+
+    // ── phase-06 G7: provenance pins ────────────────────────────────────────
+    #[test]
+    fn pinned_graph_with_wrong_digest_fails_closed() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, b"not the exported graph").unwrap();
+        let spec = ModelSpec::jina_v3(Path::new("/snap"), file.path().to_path_buf());
+        let error = spec
+            .verify_provenance_with(false)
+            .expect_err("substituted graph must be rejected");
+        assert!(error.0.contains("graph sha256 mismatch"), "{error}");
+        assert!(error.0.contains("model_pin"), "{error}");
+    }
+
+    #[test]
+    fn unpinned_custom_model_passes() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, b"anything").unwrap();
+        let spec = ModelSpec::legacy_unnormalized(
+            Path::new("/models/custom"),
+            file.path().to_path_buf(),
+            512,
+        );
+        spec.verify_provenance_with(false).expect("no pin ⇒ skip, do not hard-error");
+    }
+
+    #[test]
+    fn bypass_flag_skips_verification_loudly() {
+        let spec = ModelSpec::jina_v3(Path::new("/snap"), PathBuf::from("/definitely-missing.onnx"));
+        spec.verify_provenance_with(true)
+            .expect("bypass is the operator escape hatch");
+    }
+
+    #[test]
+    fn pins_are_self_consistent() {
+        for id in ["jinaai/jina-embeddings-v3", "BAAI/bge-m3"] {
+            let pin = model_pin(id).expect("pinned");
+            assert_eq!(pin.graph_sha256.len(), 64, "{id} graph digest");
+            assert_eq!(pin.weights_sha256.len(), 64, "{id} weights digest");
+            assert_eq!(pin.hf_revision.len(), 40, "{id} revision hash");
+        }
+        assert!(model_pin("some/other").is_none());
     }
 }

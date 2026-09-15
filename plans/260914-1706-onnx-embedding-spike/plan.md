@@ -4,13 +4,28 @@ status: partially-done
 created: 2026-09-14
 target: "rust/crates/cortex-embed (mới), cortex-mcp (mind/graph), cortex-doc, cortex-sync (seam), scripts/rust_mcp, scripts/rust_parity — code-tiny/doc-tiny giữ làm tham chiếu parity"
 blockedBy: []
-blocks: []
+blocks:
+  - "260915-analyzer-layer-rust-cutover"  # phase-06 vector plane; NO-GO (reports/phase05-sync-decision.md) đã được overturn 2026-09-15 bằng 8 component gates → plans/260915-analyzer-layer-rust-cutover/reports/phase06-vector-component-gates.md
 relatedPlans:
   - "260913-2130-rust-full-migration"
   - "260829-2322-vector-search-query-optimization"
   - "260913-1715-rust-retrieval-graph-port"
   - "260915-analyzer-layer-rust-cutover"  # phase-06 overturn NO-GO (reports/phase05-sync-decision.md) bằng component gates; kết quả gates + wall-time feed vào re-baseline golden + latency ở plan này
 ---
+
+> **Phase-06 result (2026-09-15, cutover side)** — sync-time ONNX embedding pass
+> cho **shared-7 lineage** (`SHARED_VECTOR_CLI_PARSERS`) đạt 8/8 component gates
+> (`plans/260915-analyzer-layer-rust-cutover/reports/phase06-vector-component-gates.md`):
+> point-id uuid5, redaction 3-tầng, `_hash_vector`, delete-by-filter/vectors_config,
+> provenance pin fail-closed, artifact 0600 — byte/value-identical vs Python; live
+> sync cosine worst 0.999999999992 / 0 under-gate; wall-time native **1.95×** Python
+> (không regression). **Carve-out tường minh**: legacy `CodeEmbedder` lineage + local
+> embedded-store lane vẫn trên Python child (fail-closed loud, không im lặng).
+> **Open items của spike không đổi ở đây**: (1) MCP golden re-baseline (decision #7,
+> chờ hết dogfood) — số G5/G6 phase-06 sẵn sàng feed vào; (2) int8 jina/bge vẫn chưa
+> đo (chỉ fp32 được pin + gate); (3) runbook:47 "+25–31 ms/tool-call chưa giải thích"
+> đã được root-cause ở phase-02b không phải ORT — cập nhật runbook khi flip
+> `CORTEX_EMBED_BACKEND`.
 
 # ONNX embedding spike — bỏ Python sidecar khỏi đường embedding
 
