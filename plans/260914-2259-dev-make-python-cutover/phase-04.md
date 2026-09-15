@@ -37,4 +37,4 @@ phase-10.md:41 defer swap — phase này là nơi trả nợ đó.
 - [ ] `CORTEX_RUST_ANALYZER=python` vẫn chạy được qua cortex-sync registry (rollback analyzer path).
 - [ ] `cargo test -p cortex-dev -p cortex-sync` pass; parity harness mở rộng pass.
 
-**Trạng thái:** draft (rev 2 — phase mới)
+**Trạng thái:** draft (rev 2 — phase mới) — **DONE 2026-09-15** (reports/phase-04.md)
