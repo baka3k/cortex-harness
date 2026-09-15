@@ -28,9 +28,9 @@ pub use backend::{
 };
 pub use error::{EmbedError, Result};
 pub use model::{
-    BGE_MAX_TOKENS, CODE_MAX_CHARS, EMBEDDING_DIMENSION, JINA_MAX_TOKENS, ModelSpec, Plane,
-    Pooling, export_dir, hf_snapshot, hub_dir, is_python_space, python_strip, repo_root,
-    resolve_model_source, spec_from_env, spec_from_source,
+    BGE_MAX_TOKENS, CODE_MAX_CHARS, EMBEDDING_DIMENSION, JINA_MAX_TOKENS, ModelPin, ModelSpec,
+    Plane, Pooling, export_dir, hf_snapshot, hub_dir, is_python_space, model_pin, python_strip,
+    file_sha256, repo_root, resolve_model_source, spec_from_env, spec_from_source, metadata_exported_graph,
 };
 pub use onnx::{OnnxEmbedder, SessionConfig, ort_dylib};
 pub use pooling::{cls_pool, l2_normalize, mean_of_chunks, mean_pool};

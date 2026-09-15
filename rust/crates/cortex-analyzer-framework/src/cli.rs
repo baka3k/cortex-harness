@@ -126,6 +126,13 @@ pub struct AnalyzerArgs {
     #[arg(long, hide = true)]
     pub neo4j_db: Option<String>,
 
+    /// Embedding-input artifact path (phase-06 orchestrator contract): set
+    /// only by the native embedding pass — the child parses graphless and
+    /// serializes its writer rows there; the orchestrator embeds + upserts.
+    /// Python children never see this flag (their embedding path is unchanged).
+    #[arg(long)]
+    pub embedding_input_output: Option<String>,
+
     /// Harness dev.json config — Python-side convenience; Rust orchestrator
     /// truyền explicit args nên nhận và bỏ qua (khớp contract).
     #[arg(long, hide = true)]
@@ -161,6 +168,7 @@ impl AnalyzerArgs {
         if args.build_system.is_none() {
             args.build_system = args.build_system_alt.take();
         }
+        args.note_orchestrated_embedding();
         args
     }
 
@@ -194,6 +202,34 @@ impl AnalyzerArgs {
     /// Message scan bật khi không có `--disable-message-scan` (như Python).
     pub fn message_scan_enabled(&self) -> bool {
         !self.disable_message_scan
+    }
+
+    /// `--embedding-input-output` rỗng/whitespace ≡ không bật.
+    pub fn embedding_input_output(&self) -> Option<&str> {
+        self.embedding_input_output
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
+    /// Phase-06: vector/embed flags remain accepted on Rust children for the
+    /// frozen contract but are no-ops — say so once instead of swallowing
+    /// them silently (the old accept-and-ignore was red-team Critical #1's
+    /// "mất capability im lặng" surface).
+    pub fn note_orchestrated_embedding(&self) {
+        let vector_flags_present = self.embed_model.is_some()
+            || self.qdrant_url.is_some()
+            || self.qdrant_collection.is_some()
+            || self.device.is_some()
+            || self.batch_size.is_some()
+            || self.max_embed_chars.is_some()
+            || self.chunk_embed;
+        if vector_flags_present {
+            println!(
+                "[lane] --embed-*/--qdrant-* accepted as no-op: embedding moved to the \
+                 orchestrator (phase-06); this child never embeds or writes qdrant"
+            );
+        }
     }
 
     /// `graph_writes_disabled` — CORTEX_DISABLE_GRAPH=1|true|yes|on ⇒ chạy

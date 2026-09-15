@@ -326,3 +326,44 @@ fn throughput_probe() {
         );
     }
 }
+
+/// Phase-06 G7 build/repro gate: every on-disk artifact the parity fixtures
+/// were measured against must still match the digests pinned in-repo
+/// (`cortex_embed::model_pin`). This is the "exported graph sha256 ghi
+/// in-repo" half that cannot run inside `verify_provenance` — the weights file
+/// is 2.2 GB and hashing it per process load would stall sync.
+#[test]
+#[ignore]
+fn provenance_pins_match_disk() {
+    let root = repo_root();
+    let mut checked = 0usize;
+    for (path, fixture) in fixtures() {
+        let Some(pin) = cortex_embed::model_pin(&fixture.model) else {
+            println!("[provenance] {}: no in-repo pin (custom model) — skipped", path.display());
+            continue;
+        };
+        let spec = spec_for(&root, &fixture);
+        let graph_digest = cortex_embed::file_sha256(&spec.graph).expect("graph readable");
+        assert_eq!(
+            graph_digest, pin.graph_sha256,
+            "{}: exported graph digest diverged from the in-repo pin",
+            fixture.model
+        );
+        let weights = spec.graph.with_file_name(pin.weights_file);
+        if weights.is_file() {
+            let weights_digest =
+                cortex_embed::file_sha256(&weights).expect("weights readable");
+            assert_eq!(
+                weights_digest, pin.weights_sha256,
+                "{}: weights digest diverged",
+                fixture.model
+            );
+        }
+        println!(
+            "[provenance] {} graph+weights match pin (hf revision {})",
+            fixture.model, pin.hf_revision
+        );
+        checked += 1;
+    }
+    assert!(checked > 0, "no pinned model fixture found");
+}
