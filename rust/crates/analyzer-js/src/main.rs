@@ -111,7 +111,7 @@ fn run(args: &JsArgs) -> i32 {
 // `_build_analyzer_cmd` gửi thêm. Cờ lane vector/message/cache nhận-và-bỏ-qua.
 
 #[derive(Debug, Clone, ClapParser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 pub struct JsArgs {
     /// Root folder chứa JavaScript sources.
     #[arg(long, required = true)]

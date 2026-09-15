@@ -21,7 +21,7 @@ use analyzer_jvm_overlays::spring::pipeline::run_spring_foundation;
 use analyzer_jvm_overlays::spring::writer::SpringFactWriter;
 
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 struct SpringArgs {
     #[arg(long, required = true)]
     root: String,

@@ -30,6 +30,94 @@ const MAX_OUTPUT_TAIL_CHARS: usize = 65_536;
 /// Sentinel prefix marking Python-plane delegation.
 const DELEGATE_SENTINEL: &str = "__delegate__";
 
+// Phase-08 build-commit handshake (plan §2, red-team F5 stale binary):
+// before the first spawn of each analyzer binary the orchestrator probes
+// `<binary> --version` and hard-errors when the child's baked build commit
+// differs from its own — a mixed-commit binary set is silent parity drift.
+thread_local! {
+    static HANDSHAKE_OK: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Commit stamp from `--version` output — the last token of the last line
+/// that looks like `<name> <hex sha>` (`analyzer-go 1c2967a` shape, same for
+/// the clap attribute and the probe). Scanning bottom-up for a 7–40 hex-char
+/// token keeps extra child output (warnings above/below the version line)
+/// from being misread as the stamp.
+fn parse_version_commit(output: &str) -> Option<&str> {
+    output
+        .lines()
+        .rev()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .find_map(|line| {
+            let token = line.split_whitespace().next_back()?;
+            let hexish = (7..=40).contains(&token.len())
+                && token.chars().all(|c| c.is_ascii_hexdigit());
+            hexish.then_some(token)
+        })
+}
+
+/// Pure decision core of the handshake: `Ok` only when the child stamp
+/// matches the orchestrator's own.
+fn handshake_verdict(expected: &str, probe: Option<&str>) -> Result<(), String> {
+    match probe {
+        None => Err(
+            "build-commit handshake failed: `--version` produced no commit stamp — rebuild with: cargo build --release --workspace".to_string(),
+        ),
+        Some(actual) if actual == expected => Ok(()),
+        Some(actual) => Err(format!(
+            "stale analyzer binary: built at commit '{actual}' but orchestrator expects '{expected}' — rebuild with: cargo build --release --workspace"
+        )),
+    }
+}
+
+/// Probe `<binary> --version` once per process and verify its commit stamp
+/// against the orchestrator's own (`registry::retired_at_commit`). The probe
+/// runs with the same `current_dir` as the real child so relative bin-dir
+/// resolutions agree. Passes are cached; failures are always re-reported.
+/// An orchestrator built without a stamp ("unknown", e.g. tarball outside
+/// git) warns once and skips the check instead of bricking every spawn.
+fn verify_build_handshake(binary: &str, cwd: &Path) -> Result<(), String> {
+    let expected = registry::retired_at_commit();
+    if expected == "unknown" {
+        let warned = HANDSHAKE_OK.with(|cache| cache.borrow_mut().insert(binary.to_string()));
+        if warned {
+            eprintln!(
+                "[phase-08] build-commit handshake skipped: orchestrator built without a commit stamp (non-git build)"
+            );
+        }
+        return Ok(());
+    }
+    if HANDSHAKE_OK.with(|cache| cache.borrow().contains(binary)) {
+        return Ok(());
+    }
+    let verdict = match std::process::Command::new(binary)
+        .arg("--version")
+        .current_dir(cwd)
+        .output()
+    {
+        Ok(output) if output.status.success() => handshake_verdict(
+            expected,
+            parse_version_commit(&String::from_utf8_lossy(&output.stdout)),
+        ),
+        Ok(output) => Err(format!(
+            "build-commit handshake failed: `{binary} --version` exited with {}",
+            output.status.code().unwrap_or(-1)
+        )),
+        Err(error) => Err(format!(
+            "build-commit handshake failed: cannot spawn `{binary} --version`: {error}"
+        )),
+    };
+    match verdict {
+        Ok(()) => {
+            HANDSHAKE_OK.with(|cache| cache.borrow_mut().insert(binary.to_string()));
+            Ok(())
+        }
+        Err(message) => Err(message),
+    }
+}
+
 /// Subprocess failure mirroring `subprocess.CalledProcessError` with tails.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -53,6 +141,18 @@ fn run_child(
     verbose: bool,
     env: &BTreeMap<String, String>,
 ) -> Result<String, ChildError> {
+    if let Err(message) = verify_build_handshake(&cmd[0], cwd) {
+        // Loud on stderr first: `record_component_failure` only surfaces the
+        // returncode in the summary, and this must never look like a plain
+        // child crash.
+        eprintln!("[phase-08] {message}");
+        return Err(ChildError {
+            returncode: 126,
+            cmd: cmd.to_vec(),
+            output_tail: String::new(),
+            stderr_tail: format!("{message}\n"),
+        });
+    }
     if verbose {
         println!("[upsert] exec: {}", cmd.join(" "));
     }
@@ -3124,4 +3224,58 @@ fn run_native_message_scan_lane(
         return Err(format!("native message-scan[{parser}]: {error}"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::{handshake_verdict, parse_version_commit};
+
+    #[test]
+    fn parse_version_commit_takes_last_token() {
+        assert_eq!(parse_version_commit("analyzer-go 1c2967a\n"), Some("1c2967a"));
+        assert_eq!(parse_version_commit("analyzer-perl abc1234"), Some("abc1234"));
+        assert_eq!(parse_version_commit(""), None);
+        assert_eq!(parse_version_commit("   \n"), None);
+    }
+
+    #[test]
+    fn parse_version_commit_ignores_extra_output() {
+        // Warnings before/after the version line must not be misread as the
+        // stamp: only a line ending in a 7–40 hex token qualifies.
+        assert_eq!(
+            parse_version_commit("[warn] something\nanalyzer-go 1c2967a\n"),
+            Some("1c2967a")
+        );
+        assert_eq!(
+            parse_version_commit("analyzer-go 1c2967a\ntrailing words here\n"),
+            Some("1c2967a")
+        );
+        assert_eq!(parse_version_commit("no hex token on any line here\n"), None);
+        assert_eq!(parse_version_commit("analyzer-go abc\n"), None);
+    }
+
+    #[test]
+    fn handshake_passes_on_matching_commit() {
+        assert_eq!(handshake_verdict("1c2967a", Some("1c2967a")), Ok(()));
+    }
+
+    #[test]
+    fn handshake_hard_errors_on_mismatch() {
+        let error = handshake_verdict("1c2967a", Some("0e49def")).unwrap_err();
+        assert!(error.contains("stale analyzer binary"), "{error}");
+        assert!(error.contains("0e49def") && error.contains("1c2967a"), "{error}");
+        assert!(error.contains("cargo build --release --workspace"), "{error}");
+    }
+
+    #[test]
+    fn handshake_hard_errors_on_empty_output() {
+        let error = handshake_verdict("1c2967a", None).unwrap_err();
+        assert!(error.contains("no commit stamp"), "{error}");
+    }
+
+    #[test]
+    fn handshake_hard_errors_on_unknown_child_stamp() {
+        let error = handshake_verdict("1c2967a", Some("unknown")).unwrap_err();
+        assert!(error.contains("stale analyzer binary"), "{error}");
+    }
 }

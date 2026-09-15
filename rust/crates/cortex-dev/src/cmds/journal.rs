@@ -10,7 +10,7 @@ pub fn status(m: &Matches) {
     let payload = match crate::journalx::status_payload(&m.value_or("--journal-path", "")) {
         Ok(v) => v,
         Err(line) => {
-            eprint!("{line}\n");
+            eprintln!("{line}");
             std::process::exit(1);
         }
     };
@@ -64,7 +64,7 @@ pub fn purge(m: &Matches) {
     match payload {
         Ok(value) => echo(&to_sorted_json(&value)),
         Err(line) => {
-            eprint!("{line}\n");
+            eprintln!("{line}");
             std::process::exit(1);
         }
     }

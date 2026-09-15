@@ -17,7 +17,7 @@ use crate::aspnet::writer::apply_graph;
 use crate::pyrepr::py_dict_repr;
 
 #[derive(Debug, Parser)]
-#[command(no_binary_name = true)]
+#[command(no_binary_name = true, version = cortex_analyzer_framework::BUILD_COMMIT)]
 pub struct AspNetArgs {
     #[arg(long, required = true)]
     pub root: String,
