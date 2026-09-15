@@ -6,8 +6,10 @@
 
 mod cmds;
 mod config;
+mod db_transfer;
 mod env;
 mod help;
+mod journalx;
 mod parser;
 mod procinfo;
 mod pyexec;

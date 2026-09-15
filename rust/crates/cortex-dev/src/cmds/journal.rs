@@ -1,29 +1,33 @@
-//! `dev journal status/purge` — journal inspection through the Python layer
-//! (dev.py calls `inspect_journal` / `SQLiteJournal` in-process; the native
-//! Rust journal lives behind the parallel phase-10 storage workstream).
+//! `dev journal status/purge` — native journal inspection and safe purge
+//! (the pyexec ops `journal_status` / `journal_purge` retired in phase-03;
+//! see `crate::journalx` for the ported scope-lock + purge validation).
 
 use crate::parser::Matches;
-use crate::pyexec;
 use crate::util::echo;
 use serde_json::Value;
 
 pub fn status(m: &Matches) {
-    let journal_path = m.value_or("--journal-path", "");
-    let args = serde_json::json!({ "journal_path": journal_path });
-    let payload = match pyexec::try_call_json("journal_status", &args) {
+    let payload = match crate::journalx::status_payload(&m.value_or("--journal-path", "")) {
         Ok(v) => v,
-        Err(out) => {
-            eprint!("{}", out.stderr);
-            std::process::exit(if out.code == 0 { 1 } else { out.code });
+        Err(line) => {
+            eprint!("{line}\n");
+            std::process::exit(1);
         }
     };
     if m.flag("--json-output") {
         echo(&to_sorted_json(&payload));
         return;
     }
-    let resolved = payload.get("journal_path").and_then(|v| v.as_str()).unwrap_or("");
+    let resolved = payload
+        .get("journal_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     echo(&format!("Journal: {}", resolved));
-    let runs = payload.get("runs").and_then(|r| r.as_array()).cloned().unwrap_or_default();
+    let runs = payload
+        .get("runs")
+        .and_then(|r| r.as_array())
+        .cloned()
+        .unwrap_or_default();
     if runs.is_empty() {
         echo("  no runs");
         return;
@@ -51,17 +55,17 @@ pub fn status(m: &Matches) {
 }
 
 pub fn purge(m: &Matches) {
-    let args = serde_json::json!({
-        "journal_path": m.value_or("--journal-path", ""),
-        "run_id": m.value_or("--run-id", ""),
-        "project_id": m.value_or("--project-id", ""),
-        "root": m.value_or("--root", ""),
-    });
-    match pyexec::try_call_json("journal_purge", &args) {
-        Ok(payload) => echo(&to_sorted_json(&payload)),
-        Err(out) => {
-            eprint!("{}", out.stderr);
-            std::process::exit(if out.code == 0 { 1 } else { out.code });
+    let payload = crate::journalx::purge(
+        &m.value_or("--journal-path", ""),
+        &m.value_or("--run-id", ""),
+        &m.value_or("--project-id", ""),
+        &m.value_or("--root", ""),
+    );
+    match payload {
+        Ok(value) => echo(&to_sorted_json(&value)),
+        Err(line) => {
+            eprint!("{line}\n");
+            std::process::exit(1);
         }
     }
 }
