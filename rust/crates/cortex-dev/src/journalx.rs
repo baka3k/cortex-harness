@@ -1,7 +1,7 @@
 //! Native journal status/purge — port of the dev.py journal commands plus
 //! the `scan_scope_id` / `ProjectRunLock` helpers from
 //! `tools/common/sync_scope.py` (flock contract kept interoperable with the
-//! Python sync workers and the cortex-sync port). Replaces the pyexec ops
+//! Python sync workers and the cortex-sync port). Replaces the retired bridge ops
 //! `journal_status` / `journal_purge` (phase-03 of the cutover plan).
 
 use cortex_graph_core::journal::{inspect_journal, Journal};
@@ -309,7 +309,7 @@ pub fn recover_required_lane(process_env: &[(String, String)]) -> Option<i32> {
     if !matches!(journal_mode.as_str(), "required" | "shared-required") {
         return None;
     }
-    let root = crate::pyexec::repo_root();
+    let root = crate::util::repo_root();
     let code_tiny = root.join("code-tiny");
     let mut module_env: Vec<(String, String)> = process_env.to_vec();
     let pythonpath = module_env
@@ -327,7 +327,7 @@ pub fn recover_required_lane(process_env: &[(String, String)]) -> Option<i32> {
     } else {
         module_env.push(("PYTHONPATH".to_string(), new_path));
     }
-    let recovery = std::process::Command::new(crate::pyexec::venv_python(&root))
+    let recovery = std::process::Command::new(crate::util::harness_python(&root))
         .args(["-m", "tools.graph.journal.consumer"])
         .current_dir(&code_tiny)
         .envs(module_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))

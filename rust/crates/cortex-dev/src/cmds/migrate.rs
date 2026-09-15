@@ -20,7 +20,7 @@ pub fn locate_binary() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let root = crate::pyexec::repo_root();
+    let root = crate::util::repo_root();
     [
         root.join("rust").join("target").join("release").join("cortex-migrate"),
         root.join("rust").join("target").join("debug").join("cortex-migrate"),

@@ -180,7 +180,7 @@ pub fn default_graph_provider() -> &'static str {
     }
 }
 
-const LADYBUG_ALIASES: &[&str] = &["ladybug", "lbug", "lady-bug", "kuzu"];
+pub(crate) const LADYBUG_ALIASES: &[&str] = &["ladybug", "lbug", "lady-bug", "kuzu"];
 
 /// `_graph_provider` — resolve the effective provider for a scoped key.
 pub fn graph_provider(env: &Value, scoped_key: &str) -> Result<String, String> {

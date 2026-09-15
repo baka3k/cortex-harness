@@ -1,5 +1,5 @@
 //! `dev journal status/purge` — native journal inspection and safe purge
-//! (the pyexec ops `journal_status` / `journal_purge` retired in phase-03;
+//! (the retired bridge ops `journal_status` / `journal_purge` from phase-03;
 //! see `crate::journalx` for the ported scope-lock + purge validation).
 
 use crate::parser::Matches;

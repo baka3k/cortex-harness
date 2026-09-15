@@ -1,5 +1,5 @@
 //! `dev export-db / import-db / export / import` — native `.cortexdb`
-//! bundle export/import (the pyexec ops `db_export` / `db_import` retired
+//! bundle export/import (the retired bridge ops `db_export` / `db_import`;
 //! in phase-03; see `crate::db_transfer`).
 
 use crate::db_transfer;
