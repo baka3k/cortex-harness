@@ -84,11 +84,11 @@ fn assert_vec_str(cmd_args: &[String], expected: &[&str]) {
 }
 
 #[test]
-fn primary_map_covers_22_parsers_with_bin_names() {
+fn primary_map_covers_24_parsers_with_bin_names() {
     let expected: BTreeSet<&str> = [
         "python", "shell", "ts", "js", "php", "perl", "java", "kotlin", "android", "go",
         "rust", "swift", "delphi", "cobol", "jp1", "vbnet", "vb6", "vba", "vbscript",
-        "cplus", "sql", "plsql",
+        "cplus", "sql", "plsql", "dart", "csharp",
     ]
     .into_iter()
     .collect();
@@ -110,8 +110,8 @@ fn framework_map_entries_and_shared_database_schema() {
     assert_eq!(map.get("database_sql"), Some(&"analyzer-database-schema"));
     assert_eq!(map.get("database_plsql"), Some(&"analyzer-database-schema"));
     assert_eq!(map.get("fastapi_django"), Some(&"analyzer-fastapi-django"));
-    // flutter joins together with the analyzer-dart binary (phase-02).
-    assert!(!map.contains_key("flutter"), "flutter must stay unmapped until analyzer-dart exists");
+    // flutter joined together with the analyzer-dart binary (phase-02).
+    assert_eq!(map.get("flutter"), Some(&"analyzer-dart"));
 }
 
 #[test]
@@ -216,11 +216,14 @@ fn flip_matrix_rust_unmapped_parser_falls_back_to_python() {
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", Some(dir.path.to_str().unwrap()));
     set_env("CORTEX_RUST_ANALYZER", Some("rust"));
     let topology = rust_analyzer_binary(&analyzer("project_topology"));
-    let csharp = rust_analyzer_binary(&analyzer("csharp"));
+    let topology_shadow = rust_analyzer_binary(&analyzer("project_topology"));
     set_env("CORTEX_RUST_ANALYZER", None);
     set_env("CORTEX_RUST_ANALYZER_BIN_DIR", None);
     assert_eq!(topology.expect("unmapped falls back"), None);
-    assert_eq!(csharp.expect("unmapped falls back"), None);
+    assert_eq!(
+        topology_shadow.expect("second call still unmapped"),
+        None
+    );
 }
 
 #[test]

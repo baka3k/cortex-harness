@@ -259,7 +259,8 @@ pub fn framework_analyzers() -> BTreeMap<&'static str, FrameworkAnalyzerConfig> 
 }
 
 /// Parsers with a Rust analyzer port (phase 04–07) — mirrors the live
-/// `_RUST_ANALYZER_BINARIES` map in incremental_sync.py (22 entries).
+/// `_RUST_ANALYZER_BINARIES` map in incremental_sync.py (now 24 entries,
+/// including phase-03 analyzer-csharp).
 pub fn rust_analyzer_binaries() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
         ("python", "analyzer-python"),
@@ -284,6 +285,8 @@ pub fn rust_analyzer_binaries() -> BTreeMap<&'static str, &'static str> {
         ("cplus", "analyzer-cplus"),
         ("sql", "analyzer-sql"),
         ("plsql", "analyzer-plsql"),
+        ("dart", "analyzer-dart"),
+        ("csharp", "analyzer-csharp"),
     ])
 }
 
@@ -291,9 +294,10 @@ pub fn rust_analyzer_binaries() -> BTreeMap<&'static str, &'static str> {
 /// name` (underscore framework keys map to dash binary names, e.g.
 /// `servlet_jsp → analyzer-servlet-jsp`). Overlays are resolved through the
 /// same flip matrix as primary parsers because the overlay `AnalyzerConfig`
-/// carries the framework name as its `parser`. `flutter` joins this map when
-/// the `analyzer-dart` binary lands (plan phase-02) — declaring it earlier
-/// would turn the `=rust` hard-error on for dart repos prematurely.
+/// carries the framework name as its `parser`. `flutter` resolves to the
+/// shared `analyzer-dart` binary (plan phase-02) — same artifact contract
+/// as the primary `dart` parser, with `--mode flutter` flipping the
+/// detector + analyzer into overlay mode.
 pub fn framework_rust_binaries() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
         ("spring", "analyzer-spring"),
@@ -307,6 +311,7 @@ pub fn framework_rust_binaries() -> BTreeMap<&'static str, &'static str> {
         ("laravel", "analyzer-laravel"),
         ("database_sql", "analyzer-database-schema"),
         ("database_plsql", "analyzer-database-schema"),
+        ("flutter", "analyzer-dart"),
     ])
 }
 
