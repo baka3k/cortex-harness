@@ -627,30 +627,21 @@ pub struct SyncLifecycle {
 impl Drop for SyncLifecycle {
     fn drop(&mut self) {
         if self.restart_mcp {
-            let result = pyexec::call_raw(
-                "mcp_start",
-                &json!({ "name": self.service_name, "project_dir": self.project_path.to_string_lossy() }),
-            );
-            let parsed: Option<Value> = serde_json::from_str(result.stdout.trim()).ok();
-            match parsed {
-                Some(v) if v.get("status").and_then(|s| s.as_str()) == Some("started") => {
+            let extra_env = crate::env::mcp_env_from_config(&self.project_path, &self.service_name);
+            let result = crate::cmds::mcp::mcp_start_one(&self.service_name, &extra_env);
+            match result.status.as_str() {
+                "started" => {
                     echo(&format!(
                         "[sync] {} MCP restarted (pid={})",
                         capitalize(&self.owner),
-                        v.get("pid").map(|p| p.to_string()).unwrap_or_else(|| "?".to_string())
+                        result.pid.map(|p| p.to_string()).unwrap_or_else(|| "?".to_string())
                     ));
                 }
-                Some(v) => {
-                    let reason = v.get("reason").and_then(|r| r.as_str()).unwrap_or("unknown error");
+                _ => {
+                    let reason = if result.reason.is_empty() { "unknown error" } else { &result.reason };
                     echo_err(&format!(
                         "[sync] WARNING: {} MCP was paused but could not be restarted: {}",
                         self.owner, reason
-                    ));
-                }
-                None => {
-                    echo_err(&format!(
-                        "[sync] WARNING: {} MCP was paused but could not be restarted",
-                        self.owner
                     ));
                 }
             }
@@ -709,18 +700,15 @@ pub fn sync_lifecycle(
                     "[sync] Pausing {} MCP (instance={}) to acquire the embedded FalkorDB lease",
                     owner, instance_id
                 ));
-                pyexec::call_json(
-                    "mcp_stop",
-                    &json!({ "pattern": service.2, "instance_id": instance_id }),
-                );
+                crate::procinfo::mcp_stop_pattern(service.2, Some(&instance_id));
             } else {
                 echo("[sync] Stopping orphaned embedded FalkorDB before sync");
             }
-            let stopped = pyexec::call_json("stop_embedded", &json!({ "db_path": db_path.to_string_lossy() }));
-            if stopped.as_i64().unwrap_or(0) > 0 {
+            let stopped = crate::procinfo::stop_embedded_falkordb(&db_path, 5.0);
+            if !stopped.is_empty() {
                 echo(&format!(
                     "[sync] stopped {} embedded FalkorDB process(es)",
-                    stopped.as_i64().unwrap_or(0)
+                    stopped.len()
                 ));
             }
             if !mcp_pids(service.2, Some(&instance_id)).is_empty() {
@@ -785,62 +773,62 @@ pub fn mcp_pids(pattern: &str, instance_id: Option<&str>) -> Vec<i64> {
 }
 
 pub fn embedded_falkordb_pids(db_path: &Path) -> Vec<i64> {
-    match pyexec::try_call_json("embedded_falkordb_pids", &json!({ "db_path": db_path })) {
-        Ok(v) => v
-            .as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_i64()).collect())
-            .unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    crate::procinfo::embedded_falkordb_pids(db_path, None)
 }
 
 /// dev.py `_stop_sync_workers`.
+/// dev.py `_stop_sync_workers` — native `stop_sync_processes` + embedded
+/// store sweep (the `stop_sync_workers` bridge-op assembly, now in-process).
 fn stop_sync_workers(owner: &str, process_env: &Value, prefix: &str, include_launchers: bool) {
-    let args = json!({
-        "owner": owner,
-        "include_launchers": include_launchers,
-        "falkordb_path": process_env.get("FALKORDB_PATH").and_then(|v| v.as_str()).unwrap_or(""),
-    });
-    let report = pyexec::call_json("stop_sync_workers", &args);
-    let matched = report.get("matched").and_then(|m| m.as_array()).map(|a| a.len()).unwrap_or(0);
-    if matched > 0 {
+    let report = crate::procinfo::stop_sync_processes(
+        owner,
+        &pyexec::repo_root(),
+        &[],
+        5.0,
+        include_launchers,
+    );
+    if !report.matched.is_empty() {
         echo(&format!(
             "[sync] {}: owner={} matched={} terminated={} forced={}",
             prefix,
             owner,
-            matched,
-            report.get("terminated").and_then(|m| m.as_array()).map(|a| a.len()).unwrap_or(0),
-            report.get("forced").and_then(|m| m.as_array()).map(|a| a.len()).unwrap_or(0),
+            report.matched.len(),
+            report.terminated.len(),
+            report.forced.len(),
         ));
     }
-    let remaining: Vec<String> = report
-        .get("remaining")
-        .and_then(|m| m.as_array())
-        .map(|a| a.iter().map(|x| x.to_string()).collect())
-        .unwrap_or_default();
-    if !remaining.is_empty() {
+    if !report.remaining.is_empty() {
+        let remaining: Vec<String> = report.remaining.iter().map(|p| p.to_string()).collect();
         fail(&format!(
             "Could not stop {} sync process(es): {}",
             owner,
             remaining.join(", ")
         ));
     }
-    let embedded_stopped = report.get("embedded_stopped").and_then(|m| m.as_array()).map(|a| a.len()).unwrap_or(0);
-    if embedded_stopped > 0 {
+    let falkordb_path = process_env
+        .get("FALKORDB_PATH")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if falkordb_path.is_empty() {
+        return;
+    }
+    let db_path = PathBuf::from(&falkordb_path);
+    let embedded_stopped = crate::procinfo::stop_embedded_falkordb(&db_path, 5.0);
+    if !embedded_stopped.is_empty() {
         echo(&format!(
             "[sync] {}: stopped {} embedded FalkorDB process(es)",
-            prefix, embedded_stopped
+            prefix,
+            embedded_stopped.len()
         ));
     }
-    let embedded_remaining: Vec<String> = report
-        .get("embedded_remaining")
-        .and_then(|m| m.as_array())
-        .map(|a| a.iter().map(|x| x.to_string()).collect())
-        .unwrap_or_default();
+    let embedded_remaining = crate::procinfo::embedded_falkordb_pids(&db_path, None);
     if !embedded_remaining.is_empty() {
+        let remaining: Vec<String> = embedded_remaining.iter().map(|p| p.to_string()).collect();
         fail(&format!(
             "Could not stop embedded FalkorDB process(es): {}",
-            embedded_remaining.join(", ")
+            remaining.join(", ")
         ));
     }
 }

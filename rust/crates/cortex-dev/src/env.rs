@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 
 /// dev.py `_REMOTE_STORAGE_KEYS` — endpoint/credential keys that never leak
 /// from the config into a child environment.
-const REMOTE_STORAGE_KEYS: [&str; 10] = [
+pub const REMOTE_STORAGE_KEYS: [&str; 10] = [
     "QDRANT_URL",
     "QDRANT_HOST",
     "QDRANT_PORT",

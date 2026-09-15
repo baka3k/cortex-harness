@@ -9,6 +9,7 @@ mod config;
 mod env;
 mod help;
 mod parser;
+mod procinfo;
 mod pyexec;
 mod spec;
 mod tree;
@@ -22,18 +23,71 @@ fn main() {
     // env payload the way the retired pyexec ops did, so
     // scripts/rust_parity/dev_cli_parity.py can diff Python vs Rust per key.
     if let Ok(role) = std::env::var("CORTEX_DEV_PARITY_ENV") {
-        if matches!(role.as_str(), "code" | "doc" | "status") {
-            let project_dir = std::path::PathBuf::from(
-                std::env::var("CORTEX_DEV_PARITY_PROJECT").unwrap_or_else(|_| ".".to_string()),
-            );
-            let payload = match role.as_str() {
-                "code" => env::code_env(&project_dir),
-                "doc" => env::doc_env(&project_dir),
-                _ => env::status_env_payload(&project_dir),
-            };
-            println!("{}", sorted_json(&payload));
-            let _ = std::io::stdout().flush();
-            return;
+        match role.as_str() {
+            "code" | "doc" | "status" => {
+                let project_dir = std::path::PathBuf::from(
+                    std::env::var("CORTEX_DEV_PARITY_PROJECT").unwrap_or_else(|_| ".".to_string()),
+                );
+                let payload = match role.as_str() {
+                    "code" => env::code_env(&project_dir),
+                    "doc" => env::doc_env(&project_dir),
+                    _ => env::status_env_payload(&project_dir),
+                };
+                println!("{}", sorted_json(&payload));
+                let _ = std::io::stdout().flush();
+                return;
+            }
+            // Phase-02 parity probe: embedded-FalkorDB discovery + stop
+            // against an arbitrary db path (`CORTEX_DEV_PARITY_DB`).
+            "procinfo" => {
+                let db_path = std::path::PathBuf::from(
+                    std::env::var("CORTEX_DEV_PARITY_DB").unwrap_or_default(),
+                );
+                let before = procinfo::embedded_falkordb_pids(&db_path, None);
+                let stopped = procinfo::stop_embedded_falkordb(&db_path, 5.0);
+                let after = procinfo::embedded_falkordb_pids(&db_path, None);
+                println!(
+                    "{}",
+                    sorted_json(&serde_json::json!({
+                        "before": before,
+                        "stopped": stopped,
+                        "after": after,
+                    }))
+                );
+                let _ = std::io::stdout().flush();
+                return;
+            }
+            // Debug probe: dump the process table + code-worker matches.
+            "table" => {
+                let table = procinfo::process_table();
+                let matched = procinfo::sync_processes("code", &pyexec::repo_root(), &table, &[], true);
+                println!(
+                    "{}",
+                    sorted_json(&serde_json::json!({
+                        "table_rows": table.len(),
+                        "matched": matched.iter().map(|r| serde_json::json!({
+                            "pid": r.pid,
+                            "argv": r.argv,
+                        })).collect::<Vec<_>>(),
+                    }))
+                );
+                let _ = std::io::stdout().flush();
+                return;
+            }
+            // Phase-02 parity probe: `_mcp_pids` discovery (`CORTEX_DEV_PARITY_PATTERN`).
+            "mcp_pids" => {
+                let pattern =
+                    std::env::var("CORTEX_DEV_PARITY_PATTERN").unwrap_or_default();
+                println!(
+                    "{}",
+                    sorted_json(&serde_json::json!({
+                        "pids": procinfo::mcp_pids(&pattern, None),
+                    }))
+                );
+                let _ = std::io::stdout().flush();
+                return;
+            }
+            _ => {}
         }
     }
 

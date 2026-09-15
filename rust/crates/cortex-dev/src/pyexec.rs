@@ -73,6 +73,9 @@ pub struct PyOutcome {
 /// Run the python helper dispatcher with `op` and a JSON arg payload;
 /// returns parsed stdout JSON. Exits like dev.py when the helper fails with
 /// a `[error]`/`Error:` line (already forwarded on stderr).
+/// Phase-02: all in-crate callers are native; kept for HELPER_SRC contract
+/// until the bridge is deleted in phase-07.
+#[allow(dead_code)]
 pub fn call_json(op: &str, args: &serde_json::Value) -> serde_json::Value {
     match try_call_json(op, args) {
         Ok(v) => v,
