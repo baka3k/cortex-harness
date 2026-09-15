@@ -71,8 +71,11 @@ jobs:
         run: |
           cd "$(mktemp -d)"
           dev help
-      - name: Build cortex-dev (entrypoint + bridge-ban gates need the binary)
-        run: cargo build --release -p cortex-dev --manifest-path rust/Cargo.toml
+      - name: Build cortex-dev (release for entrypoint gates, debug for the
+          synthetic discovery gate which prefers the dev-iteration binary)
+        run: |
+          cargo build --release -p cortex-dev --manifest-path rust/Cargo.toml
+          cargo build -p cortex-dev --manifest-path rust/Cargo.toml
       - name: Run lifecycle suite (incl. phase-06/07 binary + bridge-ban gates)
         run: python -m unittest tests.test_make_lifecycle tests.test_dev_lifecycle_commands tests.test_rust_bridge_ban tests.test_embedded_discovery_parity -v
 
