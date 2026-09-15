@@ -86,7 +86,8 @@ pub fn rel_posix(root: &Path, path: &Path) -> String {
 }
 
 /// `_extract_csharp_namespace_and_usings_from_text`.
-pub fn extract_namespace_and_usings(text: &str) -> (Option<String>, Vec<String>) {
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
+fn extract_namespace_and_usings(text: &str) -> (Option<String>, Vec<String>) {
     let mut namespace_name: Option<String> = None;
     let mut usings: Vec<String> = Vec::new();
     for raw_line in text.lines() {
@@ -98,12 +99,11 @@ pub fn extract_namespace_and_usings(text: &str) -> (Option<String>, Vec<String>)
         {
             continue;
         }
-        if namespace_name.is_none() {
-            if let Some(name) = match_namespace(line) {
+        if namespace_name.is_none()
+            && let Some(name) = match_namespace(line) {
                 namespace_name = Some(name);
                 continue;
             }
-        }
         if let Some(name) = match_using(line) {
             usings.push(name);
         }
@@ -113,6 +113,7 @@ pub fn extract_namespace_and_usings(text: &str) -> (Option<String>, Vec<String>)
 
 /// `^namespace\s+([A-Za-z_][A-Za-z0-9_\.]*)` — namespace name có thể đứng
 /// riêng trên một dòng (brace `{` ở dòng sau) — khớp test `namespace App.Controllers\n{`.
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
 fn match_namespace(line: &str) -> Option<String> {
     let rest = line.strip_prefix("namespace")?;
     if !rest.starts_with(|c: char| c.is_whitespace()) {
@@ -130,17 +131,17 @@ fn match_namespace(line: &str) -> Option<String> {
 }
 
 /// `^using\s+(?:static\s+)?(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?([A-Za-z_][A-Za-z0-9_\.]*)\s*;`
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
 fn match_using(line: &str) -> Option<String> {
     let rest = line.strip_prefix("using")?;
     if !rest.starts_with(|c: char| c.is_whitespace()) {
         return None;
     }
     let mut rest = rest.trim_start();
-    if let Some(stripped) = rest.strip_prefix("static") {
-        if stripped.starts_with(|c: char| c.is_whitespace()) {
+    if let Some(stripped) = rest.strip_prefix("static")
+        && stripped.starts_with(|c: char| c.is_whitespace()) {
             rest = stripped.trim_start();
         }
-    }
     // Optional alias `[A-Za-z_][A-Za-z0-9_]*\s*=\s*` (không có dấu chấm).
     if let Some(position) = find_alias_end(rest) {
         rest = rest[position..].trim_start();
@@ -154,6 +155,7 @@ fn match_using(line: &str) -> Option<String> {
 }
 
 /// Bắt `[A-Za-z_][A-Za-z0-9_\.]*` ở đầu `text`, trả (name, phần còn lại).
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
 fn parse_qualified_name(text: &str) -> Option<(String, &str)> {
     let mut name = String::new();
     for (index, character) in text.char_indices() {
@@ -180,6 +182,7 @@ fn parse_qualified_name(text: &str) -> Option<(String, &str)> {
 
 /// Tìm vị trí sau alias `word\s*=\s*` (alias: `[A-Za-z_][A-Za-z0-9_]*`) nếu
 /// pattern khớp ngay đầu text; None khi không có alias.
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
 fn find_alias_end(text: &str) -> Option<usize> {
     let mut position = 0;
     let bytes = text.as_bytes();
@@ -206,7 +209,8 @@ fn find_alias_end(text: &str) -> Option<usize> {
 }
 
 /// `_collect_csharp_import_graph` — namespace/use dependency theo rel-path.
-pub fn collect_import_graph(files: &[PathBuf], root: &Path) -> BTreeMap<String, Vec<String>> {
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
+fn collect_import_graph(files: &[PathBuf], root: &Path) -> BTreeMap<String, Vec<String>> {
     let mut namespace_to_files: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut namespace_by_file: BTreeMap<String, Option<String>> = BTreeMap::new();
     let mut using_by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -234,20 +238,18 @@ pub fn collect_import_graph(files: &[PathBuf], root: &Path) -> BTreeMap<String, 
     let mut deps_by_file: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for rel_path in &rel_paths {
         let mut resolved: BTreeSet<String> = BTreeSet::new();
-        if let Some(Some(namespace_name)) = namespace_by_file.get(rel_path) {
-            if let Some(files_in_ns) = namespace_to_files.get(namespace_name) {
+        if let Some(Some(namespace_name)) = namespace_by_file.get(rel_path)
+            && let Some(files_in_ns) = namespace_to_files.get(namespace_name) {
                 resolved.extend(files_in_ns.iter().cloned());
             }
-        }
         for using in &using_by_file[rel_path] {
             if let Some(files_in_ns) = namespace_to_files.get(using) {
                 resolved.extend(files_in_ns.iter().cloned());
             }
-            if let Some(position) = using.rfind('.') {
-                if let Some(files_in_ns) = namespace_to_files.get(&using[..position]) {
+            if let Some(position) = using.rfind('.')
+                && let Some(files_in_ns) = namespace_to_files.get(&using[..position]) {
                     resolved.extend(files_in_ns.iter().cloned());
                 }
-            }
         }
         resolved.remove(rel_path);
         deps_by_file.insert(rel_path.clone(), resolved.into_iter().collect());
@@ -256,7 +258,8 @@ pub fn collect_import_graph(files: &[PathBuf], root: &Path) -> BTreeMap<String, 
 }
 
 /// `_expand_impacted_files_by_imports` — BFS trên reverse dependency graph.
-pub fn expand_impacted_files(
+#[allow(dead_code)] // phase-03: chưa wire — giữ cho wiring composition/message lane sau
+fn expand_impacted_files(
     changed_existing: &BTreeSet<String>,
     deps_by_file: &BTreeMap<String, Vec<String>>,
 ) -> BTreeSet<String> {

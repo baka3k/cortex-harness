@@ -279,7 +279,7 @@ fn run(common: &AnalyzerArgs, extra: &CsharpExtraArgs) -> i32 {
 
     let mut exit_code = 0;
 
-    if let Some(mut store) = store_opt.take() {
+    if let Some(store) = store_opt.take() {
         let rows = build_graph_rows(
             &payloads,
             &project_id,
@@ -355,13 +355,11 @@ fn attach_provenance(mut payload: Value, provenance: &Value) -> Value {
     if let Some(parse_meta) = payload
         .get_mut("parse_meta")
         .and_then(Value::as_object_mut)
-    {
-        if let Some(source) = provenance.as_object() {
+        && let Some(source) = provenance.as_object() {
             for (key, value) in source {
                 parse_meta.insert(key.clone(), value.clone());
             }
         }
-    }
     payload
 }
 
