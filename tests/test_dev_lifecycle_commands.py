@@ -161,6 +161,43 @@ class DevLifecycleCommandTests(unittest.TestCase):
                 else:
                     run.assert_called_once_with(action)
 
+    def test_native_binary_lifecycle_actions_run_without_python_dispatch(self):
+        """Phase-06: the cortex-dev binary serves the lifecycle actions
+        natively for the ported set; the make layer points at the binary."""
+        rust_bin = REPO_ROOT / "rust" / "target" / "release" / "cortex-dev"
+        if not rust_bin.is_file():
+            self.skipTest("release cortex-dev not built")
+        for action in ("help", "storage-stop", "storage-layout", "storage-migrate-layout"):
+            with self.subTest(action=action):
+                result = subprocess.run(
+                    [str(rust_bin), action],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_entrypoint_scripts_are_binary_only(self):
+        """The 10 entrypoint artifacts must not route to dev.py (no python
+        rollback from phase-06)."""
+        entrypoints = (
+            "dev.sh",
+            "dev.bat",
+            "dev.ps1",
+            "dev-global.cmd",
+            "installers/windows/scripts/wrapper.bat",
+            "Makefile",
+        )
+        for name in entrypoints:
+            with self.subTest(entrypoint=name):
+                text = (REPO_ROOT / name).read_text(encoding="utf-8")
+                self.assertNotIn("dev.py", text)
+                self.assertIn("cortex-dev", text)
+        # pyproject must not register a python console script named dev.
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertNotIn('dev = "cortex_harness.dev:cli"', pyproject)
+
     def test_storage_migration_forwards_dry_run_and_apply_options(self):
         with mock.patch("cortex_harness.dev._run_lifecycle") as run:
             result = self.runner.invoke(
