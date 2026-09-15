@@ -15,7 +15,23 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUST_BIN = REPO_ROOT / "rust" / "target" / "debug" / "cortex-dev"
+
+
+def _rust_bin() -> Path:
+    explicit = os.environ.get("CORTEX_DEV_BIN")
+    # Debug first: the dev iteration target always carries the newest
+    # parity hooks; a stale release binary would silently miss them.
+    candidates = [
+        REPO_ROOT / "rust" / "target" / "debug" / "cortex-dev",
+        Path(explicit) if explicit else None,
+        REPO_ROOT / "rust" / "target" / "release" / "cortex-dev",
+    ]
+    for candidate in candidates:
+        if candidate is not None and candidate.is_file():
+            return candidate
+    raise unittest.SkipTest(
+        "cortex-dev binary not built (cargo build -p cortex-dev)"
+    )
 
 
 class EmbeddedDiscoveryParityTests(unittest.TestCase):
@@ -49,7 +65,7 @@ class EmbeddedDiscoveryParityTests(unittest.TestCase):
             env["CORTEX_DEV_PARITY_ARGV"] = "|".join(argv)
             env["CORTEX_HARNESS_REPO_ROOT"] = str(REPO_ROOT)
             completed = subprocess.run(
-                [str(RUST_BIN)], capture_output=True, text=True, env=env, check=False
+                [str(_rust_bin())], capture_output=True, text=True, env=env, check=False
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
 
