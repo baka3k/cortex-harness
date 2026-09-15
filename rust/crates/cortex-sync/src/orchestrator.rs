@@ -1666,7 +1666,12 @@ fn run_flow(
             let incremental = !full_scan || recovery_full_scan;
             let changed_manifest_str = changed_manifest.to_string_lossy().to_string();
             let deleted_manifest_str = deleted_manifest.to_string_lossy().to_string();
-            let overlay_config = AnalyzerConfig::with_script(framework_name, &framework_config.script_path);
+            // Carry the framework extra_args (`--framework`, `--dialect`,
+            // `--mode`) — they are required flags for several overlays and
+            // with_script() alone drops them.
+            let mut overlay_config =
+                AnalyzerConfig::with_script(framework_name, &framework_config.script_path);
+            overlay_config.extra_args = framework_config.extra_args.clone();
             let cmd = registry::build_analyzer_cmd(
                 &args.python_bin,
                 &overlay_config,
@@ -1913,7 +1918,11 @@ fn run_flow(
             if !parser_filter.contains(parser_name) || !config.writes_vectors {
                 continue;
             }
-            let config = if parser_name == "ts" { resolve_ts_analyzer(root) } else { config.clone() };
+            let mut config = if parser_name == "ts" { resolve_ts_analyzer(root) } else { config.clone() };
+            // Vector + message lanes stay on Python children until the native
+            // planes land (plan phases 05–06) — Rust children do not embed or
+            // message-scan yet, so the flip must not select them here.
+            config.force_python = true;
             let parser_changed = changed_by_parser.get(parser_name).cloned().unwrap_or_default();
             let parser_deleted = deleted_by_parser.get(parser_name).cloned().unwrap_or_default();
             let parser_impacted = impacted_by_parser.get(parser_name).cloned().unwrap_or_default();
