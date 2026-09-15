@@ -289,3 +289,52 @@ pub fn purge(journal_path: &str, run_id: &str, project_id: &str, root: &str) -> 
     ownership.release();
     outcome
 }
+
+// ---------------------------------------------------------------------------
+// Required-journal recovery (phase-04)
+// ---------------------------------------------------------------------------
+
+/// dev.py `run_with_retry`'s pre-attempt journal recovery. FORCED-PYTHON
+/// (documented in the phase-04 report): the live journal consumer (replay
+/// pending artifact batches into the graph, then ack) has no Rust port —
+/// cortex-sync itself delegates required lanes to Python
+/// (`DELEGATE_SENTINEL ... is Python-plane`, orchestrator.rs). Spawn
+/// `python -m tools.graph.journal.consumer` exactly as dev.py did.
+pub fn recover_required_lane(process_env: &[(String, String)]) -> Option<i32> {
+    let journal_mode = process_env
+        .iter()
+        .find(|(k, _)| k == "CORTEX_GRAPH_JOURNAL_MODE")
+        .map(|(_, v)| v.to_lowercase())
+        .unwrap_or_default();
+    if !matches!(journal_mode.as_str(), "required" | "shared-required") {
+        return None;
+    }
+    let root = crate::pyexec::repo_root();
+    let code_tiny = root.join("code-tiny");
+    let mut module_env: Vec<(String, String)> = process_env.to_vec();
+    let pythonpath = module_env
+        .iter()
+        .find(|(k, _)| k == "PYTHONPATH")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_default();
+    let new_path = if pythonpath.is_empty() {
+        code_tiny.to_string_lossy().to_string()
+    } else {
+        format!("{}:{}", code_tiny.display(), pythonpath)
+    };
+    if let Some(slot) = module_env.iter_mut().find(|(k, _)| k == "PYTHONPATH") {
+        slot.1 = new_path;
+    } else {
+        module_env.push(("PYTHONPATH".to_string(), new_path));
+    }
+    let recovery = std::process::Command::new(crate::pyexec::venv_python(&root))
+        .args(["-m", "tools.graph.journal.consumer"])
+        .current_dir(&code_tiny)
+        .envs(module_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .status();
+    let rc = recovery.map(|s| s.code().unwrap_or(1)).unwrap_or(1);
+    if rc != 0 {
+        return Some(rc);
+    }
+    None
+}
