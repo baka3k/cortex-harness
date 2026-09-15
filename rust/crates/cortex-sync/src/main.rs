@@ -3,6 +3,11 @@
 //!
 //! Entry point mirrors the Python `__main__`: preload the harness config
 //! (pre-scanning `--root`/`--config`), then run the orchestrator.
+#![deny(unsafe_code)]
+// Test builds lift the deny: registry_tests mutates process env to exercise
+// the flip matrix (moved out of Cargo.toml [lints] so the source attribute
+// wins over the command-line flag it would otherwise emit).
+#![cfg_attr(test, allow(unsafe_code))]
 
 mod cli;
 mod frameworks;
@@ -12,6 +17,8 @@ mod inventory;
 mod journalenv;
 mod orchestrator;
 mod registry;
+#[cfg(test)]
+mod registry_tests;
 mod routing;
 mod state;
 mod syncscope;

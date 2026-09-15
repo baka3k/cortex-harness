@@ -38,6 +38,10 @@ pub struct AnalyzerConfig {
     pub extra_args: Vec<&'static str>,
     pub writes_vectors: bool,
     pub seeded_by: Vec<&'static str>,
+    /// Pin this child to the Python backend regardless of the flip matrix —
+    /// the embedding pass uses it so vector + message lanes stay on Python
+    /// children until the native planes land (plan phases 05–06).
+    pub force_python: bool,
 }
 
 impl AnalyzerConfig {
@@ -49,6 +53,7 @@ impl AnalyzerConfig {
             extra_args: vec![],
             writes_vectors: true,
             seeded_by: vec![],
+            force_python: false,
         }
     }
 
@@ -61,6 +66,7 @@ impl AnalyzerConfig {
             extra_args: vec![],
             writes_vectors: true,
             seeded_by: vec![],
+            force_python: false,
         }
     }
 }
@@ -252,8 +258,8 @@ pub fn framework_analyzers() -> BTreeMap<&'static str, FrameworkAnalyzerConfig> 
     map
 }
 
-/// Parsers with a Rust analyzer port (phase 04–06) — mirrors the live
-/// `_RUST_ANALYZER_BINARIES` map in incremental_sync.py.
+/// Parsers with a Rust analyzer port (phase 04–07) — mirrors the live
+/// `_RUST_ANALYZER_BINARIES` map in incremental_sync.py (22 entries).
 pub fn rust_analyzer_binaries() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
         ("python", "analyzer-python"),
@@ -263,29 +269,138 @@ pub fn rust_analyzer_binaries() -> BTreeMap<&'static str, &'static str> {
         ("php", "analyzer-php"),
         ("perl", "analyzer-perl"),
         ("java", "analyzer-java"),
+        ("kotlin", "analyzer-kotlin"),
+        ("android", "analyzer-android"),
+        ("go", "analyzer-go"),
+        ("rust", "analyzer-rust"),
+        ("swift", "analyzer-swift"),
+        ("delphi", "analyzer-delphi"),
+        ("cobol", "analyzer-cobol"),
+        ("jp1", "analyzer-jp1"),
+        ("vbnet", "analyzer-vbnet"),
+        ("vb6", "analyzer-vb6"),
+        ("vba", "analyzer-vba"),
+        ("vbscript", "analyzer-vbscript"),
+        ("cplus", "analyzer-cplus"),
+        ("sql", "analyzer-sql"),
+        ("plsql", "analyzer-plsql"),
     ])
 }
 
-/// `_rust_analyzer_binary` — when `CORTEX_RUST_ANALYZER=rust` is set, resolve
-/// the Rust binary for ported parsers under `rust/target/release` (or
-/// `CORTEX_RUST_ANALYZER_BIN_DIR`). Missing binary ⇒ None (Python fallback).
-pub fn rust_analyzer_binary(analyzer: &AnalyzerConfig) -> Option<String> {
-    let mode = std::env::var("CORTEX_RUST_ANALYZER").unwrap_or_default();
-    if mode.trim().to_lowercase() != "rust" {
-        return None;
+/// Framework overlays with a Rust analyzer port — `framework key → [[bin]]
+/// name` (underscore framework keys map to dash binary names, e.g.
+/// `servlet_jsp → analyzer-servlet-jsp`). Overlays are resolved through the
+/// same flip matrix as primary parsers because the overlay `AnalyzerConfig`
+/// carries the framework name as its `parser`. `flutter` joins this map when
+/// the `analyzer-dart` binary lands (plan phase-02) — declaring it earlier
+/// would turn the `=rust` hard-error on for dart repos prematurely.
+pub fn framework_rust_binaries() -> BTreeMap<&'static str, &'static str> {
+    BTreeMap::from([
+        ("spring", "analyzer-spring"),
+        ("servlet_jsp", "analyzer-servlet-jsp"),
+        ("mybatis", "analyzer-mybatis"),
+        ("struts", "analyzer-struts"),
+        ("aspnet_framework", "analyzer-aspnet-framework"),
+        ("aspnet_core", "analyzer-aspnet-core"),
+        ("fastapi_django", "analyzer-fastapi-django"),
+        ("express_js", "analyzer-express-js"),
+        ("laravel", "analyzer-laravel"),
+        ("database_sql", "analyzer-database-schema"),
+        ("database_plsql", "analyzer-database-schema"),
+    ])
+}
+
+/// Binary name for a parser/framework key, checking the primary map first.
+fn mapped_binary_name(parser: &str) -> Option<&'static str> {
+    rust_analyzer_binaries()
+        .get(parser)
+        .copied()
+        .or_else(|| framework_rust_binaries().get(parser).copied())
+}
+
+/// Resolve the analyzer binary under `bin_dir` — probes the bare name first,
+/// then the `.exe` suffixed name (Windows cargo output; harmless elsewhere).
+fn analyzer_binary_path(bin_dir: &std::path::Path, binary_name: &str) -> Option<PathBuf> {
+    let bare = bin_dir.join(binary_name);
+    if bare.is_file() {
+        return Some(bare);
     }
-    let binaries = rust_analyzer_binaries();
-    let binary_name = binaries.get(analyzer.parser.as_str())?;
-    let bin_dir = std::env::var("CORTEX_RUST_ANALYZER_BIN_DIR")
+    let exe = bin_dir.join(format!("{binary_name}.exe"));
+    if exe.is_file() {
+        return Some(exe);
+    }
+    None
+}
+
+fn analyzer_bin_dir() -> PathBuf {
+    std::env::var("CORTEX_RUST_ANALYZER_BIN_DIR")
         .ok()
         .filter(|v| !v.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| repo_root().join("rust").join("target").join("release"));
-    let candidate = bin_dir.join(binary_name);
-    if candidate.is_file() {
-        Some(candidate.to_string_lossy().to_string())
-    } else {
-        None
+        .unwrap_or_else(|| repo_root().join("rust").join("target").join("release"))
+}
+
+/// Phase-08 flip switch: when `true`, an unset `CORTEX_RUST_ANALYZER` selects
+/// the Rust binary for mapped parsers. Phases 01–07 keep the legacy default
+/// (unset = Python child) so the default path never changes before the
+/// composition gate + dogfood pass.
+const AUTO_FLIP_DEFAULT: bool = false;
+
+fn warn_unmapped_once(parser: &str) {
+    use std::sync::{Mutex, OnceLock};
+    static WARNED: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+    let warned = WARNED.get_or_init(|| Mutex::new(BTreeSet::new()));
+    let mut guard = match warned.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if guard.insert(parser.to_string()) {
+        eprintln!(
+            "[registry] no Rust analyzer port for '{parser}' yet — using the Python child (CORTEX_RUST_ANALYZER=rust)"
+        );
+    }
+}
+
+/// `_rust_analyzer_binary` — flip matrix (phase-01..07 semantics; phase-08
+/// flips `AUTO_FLIP_DEFAULT`):
+///
+/// | `CORTEX_RUST_ANALYZER` | mapped parser | unmapped |
+/// |---|---|---|
+/// | unset | Python (until AUTO_FLIP_DEFAULT) | Python |
+/// | `rust` | Rust binary, **Err when the binary is missing** | Python + one-time warn |
+/// | `python` | Python | Python |
+/// | other | Python | Python |
+///
+/// `Err` means the operator explicitly forced the Rust backend and a declared
+/// binary is absent (stale/partial build) — callers must fail hard, never
+/// silently fall back to Python.
+pub fn rust_analyzer_binary(analyzer: &AnalyzerConfig) -> Result<Option<String>, String> {
+    let mode = std::env::var("CORTEX_RUST_ANALYZER")
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if mode == "python" {
+        return Ok(None);
+    }
+    let rust_requested = mode == "rust" || (mode.is_empty() && AUTO_FLIP_DEFAULT);
+    if !rust_requested {
+        return Ok(None);
+    }
+    let Some(binary_name) = mapped_binary_name(&analyzer.parser) else {
+        if mode == "rust" {
+            warn_unmapped_once(&analyzer.parser);
+        }
+        return Ok(None);
+    };
+    let candidate = analyzer_binary_path(&analyzer_bin_dir(), binary_name);
+    match candidate {
+        Some(path) => Ok(Some(path.to_string_lossy().to_string())),
+        None => Err(format!(
+            "CORTEX_RUST_ANALYZER=rust but binary '{binary_name}' for parser '{}' is missing in {} — build it with: cargo build --release -p {}",
+            analyzer.parser,
+            analyzer_bin_dir().display(),
+            binary_name,
+        )),
     }
 }
 
@@ -412,7 +527,18 @@ pub fn build_analyzer_cmd(
     parse_quality_max_bytes: i64,
     graph_target_args: &[String],
 ) -> BuiltCmd {
-    let rust_binary = rust_analyzer_binary(analyzer);
+    let rust_binary = if analyzer.force_python {
+        None
+    } else {
+        match rust_analyzer_binary(analyzer) {
+            Ok(resolved) => resolved,
+            Err(reason) => {
+                // Exit 2 = non-retryable in the cortex-dev retry loop.
+                eprintln!("[registry] {reason}");
+                std::process::exit(2);
+            }
+        }
+    };
     let mut cmd: Vec<String> = Vec::new();
     let program = match &rust_binary {
         Some(binary) => binary.clone(),
