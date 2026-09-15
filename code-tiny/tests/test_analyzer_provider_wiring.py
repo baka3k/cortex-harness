@@ -1,61 +1,49 @@
-import argparse
-import asyncio
-import tempfile
+"""Analyzer provider-wiring regression check.
+
+Phase-08 (analyzer-layer-rust-cutover): the Python analyzer entry points
+referenced by ``ANALYZERS`` below were retired at the cutover commit. The
+check is preserved as a documented skip so the test report still calls
+out the regression explicitly — per red-team F7 / phase-08 audit
+disposition, skips MUST be loud (no silent ``importorskip``).
+
+Once the migration is revisited, replace the skip with a parity check
+that targets the Rust analyzer binaries (e.g. assert the corresponding
+``analyzer-<lang>`` [[bin]] in ``rust/crates/`` exists and wires the
+shared graph-driver factory).
+"""
+
+from __future__ import annotations
+
 import unittest
-from pathlib import Path
-from unittest import mock
-
-from tools.graph.cli import (
-    apply_project_registry_defaults,
-    create_graph_driver_from_args,
-)
 
 
-ANALYZERS = (
-    "android/android_java_analyzer.py",
-    "android/android_kotlin_analyzer.py",
-    "cobol/cobol_analyzer.py",
-    "cplus/cplus_analyzer.py",
-    "csharp/csharp_analyzer.py",
-    "delphi/delphi_analyzer.py",
-    "flutter/flutter_analyzer.py",
-    "java/java_analyzer.py",
-    "js/js_analyzer.py",
-    "kotlin/kotlin_analyzer.py",
-    "php/php_analyzer.py",
-    "plsql/plsql_analyzer.py",
-    "python/python_analyzer.py",
-    "sql/sql_analyzer.py",
-    "spring/spring_analyzer.py",
-    "struts/struts_analyzer.py",
-    "mybatis/mybatis_analyzer.py",
-    "servlet_jsp/servlet_jsp_analyzer.py",
-    "ts/ts_analyzer.py",
-    "vb/vb_analyzer_base.py",
+_RETIRED_AT_PHASE_08 = (
+    "Phase-08 (analyzer-layer-rust-cutover): Python analyzer scripts were "
+    "deleted at this commit. The provider-wiring check below is preserved "
+    "as a documented loud-skip rather than removed — operators should see "
+    "this in the pytest report, not a silent omission."
 )
 
 
 class AnalyzerProviderWiringTests(unittest.TestCase):
-    def test_migrated_entrypoints_use_shared_driver_factory_helper(self):
-        tools_root = Path(__file__).resolve().parents[1] / "tools"
-        for relative_path in ANALYZERS:
-            with self.subTest(analyzer=relative_path):
-                source = (tools_root / relative_path).read_text(encoding="utf-8")
-                self.assertIn("create_graph_driver_from_args(args)", source)
-                self.assertNotIn("provider=GraphProvider.NEO4J", source)
+    @unittest.skip(_RETIRED_AT_PHASE_08)
+    def test_migrated_entrypoints_use_shared_driver_factory_helper(self) -> None:
+        return None
 
-    def test_sync_entrypoints_use_shared_driver_factory_helper(self):
-        tools_root = Path(__file__).resolve().parents[1] / "tools" / "sync"
-        for filename in ("message_scan.py", "dead_code_report.py"):
-            with self.subTest(entrypoint=filename):
-                source = (tools_root / filename).read_text(encoding="utf-8")
-                self.assertIn("create_graph_driver_from_args(args)", source)
-                self.assertNotIn(
-                    "GraphDriverFactory.create_driver(\n            GraphProvider.NEO4J",
-                    source,
-                )
+    @unittest.skip(_RETIRED_AT_PHASE_08)
+    def test_sync_entrypoints_use_shared_driver_factory_helper(self) -> None:
+        return None
 
-    def test_driver_helper_derives_local_path_for_direct_falkor_callers(self):
+    def test_driver_helper_derives_local_path_for_direct_falkor_callers(self) -> None:
+        # Kept live: targets ``tools.graph.cli`` which is not retired and
+        # remains part of the kept harness plane.
+        import argparse
+        import asyncio
+        import tempfile
+        from unittest import mock
+
+        from tools.graph.cli import create_graph_driver_from_args
+
         args = argparse.Namespace(
             graph_provider="falkordb",
             falkordb_path=None,
@@ -77,7 +65,12 @@ class AnalyzerProviderWiringTests(unittest.TestCase):
         self.assertTrue(config["path"])
         self.assertIn(directory, config["path"])
 
-    def test_explicit_falkor_graph_wins_over_registry_default(self):
+    def test_explicit_falkor_graph_wins_over_registry_default(self) -> None:
+        import argparse
+        from unittest import mock
+
+        from tools.graph.cli import apply_project_registry_defaults
+
         targets = argparse.Namespace(
             code_graph="registry-graph",
             code_qdrant_collection="registry-vectors",

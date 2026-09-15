@@ -2,14 +2,14 @@
 
 **Ngày:** 2026-09-15 • **Branch:** `feat/change-db`
 
-## Trạng thái: 9/14 actions NATIVE, 5/14 shim có lý do
+## Trạng thái: 11/14 actions NATIVE, 3/14 shim có lý do (start/stop port ở phase-05b, 2026-09-15)
 
 | # | Action | Trạng thái | Ghi chú |
 |---|---|---|---|
 | 1 | `help` | **NATIVE** | USAGE byte-copy — `diff` python vs rust **rỗng** |
 | 2 | `doctor` | shim | Remote/storage/qdrant probes native có sẵn (cortex-storage `remote_probe`, `LocalQdrantStore`) nhưng output-shape parity fixture + quyết định checks-mới cần 1 lượt verify riêng (validate cho phép output delta); làm ở lượt kế |
-| 3 | `start` | shim | Python `invoke_start` mở Terminal.app (osascript) + pids.json — port khi dogfood phase-06 |
-| 4 | `stop` | shim | Cùng cụm start/stop; `dev stop` vẫn pre-kill rust backend (phase-02) rồi shim python |
+| 3 | `start` | **NATIVE (phase-05b)** | `mcp_state.rs` + `cmds/lifecycle.rs::start`; giữ nguyên wrapper `.command` + Terminal.app/osascript + `pids.json` + `.active.env`; graph key theo provider (ladybug→`LADYBUG_GRAPH`) |
+| 4 | `stop` | **NATIVE (phase-05b)** | `mcp_state::stop` — record sweep + `stop_process_tree` + prune/xoá `pids.json`; `dev stop` vẫn pre-kill `cortex-mcp` trước |
 | 5 | `infra-up` | shim | ~700 LOC docker-compose plumbing (container state/ports/provision) — port riêng |
 | 6 | `infra-down` | shim | Cụm infra |
 | 7 | `storage-init` | **NATIVE** | `ensure_layout` + 7 dòng `[storage-init]` khớp format |
@@ -38,11 +38,12 @@
       `storage-migrate-layout`, `storage-stop` — diff rỗng; `storage-init` format khớp;
       `storage-backup` tested isolate CORTEX_DATA_HOME: leases + verified sha256 +
       manifest sort-keys).
-- [x] 9/14 native + 5/14 shim được liệt kê kèm lý do (bảng trên) — theo đúng điều
+- [x] 11/14 native + 3/14 shim được liệt kê kèm lý do (bảng trên) — theo đúng điều
       khoản "native HOẶC shim kèm lý do" của plan.
 - [x] `dev build install storage-init storage-backup storage-layout help
       storage-migrate-layout storage-stop` chạy native (không spawn python; doctor/
-      start/stop/infra còn shim nên chưa liệt kê).
+      infra còn shim nên chưa liệt kê). `start`/`stop` bổ sung native ở phase-05b
+      (verify: `ps` không còn `mcp-lifecycle.py` trên đường dev start/stop).
 - [x] Native `ensure-ort`: no-network OK (cache hit); venv-wheel path có sẵn; PyPI
       download path implement (chưa test máy sạch trong session này — không xoá
       `.cache/ort` trên máy dùng thật); pin khớp wheel.
@@ -54,5 +55,5 @@
 
 ## Kết luận
 
-**PASS** — 9/14 native, doctor/start/stop/infra-* shim có lý do + kế hoạch; `make
-build` hết phụ thuộc venv khi Makefile flip (phase-06).
+**PASS** — 11/14 native (start/stop về đích ở phase-05b), doctor/infra-* shim có lý do +
+kế hoạch; `make build` hết phụ thuộc venv khi Makefile flip (phase-06).

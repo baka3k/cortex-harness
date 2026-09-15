@@ -1,132 +1,88 @@
-# Command templates
+# Command templates (Rust analyzer binaries — phase-08 cutover)
+
+The Python analyzer entries (`python tools/<lang>/<lang>_analyzer.py …`)
+were retired at the phase-08 cutover. Use the corresponding Rust binary
+in `rust/target/release/` directly, or invoke the orchestrator
+(`incremental_sync.py` / `cortex-sync`) for the managed path.
 
 ## Dry run (any language)
 ```bash
-python tools/<lang>/<lang>_analyzer.py --root /path/to/src --dry-run
+./rust/target/release/analyzer-<lang> --root /path/to/src --dry-run
 ```
 
 ## Kotlin
 ```bash
-python tools/kotlin/kotlin_analyzer.py \
-  --root /path/to/kotlin \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection kotlin_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device auto \
-  --verbose
+./rust/target/release/analyzer-kotlin \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379 \
+  --falkordb-graph my-project
 ```
 
 ## Java
 ```bash
-python tools/java/java_analyzer.py \
-  --root /path/to/java \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection java_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device cpu \
-  --verbose
+./rust/target/release/analyzer-java \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379
 ```
 
 ## TypeScript
 ```bash
-python tools/ts/ts_analyzer.py \
-  --root /path/to/typescript \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection typescript_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device auto \
-  --verbose
+./rust/target/release/analyzer-ts \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379
 ```
 
 ## JavaScript
 ```bash
-python tools/js/js_analyzer.py \
-  --root /path/to/javascript \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection javascript_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device auto \
-  --verbose
+./rust/target/release/analyzer-js \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379
 ```
 
 ## PHP
 ```bash
-python tools/php/php_analyzer.py \
-  --root /path/to/php \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection php_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device auto \
-  --verbose
+./rust/target/release/analyzer-php \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379
 ```
 
 ## SQL
 ```bash
-python tools/sql/sql_analyzer.py \
-  --root /path/to/sql \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection sql_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device auto \
-  --verbose
+./rust/target/release/analyzer-sql \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379
 ```
 
 ## PL/SQL
 ```bash
-python tools/plsql/plsql_analyzer.py \
-  --root /path/to/plsql \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection plsql_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device auto \
-  --verbose
+./rust/target/release/analyzer-plsql \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379
 ```
 
 ## C#
 ```bash
-python tools/csharp/csharp_analyzer.py \
-  --root /path/to/csharp \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection csharp_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device cpu \
-  --verbose
+./rust/target/release/analyzer-csharp \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379
 ```
 
 ## C/C++
 ```bash
-python tools/cplus/cplus_analyzer.py \
-  --root /path/to/cpp \
-  --neo4j-uri bolt://localhost:7687 \
-  --neo4j-user neo4j \
-  --neo4j-pass password \
-  --qdrant-url http://localhost:6333 \
-  --qdrant-collection cplus_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
-  --device cpu \
-  --verbose
+./rust/target/release/analyzer-cplus \
+  --root /path/to/src \
+  --falkordb-uri falkor://localhost:6379 \
+  --repo my-project/project \
+  --parse-quality report
 ```
+
+## Orchestrator (managed path)
+```bash
+CORTEX_RUST_ANALYZER=unset ./cortex-harness/dev.sh sync code
+# or, equivalent:
+.venv/bin/python code-tiny/tools/sync/incremental_sync.py --root /path/to/src sync code
+```
+
+The orchestrator honors `CORTEX_RUST_ANALYZER` (`unset` → Rust auto-flip,
+`rust` → Rust with hard error if missing, anything else → loud "retired"
+error per the phase-08 cutover).
