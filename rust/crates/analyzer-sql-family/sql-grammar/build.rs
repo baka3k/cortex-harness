@@ -3,6 +3,7 @@ fn main() {
     let mut build = cc::Build::new();
     build
         .include(src_dir)
+        .warnings(false)
         .flag_if_supported("-Wno-unused-parameter")
         .flag_if_supported("-Wno-unused-but-set-variable")
         .flag_if_supported("-Wno-trigraphs");

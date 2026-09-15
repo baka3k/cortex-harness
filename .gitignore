@@ -139,6 +139,8 @@ code-tiny/tools/csharp/roslyn_worker/obj/
 .cortext-harness/config/dev.json
 .cortex/flutter/
 .cortex/flutter/**
+.cortex/**
+.cortex
 .cortext-harness/config/dev.json
 compile_commands.json
 .cortex/flutter/dart-facts.json
@@ -151,3 +153,5 @@ target/
 
 # Generated parity fixtures (regenerate: record_graph.py / record_contract.py).
 scripts/rust_mcp/fixtures/graph_fixtures.json
+tests/fixtures/flutter-app/.cache/**
+*.lock
