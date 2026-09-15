@@ -259,8 +259,9 @@ pub fn framework_analyzers() -> BTreeMap<&'static str, FrameworkAnalyzerConfig> 
 }
 
 /// Parsers with a Rust analyzer port (phase 04–07) — mirrors the live
-/// `_RUST_ANALYZER_BINARIES` map in incremental_sync.py (now 24 entries,
-/// including phase-03 analyzer-csharp).
+/// `_RUST_ANALYZER_BINARIES` map in incremental_sync.py (now 25 entries —
+/// 24 primary + `project_topology` added in phase-04 of
+/// `analyzer-layer-rust-cutover`).
 pub fn rust_analyzer_binaries() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([
         ("python", "analyzer-python"),
@@ -287,6 +288,7 @@ pub fn rust_analyzer_binaries() -> BTreeMap<&'static str, &'static str> {
         ("plsql", "analyzer-plsql"),
         ("dart", "analyzer-dart"),
         ("csharp", "analyzer-csharp"),
+        ("project_topology", "analyzer-topology"),
     ])
 }
 

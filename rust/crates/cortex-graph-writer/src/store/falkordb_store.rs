@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use cortex_falkordb::client::{ClientError, FalkorDbClient, Param};
+use cortex_falkordb::client::{FalkorDbClient, Param};
 use serde_json::Value;
 
 use crate::json_row::Row;
@@ -277,8 +277,12 @@ impl GraphStore for FalkorDbStore {
                 format!("CREATE {keyword}INDEX FOR (e:{label}) ON (e.{prop})");
             let result: Result<QueryRecords, StoreError> =
                 self.execute_query(&query, &BTreeMap::new(), database);
-            if let Err(StoreError::Falkor(ClientError::Server(message))) = &result
-                && message.to_lowercase().contains("already indexed")
+            // Python driver swallow mọi lỗi "already indexed" — FalkorDB trả
+            // error reply qua cả ClientError::Server lẫn ClientError::Redis
+            // (redis::RedisError), nên match theo Display text thay vì variant
+            // (phase-04: binary topology re-run trên graph có sẵn index).
+            if let Err(StoreError::Falkor(client_error)) = &result
+                && client_error.to_string().to_lowercase().contains("already indexed")
             {
                 continue;
             }
