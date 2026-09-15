@@ -10,6 +10,7 @@ relatedPlans:
   - "260913-2130-rust-full-migration"       # umbrella — mục tiêu "xoá dần sau cutover" là chính plan này
   - "260915-analyzer-layer-rust-cutover"    # tiền lệ trực tiếp: delete 1 commit + retired-error + rollback = git revert; dogfood sign-off vẫn mở
   - "260914-2259-dev-make-python-cutover"   # entrypoint dev/make đã binary-only; các py bridge còn sót lại thuộc disposition của plan này
+  - "260915-2300-sync-plane-rust-cutover"   # nhánh B của phase-03 (giữ incremental_sync.py) SUPERSEDED: plan đó port embedded resolution + ladybug store + journal replay sang Rust rồi xoá sync closure; nhóm A1 sync-plane chuyển dead-by-plan-đó; `tools/graph/**` di sản (drivers/cli/core — live importers doc-tiny + MCP rollback, red-team C1) quay về disposition của plan này
 ---
 
 # Python legacy cleanup — xoá hết Python không cần thiết sau cutover Rust

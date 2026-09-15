@@ -12,6 +12,7 @@ relatedPlans:
   - "260914-2259-dev-make-python-cutover"  # con của Scope B cutover: entrypoint dev/make + xoá pyexec bridge + port mcp-lifecycle
   - "260915-analyzer-layer-rust-cutover"  # đóng gate Wave-D chưa check (phase-08.md tail) + flip default + xoá analyzer scripts Python
   - "260915-2230-python-legacy-cleanup"  # legs "xoá dần sau cutover" của umbrella: xoá Python MCP/sync/aux còn lại + chốt forced-Python inventory
+  - "260915-2300-sync-plane-rust-cutover"  # wave sync-plane cuối: wire embedded resolution + ladybug store + journal replay vào cortex-sync, flip + xoá incremental_sync.py (điều kiện: dogfood stock §2 của plan này)
 predictionReport: "reports/prediction_report_20260913-1553.md"
 ---
 
