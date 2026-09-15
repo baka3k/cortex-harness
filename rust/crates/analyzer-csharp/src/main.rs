@@ -143,6 +143,65 @@ fn run(common: &AnalyzerArgs, extra: &CsharpExtraArgs) -> i32 {
     } else {
         BTreeSet::new()
     };
+    let deleted_rel_paths: BTreeSet<String> = if common.incremental {
+        match &common.deleted_files_manifest {
+            Some(manifest) => load_manifest_paths(manifest, &root)
+                .into_iter()
+                .filter(|rel| rel.ends_with(".cs"))
+                .collect(),
+            None => BTreeSet::new(),
+        }
+    } else {
+        BTreeSet::new()
+    };
+
+    // Graph store mở sớm một lần — dùng chung cho incremental cleanup và
+    // graph write cuối. Lỗi mở store KHÔNG dừng parse (khớp behavior gốc:
+    // fail ở bước graph write, exit 3 sau khi [SCAN_RESULT] đã in).
+    let mut store_open_error: Option<String> = None;
+    let mut store_opt = if !common.graph_writes_disabled() && !graph_writes_disabled() {
+        match common.open_store() {
+            Ok(store) => Some(store),
+            Err(error) => {
+                store_open_error = Some(format!("{error}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // ── Incremental cleanup (changed ∪ deleted) — mirror analyzer-python
+    //    src/python_analyzer.rs: cleanup trước parse, cùng format log. ────
+    if common.incremental && store_opt.is_some() {
+        let mut targets: Vec<String> = selected_rel_paths
+            .union(&deleted_rel_paths)
+            .cloned()
+            .collect();
+        targets.sort();
+        if !targets.is_empty() {
+            if verbose {
+                println!("[cleanup][graph] deleting graph data for {} files", targets.len());
+            }
+            match cortex_analyzer_framework::cleanup::cleanup_graph_files(
+                store_opt.as_deref_mut().expect("checked"),
+                &project_id,
+                &targets,
+            ) {
+                Ok((deleted_nodes, deleted_unknown)) => {
+                    if verbose {
+                        println!(
+                            "[cleanup][graph] deleted_nodes={deleted_nodes} deleted_unknown_functions={deleted_unknown}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    eprintln!("C# graph cleanup failed: {error}");
+                    return 3;
+                }
+            }
+        }
+    }
 
     // Scan workspace → áp manifest subset.
     let files = collect_files(&root, &selected_rel_paths);
@@ -194,49 +253,58 @@ fn run(common: &AnalyzerArgs, extra: &CsharpExtraArgs) -> i32 {
     };
 
     // Map worker response → legacy payload shape (khớp `selected_payloads`
-    // trong `build_call_graph` Python entry).
+    // trong `build_call_graph` Python entry). Mirror `roslyn_integration.py:
+    // 119-126`: skip `ok=false`, unwrap the nested `evidence` member — the
+    // worker result item is NOT itself the evidence payload.
     let provenance = parse_provenance(&worker_response);
     let payloads: Vec<Value> = match worker_response.get("results").and_then(Value::as_array) {
         Some(results) => results
             .iter()
-            .map(|evidence| attach_provenance(roslyn_evidence_to_payload(evidence), &provenance))
+            .filter_map(|result| {
+                if !result.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                    return None;
+                }
+                let evidence = result
+                    .get("evidence")
+                    .cloned()
+                    .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+                Some(attach_provenance(
+                    roslyn_evidence_to_payload(&evidence),
+                    &provenance,
+                ))
+            })
             .collect(),
         None => Vec::new(),
     };
 
     let mut exit_code = 0;
 
-    if !common.graph_writes_disabled() && !graph_writes_disabled() {
-        match common.open_store() {
-            Ok(store) => {
-                let rows = build_graph_rows(
-                    &payloads,
-                    &project_id,
-                    &project_name,
-                    &language,
-                    &repo,
-                    &build_system,
-                    &root.to_string_lossy(),
-                );
-                let mut writer = LanguageCodeWriter::new(
-                    store,
-                    common
-                        .neo4j_db
-                        .clone()
-                        .filter(|db| !db.is_empty()),
-                    extra.neo4j_batch_size.max(1) as usize,
-                    verbose,
-                );
-                if let Err(error) = write_graph(&mut writer, &rows) {
-                    eprintln!("C# graph persistence failed: {error}");
-                    exit_code = 3;
-                }
-            }
-            Err(error) => {
-                eprintln!("C# graph persistence failed: {error}");
-                exit_code = 3;
-            }
+    if let Some(mut store) = store_opt.take() {
+        let rows = build_graph_rows(
+            &payloads,
+            &project_id,
+            &project_name,
+            &language,
+            &repo,
+            &build_system,
+            &root.to_string_lossy(),
+        );
+        let mut writer = LanguageCodeWriter::new(
+            store,
+            common
+                .neo4j_db
+                .clone()
+                .filter(|db| !db.is_empty()),
+            extra.neo4j_batch_size.max(1) as usize,
+            verbose,
+        );
+        if let Err(error) = write_graph(&mut writer, &rows) {
+            eprintln!("C# graph persistence failed: {error}");
+            exit_code = 3;
         }
+    } else if let Some(error) = store_open_error {
+        eprintln!("C# graph persistence failed: {error}");
+        exit_code = 3;
     } else if verbose {
         println!("[graph] disabled; missing graph connection settings");
     }
