@@ -11,6 +11,7 @@ relatedPlans:
   - "260914-1706-onnx-embedding-spike"
   - "260914-2259-dev-make-python-cutover"  # con của Scope B cutover: entrypoint dev/make + xoá pyexec bridge + port mcp-lifecycle
   - "260915-analyzer-layer-rust-cutover"  # đóng gate Wave-D chưa check (phase-08.md tail) + flip default + xoá analyzer scripts Python
+  - "260915-2230-python-legacy-cleanup"  # legs "xoá dần sau cutover" của umbrella: xoá Python MCP/sync/aux còn lại + chốt forced-Python inventory
 predictionReport: "reports/prediction_report_20260913-1553.md"
 ---
 
