@@ -35,4 +35,4 @@ Process-listing parser tham chiếu có sẵn tại `util.rs:495` — tái dùng
 - [ ] Kill -9 pid giữa stop-sequence: lần chạy sau vẫn dọn sạch (so Python behavior).
 - [ ] `cargo test -p cortex-dev` pass.
 
-**Trạng thái:** draft (rev 2)
+**Trạng thái:** ready (rev 2) — **DONE 2026-09-15** (reports/phase-02.md)

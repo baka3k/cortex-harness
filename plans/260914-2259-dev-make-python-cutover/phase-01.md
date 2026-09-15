@@ -40,4 +40,4 @@ Nối `cmds/*` của `cortex-dev` vào crate `cortex-storage` + `config.rs` **na
 - [ ] `grep -c "status_env\|\"code_env\"\|\"doc_env\"\|mcp_env" pyexec.rs` — 4 op còn trong
       HELPER_SRC (xoá ở phase-07), nhưng **0 call site** còn trỏ tới.
 
-**Trạng thái:** draft (rev 2)
+**Trạng thái:** ready (rev 2) — **DONE 2026-09-15** (reports/phase-01.md)

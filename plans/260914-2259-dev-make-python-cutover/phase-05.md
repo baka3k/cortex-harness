@@ -31,4 +31,4 @@ Có **14 actions** trong `ACTIONS` (`mcp-lifecycle.py:2031-2045`) — rev 1 sót
 - [ ] Windows: `dev` lifecycle qua PowerShell entry vẫn hoạt động trong phase này (ps1 chỉ xoá ở 07).
 - [ ] `cargo test -p cortex-dev` pass.
 
-**Trạng thái:** draft (rev 2 — trước đây là phase-04)
+**Trạng thái:** draft (rev 2) — **PARTIAL 9/14 native 2026-09-15** (reports/phase-05.md)
