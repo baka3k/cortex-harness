@@ -1,7 +1,7 @@
 //! Process discovery and scoped termination — native port of
 //! `cortex_harness/sync_processes.py` (psutil → `ps` + libc signals) and
 //! dev.py's `_mcp_pids` / `_mcp_uptime` / `_mcp_stop_pattern` helpers.
-//! Replaces the `pyexec` bridge ops `stop_sync_workers`,
+//! Replaces the retired Python-bridge ops `stop_sync_workers`,
 //! `embedded_falkordb_pids`, `stop_embedded`, `mcp_pids`, `mcp_uptime`,
 //! `mcp_stop` (phase-02 of the dev/make cutover plan).
 

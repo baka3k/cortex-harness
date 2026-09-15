@@ -1,6 +1,6 @@
 //! Native per-process environment resolution — port of dev.py
 //! `_code_env_for_process` / `_doc_env_for_process` / `_mcp_env_from_config`
-//! plus the `status_env` payload. Replaces the `pyexec` bridge ops
+//! plus the `status_env` payload. Replaces the retired Python-bridge ops
 //! `status_env`, `code_env`, `doc_env`, `mcp_env` (phase-01 of the
 //! dev/make cutover plan): `cortex_storage` already reproduces
 //! `resolve_storage` + `storage_overlay` + topology fingerprints
@@ -11,7 +11,6 @@
 //! per process and only fires for those values.
 
 use crate::config::graph_provider;
-use crate::pyexec;
 use cortex_storage::config::{
     resolve_storage, storage_overlay, ConfigMap, ResolveOverrides, StorageRole,
 };
@@ -366,7 +365,7 @@ static TORCH_CAPS: OnceLock<Option<TorchCaps>> = OnceLock::new();
 fn torch_caps() -> Option<&'static Option<TorchCaps>> {
     Some(TORCH_CAPS.get_or_init(|| {
         let script = "import json\ncaps={'mps': False, 'cuda': False}\ntry:\n import torch\n m=getattr(torch.backends,'mps',None)\n caps['mps']=bool(m is not None and m.is_available())\n caps['cuda']=bool(torch.cuda.is_available())\nexcept Exception:\n pass\nprint(json.dumps(caps))";
-        let output = std::process::Command::new(pyexec::venv_python(&pyexec::repo_root()))
+        let output = std::process::Command::new(crate::util::harness_python(&crate::util::repo_root()))
             .arg("-c")
             .arg(script)
             .output();
@@ -706,7 +705,7 @@ pub fn resolve_start_config(start: &Path, fallback_root: &Path) -> (PathBuf, Pat
 
 /// dev.py `_mcp_env_from_config` — code/doc process env for one MCP service.
 pub fn mcp_env_from_config(project_dir: &Path, service_name: &str) -> Map<String, Value> {
-    let (config_root, cfg_path) = resolve_start_config(project_dir, &pyexec::repo_root());
+    let (config_root, cfg_path) = resolve_start_config(project_dir, &crate::util::repo_root());
     if !cfg_path.is_file() {
         return Map::new();
     }
@@ -731,7 +730,7 @@ pub fn mcp_env_from_config(project_dir: &Path, service_name: &str) -> Map<String
 }
 
 // ---------------------------------------------------------------------------
-// Op-level payloads (bridge-op replacements; the pyexec ops resolve the
+// Op-level payloads (bridge-op replacements; the retired ops resolved the
 // config path with `Path(path).resolve()`, i.e. symlinks resolved)
 // ---------------------------------------------------------------------------
 
@@ -797,10 +796,10 @@ pub fn doc_env(project_dir: &Path) -> Value {
 }
 
 /// The analyzer-worker interpreter handed to `cortex-sync` (`--python-bin`,
-/// dev.py `_venv_python(CODE_TINY)` semantics: project venv → harness venv →
+/// dev.py analyzer-interpreter semantics (project venv → harness venv →
 /// ambient). Lives here so the sync command module stays free of bridge
 /// imports; cortex-sync needs a working venv python for its python-plane
 /// delegation seam and the `CORTEX_RUST_ANALYZER=python` rollback path.
 pub fn sync_python_bin() -> String {
-    pyexec::venv_python(&pyexec::repo_root().join("code-tiny"))
+    crate::util::harness_python(&crate::util::repo_root().join("code-tiny"))
 }

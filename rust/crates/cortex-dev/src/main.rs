@@ -13,7 +13,6 @@ mod help;
 mod journalx;
 mod parser;
 mod procinfo;
-mod pyexec;
 mod spec;
 mod tree;
 mod util;
@@ -23,7 +22,7 @@ use std::io::Write;
 
 fn main() {
     // Parity-harness hook (not part of the CLI surface): dump the native
-    // env payload the way the retired pyexec ops did, so
+    // env payload the way the retired bridge ops did, so
     // scripts/rust_parity/dev_cli_parity.py can diff Python vs Rust per key.
     if let Ok(role) = std::env::var("CORTEX_DEV_PARITY_ENV") {
         match role.as_str() {
@@ -63,7 +62,7 @@ fn main() {
             // Debug probe: dump the process table + code-worker matches.
             "table" => {
                 let table = procinfo::process_table();
-                let matched = procinfo::sync_processes("code", &pyexec::repo_root(), &table, &[], true);
+                let matched = procinfo::sync_processes("code", &util::repo_root(), &table, &[], true);
                 println!(
                     "{}",
                     sorted_json(&serde_json::json!({
@@ -119,7 +118,7 @@ fn main() {
 /// Dynamic help defaults: repo-root paths and CPU-derived workers.
 fn dynamic_defaults(canonical: &str) -> Option<String> {
     match canonical {
-        "--legacy-root" => Some(pyexec::repo_root().to_string_lossy().to_string()),
+        "--legacy-root" => Some(util::repo_root().to_string_lossy().to_string()),
         "--parse-quality-workers" => Some(cmds::sync::default_workers().to_string()),
         _ => None,
     }

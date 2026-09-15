@@ -11,7 +11,6 @@
 //!   4. PyPI pinned wheel     → download via the pinned version's JSON API
 //!      (curl) and extract (bsdtar/unzip — system tools, no new crate deps)
 
-use crate::pyexec;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -26,7 +25,7 @@ const DYLIB_PATTERNS: [&str; 3] = [
 ];
 
 fn repo_root() -> PathBuf {
-    pyexec::repo_root()
+    crate::util::repo_root()
 }
 
 fn cache_root() -> PathBuf {

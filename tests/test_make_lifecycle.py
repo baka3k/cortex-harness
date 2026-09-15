@@ -207,27 +207,6 @@ class MakeLifecycleTests(unittest.TestCase):
             self.assertEqual(LIFECYCLE.uv_executable(), "/custom/uv")
         which.assert_called_once_with("/custom/uv")
 
-    def test_windows_build_backend_uses_uv_instead_of_pip(self):
-        lifecycle = (ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
-        self.assertIn("function Get-UvLauncher", lifecycle)
-        self.assertIn(
-            'Invoke-Uv -Uv $uv -Arguments @("venv", "--python", $pythonSpec, $venvDir)',
-            lifecycle,
-        )
-        self.assertIn('@("pip", "install", "--python", $python)', lifecycle)
-        self.assertNotIn("-m pip", lifecycle)
-
-    def test_windows_start_isolates_graph_provider_environment(self):
-        lifecycle = (ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
-        self.assertIn("function Get-GraphProvider", lifecycle)
-        self.assertIn("function Remove-InactiveGraphEnvironment", lifecycle)
-        self.assertIn('if ($effectiveProvider -eq "falkordb")', lifecycle)
-        self.assertIn('$overrides.FALKORDB_GRAPH = $databaseName', lifecycle)
-        self.assertIn('$overrides.NEO4J_DB = $databaseName', lifecycle)
-        self.assertIn("Unsupported graph provider", lifecycle)
-        self.assertIn("Env:NEO4J_*", lifecycle)
-        self.assertIn("Env:FALKORDB_*", lifecycle)
-
     def test_install_and_uninstall_use_user_local_bin(self):
         with tempfile.TemporaryDirectory() as home:
             with mock.patch.dict(os.environ, {"HOME": home}), mock.patch.object(

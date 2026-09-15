@@ -9,7 +9,7 @@
 //! Shimmed: doctor, start, stop, infra-up, infra-down.
 
 use crate::parser::Matches;
-use crate::pyexec::repo_root;
+use crate::util::repo_root;
 use crate::util::{echo, echo_err, fail};
 use cortex_storage::config::{resolve_storage, ConfigMap, ResolvedStorage};
 use cortex_storage::lease::StorageLease;
@@ -100,7 +100,7 @@ fn run_lifecycle(action: &str, arguments: &[String]) {
         root.clone()
     };
 
-    let mut command = Command::new(crate::pyexec::venv_python(&root));
+    let mut command = Command::new(crate::util::harness_python(&root));
     command.arg(&lifecycle).arg(action).args(arguments).current_dir(&cwd);
     let status = command.status();
     let code = match status {

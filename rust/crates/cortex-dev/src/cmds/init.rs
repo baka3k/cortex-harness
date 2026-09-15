@@ -228,6 +228,7 @@ pub fn run(m: &Matches) {
         "CODE_GRAPH_PROVIDER",
         &project_code,
         "falkordb",
+        &storage_backend,
     );
     let code_qdrant_collection = nested_prompt(
         &existing_obj,
@@ -259,6 +260,7 @@ pub fn run(m: &Matches) {
         "DOC_GRAPH_PROVIDER",
         &format!("{}_doc", project_code),
         &code_provider,
+        &storage_backend,
     );
     let doc_embed_model = nested_prompt(
         &existing_obj,
@@ -567,6 +569,7 @@ fn prompt_graph_env(
     scoped_key: &str,
     graph_default: &str,
     provider_default: &str,
+    storage_backend: &str,
 ) -> (String, Map<String, Value>) {
     let env_values = section_env(existing, section);
     let value = env_values
@@ -578,14 +581,34 @@ fn prompt_graph_env(
     let value = value.trim().to_lowercase();
     let shown_default = if value == "falkor" || value == "falkordb" {
         "falkordb"
+    } else if LADYBUG_ALIASES.contains(&value.as_str()) {
+        "ladybug"
     } else {
         "neo4j"
     };
-    let provider = prompt("GRAPH_PROVIDER (neo4j, falkordb)", shown_default).to_lowercase();
+    // click.prompt(click.Choice([...])) re-prompts until one of the listed
+    // values (case-insensitive) is entered.
+    let provider = loop {
+        let entered =
+            prompt("GRAPH_PROVIDER (neo4j, falkordb, ladybug)", shown_default).to_lowercase();
+        match entered.as_str() {
+            "neo4j" | "falkordb" | "ladybug" => break entered,
+            _ => echo(
+                "[error] Invalid GRAPH_PROVIDER; expected 'falkordb' (alias 'falkor'), \
+                 'ladybug' (alias 'lbug'), or 'neo4j'",
+            ),
+        }
+    };
 
     let mut graph_env = Map::new();
     graph_env.insert("GRAPH_PROVIDER".to_string(), json!(provider));
     graph_env.insert(scoped_key.to_string(), json!(provider));
+    if provider == "ladybug" && storage_backend == "remote" {
+        echo(
+            "     [warn] ladybug is embedded/local-only; a remote backend \
+             connects via remote.falkordb_uri instead.",
+        );
+    }
     if provider == "neo4j" {
         graph_env.insert(
             "NEO4J_URI".to_string(),
@@ -602,6 +625,29 @@ fn prompt_graph_env(
         graph_env.insert(
             "NEO4J_PASS".to_string(),
             json!(nested_prompt(existing, "NEO4J_PASS", &[section, "env", "NEO4J_PASS"], "")),
+        );
+        return (provider, graph_env);
+    }
+    if provider == "ladybug" {
+        // Embedded/local-only: blank path keeps the runtime storage-layout
+        // default (`<root>/<owner>.lbug/<graph>` via resolve_storage()).
+        let ladybug_path = nested_prompt(
+            existing,
+            "LADYBUG_PATH (blank = storage default)",
+            &[section, "env", "LADYBUG_PATH"],
+            "",
+        );
+        if !ladybug_path.is_empty() {
+            graph_env.insert("LADYBUG_PATH".to_string(), json!(ladybug_path));
+        }
+        graph_env.insert(
+            "LADYBUG_GRAPH".to_string(),
+            json!(nested_prompt(
+                existing,
+                "LADYBUG_GRAPH",
+                &[section, "env", "LADYBUG_GRAPH"],
+                graph_default
+            )),
         );
         return (provider, graph_env);
     }

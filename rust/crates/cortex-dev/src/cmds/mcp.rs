@@ -13,7 +13,6 @@
 //! Add/agent-config không đổi (URL giống hệt 2 backend).
 
 use crate::parser::Matches;
-use crate::pyexec;
 use crate::util::{echo, echo_err, shlex_split};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -104,7 +103,7 @@ fn cortex_mcp_binary() -> Option<PathBuf> {
             return Some(path);
         }
     }
-    let root = pyexec::repo_root();
+    let root = crate::util::repo_root();
     [
         root.join("rust").join("target").join("release").join("cortex-mcp"),
         root.join("rust").join("target").join("debug").join("cortex-mcp"),
@@ -178,7 +177,7 @@ fn load_dotenv(dir: &Path) -> Vec<(String, String)> {
 }
 
 fn mcp_log_dir() -> PathBuf {
-    pyexec::repo_root().join(".cache")
+    crate::util::repo_root().join(".cache")
 }
 
 /// Ghi pid file + sidecar per-instance giống `_mcp_start_one`.
@@ -217,7 +216,7 @@ fn start_rust_one(svc: &McpService, binary: &Path, project_dir: &Path, force_res
 
     // Env: inherit → svc .env → active harness config overlay (như
     // `_mcp_start_one` layering).
-    let svc_dir = pyexec::repo_root().join(svc.rel_dir);
+    let svc_dir = crate::util::repo_root().join(svc.rel_dir);
     let mut env_overrides = load_dotenv(&svc_dir);
     let extra = crate::env::mcp_env_from_config(project_dir, svc.name);
     if extra.is_empty() {
@@ -428,7 +427,7 @@ pub fn mcp_start_one(
             reason: format!("unknown service: {name}"),
         };
     };
-    let svc_dir = pyexec::repo_root().join(svc.rel_dir);
+    let svc_dir = crate::util::repo_root().join(svc.rel_dir);
     let entry_script = svc_dir.join(svc.rel_cmd0);
     if !entry_script.is_file() {
         return McpStartResult {
@@ -516,7 +515,7 @@ pub fn mcp_start_one(
 
     let log = std::fs::OpenOptions::new().create(true).append(true).open(&log_file);
     let port = svc.port.to_string();
-    let mut command = std::process::Command::new(pyexec::venv_python(&svc_dir));
+    let mut command = std::process::Command::new(crate::util::harness_python(&svc_dir));
     command
         .arg(&entry_script)
         .args(service_args(name, &port))

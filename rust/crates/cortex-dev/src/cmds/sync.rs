@@ -8,7 +8,6 @@
 use super::docsync::sha256_hex_hex;
 use crate::config::{graph_provider, ignore_folders, load_active_config, save_config};
 use crate::parser::Matches;
-use crate::pyexec;
 use crate::util::{echo, echo_err, fail, fnmatch, local_strftime, prompt};
 use serde_json::{json, Value};
 use std::io::Write as _;
@@ -528,7 +527,7 @@ fn cortex_sync_binary() -> PathBuf {
             return path;
         }
     }
-    let root = pyexec::repo_root();
+    let root = crate::util::repo_root();
     for candidate in [
         root.join("rust").join("target").join("release").join("cortex-sync"),
         root.join("rust").join("target").join("debug").join("cortex-sync"),
@@ -735,7 +734,7 @@ pub fn embedded_falkordb_pids(db_path: &Path) -> Vec<i64> {
 fn stop_sync_workers(owner: &str, process_env: &Value, prefix: &str, include_launchers: bool) {
     let report = crate::procinfo::stop_sync_processes(
         owner,
-        &pyexec::repo_root(),
+        &crate::util::repo_root(),
         &[],
         5.0,
         include_launchers,
