@@ -33,19 +33,46 @@
 | | `rust` | ép Rust; binary vắng → fallback Python kèm cảnh báo |
 | `CORTEX_MIGRATE_BIN` | path | override vị trí binary `cortex-migrate` cho `dev migrate` |
 | `CORTEX_MCP_BIN` | path | override vị trí binary `cortex-mcp` cho `dev mcp start` |
-| `CORTEX_EMBED_BACKEND` | *(unset)* hoặc `python` | **mặc định hiện tại**: embedding qua Python sidecar (`embed_worker.py` persistent cho mind MCP, one-shot cho `cortex-doc embed`) |
-| | `onnx` | embedder Rust native (`cortex-embed`: ort + tokenizers, CPU). **Chưa bật mặc định** — xem ghi chú dưới bảng |
+| `CORTEX_EMBED_BACKEND` | *(unset)* hoặc `onnx` | **mặc định từ re-baseline vector-lane phase-02** (`plans/260915-2027-vector-lane-rust-port`): embedder Rust native (`cortex-embed`: ort + tokenizers, CPU). Cần ONNX artifacts trong `.cache/embed/` (`make embed-artifacts`) hoặc `ORT_DYLIB_PATH` resolve được |
+| | `python` | **rollback flag**: embedding qua Python sidecar (`embed_worker.py` persistent cho mind MCP, one-shot cho `cortex-doc embed`) |
 | `ORT_DYLIB_PATH` | path | override `libonnxruntime`; mặc định tìm `.cache/ort/<ver>/` rồi `.venv/.../onnxruntime/capi/` |
 | `CORTEX_EMBED_ORT_THREADS` | int | intra-op threads của ORT session (mặc định `min(cpus, 8)`) |
 
-**Trạng thái `CORTEX_EMBED_BACKEND`** (spike `plans/260914-1706-onnx-embedding-spike`):
-parity số học đã đạt (cosine worst **0.9999994** trên 840 vector; GLiNER contract
-**848/848** khớp), nhưng mặc định vẫn là `python` vì hai lý do đo bằng số trong
-`plans/260914-1706-onnx-embedding-spike/reports/phase02-bgem3-parity.md`:
-(1) điểm tool-result dịch ở **chữ số thứ 7** → phải re-baseline golden fixture
-phase-12/13 (phase-04 của spike, đợi dogfood xong); (2) latency end-to-end của MCP
-server khi bật onnx **chậm hơn ~25–31ms/tool-call** ở steady state, chưa giải thích
-được. Bật `onnx` trước khi xử lý 2 việc đó là làm vỡ hợp đồng đã pass.
+**Trạng thái `CORTEX_EMBED_BACKEND`** (spike `plans/260914-1706-onnx-embedding-spike`
++ re-baseline `plans/260915-2027-vector-lane-rust-port` phase-02): parity số học đạt
+(cosine worst **0.9999994** trên 840 vector; GLiNER contract **848/848** khớp). Hai
+lý do giữ `python` mặc định trước đây đã xử lý xong: (1) drift chữ số thứ 7 được
+đóng băng bằng tolerance score tuyệt đối **1e-6** trong comparator (tolerance
+re-baseline, fixtures ghi từ Python giữ nguyên làm hợp đồng cấu trúc); (2) latency
++25–31ms là root-cause HTTP stall — đã fix bằng TTL cache
+`collection_names_cached` (`plans/260914-1706-.../reports/phase02b-latency-rootcause.md`:
+onnx p95 26.1ms — nhanh nhất). Rollback: `CORTEX_EMBED_BACKEND=python`.
+
+---
+
+## 0b. Vector lane (plans/260915-2027-vector-lane-rust-port, 2026-09-15)
+
+Backend vector search trong `cortex-mcp` (cả unified lẫn mind):
+
+| Backend | Điều kiện chọn | Đường chạy |
+|---|---|---|
+| Remote | project đăng ký `storage_backend: "remote"` + `qdrant_url` | REST `/points/search` native (ureq) |
+| Local | mọi trường hợp còn lại | sidecar `scripts/rust_mcp/vector_worker.py` (NDJSON stdio, chỉ `qdrant-client`, không torch) |
+
+Query embedding: `cortex-embed` ONNX (jina-v3 cho code lane, bge-m3 cho doc lane) —
+`CORTEX_EMBED_BACKEND=onnx` là mặc định từ re-baseline phase-02.
+
+Cờ liên quan: `CORTEX_MCP_VECTOR_WORKER` (override path worker),
+`CORTEX_MCP_PYTHON` (python binary cho sidecar), `CORTEX_EMBED_BACKEND=python`
+(rollback embedder).
+
+Phụ thuộc hạ tầng cục bộ (máy dev): qdrant + falkordb chạy docker trong colima
+(`cortex-qdrant` :6333, `cortex-falkordb` :6379). Colima dừng → mind remote
+connection refused; `colima start` để khôi phục.
+
+Trạng thái: vector lane thuần (semantic_search / mind tools) đạt golden parity;
+còn 6 case explore/expand lệch ở graph-plane (db-name vs `.lbug` graph) và fusion
+normalize với nhiều seeds thật — track riêng, không chặn cờ rollback.
 
 ---
 

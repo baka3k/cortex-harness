@@ -35,6 +35,7 @@ pub mod dispatch;
 pub mod framework_registry;
 pub mod graph;
 pub mod mind;
+pub mod vector_sidecar;
 pub mod planner;
 pub mod project_registry;
 pub mod server;
