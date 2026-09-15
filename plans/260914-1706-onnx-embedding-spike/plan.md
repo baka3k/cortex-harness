@@ -9,6 +9,7 @@ relatedPlans:
   - "260913-2130-rust-full-migration"
   - "260829-2322-vector-search-query-optimization"
   - "260913-1715-rust-retrieval-graph-port"
+  - "260915-analyzer-layer-rust-cutover"  # phase-06 overturn NO-GO (reports/phase05-sync-decision.md) bằng component gates; kết quả gates + wall-time feed vào re-baseline golden + latency ở plan này
 ---
 
 # ONNX embedding spike — bỏ Python sidecar khỏi đường embedding
