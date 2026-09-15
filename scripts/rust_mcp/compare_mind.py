@@ -87,36 +87,39 @@ def launch_rust_mind_server(port: int) -> subprocess.Popen:
 # ---------------------------------------------------------------------------
 
 
+def _leaf_key(path: str) -> str:
+    """Last path segment, ignoring list indices: `a.b[0].score` -> `score`."""
+    return path.rsplit(".", 1)[-1].split("[", 1)[0]
+
+
 def tolerant_deep_diff(
     actual, expected, path, diffs, tolerance_keys=None, tolerance=1e-9
 ):
-    """compare_contract.deep_diff + float tolerance on score-ish keys."""
+    """compare_contract.deep_diff + float tolerance on score-ish leaf keys.
+
+    The tolerance rule is applied to every leaf diff line of the form
+    ``"<path>: <actual> != <expected>"`` whose leaf key is in
+    ``tolerance_keys`` — the top-level call site only knows the case id, so
+    deciding there (the old behavior) could never match leaves like
+    ``…passages[0].score``.
+    """
     tolerance_keys = tolerance_keys or set()
-    key_hint = path.rsplit(".", 1)[-1] if "." in path else path
-    if (
-        isinstance(expected, (int, float))
-        and not isinstance(expected, bool)
-        and isinstance(actual, (int, float))
-        and not isinstance(actual, bool)
-        and key_hint in tolerance_keys
-    ):
-        if abs(float(actual) - float(expected)) > tolerance:
-            diffs.append(
-                f"{path}: {actual!r} != {expected!r} (beyond tolerance {tolerance})"
-            )
-        return
     before = len(diffs)
     base_deep_diff(actual, expected, path, diffs)
-    if len(diffs) > before and key_hint in tolerance_keys:
-        # Re-check the failing scalar pair under the tolerance rule.
-        if (
-            isinstance(expected, (int, float))
-            and not isinstance(expected, bool)
-            and isinstance(actual, (int, float))
-            and not isinstance(actual, bool)
-            and abs(float(actual) - float(expected)) <= tolerance
-        ):
-            del diffs[before:]
+    kept = []
+    for diff in diffs[before:]:
+        head, sep, tail = diff.partition(": ")
+        if sep and _leaf_key(head) in tolerance_keys and " != " in tail:
+            a_str, _, b_str = tail.rpartition(" != ")
+            try:
+                a_val, b_val = float(a_str.strip("'")), float(b_str.strip("'"))
+            except ValueError:
+                kept.append(diff)
+                continue
+            if abs(a_val - b_val) <= tolerance:
+                continue
+        kept.append(diff)
+    diffs[before:] = kept
 
 
 def _multiset_key(value) -> str:

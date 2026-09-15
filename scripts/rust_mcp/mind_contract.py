@@ -282,6 +282,9 @@ def mind_cases() -> list[dict]:
     return cases
 
 
-# Float keys compared with an absolute tolerance of 1e-9 (phase-13 gate).
+# Float keys compared with an absolute tolerance (vector-lane phase-02
+# re-baseline: 1e-9 là gate phase-13 với embedder python cả 2 phía; từ khi
+# ONNX là backend embed mặc định, drift chữ số thứ 7 ~1e-7 giữa ort và torch
+# là đặc tính đã đo ở plans/260914-1706 phase-01/02 — tolerance 1e-6 bao trọn).
 TOLERANCE_KEYS = {"score", "rerank_score", "confidence", "graph_proximity"}
-TOLERANCE = 1e-9
+TOLERANCE = 1e-6

@@ -14,7 +14,7 @@
 //!   exclusion in the parity report).
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -327,12 +327,30 @@ pub fn search_points(
 ) -> Result<Vec<SearchHit>, QdrantError> {
     let (url, api_key) = match backend {
         QdrantBackend::Remote { url, api_key } => (url.clone(), api_key.clone()),
-        QdrantBackend::Local { .. } => {
-            // Local embedded search is python-plane (no wire protocol).
-            return Err(QdrantError::runtime(
-                "Local Qdrant vector search is not available in the Rust runtime; \
-                 configure a remote qdrant_url for this project.",
-            ));
+        QdrantBackend::Local { doc_path } => {
+            // Vector-lane phase-04: the local store is python-plane on disk
+            // (pickled PointStruct rows), so search routes through the
+            // NDJSON sidecar that opens it with the real qdrant-client.
+            let hits = crate::vector_sidecar::search(
+                Path::new(&doc_path),
+                collection_name,
+                query_vector,
+                limit,
+                query_filter,
+            )
+            .map_err(QdrantError::runtime)?;
+            return Ok(hits
+                .iter()
+                .filter_map(|hit| {
+                    Some(SearchHit {
+                        score: hit.get("score").and_then(Value::as_f64)?,
+                        payload: hit
+                            .get("payload")
+                            .and_then(Value::as_object)
+                            .cloned()?,
+                    })
+                })
+                .collect());
         }
     };
     let mut body = json!({

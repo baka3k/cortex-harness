@@ -39,6 +39,7 @@ pub mod tools_search;
 pub mod tools_semantic;
 pub mod tools_traversal;
 pub mod tools_workflows;
+pub mod vector_lane;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -494,6 +495,14 @@ pub fn run_cypher_first(
                 .filter(|db| available.contains(&***db))
                 .map(|db| (*db).clone())
                 .collect();
+            if candidates.is_empty() {
+                // Registry graph names can diverge from the physical graph
+                // name inside a migrated Ladybug store (registry says the
+                // project id; the `.lbug` file carries `hyper_graph`). The
+                // python driver opens the file regardless of the requested
+                // name — fall back to the store's own graphs likewise.
+                candidates = available.clone();
+            }
             if candidates.is_empty() {
                 let default_db = runtime_default_db_name();
                 return Err(format!(
