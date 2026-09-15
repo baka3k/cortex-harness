@@ -17,7 +17,7 @@ use crate::identity::{canonical_json, deterministic_job_id, run_fingerprint, run
 use crate::journal_manifest::{
     manifest_candidates, stage_manifests_locked, PRODUCERS_COMPLETE_ID,
 };
-use crate::models::{
+use crate::models::{ ArtifactRef,
     BarrierRecord, BarrierStatus, BatchRecord, BatchSpec, BatchStatus, JournalError, JournalLimits,
     ManifestDisposition, OperationPhase, ProducerStatus, RetryClass, RunMetadata, RunRecord,
     RunStatus, TerminalErrorCode,
@@ -591,6 +591,65 @@ pub fn iso_from_epoch(epoch_s: f64) -> String {
     )
 }
 
+/// Parse an ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SS[.ffffff][+HH:MM]`)
+/// into epoch seconds — inverse of [`iso_from_epoch`] for retention checks.
+pub fn parse_iso_to_epoch(value: &str) -> Option<f64> {
+    let text = value.trim();
+    let (body, offset_s) = match text.rsplit_once('+') {
+        Some((b, off)) => {
+            let mut off_parts = off.split(':');
+            let h: i64 = off_parts.next()?.parse().ok()?;
+            let m: i64 = off_parts.next().unwrap_or("0").parse().ok()?;
+            (b, h * 3600 + m * 60)
+        }
+        None => match text.rsplit_once('-') {
+            // A leading date already consumed the first '-'; only treat a
+            // trailing `-HH:MM` after a 'T' as an offset.
+            Some((b, off))
+                if b.contains('T') && off.len() == 5 && !off.contains('-') =>
+            {
+                let mut off_parts = off.split(':');
+                let h: i64 = off_parts.next()?.parse().ok()?;
+                let m: i64 = off_parts.next().unwrap_or("0").parse().ok()?;
+                (b, -(h * 3600 + m * 60))
+            }
+            _ => (text, 0),
+        },
+    };
+    let (date, time) = body.split_once('T')?;
+    let mut d = date.split('-');
+    let year: i64 = d.next()?.parse().ok()?;
+    let month: u32 = d.next()?.parse().ok()?;
+    let day: u32 = d.next()?.parse().ok()?;
+    let mut t = time.split(':');
+    let hour: i64 = t.next()?.parse().ok()?;
+    let minute: i64 = t.next()?.parse().ok()?;
+    let sec_part = t.next().unwrap_or("0");
+    let (sec, micros) = match sec_part.split_once('.') {
+        Some((s, frac)) => {
+            let mut frac = frac.to_string();
+            while frac.len() < 6 {
+                frac.push('0');
+            }
+            let micros: i64 = frac[..6].parse().ok()?;
+            (s.parse::<i64>().ok()?, micros)
+        }
+        None => (sec_part.parse::<i64>().ok()?, 0),
+    };
+    // days_from_civil (Howard Hinnant).
+    let yy = if month <= 2 { year - 1 } else { year };
+    let era = if yy >= 0 { yy } else { yy - 399 } / 400;
+    let yoe = yy - era * 400;
+    let mp: i64 = (i64::from(month) + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + i64::from(day) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(
+        (days * 86_400 + hour * 3600 + minute * 60 + sec - offset_s) as f64
+            + micros as f64 / 1_000_000.0,
+    )
+}
+
 /// Inverse của `days_from_civil` (Howard Hinnant).
 fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
@@ -681,8 +740,11 @@ impl Journal {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        std::fs::File::create(&path)
-            .map_err(|e| self_precreate_error(&e))?;
+        // `_precreate_database` (os.O_RDWR | os.O_CREAT) — create when
+        // missing, never truncate an existing journal.
+        if !path.exists() {
+            std::fs::File::create(&path).map_err(|e| self_precreate_error(&e))?;
+        }
 
         let connection = Connection::open(&path)
             .map_err(|e| JournalError::new(TerminalErrorCode::JournalCorrupt, e.to_string()))?;
@@ -1030,6 +1092,136 @@ impl Journal {
             Some(map) => Ok(Some(run_from_map(&map)?)),
             None => Ok(None),
         }
+    }
+
+    /// Port `SQLiteJournal.purge_run` — delete artifact files + the run row
+    /// for one terminal, retention-elapsed, unfenced run. The caller must
+    /// hold the exact-scope ownership lock (`ownership_confirmed`).
+    /// Returns the number of removed artifact references.
+    pub fn purge_run(
+        &self,
+        run_id_value: &str,
+        ownership_confirmed: bool,
+    ) -> Result<usize, JournalError> {
+        if !ownership_confirmed {
+            return Err(JournalError::new(
+                TerminalErrorCode::InvalidTransition,
+                "journal purge requires the caller to hold the exact-scope ownership lock",
+            ));
+        }
+        let now_epoch = self.now_epoch();
+        let now_iso = iso_from_epoch(now_epoch);
+        let refs = self.transaction(|conn| {
+            let row = conn
+                .query_row(
+                    "SELECT * FROM runs WHERE run_id = ?1",
+                    [run_id_value],
+                    run_row_to_map,
+                )
+                .map_err(|e| match e {
+                    rusqlite::Error::QueryReturnedNoRows => JournalError::new(
+                        TerminalErrorCode::InvalidTransition,
+                        "run row vanished during purge",
+                    ),
+                    other => sqlite_err(other),
+                })?;
+            let run = run_from_map(&row)?;
+            let terminal = matches!(
+                run.status,
+                RunStatus::Blocked
+                    | RunStatus::Drained
+                    | RunStatus::DeadLettered
+                    | RunStatus::Quarantined
+                    | RunStatus::Failed
+            );
+            if !terminal {
+                return Err(JournalError::new(
+                    TerminalErrorCode::InvalidTransition,
+                    "active journal runs cannot be purged",
+                ));
+            }
+            let retention_epoch = parse_iso_to_epoch(&run.retention_until).ok_or_else(|| {
+                JournalError::new(
+                    TerminalErrorCode::InvalidTransition,
+                    format!("unreadable retention timestamp {}", run.retention_until),
+                )
+            })?;
+            if retention_epoch > now_epoch {
+                return Err(JournalError::new(
+                    TerminalErrorCode::InvalidTransition,
+                    "journal retention period has not elapsed",
+                ));
+            }
+            let fenced: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM batches WHERE run_id = ?1 AND fencing_token IS NOT NULL",
+                    [run_id_value],
+                    |row| row.get(0),
+                )
+                .map_err(sqlite_err)?;
+            if fenced > 0 {
+                return Err(JournalError::new(
+                    TerminalErrorCode::InvalidTransition,
+                    "fenced journal work cannot be purged",
+                ));
+            }
+            let mut stmt = conn
+                .prepare(
+                    "SELECT sha256, relative_path, byte_count, row_count FROM artifacts \
+                     WHERE run_id = ?1",
+                )
+                .map_err(sqlite_err)?;
+            let refs: Vec<ArtifactRef> = stmt
+                .query_map([run_id_value], |row| {
+                    Ok(ArtifactRef {
+                        sha256: row.get(0)?,
+                        relative_path: row.get(1)?,
+                        byte_count: row.get(2)?,
+                        row_count: row.get(3)?,
+                    })
+                })
+                .map_err(sqlite_err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_err)?;
+            drop(stmt);
+            let purge_started = conn
+                .query_row(
+                    "SELECT 1 FROM events WHERE run_id = ?1 AND event_type = ?2 LIMIT 1",
+                    rusqlite::params![run_id_value, PURGE_STARTED_EVENT],
+                    |_| Ok(()),
+                )
+                .ok();
+            if purge_started.is_none() {
+                Self::add_event_with_counters(
+                    conn,
+                    run_id_value,
+                    PURGE_STARTED_EVENT,
+                    &[("artifacts", refs.len() as i64)],
+                    &now_iso,
+                )?;
+            }
+            Ok(refs)
+        })?;
+        for reference in &refs {
+            if let Ok(path) = self.artifacts.path_for(reference) {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(JournalError::new(
+                            TerminalErrorCode::PermissionDenied,
+                            format!("cannot remove artifact {}: {e}", path.display()),
+                        ));
+                    }
+                }
+            }
+        }
+        self.transaction(|conn| {
+            conn.execute("DELETE FROM runs WHERE run_id = ?1", [run_id_value])
+                .map_err(sqlite_err)?;
+            Ok(())
+        })?;
+        Ok(refs.len())
     }
 
     pub fn list_runs(&self) -> Result<Vec<RunRecord>, JournalError> {

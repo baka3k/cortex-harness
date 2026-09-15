@@ -11,6 +11,7 @@ name = "cortex-dev"
 path = "src/main.rs"
 
 [dependencies]
+cortex-graph-core = { path = "../cortex-graph-core" }
 cortex-storage = { path = "../cortex-storage" }
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
