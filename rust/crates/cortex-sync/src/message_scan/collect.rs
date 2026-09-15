@@ -206,7 +206,6 @@ pub fn collect_messages_for_parser(
     }
     let detector = super::detectors::get_detector(parser);
     let normalized_root = util::realpath(&util::path_to_string(root));
-    let normalized_root = PathBuf::from(normalized_root);
     let files: Vec<PathBuf> = if let Some(targets) = target_files {
         let mut collected: Vec<PathBuf> = Vec::new();
         for raw in targets {

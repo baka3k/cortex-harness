@@ -2089,6 +2089,8 @@ fn run_flow(
             project_name,
             &before_sha,
             &after_sha,
+            !full_scan || recovery_full_scan,
+            graph_context,
             &changed_by_parser,
             &deleted_by_parser,
             &message_output_dir,
@@ -2599,12 +2601,17 @@ pub fn delegate_to_python(reason: &str) -> i32 {
 // `tools.common.message_scan`. Activated when `--sync-messages` is true
 // (default) and at least the graph pass ran.
 //
-// Today the lane only emits the per-parser artifact JSON
-// (`<output_dir>/<project>/<parser>_messages.json`). Graph upsert and
-// Qdrant vector lane are owned by phase-06 (cortex-embed component gates);
-// the Python children continue to write the graph MessageEndpoint nodes /
-// message vectors during the embedding pass until phase-08 retired-errors
-// the value.
+// Graph half (this phase): per parser the lane mirrors the Python
+// `run_message_scan_pipeline` ordering — cleanup (`Message` nodes by changed/
+// deleted paths on incremental, whole project on full) → collect →
+// `Message`/`MessageEndpoint` upsert via `message_scan::graph` on the shared
+// `cortex_graph_writer` store — then writes the per-parser artifact JSON
+// (`<output_dir>/<project>/<parser>_messages.json`).
+//
+// Vector half: Qdrant upsert is owned by phase-06 (cortex-embed component
+// gates) — "Ownership resolution" in the phase-05 report. Python children
+// keep writing message vectors during the embedding pass until phase-08
+// retired-errors the value.
 #[allow(clippy::too_many_arguments)]
 fn run_native_message_scan_lane(
     args: &crate::cli::Args,
@@ -2613,6 +2620,8 @@ fn run_native_message_scan_lane(
     project_name: &str,
     before_sha: &str,
     after_sha: &str,
+    message_incremental: bool,
+    graph_context: Option<&GraphContext>,
     changed_by_parser: &BTreeMap<String, BTreeSet<String>>,
     deleted_by_parser: &BTreeMap<String, BTreeSet<String>>,
     message_output_dir: &str,
@@ -2628,10 +2637,31 @@ fn run_native_message_scan_lane(
     }
     let mut lane_summaries: Vec<Value> = Vec::new();
     let mut total_messages = 0u64;
+    let mut total_graph_upserted = 0u64;
     let mut lane_failures: Vec<(String, String)> = Vec::new();
-    let enabled_parsers = crate::registry::message_enabled_parsers();
+    // Child launch order of the Python orchestrator — a full-scan message
+    // plane is order-sensitive (every parser's cleanup_all wipes the previous
+    // parsers' messages; the last message-enabled parser wins), so the native
+    // lane must iterate in the same order as `ANALYZERS` insertion order.
+    let message_parsers = registry::message_enabled_parsers();
+    let enabled_parsers: Vec<&str> = registry::PARSER_ITERATION_ORDER
+        .iter()
+        .copied()
+        .filter(|parser| message_parsers.contains(parser))
+        .collect();
+    let database = graph_context.map(|context| context.neo4j_db.clone());
+    // Graph store is opened lazily on the first parser that reaches the graph
+    // steps. When the resolved provider is not served by the native store
+    // (neo4j), emission is skipped and Python children keep the lane.
+    let mut store: Option<cortex_graph_writer::store::FalkorDbStore> = None;
+    let mut graph_provider_note = String::from("native-falkordb");
 
-    let run_incrementally = !args.full_scan;
+    // Effective incremental signal — the same one the children receive
+    // (`config.incremental_supported && (!full_scan || recovery_full_scan)`;
+    // every message-enabled parser is incremental-supported). The Python
+    // message pipeline keys its cleanup mode off this: incremental → delete
+    // by changed/deleted paths, full → `cleanup_all` per parser.
+    let run_incrementally = message_incremental;
     for parser in enabled_parsers {
         let changed = changed_by_parser
             .get(parser)
@@ -2643,8 +2673,11 @@ fn run_native_message_scan_lane(
             .unwrap_or_default();
         let mut target_files: Vec<String> = changed.iter().cloned().collect();
         target_files.extend(deleted.iter().cloned());
-        if run_incrementally && target_files.is_empty() {
-            // No changed files in incremental — skip (mirrors Python behaviour).
+        if changed.is_empty() && deleted.is_empty() {
+            // The Python primary pass never launches children without
+            // scan/deleted files — their message pipeline (including the
+            // full-scan cleanup_all) never runs. Mirror the skip: the
+            // full-run wipe is order-sensitive across launched parsers only.
             continue;
         }
         let target_ref = if run_incrementally {
@@ -2652,20 +2685,86 @@ fn run_native_message_scan_lane(
         } else {
             None
         };
+        // Python children pass their own default language name (ts child →
+        // "typescript", …) and repo = os.path.abspath(args.root) of the RAW
+        // --root string (pre-realpath; abspath does not resolve symlinks).
+        let language = message_scan::message_language(parser);
+        let repo = util::path_to_string(&util::absolute(&args.root));
         let started = Instant::now();
+
+        let mut info = serde_json::Map::new();
+        info.insert("parser".into(), json!(parser));
+
+        // ── graph cleanup (before collect, mirroring the Python pipeline) ──
+        let mut deleted_messages = 0u64;
+        let mut deleted_endpoints = 0u64;
+        if store.is_none()
+            && graph_provider_note != "skipped-provider"
+            && graph_provider_note != "unavailable"
+        {
+            match graph_context {
+                Some(context) if context.provider == "falkordb" => {
+                    store = Some(graphops::open_store(context).map_err(|error| {
+                        format!("native message-scan[{parser}] graph: {error}")
+                    })?);
+                }
+                Some(context) => {
+                    graph_provider_note = format!("skipped-provider-{}", context.provider);
+                }
+                None => {
+                    graph_provider_note = "unavailable".to_string();
+                }
+            }
+        }
+        if let Some(store) = store.as_mut() {
+            let cleanup_result = if run_incrementally {
+                let mut cleanup_paths: BTreeSet<String> = changed.iter().cloned().collect();
+                cleanup_paths.extend(deleted.iter().cloned());
+                message_scan::cleanup_message_nodes(
+                    store,
+                    database.as_deref(),
+                    project_id,
+                    &cleanup_paths,
+                )
+            } else {
+                message_scan::cleanup_all_message_nodes(
+                    store,
+                    database.as_deref(),
+                    project_id,
+                )
+            };
+            match cleanup_result {
+                Ok((messages, endpoints)) => {
+                    deleted_messages = messages;
+                    deleted_endpoints = endpoints;
+                }
+                Err(error) => {
+                    lane_failures.push((parser.to_string(), error.clone()));
+                    info.insert("status".into(), json!("failed"));
+                    info.insert("error".into(), json!(error));
+                    info.insert(
+                        "duration_seconds".into(),
+                        json!(util::round_digits(started.elapsed().as_secs_f64(), 6)),
+                    );
+                    lane_summaries.push(Value::Object(info));
+                    continue;
+                }
+            }
+        }
+        info.insert("deleted_messages".into(), json!(deleted_messages));
+        info.insert("deleted_endpoints".into(), json!(deleted_endpoints));
+
         let collect_result = message_scan::collect_messages_for_parser(
             root_path,
             parser,
             project_id,
-            parser,
+            &language,
             target_ref,
         );
         let records = match collect_result {
             Ok(records) => records,
             Err(error) => {
                 lane_failures.push((parser.to_string(), error.clone()));
-                let mut info = serde_json::Map::new();
-                info.insert("parser".into(), json!(parser));
                 info.insert("status".into(), json!("failed"));
                 info.insert("error".into(), json!(error));
                 info.insert(
@@ -2676,6 +2775,47 @@ fn run_native_message_scan_lane(
                 continue;
             }
         };
+        info.insert("message_count".into(), json!(records.len()));
+        info.insert(
+            "qdrant_collection".into(),
+            json!(message_qdrant_collection),
+        );
+
+        // ── graph upsert (`Message` + `MessageEndpoint`) ──
+        if let Some(store) = store.as_mut() {
+            if !records.is_empty() {
+                let upsert_result = message_scan::upsert_messages_to_graph(
+                    store,
+                    database.as_deref(),
+                    &records,
+                    project_id,
+                    project_name,
+                    &language,
+                    &repo,
+                    "",
+                );
+                match upsert_result {
+                    Ok(upserted) => {
+                        info.insert("graph_upserted".into(), json!(upserted));
+                        total_graph_upserted += upserted;
+                    }
+                    Err(error) => {
+                        lane_failures.push((parser.to_string(), error.clone()));
+                        info.insert("status".into(), json!("failed"));
+                        info.insert("error".into(), json!(error));
+                        info.insert(
+                            "duration_seconds".into(),
+                            json!(util::round_digits(started.elapsed().as_secs_f64(), 6)),
+                        );
+                        lane_summaries.push(Value::Object(info));
+                        continue;
+                    }
+                }
+            } else {
+                info.insert("graph_upserted".into(), json!(0));
+            }
+        }
+
         let artifact_result = message_scan::write_message_artifact(
             root_path,
             parser,
@@ -2686,13 +2826,6 @@ fn run_native_message_scan_lane(
             None,
             before_sha,
             after_sha,
-        );
-        let mut info = serde_json::Map::new();
-        info.insert("parser".into(), json!(parser));
-        info.insert("message_count".into(), json!(records.len()));
-        info.insert(
-            "qdrant_collection".into(),
-            json!(message_qdrant_collection),
         );
         match artifact_result {
             Ok(path) => {
@@ -2713,9 +2846,11 @@ fn run_native_message_scan_lane(
         lane_summaries.push(Value::Object(info));
         if args.verbose {
             println!(
-                "[message-scan][native] parser={} messages={}",
+                "[message-scan][native] parser={} messages={} graph_upserted={} deleted={}",
                 parser,
-                records.len()
+                records.len(),
+                total_graph_upserted,
+                deleted_messages,
             );
         }
     }
@@ -2724,9 +2859,10 @@ fn run_native_message_scan_lane(
         json!({
             "parsers": lane_summaries,
             "total_messages": total_messages,
+            "total_graph_upserted": total_graph_upserted,
             "output_dir": message_output_dir,
             "qdrant_collection": message_qdrant_collection,
-            "graph_upsert": "deferred-phase-06",
+            "graph_upsert": graph_provider_note,
             "vector_upsert": "deferred-phase-06",
         }),
     );

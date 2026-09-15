@@ -414,7 +414,7 @@ impl MessageDetector for JavaMessageDetector {
         } else if looks_endpoint(second) {
             receiver = second.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -482,7 +482,7 @@ impl MessageDetector for CSharpMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -563,7 +563,7 @@ impl MessageDetector for KotlinMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -653,7 +653,7 @@ impl MessageDetector for AndroidMessageDetector {
         } else if looks_endpoint(second) {
             receiver = second.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -721,7 +721,7 @@ impl MessageDetector for PythonMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -801,7 +801,7 @@ impl MessageDetector for JsMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -881,7 +881,7 @@ impl MessageDetector for TsMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -950,7 +950,7 @@ impl MessageDetector for PhpMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -1020,7 +1020,7 @@ impl MessageDetector for SqlMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -1087,7 +1087,7 @@ impl MessageDetector for PlSqlMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -1154,7 +1154,7 @@ impl MessageDetector for VbNetMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -1292,7 +1292,7 @@ impl MessageDetector for VbaMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,
@@ -1357,7 +1357,7 @@ impl MessageDetector for VbScriptMessageDetector {
         } else if looks_endpoint(third) {
             receiver = third.trim().chars().take(220).collect();
         }
-        let mut payload = truncate_chars(payload_seed, 400);
+        let payload = truncate_chars(payload_seed, 400);
         (
             message_name,
             receiver,

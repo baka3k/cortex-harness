@@ -36,3 +36,32 @@ pub fn file_matches_parser(rel_path: &str, parser: &str) -> bool {
     };
     exts.iter().any(|ext| lower.ends_with(ext))
 }
+
+/// Language string the Python children pass to `run_message_scan_pipeline`
+/// (`language = args.language or "<child default>"`):
+/// ts child → `"typescript"`, js → `"javascript"`, android-kotlin →
+/// `"android-kotlin"`, mọi child khác → tên parser. Thuộc tính
+/// `Message.language` trên graph phải khớp từng chữ với baseline.
+pub fn message_language(parser: &str) -> String {
+    match parser {
+        "ts" => "typescript".to_string(),
+        "js" => "javascript".to_string(),
+        "android" => "android-kotlin".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_language_matches_child_defaults() {
+        assert_eq!(message_language("ts"), "typescript");
+        assert_eq!(message_language("js"), "javascript");
+        assert_eq!(message_language("android"), "android-kotlin");
+        assert_eq!(message_language("java"), "java");
+        assert_eq!(message_language("python"), "python");
+        assert_eq!(message_language("cplus"), "cplus");
+    }
+}
