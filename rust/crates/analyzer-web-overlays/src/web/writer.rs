@@ -70,7 +70,13 @@ impl<'a> WebFrameworkWriter<'a> {
                 let batch = selected[offset..(offset + self.batch_size).min(selected.len())].to_vec();
                 let mut params = BTreeMap::new();
                 params.insert("rows".to_string(), Value::Array(batch.clone()));
-                let query = relationship_query(label);
+                // Ladybug binder mis-type struct field thành BOOL khi field
+                // được dùng cả trong so sánh lẫn `+` (+(BOOL,STRING)) —
+                // concat() tránh được; falkordb không có concat() → giữ `+`.
+                let query = relationship_query(
+                    label,
+                    self.store.provider() == "ladybug",
+                );
                 let records = self
                     .store
                     .execute_query(&query, &params, self.database.as_deref())
@@ -95,9 +101,18 @@ impl<'a> WebFrameworkWriter<'a> {
             "paths".to_string(),
             Value::Array(paths.iter().map(|path| Value::String(path.clone())).collect()),
         );
+        // Ladybug: FOREACH-delete không parse được — delete trực tiếp (phase-02).
+        let query = if self.store.provider() == "ladybug" {
+            "MATCH (node:ApiEndpoint {project_id: $project_id, framework: $framework})\n\
+             WHERE node.file_path IN $paths\n\
+             DETACH DELETE node\n\
+             RETURN count(*) AS count"
+        } else {
+            DELETE_PATHS_QUERY
+        };
         let records = self
             .store
-            .execute_query(DELETE_PATHS_QUERY, &params, self.database.as_deref())
+            .execute_query(query, &params, self.database.as_deref())
             .map_err(|error| error.to_string())?;
         Ok(count_of(&records, 0))
     }
@@ -163,7 +178,12 @@ SET node += row
 RETURN count(node) AS count
 ";
 
-fn relationship_query(handler_label: &str) -> String {
+fn relationship_query(handler_label: &str, ladybug: bool) -> String {
+    let scope_prefix = if ladybug {
+        "concat(row.handler_scope, '::')"
+    } else {
+        "row.handler_scope + '::'"
+    };
     format!(
         r#"
     UNWIND $rows AS row
@@ -172,7 +192,7 @@ fn relationship_query(handler_label: &str) -> String {
     WHERE handler.name = row.handler_name
       AND (row.handler_file = '' OR replace(handler.file_path, '\\', '/') = row.handler_file)
       AND (row.handler_scope = '' OR coalesce(handler.scope_name, handler.class_name, '') = row.handler_scope
-           OR coalesce(handler.qualified_name, '') STARTS WITH row.handler_scope + '::')
+           OR coalesce(handler.qualified_name, '') STARTS WITH {scope_prefix})
     MERGE (endpoint)-[rel:HANDLES]->(handler)
     SET rel.id = row.id,
         rel.framework = row.framework,
@@ -204,7 +224,7 @@ mod tests {
         assert!(NODE_QUERY.contains("SET node += row"));
         // Relationship query: replace handler.file_path '\\' → '/' (Cypher
         // literal 2 ký tự backslash, khớp f-string Python).
-        let query = relationship_query("Function");
+        let query = relationship_query("Function", false);
         assert!(query.contains("MATCH (endpoint:ApiEndpoint {id: row.endpoint_id, project_id: row.project_id})"));
         assert!(query.contains("MATCH (handler:Function {project_id: row.project_id})"));
         assert!(query.contains("MERGE (endpoint)-[:SEMANTIC_OF]->(handler)"));
