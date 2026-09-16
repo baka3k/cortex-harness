@@ -110,6 +110,7 @@ _ENV_DOC_PROVIDER = ("DOC_GRAPH_PROVIDER", "GRAPH_PROVIDER")
 
 _FALKORDB_PROVIDER_ALIASES = frozenset({"falkordb", "falkor", "local", "embedded"})
 _NEO4J_PROVIDER_ALIASES = frozenset({"neo4j", "neo"})
+_LADYBUG_PROVIDER_ALIASES = frozenset({"ladybug", "ladybugdb", "ladybug-db"})
 
 
 def _normalize_graph_provider(value: Any) -> str:
@@ -118,8 +119,11 @@ def _normalize_graph_provider(value: Any) -> str:
         return "falkordb"
     if normalized in _NEO4J_PROVIDER_ALIASES:
         return "neo4j"
+    if normalized in _LADYBUG_PROVIDER_ALIASES:
+        return "ladybug"
     raise ValueError(
-        f"Unsupported graph provider '{value}'. Expected 'falkordb' or 'neo4j'."
+        f"Unsupported graph provider '{value}'. "
+        "Expected 'falkordb', 'neo4j', or 'ladybug'."
     )
 
 

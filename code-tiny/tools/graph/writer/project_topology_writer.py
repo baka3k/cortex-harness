@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from tools.common.project_scope import project_id_lookup_key
 from tools.graph.core.base import GraphDriver
 from tools.graph.schema.manifest import validate_cypher_identifier
 from tools.project_topology.models import TopologyAnalysisResult, stable_fact_id
+
+logger = logging.getLogger(__name__)
 
 
 _MODULE_QUERY = """
@@ -456,12 +459,37 @@ class ProjectTopologyWriter:
                 _dependency_edge_query(target_label), rows
             )
 
+        # The gradle-compatibility queries promote nodes to a second label
+        # (``SET module:GradleModule``) and the public-api link queries match
+        # schema-less generic symbols — both are unrepresentable in
+        # LadybugDB's table-typed catalog, so those optional enrichment
+        # batches are skipped there instead of failing the whole write.
+        raw_provider = getattr(self.driver, "provider", "")
+        provider = str(
+            getattr(raw_provider, "value", raw_provider) or ""
+        ).lower()
+        skip_generic_node_batches = provider == "ladybug"
+        if skip_generic_node_batches and (
+            gradle_compatibility_rows or public_api_link_rows
+        ):
+            logger.warning(
+                "LadybugDB cannot express multi-label promotion or generic-node "
+                "symbol matches; skipping %d gradle-compatibility and %d "
+                "public-api link rows",
+                len(gradle_compatibility_rows),
+                len(public_api_link_rows),
+            )
+
         return {
             "modules": await self._write_batches(_MODULE_QUERY, module_rows),
-            "gradle_compatibility_labels": await self._write_batches(
+            "gradle_compatibility_labels": 0
+            if skip_generic_node_batches
+            else await self._write_batches(
                 _GRADLE_COMPATIBILITY_QUERY, gradle_compatibility_rows
             ),
-            "gradle_legacy_links": await self._write_batches(
+            "gradle_legacy_links": 0
+            if skip_generic_node_batches
+            else await self._write_batches(
                 _GRADLE_LEGACY_LINK_QUERY, gradle_compatibility_rows
             ),
             "descriptors": await self._write_batches(
@@ -482,13 +510,19 @@ class ProjectTopologyWriter:
             "frameworks": await self._write_batches(
                 _FRAMEWORK_QUERY, framework_rows
             ),
-            "public_api_links": await self._write_batches(
+            "public_api_links": 0
+            if skip_generic_node_batches
+            else await self._write_batches(
                 _PUBLIC_API_LINK_QUERY, public_api_link_rows
             ),
-            "existing_endpoint_links": await self._write_batches(
+            "existing_endpoint_links": 0
+            if skip_generic_node_batches
+            else await self._write_batches(
                 _EXISTING_ENDPOINT_LINK_QUERY, public_api_link_rows
             ),
-            "android_fact_links": await self._write_batches(
+            "android_fact_links": 0
+            if skip_generic_node_batches
+            else await self._write_batches(
                 _ANDROID_FACT_LINK_QUERY, public_api_link_rows
             ),
         }
@@ -501,6 +535,18 @@ class ProjectTopologyWriter:
         )
         if not normalized:
             return 0
+        # LadybugDB is table-typed: the schema-less generic-node Cypher below
+        # cannot bind there. Its driver exposes a per-label equivalent.
+        ladybug_cleanup = getattr(self.driver, "cleanup_topology_owned", None)
+        if callable(ladybug_cleanup):
+            return int(
+                await ladybug_cleanup(
+                    project_id_lookup_key(project_id),
+                    paths=normalized,
+                    database=self.database,
+                )
+                or 0
+            )
         records, _, _ = await self.driver.execute_query(
             _CLEANUP_PATHS_QUERY,
             {
@@ -512,6 +558,15 @@ class ProjectTopologyWriter:
         return _count(records, 0)
 
     async def cleanup_project(self, project_id: str) -> int:
+        ladybug_cleanup = getattr(self.driver, "cleanup_topology_owned", None)
+        if callable(ladybug_cleanup):
+            return int(
+                await ladybug_cleanup(
+                    project_id_lookup_key(project_id),
+                    database=self.database,
+                )
+                or 0
+            )
         records, _, _ = await self.driver.execute_query(
             _CLEANUP_PROJECT_QUERY,
             {"project_id_normalized": project_id_lookup_key(project_id)},

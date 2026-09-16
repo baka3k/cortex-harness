@@ -6,14 +6,24 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
+_PROVIDER_LOGICAL_GRAPH_KEYS = frozenset(
+    # Logical graph names are provider-neutral metadata; the ladybug branches
+    # read them from the existing FALKORDB_* plumbing.
+    {"FALKORDB_GRAPH", "DOC_FALKORDB_GRAPH", "FALKORDB_DATABASE"}
+)
+
+
 def _normalize_graph_provider(value: Any) -> str:
     normalized = str(value or "falkordb").strip().lower()
     if normalized in {"falkordb", "falkor", "local", "embedded"}:
         return "falkordb"
     if normalized in {"neo4j", "neo"}:
         return "neo4j"
+    if normalized in {"ladybug", "ladybugdb", "ladybug-db"}:
+        return "ladybug"
     raise ValueError(
-        f"Unsupported graph provider '{value}'. Expected 'falkordb' or 'neo4j'."
+        f"Unsupported graph provider '{value}'. "
+        "Expected 'falkordb', 'neo4j', or 'ladybug'."
     )
 
 
@@ -53,14 +63,26 @@ def load_harness_config(config_path: str) -> None:
 
     if provider == "neo4j":
         for key in tuple(os.environ):
-            if key.startswith("FALKORDB_"):
+            if key.startswith("FALKORDB_") or key.startswith("LADYBUG_"):
                 os.environ.pop(key, None)
         for key in ("NEO4J_URI", "NEO4J_USER", "NEO4J_PASS", "NEO4J_DB"):
             if key in code_env and key not in os.environ:
                 os.environ[key] = str(code_env[key])
-    else:
+    elif provider == "ladybug":
+        # LadybugDB is embedded-only: strip Neo4j settings plus every
+        # connection-style FalkorDB key, keeping only the logical graph names.
         for key in tuple(os.environ):
             if key.startswith("NEO4J_"):
+                os.environ.pop(key, None)
+            elif key.startswith("FALKORDB_") and key not in _PROVIDER_LOGICAL_GRAPH_KEYS:
+                os.environ.pop(key, None)
+        for key in ("FALKORDB_GRAPH", "FALKORDB_DATABASE", "LADYBUG_PATH"):
+            value = code_env.get(key) or doc_env.get(key)
+            if value and key not in os.environ:
+                os.environ[key] = str(value)
+    else:
+        for key in tuple(os.environ):
+            if key.startswith("NEO4J_") or key.startswith("LADYBUG_"):
                 os.environ.pop(key, None)
         for key in ("FALKORDB_GRAPH", "FALKORDB_DATABASE"):
             value = code_env.get(key) or doc_env.get(key)
@@ -85,6 +107,9 @@ def load_harness_config(config_path: str) -> None:
             "FALKORDB_PATH",
             "FALKORDB_CODE_PATH",
             "FALKORDB_DOC_PATH",
+            "LADYBUG_PATH",
+            "LADYBUG_CODE_PATH",
+            "LADYBUG_DOC_PATH",
         }
     }
     config_file = Path(config_path).resolve()
@@ -111,6 +136,14 @@ def load_harness_config(config_path: str) -> None:
                 os.environ["FALKORDB_SSL"] = "1"
     for key, value in storage_overlay(resolved, owner="code").items():
         if provider == "neo4j" and key.startswith("FALKORDB_"):
+            continue
+        if (
+            provider == "ladybug"
+            and key.startswith("FALKORDB_")
+            and key not in _PROVIDER_LOGICAL_GRAPH_KEYS
+        ):
+            # LadybugDB is embedded-only; embedded FalkorDB paths must not
+            # leak into a ladybug run.
             continue
         if remote_uri and key.startswith("FALKORDB_") and key.endswith("_PATH"):
             # Remote graph projects must not fall back to embedded paths.

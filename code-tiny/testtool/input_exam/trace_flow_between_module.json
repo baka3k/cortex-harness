@@ -1,13 +1,13 @@
 {
-        "source_modules": [
-                "xxx"
-        ],
-        "target_modules": [
-                "yyy"
-        ],
-        "project_id": "hyper_graph",
-        "max_depth": 8,
-        "direction": "out",
-        "content_mode": "summary",
-        "include_raw_fields": false
+  "source_modules": [
+    "DigitalKey"
+  ],
+  "target_modules": [
+    "Iso7816"
+  ],
+  "project_id": "digitalkey",
+  "max_depth": 4,
+  "direction": "out",
+  "content_mode": "summary",
+  "include_raw_fields": false
 }

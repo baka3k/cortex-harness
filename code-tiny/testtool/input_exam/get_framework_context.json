@@ -1,6 +1,6 @@
 {
-    "project_id": "YOUR_PROJECT_ID",
-    "parser_type": "YOUR_PARSER_TYPE",
-    "framework": "spring",
-    "limit": 50
+  "project_id": "digitalkey",
+  "parser_type": "android",
+  "framework": "spring",
+  "limit": 50
 }

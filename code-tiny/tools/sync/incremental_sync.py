@@ -2193,10 +2193,32 @@ async def _run_incremental(args: argparse.Namespace) -> int:
                     }
                 )
             if not dirty_inventories:
-                raise RuntimeError(
-                    "dirty sync state has no recovery or last-good inventory; "
-                    "project-scoped storage reconciliation is required"
-                )
+                if full_scan:
+                    # An explicit full scan re-ingests every current file, so it
+                    # needs no recovery inventory. This is the only safe path
+                    # out of a dirty state whose inventories were never written
+                    # (e.g. the failed run crashed before recording one).
+                    summary["coverage_warnings"].append(
+                        {
+                            "code": "dirty_state_without_inventory_full_scan",
+                            "warning": (
+                                "previous run is dirty but recorded no recovery or "
+                                "last-good inventory; explicit full scan covers every "
+                                "current file, so recovery replay is skipped"
+                            ),
+                        }
+                    )
+                    if args.verbose:
+                        print(
+                            "[recovery] previous run is dirty without any recorded "
+                            "inventory; explicit full scan covers all current files"
+                        )
+                else:
+                    raise RuntimeError(
+                        "dirty sync state has no recovery or last-good inventory; "
+                        "project-scoped storage reconciliation is required "
+                        "(rerun with --full-scan)"
+                    )
             recovery_full_scan = True
             summary["full_scan"] = True
             summary["recovery_full_scan"] = True
