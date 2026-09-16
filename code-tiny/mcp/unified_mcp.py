@@ -22,7 +22,7 @@ from fastmcp import FastMCP
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools import Tool
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools import ToolResult
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -2583,7 +2583,7 @@ async def tool_get_api_call_chain(
     fe_project_id:  str = "",
     be_project_id:  str = "",
     project_id:     str = "",
-    max_depth:      str = "5",
+    max_depth:      int = 5,
     parser_type:    str = "",
 ) -> Dict[str, Any]:
     """
