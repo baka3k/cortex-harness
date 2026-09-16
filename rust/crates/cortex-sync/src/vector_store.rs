@@ -141,8 +141,16 @@ impl VectorWriteOps for LocalQdrantStore {
     fn discard(&self) {
         // Evict the diverged in-memory state (failed pass leaves deferred
         // mutations only in memory): re-read disk into this handle AND the
-        // process cache, keeping the storage lease.
-        let _ = LocalQdrantStore::reload_from_disk(self);
+        // process cache, keeping the storage lease. If the reload itself
+        // fails, say so loudly — a silent failure would let the diverged
+        // state resurface via a later flush (the very bug discard exists to
+        // prevent).
+        if let Err(error) = LocalQdrantStore::reload_from_disk(self) {
+            eprintln!(
+                "[vector-store] WARN: post-failure reload_from_disk failed ({error}) — \
+                 diverged in-memory state retained; rerun the sync if vector counts drift"
+            );
+        }
     }
 }
 

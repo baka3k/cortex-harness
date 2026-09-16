@@ -45,6 +45,7 @@ from local_twin_parity import build_fixture, COLLECTION, DIM, PROJECT  # noqa: E
 RUST_TARGET = REPO_ROOT / "rust" / "target"
 STORAGE_PROBE = RUST_TARGET / "debug" / "examples" / "local_vector_probe"
 WRITER_PROBE = RUST_TARGET / "debug" / "examples" / "vector_writer_probe"
+LANE_PROBE = RUST_TARGET / "debug" / "examples" / "vector_lane_probe"
 TWIN_SCRIPT = HERE / "local_twin_parity.py"
 
 RESULTS: list[tuple[str, str]] = []
@@ -205,9 +206,8 @@ def leg_explore_seeds(root: Path) -> None:
     run_binary(STORAGE_PROBE, ["init", str(store), "/dev/stdin", "seed_a", str(DIM)], stdin=json.dumps(shared))
     run_binary(STORAGE_PROBE, ["init", str(store), "/dev/stdin", "seed_b", str(DIM)], stdin=json.dumps(shared))
 
-    probe = RUST_TARGET / "debug" / "examples" / "vector_lane_probe"
     result = run_binary(
-        probe,
+        LANE_PROBE,
         [str(store), "seed_a,seed_b", "5"],
         stdin=json.dumps([0.4] * DIM),
         env_extra={"CORTEX_VECTOR_BACKEND": "rust"},
@@ -341,11 +341,18 @@ def leg_rss(root: Path) -> None:
 
 
 def main() -> int:
-    if not STORAGE_PROBE.exists() or not WRITER_PROBE.exists():
+    missing = [
+        probe
+        for probe in (STORAGE_PROBE, WRITER_PROBE, LANE_PROBE)
+        if not probe.exists()
+    ]
+    if missing:
         print(
-            "probe binaries missing — build with:\n"
+            "probe binaries missing:\n  " + "\n  ".join(str(p) for p in missing)
+            + "\nbuild with:\n"
             "  cargo build -p cortex-storage --example local_vector_probe\n"
-            "  cargo build -p cortex-sync --example vector_writer_probe"
+            "  cargo build -p cortex-sync --example vector_writer_probe\n"
+            "  cargo build -p cortex-mcp --example vector_lane_probe"
         )
         return 2
     with tempfile.TemporaryDirectory(prefix="vector-matrix-") as tmp:
