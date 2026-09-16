@@ -201,6 +201,10 @@ fn write_graph(
 ) -> Result<BTreeMap<String, i64>, String> {
     let (mut store, database) = open_store(args).map_err(|error| error.to_string())?;
     let mut counts: BTreeMap<String, i64> = BTreeMap::new();
+    // Ladybug không hỗ trợ node multi-label (`Create node n with multiple
+    // node labels is not supported`) — node chỉ gắn nhãn StrutsFact, kind
+    // phân biệt qua property `kind` (đã có sẵn trong row).
+    let ladybug = store.provider() == "ladybug";
 
     // Cleanup: xoá StrutsFact cũ của project (chạy trước khi writer chiếm
     // quyền sở hữu store — như python cleanup_batch).
@@ -241,9 +245,11 @@ fn write_graph(
             .push(fact.to_graph_node());
     }
     for (kind, rows) in &facts_by_kind {
-        let cypher = format!(
-            "UNWIND $rows AS row MERGE (n:StrutsFact:{kind} {{id: row.id}}) SET n += row"
-        );
+        let cypher = if ladybug {
+            "UNWIND $rows AS row MERGE (n:StrutsFact {id: row.id}) SET n += row".to_string()
+        } else {
+            format!("UNWIND $rows AS row MERGE (n:StrutsFact:{kind} {{id: row.id}}) SET n += row")
+        };
         let written = writer
             .write_nodes_batch(&format!("struts:{kind}"), &cypher, rows)
             .map_err(|error| error.to_string())?;
@@ -270,8 +276,14 @@ fn write_graph(
         let mut rel_row = serde_json::Map::new();
         rel_row.insert("source_id".into(), row["from_id"].clone());
         rel_row.insert("target_id".into(), row["to_id"].clone());
-        rel_row.insert("source_label".into(), row["from_label"].clone());
-        rel_row.insert("target_label".into(), row["to_label"].clone());
+        rel_row.insert(
+            "source_label".into(),
+            if ladybug { json!("StrutsFact") } else { row["from_label"].clone() },
+        );
+        rel_row.insert(
+            "target_label".into(),
+            if ladybug { json!("StrutsFact") } else { row["to_label"].clone() },
+        );
         rel_row.insert("rel_type".into(), row["type"].clone());
         rel_row.insert("properties".into(), Value::Object(merged));
         relations.push(rel_row);

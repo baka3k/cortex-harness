@@ -7,6 +7,12 @@ root-cause đã fix). Kế thừa decision "ingest giữ Python" của spike pha
 > blockedBy-note: plan này **blocks** `plans/260915-2230-python-legacy-cleanup` —
 > phase-03/04/05 phải xong trước khi cleanup xoá Python MCP plane (Python unified/mind
 > vẫn là parity ground-truth + rollback của lane đang port).
+>
+> **Revision 2026-09-16** — `plans/260916-1154-native-vector-ingest-local` superseded
+> D2 + "ingest giữ Python" CHO RIÊNG code lane: Rust native JSON store
+> (`LocalQdrantStore`, `cortex-local-store.json`) là chủ sở hữu format local của code
+> lane (writer sync + reader search). Sidecar `vector_worker.py` còn sống cho mind/doc
+> lane (writer doc vẫn Python).Các decision D1/D3/D4 giữ nguyên.
 
 ## 1. Bối cảnh — vì sao cần plan riêng
 

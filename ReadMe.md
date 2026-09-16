@@ -85,6 +85,7 @@ git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
 make build       # build the cortex-dev binary (cargo workspace) + provision the ONNX Runtime dylib
+make embedding-install # install the pinned embedding model graphs into .cache/embed/ (skips present models)
 make storage-init # create ~/.cortext-harness/v1/instances/default and its manifest
 make storage-layout # show resolved owner paths, manifest, and leases
 make install     # install the cortex-dev binary + the global `dev` command (~/.local/bin)
@@ -277,6 +278,13 @@ and source root; active, leased, or retained runs are refused.
 primary graph and framework overlays first, runs `project_topology`, and only
 then writes embeddings to Qdrant. This guarantees that graph and module
 topology queries are available without waiting for embedding to finish.
+
+The embedding phase runs the native `cortex-embed` ONNX embedder (default
+`CORTEX_EMBED_BACKEND`), which loads the pinned model graphs (jina-v3 +
+bge-m3) from `.cache/embed/`. Provision them on demand with
+`make embedding-install` — idempotent, skips models already present; the
+first run downloads/exports several GB of weights. Force a per-model
+re-export or re-download with `make embed-jina-onnx` / `make embed-bge-onnx`.
 
 | Mode | Runs | Storage isolation |
 | --- | --- | --- |

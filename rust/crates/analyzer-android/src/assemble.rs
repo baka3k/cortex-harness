@@ -49,8 +49,7 @@ pub const NODE_QUERIES: [(&str, &str); 18] = [
         r#"
                 UNWIND $rows AS row
                 MERGE (p:Package {id: row.id})
-                SET p:Package,
-                    p.name = row.name,
+                SET p.name = row.name,
                     p.start_line = row.start_line,
                     p.end_line = row.end_line,
                     p.code = row.code,
@@ -70,8 +69,7 @@ pub const NODE_QUERIES: [(&str, &str); 18] = [
         r#"
                 UNWIND $rows AS row
                 MERGE (n:Namespace {id: row.id})
-                SET n:Namespace,
-                    n.name = row.name,
+                SET n.name = row.name,
                     n.qualified_name = row.qualified_name,
                     n.file_path = row.file_path,
                     n.start_line = row.start_line,

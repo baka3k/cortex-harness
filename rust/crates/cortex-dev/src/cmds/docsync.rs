@@ -7,7 +7,7 @@
 //! stock local store yet. Everything else here is native.
 
 use super::sync::{
-    absolute_or_join, print_summary, run_with_retry, select_folders_interactive,
+    absolute_or_join, lane_destinations, print_summary, run_with_retry, select_folders_interactive,
     env_to_neo4j_args, stop_sync_command, sync_lifecycle, warn_scan_roots_matching_ignores,
     with_extra_ignores, RetryOptions,
 };
@@ -98,7 +98,8 @@ pub fn sync_doc_impl(m: &Matches, force_full: bool) {
         summaries.push(result);
     }
     drop(guard);
-    print_summary(&summaries, total_start.elapsed().as_secs_f64());
+    let dest = lane_destinations(&env, "doc", "both");
+    print_summary(&summaries, total_start.elapsed().as_secs_f64(), &dest);
 }
 
 pub fn sync_doc_stop(m: &Matches) {
@@ -128,6 +129,7 @@ pub(super) fn sync_doc_folder(
     }
 
     let state_key = format!("doc:{}", folder);
+    let state_file = crate::util::state_path(project_path, &state_key);
     let state = load_state(project_path, &state_key);
     let has_state = state.as_object().map(|o| !o.is_empty()).unwrap_or(false);
     let mode = if force_mode != "auto" {
@@ -168,7 +170,7 @@ pub(super) fn sync_doc_folder(
     base_cmd.push("--project-id".to_string());
     base_cmd.push(project_id.clone());
     base_cmd.push("--collection".to_string());
-    base_cmd.push(collection);
+    base_cmd.push(collection.clone());
     base_cmd.push("--entity-provider".to_string());
     base_cmd.push(entity_provider.to_string());
     base_cmd.push("--embedding-model".to_string());
@@ -278,6 +280,8 @@ pub(super) fn sync_doc_folder(
             "status": if rc == 0 { "ok" } else { "error" },
             "mode": mode,
             "elapsed": elapsed,
+            "collections": doc_collections(&collection),
+            "state_path": state_file.to_string_lossy(),
         });
     }
 
@@ -393,8 +397,17 @@ pub(super) fn sync_doc_folder(
         "status": if success { "ok" } else { "error" },
         "mode": mode,
         "elapsed": elapsed,
+        "collections": doc_collections(&collection),
+        "state_path": state_file.to_string_lossy(),
     })
 }
+
+/// The doc lane writes one collection per project; the Python ingestor counts
+/// its own points, so the count stays unknown here rather than reported as 0.
+fn doc_collections(collection: &str) -> Value {
+    json!([{"name": collection, "points": Value::Null}])
+}
+
 pub(super) fn start_elapsed(start_ts: f64) -> f64 {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

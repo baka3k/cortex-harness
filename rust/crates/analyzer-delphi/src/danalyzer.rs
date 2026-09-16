@@ -19,6 +19,7 @@ use std::time::Instant;
 
 use cortex_analyzer_framework::cli::AnalyzerArgs;
 use cortex_analyzer_framework::cleanup::cleanup_graph_files;
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::manifest::load_manifest_paths;
 use cortex_analyzer_framework::scan::rel_posix;
 use cortex_graph_writer::language_writer::{FilesVariant, LanguageCodeWriter, WriteAllPayload};
@@ -728,9 +729,29 @@ fn run_build_call_graph(
             use_full_writers: true,
             files_variant: FilesVariant::Default,
         };
+        // Phase-02: capture embedding categories BEFORE write_all consumes (plan
+        // `260916-1432-legacy-17-vector-emit`).
+        let embedding_categories = payload.embedding_categories();
         writer
             .write_all(&payload)
             .map_err(|error| format!("Delphi graph persistence failed: {error}"))?;
+        if let Some(output) = args.embedding_input_output() {
+            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+                Some(output),
+                EmbeddingEmission {
+                    parser: "delphi",
+                    project_id: &scope.project_id,
+                    root_scope: &scope.repo,
+                    full_replace: !args.incremental,
+                    scanned_directory: true,
+                    files_selected: Vec::new(),
+                    files_deleted: Vec::new(),
+                    categories: embedding_categories,
+                },
+            ) {
+                eprintln!("delphi embedding-input artifact failed: {error}");
+            }
+        }
 
         if !all_calls.is_empty() {
             let original_batch_size = writer.batch_size;

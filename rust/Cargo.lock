@@ -848,6 +848,7 @@ dependencies = [
  "cortex-falkordb",
  "cortex-graph-writer",
  "cortex-retrieval",
+ "cortex-storage",
  "lbug",
  "redis",
  "rmcp",

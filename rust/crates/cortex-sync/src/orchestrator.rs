@@ -352,6 +352,7 @@ pub fn run_incremental(args: &Args) -> i32 {
         &mut current_inventory,
         &mut parse_quality_manifest_path,
         &mut exit_code,
+        started,
     ) {
         Ok(()) => {}
         Err(message) => {
@@ -644,6 +645,7 @@ fn run_flow(
     current_inventory_out: &mut Option<SourceInventory>,
     parse_quality_manifest_path: &mut Option<String>,
     exit_code: &mut i32,
+    primary_pass_started_at: std::time::Instant,
 ) -> Result<(), String> {
     let graph_ready = graph_context.is_some();
     if !root.is_dir() {
@@ -2113,7 +2115,7 @@ fn run_flow(
             // pin loudly — the embedding pass never hard-fails on a cell the
             // phase-01 semantics did not.
             let mut native_parser = native_store.is_some()
-                && registry::SHARED_VECTOR_CLI_PARSERS.contains(&parser_name);
+                && registry::EMITTING_VECTOR_CLI_PARSERS.contains(&parser_name);
             if native_parser {
                 match registry::rust_analyzer_binary(&config) {
                     Ok(Some(_)) => {}
@@ -2127,9 +2129,10 @@ fn run_flow(
             // Phase-08: Python analyzer scripts are retired; the embedding pass
             // always uses the Rust child. Shared-7 lineage still gets orchestrator-
             // level embedding (artifact emission handled by the Rust binary).
-            // Legacy 17 parsers do not emit embedding-input artifacts yet and
-            // therefore report `vectors=0 vector_status=disabled`; this regression
-            // is logged once at the top of the loop, never silent.
+            // Legacy 17 parsers that LACK emitter fall through to
+            // `vector_status="disabled-no-emitter"` (plan `260916-1432-legacy-17-vector-emit`
+            // D4); vector_count=0 explicit. Plan này wires 14 legacy + dart fix
+            // ở phase-02; capability table đầy đủ ở phase-03 widening.
             config.force_python = false;
             let parser_changed = changed_by_parser.get(parser_name).cloned().unwrap_or_default();
             let parser_deleted = deleted_by_parser.get(parser_name).cloned().unwrap_or_default();
@@ -2173,13 +2176,27 @@ fn run_flow(
                     .insert("embedding_input_artifact".into(), json!(path.to_string_lossy()));
             }
             vector_info.insert("writes_vectors".into(), json!(true));
+            // Plan `260916-1432-legacy-17-vector-emit` D4: distinguish
+            //   - `pending` — native_parser, awaiting finish_native_embedding_pass
+            //   - `success` — finished, vector_count=N
+            //   - `disabled-no-emitter` — capability table carve-out (parser
+            //     không trong EMITTING_VECTOR_CLI_PARSERS); vector_count=0 explicit
+            //   - `disabled` — qdrant_url không set
             vector_info.insert(
                 "vector_status".into(),
-                json!(if args.qdrant_url.is_some() { "pending" } else { "disabled" }),
+                json!(match (args.qdrant_url.is_some(), native_parser) {
+                    (false, _) => "disabled",
+                    (true, false) => "disabled-no-emitter",
+                    (true, true) => "pending",
+                }),
             );
             vector_info.insert(
                 "vector_count".into(),
-                json!(if args.qdrant_url.is_some() { Value::Null } else { json!(0) }),
+                json!(match (args.qdrant_url.is_some(), native_parser) {
+                    (false, _) => json!(0),
+                    (true, false) => json!(0),
+                    (true, true) => Value::Null,
+                }),
             );
             vector_info.insert("graph_status".into(), json!("disabled"));
             let message_enabled =
@@ -2254,7 +2271,26 @@ fn run_flow(
             set_list_field(&mut vector_summaries, index, "command", json!(command_vec));
             sync_list(summary, "vector_embeddings", &vector_summaries);
             let mut lane_error: Option<String> = None;
-            let child_result = run_child(&command_vec, &run_cwd, args.verbose, &embedding_env);
+            // Phase-03 (plan `260916-1432-legacy-17-vector-emit` D2): re-launch
+            // short-circuit. Skip child launch khi primary-pass artifact đã
+            // fresh (incremental + !reconcile + artifact mtime fresh).
+            let skip_child = !args.full_scan
+                && !args.reconcile
+                && legacy_emit_enabled()
+                && should_skip_embedding_child_relaunch(
+                    embedding_artifact.as_deref(),
+                    primary_pass_started_at,
+                    args.full_scan,
+                    args.reconcile,
+                );
+            let child_result = if skip_child {
+                println!(
+                    "[embedding] {parser_name}: skipping child launch (primary-pass artifact fresh)"
+                );
+                Ok(String::new())
+            } else {
+                run_child(&command_vec, &run_cwd, args.verbose, &embedding_env)
+            };
             match child_result {
                 Ok(output) => {
                     set_list_field(&mut vector_summaries, index, "status", json!("success"));
@@ -2715,6 +2751,61 @@ fn read_parse_quality_aggregates(
 
 fn env_lookup(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+/// `CORTEX_LEGACY_VECTOR_EMIT` opt-in flag (plan `260916-1432-legacy-17-vector-emit` D8).
+/// Phase-03 default off (return false); phase-04 flip default ON (return true).
+/// Explicit override: `=python` / `=0` / `=false` / `=no` opt-out;
+///                    `=rust` / `=1` / `=true` / `=yes` opt-in.
+#[allow(dead_code)] // phase-01 skeleton — phase-03 wires
+fn legacy_emit_enabled() -> bool {
+    match env_lookup("CORTEX_LEGACY_VECTOR_EMIT")
+        .map(|v| v.trim().to_lowercase())
+        .as_deref()
+    {
+        Some("python") | Some("off") | Some("0") | Some("false") | Some("no") => false,
+        Some("rust") | Some("on") | Some("1") | Some("true") | Some("yes") => true,
+        _ => false, // unset = phase-03 default off
+    }
+}
+
+/// Re-launch short-circuit (D2): khi primary-pass artifact đã fresh, skip
+/// child launch trong embedding pass. Phase-03 skeleton — phase-04 flip default.
+///
+/// Skip conditions (all required):
+///   - `!args.full_scan` (incremental only)
+///   - `!args.reconcile`
+///   - artifact path exists
+///   - artifact mtime >= primary_pass_started_at (an toàn cho incremental)
+///
+/// Phase-03 returns `false` (luôn re-launch) để safe default; phase-04 flip
+/// thành `true` sau drill PASS.
+#[allow(dead_code)] // phase-01 skeleton — phase-03 wires
+fn should_skip_embedding_child_relaunch(
+    artifact: Option<&Path>,
+    primary_pass_started_at: std::time::Instant,
+    full_scan: bool,
+    reconcile: bool,
+) -> bool {
+    if full_scan || reconcile {
+        return false;
+    }
+    let Some(artifact_path) = artifact else {
+        return false;
+    };
+    if !artifact_path.exists() {
+        return false;
+    }
+    let Ok(metadata) = std::fs::metadata(artifact_path) else {
+        return false;
+    };
+    let Ok(artifact_mtime) = metadata.modified() else {
+        return false;
+    };
+    let primary_mtime = std::time::SystemTime::now()
+        .checked_sub(primary_pass_started_at.elapsed())
+        .unwrap_or(std::time::SystemTime::now());
+    artifact_mtime >= primary_mtime
 }
 
 fn is_git_repo(root: &str) -> bool {
@@ -3369,7 +3460,10 @@ fn run_native_message_scan_lane(
 
 #[cfg(test)]
 mod handshake_tests {
-    use super::{handshake_verdict, parse_version_commit};
+    use super::{
+        handshake_verdict, legacy_emit_enabled, parse_version_commit,
+        should_skip_embedding_child_relaunch,
+    };
 
     #[test]
     fn parse_version_commit_takes_last_token() {
@@ -3418,5 +3512,149 @@ mod handshake_tests {
     fn handshake_hard_errors_on_unknown_child_stamp() {
         let error = handshake_verdict("1c2967a", Some("unknown")).unwrap_err();
         assert!(error.contains("stale analyzer binary"), "{error}");
+    }
+
+    // ── Phase 01 — capability table gate + re-launch short-circuit (plan
+    //    `260916-1432-legacy-17-vector-emit`). ─────────────────────────────
+
+    #[test]
+    fn capability_table_constant_exposes_emitting_set() {
+        // Phase-03 widening: 22 parsers in capability table.
+        for parser in [
+            "cplus", "csharp", "dart", "delphi", "go", "java", "jp1", "js", "kotlin",
+            "perl", "php", "plsql", "python", "rust", "shell", "sql", "swift", "ts",
+            "vb6", "vba", "vbnet", "vbscript",
+        ] {
+            assert!(
+                crate::registry::EMITTING_VECTOR_CLI_PARSERS.contains(&parser),
+                "{parser} phải trong EMITTING_VECTOR_CLI_PARSERS"
+            );
+        }
+        // Carve-outs: android, cobol chưa wire (phase-02 defer).
+        for parser in ["android", "cobol"] {
+            assert!(
+                !crate::registry::EMITTING_VECTOR_CLI_PARSERS.contains(&parser),
+                "{parser} KHÔNG nên trong EMITTING_VECTOR_CLI_PARSERS ở phase-03"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_emit_flag_default_off_phase_three() {
+        // Phase-03 default: flag unset → off.
+        // SAFETY: single-threaded test; env var scoped to test.
+        unsafe { std::env::remove_var("CORTEX_LEGACY_VECTOR_EMIT") };
+        assert!(!legacy_emit_enabled());
+        // Explicit opt-in.
+        unsafe { std::env::set_var("CORTEX_LEGACY_VECTOR_EMIT", "rust") };
+        assert!(legacy_emit_enabled());
+        unsafe { std::env::set_var("CORTEX_LEGACY_VECTOR_EMIT", "true") };
+        assert!(legacy_emit_enabled());
+        unsafe { std::env::set_var("CORTEX_LEGACY_VECTOR_EMIT", "1") };
+        assert!(legacy_emit_enabled());
+        // Explicit opt-out.
+        unsafe { std::env::set_var("CORTEX_LEGACY_VECTOR_EMIT", "python") };
+        assert!(!legacy_emit_enabled());
+        unsafe { std::env::set_var("CORTEX_LEGACY_VECTOR_EMIT", "0") };
+        assert!(!legacy_emit_enabled());
+        unsafe { std::env::set_var("CORTEX_LEGACY_VECTOR_EMIT", "false") };
+        assert!(!legacy_emit_enabled());
+        unsafe { std::env::remove_var("CORTEX_LEGACY_VECTOR_EMIT") };
+    }
+
+    #[test]
+    fn re_launch_short_circuit_full_scan_and_reconcile_force_relaunch() {
+        let tmp = std::env::temp_dir().join(format!("cortex-sync-relaunch-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let artifact = tmp.join("embedding_input.json");
+        std::fs::write(&artifact, "{}").unwrap();
+        let started = std::time::Instant::now();
+        // full_scan = true → luôn re-launch
+        assert!(!should_skip_embedding_child_relaunch(
+            Some(&artifact),
+            started,
+            true,
+            false,
+        ));
+        // reconcile = true → luôn re-launch
+        assert!(!should_skip_embedding_child_relaunch(
+            Some(&artifact),
+            started,
+            false,
+            true,
+        ));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn re_launch_short_circuit_missing_artifact_falls_through() {
+        let tmp = std::env::temp_dir().join(format!("cortex-sync-relaunch-missing-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let missing = tmp.join("does_not_exist.json");
+        let started = std::time::Instant::now();
+        assert!(!should_skip_embedding_child_relaunch(
+            Some(&missing),
+            started,
+            false,
+            false,
+        ));
+        // None = always re-launch
+        assert!(!should_skip_embedding_child_relaunch(None, started, false, false));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn re_launch_short_circuit_fresh_artifact_skips() {
+        let tmp = std::env::temp_dir().join(format!("cortex-sync-relaunch-fresh-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let artifact = tmp.join("embedding_input.json");
+        std::fs::write(&artifact, "{}").unwrap();
+        // Artifact is fresh — just written. `started` should reflect a primary
+        // pass that happened BEFORE artifact (primary writes artifact; artifact
+        // mtime > primary_pass_started_at → skip re-launch).
+        // Capture `started` first, then write artifact with later mtime.
+        let started = std::time::Instant::now();
+        // Sleep 10ms để chắc chắn artifact mtime > started-instant
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        // Re-touch artifact mtime về now() (mặc định fs::write đã làm nhưng rõ ràng).
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&artifact)
+            .unwrap();
+        file.set_modified(std::time::SystemTime::now()).unwrap();
+        drop(file);
+        assert!(should_skip_embedding_child_relaunch(
+            Some(&artifact),
+            started,
+            false,
+            false,
+        ));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn re_launch_short_circuit_stale_artifact_falls_through() {
+        let tmp = std::env::temp_dir().join(format!("cortex-sync-relaunch-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let artifact = tmp.join("embedding_input.json");
+        std::fs::write(&artifact, "{}").unwrap();
+        // Backdate artifact mtime rất xa trong quá khứ (1 ngày).
+        let now = std::time::SystemTime::now();
+        let stale = now - std::time::Duration::from_secs(86_400);
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&artifact)
+            .unwrap();
+        file.set_modified(stale).unwrap();
+        drop(file);
+        let started = std::time::Instant::now();
+        // Stale → KHÔNG skip; re-launch.
+        assert!(!should_skip_embedding_child_relaunch(
+            Some(&artifact),
+            started,
+            false,
+            false,
+        ));
+        std::fs::remove_dir_all(&tmp).ok();
     }
 }

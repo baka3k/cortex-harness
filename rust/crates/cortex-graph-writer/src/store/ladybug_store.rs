@@ -64,6 +64,29 @@ fn merge_node_pattern_re() -> &'static Regex {
     })
 }
 
+/// Backtick-quote node label / rel type trong pattern positions. Một số
+/// identifier của schema trùng reserved word của ladybug grammar (`Table`,
+/// `Index`, `Order`, `Group`, `Union`, `All`, `Any`, `Case`, `When`,
+/// `Macro`, …) — dạng trần `(t:Table` vỡ Parser exception "expected rule
+/// oC_SingleQuery"; dạng quoted ``(t:`Table``` parse OK với mọi label.
+/// Chạy TRƯỚC render_params: query text lúc này còn là shape từ code
+/// (không chứa dữ liệu đã inline) nên regex không đụng string literal dữ liệu.
+fn quote_cypher_labels(query: &str) -> String {
+    static NODE_VAR: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static NODE_BARE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static REL_VAR: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static REL_BARE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let node_var = NODE_VAR.get_or_init(|| Regex::new(r"\(([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+    let node_bare = NODE_BARE.get_or_init(|| Regex::new(r"\(:([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+    let rel_var = REL_VAR.get_or_init(|| Regex::new(r"-\[([A-Za-z_][A-Za-z0-9_]*):([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+    let rel_bare = REL_BARE.get_or_init(|| Regex::new(r"-\[:([A-Za-z_][A-Za-z0-9_]*)").unwrap());
+    let quoted = rel_bare.replace_all(query, "-[:`$1`");
+    let quoted = rel_var.replace_all(&quoted, "-[$1:`$2`");
+    let quoted = node_bare.replace_all(&quoted, "(:`$1`");
+    let quoted = node_var.replace_all(&quoted, "($1:`$2`");
+    quoted.into_owned()
+}
+
 /// Ladybug yêu cầu primary key (`id`) xuất hiện trực tiếp trong MERGE
 /// pattern, còn các upsert port từ FalkorDB merge trên natural key
 /// (Project.project_id, CallSite.site_id, Workflow.workflow_id, …).
@@ -203,6 +226,9 @@ pub struct LadybugStore {
     graph: String,
     path: PathBuf,
     bootstrapped: bool,
+    /// Cache các (rel_type, source, target) đã xác nhận có endpoint bind —
+    /// tránh re-probe `show_connection` mỗi batch.
+    ensured_rel_pairs: std::cell::RefCell<BTreeSet<(String, String, String)>>,
 }
 
 impl LadybugStore {
@@ -232,7 +258,91 @@ impl LadybugStore {
             graph: graph.to_string(),
             path,
             bootstrapped: false,
+            ensured_rel_pairs: std::cell::RefCell::new(BTreeSet::new()),
         })
+    }
+
+    /// Self-heal rel table endpoint: rel table bind CHẶT endpoints từ lần
+    /// tạo đầu; parser khác ghi cùng rel type với endpoint khác → Binder
+    /// "Query node X violates schema. Expected labels are …". Quét rel
+    /// pattern trong query, thiếu pair nào thì DROP+CREATE lại rel table
+    /// với UNION endpoints (best-effort, cache để tránh re-probe mỗi batch).
+    fn autoheal_rel_endpoints(&self, query: &str) {
+        let pairs_by_rel = rel_pairs_from_query_all(query);
+        if pairs_by_rel.is_empty() {
+            return;
+        }
+        for (rel, pairs) in &pairs_by_rel {
+            let pending: Vec<(String, String)> = pairs
+                .iter()
+                .filter(|pair| {
+                    !self
+                        .ensured_rel_pairs
+                        .borrow()
+                        .contains(&(rel.clone(), pair.0.clone(), pair.1.clone()))
+                })
+                .cloned()
+                .collect();
+            if pending.is_empty() {
+                continue;
+            }
+            let Ok(connection) = self.connect() else {
+                return;
+            };
+            let existing: BTreeSet<(String, String)> =
+                match connection.query(&format!("CALL show_connection('{rel}')")) {
+                    Ok(result) => result
+                        .into_iter()
+                        .map(|row| {
+                            let source = row
+                                .iter()
+                                .find_map(ladybug_pair_source)
+                                .unwrap_or_default()
+                                .to_string();
+                            let target = row
+                                .iter()
+                                .find_map(ladybug_pair_target)
+                                .unwrap_or_default()
+                                .to_string();
+                            (source, target)
+                        })
+                        .collect(),
+                    Err(_) => BTreeSet::new(), // bảng chưa tồn tại
+                };
+            let missing: Vec<(String, String)> = pending
+                .iter()
+                .filter(|pair| !existing.contains(pair))
+                .cloned()
+                .collect();
+            if missing.is_empty() {
+                let mut cache = self.ensured_rel_pairs.borrow_mut();
+                for pair in pending {
+                    cache.insert((rel.clone(), pair.0.clone(), pair.1.clone()));
+                }
+                continue;
+            }
+            let mut union = existing;
+            union.extend(missing.iter().cloned());
+            let pairs_sql = union
+                .iter()
+                .map(|(src, dst)| format!("FROM `{src}` TO `{dst}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!(
+                "[ladybug autoheal] rel table `{rel}` thiếu endpoint pairs ({:?}) — DROP+CREATE với union endpoints",
+                missing
+            );
+            if connection.query(&format!("DROP TABLE `{rel}`")).is_ok()
+                && connection
+                    .query(&format!("CREATE REL TABLE `{rel}` ({pairs_sql})"))
+                    .is_ok()
+            {
+                let mut cache = self.ensured_rel_pairs.borrow_mut();
+                for (src, dst) in &union {
+                    cache.insert((rel.clone(), src.clone(), dst.clone()));
+                }
+            }
+        }
     }
 
     /// Connection per query — `Connection<'a>` mượn `Database` nên không thể
@@ -272,7 +382,10 @@ impl LadybugStore {
         // literals đã render (uniform-key). Chỉ đụng shape `+= row` trơn;
         // `+= row.props` / `coalesce(row.props, {})` chưa expand (null-props
         // row sẽ đổi semantics) — fail-closed như trước.
-        Ok(expand_set_plus_equals(&rendered))
+        // Quote label/rel-type chạy CUỐI: mọi regex nội bộ (natural-key
+        // rewrite, SET += expansion, auto-DDL table resolve) đã nhìn shape
+        // trần; executed query mới nhận bản quoted.
+        Ok(quote_cypher_labels(&expand_set_plus_equals(&rendered)))
     }
 
     fn execute_one(
@@ -368,9 +481,13 @@ impl LadybugStore {
                     "CREATE REL TABLE IF NOT EXISTS `{table}` ({pairs})"
                 ));
             }
-            // Node fallback với identity key chuẩn (khớp Python).
+            // Node fallback với identity key chuẩn + base columns (khớp
+            // bootstrap — unlabeled cleanup query đọc file_path/path/framework
+            // trên MỌI bảng nên các cột phải tồn tại từ lúc tạo).
             return Some(format!(
-                "CREATE NODE TABLE IF NOT EXISTS `{table}` (id STRING, PRIMARY KEY(id))"
+                "CREATE NODE TABLE IF NOT EXISTS `{table}` (id STRING, name STRING, \
+                 file_path STRING, path STRING, qualified_name STRING, framework STRING, \
+                 project_id STRING, project_id_normalized STRING, PRIMARY KEY(id))"
             ));
         }
         if let Some(caps) = missing_rel_bind_re().captures(message) {
@@ -403,7 +520,7 @@ impl LadybugStore {
             let connection = self.connect()?;
             let manifest = code_graph_schema();
         let base_columns = "id STRING, name STRING, file_path STRING, path STRING, \
-             qualified_name STRING, project_id STRING, project_id_normalized STRING, \
+             qualified_name STRING, framework STRING, project_id STRING, project_id_normalized STRING, \
              PRIMARY KEY(id)";
         let mut labels: BTreeSet<String> = BTreeSet::new();
         for index in &manifest.indexes {
@@ -415,6 +532,13 @@ impl LadybugStore {
             connection
                 .query(&statement)
                 .map_err(|e| StoreError::Ladybug(format!("bootstrap {label}: {e}")))?;
+            // DB cũ tạo trước khi có cột `framework` — ALTER repair (bỏ qua
+            // lỗi khi cột đã tồn tại). Overlay cleanup query `n.framework=…`
+            // MATCH node KHÔNG label nên binder cần cột tồn tại trên mọi
+            // bảng — auto-DDL không tự sửa được (var không label).
+            let _ = connection.query(&format!(
+                "ALTER TABLE `{label}` ADD `framework` STRING"
+            ));
         }
         for (name, sources, targets, _required) in &manifest.relationship_types {
             let pairs = rel_pairs(sources, targets);
@@ -428,11 +552,100 @@ impl LadybugStore {
             if connection.query(&statement).is_err() {
                 continue;
             }
+            self.repair_drifted_rel_table(&connection, name, sources, targets);
         }
         }
         self.bootstrapped = true;
         Ok(())
     }
+
+    /// Rel table của bootstrap cũ có thể chỉ bind 1 subset endpoint pairs
+    /// (ladybug không hỗ trợ ALTER endpoint; `CREATE … IF NOT EXISTS` là
+    /// no-op khi bảng đã tồn tại) → query ghi pair mới fail Binder
+    /// "Query node a violates schema. Expected labels are …". Đọc endpoint
+    /// hiện tại qua `CALL show_connection` và DROP+CREATE lại khi thiếu pair
+    /// — cạnh cũ của rel type đó sẽ được replay sync recovery ghi lại.
+    fn repair_drifted_rel_table(
+        &self,
+        connection: &Connection<'_>,
+        name: &str,
+        sources: &[String],
+        targets: &[String],
+    ) {
+        let probe = format!("CALL show_connection('{name}')");
+        let Ok(result) = connection.query(&probe) else {
+            return; // không đọc được catalog — bỏ qua, auto-DDL sẽ xử lý theo lỗi thực tế
+        };
+        let mut actual: BTreeSet<(String, String)> = BTreeSet::new();
+        for row in result {
+            let source = row
+                .iter()
+                .find_map(ladybug_pair_source)
+                .unwrap_or_default()
+                .to_string();
+            let target = row
+                .iter()
+                .find_map(ladybug_pair_target)
+                .unwrap_or_default()
+                .to_string();
+            if !source.is_empty() && !target.is_empty() {
+                actual.insert((source, target));
+            }
+        }
+        if actual.is_empty() {
+            return;
+        }
+        let missing: Vec<(&String, &String)> = sources
+            .iter()
+            .flat_map(|source| targets.iter().map(move |target| (source, target)))
+            .filter(|(source, target)| !actual.contains(&((*source).clone(), (*target).clone())))
+            .collect();
+        if missing.is_empty() {
+            return;
+        }
+        let missing_list = missing
+            .iter()
+            .map(|(source, target)| format!("{source}->{target}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        eprintln!(
+            "[ladybug bootstrap] rel table `{name}` thiếu endpoint pairs ({missing_list}) — DROP+CREATE lại theo schema hiện hành"
+        );
+        if let Err(error) = connection.query(&format!("DROP TABLE `{name}`")) {
+            eprintln!("[ladybug bootstrap] DROP `{name}` thất bại: {error}");
+            return;
+        }
+        let pairs = rel_pairs(sources, targets);
+        if let Err(error) =
+            connection.query(&format!("CREATE REL TABLE `{name}` ({pairs})"))
+        {
+            eprintln!("[ladybug bootstrap] CREATE lại `{name}` thất bại: {error}");
+        }
+    }
+}
+
+/// Cột "source table name" của `CALL show_connection(...)`.
+fn ladybug_pair_source(value: &lbug::Value) -> Option<&str> {
+    ladybug_pair_endpoint(value, "source table name")
+}
+
+/// Cột "destination table name" của `CALL show_connection(...)`.
+fn ladybug_pair_target(value: &lbug::Value) -> Option<&str> {
+    ladybug_pair_endpoint(value, "destination table name")
+}
+
+fn ladybug_pair_endpoint<'a>(value: &'a lbug::Value, column: &str) -> Option<&'a str> {
+    if let lbug::Value::String(text) = value {
+        return Some(text.as_str());
+    }
+    if let lbug::Value::Struct(fields) = value {
+        for (name, item) in fields {
+            if name == column {
+                return ladybug_pair_endpoint(item, column);
+            }
+        }
+    }
+    None
 }
 
 fn rel_pairs(sources: &[String], targets: &[String]) -> String {
@@ -506,6 +719,20 @@ fn infer_property_type(query: &str, var: &str, prop: &str) -> &'static str {
 /// Port `_resolve_rel_pairs_from_query` — endpoint labels của rel type trong
 /// query: inline hoặc qua biến được type ở node pattern khác.
 fn resolve_rel_pairs_from_query(query: &str, table: &str) -> String {
+    let all = rel_pairs_from_query_all(query);
+    let Some(pairs) = all.get(table) else {
+        return String::new();
+    };
+    pairs
+        .iter()
+        .map(|(src, dst)| format!("FROM `{src}` TO `{dst}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Mọi (rel_type → set endpoint pair) xuất hiện trong query — dùng cho
+/// auto-heal rel table endpoint (self-heal "Query node X violates schema").
+fn rel_pairs_from_query_all(query: &str) -> BTreeMap<String, BTreeSet<(String, String)>> {
     let var_labels_re =
         Regex::new(r"\(\s*`?(\w+)`?\s*:\s*`?([A-Za-z_][A-Za-z0-9_]*)`?").unwrap();
     let var_labels: BTreeMap<String, String> = var_labels_re
@@ -516,7 +743,7 @@ fn resolve_rel_pairs_from_query(query: &str, table: &str) -> String {
         r"\(\s*`?(\w+)`?\s*:?\s*`?([A-Za-z_][A-Za-z0-9_]*)?`?[^)]*\)-\[[^\]]*?:\s*`?([A-Za-z_][A-Za-z0-9_]*)`?[^\]]*\]->\(\s*`?(\w+)`?\s*:?\s*`?([A-Za-z_][A-Za-z0-9_]*)?`?[^)]*\)",
     )
     .unwrap();
-    let mut endpoints: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut out: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
     for caps in rel_usage_re.captures_iter(query) {
         let (src_var, src_label, rel_type, dst_var, dst_label) = (
             &caps[1],
@@ -525,9 +752,6 @@ fn resolve_rel_pairs_from_query(query: &str, table: &str) -> String {
             &caps[4],
             caps.get(5).map(|m| m.as_str()),
         );
-        if !rel_type.eq_ignore_ascii_case(table) {
-            continue;
-        }
         let source = src_label
             .map(str::to_string)
             .or_else(|| var_labels.get(src_var).cloned());
@@ -535,14 +759,12 @@ fn resolve_rel_pairs_from_query(query: &str, table: &str) -> String {
             .map(str::to_string)
             .or_else(|| var_labels.get(dst_var).cloned());
         if let (Some(source), Some(target)) = (source, target) {
-            endpoints.insert((source, target));
+            out.entry(rel_type.to_string())
+                .or_default()
+                .insert((source, target));
         }
     }
-    endpoints
-        .into_iter()
-        .map(|(src, dst)| format!("FROM `{src}` TO `{dst}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
+    out
 }
 
 // ── Literal rendering ────────────────────────────────────────────────────────
@@ -567,22 +789,62 @@ fn expand_set_plus_equals(query: &str) -> String {
     // Merge key per var (post natural-key rewrite mọi merge đều `{id: …}`).
     // Assignment `<var>.<merge_key> = <cùng expr>` là PK-set → binder ladybug
     // từ chối — loại khỏi expansion (redundant: merge đã đặt giá trị đó).
+    // Ngoài MERGE, pattern `(var:Label {key: …})` của MATCH/MERGE đều bind
+    // key đó làm identity — SET lại key đó (kể cả qua `+= row` expansion)
+    // đều dính "Cannot set property id … primary key".
     let mut merge_keys: Vec<(String, String)> = Vec::new();
     for caps in merge_node_pattern_re().captures_iter(query) {
         merge_keys.push((caps[1].to_string(), caps[3].to_string()));
     }
+    for caps in node_pattern_prop_re().captures_iter(query) {
+        // Chỉ `id` là PK: mọi node table ladybug khai `PRIMARY KEY(id)`
+        // (bootstrap + auto-DDL fallback). Pattern prop khác (filter trong
+        // MATCH) vẫn SET được — không lọc để không mất write.
+        let key = &caps[2];
+        if key == "id" {
+            merge_keys.push((caps[1].to_string(), key.to_string()));
+        }
+    }
     let re = set_plus_equals_row_re();
     re.replace_all(query, |caps: &regex::Captures| {
-        // Follow char phải không phải `.`/identifier — `+= row.props` KHÔNG
-        // được match (expand sai semantics null-props); trả nguyên fragment.
-        let follow = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-        if follow == "."
-            || follow.chars().next().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
-        {
+        // Nhánh 1: `+= coalesce(row.<field>, {})` (groups 1-2)
+        // Nhánh 2: `+= row.<field>` (groups 3-4)
+        // Nhánh 3: `+= row` trơn (groups 5-6; follow char phải preserve).
+        let (var, nested_field, follow) = if caps.get(1).is_some() {
+            (
+                caps.get(1).map(|m| m.as_str()).unwrap_or_default(),
+                caps.get(2).map(|m| m.as_str()).filter(|s| !s.is_empty()),
+                None,
+            )
+        } else if caps.get(3).is_some() {
+            (
+                caps.get(3).map(|m| m.as_str()).unwrap_or_default(),
+                caps.get(4).map(|m| m.as_str()).filter(|s| !s.is_empty()),
+                None,
+            )
+        } else {
+            (
+                caps.get(5).map(|m| m.as_str()).unwrap_or_default(),
+                None,
+                caps.get(6).map(|m| m.as_str()),
+            )
+        };
+        let keys_for_assign: Option<Vec<String>> = match nested_field {
+            Some(field) => unwind_nested_row_keys(query, field).filter(|nested| {
+                !nested.is_empty() && nested.iter().all(|k| is_plain_identifier(k))
+            }),
+            None => Some(keys.clone()),
+        };
+        let Some(assigns_keys) = keys_for_assign else {
+            // Field lồng không tìm thấy key set — fail-closed giữ nguyên
+            // fragment (query sẽ fail như trước thay vì sai semantics).
             return caps[0].to_string();
-        }
-        let var = &caps[1];
-        let assigns: Vec<String> = keys
+        };
+        let source = match nested_field {
+            Some(field) => format!("row.`{field}`"),
+            None => "row".to_string(),
+        };
+        let assigns: Vec<String> = assigns_keys
             .iter()
             .filter(|key| {
                 // Bỏ key trùng merge key CÙNG expr (node merged trên id đã có
@@ -591,20 +853,81 @@ fn expand_set_plus_equals(query: &str) -> String {
                     .iter()
                     .any(|(mv, mk)| mv == var && mk == *key)
             })
-            .map(|key| format!("{var}.{key} = row.{key}"))
+            // Backtick cả 2 bên: key có thể là reserved word của ladybug
+            // (`order`, `count`, `index`, …) — property access trần vỡ parser.
+            .map(|key| format!("{var}.`{key}` = {source}.`{key}`"))
             .collect();
         if assigns.is_empty() {
             // Mọi key đều là merge key — SET list rỗng không parse được.
             return caps[0].to_string();
         }
-        format!("SET {}{follow}", assigns.join(", "))
+        match follow {
+            Some(follow) => format!("SET {}{follow}", assigns.join(", ")),
+            None => format!("SET {}", assigns.join(", ")),
+        }
     })
     .into_owned()
 }
 
-fn set_plus_equals_row_re() -> &'static Regex {
+/// Property identity trong MỌI node pattern `(var:Label {key: expr})` —
+/// key đó là PK/identity của pattern, không được SET lại qua expansion.
+fn node_pattern_prop_re() -> &'static Regex {
     static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)\bSET ([A-Za-z_][A-Za-z0-9_]*) \+= row(.?)").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"\(([A-Za-z_][A-Za-z0-9_]*):`?[A-Za-z_][A-Za-z0-9_]*`? ?\{`?([A-Za-z_][A-Za-z0-9_]*)`?: ").unwrap()
+    })
+}
+
+fn set_plus_equals_row_re() -> &'static Regex {    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r#"(?i)\bSET ([A-Za-z_][A-Za-z0-9_]*) \+= coalesce\(row\.([A-Za-z_][A-Za-z0-9_]*), \{\}\)|\bSET ([A-Za-z_][A-Za-z0-9_]*) \+= row\.([A-Za-z_][A-Za-z0-9_]*)|\bSET ([A-Za-z_][A-Za-z0-9_]*) \+= row([^A-Za-z0-9_.])?"#,
+        )
+        .unwrap()
+    })
+}
+
+/// Union key của map lồng `row.<field>` trong literal `UNWIND [...]` đầu tiên
+/// (render uniform-key nên row đầu đại diện cả batch). Renderer emits
+/// `` `key`: {``…``}`` — tìm marker rồi bóc segment map lồng cho
+/// `first_map_keys`.
+fn unwind_nested_row_keys(query: &str, field: &str) -> Option<Vec<String>> {
+    let unwind = query.find("UNWIND ")?;
+    let open = query[unwind..].find('[')? + unwind;
+    let segment = &query[open..];
+    let marker = format!("`{field}`: {{");
+    let marker_pos = segment.find(&marker)?;
+    let brace_start = open + marker_pos + marker.len() - 1;
+    let bytes = query.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str: Option<char> = None;
+    let mut escaped = false;
+    for (offset, &byte) in bytes.iter().enumerate().skip(brace_start) {
+        let c = byte as char;
+        if let Some(quote) = in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == quote {
+                in_str = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => in_str = Some(c),
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    // Gồm cả 2 braces — first_map_keys đợi `{` đầu tiên.
+                    return Some(first_map_keys(&query[brace_start..=offset]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn is_plain_identifier(value: &str) -> bool {
@@ -783,6 +1106,16 @@ struct SchemaNode {
     /// để type-tag array rỗng: ladybug unify `[]` thành INT64[] và vỡ khi
     /// batch trộn với STRING[] giữa các row (implicit cast not supported).
     saw_string_element: bool,
+    /// Column từng chứa bool / number / array / object — xác định "shape
+    /// set" của cột; nhiều shape → mọi value JSON-string để đồng nhất kiểu.
+    saw_bool: bool,
+    saw_number: bool,
+    saw_array: bool,
+    saw_object: bool,
+    /// Array chứa object element (khác array thuần scalar).
+    saw_array_with_object: bool,
+    /// Array thuần scalar (string/number/bool).
+    saw_array_scalar: bool,
 }
 
 /// Loại NULL-typed theo hint từ query: `coalesce(row.<field>, <default>)`
@@ -845,11 +1178,20 @@ impl SchemaNode {
     fn absorb(&mut self, value: &Value) {
         match value {
             Value::Object(map) => {
+                self.saw_object = true;
                 for (key, child) in map {
                     self.children.entry(key.clone()).or_default().absorb(child);
                 }
             }
             Value::Array(items) => {
+                self.saw_array = true;
+                let has_object = items.iter().any(Value::is_object);
+                if has_object {
+                    self.saw_array_with_object = true;
+                }
+                if !items.is_empty() && !has_object {
+                    self.saw_array_scalar = true;
+                }
                 for item in items {
                     if item.is_string() {
                         self.saw_string_element = true;
@@ -858,6 +1200,8 @@ impl SchemaNode {
                 }
             }
             Value::String(_) => self.saw_string_element = true,
+            Value::Bool(_) => self.saw_bool = true,
+            Value::Number(_) => self.saw_number = true,
             _ => {}
         }
     }
@@ -904,10 +1248,44 @@ impl SchemaNode {
                 let mut parts = Vec::new();
                 for (key, child) in &self.children {
                     let value = map.get(key).unwrap_or(&Value::Null);
+                    // Shape set của cột: >1 shape (string/bool/number/array/
+                    // object) hoặc array trộn scalar-array với object-array →
+                    // JSON-string toàn bộ value của cột để mọi row đồng nhất
+                    // kiểu (ladybug không implicit cast giữa các row).
+                    let mut shapes = 0usize;
+                    for saw in [
+                        child.saw_string_element,
+                        child.saw_bool,
+                        child.saw_number,
+                        child.saw_array,
+                        child.saw_object,
+                    ] {
+                        if saw {
+                            shapes += 1;
+                        }
+                    }
+                    let array_shape_split =
+                        child.saw_array_with_object && child.saw_array_scalar;
+                    let mixed = shapes > 1 || array_shape_split;
                     let rendered = if value.is_null() {
                         match hints.get(key) {
                             Some(hint) => format!("CAST(NULL AS {hint})"),
-                            None => "NULL".to_string(),
+                            None => {
+                                if mixed || child.saw_string_element {
+                                    "CAST(NULL AS STRING)".to_string()
+                                } else if child.saw_bool {
+                                    "CAST(NULL AS BOOL)".to_string()
+                                } else if child.saw_number {
+                                    "CAST(NULL AS INT64)".to_string()
+                                } else {
+                                    "NULL".to_string()
+                                }
+                            }
+                        }
+                    } else if mixed {
+                        match serde_json::to_string(value) {
+                            Ok(text) => quote_cypher(&text),
+                            Err(_) => "NULL".to_string(),
                         }
                     } else {
                         child.render(value, hints)
@@ -1002,6 +1380,9 @@ impl GraphStore for LadybugStore {
         let _ = database;
         if is_write_intent(query) && !self.bootstrapped {
             self.bootstrap_schema()?;
+        }
+        if is_write_intent(query) {
+            self.autoheal_rel_endpoints(query);
         }
         let prepared = Self::prepare(query, parameters)?;
         let connection = self.connect()?;
@@ -1200,7 +1581,7 @@ mod tests {
         // `id` là merge key (PK) — bị loại khỏi expansion (SET lại = PK-set
         // violation trên ladybug).
         assert!(
-            out.contains("SET endpoint.count = row.count, endpoint.name = row.name, endpoint.topology_owned = true"),
+            out.contains("SET endpoint.`count` = row.`count`, endpoint.`name` = row.`name`, endpoint.topology_owned = true"),
             "{out}"
         );
         assert!(!out.contains("+="), "{out}");
@@ -1269,9 +1650,16 @@ ON MATCH SET
 
     #[test]
     fn set_plus_equals_ignores_props_shapes() {
-        // `+= row.props` chưa expand (null-props row đổi semantics) — giữ nguyên.
+        // `+= row.props` giờ ĐƯỢC expand (ladybug không parse `+= <map expr>`;
+        // key set lấy từ map lồng của row đầu — render uniform-key nên đại
+        // diện cả batch). `+= row.props.<x>` vô nghĩa thì vẫn giữ nguyên.
         let query = "UNWIND [{`site_id`: `s`, `props`: {`count`: 1}}] AS row\nSET site += row.props";
-        assert_eq!(expand_set_plus_equals(query), query);
+        let expanded = expand_set_plus_equals(query);
+        assert!(
+            expanded.contains("SET site.`count` = row.`props`.`count`"),
+            "{expanded}"
+        );
+        assert!(!expanded.contains("+="), "{expanded}");
     }
 
     #[test]
@@ -1286,10 +1674,23 @@ ON MATCH SET
         );
         let expanded = expand_set_plus_equals(dq);
         assert!(
-            expanded.contains("SET node.route = row.route, node.n = row.n"),
+            expanded.contains("SET node.`route` = row.`route`, node.`n` = row.`n`"),
             "{expanded}"
         );
         assert!(!expanded.contains("node.id = row.id"), "{expanded}");
+    }
+
+    #[test]
+    fn nested_field_plus_equals_expands() {
+        let query = "UNWIND [{`id`: \"f1\", `properties`: {`confidence`: 1.0, `dialect`: \"ansi\"}}, {`id`: \"f2\", `properties`: {`confidence`: NULL, `dialect`: NULL}}] AS row MATCH (n:File {id: row.id}) SET n += row.properties";
+        eprintln!("REGEX_MATCH: {:?}", set_plus_equals_row_re().captures(query).is_some());
+        eprintln!("NESTED_KEYS: {:?}", unwind_nested_row_keys(query, "properties"));
+        let out = expand_set_plus_equals(query);
+        assert!(
+            out.contains("n.`confidence` = row.`properties`.`confidence`"),
+            "{out}"
+        );
+        assert!(!out.contains("+="), "{out}");
     }
 
     #[test]
@@ -1340,9 +1741,10 @@ ON MATCH SET
             serde_json::json!({"id": "b", "name": Value::Null, "extra": 1}),
         ];
         let rendered = render_uniform_with_query(&Value::Array(rows), "").unwrap();
-        // Row 1 thiếu extra → NULL; key set uniform.
+        // Row 1 thiếu extra → CAST(NULL AS INT64) (cột chỉ có number — NULL
+        // trần bị ladybug type thành STRING và vỡ khi trộn row); key set uniform.
         assert!(rendered.contains("`id`: \"a\""), "{rendered}");
-        assert!(rendered.contains("`extra`: NULL"));
+        assert!(rendered.contains("`extra`: CAST(NULL AS INT64)"), "{rendered}");
         assert!(rendered.contains("`extra`: 1"));
     }
 

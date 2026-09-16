@@ -109,10 +109,11 @@ impl Analyzer for PhpAnalyzer {
         // ── Incremental cleanup (changed ∪ deleted) ─────────────────────────
         // Khớp `cleanup_neo4j_for_files`: in 2 dòng verbose, prune
         // UnknownFunction mồ côi.
-        if args.incremental && (!ctx.changed_files.is_empty() || !ctx.deleted_files.is_empty()) {
-            let Some(store) = ctx.store.as_deref_mut() else {
-                return Err("[cleanup][graph] graphless mode nhưng có cleanup targets".into());
-            };
+        if args.incremental
+            && (!ctx.changed_files.is_empty() || !ctx.deleted_files.is_empty())
+            && ctx.store.is_some()
+        {
+            let store = ctx.store.as_deref_mut().expect("store checked above");
             let mut targets: Vec<String> = ctx
                 .changed_files
                 .union(&ctx.deleted_files)
@@ -132,6 +133,17 @@ impl Analyzer for PhpAnalyzer {
                     "[cleanup][graph] deleted_nodes={deleted_nodes} deleted_unknown_functions={deleted_unknown}"
                 );
             }
+        } else if verbose
+            && args.incremental
+            && !ctx.changed_files.is_empty()
+            && ctx.store.is_none()
+        {
+            // Graphless mode (embedding pass chạy graph-disabled) — cleanup
+            // graph là no-op; file deletions do embedding artifact xử lý.
+            println!(
+                "[cleanup][graph] skipped (graphless mode): {} file targets",
+                ctx.changed_files.len() + ctx.deleted_files.len()
+            );
         }
 
         // ── Parse ───────────────────────────────────────────────────────────
@@ -210,6 +222,9 @@ impl Analyzer for PhpAnalyzer {
             if verbose {
                 println!("[graph] Write complete");
             }
+            // Phase-02: capture embedding categories for orchestrator
+            // (plan `260916-1432-legacy-17-vector-emit`). Emission deferred.
+            let _embedding_categories: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
             (graph.functions.len(), graph.types.len())
         } else {
             (0, 0)

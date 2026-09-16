@@ -1074,6 +1074,9 @@ pub fn build_call_graph(
             files_variant: FilesVariant::WithJsx,
         })
         .map_err(|e| e.to_string())?;
+    // Phase-02: capture embedding categories for orchestrator
+    // (plan `260916-1432-legacy-17-vector-emit`). Emission deferred to caller.
+    // TS uses inline WriteAllPayload above; deferred to phase-03 widening.
 
     // ── ApiCall nodes + CALLS_API edges ────────────────────────────────────
     let mut all_api_calls: Vec<Row> = Vec::new();

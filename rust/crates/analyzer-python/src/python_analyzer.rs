@@ -5,6 +5,7 @@
 use std::time::Instant;
 
 use cortex_analyzer_framework::cli::AnalyzerArgs;
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::semantic::{
     build_usage_index, FunctionRef, SemanticInferenceEngine, UsageCall,
 };
@@ -217,7 +218,7 @@ impl Analyzer for PythonAnalyzer {
             if verbose {
                 println!("[graph] Writing nodes and relations (streaming)...");
             }
-            let counts = writer.write_all(&WriteAllPayload {
+            let payload = WriteAllPayload {
                 projects: &graph.projects,
                 packages: &[],
                 namespaces: &graph.namespaces,
@@ -251,7 +252,14 @@ impl Analyzer for PythonAnalyzer {
                 proc_host_declarations: &[],
                 use_full_writers: true,
                 files_variant: FilesVariant::WithImports,
-            });
+            };
+            // Phase-02: capture embedding categories BEFORE write_all consumes
+            // (plan `260916-1432-legacy-17-vector-emit`). Emission deferred to
+            // caller where args/project_id/repo are in scope.
+            let embedding_categories = payload.embedding_categories();
+            let counts = writer.write_all(&payload);
+            // TODO(phase-03): forward embedding_categories to caller; emit artifact.
+            let _ = embedding_categories;
             match counts {
                 Ok(counts) if verbose => {
                     println!("[graph] Write complete ({counts:?})");

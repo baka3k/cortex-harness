@@ -258,6 +258,22 @@ UNWIND nodes AS node
 DETACH DELETE node
 RETURN count(node) AS deleted_nodes
 "#;
+        // Ladybug mất node type qua collect/UNWIND (binder) — DETACH DELETE
+        // phải chạy trực tiếp trên MATCH (khớp cleanup.rs).
+        let query = if self.store.provider() == "ladybug" {
+            r#"
+MATCH (state:ServletJspAnalysisState {project_id: $project_id, module_id: $module_id})
+MATCH (node)
+WHERE node.project_id = $project_id
+  AND node.module_id = $module_id
+  AND node.framework = 'servlet_jsp'
+  AND node.generation_id <> state.active_generation
+DETACH DELETE node
+RETURN count(*) AS deleted_nodes
+"#
+        } else {
+            query
+        };
         let mut params: BTreeMap<String, Value> = BTreeMap::new();
         params.insert("project_id".to_string(), json!(project_id));
         params.insert("module_id".to_string(), json!(module_id));

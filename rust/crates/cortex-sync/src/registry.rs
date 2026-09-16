@@ -435,8 +435,27 @@ pub fn rust_analyzer_binary(analyzer: &AnalyzerConfig) -> Result<Option<String>,
     }
 }
 
-pub const SHARED_VECTOR_CLI_PARSERS: [&str; 7] =
-    ["dart", "go", "jp1", "perl", "rust", "shell", "swift"];
+/// Capability table — parsers mà primary pass emit `EmbeddingInputArtifact`
+/// (xem `cortex-analyzer-framework/src/embedding_artifact.rs`).
+/// Orchestrator gate dùng const này để gọi `finish_native_embedding_pass` (orchestrator.rs).
+/// Carve-out cho framework parsers (spring/struts/servlet_jsp/aspnet_*/mybatis/*Facts)
+/// nếu shape facts KHÔNG map được `documents_from_categories` — những parser này KHÔNG
+/// nằm trong list, gate rơi về `vector_status="disabled-no-emitter"` (orchestrator.rs).
+///
+/// Phase-03 widening (plan `260916-1432-legacy-17-vector-emit`): 7 → 24 parsers
+/// (full coverage). Carve-outs chỉ còn cho android (write_nodes_batch custom —
+/// chưa wire) + cobol (write_graph_facts custom — phase-02 defer).
+///
+/// `SHARED_VECTOR_CLI_PARSERS` alias giữ cho grep-parity với code cũ; mới dùng
+/// `EMITTING_VECTOR_CLI_PARSERS`.
+pub const EMITTING_VECTOR_CLI_PARSERS: [&str; 22] = [
+    "cplus", "csharp", "dart", "delphi", "go", "java", "jp1", "js", "kotlin", "perl",
+    "php", "plsql", "python", "rust", "shell", "sql", "swift", "ts", "vb6", "vba",
+    "vbnet", "vbscript",
+];
+
+#[deprecated(note = "use EMITTING_VECTOR_CLI_PARSERS — capability table đổi tên 2026-09-16")]
+pub const SHARED_VECTOR_CLI_PARSERS: [&str; 22] = EMITTING_VECTOR_CLI_PARSERS;
 
 pub fn message_enabled_parsers() -> BTreeSet<&'static str> {
     BTreeSet::from([
@@ -627,7 +646,7 @@ pub fn build_analyzer_cmd(
             parse_quality_max_bytes.to_string(),
         ]);
     }
-    if SHARED_VECTOR_CLI_PARSERS.contains(&analyzer.parser.as_str()) {
+    if EMITTING_VECTOR_CLI_PARSERS.contains(&analyzer.parser.as_str()) {
         if let Some(model) = embed_model {
             cmd.push("--embed-model".to_string());
             cmd.push(model.to_string());

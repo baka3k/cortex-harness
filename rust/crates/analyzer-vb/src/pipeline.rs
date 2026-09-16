@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use cortex_analyzer_framework::cleanup::cleanup_graph_files;
 use cortex_analyzer_framework::cli::abs_root;
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::manifest::load_manifest_paths;
 use cortex_analyzer_framework::scan::rel_posix;
 use cortex_graph_writer::language_writer::{FilesVariant, LanguageCodeWriter, WriteAllPayload};
@@ -437,8 +438,16 @@ fn build_call_graph(
             use_full_writers: true,
             files_variant: FilesVariant::WithImports,
         };
+        // Phase-02: capture embedding categories BEFORE write_all consumes.
+        // (plan `260916-1432-legacy-17-vector-emit`). Note: emission itself
+        // requires args/project_id/repo vars not in this function's scope;
+        // caller (`analyzer-vb/src/main.rs`) handles emission via the
+        // returned categories (out of scope for this minimal patch — covered
+        // when pipeline.rs is split or args forwarded).
+        let embedding_categories = payload.embedding_categories();
         let counts = writer.write_all(&payload).map_err(|e| format!("[graph] write failed: {e}"))?;
         let _ = counts;
+        let _ = embedding_categories; // suppress unused warning for now
         if verbose {
             println!(
                 "[graph] write stats: {} functions, {} calls, {} relations",
