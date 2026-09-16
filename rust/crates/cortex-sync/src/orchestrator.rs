@@ -2337,6 +2337,23 @@ fn run_flow(
             );
             sync_list(summary, "vector_embeddings", &vector_summaries);
         }
+        let vectors_upserted: i64 = vector_summaries
+            .iter()
+            .filter_map(|entry| entry.get("vector_count").and_then(Value::as_i64))
+            .sum();
+        println!(
+            "[embedding] pass complete: parsers={} vectors_upserted={} backend={}",
+            vector_summaries.len(),
+            vectors_upserted,
+            if native_store.is_some() { "orchestrator" } else { "python-children" }
+        );
+        if native_store.is_none() {
+            println!(
+                "[embedding] NOTE: native embedding pass unavailable for this storage backend \
+                 (see the 'native pass unavailable/disabled' line above); python embedding \
+                 children retired at phase-08, so vector upserts stay 0"
+            );
+        }
     }
 
     // ── native message-scan lane (phase-05) ──
@@ -2385,8 +2402,25 @@ fn run_flow(
     }
 
     if !component_failures.is_empty() {
-        let (_, message) = component_failures[0].clone();
-        return Err(message);
+        if args.strict {
+            // --strict giữ fail-loud: component failure vẫn phải dừng run.
+            let (_, message) = component_failures[0].clone();
+            return Err(message);
+        }
+        // Mặc định (non-strict): component failures đã được isolate từng
+        // child (continued=true) — run vẫn chạy tiếp tới publishing, kết
+        // thúc exit 0 với outcome=partial_coverage thay vì abort cả run.
+        push_warning(
+            summary,
+            json!({
+                "code": "component_failures_continued",
+                "failed_components": component_failures
+                    .iter()
+                    .map(|(component, _)| component.as_str())
+                    .collect::<Vec<_>>(),
+                "first_error": component_failures[0].1.clone(),
+            }),
+        );
     }
 
     // ── verifying generation ──
@@ -2476,10 +2510,43 @@ fn run_flow(
             args.sync_mode
         );
     }
+    // Component failures: run vẫn hoàn thành (exit 0) nhưng với phía graph
+    // có component fail thì KHÔNG advance last_good_sha — mark dirty giữ
+    // recovery inventory để run sau replay phần chưa ghi được.
+    let graph_component_failures: Vec<(String, String)> = component_failures
+        .iter()
+        .filter(|(component, _)| !component.starts_with("embedding:"))
+        .cloned()
+        .collect();
+    if !graph_component_failures.is_empty() && args.sync_mode == "both" && !args.strict {
+        let note = graph_component_failures
+            .iter()
+            .map(|(component, message)| format!("{component}: {message}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let dirty_marked = mark_dirty_on_failure(
+            control_cache_dir,
+            state_opt.as_mut(),
+            state_path.as_path(),
+            *lock_acquired,
+            current_inventory_out.as_ref(),
+            &note,
+            summary,
+        );
+        summary.insert(
+            "baseline_preserved_due_to_component_failures".into(),
+            json!(dirty_marked),
+        );
+    }
     summary.insert("status".into(), json!("success"));
+    let has_component_failures = !component_failures.is_empty();
     summary.insert(
         "outcome".into(),
-        json!(if topology_warnings.is_empty() { "scanned" } else { "partial_coverage" }),
+        json!(if topology_warnings.is_empty() && !has_component_failures {
+            "scanned"
+        } else {
+            "partial_coverage"
+        }),
     );
     println!(
         "[state] summary changed={} deleted={} impacted={} parsers={}",
@@ -2488,7 +2555,14 @@ fn run_flow(
         impacted_paths.len(),
         executed_parsers.len()
     );
-    println!("[state] incremental sync completed successfully");
+    if has_component_failures {
+        println!(
+            "[state] incremental sync completed with {} component failure(s); outcome=partial_coverage (baseline kept dirty for replay)",
+            component_failures.len()
+        );
+    } else {
+        println!("[state] incremental sync completed successfully");
+    }
     *exit_code = 0;
     Ok(())
 }
@@ -2550,6 +2624,13 @@ fn record_component_failure(
     info.insert("failure_class".into(), json!("parser_isolation"));
     info.insert("failure_code".into(), json!("analyzer_child_failed"));
     info.insert("failure_artifacts".into(), json!([]));
+    let stderr_tail = error.stderr_tail.trim().to_string();
+    let output_tail = error.output_tail.trim().to_string();
+    if !stderr_tail.is_empty() {
+        eprintln!("[child] {role}:{name} stderr tail: {stderr_tail}");
+    } else if !output_tail.is_empty() {
+        eprintln!("[child] {role}:{name} output tail: {output_tail}");
+    }
     if let Some(Value::Array(failures)) = summary.get_mut("component_failures") {
         failures.push(json!({
             "component": format!("{role}:{name}"),
@@ -2562,7 +2643,12 @@ fn record_component_failure(
             "retryable": false,
             "safe_action": "inspect the child debug artifact and quarantine or correct the failing input",
             "continued": continued,
-            "details": {"exception_type": "CalledProcessError"},
+            "details": {
+                "exception_type": "CalledProcessError",
+                "cmd": error.cmd,
+                "stderr_tail": stderr_tail,
+                "output_tail": output_tail,
+            },
             "artifacts": [],
         }));
     }

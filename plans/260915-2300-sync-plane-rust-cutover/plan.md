@@ -1,6 +1,6 @@
 ---
 title: "Sync-plane Rust cutover rev 2 — wire embedded storage + ladybug store + journal replay vào cortex-sync, flip, rồi xoá incremental_sync.py + tools/sync closure (red-team rev1 đã hấp thụ 13 findings: 1 Critical re-scope manifest, 3 High)"
-status: ready (red-team rev1: verdict FAIL 1C/3H/5M/4L — tất cả đã xử lý, chi tiết reports/red-team-rev1.md; chờ validate/execute)
+status: DONE (2026-09-16 — phase-01..06 executed; dogfood waived explicit bởi user; tag `pre-syncplane-delete`; python sync plane DELETED; chi tiết reports/phase01..06)
 created: 2026-09-15
 revised: 2026-09-15 (rev2 hấp thụ red-team-rev1)
 target: "rust/crates/cortex-sync (graphops.rs, orchestrator.rs, registry.rs, journal_replay.rs mới, cli.rs), rust/crates/cortex-dev (journalx.rs, cmds/init.rs, cmds/sync.rs, procinfo.rs), rust/crates/cortex-graph-driver (bin graph-state diff), rust/crates/cortex-migrate (falkor_boot reuse spike), cortex_harness/dev.py (dead sync bodies), code-tiny/tools/sync/** (xoá), tests/test_incremental_sync_*.py + test_sync_processes.py (xoá), docs/cutover-runbook.md, plans/260915-2230-python-legacy-cleanup (cross-update)"

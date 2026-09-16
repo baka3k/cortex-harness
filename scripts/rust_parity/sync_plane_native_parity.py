@@ -364,17 +364,17 @@ def main() -> int:
         gate.check(summary.get("full_scan") is False, "incremental leg is not full-scan")
 
         # ── Leg 3: hatch CORTEX_SYNC_BACKEND=python ──────────────────────
-        print("\n[leg-3] hatch CORTEX_SYNC_BACKEND=python")
+        # ── Leg 3: CORTEX_SYNC_BACKEND retired-error (phase-06) ─────────
+        print("\n[leg-3] CORTEX_SYNC_BACKEND retired-error")
         project3, _, _ = make_scratch(base / "leg3")
         result = sync(project3, rust_bin, extra_env={"CORTEX_SYNC_BACKEND": "python"})
-        summary = load_summary(project3)
-        gate.check(DELEGATION_LINE in result.stdout,
-                   "[leg3-hatch] delegation fires (hatch leg)")
-        gate.check(summary.get("backend") == "python",
-                   f"[leg3-hatch] backend == python (got {summary.get('backend')!r})")
-        gate.check(summary.get("status") == "success", "[leg3-hatch] python leg healthy")
-        gate.check(summary.get("services", {}).get("graph_ready") is True,
-                   "[leg3-hatch] graph_ready on python plane")
+        gate.check("CORTEX_SYNC_BACKEND is retired" in result.stderr,
+                   "[leg3-retired] loud retired-error on stderr")
+        gate.check(DELEGATION_LINE not in result.stdout,
+                   "[leg3-retired] no delegation (python plane deleted)")
+        summary3 = load_summary(project3)
+        gate.check(summary3.get("backend") == "rust-native",
+                   "[leg3-retired] run proceeds native")
 
         # ── Leg 4: journal required (native replay lane) ─────────────────
         print("\n[leg-4] journal required")

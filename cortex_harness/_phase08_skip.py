@@ -329,7 +329,7 @@ def _stub_path(name: str, repo_root: str | None = None) -> None:
     """Stub every prefix along ``name`` except the ``tools`` parent.
 
     The top-level ``tools`` package stays live — it contains kept modules
-    (``tools.graph``, ``tools.common``, ``tools.sync``, …). When the
+    (``tools.graph``, ``tools.common``, …; ``tools.sync`` was deleted at the 2026-09-16 sync-plane Rust cutover). When the
     intermediate ``tools.<dir>`` parent still has live ``*.py`` files on
     disk (e.g. ``tools.project_topology`` keeps ``models/contracts/registry``
     after ``topology_analyzer.py`` is archived), we skip stubbing the

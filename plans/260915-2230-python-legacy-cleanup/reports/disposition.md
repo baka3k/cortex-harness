@@ -19,16 +19,17 @@ theo đường dẫn, không qua import); (4) smoke thực nghiệm trên scratc
 
 ## A. LIVE-RUNTIME — giữ, có chủ đích
 
-### A1. Sync-plane (SMOKE chứng minh còn delegate — plan phase-03 chuyển nhánh B)
-Evidence: smoke scratch instance `cleanup-smoke` — `[cortex-sync] python-plane delegation:
-graph target resolution: ladybug provider requires embedded storage resolution (Python-plane)`
-(`orchestrator.rs:276`); falkordb embedded fail-closed `graphops.rs:132`; journal lane
-delegate `orchestrator.rs:1226`. **`incremental_sync.py` + toàn bộ import closure của nó là runtime sống:**
-- `code-tiny/tools/sync/**` (5 file)
-- `code-tiny/tools/common/**` — 71 file, phần được import (13 file trong closure) + path-spawn analyzer helpers
-- `code-tiny/tools/graph/**` — driver (falkordb/ladybug/neo4j), journal/** (consumer chạy `python -m`), operations, writer, schema, cli
-- **`cortex_harness/storage/**` (16 file)** — `resolve_storage`, lease, layout: import sống từ `incremental_sync.py:1085`, `graph/core/factory.py:178`, `driver/ladybug_driver.py:64-66`. (Phase-08 từng xếp storage vào parity-reference — **sai**, sửa tại đây.)
-- path-classifier helpers: `tools/ts/ts_project_detector.py`, `tools/vb/vb_path_classifier.py`, `tools/jp1/sniff.py`, `tools/project_topology/{models,registry}.py`
+### A1. Sync-plane — **DEAD-BY-PLAN (2026-09-16, superseded by plans/260915-2300-sync-plane-rust-cutover phase-06; tag `pre-syncplane-delete`)**
+~~SMOKE chứng minh còn delegate~~ — plan 260915-2300 đã port embedded resolution + ladybug store +
+journal replay sang Rust rồi **xoá sync closure** (waiver dogfood 2026-09-16):
+- ~~`code-tiny/tools/sync/**`~~ — DELETED (commit phase-06)
+- `code-tiny/tools/common/**` — phần closure-cụ thể chết theo; còn lại về disposition của plan này
+- `code-tiny/tools/graph/**` (drivers/cli/core/schema/operations/writer/journal) — **LIVE importers:
+  doc-tiny/graph_store.py, MCP python rollback (`provider_contract`/`shared_runtime`), operations/**
+  (red-team C1) → giữ, disposition của plan này (phase-02)**
+- **`cortex_harness/storage/**` (16 file)** — vẫn LIVE (doc-tiny, factory, ladybug_driver; phase-08
+  xếp parity-reference là SAI — đã sửa tại đây) → disposition plan này
+- path-classifier helpers — disposition plan này
 
 ### A2. cplus clang plane (decision #8 umbrella — `analyzer-cplus/src/main.rs:8-13`)
 `code-tiny/tools/cplus/**` — clang_worker/parse_recovery/semantic_worker/semantic_context là

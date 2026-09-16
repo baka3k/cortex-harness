@@ -246,6 +246,7 @@ switching procedure, and force-local behavior.
 | Command | Description |
 | --- | --- |
 | `dev sync code` | Interactive folder picker; reliable hybrid incremental scan by default |
+| | **Sync-plane is Rust-only** (2026-09-16 cutover): the Python orchestrator (`code-tiny/tools/sync/`) was deleted; embedded FalkorDB is fail-closed (use `FALKORDB_URI` remote or `GRAPH_PROVIDER=ladybug`). `CORTEX_SYNC_BACKEND` is retired. Rollback = `git revert` (tag `pre-syncplane-delete`). |
 | `dev sync code all` | Run all analyzers on every non-overlapping configured root; still incremental unless `--full-scan` is set |
 | `dev sync code add` | Add a new source project (git URL + folders) to the active config |
 

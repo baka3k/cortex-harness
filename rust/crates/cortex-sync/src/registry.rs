@@ -3,7 +3,7 @@
 //! `_build_analyzer_cmd`, collection naming, and `_selected_parsers`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::util;
 
@@ -18,11 +18,16 @@ pub fn repo_root() -> PathBuf {
             return PathBuf::from(from_env);
         }
     if let Ok(exe) = std::env::current_exe() {
-        // exe = <repo>/rust/target/{release,debug}/cortex-sync
-        if let Some(repo) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent())
-            && repo.join("cortex_harness/dev.py").is_file() {
-                return repo.to_path_buf();
+        // Prod: <repo>/rust/target/{release,debug}/cortex-sync.
+        // Test: <repo>/rust/target/{debug,release}/deps/<bin>-<hash> — sâu hơn
+        // 1 cấp. Walk-up cho cả hai layout.
+        let mut current = exe.parent().map(Path::to_path_buf);
+        while let Some(dir) = current {
+            if dir.join("cortex_harness/dev.py").is_file() {
+                return dir;
             }
+            current = dir.parent().map(Path::to_path_buf);
+        }
     }
     PathBuf::from(".")
 }
