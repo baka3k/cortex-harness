@@ -71,7 +71,10 @@ pub use lease::{
     StorageLeaseConflictError,
 };
 pub use migration::{migrate_legacy_layout, MigrationItem};
-pub use qdrant::{build_filter, get_client, reset_clients, LocalQdrantStore};
+pub use qdrant::{
+    build_filter, get_client, local_native_enabled, reset_clients, LocalQdrantReader,
+    LocalQdrantStore, LOCAL_NATIVE_DEFAULT, VECTOR_BACKEND_ENV,
+};
 pub use qdrant_remote::{get_remote_client, reset_remote_clients, RemoteQdrantStore};
 pub use remote_probe::{
     force_local_active, probe_all, probe_falkordb, probe_qdrant, provision_falkordb_graph,

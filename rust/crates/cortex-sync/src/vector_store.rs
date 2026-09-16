@@ -7,15 +7,19 @@
 //! 1. `CORTEX_STORAGE_PROJECT_ID` set → project registry decides:
 //!    `storage_backend == "remote"` + `remote.qdrant_url` → HTTP Qdrant
 //!    server (the lane Python children write on, byte-for-byte via REST).
-//! 2. Everything else → the Python embedded `qdrant_client(path=...)`
-//!    engine, whose on-disk format the Rust JSON adapter cannot share
-//!    (documented divergence in cortex-storage/src/qdrant.rs). The native
-//!    pass FAILS CLOSED to `Unsupported` and the embedding pass stays on
-//!    Python children — loud, never silent (red-team Critical #1).
+//! 2. Everything else → the LOCAL lane. Native-vector-ingest-local (rev2):
+//!    the Rust JSON engine (`LocalQdrantStore`) is the local-lane owner, but
+//!    only under the `CORTEX_VECTOR_BACKEND` hatch (D5): `=rust` opts in;
+//!    unset (pre-flip) or `=python` keeps the native local pass OFF — code
+//!    vectors stay FROZEN at zero writes (python analyzer children do not
+//!    embed since phase-08; there is no "delegate to python children" path).
+//!    Phase-05 of the plan flips the default (`unset` → native).
 
 use std::collections::BTreeMap;
 
 use cortex_embed::{Embedder, Plane};
+use cortex_storage::config::{resolve_storage, ResolveOverrides};
+use cortex_storage::qdrant::LocalQdrantStore;
 use cortex_storage::qdrant_remote::RemoteQdrantStore;
 use serde_json::{Map, Value, json};
 
@@ -25,10 +29,108 @@ use crate::vector_sync::{
 };
 
 /// Outcome of the fail-closed store resolution.
+#[derive(Debug)]
 pub enum NativeStore {
     Remote(RemoteQdrantStore),
-    /// Local embedded engine — the caller must keep the Python children.
+    /// Native local JSON engine (`cortex-local-store.json`) — gated behind
+    /// `CORTEX_VECTOR_BACKEND=rust` until the phase-05 flip.
+    Local(LocalQdrantStore),
+    /// Local lane stays OFF — code vectors are FROZEN at zero writes.
     Unsupported(String),
+}
+
+/// Store-agnostic write surface behind `sync_vector_documents` — the trait
+/// seam with exactly two impls (remote REST wire / local JSON engine).
+pub trait VectorWriteOps {
+    fn collection_exists(&self, collection: &str) -> Result<bool, String>;
+    /// REST-shaped `get_collection_info` (drift-guard source).
+    fn collection_info(&self, collection: &str) -> Result<Value, String>;
+    fn create_collection_body(&self, collection: &str, body: &Value) -> Result<(), String>;
+    /// Ingest the pass's points; durability is defined by [`Self::finalize`].
+    fn upsert_batches(&self, collection: &str, points: &[Value]) -> Result<(), String>;
+    fn delete_by_filter(&self, collection: &str, filter: &Value) -> Result<(), String>;
+    fn create_payload_index(&self, collection: &str, field: &str) -> Result<(), String>;
+    /// Close the pass durably (remote: every call already waited; local: the
+    /// single closing flush of the persist-mode bulk pass).
+    fn finalize(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+impl VectorWriteOps for RemoteQdrantStore {
+    fn collection_exists(&self, collection: &str) -> Result<bool, String> {
+        RemoteQdrantStore::collection_exists(self, collection).map_err(|error| error.to_string())
+    }
+
+    fn collection_info(&self, collection: &str) -> Result<Value, String> {
+        RemoteQdrantStore::get_collection_info(self, collection).map_err(|error| error.to_string())
+    }
+
+    fn create_collection_body(&self, collection: &str, body: &Value) -> Result<(), String> {
+        RemoteQdrantStore::create_collection_body(self, collection, body)
+            .map_err(|error| error.to_string())
+    }
+
+    fn upsert_batches(&self, collection: &str, points: &[Value]) -> Result<(), String> {
+        let size = QDRANT_UPSERT_BATCH.max(1);
+        for start in (0..points.len()).step_by(size) {
+            let batch = &points[start..(start + size).min(points.len())];
+            // Only the final batch waits: the flush at the function boundary
+            // is the durability contract (primary_vector_sync.py:343-352).
+            let is_last = start + size >= points.len();
+            self.upsert_wait(collection, batch, is_last)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn delete_by_filter(&self, collection: &str, filter: &Value) -> Result<(), String> {
+        self.delete(collection, None, Some(filter))
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn create_payload_index(&self, collection: &str, field: &str) -> Result<(), String> {
+        RemoteQdrantStore::create_payload_index(self, collection, field, None)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl VectorWriteOps for LocalQdrantStore {
+    fn collection_exists(&self, collection: &str) -> Result<bool, String> {
+        Ok(LocalQdrantStore::collection_exists(self, collection))
+    }
+
+    fn collection_info(&self, collection: &str) -> Result<Value, String> {
+        LocalQdrantStore::get_collection_info(self, collection).map_err(|error| error.to_string())
+    }
+
+    fn create_collection_body(&self, collection: &str, body: &Value) -> Result<(), String> {
+        // hnsw_config/quantization_config keys are inert on the local engine
+        // (matches the Python one-time inert-tuning warning).
+        LocalQdrantStore::create_collection(self, collection, body).map_err(|error| error.to_string())
+    }
+
+    fn upsert_batches(&self, collection: &str, points: &[Value]) -> Result<(), String> {
+        // Persist-mode bulk (phase-01): one in-memory ingest, no per-batch
+        // full-store serialization; finalize() flushes exactly once.
+        LocalQdrantStore::upsert_deferred(self, collection, points).map_err(|error| error.to_string())
+    }
+
+    fn delete_by_filter(&self, collection: &str, filter: &Value) -> Result<(), String> {
+        LocalQdrantStore::delete_deferred(self, collection, None, Some(filter))
+            .map_err(|error| error.to_string())
+    }
+
+    fn create_payload_index(&self, collection: &str, field: &str) -> Result<(), String> {
+        // Idempotent on the local engine (phase-01) — safe to re-issue.
+        LocalQdrantStore::create_payload_index(self, collection, field, None)
+            .map_err(|error| error.to_string())
+    }
+
+    fn finalize(&self) -> Result<(), String> {
+        LocalQdrantStore::flush(self).map_err(|error| error.to_string())
+    }
 }
 
 fn env_nonempty(key: &str) -> Option<String> {
@@ -97,8 +199,38 @@ fn registry_backend(project_id: &str) -> Option<(String, Option<String>, Option<
     None
 }
 
+/// Local-lane OFF reason — the frozen semantics (D5, red-team C1): there is
+/// no "delegate to python children" path (python analyzer children do not
+/// embed since phase-08), so OFF means zero writes, period.
+fn frozen_reason(context: &str) -> NativeStore {
+    NativeStore::Unsupported(format!(
+        "{context}: native local lane is OFF (CORTEX_VECTOR_BACKEND is not 'rust') — code \
+         vectors stay FROZEN at zero writes (python analyzer children do not embed since \
+         phase-08); set CORTEX_VECTOR_BACKEND=rust to opt in"
+    ))
+}
+
+/// Resolve the local JSON engine via the shared cortex-storage resolver
+/// (env-first: `QDRANT_CODE_PATH`, then the instance-derived default).
+fn open_local_native_store(context: &str) -> NativeStore {
+    match resolve_storage(std::path::Path::new("."), None, &ResolveOverrides::default()) {
+        Ok(resolved) => {
+            match LocalQdrantStore::open(&resolved, cortex_storage::StorageRole::Code.as_str()) {
+                Ok(store) => NativeStore::Local(store),
+                Err(error) => NativeStore::Unsupported(format!(
+                    "native local vector store failed to open ({context}): {error}"
+                )),
+            }
+        }
+        Err(error) => NativeStore::Unsupported(format!(
+            "native local vector store resolution failed ({context}): {error}"
+        )),
+    }
+}
+
 /// Mirror of `get_code_qdrant_store` for the natively-servable subset.
 pub fn open_native_store(qdrant_url: Option<&str>) -> NativeStore {
+    let local_native = cortex_storage::qdrant::local_native_enabled();
     if let Some(project_id) = env_nonempty("CORTEX_STORAGE_PROJECT_ID") {
         match registry_backend(&project_id) {
             Some((backend, url, api_key)) => {
@@ -113,21 +245,32 @@ pub fn open_native_store(qdrant_url: Option<&str>) -> NativeStore {
                         };
                     }
                     // factory fallback: remote backend without qdrant_url → local store
-                    return NativeStore::Unsupported(format!(
+                    if local_native {
+                        return open_local_native_store(&format!(
+                            "project {project_id:?} is backend=remote without remote.qdrant_url \
+                             (factory falls back to the embedded store)"
+                        ));
+                    }
+                    return frozen_reason(&format!(
                         "project {project_id:?} is backend=remote without remote.qdrant_url \
-                         (factory falls back to the embedded store): vector lane stays on Python children"
+                         (factory falls back to the embedded store)"
                     ));
                 }
-                return NativeStore::Unsupported(format!(
-                    "project {project_id:?} uses storage_backend={backend:?} (embedded engine): \
-                     native embedding pass requires an HTTP qdrant server; vector lane stays \
-                     on Python children"
+                if local_native {
+                    return open_local_native_store(&format!(
+                        "project {project_id:?} uses storage_backend={backend:?} (embedded engine)"
+                    ));
+                }
+                return frozen_reason(&format!(
+                    "project {project_id:?} uses storage_backend={backend:?} (embedded engine)"
                 ));
             }
             None => {
+                // Refusing to guess survives the hatch: an unregistered
+                // project has no backend contract at all.
                 return NativeStore::Unsupported(format!(
                     "project {project_id:?} is not registered in the harness config: refusing \
-                     to guess a storage backend; vector lane stays on Python children"
+                     to guess a storage backend; vector lane stays frozen (zero writes)"
                 ));
             }
         }
@@ -143,11 +286,8 @@ pub fn open_native_store(qdrant_url: Option<&str>) -> NativeStore {
                  the Python reference too (RemoteQdrantUnsupportedError): {url}"
             ))
         }
-        _ => NativeStore::Unsupported(
-            "local embedded qdrant store (qdrant_client(path=...)): native embedding pass \
-             fails closed; vector lane stays on Python children"
-                .to_string(),
-        ),
+        _ if local_native => open_local_native_store("path-shaped QDRANT_CODE_PATH locator"),
+        _ => frozen_reason("local embedded qdrant store (qdrant_client(path=...))"),
     }
 }
 
@@ -194,12 +334,13 @@ pub(crate) fn size_drift_message(
     )
 }
 
-pub fn ensure_collection(store: &RemoteQdrantStore, collection: &str, vector_size: usize) -> Result<(), String> {
-    if store
-        .collection_exists(collection)
-        .map_err(|error| error.to_string())?
-    {
-        let info = store.get_collection_info(collection).map_err(|error| error.to_string())?;
+pub fn ensure_collection(
+    store: &impl VectorWriteOps,
+    collection: &str,
+    vector_size: usize,
+) -> Result<(), String> {
+    if store.collection_exists(collection)? {
+        let info = store.collection_info(collection)?;
         let sizes = vector_sizes(&info);
         if !sizes.is_empty() && !sizes.values().any(|size| *size as usize == vector_size) {
             return Err(size_drift_message(collection, &sizes, vector_size));
@@ -209,9 +350,7 @@ pub fn ensure_collection(store: &RemoteQdrantStore, collection: &str, vector_siz
     let mut body = Map::new();
     body.insert("vectors".into(), json!({"size": vector_size, "distance": "Cosine"}));
     apply_tuning_kwargs(&mut body)?;
-    store
-        .create_collection_body(collection, &Value::Object(body))
-        .map_err(|error| error.to_string())
+    store.create_collection_body(collection, &Value::Object(body))
 }
 
 /// `local_qdrant._tuning_kwargs` — unset env (the default) sends NOTHING.
@@ -248,12 +387,11 @@ fn apply_tuning_kwargs(body: &mut Map<String, Value>) -> Result<(), String> {
 }
 
 /// `_ensure_project_scope_index` — SCOPE_INDEX_FIELDS order is the Python
-/// tuple order; the call is idempotent server-side.
-fn ensure_scope_indexes(store: &RemoteQdrantStore, collection: &str) -> Result<(), String> {
+/// tuple order; the call is idempotent (server-side on remote, engine-level
+/// on local since phase-01).
+fn ensure_scope_indexes(store: &impl VectorWriteOps, collection: &str) -> Result<(), String> {
     for field in vector_sync::SCOPE_INDEX_FIELDS {
-        store
-            .create_payload_index(collection, field, None)
-            .map_err(|error| error.to_string())?;
+        store.create_payload_index(collection, field)?;
     }
     Ok(())
 }
@@ -262,10 +400,11 @@ fn ensure_scope_indexes(store: &RemoteQdrantStore, collection: &str) -> Result<(
 /// `sync_vector_documents` contract: embed everything, ensure collection,
 /// index scope fields, upsert (only the LAST batch waits), then delete
 /// stale points inside the scope. Returns the document count
-/// (`vector_count`).
+/// (`vector_count`). Runs unchanged over the remote REST wire and the local
+/// JSON engine via the [`VectorWriteOps`] seam.
 #[allow(clippy::too_many_arguments)] // mirrors sync_vector_documents' parameter list 1:1
 pub fn sync_vector_documents(
-    store: &RemoteQdrantStore,
+    store: &impl VectorWriteOps,
     embedder: &dyn Embedder,
     collection: &str,
     documents: &[VectorDocument],
@@ -316,25 +455,17 @@ pub fn sync_vector_documents(
                 })
             })
             .collect();
-        let size = QDRANT_UPSERT_BATCH.max(1);
-        for start in (0..points.len()).step_by(size) {
-            let batch = &points[start..(start + size).min(points.len())];
-            // Only the final batch waits: the flush at the function boundary
-            // is the durability contract (primary_vector_sync.py:343-352).
-            let is_last = start + size >= points.len();
-            store
-                .upsert_wait(collection, batch, is_last)
-                .map_err(|error| error.to_string())?;
-        }
+        store.upsert_batches(collection, &points)?;
     }
     delete_stale(store, collection, parser, project_id, root_scope, cleanup_paths, documents, full_replace)?;
+    store.finalize()?;
     Ok(documents.len())
 }
 
 /// `_delete_stale` — filter fields + semantics byte-pinned by the G4 gate.
 #[allow(clippy::too_many_arguments)] // mirrors _delete_stale's parameter list 1:1
 fn delete_stale(
-    store: &RemoteQdrantStore,
+    store: &impl VectorWriteOps,
     collection: &str,
     parser: &str,
     project_id: &str,
@@ -349,12 +480,10 @@ fn delete_stale(
     else {
         return Ok(());
     };
-    if !store.collection_exists(collection).map_err(|error| error.to_string())? {
+    if !store.collection_exists(collection)? {
         return Ok(());
     }
-    store
-        .delete(collection, None, Some(&filter))
-        .map_err(|error| error.to_string())?;
+    store.delete_by_filter(collection, &filter)?;
     Ok(())
 }
 
@@ -488,6 +617,250 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error, "Vector document payload scope does not match the requested sync scope");
+    }
+
+    // ── phase-02: local seam (native-vector-ingest-local) ──────────────────
+
+    /// CORTEX_VECTOR_BACKEND is process-global — hatch tests serialize on
+    /// the same lock as the other env-mutating tests in this module.
+    fn backend_env_lock() -> &'static std::sync::Mutex<()> {
+        tuning_env_lock()
+    }
+
+    struct FixedEmbedder {
+        dim: usize,
+    }
+    impl Embedder for FixedEmbedder {
+        fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, cortex_embed::EmbedError> {
+            Ok(texts
+                .iter()
+                .map(|text| {
+                    let seed = text.bytes().fold(0u64, |acc, byte| acc.wrapping_mul(31).wrapping_add(byte as u64));
+                    (0..self.dim)
+                        .map(|dim| ((seed >> (dim % 13)) & 0xff) as f32 / 255.0 + 0.01)
+                        .collect::<Vec<f32>>()
+                })
+                .collect())
+        }
+        fn dimension(&self) -> Option<usize> {
+            None
+        }
+        fn backend_name(&self) -> &'static str {
+            "fixed"
+        }
+    }
+
+    fn local_test_store(label: &str) -> (tempfile::TempDir, LocalQdrantStore) {
+        let isolation = tempfile::tempdir().expect("tempdir");
+        let store_root = isolation.path().join("qdrant").join("code");
+        let resolved = resolve_storage(
+            isolation.path(),
+            None,
+            &ResolveOverrides {
+                data_home: Some(isolation.path().to_string_lossy().into_owned()),
+                // Pin the code-store path: parallel hatch tests mutate
+                // QDRANT_CODE_PATH process-globally, and the override beats
+                // env in resolve_storage's precedence.
+                qdrant_code_path: Some(store_root.to_string_lossy().into_owned()),
+                ..ResolveOverrides::default()
+            },
+        )
+        .unwrap();
+        resolved.ensure_directories().unwrap();
+        let store = LocalQdrantStore::open(&resolved, cortex_storage::StorageRole::Code.as_str())
+            .unwrap_or_else(|error| panic!("{label}: {error}"));
+        (isolation, store)
+    }
+
+    fn document(id: &str, file: &str) -> VectorDocument {
+        let mut payload = Map::new();
+        payload.insert("project_id".into(), json!("proj"));
+        // document_from_payload adds the normalized scope field the stale
+        // filter matches on (vector_sync.rs:331).
+        payload.insert("project_id_normalized".into(), json!("proj"));
+        payload.insert("parser".into(), json!("go"));
+        payload.insert("root_scope".into(), json!("/r"));
+        payload.insert("file_path".into(), json!(file));
+        VectorDocument { id: id.into(), text: format!("text of {id} in {file}"), payload }
+    }
+
+    fn stored_ids(store: &LocalQdrantStore, collection: &str) -> Vec<String> {
+        let mut ids: Vec<String> = store
+            .scroll(collection, None, 1000, false, false, None)
+            .unwrap()
+            .0
+            .iter()
+            .map(|hit| hit["id"].as_str().unwrap().to_string())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// Scratch local sync with the flag ON: full replace upserts the JSON
+    /// store with correct points/payload; an incremental rename pass deletes
+    /// exactly the renamed file's stale points — never the kept ones (the
+    /// phase-01 must_not fix is load-bearing here).
+    #[test]
+    fn local_seam_full_replace_then_incremental_rename() {
+        let (_isolation, store) = local_test_store("local-seam");
+        let documents = vec![
+            document("id-a", "/r/a.go"),
+            document("id-b", "/r/b.go"),
+            document("id-c", "/r/c.go"),
+        ];
+        let count = sync_vector_documents(
+            &store,
+            &FixedEmbedder { dim: 2 },
+            "code",
+            &documents,
+            "go",
+            "proj",
+            "/r",
+            &[],
+            true,
+        )
+        .unwrap();
+        assert_eq!(count, 3);
+        assert!(store.collection_exists("code"));
+        assert_eq!(stored_ids(&store, "code"), vec!["id-a", "id-b", "id-c"]);
+
+        // Incremental: a.go renamed away → cleanup_paths carries it, keep_ids
+        // are the surviving documents.
+        let survivors = vec![document("id-b", "/r/b.go"), document("id-c", "/r/c.go")];
+        let count = sync_vector_documents(
+            &store,
+            &FixedEmbedder { dim: 2 },
+            "code",
+            &survivors,
+            "go",
+            "proj",
+            "/r",
+            &["/r/a.go".to_string()],
+            false,
+        )
+        .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(stored_ids(&store, "code"), vec!["id-b", "id-c"], "only the stale a.go point dies");
+
+        // Payload shape survived the JSON round-trip.
+        let hits = store.scroll("code", None, 10, true, false, None).unwrap().0;
+        let payload_b = hits
+            .iter()
+            .find(|hit| hit["id"] == "id-b")
+            .map(|hit| hit["payload"].clone())
+            .unwrap();
+        assert_eq!(payload_b["file_path"], "/r/b.go");
+        assert_eq!(payload_b["project_id"], "proj");
+        assert_eq!(payload_b["parser"], "go");
+
+        // Scope indexes exist exactly once each (idempotent engine path).
+        let info = store.get_collection_info("code").unwrap();
+        let fields: Vec<&str> = info
+            .pointer("/result/payload_indexes")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|index| index["field_name"].as_str().unwrap())
+            .collect();
+        let mut sorted_fields = fields.clone();
+        sorted_fields.sort();
+        let mut expected: Vec<&str> = vector_sync::SCOPE_INDEX_FIELDS.to_vec();
+        expected.sort();
+        assert_eq!(sorted_fields, expected, "each scope field indexed exactly once: {fields:?}");
+        store.close();
+    }
+
+    /// The size-drift guard works on the local store now that
+    /// get_collection_info carries the vector config (phase-01 F3b fix).
+    #[test]
+    fn local_seam_drift_guard_message() {
+        let (_isolation, store) = local_test_store("local-drift");
+        store
+            .create_collection("code", &json!({"vectors": {"size": 2, "distance": "Cosine"}}))
+            .unwrap();
+        let error = sync_vector_documents(
+            &store,
+            &FixedEmbedder { dim: 4 },
+            "code",
+            &[document("id-a", "/r/a.go")],
+            "go",
+            "proj",
+            "/r",
+            &[],
+            false,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "Qdrant collection 'code' has vector size default=2, \
+             but the configured embedder produces 4"
+        );
+        store.close();
+    }
+
+    /// Hatch gate (red-team H2/C1, pre-flip): flag unset → frozen Unsupported
+    /// (zero writes, behavior identical to before the plan); `=python` →
+    /// frozen too; `=rust` → the local JSON engine opens for business. The
+    /// phase-05 flip commit swaps unset to native.
+    #[test]
+    fn open_native_store_honours_vector_backend_hatch() {
+        let _env = backend_env_lock().lock().unwrap();
+        let isolation = tempfile::tempdir().expect("tempdir");
+        let store_root = isolation.path().join("qdrant").join("code");
+        std::fs::create_dir_all(&store_root).unwrap();
+
+        let previous = |key: &str| std::env::var(key).ok();
+        let restore = |key: &str, value: Option<String>| {
+            // SAFETY: serialized by backend_env_lock; test-only env scope.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        };
+        let saved_project = previous("CORTEX_STORAGE_PROJECT_ID");
+        let saved_config = previous("CORTEX_HARNESS_CONFIG_PATH");
+        let saved_qdrant = previous("QDRANT_CODE_PATH");
+        let saved_backend = previous("CORTEX_VECTOR_BACKEND");
+        restore("CORTEX_STORAGE_PROJECT_ID", None);
+        // Registry isolation: point the config dir at an empty temp file so
+        // registry_backend never sees the repo's real config.
+        restore(
+            "CORTEX_HARNESS_CONFIG_PATH",
+            Some(isolation.path().join("none.json").to_string_lossy().into_owned()),
+        );
+        restore("QDRANT_CODE_PATH", Some(store_root.to_string_lossy().into_owned()));
+
+        // Unset flag → frozen (byte-identical outcome to pre-plan behavior).
+        restore("CORTEX_VECTOR_BACKEND", None);
+        match open_native_store(Some(&store_root.to_string_lossy())) {
+            NativeStore::Unsupported(reason) => {
+                assert!(reason.contains("FROZEN at zero writes"), "honest frozen reason: {reason}");
+                assert!(reason.contains("CORTEX_VECTOR_BACKEND=rust"), "escape hatch named: {reason}");
+            }
+            _ => panic!("unset hatch must stay frozen before the flip"),
+        }
+        // `=python` → frozen as well.
+        restore("CORTEX_VECTOR_BACKEND", Some("python".into()));
+        assert!(matches!(open_native_store(Some(&store_root.to_string_lossy())), NativeStore::Unsupported(_)));
+        // `=rust` → Local JSON engine; the store file appears after a flush.
+        restore("CORTEX_VECTOR_BACKEND", Some("rust".into()));
+        match open_native_store(Some(&store_root.to_string_lossy())) {
+            NativeStore::Local(store) => {
+                store.create_collection("code", &json!({"size": 2, "distance": "Cosine"})).unwrap();
+                assert!(store.collection_exists("code"));
+                assert!(store_root.join("cortex-local-store.json").exists());
+                store.close();
+            }
+            other => panic!("=rust must resolve the local JSON engine, got {other:?}"),
+        }
+
+        restore("CORTEX_STORAGE_PROJECT_ID", saved_project);
+        restore("CORTEX_HARNESS_CONFIG_PATH", saved_config);
+        restore("QDRANT_CODE_PATH", saved_qdrant);
+        restore("CORTEX_VECTOR_BACKEND", saved_backend);
     }
 
     struct NullEmbedder;

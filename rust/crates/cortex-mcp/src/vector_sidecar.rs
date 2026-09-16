@@ -27,7 +27,11 @@ struct VectorWorker {
 }
 
 fn worker_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("CORTEX_MCP_VECTOR_WORKER") {
+    worker_path_from(std::env::var("CORTEX_MCP_VECTOR_WORKER").ok())
+}
+
+fn worker_path_from(env_override: Option<String>) -> Option<PathBuf> {
+    if let Some(path) = env_override {
         let path = PathBuf::from(path);
         return path.is_file().then_some(path);
     }
@@ -118,6 +122,9 @@ fn run_request(
     store_path: &Path,
     payload: &Value,
 ) -> Result<Value, String> {
+    if let Some(refusal) = quarantined_store_refusal(store_path) {
+        return Err(refusal);
+    }
     let mut cache = worker_cache()
         .lock()
         .map_err(|_| "vector worker cache poisoned".to_string())?;
@@ -142,6 +149,27 @@ fn run_request(
         }
     }
     Err("vector worker unreachable".to_string())
+}
+
+/// Rollback guard (native-vector-ingest-local phase-05, red-team H5): a
+/// python sidecar aimed at a root whose data has moved to the native JSON
+/// store (`cortex-local-store.json` present, legacy pickle `collection/`
+/// quarantined away) must refuse LOUDLY — qdrant-client would otherwise
+/// re-initialise an empty pickle store and silently serve nothing. Mind/doc
+/// stores are pickle-only (no JSON store) and never trip this.
+fn quarantined_store_refusal(store_path: &Path) -> Option<String> {
+    let json_owned = store_path.join("cortex-local-store.json").is_file();
+    let pickle_gone = !store_path.join("collection").exists();
+    if json_owned && pickle_gone {
+        return Some(format!(
+            "python vector sidecar refuses {}: the native JSON vector store owns this root and \
+             the legacy pickle collection/ subtree is quarantined — the code-lane data lives in \
+             the JSON store. Rerun with CORTEX_VECTOR_BACKEND=rust (native reader) or restore \
+             the pickle subtree; serving this root as empty would be a lie.",
+            store_path.display()
+        ));
+    }
+    None
 }
 
 fn expect_ok(response: Value) -> Result<Value, String> {
@@ -227,4 +255,32 @@ pub fn search_with_using(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Post-quarantine rollback (drill leg B): JSON store present + pickle
+    /// `collection/` gone → every sidecar op refuses loudly, never serves an
+    /// empty store.
+    #[test]
+    fn quarantined_store_is_refused_loudly() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cortex-local-store.json"), "{\"collections\":{}}").unwrap();
+        let error = list_collections(dir.path()).unwrap_err();
+        assert!(
+            error.contains("refuses") && error.contains("JSON vector store"),
+            "loud quarantine refusal, got: {error}"
+        );
+
+        // Mind/doc lane worker-override contract: an EMPTY
+        // CORTEX_MCP_VECTOR_WORKER must fail closed (no default fallback) —
+        // pure-function check, no python needed.
+        std::fs::create_dir_all(dir.path().join("collection").join("docs")).unwrap();
+        assert!(
+            worker_path_from(Some(String::new())).is_none(),
+            "empty CORTEX_MCP_VECTOR_WORKER must fail closed"
+        );
+    }
 }
