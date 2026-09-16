@@ -76,8 +76,22 @@ fn remote_qdrant_url(remote_config: Option<&Value>) -> Option<(String, Option<St
     Some((url, api_key))
 }
 
-/// Store root for the code plane — `QDRANT_CODE_PATH` or the instance layout.
+/// Store root for the code plane. Resolution goes through the SHARED
+/// `cortex_storage::resolve_storage` (review fix: the writer and the reader
+/// must derive the same root — env-first `QDRANT_CODE_PATH`, then config
+/// file, then the instance-derived default with `~` expansion + instance
+/// normalization). If resolution fails outright (e.g. a broken config),
+/// fall back to the minimal env chain so the reader keeps degrading loudly
+/// at store-open time instead of erroring before it can name a path.
 pub fn local_store_root() -> PathBuf {
+    if let Ok(resolved) = cortex_storage::config::resolve_storage(
+        std::path::Path::new("."),
+        None,
+        &cortex_storage::config::ResolveOverrides::default(),
+    ) && let Ok(path) = resolved.path_for_role(cortex_storage::StorageRole::Code.as_str())
+    {
+        return path.to_path_buf();
+    }
     if let Ok(path) = std::env::var("QDRANT_CODE_PATH")
         && !path.trim().is_empty()
     {

@@ -168,7 +168,7 @@ def rust_leg(store_dir: Path, fixture: list[dict], query: list[float]) -> dict:
     payload = json.loads(proc.stdout)
     return {
         "list": payload.get("collections", []),
-        "sizes": {"default": DIM},
+        "sizes": payload.get("sizes", {}),
         "hits": payload.get("hits", []),
     }
 

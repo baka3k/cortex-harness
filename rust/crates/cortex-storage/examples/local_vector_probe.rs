@@ -79,9 +79,17 @@ fn main() {
             let hits = reader
                 .search(&collection, &vector, limit, filter, true, false, using)
                 .expect("search");
+            let sizes = reader
+                .get_collection_info(&collection)
+                .ok()
+                .and_then(|info| {
+                    info.pointer("/result/config/params/vectors/size")
+                        .map(|size| serde_json::json!({"default": size}))
+                })
+                .unwrap_or(serde_json::json!({}));
             print!(
                 "{}",
-                serde_json::json!({"ok": true, "hits": hits, "collections": reader.list_collection_names().unwrap()})
+                serde_json::json!({"ok": true, "hits": hits, "sizes": sizes, "collections": reader.list_collection_names().unwrap()})
             );
         }
         Some("info") => {
