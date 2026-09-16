@@ -281,68 +281,69 @@ pub fn execute(args: &AnalyzerArgs, extra: &JavaExtraArgs) -> Result<i32, String
     let class_index = ClassIndex::build(&index_refs);
     let function_index = FunctionIndex::build(&index_refs);
 
-    // ── Graph write ─────────────────────────────────────────────────────────
+    // ── Phase-02 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+    // Pattern A: assemble_graph + WriteAllPayload build + embedding_categories()
+    // capture must run in BOTH graph and graphless modes. Previously gated
+    // inside `if let Some(store) = store.take()` — unreachable when the
+    // orchestrator's embedding pass sets `CORTEX_DISABLE_GRAPH=1`.
+    let selected_refs: Vec<&FilePayload> = selected_payloads.iter().collect();
+    let graph = assemble_graph(
+        &selected_refs,
+        &index_refs,
+        &class_index,
+        &function_index,
+        &project_id,
+        &project_name,
+        &language,
+        &repo,
+        &build_system,
+        &args.root,
+    );
+    let payload = WriteAllPayload {
+        projects: &graph.projects,
+        packages: &graph.packages,
+        namespaces: &graph.namespaces,
+        files: &graph.files,
+        classes: &graph.classes,
+        types: &[],
+        function_types: &graph.function_types,
+        functions: &graph.functions,
+        fields: &[],
+        aliases: &[],
+        templates: &[],
+        relations: &graph.relations,
+        calls: &graph.calls,
+        calls_with_site: &[],
+        properties: &[],
+        events: &[],
+        interfaces: &[],
+        enums: &[],
+        constants: &[],
+        variables: &[],
+        navigators: &[],
+        has_routes: &[],
+        param_lists: &[],
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::WithPackage,
+    };
+    let embedding_categories = payload.embedding_categories();
+
+    // ── Graph write (only when a store is open) ─────────────────────────────
     if let Some(store) = store.take() {
         if verbose {
             println!("[graph] Writing nodes and relations (streaming)...");
         }
-        let selected_refs: Vec<&FilePayload> = selected_payloads.iter().collect();
-        // assemble_graph mượn refs — dùng FunctionIndex đã build từ
-        // index_payloads (khớp resolve_callee_id của Python).
-        let graph = assemble_graph(
-            &selected_refs,
-            &index_refs,
-            &class_index,
-            &function_index,
-            &project_id,
-            &project_name,
-            &language,
-            &repo,
-            &build_system,
-            &args.root,
-        );
         let batch_size = extra.neo4j_batch_size.unwrap_or(1000).max(1) as usize;
         let mut writer = LanguageCodeWriter::new(store, args.neo4j_db.clone(), batch_size, verbose);
-        let payload = WriteAllPayload {
-            projects: &graph.projects,
-            packages: &graph.packages,
-            namespaces: &graph.namespaces,
-            files: &graph.files,
-            classes: &graph.classes,
-            types: &[],
-            function_types: &graph.function_types,
-            functions: &graph.functions,
-            fields: &[],
-            aliases: &[],
-            templates: &[],
-            relations: &graph.relations,
-            calls: &graph.calls,
-            calls_with_site: &[],
-            properties: &[],
-            events: &[],
-            interfaces: &[],
-            enums: &[],
-            constants: &[],
-            variables: &[],
-            navigators: &[],
-            has_routes: &[],
-            param_lists: &[],
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::WithPackage,
-        };
-        // Phase-02: capture embedding categories BEFORE write_all consumes graph
-        // (plan `260916-1432-legacy-17-vector-emit`).
-        let embedding_categories = payload.embedding_categories();
-        let counts = writer.write_all(&payload);
-        match counts {
+        match writer.write_all(&payload) {
             Ok(_) => {
                 if verbose {
                     println!("[graph] Write complete");
@@ -350,24 +351,25 @@ pub fn execute(args: &AnalyzerArgs, extra: &JavaExtraArgs) -> Result<i32, String
             }
             Err(error) => return Err(format!("[graph] write failed: {error}")),
         }
-        // Phase-02: emit EmbeddingInputArtifact.
-        if let Some(output) = args.embedding_input_output() {
-            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
-                Some(output),
-                EmbeddingEmission {
-                    parser: "java",
-                    project_id: &project_id,
-                    root_scope: &repo,
-                    full_replace: !args.incremental,
-                    scanned_directory: true,
-                    files_selected: selected_rel_paths.iter().cloned().collect(),
-                    files_deleted: deleted_set.iter().cloned().collect(),
-                    categories: embedding_categories,
-                },
-            ) {
-                eprintln!("java embedding-input artifact failed: {error}");
-                return Ok(1);
-            }
+    }
+
+    // ── Phase-02 emit EmbeddingInputArtifact OUTSIDE writer block ──────────
+    if let Some(output) = args.embedding_input_output() {
+        if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: "java",
+                project_id: &project_id,
+                root_scope: &repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected: selected_rel_paths.iter().cloned().collect(),
+                files_deleted: deleted_set.iter().cloned().collect(),
+                categories: embedding_categories,
+            },
+        ) {
+            eprintln!("java embedding-input artifact failed: {error}");
+            return Ok(1);
         }
     }
 

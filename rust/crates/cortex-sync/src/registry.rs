@@ -442,20 +442,23 @@ pub fn rust_analyzer_binary(analyzer: &AnalyzerConfig) -> Result<Option<String>,
 /// nếu shape facts KHÔNG map được `documents_from_categories` — những parser này KHÔNG
 /// nằm trong list, gate rơi về `vector_status="disabled-no-emitter"` (orchestrator.rs).
 ///
-/// Phase-03 widening (plan `260916-1432-legacy-17-vector-emit`): 7 → 24 parsers
-/// (full coverage). Carve-outs chỉ còn cho android (write_nodes_batch custom —
-/// chưa wire) + cobol (write_graph_facts custom — phase-02 defer).
+/// Phase-03 widening (plan `260916-1432-legacy-17-vector-emit`) + Phase-03 of
+/// `260916-1520-legacy17-graphless-emit`: csharp added (Pattern A — never
+/// wired before) + cobol added (Pattern B — capture from `write_graph_facts`).
+/// android remains deferred — `assemble::write_graph` (~1200 lines, custom
+/// `write_nodes_batch` per label) needs major refactor for emission. plsql
+/// inherits from sqlcommon.
 ///
 /// `SHARED_VECTOR_CLI_PARSERS` alias giữ cho grep-parity với code cũ; mới dùng
 /// `EMITTING_VECTOR_CLI_PARSERS`.
-pub const EMITTING_VECTOR_CLI_PARSERS: [&str; 22] = [
-    "cplus", "csharp", "dart", "delphi", "go", "java", "jp1", "js", "kotlin", "perl",
-    "php", "plsql", "python", "rust", "shell", "sql", "swift", "ts", "vb6", "vba",
-    "vbnet", "vbscript",
+pub const EMITTING_VECTOR_CLI_PARSERS: [&str; 23] = [
+    "cplus", "cobol", "csharp", "dart", "delphi", "go", "java", "jp1", "js", "kotlin",
+    "perl", "php", "plsql", "python", "rust", "shell", "sql", "swift", "ts", "vb6",
+    "vba", "vbnet", "vbscript",
 ];
 
 #[deprecated(note = "use EMITTING_VECTOR_CLI_PARSERS — capability table đổi tên 2026-09-16")]
-pub const SHARED_VECTOR_CLI_PARSERS: [&str; 22] = EMITTING_VECTOR_CLI_PARSERS;
+pub const SHARED_VECTOR_CLI_PARSERS: [&str; 23] = EMITTING_VECTOR_CLI_PARSERS;
 
 pub fn message_enabled_parsers() -> BTreeSet<&'static str> {
     BTreeSet::from([

@@ -191,29 +191,64 @@ pub fn execute(args: &AnalyzerArgs, extra: &CobolExtraArgs) -> Result<i32, Strin
     }
     let cleanup_paths: Vec<String> = cleanup_paths.into_iter().collect();
 
-    let graph_total = match write_graph(args, extra, &result, &scope, &cleanup_paths) {
-        Ok(total) => total,
+    let (graph_total, embedding_categories) = match write_graph(args, extra, &result, &scope, &cleanup_paths) {
+        Ok((total, categories)) => (total, categories),
         Err(error) => {
             eprintln!("[cobol] ERROR: graph write failed after staged analysis: {error}");
             return Ok(3);
         }
     };
 
-    // Vector sync — Python plane; Rust accept-and-ignore ⇒ vectors=0.
-    let vector_count = 0usize;
+    // Vector sync — orchestrator-level (phase-06); Rust không embed.
+    // Phase-03: emit EmbeddingInputArtifact nếu orchestrator yêu cầu.
+    let mut vector_count = 0i64;
+    let mut vector_status = "disabled";
+    if let Some(out_path) = args.embedding_input_output() {
+        let repo = scope.repo.clone();
+        match cortex_analyzer_framework::embedding_artifact::maybe_emit_embedding_artifact(
+            Some(out_path),
+            cortex_analyzer_framework::embedding_artifact::EmbeddingEmission {
+                parser: "cobol",
+                project_id: &scope.project_id,
+                root_scope: &repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected: result
+                    .nodes
+                    .iter()
+                    .filter_map(|node| node.properties.get("file_path").and_then(Value::as_str).map(str::to_string))
+                    .collect(),
+                files_deleted: deleted.iter().cloned().collect(),
+                categories: embedding_categories,
+            },
+        ) {
+            Ok(Some(_)) => {
+                vector_status = "success";
+                if args.verbose {
+                    println!("[embedding] cobol artifact written {out_path}");
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("cobol embedding-input artifact failed: {error}");
+                return Ok(1);
+            }
+        }
+    }
 
     if let Err(error) = dependency_index.save(&dependency_cache) {
         eprintln!("[cobol] WARNING: dependency cache was not updated: {error}");
     }
 
     println!(
-        "[SCAN_RESULT] parser=cobol files={} nodes={} edges={} diagnostics={} graph={} vectors={} artifact={}",
+        "[SCAN_RESULT] parser=cobol files={} nodes={} edges={} diagnostics={} graph={} vectors={} vector_status={} artifact={}",
         result.summary.processed_files,
         result.nodes.len(),
         result.edges.len(),
         result.diagnostics.len(),
         graph_total,
         vector_count,
+        vector_status,
         output.display(),
     );
     Ok(0)
@@ -309,26 +344,31 @@ fn run_staged_analysis(
 }
 
 /// `write_graph` — returns `sum(counts.values())`.
+///
+/// Phase-03 hoist (plan `260916-1520-legacy17-graphless-emit`): the
+/// graphless short-circuit was removed — `write_graph_facts` now builds
+/// embedding categories regardless of whether the writer is Some or None.
 fn write_graph(
     args: &AnalyzerArgs,
     extra: &CobolExtraArgs,
     result: &crate::models::AnalysisResult,
     scope: &Scope,
     cleanup_paths: &[String],
-) -> Result<i64, String> {
-    // Python: driver = await create_graph_driver_from_args(args); if None: {}
-    if args.graph_writes_disabled() {
-        return Ok(0);
-    }
-    let store = args.open_store().map_err(|e| e.to_string())?;
-    let mut writer = LanguageCodeWriter::new(
-        store,
-        args.neo4j_db.clone(),
-        extra.neo4j_batch_size,
-        args.verbose,
-    );
-    let counts = write_graph_facts(
-        &mut writer,
+) -> Result<(i64, Vec<(String, Vec<serde_json::Value>)>), String> {
+    let writer = if args.graph_writes_disabled() {
+        None
+    } else {
+        let store = args.open_store().map_err(|e| e.to_string())?;
+        Some(LanguageCodeWriter::new(
+            store,
+            args.neo4j_db.clone(),
+            extra.neo4j_batch_size,
+            args.verbose,
+        ))
+    };
+    let (mut writer_opt, mut _writer_owner) = (writer, ());
+    let (counts, embedding_categories) = write_graph_facts(
+        writer_opt.as_mut(),
         result,
         &scope.project_name,
         &scope.repo,
@@ -336,36 +376,39 @@ fn write_graph(
     )
     .map_err(|e| e.to_string())?;
     if !cleanup_paths.is_empty() {
-        let keep_ids: Vec<String> = result.nodes.iter().map(|node| node.id.clone()).collect();
-        let query = "MATCH (n {project_id: $project_id}) \
-                     WHERE (n.file_path IN $paths OR n.path IN $paths) \
-                     AND NOT n.id IN $keep_ids \
-                     DETACH DELETE n RETURN count(n) AS count";
-        let params_row = json!({
-            "project_id": result.project_id,
-            "paths": cleanup_paths,
-            "keep_ids": keep_ids,
-        })
-        .as_object()
-        .cloned()
-        .expect("cleanup params object");
-        // Python: writer.write_batches("cobol:incremental_cleanup",
-        //   [cleanup_parameters], cleanup_batch) — return value KHÔNG được gán
-        // vào counts (quirk upstream) nên `graph=` không cộng cleanup.
-        writer
-            .write_batches("cobol:incremental_cleanup", &[params_row], &mut |store, database, batch| {
-                let batch_params = batch
-                    .first()
-                    .map(|row| {
-                        row.iter()
-                            .map(|(key, value)| (key.clone(), value.clone()))
-                            .collect::<BTreeMap<String, Value>>()
-                    })
-                    .unwrap_or_default();
-                store.execute_query(query, &batch_params, database)?;
-                Ok(batch.len() as i64)
+        if let Some(writer_ref) = writer_opt.as_mut() {
+            let keep_ids: Vec<String> =
+                result.nodes.iter().map(|node| node.id.clone()).collect();
+            let query = "MATCH (n {project_id: $project_id}) \
+                         WHERE (n.file_path IN $paths OR n.path IN $paths) \
+                         AND NOT n.id IN $keep_ids \
+                         DETACH DELETE n RETURN count(n) AS count";
+            let params_row = json!({
+                "project_id": result.project_id,
+                "paths": cleanup_paths,
+                "keep_ids": keep_ids,
             })
-            .map_err(|e| e.to_string())?;
+            .as_object()
+            .cloned()
+            .expect("cleanup params object");
+            // Python: writer.write_batches("cobol:incremental_cleanup",
+            //   [cleanup_parameters], cleanup_batch) — return value KHÔNG được gán
+            // vào counts (quirk upstream) nên `graph=` không cộng cleanup.
+            writer_ref
+                .write_batches("cobol:incremental_cleanup", &[params_row], &mut |store, database, batch| {
+                    let batch_params = batch
+                        .first()
+                        .map(|row| {
+                            row.iter()
+                                .map(|(key, value)| (key.clone(), value.clone()))
+                                .collect::<BTreeMap<String, Value>>()
+                        })
+                        .unwrap_or_default();
+                    store.execute_query(query, &batch_params, database)?;
+                    Ok(batch.len() as i64)
+                })
+                .map_err(|e| e.to_string())?;
+        }
     }
-    Ok(counts.values().sum())
+    Ok((counts.values().sum(), embedding_categories))
 }

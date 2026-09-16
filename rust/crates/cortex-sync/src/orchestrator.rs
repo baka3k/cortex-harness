@@ -3519,19 +3519,23 @@ mod handshake_tests {
 
     #[test]
     fn capability_table_constant_exposes_emitting_set() {
-        // Phase-03 widening: 22 parsers in capability table.
+        // Phase-03 widening: 23 parsers in capability table (cobol added in
+        // `260916-1520-legacy17-graphless-emit` Phase-03 — Pattern B capture
+        // from `write_graph_facts`). android still deferred (~1200-line
+        // `assemble::write_graph` needs major refactor).
         for parser in [
-            "cplus", "csharp", "dart", "delphi", "go", "java", "jp1", "js", "kotlin",
-            "perl", "php", "plsql", "python", "rust", "shell", "sql", "swift", "ts",
-            "vb6", "vba", "vbnet", "vbscript",
+            "cobol", "cplus", "csharp", "dart", "delphi", "go", "java", "jp1", "js",
+            "kotlin", "perl", "php", "plsql", "python", "rust", "shell", "sql",
+            "swift", "ts", "vb6", "vba", "vbnet", "vbscript",
         ] {
             assert!(
                 crate::registry::EMITTING_VECTOR_CLI_PARSERS.contains(&parser),
                 "{parser} phải trong EMITTING_VECTOR_CLI_PARSERS"
             );
         }
-        // Carve-outs: android, cobol chưa wire (phase-02 defer).
-        for parser in ["android", "cobol"] {
+        // Only android remains deferred (assemble.rs ~1200 lines, custom
+        // write_nodes_batch per label — needs major refactor).
+        for parser in ["android"] {
             assert!(
                 !crate::registry::EMITTING_VECTOR_CLI_PARSERS.contains(&parser),
                 "{parser} KHÔNG nên trong EMITTING_VECTOR_CLI_PARSERS ở phase-03"

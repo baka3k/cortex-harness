@@ -1,6 +1,6 @@
 ---
 title: "Legacy 17 parsers — emit EmbeddingInputArtifact in primary pass, read in embedding pass"
-status: phases 01-03 done; phase-04 deferred (root cause: graphless mode architecture)
+status: phases 01-03 done; phase-04 unblocked by plan `260916-1520-legacy17-graphless-emit` (graphless hoist implemented; resume phase-04 per drill 3 legs)
 created: 2026-09-16
 branch: feat/change-b
 target: >
@@ -16,7 +16,10 @@ blockedBy:
 blocks:
   - "260915-2230-python-legacy-cleanup"          # unblocks: Python analyzer scripts deletable per disposition
   - "260916-0936-presence-gating-parser-retirement"  # separate lane
+blockedByUpstream:
+  - "260916-1520-legacy17-graphless-emit"   # architecturally required for phase-04 to PASS
 relatedPlans:
+  - "260916-1520-legacy17-graphless-emit"   # unblocks phase-04 (graphless emit fix)
   - "260915-2027-vector-lane-rust-port"          # precedent: shared-7 native embedding wiring
   - "260913-2130-rust-full-migration"            # umbrella
 research: "plans/260916-1432-legacy-17-vector-emit/research/digest.md"

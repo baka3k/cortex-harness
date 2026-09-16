@@ -868,27 +868,30 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
         }
     }
 
-    // ── Streaming graph write ───────────────────────────────────────────────
-    if let Some(mut writer) = writer {
-        println!("[graph] Streaming nodes and relations in batches...");
+    // ── Streaming graph write (Phase-02 hoist: build + accumulate OUTSIDE) ─
+    // Pattern B: per-file loop, buf_* accumulators, flush_write_buffers calls,
+    // and embedding_accumulator MUST run in BOTH graph and graphless modes.
+    // Previously gated inside `if let Some(mut writer) = writer` — unreachable
+    // when the orchestrator's embedding pass sets `CORTEX_DISABLE_GRAPH=1`.
+    println!("[graph] Streaming nodes and relations in batches...");
 
-        let mut buf_files: Vec<Row> = Vec::new();
-        let mut buf_namespaces: Vec<Row> = Vec::new();
-        let mut buf_types: Vec<Row> = Vec::new();
-        let mut buf_function_types: Vec<Row> = Vec::new();
-        let mut buf_functions: Vec<Row> = Vec::new();
-        let mut buf_fields: Vec<Row> = Vec::new();
-        let mut buf_aliases: Vec<Row> = Vec::new();
-        let mut buf_templates: Vec<Row> = Vec::new();
-        let mut buf_resources: Vec<Row> = Vec::new();
-        let mut buf_resource_elements: Vec<Row> = Vec::new();
-        let mut buf_relations: Vec<Row> = Vec::new();
-        let mut buf_possible_calls: Vec<Row> = Vec::new();
-        let mut buf_unknown_calls: Vec<Row> = Vec::new();
-        let mut files_in_buf = 0usize;
-        // Phase-02: accumulate embedding categories across all flush batches
-        // (plan `260916-1432-legacy-17-vector-emit`).
-        let mut embedding_accumulator: Vec<(String, Vec<Value>)> = Vec::new();
+    let mut buf_files: Vec<Row> = Vec::new();
+    let mut buf_namespaces: Vec<Row> = Vec::new();
+    let mut buf_types: Vec<Row> = Vec::new();
+    let mut buf_function_types: Vec<Row> = Vec::new();
+    let mut buf_functions: Vec<Row> = Vec::new();
+    let mut buf_fields: Vec<Row> = Vec::new();
+    let mut buf_aliases: Vec<Row> = Vec::new();
+    let mut buf_templates: Vec<Row> = Vec::new();
+    let mut buf_resources: Vec<Row> = Vec::new();
+    let mut buf_resource_elements: Vec<Row> = Vec::new();
+    let mut buf_relations: Vec<Row> = Vec::new();
+    let mut buf_possible_calls: Vec<Row> = Vec::new();
+    let mut buf_unknown_calls: Vec<Row> = Vec::new();
+    let mut files_in_buf = 0usize;
+    // Phase-02: accumulate embedding categories across all flush batches
+    // (plan `260916-1432-legacy-17-vector-emit`).
+    let mut embedding_accumulator: Vec<(String, Vec<Value>)> = Vec::new();
 
         let mut func_metas: Vec<(String, Option<String>, String, String)> = Vec::new();
         let mut infer_type_ids: HashSet<String> = HashSet::new();
@@ -1340,7 +1343,7 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
             files_in_buf += 1;
             if files_in_buf >= STREAM_BATCH_FILES {
                 flush_write_buffers(
-                    &mut writer,
+                    writer.as_mut(),
                     &mut buf_files, &mut buf_namespaces, &mut buf_types,
                     &mut buf_function_types, &mut buf_functions, &mut buf_fields,
                     &mut buf_aliases, &mut buf_templates, &mut buf_resources,
@@ -1353,7 +1356,7 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
         }
 
         flush_write_buffers(
-            &mut writer,
+            writer.as_mut(),
             &mut buf_files, &mut buf_namespaces, &mut buf_types,
             &mut buf_function_types, &mut buf_functions, &mut buf_fields,
             &mut buf_aliases, &mut buf_templates, &mut buf_resources,
@@ -1363,15 +1366,20 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
             &mut embedding_accumulator,
         )?;
 
-        // Deferred INCLUDES (đích có thể thuộc buffer sau).
-        if !deferred_include_relations.is_empty() {
-            writer
-                .write_relations_typed(&deferred_include_relations, Some(&project_id))
-                .map_err(|e| e.to_string())?;
-        }
+        // ── Persistence-only writer block: deferred INCLUDES + tail/inferred +
+        // ParseRun + tail_and_inferred write_all. These do NOT need to run in
+        // graphless mode (no graph store open); only the parse + accumulator
+        // work above does. Emission lives OUTSIDE this block.
+        if let Some(writer) = writer.as_mut() {
+            // Deferred INCLUDES (đích có thể thuộc buffer sau).
+            if !deferred_include_relations.is_empty() {
+                writer
+                    .write_relations_typed(&deferred_include_relations, Some(&project_id))
+                    .map_err(|e| e.to_string())?;
+            }
 
-        // ── Tail relations + inferred DECLARES ──────────────────────────────
-        let mut tail_relations: Vec<Row> = resource_reference_relations.clone();
+            // ── Tail relations + inferred DECLARES ──────────────────────────────
+            let mut tail_relations: Vec<Row> = resource_reference_relations.clone();
         for (func_id, event_id, rel_type, props) in &event_relations {
             let mut row = Map::new();
             row.insert("source_label".into(), json!("Function"));
@@ -1534,28 +1542,32 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
 
         // Phase-02: emit EmbeddingInputArtifact after all flushes
         // (plan `260916-1432-legacy-17-vector-emit`).
-        if let Some(output) = args.embedding_input_output() {
-            let files_selected: Vec<String> = if let Some(set) = &selected {
-                set.iter().cloned().collect()
-            } else {
-                all_rel_paths.clone()
-            };
-            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
-                Some(output),
-                EmbeddingEmission {
-                    parser: "cplus",
-                    project_id: &project_id,
-                    root_scope: &repo,
-                    full_replace: !args.incremental,
-                    scanned_directory: true,
-                    files_selected,
-                    files_deleted: deleted_files.iter().cloned().collect(),
-                    categories: embedding_accumulator,
-                },
-            ) {
-                eprintln!("cplus embedding-input artifact failed: {error}");
-                return Ok(1);
-            }
+        // Phase-02 hoist (plan `260916-1520-legacy17-graphless-emit`): emission
+        // runs OUTSIDE this persistence-only writer block so it fires in
+        // graphless mode too. `embedding_accumulator` is owned above.
+        } // end of `if let Some(writer) = writer.as_mut() { ... }` (persistence-only)
+
+    if let Some(output) = args.embedding_input_output() {
+        let files_selected: Vec<String> = if let Some(set) = &selected {
+            set.iter().cloned().collect()
+        } else {
+            all_rel_paths.clone()
+        };
+        if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: "cplus",
+                project_id: &project_id,
+                root_scope: &repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected,
+                files_deleted: deleted_files.iter().cloned().collect(),
+                categories: embedding_accumulator,
+            },
+        ) {
+            eprintln!("cplus embedding-input artifact failed: {error}");
+            return Ok(1);
         }
     }
 
@@ -1571,9 +1583,17 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
 
 // ── Buffer flush ───────────────────────────────────────────────────────────
 
+/// `flush_write_buffers` — write batched rows to the graph writer + accumulate
+/// `embedding_categories()` for the orchestrator's embedding pass.
+///
+/// Phase-02 hoist (plan `260916-1520-legacy17-graphless-emit`): the writer is
+/// `Option<&mut LanguageCodeWriter>`. When `Some`, persist rows AND
+/// accumulate categories. When `None` (graphless mode), skip persistence and
+/// still accumulate categories so the orchestrator's embedding pass can
+/// serialize the artifact.
 #[allow(clippy::too_many_arguments)]
 fn flush_write_buffers(
-    writer: &mut LanguageCodeWriter,
+    writer: Option<&mut LanguageCodeWriter>,
     buf_files: &mut Vec<Row>,
     buf_namespaces: &mut Vec<Row>,
     buf_types: &mut Vec<Row>,
@@ -1592,23 +1612,6 @@ fn flush_write_buffers(
 ) -> Result<(), String> {
     if *files_in_buf == 0 {
         return Ok(());
-    }
-    if !buf_resources.is_empty() {
-        writer
-            .write_node_properties_batch("resources", "Resource", buf_resources, "id", "id", None)
-            .map_err(|e| e.to_string())?;
-    }
-    if !buf_resource_elements.is_empty() {
-        writer
-            .write_node_properties_batch(
-                "resource_elements",
-                "UIControl",
-                buf_resource_elements,
-                "id",
-                "id",
-                None,
-            )
-            .map_err(|e| e.to_string())?;
     }
     let has_nodes = !buf_files.is_empty()
         || !buf_namespaces.is_empty()
@@ -1654,74 +1657,86 @@ fn flush_write_buffers(
             use_full_writers: true,
             files_variant: FilesVariant::Default,
         };
-        // Phase-02: capture embedding categories BEFORE write_all consumes
-        // the row buffers (plan `260916-1432-legacy-17-vector-emit`).
+        // Capture embedding categories BEFORE write_all consumes the row
+        // buffers — runs in BOTH modes (graph-enabled + graphless).
         embedding_accumulator.extend(payload.embedding_categories());
-        writer
-            .write_all(&payload)
-            .map_err(|e| e.to_string())?;
-    }
-    if !buf_possible_calls.is_empty() {
-        writer
-            .write_possible_calls_with_site(buf_possible_calls)
-            .map_err(|e| e.to_string())?;
-    }
-    if !buf_unknown_calls.is_empty() {
-        let mut unknown_nodes_by_id: Vec<Row> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for row in buf_unknown_calls.iter() {
-            let unknown_id = str_of(row, "unknown_id");
-            if !seen.insert(unknown_id.clone()) {
-                continue;
+        if let Some(w) = writer {
+            if !buf_resources.is_empty() {
+                w.write_node_properties_batch("resources", "Resource", buf_resources, "id", "id", None)
+                    .map_err(|e| e.to_string())?;
             }
-            unknown_nodes_by_id.push(json!({
-                "id": unknown_id,
-                "name": row["props"]["callee_name"].clone(),
-                "node_type": "code",
-                "project_id": row["project_id"].clone(),
-                "project_id_normalized": row["project_id"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_lowercase(),
-            })
-            .as_object()
-            .cloned()
-            .unwrap());
+            if !buf_resource_elements.is_empty() {
+                w.write_node_properties_batch(
+                    "resource_elements",
+                    "UIControl",
+                    buf_resource_elements,
+                    "id",
+                    "id",
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            w.write_all(&payload).map_err(|e| e.to_string())?;
+            if !buf_possible_calls.is_empty() {
+                w.write_possible_calls_with_site(buf_possible_calls)
+                    .map_err(|e| e.to_string())?;
+            }
+            if !buf_unknown_calls.is_empty() {
+                let mut unknown_nodes_by_id: Vec<Row> = Vec::new();
+                let mut seen: HashSet<String> = HashSet::new();
+                for row in buf_unknown_calls.iter() {
+                    let unknown_id = str_of(row, "unknown_id");
+                    if !seen.insert(unknown_id.clone()) {
+                        continue;
+                    }
+                    unknown_nodes_by_id.push(json!({
+                        "id": unknown_id,
+                        "name": row["props"]["callee_name"].clone(),
+                        "node_type": "code",
+                        "project_id": row["project_id"].clone(),
+                        "project_id_normalized": row["project_id"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_lowercase(),
+                    })
+                    .as_object()
+                    .cloned()
+                    .unwrap());
+                }
+                w.write_node_properties_batch(
+                    "cplus:unknown_functions",
+                    "UnknownFunction",
+                    &unknown_nodes_by_id,
+                    "id",
+                    "id",
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+                let unknown_edges: Vec<Row> = buf_unknown_calls
+                    .iter()
+                    .map(|row| {
+                        json!({
+                            "source_label": "Function",
+                            "source_property": "id",
+                            "source_id": str_of(row, "caller_id"),
+                            "target_label": "UnknownFunction",
+                            "target_property": "id",
+                            "target_id": str_of(row, "unknown_id"),
+                            "rel_type": "UNKNOWN_CALL",
+                            "edge_property": "site_id",
+                            "edge_id": str_of(row, "site_id"),
+                            "props": row["props"].clone(),
+                            "project_id": row["project_id"].clone(),
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap()
+                    })
+                    .collect();
+                w.write_evidence_edges(&unknown_edges)
+                    .map_err(|e| e.to_string())?;
+            }
         }
-        writer
-            .write_node_properties_batch(
-                "cplus:unknown_functions",
-                "UnknownFunction",
-                &unknown_nodes_by_id,
-                "id",
-                "id",
-                None,
-            )
-            .map_err(|e| e.to_string())?;
-        let unknown_edges: Vec<Row> = buf_unknown_calls
-            .iter()
-            .map(|row| {
-                json!({
-                    "source_label": "Function",
-                    "source_property": "id",
-                    "source_id": str_of(row, "caller_id"),
-                    "target_label": "UnknownFunction",
-                    "target_property": "id",
-                    "target_id": str_of(row, "unknown_id"),
-                    "rel_type": "UNKNOWN_CALL",
-                    "edge_property": "site_id",
-                    "edge_id": str_of(row, "site_id"),
-                    "props": row["props"].clone(),
-                    "project_id": row["project_id"].clone(),
-                })
-                .as_object()
-                .cloned()
-                .unwrap()
-            })
-            .collect();
-        writer
-            .write_evidence_edges(&unknown_edges)
-            .map_err(|e| e.to_string())?;
     }
     buf_files.clear();
     buf_namespaces.clear();

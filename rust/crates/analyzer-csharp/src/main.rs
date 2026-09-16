@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser as ClapParser;
 use cortex_analyzer_framework::cli::{abs_root, AnalyzerArgs};
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::manifest::load_manifest_paths;
 use cortex_graph_writer::language_writer::LanguageCodeWriter;
 use serde_json::{json, Value};
@@ -279,16 +280,22 @@ fn run(common: &AnalyzerArgs, extra: &CsharpExtraArgs) -> i32 {
 
     let mut exit_code = 0;
 
+    // ── Phase-03 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+    // Pattern A: build_graph_rows + WriteAllPayload + embedding_categories()
+    // capture ALWAYS run (so graphless mode can serialize the artifact).
+    // Persistence is gated on the store being Some.
+    let rows = build_graph_rows(
+        &payloads,
+        &project_id,
+        &project_name,
+        &language,
+        &repo,
+        &build_system,
+        &root.to_string_lossy(),
+    );
+    let (write_payload, embedding_categories) = crate::graph::build_payload(&rows);
+
     if let Some(store) = store_opt.take() {
-        let rows = build_graph_rows(
-            &payloads,
-            &project_id,
-            &project_name,
-            &language,
-            &repo,
-            &build_system,
-            &root.to_string_lossy(),
-        );
         let mut writer = LanguageCodeWriter::new(
             store,
             common
@@ -298,7 +305,7 @@ fn run(common: &AnalyzerArgs, extra: &CsharpExtraArgs) -> i32 {
             extra.neo4j_batch_size.max(1) as usize,
             verbose,
         );
-        if let Err(error) = write_graph(&mut writer, &rows) {
+        if let Err(error) = write_graph(&mut writer, &write_payload) {
             eprintln!("C# graph persistence failed: {error}");
             exit_code = 3;
         }
@@ -307,6 +314,28 @@ fn run(common: &AnalyzerArgs, extra: &CsharpExtraArgs) -> i32 {
         exit_code = 3;
     } else if verbose {
         println!("[graph] disabled; missing graph connection settings");
+    }
+
+    // ── Phase-03 emit EmbeddingInputArtifact OUTSIDE writer block ───────────
+    if let Some(output) = common.embedding_input_output() {
+        let files_selected: Vec<String> = selected_rel_paths.iter().cloned().collect();
+        let files_deleted: Vec<String> = deleted_rel_paths.iter().cloned().collect();
+        if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: "csharp",
+                project_id: &project_id,
+                root_scope: &repo,
+                full_replace: !common.incremental,
+                scanned_directory: true,
+                files_selected,
+                files_deleted,
+                categories: embedding_categories,
+            },
+        ) {
+            eprintln!("csharp embedding-input artifact failed: {error}");
+            exit_code = 1;
+        }
     }
 
     // Skip message scan plane (Python-side) — log giống Python khi caller

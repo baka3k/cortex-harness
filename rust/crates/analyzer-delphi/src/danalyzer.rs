@@ -39,9 +39,9 @@ pub struct DelphiExtraArgs {
     pub neo4j_user: Option<String>,
     #[arg(long, hide = true)]
     pub neo4j_password: Option<String>, // sensitive-guard:allow
-    /// Writer database (`--neo4j-db`).
-    #[arg(long, hide = true)]
-    pub neo4j_db: Option<String>,
+    // `--neo4j-db` is owned by `AnalyzerArgs` (cortex-analyzer-framework).
+    // Defining it here would clash at clap derive's debug-assert unique-arg-name
+    // check. Use `args.neo4j_db` directly (see `LanguageCodeWriter::new` call).
     /// Writer batch size (`--neo4j-batch-size`, default 1000 như Python).
     #[arg(long, default_value_t = 1000, hide = true)]
     pub neo4j_batch_size: usize,
@@ -333,7 +333,10 @@ fn run_build_call_graph(
 
     // ── Selection ────────────────────────────────────────────────────────────
     let incremental = args.incremental;
-    let (selected_files, impacted_count) = if incremental {
+    // Phase-01 hoist: capture `selected_rel_paths` (rel-posix) alongside
+    // `selected_files` (abs paths) so we can populate `files_selected` for the
+    // embedding-input artifact regardless of whether a graph writer is open.
+    let (selected_files, selected_rel_paths, impacted_count) = if incremental {
         let changed_existing: HashSet<String> = changed_set
             .iter()
             .filter(|path| rel_to_abs.contains_key(*path))
@@ -341,18 +344,19 @@ fn run_build_call_graph(
             .collect();
         let impacted_by_uses =
             resolve::expand_impacted_files_by_uses(&changed_existing, &resolved_uses_by_file_all);
-        let selected_rel_paths: HashSet<String> =
+        let selected_rel_set: HashSet<String> =
             changed_existing.union(&impacted_by_uses).cloned().collect();
         let files: Vec<String> = all_rel_paths
             .iter()
-            .filter(|path| selected_rel_paths.contains(*path))
+            .filter(|path| selected_rel_set.contains(*path))
             .map(|path| rel_to_abs[path].clone())
             .collect();
         // Python: max(len(selected) - len(changed_existing), 0)
         let impacted = files.len().saturating_sub(changed_existing.len());
-        (files, impacted)
+        (files, selected_rel_set, impacted)
     } else {
-        (all_scanned_files.clone(), 0usize)
+        let all_set: HashSet<String> = all_rel_paths.iter().cloned().collect();
+        (all_scanned_files.clone(), all_set, 0usize)
     };
     if verbose {
         if incremental {
@@ -532,226 +536,221 @@ fn run_build_call_graph(
         .collect();
 
     let mut all_calls: Vec<Map<String, Value>> = Vec::new();
-    if let Some(store) = store.take() {
-        if verbose {
-            println!("[graph] Collecting nodes and relations for batch write...");
+
+    // Phase-01 hoist (plan `260916-1520-legacy17-graphless-emit`): the entire
+    // row-construction loop + WriteAllPayload build + `embedding_categories()`
+    // capture must run in BOTH graph and graphless modes. Previously gated
+    // inside `if let Some(store) = store.take()` — unreachable when the
+    // orchestrator's embedding pass sets `CORTEX_DISABLE_GRAPH=1`. Pattern A
+    // reference impl: hoist everything except `write_all` / `write_calls_with_site`.
+    let project_row: Map<String, Value> = {
+        let mut row = Map::new();
+        row.insert("id".into(), json!(scope.project_id));
+        row.insert("project_id".into(), json!(scope.project_id));
+        row.insert("project_name".into(), json!(scope.project_name));
+        row.insert("root".into(), json!(args.root));
+        row.insert("repo".into(), json!(scope.repo));
+        row.insert("language".into(), json!(scope.language));
+        row
+    };
+
+    let mut all_files_nodes: Vec<Map<String, Value>> = Vec::new();
+    let mut all_namespaces: Vec<Map<String, Value>> = Vec::new();
+    let mut all_types: Vec<Map<String, Value>> = Vec::new();
+    let mut all_functions: Vec<Map<String, Value>> = Vec::new();
+    let mut all_fields: Vec<Map<String, Value>> = Vec::new();
+    let mut all_relations: Vec<Map<String, Value>> = Vec::new();
+
+    const ALLOWED_REL_TYPES: [&str; 6] =
+        ["CONTAINS", "DECLARES", "EXTENDS", "USES_TYPE", "POINTER_TO", "DEPENDS_ON"];
+
+    for payload in &payloads {
+        let file_def = &payload.file_def;
+        let file_id = file_def.file_path.clone();
+
+        all_files_nodes.push(file_row(file_def, scope));
+        all_relations.push(relation_row(
+            &scope.project_id,
+            "Project",
+            &file_id,
+            "File",
+            "CONTAINS",
+            Map::new(),
+        ));
+
+        if let Some(deps) = resolved_uses_by_file.get(&file_id) {
+            for dep_file in deps {
+                let mut props = Map::new();
+                props.insert("kind".into(), json!("uses"));
+                all_relations.push(relation_row(
+                    &file_id,
+                    "File",
+                    dep_file,
+                    "File",
+                    "DEPENDS_ON",
+                    props,
+                ));
+            }
         }
 
-        let project_row: Map<String, Value> = {
-            let mut row = Map::new();
-            row.insert("id".into(), json!(scope.project_id));
-            row.insert("project_id".into(), json!(scope.project_id));
-            row.insert("project_name".into(), json!(scope.project_name));
-            row.insert("root".into(), json!(args.root));
-            row.insert("repo".into(), json!(scope.repo));
-            row.insert("language".into(), json!(scope.language));
-            row
-        };
-
-        let mut all_files_nodes: Vec<Map<String, Value>> = Vec::new();
-        let mut all_namespaces: Vec<Map<String, Value>> = Vec::new();
-        let mut all_types: Vec<Map<String, Value>> = Vec::new();
-        let mut all_functions: Vec<Map<String, Value>> = Vec::new();
-        let mut all_fields: Vec<Map<String, Value>> = Vec::new();
-        let mut all_relations: Vec<Map<String, Value>> = Vec::new();
-
-        const ALLOWED_REL_TYPES: [&str; 6] =
-            ["CONTAINS", "DECLARES", "EXTENDS", "USES_TYPE", "POINTER_TO", "DEPENDS_ON"];
-
-        for payload in &payloads {
-            let file_def = &payload.file_def;
-            let file_id = file_def.file_path.clone();
-
-            all_files_nodes.push(file_row(file_def, scope));
+        for ns in &payload.namespaces {
+            all_namespaces.push(namespace_row(ns, scope));
             all_relations.push(relation_row(
-                &scope.project_id,
-                "Project",
                 &file_id,
                 "File",
+                &ns.symbol_id,
+                "Namespace",
                 "CONTAINS",
                 Map::new(),
             ));
+        }
 
-            if let Some(deps) = resolved_uses_by_file.get(&file_id) {
-                for dep_file in deps {
-                    let mut props = Map::new();
-                    props.insert("kind".into(), json!("uses"));
-                    all_relations.push(relation_row(
-                        &file_id,
-                        "File",
-                        dep_file,
-                        "File",
-                        "DEPENDS_ON",
-                        props,
-                    ));
+        for type_def in &payload.types {
+            all_types.push(type_row(type_def, scope));
+            all_relations.push(relation_row(
+                &file_id,
+                "File",
+                &type_def.symbol_id,
+                "Type",
+                "CONTAINS",
+                Map::new(),
+            ));
+        }
+
+        for func in &payload.functions {
+            all_functions.push(function_row(func, scope));
+            all_relations.push(relation_row(
+                &file_id,
+                "File",
+                &func.symbol_id,
+                "Function",
+                "CONTAINS",
+                Map::new(),
+            ));
+        }
+
+        for field in &payload.fields {
+            all_fields.push(field_row(field, scope));
+            all_relations.push(relation_row(
+                &file_id,
+                "File",
+                &field.symbol_id,
+                "Field",
+                "CONTAINS",
+                Map::new(),
+            ));
+        }
+
+        for rel in &payload.relations {
+            if !ALLOWED_REL_TYPES.contains(&rel.rel_type.as_str()) {
+                continue;
+            }
+            all_relations.push(relation_row(
+                &rel.source_id,
+                &rel.source_label,
+                &rel.target_id,
+                &rel.target_label,
+                &rel.rel_type,
+                rel.properties.clone(),
+            ));
+        }
+
+        for call in &payload.calls {
+            let key = (
+                call.caller_id.clone(),
+                call.caller_file.clone(),
+                call.call_line,
+                call.callee_raw.clone(),
+                call.callee_name.clone(),
+                call.call_arity,
+            );
+            let resolved = calls_by_key.get(&key).cloned().flatten();
+            let entry = call_stats_by_file.entry(call.caller_file.clone()).or_insert((0, 0));
+            match resolved {
+                Some(callee_id) if !callee_id.is_empty() => {
+                    call_stats_resolved += 1;
+                    entry.0 += 1;
+                    entry.1 += 1;
+                    let mut row = Map::new();
+                    row.insert("caller_id".into(), json!(call.caller_id));
+                    row.insert("callee_id".into(), json!(callee_id));
+                    all_calls.push(row);
+                }
+                _ => {
+                    entry.0 += 1;
+                    let mut row = Map::new();
+                    row.insert("caller_id".into(), json!(call.caller_id));
+                    row.insert("caller_scope".into(), json!(call.caller_scope.clone().unwrap_or_default()));
+                    row.insert("file_path".into(), json!(call.caller_file));
+                    row.insert("line".into(), json!(call.call_line));
+                    row.insert("callee_name".into(), json!(if call.callee_raw.is_empty() { call.callee_name.clone() } else { call.callee_raw.clone() }));
+                    row.insert("call_arity".into(), json!(call.call_arity));
+                    row.insert("parse_run_id".into(), json!(parse_run_id));
+                    row.insert("commit_sha".into(), json!(commit_sha));
+                    unresolved_rows.push(row);
                 }
             }
+        }
+    }
 
-            for ns in &payload.namespaces {
-                all_namespaces.push(namespace_row(ns, scope));
-                all_relations.push(relation_row(
-                    &file_id,
-                    "File",
-                    &ns.symbol_id,
-                    "Namespace",
-                    "CONTAINS",
-                    Map::new(),
-                ));
-            }
+    // Build WriteAllPayload + capture embedding_categories OUTSIDE writer block
+    // so the artifact is serializable in graphless mode (the orchestrator's
+    // embedding pass sets `CORTEX_DISABLE_GRAPH=1`, opening no graph store).
+    let projects_rows = vec![project_row];
+    let write_payload = WriteAllPayload {
+        projects: &projects_rows,
+        packages: &[],
+        namespaces: &all_namespaces,
+        files: &all_files_nodes,
+        classes: &[],
+        types: &all_types,
+        function_types: &[],
+        functions: &all_functions,
+        fields: &all_fields,
+        aliases: &[],
+        templates: &[],
+        relations: &all_relations,
+        calls: &[],
+        calls_with_site: &[],
+        properties: &[],
+        events: &[],
+        interfaces: &[],
+        enums: &[],
+        constants: &[],
+        variables: &[],
+        navigators: &[],
+        has_routes: &[],
+        param_lists: &[],
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::Default,
+    };
+    let embedding_categories = write_payload.embedding_categories();
 
-            for type_def in &payload.types {
-                all_types.push(type_row(type_def, scope));
-                all_relations.push(relation_row(
-                    &file_id,
-                    "File",
-                    &type_def.symbol_id,
-                    "Type",
-                    "CONTAINS",
-                    Map::new(),
-                ));
-            }
-
-            for func in &payload.functions {
-                all_functions.push(function_row(func, scope));
-                all_relations.push(relation_row(
-                    &file_id,
-                    "File",
-                    &func.symbol_id,
-                    "Function",
-                    "CONTAINS",
-                    Map::new(),
-                ));
-            }
-
-            for field in &payload.fields {
-                all_fields.push(field_row(field, scope));
-                all_relations.push(relation_row(
-                    &file_id,
-                    "File",
-                    &field.symbol_id,
-                    "Field",
-                    "CONTAINS",
-                    Map::new(),
-                ));
-            }
-
-            for rel in &payload.relations {
-                if !ALLOWED_REL_TYPES.contains(&rel.rel_type.as_str()) {
-                    continue;
-                }
-                all_relations.push(relation_row(
-                    &rel.source_id,
-                    &rel.source_label,
-                    &rel.target_id,
-                    &rel.target_label,
-                    &rel.rel_type,
-                    rel.properties.clone(),
-                ));
-            }
-
-            for call in &payload.calls {
-                let key = (
-                    call.caller_id.clone(),
-                    call.caller_file.clone(),
-                    call.call_line,
-                    call.callee_raw.clone(),
-                    call.callee_name.clone(),
-                    call.call_arity,
-                );
-                let resolved = calls_by_key.get(&key).cloned().flatten();
-                let entry = call_stats_by_file.entry(call.caller_file.clone()).or_insert((0, 0));
-                match resolved {
-                    Some(callee_id) if !callee_id.is_empty() => {
-                        call_stats_resolved += 1;
-                        entry.0 += 1;
-                        entry.1 += 1;
-                        let mut row = Map::new();
-                        row.insert("caller_id".into(), json!(call.caller_id));
-                        row.insert("callee_id".into(), json!(callee_id));
-                        all_calls.push(row);
-                    }
-                    _ => {
-                        entry.0 += 1;
-                        let mut row = Map::new();
-                        row.insert("caller_id".into(), json!(call.caller_id));
-                        row.insert("caller_scope".into(), json!(call.caller_scope.clone().unwrap_or_default()));
-                        row.insert("file_path".into(), json!(call.caller_file));
-                        row.insert("line".into(), json!(call.call_line));
-                        row.insert("callee_name".into(), json!(if call.callee_raw.is_empty() { call.callee_name.clone() } else { call.callee_raw.clone() }));
-                        row.insert("call_arity".into(), json!(call.call_arity));
-                        row.insert("parse_run_id".into(), json!(parse_run_id));
-                        row.insert("commit_sha".into(), json!(commit_sha));
-                        unresolved_rows.push(row);
-                    }
-                }
-            }
+    // Writer block: only `write_all` + `write_calls_with_site` are gated on the
+    // graph store being Some. The parse work + payload build are done above.
+    let mut store = store;
+    if let Some(store_inner) = store.take() {
+        if verbose {
+            println!("[graph] Persisting nodes and relations for batch write...");
         }
 
         let mut writer = LanguageCodeWriter::new(
-            store,
-            extra.neo4j_db.clone().or_else(|| args.neo4j_db.clone()),
+            store_inner,
+            args.neo4j_db.clone(),
             extra.neo4j_batch_size,
             verbose,
         );
-        let projects_rows = vec![project_row];
-        let payload = WriteAllPayload {
-            projects: &projects_rows,
-            packages: &[],
-            namespaces: &all_namespaces,
-            files: &all_files_nodes,
-            classes: &[],
-            types: &all_types,
-            function_types: &[],
-            functions: &all_functions,
-            fields: &all_fields,
-            aliases: &[],
-            templates: &[],
-            relations: &all_relations,
-            calls: &[],
-            calls_with_site: &[],
-            properties: &[],
-            events: &[],
-            interfaces: &[],
-            enums: &[],
-            constants: &[],
-            variables: &[],
-            navigators: &[],
-            has_routes: &[],
-            param_lists: &[],
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::Default,
-        };
-        // Phase-02: capture embedding categories BEFORE write_all consumes (plan
-        // `260916-1432-legacy-17-vector-emit`).
-        let embedding_categories = payload.embedding_categories();
         writer
-            .write_all(&payload)
+            .write_all(&write_payload)
             .map_err(|error| format!("Delphi graph persistence failed: {error}"))?;
-        if let Some(output) = args.embedding_input_output() {
-            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
-                Some(output),
-                EmbeddingEmission {
-                    parser: "delphi",
-                    project_id: &scope.project_id,
-                    root_scope: &scope.repo,
-                    full_replace: !args.incremental,
-                    scanned_directory: true,
-                    files_selected: Vec::new(),
-                    files_deleted: Vec::new(),
-                    categories: embedding_categories,
-                },
-            ) {
-                eprintln!("delphi embedding-input artifact failed: {error}");
-            }
-        }
 
         if !all_calls.is_empty() {
             let original_batch_size = writer.batch_size;
@@ -784,46 +783,48 @@ fn run_build_call_graph(
             writer.batch_size = original_batch_size;
             result.map_err(|error| format!("Delphi graph persistence failed: {error}"))?;
         }
+    }
+    // Graphless branch is intentionally empty — all parse + payload + stats work
+    // runs unconditionally above so the embedding pass can read the artifact.
 
-        if verbose {
-            let unresolved = call_stats_total - call_stats_resolved;
-            let ratio = if call_stats_total > 0 {
-                call_stats_resolved as f64 / call_stats_total as f64
-            } else {
-                0.0
-            };
-            println!(
-                "[calls] resolved {} / {} ({:.1}%), unresolved {}",
-                call_stats_resolved,
-                call_stats_total,
-                ratio * 100.0,
-                unresolved
-            );
-        }
-    } else {
-        // Dry parse mode không có graph writer.
-        for call in &calls_all {
-            let entry = call_stats_by_file.entry(call.caller_file.clone()).or_insert((0, 0));
-            match &call.callee_id {
-                Some(callee_id) if !callee_id.is_empty() => {
-                    call_stats_resolved += 1;
-                    entry.0 += 1;
-                    entry.1 += 1;
-                }
-                _ => {
-                    entry.0 += 1;
-                    let mut row = Map::new();
-                    row.insert("caller_id".into(), json!(call.caller_id));
-                    row.insert("caller_scope".into(), json!(call.caller_scope.clone().unwrap_or_default()));
-                    row.insert("file_path".into(), json!(call.caller_file));
-                    row.insert("line".into(), json!(call.call_line));
-                    row.insert("callee_name".into(), json!(if call.callee_raw.is_empty() { call.callee_name.clone() } else { call.callee_raw.clone() }));
-                    row.insert("call_arity".into(), json!(call.call_arity));
-                    row.insert("parse_run_id".into(), json!(parse_run_id));
-                    row.insert("commit_sha".into(), json!(commit_sha));
-                    unresolved_rows.push(row);
-                }
-            }
+    if verbose {
+        let unresolved = call_stats_total - call_stats_resolved;
+        let ratio = if call_stats_total > 0 {
+            call_stats_resolved as f64 / call_stats_total as f64
+        } else {
+            0.0
+        };
+        println!(
+            "[calls] resolved {} / {} ({:.1}%), unresolved {}",
+            call_stats_resolved,
+            call_stats_total,
+            ratio * 100.0,
+            unresolved
+        );
+    }
+
+    // Phase-01 hoist: emit EmbeddingInputArtifact OUTSIDE writer block so it
+    // runs in graphless mode (when `CORTEX_DISABLE_GRAPH=1`). Pattern A
+    // reference impl — replicates for other legacy analyzers (java/sql/kotlin/
+    // vb/js/ts/php). Populates `files_selected` from the rel-posix selection
+    // set built above, `files_deleted` from `deleted_set`.
+    if let Some(output) = args.embedding_input_output() {
+        let files_selected: Vec<String> = selected_rel_paths.iter().cloned().collect();
+        let files_deleted: Vec<String> = deleted_set.iter().cloned().collect();
+        if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: "delphi",
+                project_id: &scope.project_id,
+                root_scope: &scope.repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected,
+                files_deleted,
+                categories: embedding_categories,
+            },
+        ) {
+            eprintln!("delphi embedding-input artifact failed: {error}");
         }
     }
 

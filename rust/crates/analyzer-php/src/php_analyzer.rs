@@ -38,6 +38,14 @@ impl PhpAnalyzer {
         let mut ctx = AnalyzerContext::from_args(args)?;
         ctx.root = root.to_path_buf();
         let result = self.run(&mut ctx)?;
+        // Phase-04 emit EmbeddingInputArtifact via framework-side seam.
+        // Pattern C (Trait/AnalyzerContext): analyzer populates
+        // `result.embedding_categories`, framework helper handles emission
+        // in BOTH graph + graphless modes.
+        if let Err(error) = ctx.emit_embedding_artifact("php", result.embedding_categories.clone()) {
+            eprintln!("php embedding-input artifact failed: {error}");
+            return Ok(1);
+        }
         if let (Some(path), Some(summary)) = (&args.summary_path, result.summary_json) {
             write_summary(path, &summary).map_err(|e| format!("[summary] write failed: {e}"))?;
         }
@@ -159,72 +167,70 @@ impl Analyzer for PhpAnalyzer {
         // ── Function index + call resolution + rows ─────────────────────────
         let function_index = FunctionIndex::build(&payloads);
 
-        // ── Graph write (skip khi graphless) ────────────────────────────────
-        // Python: `_sr_fn = len(all_functions) if 'all_functions' in vars()
-        // else 0` — graphless thì counts = 0.
+        // ── Phase-04 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+        // Pattern C (Trait seam): build WriteAllPayload + capture embedding
+        // categories OUTSIDE the writer block so the framework-side emission
+        // helper (`AnalyzerContext::emit_embedding_artifact`) can read them
+        // in BOTH graph + graphless modes.
+        let graph = assemble_graph(
+            &payloads,
+            &function_index,
+            &project_id,
+            &ctx.project_name,
+            &language,
+            &repo,
+            &ctx.build_system,
+            &ctx.root.to_string_lossy(),
+        );
+        let payload = WriteAllPayload {
+            projects: &graph.projects,
+            packages: &[],
+            namespaces: &graph.namespaces,
+            files: &graph.files,
+            classes: &[],
+            types: &graph.types,
+            function_types: &[],
+            functions: &graph.functions,
+            fields: &[],
+            aliases: &[],
+            templates: &[],
+            relations: &graph.relations,
+            calls: &graph.calls,
+            calls_with_site: &[],
+            properties: &[],
+            events: &[],
+            interfaces: &[],
+            enums: &[],
+            constants: &[],
+            variables: &[],
+            navigators: &[],
+            has_routes: &[],
+            param_lists: &[],
+            workflows: &[],
+            workflow_steps: &[],
+            call_evidence_sites: &[],
+            call_evidence_observations: &[],
+            build_configurations: &[],
+            semantic_coverage: &[],
+            proc_function_joins: &[],
+            proc_host_declarations: &[],
+            use_full_writers: true,
+            files_variant: FilesVariant::WithJsx,
+        };
+        let embedding_categories = payload.embedding_categories();
+
+        // Writer block: only `write_all` is gated on the graph store being Some.
         let (function_total, class_total) = if let Some(store) = ctx.store.take() {
-            let mut writer = LanguageCodeWriter::new(
-                store,
-                ctx.args.neo4j_db.clone(),
-                1000,
-                verbose,
-            );
+            let mut writer = LanguageCodeWriter::new(store, args.neo4j_db.clone(), 1000, verbose);
             if verbose {
                 println!("[graph] Writing nodes and relations (streaming)...");
             }
-            let graph = assemble_graph(
-                &payloads,
-                &function_index,
-                &project_id,
-                &ctx.project_name,
-                &language,
-                &repo,
-                &ctx.build_system,
-                &ctx.root.to_string_lossy(),
-            );
             writer
-                .write_all(&WriteAllPayload {
-                    projects: &graph.projects,
-                    packages: &[],
-                    namespaces: &graph.namespaces,
-                    files: &graph.files,
-                    classes: &[],
-                    types: &graph.types,
-                    function_types: &[],
-                    functions: &graph.functions,
-                    fields: &[],
-                    aliases: &[],
-                    templates: &[],
-                    relations: &graph.relations,
-                    calls: &graph.calls,
-                    calls_with_site: &[],
-                    properties: &[],
-                    events: &[],
-                    interfaces: &[],
-                    enums: &[],
-                    constants: &[],
-                    variables: &[],
-                    navigators: &[],
-                    has_routes: &[],
-                    param_lists: &[],
-                    workflows: &[],
-                    workflow_steps: &[],
-                    call_evidence_sites: &[],
-                    call_evidence_observations: &[],
-                    build_configurations: &[],
-                    semantic_coverage: &[],
-                    proc_function_joins: &[],
-                    proc_host_declarations: &[],
-                    use_full_writers: true,
-                    files_variant: FilesVariant::WithJsx,
-                })
+                .write_all(&payload)
                 .map_err(|error| format!("[graph] write failed: {error}"))?;
             if verbose {
                 println!("[graph] Write complete");
             }
-            // Phase-02: capture embedding categories for orchestrator
-            // (plan `260916-1432-legacy-17-vector-emit`). Emission deferred.
-            let _embedding_categories: Vec<(String, Vec<serde_json::Value>)> = Vec::new();
             (graph.functions.len(), graph.types.len())
         } else {
             (0, 0)
@@ -252,6 +258,7 @@ impl Analyzer for PhpAnalyzer {
             written: Default::default(),
             duration_seconds: start.elapsed().as_secs_f64(),
             summary_json: None,
+            embedding_categories,
         };
         result.summary_json = Some(summary_json(
             &result,

@@ -12,12 +12,12 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::OnceLock;
 
-    use crate::danalyzer::stable_point_id;
-    use crate::dparse::{
+    use analyzer_delphi::danalyzer::stable_point_id;
+    use analyzer_delphi::dparse::{
         count_signature_arity, merge_line_ranges, normalize_call_name, normalize_type_name,
         scan_delphi_files, strip_comments_and_strings,
     };
-    use crate::resolve;
+    use analyzer_delphi::resolve;
 
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..")
@@ -34,12 +34,12 @@ mod tests {
         })
     }
 
-    fn parse_all() -> BTreeMap<String, crate::dparse::ParsedFile> {
+    fn parse_all() -> BTreeMap<String, analyzer_delphi::dparse::ParsedFile> {
         let root = fixtures_root();
         let mut out = BTreeMap::new();
         for abs in scan_delphi_files(&root) {
             let rel = cortex_analyzer_framework::scan::rel_posix(&root, std::path::Path::new(&abs));
-            let parsed = crate::dparse::parse_delphi_file(std::path::Path::new(&abs), &root)
+            let parsed = analyzer_delphi::dparse::parse_delphi_file(std::path::Path::new(&abs), &root)
                 .expect("parse");
             out.insert(rel, parsed);
         }
@@ -226,8 +226,8 @@ mod tests {
         let parsed = parse_all();
         let root = fixtures_root();
 
-        let mut function_defs: Vec<crate::dparse::FunctionDef> = Vec::new();
-        let mut calls: Vec<crate::dparse::CallEdge> = Vec::new();
+        let mut function_defs: Vec<analyzer_delphi::dparse::FunctionDef> = Vec::new();
+        let mut calls: Vec<analyzer_delphi::dparse::CallEdge> = Vec::new();
         let mut uses_by_file: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for (rel, p) in &parsed {

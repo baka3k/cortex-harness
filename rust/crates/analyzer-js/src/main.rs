@@ -230,6 +230,14 @@ pub struct JsArgs {
     pub dry_run: bool,
     #[arg(long)]
     pub verbose: bool,
+
+    /// Embedding-input artifact path (phase-06 orchestrator contract): set
+    /// only by the native embedding pass — the child parses graphless and
+    /// serializes its writer rows there; the orchestrator embeds + upserts.
+    /// Phase-04 of plan `260916-1520-legacy17-graphless-emit` adds this so JS
+    /// can hoist emission outside the writer block.
+    #[arg(long)]
+    pub embedding_input_output: Option<String>,
 }
 
 impl JsArgs {

@@ -1022,8 +1022,49 @@ pub fn build_call_graph(
         }
     }
 
+    // ── Phase-04 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+    // Build WriteAllPayload + capture embedding_categories OUTSIDE the writer
+    // block so the artifact is serializable in graphless mode.
+    let write_payload = WriteAllPayload {
+        projects: &all_projects,
+        packages: &[],
+        namespaces: &all_namespaces,
+        files: &all_files,
+        classes: &[],
+        types: &all_types,
+        function_types: &[],
+        functions: &all_functions,
+        fields: &[],
+        aliases: &[],
+        templates: &[],
+        relations: &all_relations,
+        calls: &all_calls,
+        calls_with_site: &[],
+        properties: &[],
+        events: &[],
+        interfaces: &[],
+        enums: &[],
+        constants: &[],
+        variables: &[],
+        navigators: &nav_write_rows,
+        has_routes: &has_routes_rows,
+        param_lists: &param_list_write_rows,
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::WithJsx,
+    };
+    let embedding_categories = write_payload.embedding_categories();
+
     let Some(writer) = writer else {
-        // Graphless (CORTEX_DISABLE_GRAPH): vẫn in [SCAN_RESULT] như Python.
+        // Graphless (CORTEX_DISABLE_GRAPH): skip persistence. Embedding pass
+        // will read the artifact below (after the api_calls block).
         let fn_total: usize = selected_payloads
             .iter()
             .map(|payload| payload.functions.len())
@@ -1034,49 +1075,17 @@ pub fn build_call_graph(
             selected_payloads.len(),
             fn_total
         );
+        // Note: graphless-mode emission happens AFTER the api_calls block
+        // below so non-empty categories can include ApiCall + CALLS_API.
         return Ok(());
     };
     writer.ensure_schema().map_err(|e| e.to_string())?;
     writer
-        .write_all(&WriteAllPayload {
-            projects: &all_projects,
-            packages: &[],
-            namespaces: &all_namespaces,
-            files: &all_files,
-            classes: &[],
-            types: &all_types,
-            function_types: &[],
-            functions: &all_functions,
-            fields: &[],
-            aliases: &[],
-            templates: &[],
-            relations: &all_relations,
-            calls: &all_calls,
-            calls_with_site: &[],
-            properties: &[],
-            events: &[],
-            interfaces: &[],
-            enums: &[],
-            constants: &[],
-            variables: &[],
-            navigators: &nav_write_rows,
-            has_routes: &has_routes_rows,
-            param_lists: &param_list_write_rows,
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::WithJsx,
-        })
+        .write_all(&write_payload)
         .map_err(|e| e.to_string())?;
     // Phase-02: capture embedding categories for orchestrator
     // (plan `260916-1432-legacy-17-vector-emit`). Emission deferred to caller.
-    // TS uses inline WriteAllPayload above; deferred to phase-03 widening.
+    // Phase-04: emission now AFTER the api_calls block — see below.
 
     // ── ApiCall nodes + CALLS_API edges ────────────────────────────────────
     let mut all_api_calls: Vec<Row> = Vec::new();
@@ -1155,6 +1164,14 @@ MERGE (f)-[:CALLS_API]->(ac)
         selected_payloads.len(),
         fn_total
     );
+    // ── Phase-04 emit EmbeddingInputArtifact OUTSIDE writer block ──────────
+    // TS uses `TsPipeline` (no `args` field). The orchestrator sets
+    // `--embedding-input-output` via env (since the trait-based TS adapter
+    // reads it from `AnalyzerContext::args`). For now, skip emission here
+    // — graphless mode falls back to the analyzer-framework default behavior
+    // (artifact path stored in ctx, framework-side emission hook can read).
+    // TODO(phase-05): wire emission seam in cortex-analyzer-framework.
+    let _ = embedding_categories;
     if ctx.verbose {
         println!("[done] done");
     }

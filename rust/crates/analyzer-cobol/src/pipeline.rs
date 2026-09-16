@@ -312,16 +312,44 @@ fn pop_string(map: &mut Map<String, Value>, key: &str) -> String {
 
 /// `write_graph_facts` — files (with_imports) + repo_file_edges + FileMetadata
 /// + node batch theo label (sorted) + typed relations.
+///
+/// Phase-03 hoist (plan `260916-1520-legacy17-graphless-emit`): when the
+/// `writer` is `None` (graphless mode), skip persistence but STILL build
+/// `embedding_categories` from `nodes_by_label` so the orchestrator's
+/// embedding pass can serialize the artifact.
+#[allow(clippy::too_many_arguments)]
 pub fn write_graph_facts(
-    writer: &mut LanguageCodeWriter,
+    writer: Option<&mut LanguageCodeWriter>,
     result: &AnalysisResult,
     project_name: &str,
     repo: &str,
     build_system: &str,
-) -> Result<BTreeMap<String, i64>, WriterError> {
+) -> Result<(BTreeMap<String, i64>, Vec<(String, Vec<Value>)>), WriterError> {
     let (mut nodes_by_label, relations) = graph_rows(result);
+    // Capture embedding categories BEFORE the writes consume `nodes_by_label`.
+    // Skip `relations` and `calls` (edges never become vector documents;
+    // `documents_from_categories` skips them; leaving them out keeps the
+    // artifact small).
+    let mut embedding_categories: Vec<(String, Vec<Value>)> = Vec::new();
+    for (label, batch_rows) in &nodes_by_label {
+        if label == "relations" || label == "calls" {
+            continue;
+        }
+        embedding_categories.push((
+            label.clone(),
+            batch_rows
+                .iter()
+                .cloned()
+                .map(|row| Value::Object(row))
+                .collect(),
+        ));
+    }
     let mut counts: BTreeMap<String, i64> = BTreeMap::new();
     let file_metadata_rows = nodes_by_label.remove("File").unwrap_or_default();
+    let Some(writer) = writer else {
+        // Graphless mode: persistence skipped; categories captured above.
+        return Ok((counts, embedding_categories));
+    };
     if !file_metadata_rows.is_empty() {
         let mut file_rows: Vec<Row> = Vec::new();
         for row in &file_metadata_rows {
@@ -382,7 +410,7 @@ pub fn write_graph_facts(
         "relations".into(),
         writer.write_relations_typed(&relations, Some(&result.project_id))? as i64,
     );
-    Ok(counts)
+    Ok((counts, embedding_categories))
 }
 
 fn is_safe_label(label: &str) -> bool {

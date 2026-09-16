@@ -134,6 +134,7 @@ pub fn execute(args: &VbArgs) -> Result<i32, String> {
         &deleted_files,
         base.incremental,
         verbose,
+        base.embedding_input_output(),
     )?;
 
     // Message scan plane Python — flag nhận (default BẬT như Python), skip.
@@ -159,6 +160,7 @@ fn build_call_graph(
     deleted_files: &BTreeSet<String>,
     incremental: bool,
     verbose: bool,
+    embedding_output: Option<&str>,
 ) -> Result<(), String> {
     let start_time = Instant::now();
 
@@ -280,174 +282,172 @@ fn build_call_graph(
         println!("[vb] calls: {total_calls} total, {resolved_calls} resolved ({pct:.1}%)");
     }
 
-    // ── Graph write ─────────────────────────────────────────────────────────
-    if let Some(store) = store.take() {
-        let mut files_rows: Vec<parse::Row> = Vec::new();
-        let mut namespaces_rows: Vec<parse::Row> = Vec::new();
-        let mut types_rows: Vec<parse::Row> = Vec::new();
-        let mut functions_rows: Vec<parse::Row> = Vec::new();
-        let mut relations_rows: Vec<parse::Row> = Vec::new();
-        let mut calls_rows: Vec<parse::Row> = Vec::new();
-        let mut properties_rows: Vec<parse::Row> = Vec::new();
-        let mut events_rows: Vec<parse::Row> = Vec::new();
-        let mut interfaces_rows: Vec<parse::Row> = Vec::new();
-        let mut enums_rows: Vec<parse::Row> = Vec::new();
-        let mut constants_rows: Vec<parse::Row> = Vec::new();
-        let mut variables_rows: Vec<parse::Row> = Vec::new();
+    // ── Phase-04 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+    // Pattern A: row Vec accumulators + payload → row loop + WriteAllPayload
+    // build + `embedding_categories()` capture MUST run in BOTH graph and
+    // graphless modes. Previously gated inside `if let Some(store) = store.take()`
+    // — unreachable when the orchestrator's embedding pass sets
+    // `CORTEX_DISABLE_GRAPH=1`. Persistence (`writer.write_all`) stays gated.
+    let mut files_rows: Vec<parse::Row> = Vec::new();
+    let mut namespaces_rows: Vec<parse::Row> = Vec::new();
+    let mut types_rows: Vec<parse::Row> = Vec::new();
+    let mut functions_rows: Vec<parse::Row> = Vec::new();
+    let mut relations_rows: Vec<parse::Row> = Vec::new();
+    let mut calls_rows: Vec<parse::Row> = Vec::new();
+    let mut properties_rows: Vec<parse::Row> = Vec::new();
+    let mut events_rows: Vec<parse::Row> = Vec::new();
+    let mut interfaces_rows: Vec<parse::Row> = Vec::new();
+    let mut enums_rows: Vec<parse::Row> = Vec::new();
+    let mut constants_rows: Vec<parse::Row> = Vec::new();
+    let mut variables_rows: Vec<parse::Row> = Vec::new();
 
-        for payload in &payloads {
-            let file_def = payload.file_def.as_ref().ok_or("payload missing file_def")?;
-            let file_row = asdict_file(file_def, project_id, project_name, language, repo, build_system);
-            let file_row_id = file_row
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_default()
-                .to_string();
-            files_rows.push(file_row);
-            relations_rows.push(rel_row(project_id, &file_row_id, "CONTAINS"));
+    for payload in &payloads {
+        let file_def = payload.file_def.as_ref().ok_or("payload missing file_def")?;
+        let file_row = asdict_file(file_def, project_id, project_name, language, repo, build_system);
+        let file_row_id = file_row
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        files_rows.push(file_row);
+        relations_rows.push(rel_row(project_id, &file_row_id, "CONTAINS"));
 
-            for ns in &payload.namespaces {
-                let row = asdict_namespace(ns, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                namespaces_rows.push(row);
-            }
-            for cls in &payload.classes {
-                let row = asdict_class(cls, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                types_rows.push(row);
-            }
-            for func in &payload.functions {
-                let row = asdict_function(func, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                functions_rows.push(row);
-            }
-            for rel in &payload.relations {
-                relations_rows.push(serde_json::json!({
-                    "source_id": rel.source_id,
-                    "target_id": rel.target_id,
-                    "rel_type": rel.rel_type,
-                    "properties": rel.properties,
-                })
-                .as_object()
-                .unwrap()
-                .clone());
-            }
-            for call in &payload.calls {
-                if let Some(callee_id) = &call.callee_id {
-                    calls_rows.push(
-                        serde_json::json!({
-                            "caller_id": call.caller_id,
-                            "callee_id": callee_id,
-                            "call_type": "call_expression",
-                            // writer contract (mirror analyzer-java): call rows
-                            // mang project_id tường minh.
-                            "project_id": project_id,
-                        })
-                        .as_object()
-                        .unwrap()
-                        .clone(),
-                    );
-                }
-            }
-            for prop in &payload.properties {
-                let row = asdict_property(prop, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                properties_rows.push(row);
-            }
-            for event in &payload.events {
-                let row = asdict_event(event, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                events_rows.push(row);
-            }
-            for iface in &payload.interfaces {
-                let row = asdict_interface(iface, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                interfaces_rows.push(row);
-            }
-            for enum_def in &payload.enums {
-                let row = asdict_enum(enum_def, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                enums_rows.push(row);
-            }
-            for constant in &payload.constants {
-                let row = asdict_constant(constant, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                constants_rows.push(row);
-            }
-            for var in &payload.variables {
-                let row = asdict_variable(var, project_id, project_name, language, repo, build_system);
-                let id = row_id(&row);
-                relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
-                variables_rows.push(row);
+        for ns in &payload.namespaces {
+            let row = asdict_namespace(ns, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            namespaces_rows.push(row);
+        }
+        for cls in &payload.classes {
+            let row = asdict_class(cls, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            types_rows.push(row);
+        }
+        for func in &payload.functions {
+            let row = asdict_function(func, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            functions_rows.push(row);
+        }
+        for rel in &payload.relations {
+            relations_rows.push(serde_json::json!({
+                "source_id": rel.source_id,
+                "target_id": rel.target_id,
+                "rel_type": rel.rel_type,
+                "properties": rel.properties,
+            })
+            .as_object()
+            .unwrap()
+            .clone());
+        }
+        for call in &payload.calls {
+            if let Some(callee_id) = &call.callee_id {
+                calls_rows.push(
+                    serde_json::json!({
+                        "caller_id": call.caller_id,
+                        "callee_id": callee_id,
+                        "call_type": "call_expression",
+                        "project_id": project_id,
+                    })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+                );
             }
         }
+        for prop in &payload.properties {
+            let row = asdict_property(prop, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            properties_rows.push(row);
+        }
+        for event in &payload.events {
+            let row = asdict_event(event, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            events_rows.push(row);
+        }
+        for iface in &payload.interfaces {
+            let row = asdict_interface(iface, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            interfaces_rows.push(row);
+        }
+        for enum_def in &payload.enums {
+            let row = asdict_enum(enum_def, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            enums_rows.push(row);
+        }
+        for constant in &payload.constants {
+            let row = asdict_constant(constant, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            constants_rows.push(row);
+        }
+        for var in &payload.variables {
+            let row = asdict_variable(var, project_id, project_name, language, repo, build_system);
+            let id = row_id(&row);
+            relations_rows.push(rel_row(&file_row_id, &id, "CONTAINS"));
+            variables_rows.push(row);
+        }
+    }
 
+    let project_rows: Vec<parse::Row> = vec![serde_json::json!({
+        "id": project_id,
+        "name": project_name,
+        "language": language,
+        "repo": repo,
+        "root": root_raw,
+        "build_system": build_system,
+    })
+    .as_object()
+    .unwrap()
+    .clone()];
+    let payload = WriteAllPayload {
+        projects: &project_rows,
+        packages: &[],
+        namespaces: &namespaces_rows,
+        files: &files_rows,
+        classes: &[],
+        types: &types_rows,
+        function_types: &[],
+        functions: &functions_rows,
+        fields: &[],
+        aliases: &[],
+        templates: &[],
+        relations: &relations_rows,
+        calls: &calls_rows,
+        calls_with_site: &[],
+        properties: &properties_rows,
+        events: &events_rows,
+        interfaces: &interfaces_rows,
+        enums: &enums_rows,
+        constants: &constants_rows,
+        variables: &variables_rows,
+        navigators: &[],
+        has_routes: &[],
+        param_lists: &[],
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::WithImports,
+    };
+    let embedding_categories = payload.embedding_categories();
+
+    // Writer block: only `write_all` is gated on the graph store being Some.
+    if let Some(store) = store.take() {
         let mut writer =
             LanguageCodeWriter::new(store, neo4j_db.map(str::to_string), extra.neo4j_batch_size.max(1) as usize, verbose);
-        let project_rows: Vec<parse::Row> = vec![serde_json::json!({
-            "id": project_id,
-            "name": project_name,
-            "language": language,
-            "repo": repo,
-            "root": root_raw,
-            "build_system": build_system,
-        })
-        .as_object()
-        .unwrap()
-        .clone()];
-        let payload = WriteAllPayload {
-            projects: &project_rows,
-            packages: &[],
-            namespaces: &namespaces_rows,
-            files: &files_rows,
-            classes: &[],
-            types: &types_rows,
-            function_types: &[],
-            functions: &functions_rows,
-            fields: &[],
-            aliases: &[],
-            templates: &[],
-            relations: &relations_rows,
-            calls: &calls_rows,
-            calls_with_site: &[],
-            properties: &properties_rows,
-            events: &events_rows,
-            interfaces: &interfaces_rows,
-            enums: &enums_rows,
-            constants: &constants_rows,
-            variables: &variables_rows,
-            navigators: &[],
-            has_routes: &[],
-            param_lists: &[],
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::WithImports,
-        };
-        // Phase-02: capture embedding categories BEFORE write_all consumes.
-        // (plan `260916-1432-legacy-17-vector-emit`). Note: emission itself
-        // requires args/project_id/repo vars not in this function's scope;
-        // caller (`analyzer-vb/src/main.rs`) handles emission via the
-        // returned categories (out of scope for this minimal patch — covered
-        // when pipeline.rs is split or args forwarded).
-        let embedding_categories = payload.embedding_categories();
         let counts = writer.write_all(&payload).map_err(|e| format!("[graph] write failed: {e}"))?;
         let _ = counts;
-        let _ = embedding_categories; // suppress unused warning for now
         if verbose {
             println!(
                 "[graph] write stats: {} functions, {} calls, {} relations",
@@ -455,6 +455,30 @@ fn build_call_graph(
                 calls_rows.len(),
                 relations_rows.len()
             );
+        }
+    }
+    // Graphless branch is intentionally empty — parse + payload build runs
+    // unconditionally above so the embedding pass can read the artifact.
+
+    // ── Phase-04 emit EmbeddingInputArtifact OUTSIDE writer block ──────────
+    if let Some(output) = embedding_output {
+        let files_selected: Vec<String> = changed_files.iter().cloned().collect();
+        let files_deleted: Vec<String> = deleted_files.iter().cloned().collect();
+        if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: dialect,
+                project_id,
+                root_scope: repo,
+                full_replace: !incremental,
+                scanned_directory: true,
+                files_selected,
+                files_deleted,
+                categories: embedding_categories,
+            },
+        ) {
+            eprintln!("{dialect} embedding-input artifact failed: {error}");
+            return Err(format!("{dialect} embedding-input artifact failed: {error}"));
         }
     }
 

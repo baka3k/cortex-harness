@@ -488,12 +488,10 @@ pub fn build_graph_rows(
     rows
 }
 
-/// Ghi graph qua LanguageCodeWriter::write_all — `use_full_writers=true`,
-/// `files_variant="default"` (khớp entry Python). Trả counts dict.
-pub fn write_graph(
-    writer: &mut LanguageCodeWriter,
-    rows: &GraphRows,
-) -> Result<BTreeMap<String, i64>, String> {
+/// Build `WriteAllPayload` từ `GraphRows` + capture embedding_categories.
+/// Phase-03 hoist (plan `260916-1520-legacy17-graphless-emit`): emission runs
+/// OUTSIDE the writer block so it fires in graphless mode too.
+pub fn build_payload(rows: &GraphRows) -> (WriteAllPayload<'_>, Vec<(String, Vec<serde_json::Value>)>) {
     let payload = WriteAllPayload {
         projects: &rows.projects,
         packages: &[],
@@ -529,7 +527,17 @@ pub fn write_graph(
         use_full_writers: true,
         files_variant: FilesVariant::Default,
     };
-    let counts = writer.write_all(&payload).map_err(|error| error.to_string())?;
+    let embedding_categories = payload.embedding_categories();
+    (payload, embedding_categories)
+}
+
+/// Ghi graph qua LanguageCodeWriter::write_all — `use_full_writers=true`,
+/// `files_variant="default"` (khớp entry Python). Trả counts dict.
+pub fn write_graph(
+    writer: &mut LanguageCodeWriter,
+    payload: &WriteAllPayload<'_>,
+) -> Result<BTreeMap<String, i64>, String> {
+    let counts = writer.write_all(payload).map_err(|error| error.to_string())?;
     Ok(counts)
 }
 

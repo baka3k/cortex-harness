@@ -409,14 +409,16 @@ fn write_fact_artifact(path: &Path, facts: &AnalysisFacts) -> Result<(), String>
 /// `write_graph` — normalize + write_all + flutter incremental cleanup.
 /// Trả (counts, embedding_categories) — counts = graph totals; embedding_categories
 /// = rows sẵn cho phase-06 orchestrator (plan `260916-1432-legacy-17-vector-emit` R12).
+///
+/// Phase-02 hoist (plan `260916-1520-legacy17-graphless-emit`): parse + payload
+/// build ALWAYS runs (so the embedding pass can serialize the artifact in
+/// graphless mode). Persistence is gated on `!graph_writes_disabled()`.
 fn write_graph(
     args: &DartArgs,
     facts: &AnalysisFacts,
     root: &Path,
     cleanup_paths: &[String],
 ) -> Result<(BTreeMap<String, i64>, Vec<(String, Vec<Value>)>), String> {
-    let store = open_store(args)?;
-    let mut writer = LanguageCodeWriter::new(store, args.neo4j_db.clone(), 1000, args.verbose);
     let repo = args
         .repo
         .clone()
@@ -468,8 +470,17 @@ fn write_graph(
         use_full_writers: true,
         files_variant: FilesVariant::WithImports,
     };
-    // Phase-02 / R12: capture embedding categories BEFORE write_all consumes.
+    // Capture embedding categories BEFORE write_all consumes the payload.
     let embedding_categories = payload.embedding_categories();
+
+    // Graphless mode: skip store open + write_all + cleanup. The artifact is
+    // still built above (orchestrator's embedding pass will read it).
+    if graph_writes_disabled() {
+        return Ok((BTreeMap::new(), embedding_categories));
+    }
+
+    let store = open_store(args)?;
+    let mut writer = LanguageCodeWriter::new(store, args.neo4j_db.clone(), 1000, args.verbose);
     let counts = writer
         .write_all(&payload)
         .map_err(|e| e.to_string())?;

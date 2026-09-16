@@ -37,6 +37,14 @@ impl PythonAnalyzer {
         let mut ctx = AnalyzerContext::from_args(args)?;
         ctx.root = root.to_path_buf();
         let result = self.run(&mut ctx)?;
+        // Phase-04 emit EmbeddingInputArtifact via framework-side seam.
+        // Pattern C (Trait/AnalyzerContext): analyzer populates
+        // `result.embedding_categories`, framework helper handles emission
+        // in BOTH graph + graphless modes.
+        if let Err(error) = ctx.emit_embedding_artifact("python", result.embedding_categories.clone()) {
+            eprintln!("python embedding-input artifact failed: {error}");
+            return Ok(1);
+        }
         if let (Some(path), Some(summary)) = (&args.summary_path, result.summary_json) {
             write_summary(path, &summary).map_err(|e| format!("[summary] write failed: {e}"))?;
         }
@@ -212,55 +220,54 @@ impl Analyzer for PythonAnalyzer {
             &ctx.root.to_string_lossy(),
         );
 
-        // ── Graph write (skip khi graphless) ────────────────────────────────
+        // ── Phase-04 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+        // Pattern C (Trait seam): build WriteAllPayload + capture embedding
+        // categories OUTSIDE the writer block so the framework-side emission
+        // helper (`AnalyzerContext::emit_embedding_artifact`) can read them
+        // in BOTH graph + graphless modes.
+        let payload = WriteAllPayload {
+            projects: &graph.projects,
+            packages: &[],
+            namespaces: &graph.namespaces,
+            files: &graph.files,
+            classes: &[],
+            types: &graph.types,
+            function_types: &[],
+            functions: &graph.functions,
+            fields: &[],
+            aliases: &[],
+            templates: &[],
+            relations: &graph.relations,
+            calls: &graph.calls,
+            calls_with_site: &[],
+            properties: &[],
+            events: &[],
+            interfaces: &[],
+            enums: &[],
+            constants: &[],
+            variables: &[],
+            navigators: &[],
+            has_routes: &[],
+            param_lists: &[],
+            workflows: &[],
+            workflow_steps: &[],
+            call_evidence_sites: &[],
+            call_evidence_observations: &[],
+            build_configurations: &[],
+            semantic_coverage: &[],
+            proc_function_joins: &[],
+            proc_host_declarations: &[],
+            use_full_writers: true,
+            files_variant: FilesVariant::WithImports,
+        };
+        let embedding_categories = payload.embedding_categories();
+
         if let Some(store) = ctx.store.take() {
             let mut writer = LanguageCodeWriter::new(store, None, 1000, verbose);
             if verbose {
                 println!("[graph] Writing nodes and relations (streaming)...");
             }
-            let payload = WriteAllPayload {
-                projects: &graph.projects,
-                packages: &[],
-                namespaces: &graph.namespaces,
-                files: &graph.files,
-                classes: &[],
-                types: &graph.types,
-                function_types: &[],
-                functions: &graph.functions,
-                fields: &[],
-                aliases: &[],
-                templates: &[],
-                relations: &graph.relations,
-                calls: &graph.calls,
-                calls_with_site: &[],
-                properties: &[],
-                events: &[],
-                interfaces: &[],
-                enums: &[],
-                constants: &[],
-                variables: &[],
-                navigators: &[],
-                has_routes: &[],
-                param_lists: &[],
-                workflows: &[],
-                workflow_steps: &[],
-                call_evidence_sites: &[],
-                call_evidence_observations: &[],
-                build_configurations: &[],
-                semantic_coverage: &[],
-                proc_function_joins: &[],
-                proc_host_declarations: &[],
-                use_full_writers: true,
-                files_variant: FilesVariant::WithImports,
-            };
-            // Phase-02: capture embedding categories BEFORE write_all consumes
-            // (plan `260916-1432-legacy-17-vector-emit`). Emission deferred to
-            // caller where args/project_id/repo are in scope.
-            let embedding_categories = payload.embedding_categories();
-            let counts = writer.write_all(&payload);
-            // TODO(phase-03): forward embedding_categories to caller; emit artifact.
-            let _ = embedding_categories;
-            match counts {
+            match writer.write_all(&payload) {
                 Ok(counts) if verbose => {
                     println!("[graph] Write complete ({counts:?})");
                 }
@@ -293,6 +300,7 @@ impl Analyzer for PythonAnalyzer {
             written: Default::default(),
             duration_seconds: start.elapsed().as_secs_f64(),
             summary_json: None,
+            embedding_categories,
         };
         result.summary_json = Some(summary_json(
             &result,

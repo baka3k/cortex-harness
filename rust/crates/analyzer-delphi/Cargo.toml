@@ -10,6 +10,10 @@ publish = false
 name = "analyzer-delphi"
 path = "src/main.rs"
 
+[lib]
+name = "analyzer_delphi"
+path = "src/lib.rs"
+
 [dependencies]
 cortex-analyzer-framework = { path = "../cortex-analyzer-framework" }
 cortex-graph-writer = { path = "../cortex-graph-writer" }

@@ -992,33 +992,35 @@ pub fn run(
 
     let sr_fn;
     let sr_cls;
-    if let Some(store) = store.take() {
-        if verbose {
-            println!("[graph] Writing nodes and relations (streaming)...");
-        }
-        let call_scope = {
-            let mode = call_scope.trim().to_lowercase();
-            if mode.is_empty() { "internal".to_string() } else { mode }
-        };
-        let keywords = (spec.keywords)();
-        let type_keywords = (spec.type_keywords)();
+    // ── Phase-02 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+    // Pattern A: constants + Vec accumulators + payload → row loop +
+    // WriteAllPayload build + `embedding_categories()` capture must run in
+    // BOTH graph and graphless modes. Previously gated inside
+    // `if let Some(store) = store.take()` — unreachable when the orchestrator's
+    // embedding pass sets `CORTEX_DISABLE_GRAPH=1`.
+    let call_scope = {
+        let mode = call_scope.trim().to_lowercase();
+        if mode.is_empty() { "internal".to_string() } else { mode }
+    };
+    let keywords = (spec.keywords)();
+    let type_keywords = (spec.type_keywords)();
 
-        let mut all_functions: Vec<Map<String, Value>> = Vec::new();
-        let all_types: Vec<Map<String, Value>> = Vec::new();
-        let mut all_namespaces: Vec<Map<String, Value>> = Vec::new();
-        let mut all_files: Vec<Map<String, Value>> = Vec::new();
-        let mut all_relations: Vec<Map<String, Value>> = Vec::new();
-        let mut all_calls: Vec<Map<String, Value>> = Vec::new();
-        // external_functions: dict insertion order → Vec + set.
-        let mut external_functions: Vec<Map<String, Value>> = Vec::new();
-        let mut external_ids: BTreeSet<String> = BTreeSet::new();
-        let mut known_function_ids: BTreeSet<String> = BTreeSet::new();
-        let mut total_calls = 0i64;
-        let mut resolved_calls = 0i64;
-        let mut unresolved_calls_count = 0i64;
-        let mut external_calls_written = 0i64;
+    let mut all_functions: Vec<Map<String, Value>> = Vec::new();
+    let all_types: Vec<Map<String, Value>> = Vec::new();
+    let mut all_namespaces: Vec<Map<String, Value>> = Vec::new();
+    let mut all_files: Vec<Map<String, Value>> = Vec::new();
+    let mut all_relations: Vec<Map<String, Value>> = Vec::new();
+    let mut all_calls: Vec<Map<String, Value>> = Vec::new();
+    // external_functions: dict insertion order → Vec + set.
+    let mut external_functions: Vec<Map<String, Value>> = Vec::new();
+    let mut external_ids: BTreeSet<String> = BTreeSet::new();
+    let mut known_function_ids: BTreeSet<String> = BTreeSet::new();
+    let mut total_calls = 0i64;
+    let mut resolved_calls = 0i64;
+    let mut unresolved_calls_count = 0i64;
+    let mut external_calls_written = 0i64;
 
-        for payload in &payloads {
+    for payload in &payloads {
             let file_def = &payload.file_def;
             let file_id = file_def.file_path.clone();
             let mut file_row = Map::new();
@@ -1183,97 +1185,106 @@ pub fn run(
         }
         all_functions.extend(external_functions);
 
+    // Build WriteAllPayload + capture embedding_categories OUTSIDE writer block
+    // so the artifact is serializable in graphless mode (the orchestrator's
+    // embedding pass sets `CORTEX_DISABLE_GRAPH=1`, opening no graph store).
+    let payload = WriteAllPayload {
+        projects: &project_rows(&project_id, &project_name, &language, &repo, &args.root, &build_system),
+        packages: &[],
+        namespaces: &all_namespaces,
+        files: &all_files,
+        classes: &[],
+        types: &all_types,
+        function_types: &[],
+        functions: &all_functions,
+        fields: &[],
+        aliases: &[],
+        templates: &[],
+        relations: &all_relations,
+        calls: &all_calls,
+        calls_with_site: &[],
+        properties: &[],
+        events: &[],
+        interfaces: &[],
+        enums: &[],
+        constants: &[],
+        variables: &[],
+        navigators: &[],
+        has_routes: &[],
+        param_lists: &[],
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::WithImports,
+    };
+    let embedding_categories = payload.embedding_categories();
+
+    // Writer block: only `write_all` is gated on the graph store being Some.
+    if let Some(store) = store.take() {
+        if verbose {
+            println!("[graph] Writing nodes and relations (streaming)...");
+        }
         let mut writer = LanguageCodeWriter::new(
             store,
             args.neo4j_db.clone(),
             neo4j_batch_size.max(1),
             verbose,
         );
-        let payload = WriteAllPayload {
-            projects: &project_rows(&project_id, &project_name, &language, &repo, &args.root, &build_system),
-            packages: &[],
-            namespaces: &all_namespaces,
-            files: &all_files,
-            classes: &[],
-            types: &all_types,
-            function_types: &[],
-            functions: &all_functions,
-            fields: &[],
-            aliases: &[],
-            templates: &[],
-            relations: &all_relations,
-            calls: &all_calls,
-            calls_with_site: &[],
-            properties: &[],
-            events: &[],
-            interfaces: &[],
-            enums: &[],
-            constants: &[],
-            variables: &[],
-            navigators: &[],
-            has_routes: &[],
-            param_lists: &[],
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::WithImports,
-        };
-        // Phase-02: capture embedding categories BEFORE write_all consumes
-        // (plan `260916-1432-legacy-17-vector-emit`).
-        let embedding_categories = payload.embedding_categories();
         let counts = writer.write_all(&payload);
         if let Err(error) = counts {
             return Err(format!("[graph] write failed: {error}"));
         }
-        // Phase-02: emit EmbeddingInputArtifact.
-        if let Some(output) = args.embedding_input_output() {
-            let files_selected: Vec<String> = selected_files
-                .iter()
-                .map(|path| rel_slash(&root, path))
-                .collect();
-            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
-                Some(output),
-                EmbeddingEmission {
-                    parser: spec.language_default,
-                    project_id: &project_id,
-                    root_scope: &repo,
-                    full_replace: !args.incremental,
-                    scanned_directory: true,
-                    files_selected,
-                    files_deleted: deleted_set.iter().cloned().collect(),
-                    categories: embedding_categories,
-                },
-            ) {
-                eprintln!("sql embedding-input artifact failed: {error}");
-                return Ok(1);
-            }
-        }
-        if verbose {
-            let ratio = if total_calls > 0 {
-                ((resolved_calls as f64 / total_calls as f64) * 100.0 * 100.0).round() / 100.0
-            } else {
-                0.0
-            };
-            println!(
-                "[calls] resolved {}/{} ({:.2}%), unresolved {}, external {}",
-                resolved_calls, total_calls, ratio, unresolved_calls_count, external_calls_written
-            );
-        }
         if verbose {
             println!("[graph] Write complete");
         }
-        sr_fn = all_functions.len();
-        sr_cls = all_types.len();
-    } else {
-        sr_fn = 0;
-        sr_cls = 0;
     }
+    // Graphless branch is intentionally empty — parse + payload build runs
+    // unconditionally above so the embedding pass can read the artifact.
+
+    if verbose {
+        let ratio = if total_calls > 0 {
+            ((resolved_calls as f64 / total_calls as f64) * 100.0 * 100.0).round() / 100.0
+        } else {
+            0.0
+        };
+        println!(
+            "[calls] resolved {}/{} ({:.2}%), unresolved {}, external {}",
+            resolved_calls, total_calls, ratio, unresolved_calls_count, external_calls_written
+        );
+    }
+
+    // Phase-02 emit EmbeddingInputArtifact OUTSIDE writer block (Pattern A).
+    if let Some(output) = args.embedding_input_output() {
+        let files_selected: Vec<String> = selected_files
+            .iter()
+            .map(|path| rel_slash(&root, path))
+            .collect();
+        if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: spec.language_default,
+                project_id: &project_id,
+                root_scope: &repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected,
+                files_deleted: deleted_set.iter().cloned().collect(),
+                categories: embedding_categories,
+            },
+        ) {
+            eprintln!("sql embedding-input artifact failed: {error}");
+            return Ok(1);
+        }
+    }
+
+    sr_fn = all_functions.len();
+    sr_cls = all_types.len();
 
     println!(
         "[SCAN_RESULT] parser={language} files={total_files} functions={sr_fn} classes={sr_cls}"

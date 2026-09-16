@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use std::sync::OnceLock;
 
 use cortex_analyzer_framework::cleanup::cleanup_graph_files;
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::scan::{matches_extra_ignore, rel_posix, COMMON_SCAN_EXCLUDE};
 use cortex_graph_writer::language_writer::{FilesVariant, LanguageCodeWriter, WriteAllPayload};
 use cortex_graph_writer::store::GraphStore;
@@ -720,64 +721,67 @@ pub fn build_call_graph(
         FunctionIndex::build(selected_payloads.iter())
     };
 
-    // ── Rows + write ────────────────────────────────────────────────────────
+    // ── Phase-04 hoist (plan `260916-1520-legacy17-graphless-emit`) ──────────
+    // Pattern A: assemble_graph + WriteAllPayload + embedding_categories()
+    // capture ALWAYS run; persistence is gated on store being Some.
+    let rows = assemble_graph(
+        &selected_payloads,
+        &function_index,
+        &project_id,
+        &project_name,
+        &language,
+        &repo,
+        &build_system,
+        &root_raw,
+    );
+    let payload = WriteAllPayload {
+        projects: &rows.projects,
+        packages: &[],
+        namespaces: &rows.namespaces,
+        files: &rows.files,
+        classes: &[],
+        types: &rows.types,
+        function_types: &[],
+        functions: &rows.functions,
+        fields: &[],
+        aliases: &[],
+        templates: &[],
+        relations: &rows.relations,
+        calls: &rows.calls,
+        calls_with_site: &[],
+        properties: &[],
+        events: &[],
+        interfaces: &[],
+        enums: &[],
+        constants: &[],
+        variables: &[],
+        navigators: &[],
+        has_routes: &[],
+        param_lists: &[],
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::WithJsx,
+    };
+    let embedding_categories = payload.embedding_categories();
+
+    // Writer block: only `write_all` is gated on the graph store being Some.
     if let Some(store) = store.take() {
         if verbose {
             println!("[graph] Writing nodes and relations (streaming)...");
         }
-        let rows = assemble_graph(
-            &selected_payloads,
-            &function_index,
-            &project_id,
-            &project_name,
-            &language,
-            &repo,
-            &build_system,
-            &root_raw,
-        );
         let database = args
             .neo4j_db
             .clone()
             .filter(|value| !value.is_empty());
         let batch_size = args.neo4j_batch_size.max(1) as usize;
         let mut writer = LanguageCodeWriter::new(store, database, batch_size, verbose);
-        let payload = WriteAllPayload {
-            projects: &rows.projects,
-            packages: &[],
-            namespaces: &rows.namespaces,
-            files: &rows.files,
-            classes: &[],
-            types: &rows.types,
-            function_types: &[],
-            functions: &rows.functions,
-            fields: &[],
-            aliases: &[],
-            templates: &[],
-            relations: &rows.relations,
-            calls: &rows.calls,
-            calls_with_site: &[],
-            properties: &[],
-            events: &[],
-            interfaces: &[],
-            enums: &[],
-            constants: &[],
-            variables: &[],
-            navigators: &[],
-            has_routes: &[],
-            param_lists: &[],
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::WithJsx,
-        };
-        // Phase-02: capture embedding categories BEFORE write_all consumes.
-        let _embedding_categories = payload.embedding_categories();
         match writer.write_all(&payload) {
             Ok(_counts) => {
                 if verbose {
@@ -785,6 +789,26 @@ pub fn build_call_graph(
                 }
             }
             Err(error) => return Err(format!("[graph] write failed: {error}")),
+        }
+    }
+
+    // ── Phase-04 emit EmbeddingInputArtifact OUTSIDE writer block ──────────
+    if let Some(output) = args.embedding_input_output.as_deref().filter(|value| !value.is_empty()) {
+        if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: "js",
+                project_id: &project_id,
+                root_scope: &repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected: selected_rel_paths.iter().cloned().collect(),
+                files_deleted: deleted_set.iter().cloned().collect(),
+                categories: embedding_categories,
+            },
+        ) {
+            eprintln!("js embedding-input artifact failed: {error}");
+            return Err("js embedding-input artifact failed".to_string());
         }
     }
 

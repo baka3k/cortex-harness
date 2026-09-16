@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use cortex_graph_writer::store::GraphStore;
 
 use crate::cli::AnalyzerArgs;
+use crate::embedding_artifact::{self, EmbeddingEmission};
 use crate::manifest::load_manifest_paths;
 use crate::scan::scan_files;
 
@@ -22,7 +23,18 @@ pub struct AnalyzerResult {
     pub duration_seconds: f64,
     /// Summary JSON đã build (được main ghi ra `--summary-path` khi có).
     pub summary_json: Option<serde_json::Value>,
+    /// Phase-04 (plan `260916-1520-legacy17-graphless-emit`): Trait-based
+    /// analyzers (python/php/ts) populate this with
+    /// `WriteAllPayload::embedding_categories()`. The framework-side
+    /// `emit_embedding_artifact` helper reads it AFTER `run()` returns —
+    /// works in BOTH graph + graphless modes (orchestrator's
+    /// `finish_native_embedding_pass` needs the file even when store is None).
+    pub embedding_categories: Vec<EmbeddingCategory>,
 }
+
+/// `EmbeddingCategory` alias — re-exported from `embedding_artifact` để tránh
+/// duplicate type definitions.
+pub type EmbeddingCategory = embedding_artifact::EmbeddingCategory;
 
 /// BTreeMap alias để tránh generic noise trong AnalyzerResult.
 pub type BTreeMapCounts = std::collections::BTreeMap<String, i64>;
@@ -98,6 +110,36 @@ impl<'a> AnalyzerContext<'a> {
     pub fn rel_posix(&self, path: &Path) -> String {
         crate::scan::rel_posix(&self.root, path)
     }
+
+    /// Phase-04 emission seam (plan `260916-1520-legacy17-graphless-emit`):
+    /// emit EmbeddingInputArtifact từ caller-supplied categories nếu
+    /// orchestrator yêu cầu. Helper dùng cho Trait-based analyzers
+    /// (python/php/ts) — emission lives ở framework, analyzer chỉ populate
+    /// `result.embedding_categories` rồi framework gọi helper này sau
+    /// khi `run()` returns.
+    pub fn emit_embedding_artifact(
+        &self,
+        parser: &str,
+        result_embedding_categories: Vec<EmbeddingCategory>,
+    ) -> Result<(), String> {
+        let Some(output) = self.args.embedding_input_output() else {
+            return Ok(());
+        };
+        embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser,
+                project_id: &self.project_id,
+                root_scope: &self.repo,
+                full_replace: !self.args.incremental,
+                scanned_directory: true,
+                files_selected: self.changed_files.iter().cloned().collect(),
+                files_deleted: self.deleted_files.iter().cloned().collect(),
+                categories: result_embedding_categories,
+            },
+        )
+        .map(|_| ())
+    }
 }
 
 /// Trait analyzer — Wave D điền per-language vào khung này.
@@ -109,5 +151,7 @@ pub trait Analyzer {
     fn detect(&self, root: &Path) -> bool;
 
     /// Chạy analyzer: parse + enrich + resolve + write qua `ctx.store`.
+    /// Populate `result.embedding_categories` for Phase-04 graphless emit
+    /// (framework-side helper reads it via `AnalyzerContext::emit_embedding_artifact`).
     fn run(&self, ctx: &mut AnalyzerContext<'_>) -> Result<AnalyzerResult, String>;
 }
