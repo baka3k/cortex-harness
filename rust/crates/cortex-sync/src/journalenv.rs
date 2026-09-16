@@ -46,7 +46,9 @@ pub fn normalize_mode(raw: &str) -> Result<String, String> {
     Err(format!("unsupported graph journal mode: {raw}"))
 }
 
-/// `_journal_mode_for_lane` — default migrated lane: cplus → shared-required.
+/// `_journal_mode_for_lane` — phase-03 (M2): default migrated lane cplus
+/// chuyển `shared-required` → `off` (direct-write như 37 parser còn lại);
+/// non-cplus giữ `shared-shadow`. Callers skip journal-env cho lane "off".
 pub fn journal_mode_for_lane(env: &BTreeMap<String, String>, lane: &str) -> String {
     let configured = env
         .get("CORTEX_GRAPH_JOURNAL_MODE")
@@ -58,7 +60,7 @@ pub fn journal_mode_for_lane(env: &BTreeMap<String, String>, lane: &str) -> Stri
         return configured;
     }
     if lane.eq_ignore_ascii_case("cplus") {
-        "shared-required".to_string()
+        "off".to_string()
     } else {
         "shared-shadow".to_string()
     }

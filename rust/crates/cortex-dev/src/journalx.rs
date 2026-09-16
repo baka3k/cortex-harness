@@ -302,7 +302,10 @@ pub fn purge(journal_path: &str, run_id: &str, project_id: &str, root: &str) -> 
 /// pending artifact batches into the graph, then ack) has no Rust port —
 /// cortex-sync itself delegates required lanes to Python
 /// (`DELEGATE_SENTINEL ... is Python-plane`, orchestrator.rs). Spawn
-/// `python -m tools.graph.journal.consumer` exactly as dev.py did.
+/// dev.py `run_with_retry`'s pre-attempt journal recovery. Phase-03: the
+/// replay driver is NATIVE — exec `cortex-sync --journal-recover-only`
+/// (same lib the orchestrator uses; the python consumer spawn + its
+/// `":"`-joined PYTHONPATH bug die with it). Returns Some(rc) on failure.
 pub fn recover_required_lane(process_env: &[(String, String)]) -> Option<i32> {
     let journal_mode = process_env
         .iter()
@@ -313,31 +316,34 @@ pub fn recover_required_lane(process_env: &[(String, String)]) -> Option<i32> {
         return None;
     }
     let root = crate::util::repo_root();
-    let code_tiny = root.join("code-tiny");
-    let mut module_env: Vec<(String, String)> = process_env.to_vec();
-    let pythonpath = module_env
-        .iter()
-        .find(|(k, _)| k == "PYTHONPATH")
-        .map(|(_, v)| v.clone())
-        .unwrap_or_default();
-    let new_path = if pythonpath.is_empty() {
-        code_tiny.to_string_lossy().to_string()
-    } else {
-        format!("{}:{}", code_tiny.display(), pythonpath)
-    };
-    if let Some(slot) = module_env.iter_mut().find(|(k, _)| k == "PYTHONPATH") {
-        slot.1 = new_path;
-    } else {
-        module_env.push(("PYTHONPATH".to_string(), new_path));
-    }
-    let recovery = std::process::Command::new(crate::util::harness_python(&root))
-        .args(["-m", "tools.graph.journal.consumer"])
-        .current_dir(&code_tiny)
-        .envs(module_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+    let sync_bin = cortex_sync_binary(&root);
+    let recovery = std::process::Command::new(&sync_bin)
+        .arg("--journal-recover-only")
+        .envs(process_env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .status();
     let rc = recovery.map(|s| s.code().unwrap_or(1)).unwrap_or(1);
     if rc != 0 {
         return Some(rc);
     }
     None
+}
+
+/// Same resolution as `cmds::sync::cortex_sync_binary` (env override →
+/// repo release → repo debug target).
+fn cortex_sync_binary(root: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(explicit) = std::env::var("CORTEX_SYNC_BIN") {
+        let path = std::path::PathBuf::from(explicit);
+        if path.is_file() {
+            return path;
+        }
+    }
+    for candidate in [
+        root.join("rust").join("target").join("release").join("cortex-sync"),
+        root.join("rust").join("target").join("debug").join("cortex-sync"),
+    ] {
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    std::path::PathBuf::from("cortex-sync")
 }

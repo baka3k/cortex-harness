@@ -477,14 +477,36 @@ pub fn project_topology_bootstrap_needed(
 /// `_graph_target_cli_args` — pin children to the resolved graph target.
 /// The remote URI is NOT passed as a flag: the Python parent relies on the
 /// propagated `FALKORDB_URI`/`FALKORDB_GRAPH` env, and children re-read them.
-pub fn graph_target_cli_args(_args: &Args, context: &GraphContext) -> Vec<String> {
+pub fn graph_target_cli_args(args: &Args, context: &GraphContext) -> Vec<String> {
     let mut result = vec!["--graph-provider".to_string(), context.provider.clone()];
-    if context.provider == "falkordb" {
-        let graph = context.falkordb_graph.trim().to_string();
-        if !graph.is_empty() {
-            result.push("--falkordb-graph".to_string());
-            result.push(graph);
+    match context.provider.as_str() {
+        "falkordb" => {
+            let graph = context.falkordb_graph.trim().to_string();
+            if !graph.is_empty() {
+                result.push("--falkordb-graph".to_string());
+                result.push(graph);
+            }
         }
+        // incremental_sync.py:1434-1440 — children nhận ladybug target qua
+        // flags (không dựa vào env kế thừa).
+        "ladybug" => {
+            if let Some(path) = context
+                .ladybug_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+            {
+                result.push("--ladybug-path".to_string());
+                result.push(path.to_string());
+            }
+            let graph = context.falkordb_graph.trim().to_string();
+            if !graph.is_empty() {
+                result.push("--ladybug-graph".to_string());
+                result.push(graph);
+            }
+        }
+        _ => {}
     }
+    let _ = args;
     result
 }

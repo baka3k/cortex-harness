@@ -12,6 +12,7 @@ use crate::frameworks;
 use crate::gitdiff;
 use crate::graphops::{self, GraphContext};
 use crate::inventory::{self, SourceInventory};
+use crate::journal_replay;
 use crate::journalenv;
 use crate::registry::{self, AnalyzerConfig};
 use crate::routing;
@@ -1221,26 +1222,66 @@ fn run_flow(
     // ── parser selection ──
     let (parser_filter, parser_auto_mode) = registry::selected_parsers(&args.parsers)?;
 
-    // ── graph setup (Python-plane delegation point for required lanes) ──
+    // ── graph setup (phase-03: required lanes drain natively) ──
+    // M2: empty-mode-cplus branch REMOVED — cplus lane mặc định "off"
+    // (direct-write như 37 parser). Required chỉ khi env explicitly
+    // required/shared-required → native replay (legacy-drain-only, phase-01
+    // M2 probe: Rust children không enqueue).
     let configured_journal_mode =
         env_lookup("CORTEX_GRAPH_JOURNAL_MODE").unwrap_or_default().trim().to_lowercase();
-    let cplus_changed = routing::group_paths_by_parser(
-        &changed_paths.union(&deleted_paths).cloned().collect(),
-        root,
-    )
-    .get("cplus")
-    .cloned()
-    .unwrap_or_default();
-    let setup_is_required = journalenv::REQUIRED_MODES.contains(&configured_journal_mode.as_str())
-        || (configured_journal_mode.is_empty()
-            && parser_filter.contains("cplus")
-            && !cplus_changed.is_empty());
-    if setup_is_required {
-        // Required journal lanes need the SQLite store (resume/quarantine/
-        // finalize drain) — Python-plane.
-        return Err(format!(
-            "{DELEGATE_SENTINEL}required graph journal lane (SQLite store, resume/finalize) is Python-plane"
-        ));
+    let setup_is_required = journalenv::REQUIRED_MODES.contains(&configured_journal_mode.as_str());
+    if setup_is_required && graph_ready {
+        // Native replay: drain env-configured journal (consumer `_main`
+        // contract) TRƯỚC streaming — legacy resume semantics.
+        let context = graph_context.expect("graph context");
+        let mut replay = match journal_replay::open_replay_store(context) {
+            Ok(replay) => replay,
+            Err(error) => {
+                return Err(format!("graph schema/project setup failed before streaming: {error}"))
+            }
+        };
+        match journal_replay::replay_config_from_env() {
+            Ok(Some(config)) => {
+                let database = replay.database.clone();
+                let recovered = journal_replay::drain_configured(&config, replay.store.as_mut(), database.as_deref())
+                    .map_err(|error| format!("required graph journal replay failed: {}", error.message))?;
+                if recovered > 0 {
+                    println!("[journal] natively recovered {recovered} batch(es)");
+                }
+                summary.insert("journal".into(), json!({
+                    "mode": configured_journal_mode,
+                    "backend": "rust-native",
+                    "recovered_batches": recovered,
+                    "path": config.path.to_string_lossy(),
+                }));
+            }
+            Ok(None) | Err(_) => {
+                // Parent-level invocation (explicit required mode, không có
+                // env per-child): sweep mọi journal resumable của scope.
+                let database = replay.database.clone();
+                let recovered = journal_replay::drain_scope_sweep(
+                    replay.store.as_mut(),
+                    database.as_deref(),
+                    control_cache_dir,
+                    scope_id,
+                )
+                .map_err(|error| format!("required graph journal replay failed: {}", error.message))?;
+                if recovered > 0 {
+                    println!("[journal] natively recovered {recovered} batch(es) from scope journals");
+                }
+                summary.insert("journal".into(), json!({
+                    "mode": configured_journal_mode,
+                    "backend": "rust-native",
+                    "recovered_batches": recovered,
+                    "sweep": scope_id,
+                }));
+            }
+        }
+    }
+    if setup_is_required && !graph_ready {
+        // Required mode without a graph target — children chỉ chạy khi graph
+        // sẵn sàng; giữ fail-closed (không delegate).
+        return Err("required graph journal lane selected but no graph target resolved".to_string());
     }
     if graph_ready {
         let mut store = graphops::open_store(graph_context.expect("graph context"))
@@ -1632,7 +1673,9 @@ fn run_flow(
             let mut parser_env = graph_env.clone();
             let lane_mode =
                 journalenv::normalize_mode(&journalenv::journal_mode_for_lane(&parser_env, parser_name))?;
-            if !graph_disabled_env(&parser_env) {
+            // Phase-03 (M2): lane "off" (cplus mặc định mới) → children viết
+            // direct, không journal env.
+            if !graph_disabled_env(&parser_env) && lane_mode != "off" {
                 let physical_target = journalenv::physical_target_from_env(&parser_env)
                     .map_err(|error| format!("graph schema/project setup failed before streaming: {error}"))?;
                 let journal = journalenv::configure_journal_env(
@@ -1827,7 +1870,7 @@ fn run_flow(
                 &framework_env,
                 framework_name,
             ))?;
-            if !graph_disabled_env(&framework_env) {
+            if !graph_disabled_env(&framework_env) && lane_mode != "off" {
                 let physical_target = journalenv::physical_target_from_env(&framework_env)
                     .map_err(|error| format!("graph schema/project setup failed before streaming: {error}"))?;
                 let journal = journalenv::configure_journal_env(
@@ -1955,11 +1998,12 @@ fn run_flow(
             std::iter::once(cmd.program.clone()).chain(cmd.args.iter().cloned()).collect();
         set_list_field(&mut topology_summaries, 0, "command", json!(command_vec));
         let mut topology_env = graph_env.clone();
-        if !graph_disabled_env(&topology_env) {
-            let lane_mode = journalenv::normalize_mode(&journalenv::journal_mode_for_lane(
-                &topology_env,
-                "project_topology",
-            ))?;
+        let topology_lane_mode = journalenv::normalize_mode(&journalenv::journal_mode_for_lane(
+            &topology_env,
+            "project_topology",
+        ))?;
+        if !graph_disabled_env(&topology_env) && topology_lane_mode != "off" {
+            let lane_mode = topology_lane_mode;
             let physical_target = journalenv::physical_target_from_env(&topology_env)
                 .map_err(|error| format!("graph schema/project setup failed before streaming: {error}"))?;
             let journal = journalenv::configure_journal_env(
