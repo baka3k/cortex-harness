@@ -100,6 +100,16 @@ pub const MESSAGE_CLEANUP_BY_FILES_QUERY: &str = r#"
     RETURN count(m) AS deleted_messages
     "#;
 
+/// Ladybug variant của `MESSAGE_CLEANUP_BY_FILES_QUERY` — embedded engine
+/// không delete được biến UNWIND ("Cannot delete expression m with type
+/// VARIABLE"); match trực tiếp theo path (phase-02 sync-cutover).
+pub const MESSAGE_CLEANUP_BY_FILES_LADYBUG_QUERY: &str = r#"
+    UNWIND $paths AS p
+    MATCH (m:Message {project_id: $project_id, file_path: p})
+    DETACH DELETE m
+    RETURN count(*) AS deleted_messages
+    "#;
+
 /// Query xoá toàn bộ `Message` của project (`cleanup_all_message_nodes_neo4j`).
 pub const MESSAGE_CLEANUP_ALL_QUERY: &str = r#"
     MATCH (m:Message {project_id: $project_id})
@@ -117,6 +127,17 @@ pub const MESSAGE_ENDPOINT_PRUNE_QUERY: &str = r#"
     UNWIND endpoints AS e
     DETACH DELETE e
     RETURN count(e) AS deleted_endpoints
+    "#;
+
+/// Ladybug variant — OPTIONAL MATCH + đếm relationship rồi xoá theo id
+/// (embedded engine không delete được biến UNWIND).
+pub const MESSAGE_ENDPOINT_PRUNE_LADYBUG_QUERY: &str = r#"
+    MATCH (e:MessageEndpoint {project_id: $project_id})
+    OPTIONAL MATCH (e)-[r]-()
+    WITH e, count(r) AS degree
+    WHERE degree = 0
+    DETACH DELETE e
+    RETURN count(*) AS deleted_endpoints
     "#;
 
 /// `msg_endpoint::<project_id>::<sha1(value)[:16]>` — endpoint node identity.
@@ -259,8 +280,13 @@ pub fn cleanup_message_nodes(
     let mut params = BTreeMap::new();
     params.insert("project_id".to_string(), json!(project_id));
     params.insert("paths".to_string(), json!(paths));
+    let query = if store.provider() == "ladybug" {
+        MESSAGE_CLEANUP_BY_FILES_LADYBUG_QUERY
+    } else {
+        MESSAGE_CLEANUP_BY_FILES_QUERY
+    };
     let deleted = store
-        .execute_query(MESSAGE_CLEANUP_BY_FILES_QUERY, &params, database)
+        .execute_query(query, &params, database)
         .map_err(|error| error.to_string())?;
     let deleted_messages = query_count(&deleted, "deleted_messages");
     let deleted_endpoints = prune_orphan_endpoints(store, database, project_id)?;
@@ -276,8 +302,13 @@ pub fn cleanup_all_message_nodes(
 ) -> Result<(u64, u64), String> {
     let mut params = BTreeMap::new();
     params.insert("project_id".to_string(), json!(project_id));
+    let query = if store.provider() == "ladybug" {
+        "MATCH (m:Message {project_id: $project_id}) DETACH DELETE m RETURN count(*) AS deleted_messages"
+    } else {
+        MESSAGE_CLEANUP_ALL_QUERY
+    };
     let deleted = store
-        .execute_query(MESSAGE_CLEANUP_ALL_QUERY, &params, database)
+        .execute_query(query, &params, database)
         .map_err(|error| error.to_string())?;
     let deleted_messages = query_count(&deleted, "deleted_messages");
     let deleted_endpoints = prune_orphan_endpoints(store, database, project_id)?;
@@ -291,8 +322,13 @@ fn prune_orphan_endpoints(
 ) -> Result<u64, String> {
     let mut params = BTreeMap::new();
     params.insert("project_id".to_string(), json!(project_id));
+    let query = if store.provider() == "ladybug" {
+        MESSAGE_ENDPOINT_PRUNE_LADYBUG_QUERY
+    } else {
+        MESSAGE_ENDPOINT_PRUNE_QUERY
+    };
     let pruned = store
-        .execute_query(MESSAGE_ENDPOINT_PRUNE_QUERY, &params, database)
+        .execute_query(query, &params, database)
         .map_err(|error| error.to_string())?;
     Ok(query_count(&pruned, "deleted_endpoints"))
 }

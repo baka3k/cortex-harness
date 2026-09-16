@@ -249,8 +249,20 @@ fn tail_window(line: &str) -> String {
 /// `_run_incremental` exit codes: 0 success, 1 failure, 2 lock busy.
 pub fn run_incremental(args: &Args) -> i32 {
     let started = Instant::now();
+    // Rollback hatch (phase-02, L2): explicit `CORTEX_SYNC_BACKEND=python`
+    // forces delegation even when native paths are ready — runbook §flags.
+    if env_lookup("CORTEX_SYNC_BACKEND")
+        .map(|v| v.trim().to_lowercase())
+        .as_deref()
+        == Some("python")
+    {
+        return delegate_to_python("explicit CORTEX_SYNC_BACKEND=python");
+    }
     let run_id = env_lookup("CORTEX_RUN_ID").unwrap_or_else(util::uuid4_hex);
     let correlation_id = env_lookup("CORTEX_CORRELATION_ID").unwrap_or_else(|| run_id.clone());
+    // Mutable clone: prepare_graph_args fills ProjectRegistry defaults
+    // (falkordb_graph) in place (phase-02 registry port).
+    let mut args = args.clone();
     let root = util::realpath(&args.root);
     let root_str = util::path_to_string(&root);
     let project_id = args
@@ -270,7 +282,7 @@ pub fn run_incremental(args: &Args) -> i32 {
     let graph_context: Option<GraphContext> = if !graph_selected || args.no_graph {
         None
     } else {
-        match graphops::prepare_graph_args(args) {
+        match graphops::prepare_graph_args(&mut args) {
             Ok(context) => context,
             Err(reason) => {
                 return delegate_to_python(&format!("graph target resolution: {reason}"))
@@ -297,7 +309,7 @@ pub fn run_incremental(args: &Args) -> i32 {
     };
 
     let mut summary = initial_summary(
-        args,
+        &args,
         &run_id,
         &correlation_id,
         &root_str,
@@ -316,8 +328,12 @@ pub fn run_incremental(args: &Args) -> i32 {
     let mut current_inventory: Option<SourceInventory> = None;
     let mut parse_quality_manifest_path: Option<String> = None;
 
+    // Backend stamp (L2): the run is committed native from here on — any
+    // later delegation goes through the DELEGATE_SENTINEL strip below which
+    // re-execs Python and stamps its own summary instead.
+    summary.insert("backend".into(), json!("rust-native"));
     match run_flow(
-        args,
+        &args,
         &mut summary,
         &root,
         &root_str,
@@ -1227,11 +1243,10 @@ fn run_flow(
         ));
     }
     if graph_ready {
-        let store = graphops::open_store(graph_context.expect("graph context"))
+        let mut store = graphops::open_store(graph_context.expect("graph context"))
             .map_err(|error| format!("graph schema/project setup failed before streaming: {error}"))?;
-        let mut store = store;
         let setup_mutated = graphops::ensure_project_repository_graph(
-            &mut store,
+            store.as_mut(),
             Some(&graph_context.expect("graph context").neo4j_db),
             project_id,
             project_name,
@@ -1319,7 +1334,7 @@ fn run_flow(
             .map_err(|error| error.to_string())?;
         let database = graph_context.expect("graph context").neo4j_db.clone();
         impacted_paths = graphops::query_impacted_files(
-            &mut store,
+            store.as_mut(),
             Some(&database),
             project_id,
             &changed_paths,
@@ -1367,7 +1382,7 @@ fn run_flow(
     {
         if let Ok(mut store) = graphops::open_store(graph_context.expect("graph context")) {
             let database = graph_context.expect("graph context").neo4j_db.clone();
-            match graphops::project_topology_bootstrap_needed(&mut store, Some(&database), project_id) {
+            match graphops::project_topology_bootstrap_needed(store.as_mut(), Some(&database), project_id) {
                 Ok(needed) => topology_bootstrap_needed = needed,
                 Err(error) => {
                     if args.verbose {
@@ -2935,16 +2950,43 @@ pub fn delegate_to_python(reason: &str) -> i32 {
     let script = repo_root.join("code-tiny/tools/sync/incremental_sync.py");
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let python_bin = crate::cli::resolve_python_bin(&raw);
-    match std::process::Command::new(python_bin)
+    let status = std::process::Command::new(python_bin)
         .arg(script)
         .args(&raw)
-        .status()
-    {
+        .status();
+    let code = match status {
         Ok(status) => status.code().unwrap_or(1),
         Err(error) => {
             eprintln!("[cortex-sync] python delegation failed: {error}");
-            1
+            return 1;
         }
+    };
+    stamp_delegated_summary(&raw);
+    code
+}
+
+/// Backend stamp (L2) for the delegated leg: the Python child wrote the
+/// summary — patch `backend="python"` into it so dogfood/drill verification
+/// can tell legs apart from the artifact alone. Best-effort; only when
+/// `--summary-path` was passed (the dev flow always passes it).
+fn stamp_delegated_summary(raw: &[String]) {
+    let Some(path) = raw
+        .iter()
+        .position(|arg| arg == "--summary-path")
+        .and_then(|index| raw.get(index + 1))
+    else {
+        return;
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut payload) = serde_json::from_str::<serde_json::Map<String, Value>>(text.trim())
+    else {
+        return;
+    };
+    payload.insert("backend".into(), json!("python"));
+    if let Ok(rendered) = serde_json::to_string_pretty(&payload) {
+        let _ = std::fs::write(path, rendered);
     }
 }
 
@@ -3004,10 +3046,11 @@ fn run_native_message_scan_lane(
         .collect();
     let database = graph_context.map(|context| context.neo4j_db.clone());
     // Graph store is opened lazily on the first parser that reaches the graph
-    // steps. When the resolved provider is not served by the native store
-    // (neo4j), emission is skipped and Python children keep the lane.
-    let mut store: Option<cortex_graph_writer::store::FalkorDbStore> = None;
-    let mut graph_provider_note = String::from("native-falkordb");
+    // steps. Phase-02 (red-team M1): the store is polymorphic — any provider
+    // with a resolvable target opens natively; only neo4j (no native store)
+    // and a missing context skip the graph half.
+    let mut store: Option<Box<dyn cortex_graph_writer::store::GraphStore>> = None;
+    let mut graph_provider_note = String::from("native");
 
     // Effective incremental signal — the same one the children receive
     // (`config.incremental_supported && (!full_scan || recovery_full_scan)`;
@@ -3056,7 +3099,7 @@ fn run_native_message_scan_lane(
             && graph_provider_note != "unavailable"
         {
             match graph_context {
-                Some(context) if context.provider == "falkordb" => {
+                Some(context) if context.provider == "falkordb" || context.provider == "ladybug" => {
                     store = Some(graphops::open_store(context).map_err(|error| {
                         format!("native message-scan[{parser}] graph: {error}")
                     })?);
@@ -3069,7 +3112,7 @@ fn run_native_message_scan_lane(
                 }
             }
         }
-        if let Some(store) = store.as_mut() {
+        if let Some(store) = store.as_deref_mut() {
             let cleanup_result = if run_incrementally {
                 let mut cleanup_paths: BTreeSet<String> = changed.iter().cloned().collect();
                 cleanup_paths.extend(deleted.iter().cloned());
@@ -3138,7 +3181,7 @@ fn run_native_message_scan_lane(
         if let Some(store) = store.as_mut() {
             if !records.is_empty() {
                 let upsert_result = message_scan::upsert_messages_to_graph(
-                    store,
+                    store.as_mut(),
                     database.as_deref(),
                     &records,
                     project_id,
