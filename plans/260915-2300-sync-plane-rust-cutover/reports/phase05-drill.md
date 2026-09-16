@@ -58,3 +58,12 @@ Phase-06 KHÔNG chạy khi thiếu một trong hai:
 
 Trạng thái dogfood tooling: đã sẵn sàng — lần sync thật kế tiếp của user sẽ stamp
 `summary.backend` (rust-native/python) vào summary artifact để verify không cần đoán (L2).
+
+---
+
+## DOGFOOD WAIVER (2026-09-16)
+
+User ra lệnh trực tiếp "chạy phase 6 đi" sau khi được trình bày đầy đủ 2 lựa chọn
+(dogfood sign-off / waiver) trong final summary phase-05. Đây là **explicit user waiver**
+cho gate H3 — phase-06 (DELETE sync closure) được phép chạy. Dogfood tooling vẫn sẵn
+sàng: mọi `dev sync code` thật đều stamp `summary.backend` để verify ngược về sau.
