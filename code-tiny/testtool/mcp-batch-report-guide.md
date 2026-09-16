@@ -32,15 +32,15 @@ Chạy lệnh từ thư mục gốc `cortex-harness` và bảo đảm hai MCP se
 
 ```bash
 ./.venv/bin/python cortex_harness/dev.py mcp start \
-  --project-dir ~/REDACTED_HOST/Migration/procsample
+  --project-dir /Users/user/Migration/procsample
 ```
 
 Kiểm tra trạng thái storage và MCP:
 
 ```bash
-cd ~/REDACTED_HOST/Migration/procsample
-~/REDACTED_HOST/AI/cortex-harness/.venv/bin/python \
-  ~/REDACTED_HOST/AI/cortex-harness/cortex_harness/dev.py doctor
+cd /Users/user/Migration/procsample
+/Users/user/AI/cortex-harness/.venv/bin/python \
+  /Users/user/AI/cortex-harness/cortex_harness/dev.py doctor
 ```
 
 ## Chạy suite `procsample`
@@ -48,11 +48,11 @@ cd ~/REDACTED_HOST/Migration/procsample
 Tạo report vào thư mục `output_porting` với tên có timestamp:
 
 ```bash
-cd ~/REDACTED_HOST/AI/cortex-harness
+cd /Users/user/AI/cortex-harness
 
 ./.venv/bin/python code-tiny/testtool/mcp_batch_report.py \
   --suite code-tiny/testtool/suites/procsample-all-tools.json \
-  --output ~/REDACTED_HOST/Migration/procsample/output_porting
+  --output /Users/user/Migration/procsample/output_porting
 ```
 
 Ghi vào một file xác định:
@@ -60,7 +60,7 @@ Ghi vào một file xác định:
 ```bash
 ./.venv/bin/python code-tiny/testtool/mcp_batch_report.py \
   --suite code-tiny/testtool/suites/procsample-all-tools.json \
-  --output ~/REDACTED_HOST/Migration/procsample/output_porting/mcp-latest.md
+  --output /Users/user/Migration/procsample/output_porting/mcp-latest.md
 ```
 
 Ẩn progress của từng tool khi chạy trong automation:
@@ -68,7 +68,7 @@ Ghi vào một file xác định:
 ```bash
 ./.venv/bin/python code-tiny/testtool/mcp_batch_report.py \
   --suite code-tiny/testtool/suites/procsample-all-tools.json \
-  --output ~/REDACTED_HOST/Migration/procsample/output_porting \
+  --output /Users/user/Migration/procsample/output_porting \
   --quiet
 ```
 

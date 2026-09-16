@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-REPO_ROOT = "~/REDACTED_HOST/AI/cortex-harness"
+REPO_ROOT = "/Users/user/AI/cortex-harness"
 
 # Sorted unified tool names (unified_mcp._UNIFIED_TOOL_NAMES).
 UNIFIED_TOOL_NAMES: List[str] = [

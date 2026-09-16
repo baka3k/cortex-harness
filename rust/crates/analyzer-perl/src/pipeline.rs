@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn scan_finds_fixture_corpus() {
         let root =
-            Path::new("~/REDACTED_HOST/AI/cortex-harness/tests/fixtures/perl-application");
+            Path::new("/Users/user/AI/cortex-harness/tests/fixtures/perl-application");
         if !root.is_dir() {
             return;
         }
