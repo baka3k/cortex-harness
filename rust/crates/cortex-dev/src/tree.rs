@@ -358,7 +358,7 @@ static CMD_SYNC_CODE_ADD: Cmd = Cmd {
 
 static CMD_SYNC_CODE_ALL: Cmd = Cmd {
     name: "all",
-    desc: "Run ALL available analyzers on every configured folder.\n\n\n- Every primary language analyzer and detected framework overlay is considered.\n- Framework overlays are detector-gated by incremental_sync.\n- Incremental if a sync baseline exists, full sync on first run.\n- Changed/deleted files are passed via --changed-files-manifest\n  to the analyzer's built-in incremental engine.",
+    desc: "Run ALL available analyzers on every configured folder.\n\n\n- Every primary language analyzer and detected framework overlay is considered.\n- Framework overlays are detector-gated by the native orchestrator.\n- Incremental if a sync baseline exists, full sync on first run.\n- Changed/deleted files are passed via --changed-files-manifest\n  to the analyzer's built-in incremental engine.",
     opts: &[HELP_OPT],
     args: &[],
     subs: &[],

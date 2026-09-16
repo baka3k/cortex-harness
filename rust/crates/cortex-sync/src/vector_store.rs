@@ -379,6 +379,12 @@ pub fn pass_embedder() -> Result<Box<dyn Embedder>, String> {
 
 #[cfg(test)]
 mod tests {
+    /// QDRANT_* env là process-global — các tuning test phải tuần tự.
+    fn tuning_env_lock() -> &'static std::sync::Mutex<()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
     use super::*;
 
     #[test]
@@ -393,6 +399,7 @@ mod tests {
 
     #[test]
     fn tuning_body_defaults_to_nothing() {
+        let _env_lock = tuning_env_lock().lock().unwrap();
         // No env set on CI machines → body must stay byte-identical to
         // Python's VectorParams-only create. serde_json runs with
         // `preserve_order` workspace-wide, so bytes = INSERTION order —
@@ -401,6 +408,17 @@ mod tests {
         unsafe { std::env::remove_var("QDRANT_HNSW_M") };
         unsafe { std::env::remove_var("QDRANT_HNSW_EF_CONSTRUCT") };
         unsafe { std::env::remove_var("QDRANT_SCALAR_QUANT") };
+        // Phase-06: repo_root giờ walk-up đúng (marker test) → unit test phải
+        // cô lập khỏi config THẬT của repo qua CORTEX_HARNESS_CONFIG_PATH.
+        let isolation = tempfile::tempdir().expect("tempdir");
+        let previous_config_path = std::env::var("CORTEX_HARNESS_CONFIG_PATH").ok();
+        // SAFETY: single-threaded unit test scope.
+        unsafe {
+            std::env::set_var(
+                "CORTEX_HARNESS_CONFIG_PATH",
+                isolation.path().join("none.json"),
+            );
+        }
         let mut body = Map::new();
         body.insert("vectors".into(), json!({"size": 1024, "distance": "Cosine"}));
         apply_tuning_kwargs(&mut body).unwrap();
@@ -411,10 +429,18 @@ mod tests {
         // same build), and qdrant treats object key order as irrelevant.
         let parsed: Value = serde_json::from_str(&serde_json::to_string(&Value::Object(body)).unwrap()).unwrap();
         assert_eq!(parsed, json!({"vectors": {"size": 1024, "distance": "Cosine"}}));
+        // SAFETY: khôi phục env trước khi tempdir drop.
+        unsafe {
+            match &previous_config_path {
+                Some(value) => std::env::set_var("CORTEX_HARNESS_CONFIG_PATH", value),
+                None => std::env::remove_var("CORTEX_HARNESS_CONFIG_PATH"),
+            }
+        }
     }
 
     #[test]
     fn tuning_body_honours_env() {
+        let _env_lock = tuning_env_lock().lock().unwrap();
         unsafe { std::env::set_var("QDRANT_HNSW_M", "24") };
         unsafe { std::env::set_var("QDRANT_SCALAR_QUANT", "on") };
         let mut body = Map::new();

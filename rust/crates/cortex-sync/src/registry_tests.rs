@@ -437,3 +437,45 @@ impl<T> ResultExt<T> for Result<Option<T>, String> {
         }
     }
 }
+// ── phase-06 marker swap: repo root keyed on cortex_harness/dev.py ────────
+
+#[test]
+fn repo_root_detects_sentinel_without_env_override() {
+    // Không set CORTEX_REPO_ROOT — detection phải đi qua current_exe
+    // (target/{debug,release}/deps/... → repo) và khớp sentinel dev.py.
+    // env đảo ngược: nếu CI có biến này, xoá tạm trong scope test.
+    let guard = env_var_guard("CORTEX_REPO_ROOT");
+    let _ = guard;
+    let root = crate::registry::repo_root();
+    assert!(
+        root.join("cortex_harness/dev.py").is_file(),
+        "repo_root must resolve to the repo containing the dev.py sentinel, got {root:?}"
+    );
+    assert!(
+        !root.join("code-tiny/tools/sync/incremental_sync.py").exists(),
+        "old marker must be gone after the sync closure delete"
+    );
+}
+
+/// Xoá biến env trong scope test, khôi phục khi drop.
+struct EnvVarGuard(&'static str);
+
+impl EnvVarGuard {
+    fn remove(key: &'static str) -> Self {
+        // SAFETY: tests chạy đơn luồng trong process test này; các test khác
+        // không đọc CORTEX_REPO_ROOT đồng thời.
+        unsafe { std::env::remove_var(key) };
+        EnvVarGuard(key)
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: xem remove().
+        unsafe { std::env::remove_var(self.0) };
+    }
+}
+
+fn env_var_guard(key: &'static str) -> EnvVarGuard {
+    EnvVarGuard::remove(key)
+}

@@ -90,7 +90,7 @@ fn dump_store(store: &PathBuf, graph: &str) -> Value {
     let mut rel_tables: Vec<String> = Vec::new();
     for (names, values) in rows(&connection, "CALL show_tables() RETURN *") {
         let map: BTreeMap<String, Value> =
-            names.iter().cloned().zip(values.into_iter()).collect();
+            names.iter().cloned().zip(values).collect();
         let name = map
             .get("name")
             .map(string_value)
@@ -177,7 +177,7 @@ fn dump_store(store: &PathBuf, graph: &str) -> Value {
         .into_iter()
         .map(|(names, values)| {
             let map: BTreeMap<String, Value> =
-                names.iter().cloned().zip(values.into_iter()).collect();
+                names.iter().cloned().zip(values).collect();
             json!({
                 "table": map.get("table_name").map(string_value).unwrap_or_default(),
                 "name": map.get("index_name").map(string_value).unwrap_or_default(),

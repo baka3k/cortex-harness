@@ -297,15 +297,11 @@ pub fn purge(journal_path: &str, run_id: &str, project_id: &str, root: &str) -> 
 // Required-journal recovery (phase-04)
 // ---------------------------------------------------------------------------
 
-/// dev.py `run_with_retry`'s pre-attempt journal recovery. FORCED-PYTHON
-/// (documented in the phase-04 report): the live journal consumer (replay
-/// pending artifact batches into the graph, then ack) has no Rust port —
-/// cortex-sync itself delegates required lanes to Python
-/// (`DELEGATE_SENTINEL ... is Python-plane`, orchestrator.rs). Spawn
 /// dev.py `run_with_retry`'s pre-attempt journal recovery. Phase-03: the
 /// replay driver is NATIVE — exec `cortex-sync --journal-recover-only`
 /// (same lib the orchestrator uses; the python consumer spawn + its
-/// `":"`-joined PYTHONPATH bug die with it). Returns Some(rc) on failure.
+/// `":"`-joined PYTHONPATH bug died with the phase-03 cutover, and the
+/// python plane itself was deleted at phase-06). Returns Some(rc) on failure.
 pub fn recover_required_lane(process_env: &[(String, String)]) -> Option<i32> {
     let journal_mode = process_env
         .iter()
