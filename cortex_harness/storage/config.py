@@ -581,6 +581,7 @@ def storage_overlay(
             graph_name=graph_name,
             collection_name=collection_name,
             role=selected,
+            provider=str(graph_provider),
         )
         overlay[ENV_EFFECTIVE_GRAPH_TARGET] = topology.graph.canonical_json
         overlay[ENV_EFFECTIVE_GRAPH_FINGERPRINT] = topology.graph_fingerprint

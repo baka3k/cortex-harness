@@ -601,5 +601,52 @@ class SharedRuntimeKeyTests(unittest.TestCase):
         self.assertTrue(any("a.lbdb" in part for part in key if isinstance(part, str)))
 
 
+class DevInitIntegrationTests(unittest.TestCase):
+    def test_init_prompt_offers_ladybug(self) -> None:
+        source = (
+            REPO_ROOT / "cortex_harness" / "dev.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'click.Choice(["neo4j", "falkordb", "ladybug"], case_sensitive=False)',
+            source,
+        )
+        self.assertIn(
+            'click.Choice(["falkordb", "neo4j", "ladybug"])',
+            source,
+        )
+
+    def test_effective_graph_target_reflects_ladybug_provider(self) -> None:
+        from cortex_harness.storage import resolve_storage
+        from cortex_harness.storage.factory import StorageFactory
+
+        resolved = resolve_storage(REPO_ROOT)
+        factory = StorageFactory(backend_mode=None, resolved=resolved, remote=None)
+        target = factory.effective_graph_target(
+            "proj_graph", role="code", provider="ladybug"
+        )
+        self.assertEqual(target.provider, "ladybug")
+        self.assertTrue(str(target.location).endswith(".lbdb"))
+        falkor_target = factory.effective_graph_target(
+            "proj_graph", role="code", provider="falkordb"
+        )
+        self.assertEqual(falkor_target.provider, "falkordb")
+        # Journal identity must differ across providers.
+        self.assertNotEqual(target.fingerprint, falkor_target.fingerprint)
+
+    def test_runtime_graph_target_from_env_ladybug(self) -> None:
+        from cortex_harness.storage.targets import effective_graph_target_from_env
+
+        target = effective_graph_target_from_env(
+            {
+                "CORTEX_STORAGE_OWNER": "code",
+                "CODE_GRAPH_PROVIDER": "ladybug",
+                "LADYBUG_PATH": "/tmp/x/data.lbdb",
+                "FALKORDB_GRAPH": "proj",
+            }
+        )
+        self.assertEqual(target.provider, "ladybug")
+        self.assertTrue(str(target.location).endswith("/x/data.lbdb"))
+
+
 if __name__ == "__main__":
     unittest.main()

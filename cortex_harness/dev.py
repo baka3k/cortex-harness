@@ -2655,7 +2655,7 @@ def storage_stop():
 @click.option("--doc-port", type=click.IntRange(1, 65535), help="doc-tiny port.")
 @click.option("--host", help="Bind host for selected MCP servers.")
 @click.option("--path", "mcp_path", help="Streamable HTTP route.")
-@click.option("--provider", type=click.Choice(["falkordb", "neo4j"]), help="Graph provider override.")
+@click.option("--provider", type=click.Choice(["falkordb", "neo4j", "ladybug"]), help="Graph provider override.")
 @click.option("--collection", help="Vector collection used by every selected server.")
 @click.option("--code-collection", help="Vector collection override for code-tiny.")
 @click.option("--doc-collection", help="Vector collection override for doc-tiny.")
@@ -2773,7 +2773,11 @@ def init(env, project_dir, path):
         else:
             value = default
         value = str(value).strip().lower()
-        return "falkordb" if value in {"falkor", "falkordb"} else "neo4j"
+        if value in {"falkor", "falkordb"}:
+            return "falkordb"
+        if value in {"ladybug", "ladybugdb", "ladybug-db"}:
+            return "ladybug"
+        return "neo4j"
 
     def _prompt_graph_env(
         section: str,
@@ -2784,7 +2788,7 @@ def init(env, project_dir, path):
         provider = click.prompt(
             "GRAPH_PROVIDER",
             default=_provider_default(section, scoped_key, provider_default),
-            type=click.Choice(["neo4j", "falkordb"], case_sensitive=False),
+            type=click.Choice(["neo4j", "falkordb", "ladybug"], case_sensitive=False),
         ).lower()
         graph_env = {"GRAPH_PROVIDER": provider, scoped_key: provider}
         if provider == "neo4j":

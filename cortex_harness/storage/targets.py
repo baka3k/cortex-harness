@@ -375,10 +375,16 @@ def remote_graph_target(
     )
 
 
-def local_graph_target(path: str | Path, *, graph: str, role: object) -> EffectiveStorageTarget:
+def local_graph_target(
+    path: str | Path,
+    *,
+    graph: str,
+    role: object,
+    provider: str = "falkordb",
+) -> EffectiveStorageTarget:
     return EffectiveStorageTarget(
         component="graph",
-        provider="falkordb",
+        provider=str(provider),
         mode="file",
         location=canonical_local_target(path),
         namespace=str(graph),
@@ -454,6 +460,13 @@ def _runtime_graph_target_from_env(env: Mapping[str, str]) -> EffectiveStorageTa
             provider="neo4j",
         )
     graph = env.get("FALKORDB_GRAPH") or env.get("FALKORDB_DATABASE") or "hyper_graph"
+    if provider in {"ladybug", "ladybugdb", "ladybug-db"}:
+        return local_graph_target(
+            env.get("LADYBUG_PATH") or "embedded",
+            graph=graph,
+            role=role,
+            provider="ladybug",
+        )
     uri = str(env.get("FALKORDB_URI") or "").strip()
     if uri:
         return remote_graph_target(
