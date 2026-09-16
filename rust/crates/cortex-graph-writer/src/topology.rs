@@ -250,6 +250,96 @@ SET rel.project_id = row.project_id,
 RETURN count(fact) AS count
 "#;
 
+/// Ladybug per-label link templates (phase-02) — thay label-OR list bằng
+/// label trơn; phần còn lại giữ nguyên semantics.
+const PUBLIC_API_LINK_LADYBUG_QUERY: &str = r#"
+UNWIND $rows AS row
+MATCH (module:ProjectModule {id: row.module_id})
+MATCH (symbol:`{label}`)
+WHERE symbol.project_id_normalized = row.project_id_normalized
+  AND coalesce(symbol.is_public_api, false) = true
+  AND (
+    row.module_path = '.'
+    OR symbol.file_path = row.module_path
+    OR substring(symbol.file_path, 0, size(row.module_path) + 1) = row.module_path + '/'
+  )
+OPTIONAL MATCH (more_specific:ProjectModule)
+WHERE more_specific.project_id_normalized = row.project_id_normalized
+  AND more_specific.id <> module.id
+  AND more_specific.module_path <> '.'
+  AND size(more_specific.module_path) > size(row.module_path)
+  AND substring(symbol.file_path, 0, size(more_specific.module_path) + 1)
+      = more_specific.module_path + '/'
+WITH row, module, symbol, count(more_specific) AS more_specific_count
+WHERE more_specific_count = 0
+SET symbol.module_id = row.module_id
+MERGE (module)-[rel:EXPOSES_API {id: row.module_id + ':EXPOSES_API:' + symbol.id}]->(symbol)
+SET rel.project_id = row.project_id,
+    rel.topology_owner = 'project_topology'
+RETURN count(symbol) AS count
+"#;
+
+const EXISTING_ENDPOINT_LINK_LADYBUG_QUERY: &str = r#"
+UNWIND $rows AS row
+MATCH (module:ProjectModule {id: row.module_id})
+MATCH (endpoint:`{label}`)
+WHERE coalesce(endpoint.topology_owned, false) = false
+  AND endpoint.project_id_normalized = row.project_id_normalized
+  AND (
+    row.module_path = '.'
+    OR endpoint.file_path = row.module_path
+    OR substring(endpoint.file_path, 0, size(row.module_path) + 1) = row.module_path + '/'
+  )
+OPTIONAL MATCH (more_specific:ProjectModule)
+WHERE more_specific.project_id_normalized = row.project_id_normalized
+  AND more_specific.id <> module.id
+  AND more_specific.module_path <> '.'
+  AND size(more_specific.module_path) > size(row.module_path)
+  AND substring(endpoint.file_path, 0, size(more_specific.module_path) + 1)
+      = more_specific.module_path + '/'
+WITH row, module, endpoint, count(more_specific) AS more_specific_count
+WHERE more_specific_count = 0
+SET endpoint.module_id = row.module_id
+MERGE (module)-[rel:EXPOSES_ENDPOINT {id: row.module_id + ':EXPOSES_ENDPOINT:' + endpoint.id}]->(endpoint)
+SET rel.project_id = row.project_id,
+    rel.topology_owner = 'project_topology'
+RETURN count(endpoint) AS count
+"#;
+
+const ANDROID_FACT_LINK_LADYBUG_QUERY: &str = r#"
+UNWIND $rows AS row
+MATCH (module:ProjectModule {id: row.module_id})
+MATCH (fact:`{label}`)
+WHERE fact.project_id_normalized = row.project_id_normalized
+  OR toLower(coalesce(fact.project_id, '')) = row.project_id_normalized
+OPTIONAL MATCH (more_specific:ProjectModule)
+WHERE more_specific.project_id_normalized = row.project_id_normalized
+  AND more_specific.id <> module.id
+  AND more_specific.module_path <> '.'
+  AND size(more_specific.module_path) > size(row.module_path)
+  AND substring(fact.file_path, 0, size(more_specific.module_path) + 1)
+      = more_specific.module_path + '/'
+WITH row, module, fact, count(more_specific) AS more_specific_count
+WHERE more_specific_count = 0
+SET fact.module_id = row.module_id
+MERGE (module)-[rel:EXPOSES_FACT {id: row.module_id + ':EXPOSES_FACT:' + fact.id}]->(fact)
+SET rel.project_id = row.project_id,
+    rel.topology_owner = 'project_topology'
+RETURN count(fact) AS count
+"#;
+
+/// Label lists cho per-label ladybug link queries (khớp label-OR list của
+/// query gốc).
+const PUBLIC_API_SYMBOL_LABELS: [&str; 4] = ["Class", "Function", "Type", "Interface"];
+const EXISTING_ENDPOINT_LABELS: [&str; 5] = [
+    "ApiEndpoint",
+    "HttpEndpoint",
+    "Route",
+    "ControllerAction",
+    "ServletEndpoint",
+];
+const ANDROID_FACT_LABELS: [&str; 3] = ["AndroidManifest", "AndroidComponent", "AndroidResource"];
+
 const CLEANUP_PATHS_QUERY: &str = r#"
 MATCH (node)
 WHERE node.project_id_normalized = $project_id_normalized
@@ -275,6 +365,53 @@ WITH collect(node) AS nodes
 FOREACH (node IN nodes | DETACH DELETE node)
 RETURN size(nodes) AS count
 "#;
+
+/// Ladybug variants (phase-02 sync-cutover) — embedded 0.20.4 không parse
+/// được `FOREACH (x IN list | DELETE x)` ở vị trí trailing; delete trực tiếp
+/// từ MATCH (count(*) = số row khớp, khớp semantics `size(nodes)`).
+const CLEANUP_PATHS_LADYBUG_QUERY: &str = r#"
+MATCH (node:`{label}`)
+WHERE node.project_id_normalized = $project_id_normalized
+  AND node.topology_owned = true
+  AND (
+    node.file_path IN $paths
+    OR node.path IN $paths
+    OR any(path IN $paths WHERE
+      node.module_path = path OR
+      substring(node.module_path, 0, size(path) + 1) = path + '/'
+    )
+  )
+DETACH DELETE node
+RETURN count(*) AS count
+"#;
+
+const CLEANUP_PROJECT_LADYBUG_QUERY: &str = r#"
+MATCH (node:`{label}`)
+WHERE node.project_id_normalized = $project_id_normalized
+  AND node.topology_owned = true
+DETACH DELETE node
+RETURN count(*) AS count
+"#;
+
+/// Node labels mà topology writer gắn `topology_owned = true` — ladybug
+/// cleanup chạy per-label (binder không chấp nhận property access trên var
+/// không label khi property chưa tồn tại ở mọi table).
+const TOPOLOGY_OWNED_NODE_LABELS: [&str; 14] = [
+    "ProjectModule",
+    "BuildDescriptor",
+    "Dependency",
+    "GrpcEndpoint",
+    "GrpcService",
+    "FrameworkInstance",
+    "ApiEndpoint",
+    "HttpEndpoint",
+    "Route",
+    "ControllerAction",
+    "ServletEndpoint",
+    "AndroidManifest",
+    "AndroidComponent",
+    "AndroidResource",
+];
 
 /// `json.dumps(value, ensure_ascii=True)` — non-ASCII escape \uXXXX (Python
 /// json.dumps default; writer module dùng cho graph values + canonical rows).
@@ -822,6 +959,30 @@ impl ProjectTopologyWriter {
             "frameworks".to_string(),
             self.write_batches(FRAMEWORK_QUERY, &framework_rows)?,
         );
+        if self.store.provider() == "ladybug" {
+            // Labelless `MATCH (endpoint/symbol/fact)` mis-type property
+            // access trên binder ladybug (+(BOOL,STRING) v.v.) — chạy
+            // per-label với query template tương đương.
+            let mut public_api_total = 0i64;
+            for label in PUBLIC_API_SYMBOL_LABELS {
+                let query = PUBLIC_API_LINK_LADYBUG_QUERY.replace("{label}", label);
+                public_api_total += self.write_batches(&query, &public_api_link_rows)?;
+            }
+            counts.insert("public_api_links".to_string(), public_api_total);
+            let mut endpoint_link_total = 0i64;
+            for label in EXISTING_ENDPOINT_LABELS {
+                let query = EXISTING_ENDPOINT_LINK_LADYBUG_QUERY.replace("{label}", label);
+                endpoint_link_total += self.write_batches(&query, &public_api_link_rows)?;
+            }
+            counts.insert("existing_endpoint_links".to_string(), endpoint_link_total);
+            let mut fact_link_total = 0i64;
+            for label in ANDROID_FACT_LABELS {
+                let query = ANDROID_FACT_LINK_LADYBUG_QUERY.replace("{label}", label);
+                fact_link_total += self.write_batches(&query, &public_api_link_rows)?;
+            }
+            counts.insert("android_fact_links".to_string(), fact_link_total);
+            return Ok(counts);
+        }
         counts.insert(
             "public_api_links".to_string(),
             self.write_batches(PUBLIC_API_LINK_QUERY, &public_api_link_rows)?,
@@ -857,6 +1018,19 @@ impl ProjectTopologyWriter {
             "paths".to_string(),
             Value::Array(sorted.into_iter().map(Value::String).collect()),
         );
+        if self.store.provider() == "ladybug" {
+            // Labelless `MATCH (node)` làm binder không resolve được property
+            // (auto-DDL cũng không đoán được table) — chạy per-label.
+            let mut total = 0i64;
+            for label in TOPOLOGY_OWNED_NODE_LABELS {
+                let query = CLEANUP_PATHS_LADYBUG_QUERY.replace("{label}", label);
+                let records = self
+                    .store
+                    .execute_query(&query, &params, self.database.as_deref())?;
+                total += count_from(&records, 0);
+            }
+            return Ok(total);
+        }
         let records = self
             .store
             .execute_query(CLEANUP_PATHS_QUERY, &params, self.database.as_deref())?;
@@ -870,6 +1044,17 @@ impl ProjectTopologyWriter {
             "project_id_normalized".to_string(),
             json!(project_id_lookup_key(Some(project_id)).unwrap_or_default()),
         );
+        if self.store.provider() == "ladybug" {
+            let mut total = 0i64;
+            for label in TOPOLOGY_OWNED_NODE_LABELS {
+                let query = CLEANUP_PROJECT_LADYBUG_QUERY.replace("{label}", label);
+                let records = self
+                    .store
+                    .execute_query(&query, &params, self.database.as_deref())?;
+                total += count_from(&records, 0);
+            }
+            return Ok(total);
+        }
         let records = self
             .store
             .execute_query(CLEANUP_PROJECT_QUERY, &params, self.database.as_deref())?;

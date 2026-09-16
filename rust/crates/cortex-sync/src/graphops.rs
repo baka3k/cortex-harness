@@ -152,18 +152,18 @@ fn resolve_embedded_path(args: &Args, role: &str) -> Result<std::path::PathBuf, 
     let root = std::path::PathBuf::from(&args.root);
     let resolved = cortex_storage::resolve_storage(&root, None, &Default::default())
         .map_err(|error| format!("embedded storage resolution ({role}, anchor = --root): {error}"))?;
-    Ok(resolved.ladybug_path_for_role(role).map_err(|error| {
-        format!("embedded storage resolution ({role}, anchor = --root): {error}")
-    })?)
+    resolved
+        .ladybug_path_for_role(role)
+        .map_err(|error| format!("embedded storage resolution ({role}, anchor = --root): {error}"))
 }
 
 /// `prepare_graph_args` — resolve the effective graph target. Returns None
 /// when graph writes are disabled; Err is fail-closed (no delegation).
-pub fn prepare_graph_args(mut args: &mut Args) -> Result<Option<GraphContext>, String> {
+pub fn prepare_graph_args(args: &mut Args) -> Result<Option<GraphContext>, String> {
     if graph_writes_disabled() {
         return Ok(None);
     }
-    apply_project_registry_defaults(&mut args);
+    apply_project_registry_defaults(args);
     match args.graph_provider.as_str() {
         "neo4j" => {
             if args.neo4j_uri.is_some() && args.neo4j_user.is_some() && args.neo4j_password.is_some() {
