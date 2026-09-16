@@ -1,10 +1,11 @@
 //! Graph-plane helpers: `prepare_graph_args`, driver-style connection over
-//! `cortex-falkordb`, `ensure_schema` + Project/Repository setup, the impact
-//! expansion queries, and the topology bootstrap probe.
+//! `cortex-falkordb`/`cortex-graph-writer::LadybugStore`, `ensure_schema` +
+//! Project/Repository setup, the impact expansion queries, and the topology
+//! bootstrap probe.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cortex_graph_writer::store::{FalkorDbStore, GraphStore};
+use cortex_graph_writer::store::{FalkorDbStore, GraphStore, LadybugStore};
 use serde_json::json;
 
 use crate::cli::Args;
@@ -14,6 +15,9 @@ pub struct GraphContext {
     pub provider: String,
     pub falkordb_uri: Option<String>,
     pub falkordb_path: Option<String>,
+    /// Ladybug store file (resolved embedded target).
+    pub ladybug_path: Option<String>,
+    /// Resolved graph name — falkordb graph / ladybug named graph / neo4j db.
     pub falkordb_graph: String,
     pub neo4j_db: String,
 }
@@ -45,29 +49,121 @@ pub fn parse_falkordb_uri(uri: &str) -> (String, u16) {
     }
 }
 
-/// `apply_project_registry_defaults` — Python-plane. The ProjectRegistry
-/// lookup is not ported; when a harness config dir exists under root the
-/// registry behaves as "not registered" (warning + fallback), which is the
-/// parity-corpus behavior.
-fn apply_project_registry_defaults(args: &Args) {
-    let root = std::path::PathBuf::from(&args.root);
-    if root.join(".cortext-harness/config").is_dir() {
+/// ProjectRegistry default fill (port of `tools.common.project_registry.
+/// resolve_project_targets` + `tools.graph.cli.apply_project_registry_defaults`).
+///
+/// Only `falkordb_graph` is filled — cortex-sync has no `--qdrant-collection`
+/// flag (the qdrant half of the Python fill has no Rust consumer here), and
+/// **ladybug_graph deliberately does NOT participate** (cli.py:249-256 chain
+/// never consults the registry for ladybug; plan rev2 H1).
+///
+/// Config discovery anchors at `--root` walking up (mirror of cli.py's
+/// `_resolve_config_dir`), NOT `Path.cwd()` like `project_registry`'s own
+/// default — the orchestrator is root-addressable (parity/CI runs it from
+/// any cwd). Unregistered project / missing dir → warning + fallback, never
+/// a hard error (mirrors cli.py's `except ProjectNotRegisteredError`).
+fn apply_project_registry_defaults(args: &mut Args) {
+    let Some(project_id) = args
+        .project_id
+        .clone()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        return;
+    };
+    let Some(config_dir) = discover_config_dir(&args.root) else {
+        return;
+    };
+    let Some(registered_graph) = registry_falkordb_graph(&config_dir, &project_id) else {
         eprintln!(
             "[graph-cli] project_id {:?} not registered in discovered config; falling back to args.project_id for falkordb-graph.",
             args.project_id
         );
+        return;
+    };
+    let explicit = args
+        .falkordb_graph
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| !g.is_empty());
+    if explicit.is_none() {
+        args.falkordb_graph = Some(registered_graph);
     }
 }
 
+/// `.cortext-harness/config` discovery — walk up from `root` (inclusive).
+fn discover_config_dir(root: &str) -> Option<std::path::PathBuf> {
+    let mut current = Some(std::path::PathBuf::from(root));
+    while let Some(dir) = current {
+        let candidate = dir.join(".cortext-harness").join("config");
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        current = dir.parent().map(std::path::Path::to_path_buf);
+    }
+    None
+}
+
+/// `FALKORDB_GRAPH` of the registered project (case-insensitive id match),
+/// reading `*.json` sorted like `_read_config_files`.
+fn registry_falkordb_graph(config_dir: &std::path::Path, project_id: &str) -> Option<String> {
+    let lookup = project_id.trim().to_lowercase();
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(config_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().map(|ext| ext == "json").unwrap_or(false))
+        .collect();
+    files.sort();
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let project = payload.get("project")?;
+        let registered = project
+            .get("code")
+            .or_else(|| project.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .map(|value| value.trim().to_lowercase());
+        if registered.as_deref() != Some(lookup.as_str()) {
+            continue;
+        }
+        let graph = payload
+            .get("code")
+            .and_then(|code| code.get("env"))
+            .and_then(|env| env.get("FALKORDB_GRAPH"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .filter(|value| !value.trim().is_empty());
+        return graph;
+    }
+    None
+}
+
+/// Resolved embedded store path via `cortex_storage::resolve_storage`.
+///
+/// Deliberate deviation from cli.py:243-244: Python resolves with
+/// `Path.cwd()` (probe phase-01.4 showed a cwd≠root run lands in the WRONG
+/// instance); the Rust orchestrator anchors at `--root`.
+fn resolve_embedded_path(args: &Args, role: &str) -> Result<std::path::PathBuf, String> {
+    let root = std::path::PathBuf::from(&args.root);
+    let resolved = cortex_storage::resolve_storage(&root, None, &Default::default())
+        .map_err(|error| format!("embedded storage resolution ({role}, anchor = --root): {error}"))?;
+    Ok(resolved.ladybug_path_for_role(role).map_err(|error| {
+        format!("embedded storage resolution ({role}, anchor = --root): {error}")
+    })?)
+}
+
 /// `prepare_graph_args` — resolve the effective graph target. Returns None
-/// when graph writes are disabled; Err means the embedded-storage fallback
-/// (resolve_storage) would be needed, which is Python-plane and the caller
-/// must delegate the run to the Python orchestrator.
-pub fn prepare_graph_args(args: &Args) -> Result<Option<GraphContext>, String> {
+/// when graph writes are disabled; Err is fail-closed (no delegation).
+pub fn prepare_graph_args(mut args: &mut Args) -> Result<Option<GraphContext>, String> {
     if graph_writes_disabled() {
         return Ok(None);
     }
-    apply_project_registry_defaults(args);
+    apply_project_registry_defaults(&mut args);
     match args.graph_provider.as_str() {
         "neo4j" => {
             if args.neo4j_uri.is_some() && args.neo4j_user.is_some() && args.neo4j_password.is_some() {
@@ -75,6 +171,7 @@ pub fn prepare_graph_args(args: &Args) -> Result<Option<GraphContext>, String> {
                     provider: "neo4j".to_string(),
                     falkordb_uri: None,
                     falkordb_path: None,
+                    ladybug_path: None,
                     falkordb_graph: args.neo4j_db.clone().unwrap_or_default(),
                     neo4j_db: args.neo4j_db.clone().unwrap_or_default(),
                 }))
@@ -83,8 +180,45 @@ pub fn prepare_graph_args(args: &Args) -> Result<Option<GraphContext>, String> {
             }
         }
         "ladybug" => {
-            // Embedded-only; the ladybug store path derivation is Python-plane.
-            Err("ladybug provider requires embedded storage resolution (Python-plane)".to_string())
+            // Embedded-only. Store path: --ladybug-path arg (cli.rs merges the
+            // LADYBUG_PATH env fallback) > resolve_storage (anchored --root).
+            let path = match args
+                .ladybug_path
+                .clone()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+            {
+                Some(path) => path,
+                None => resolve_embedded_path(args, "code")?.to_string_lossy().to_string(),
+            };
+            // Graph name — cli.py:249-256 chain, exact: explicit arg >
+            // project_id > LADYBUG_GRAPH env > "hyper_graph". The registry
+            // NEVER participates for ladybug (red-team H1). Note the live
+            // Python argparse pre-fills env/"hyper_graph" making project_id
+            // shadowed in the direct path; this port implements the
+            // documented chain (dev always passes the flag explicitly, so
+            // the user flow is identical).
+            let graph = args
+                .ladybug_graph
+                .clone()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .or_else(|| {
+                    args.project_id
+                        .clone()
+                        .map(|v| v.trim().to_string())
+                        .filter(|v| !v.is_empty())
+                })
+                .or_else(|| env_lookup("LADYBUG_GRAPH"))
+                .unwrap_or_else(|| "hyper_graph".to_string());
+            Ok(Some(GraphContext {
+                provider: "ladybug".to_string(),
+                falkordb_uri: None,
+                falkordb_path: None,
+                ladybug_path: Some(path),
+                falkordb_graph: graph.clone(),
+                neo4j_db: graph,
+            }))
         }
         _ => {
             let falkordb_uri = if args.explicit_falkordb_target == Some("path") {
@@ -98,13 +232,21 @@ pub fn prepare_graph_args(args: &Args) -> Result<Option<GraphContext>, String> {
             };
             let (falkordb_uri, falkordb_path) = if let Some(uri) = falkordb_uri {
                 (Some(uri), None)
-            } else if let Some(path) = args.falkordb_path.clone().filter(|p| !p.trim().is_empty()) {
-                (None, Some(path))
             } else {
-                return Err(
-                    "embedded FalkorDB storage resolution (resolve_storage) is Python-plane; set FALKORDB_URI or --falkordb-path"
-                        .to_string(),
-                );
+                // Embedded FalkorDBLite path: explicit arg/env first, then
+                // resolve_storage (same derivation as cli.py:265-269).
+                match args
+                    .falkordb_path
+                    .clone()
+                    .map(|v| v.trim().to_string())
+                    .filter(|v| !v.is_empty())
+                {
+                    Some(path) => (None, Some(path)),
+                    None => (
+                        None,
+                        Some(resolve_embedded_path(args, "code")?.to_string_lossy().to_string()),
+                    ),
+                }
             };
             let graph = args
                 .falkordb_graph
@@ -119,6 +261,7 @@ pub fn prepare_graph_args(args: &Args) -> Result<Option<GraphContext>, String> {
                 provider: "falkordb".to_string(),
                 falkordb_uri,
                 falkordb_path,
+                ladybug_path: None,
                 falkordb_graph: graph.clone(),
                 neo4j_db: graph,
             }))
@@ -126,21 +269,51 @@ pub fn prepare_graph_args(args: &Args) -> Result<Option<GraphContext>, String> {
     }
 }
 
-/// Open a `FalkorDbStore` for the context.
-pub fn open_store(context: &GraphContext) -> Result<FalkorDbStore, String> {
-    let Some(uri) = &context.falkordb_uri else {
-        return Err("embedded FalkorDB (FALKORDB_PATH) driver is Python-plane".to_string());
-    };
-    let (host, port) = parse_falkordb_uri(uri);
-    let mut client = cortex_falkordb::client::FalkorDbClient::connect(&host, port)
-        .map_err(|error| format!("falkordb connect {host}:{port}: {error}"))?;
-    if let Some(password) = env_lookup("FALKORDB_PASSWORD") {
-        redis::cmd("AUTH")
-            .arg(&password)
-            .query::<()>(client.connection_mut())
-            .map_err(|error| format!("falkordb auth: {error}"))?;
+/// Q2 verdict (phase-01.5 spike, red-team H2): embedded FalkorDB stays
+/// FAIL-CLOSED in the native plane. Evidence: (a) `falkor_boot.rs` boots
+/// redislite with `save ""` + `SHUTDOWN NOSAVE` — a read-only contract;
+/// writes would be lost on shutdown; (b) the Rust analyzer children have no
+/// embedded FalkorDBLite support at all (cortex-analyzer-framework
+/// cli.rs:288-291), so even a writable parent-side boot would strand the
+/// write plane. Error states BOTH honest options including the rebuild
+/// caveat (no falkordb→ladybug data migration exists).
+const EMBEDDED_FALKORDB_UNAVAILABLE: &str = "embedded FalkorDB (FALKORDB_PATH) is not available in the native sync plane: the Rust analyzer children cannot open FalkorDBLite stores and the embedded boot contract is read-only. Options: set FALKORDB_URI to a remote FalkorDB server (keeps the existing data), or set GRAPH_PROVIDER=ladybug (new store; the graph is rebuilt by a full re-sync — there is no data migration from falkordb to ladybug)";
+
+/// Open a polymorphic store for the context (phase-02: ladybug joins the
+/// native plane via `LadybugStore`; falkordb remote via `FalkorDbStore`).
+pub fn open_store(context: &GraphContext) -> Result<Box<dyn GraphStore>, String> {
+    match context.provider.as_str() {
+        "ladybug" => {
+            let path = context
+                .ladybug_path
+                .as_deref()
+                .filter(|p| !p.trim().is_empty())
+                .ok_or_else(|| "ladybug context has no resolved store path".to_string())?;
+            let store = LadybugStore::open(std::path::Path::new(path), &context.falkordb_graph)
+                .map_err(|error| format!("ladybug open {path} (graph {}): {error}", context.falkordb_graph))?;
+            Ok(Box::new(store))
+        }
+        "falkordb" => {
+            let Some(uri) = &context.falkordb_uri else {
+                return Err(EMBEDDED_FALKORDB_UNAVAILABLE.to_string());
+            };
+            let (host, port) = parse_falkordb_uri(uri);
+            let mut client = cortex_falkordb::client::FalkorDbClient::connect(&host, port)
+                .map_err(|error| format!("falkordb connect {host}:{port}: {error}"))?;
+            if let Some(password) = env_lookup("FALKORDB_PASSWORD") {
+                redis::cmd("AUTH")
+                    .arg(&password)
+                    .query::<()>(client.connection_mut())
+                    .map_err(|error| format!("falkordb auth: {error}"))?;
+            }
+            Ok(Box::new(FalkorDbStore::new(client, context.falkordb_graph.clone())))
+        }
+        "neo4j" => Err(
+            "neo4j has no native store in cortex-sync (children write falkordb/ladybug only); set GRAPH_PROVIDER=falkordb (with FALKORDB_URI) or GRAPH_PROVIDER=ladybug"
+                .to_string(),
+        ),
+        other => Err(format!("unsupported graph provider: {other}")),
     }
-    Ok(FalkorDbStore::new(client, context.falkordb_graph.clone()))
 }
 
 /// `_PROJECT_REPOSITORY_SETUP_QUERY`.
@@ -182,7 +355,7 @@ pub fn project_id_lookup_key(value: &str) -> Option<String> {
 
 /// `_ensure_project_repository_graph` — schema preflight + setup mutation.
 pub fn ensure_project_repository_graph(
-    store: &mut FalkorDbStore,
+    store: &mut dyn GraphStore,
     database: Option<&str>,
     project_id: &str,
     project_name: &str,
@@ -214,7 +387,7 @@ pub fn ensure_project_repository_graph(
 
 /// `_query_impacted_files` — three relationship-expand queries.
 pub fn query_impacted_files(
-    store: &mut FalkorDbStore,
+    store: &mut dyn GraphStore,
     database: Option<&str>,
     project_id: &str,
     changed_paths: &BTreeSet<String>,
@@ -273,7 +446,7 @@ pub fn query_impacted_files(
 
 /// `_project_topology_bootstrap_needed`.
 pub fn project_topology_bootstrap_needed(
-    store: &mut FalkorDbStore,
+    store: &mut dyn GraphStore,
     database: Option<&str>,
     project_id: &str,
 ) -> Result<bool, String> {

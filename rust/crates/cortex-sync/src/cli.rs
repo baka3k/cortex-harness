@@ -319,10 +319,11 @@ impl Args {
                 .clone()
                 .unwrap_or_else(default_graph_provider),
             ladybug_path: raw.ladybug_path.clone().or_else(|| env_get("LADYBUG_PATH")),
-            ladybug_graph: raw
-                .ladybug_graph
-                .clone()
-                .or_else(|| env_get("LADYBUG_GRAPH")),
+            // Raw --ladybug-graph ONLY (no env merge): the H1 precedence
+            // chain is arg > project_id > LADYBUG_GRAPH env > "hyper_graph"
+            // and is resolved in graphops::prepare_graph_args. Merging env
+            // here would let it outrank project_id.
+            ladybug_graph: raw.ladybug_graph.clone(),
             falkordb_path: raw.falkordb_path.clone().or_else(|| env_get("FALKORDB_PATH")),
             falkordb_uri: raw.falkordb_uri.clone().or_else(|| env_get("FALKORDB_URI")),
             falkordb_password: raw // sensitive-guard:allow (flag name, khong phai secret)

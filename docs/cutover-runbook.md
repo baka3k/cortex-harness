@@ -70,9 +70,23 @@ Phụ thuộc hạ tầng cục bộ (máy dev): qdrant + falkordb chạy docker
 (`cortex-qdrant` :6333, `cortex-falkordb` :6379). Colima dừng → mind remote
 connection refused; `colima start` để khôi phục.
 
-Trạng thái: vector lane thuần (semantic_search / mind tools) đạt golden parity;
-còn 6 case explore/expand lệch ở graph-plane (db-name vs `.lbug` graph) và fusion
-normalize với nhiều seeds thật — track riêng, không chặn cờ rollback.
+**Cutover 2026-09-15 (live)**: `dev start` giờ tự chọn backend qua chính
+`<svc>/mcp.sh` (mục mới: `CORTEX_MCP_BACKEND=python` giữ server python; unset/auto
+exec `cortex-mcp`, doc-tiny chạy `--server mind`). Verify live: cả 2 server chạy
+binary `rust/target/release/cortex-mcp`; smoke toàn bộ **44/44 tool** phản hồi hợp lệ
+(39 graph + 5 mind).
+
+**Ladybug runtime đã port (2026-09-15, tonight)**: `graph/ladybug.rs` — mở store
+file `<owner>.lbug/<graph>` in-process qua crate `lbug` (cùng engine/format với
+PyPI `ladybug` của Python); schema introspection dùng `CALL show_tables()` (REL →
+relationship types uppercase, NODE → labels); `GraphRuntime` + `DocGraphStore`
+đều route được ladybug/falkordb. Verify live: mind `list_source_ids` /
+`get_paragraph_text` OK trên instance ladybug thật; smoke **44/44 tool**.
+
+Hạn chế còn lại: `explore_graph` fusion numerics với dữ liệu đa tín hiệu thật
+(signal normalize/weights/query-understanding) chưa byte-parity với Python
+(4/23 golden case; `semantic_search` + `expand_graph` đã PASS toàn bộ). Track
+riêng. Rollback tức thì per-service: `CORTEX_MCP_BACKEND=python dev start`.
 
 ---
 

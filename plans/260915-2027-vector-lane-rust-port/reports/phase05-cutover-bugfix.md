@@ -46,6 +46,21 @@ store sau migration → lỗi "database does not exist" làm hỏng toàn bộ t
   còn divergence (report phase03-04) — flip thống nhất chờ graph-track xử lý 2 nhóm
   đó; flip từng server vẫn khả dụng qua `CORTEX_MCP_BACKEND`.
 
+## 4. Live flip 2026-09-15 (bổ sung sau review)
+
+- `code-tiny/mcp.sh` + `doc-tiny/mcp.sh` giờ tôn trọng `CORTEX_MCP_BACKEND`
+  (unset/auto → exec `cortex-mcp`, `python` = rollback) — `dev start` khởi động
+  Rust mà không cần đổi lifecycle. doc-tiny exec kèm `--server mind`.
+- Verify live: 2 server chạy `rust/target/release/cortex-mcp` (8788 unified,
+  8789 mind); smoke toàn bộ **44/44 tool** trả kết quả hợp lệ
+  (`scripts/rust_mcp/smoke_all_tools.py`).
+- Hạn chế trên instance ladybug: mind graph tools (`list_source_ids`,
+  `get_paragraph_text`, graph-expansion của query_graph_rag) cần ladybug runtime
+  mà Rust chưa có (chỉ FalkorDB `.rdb`/remote) → `storage_unavailable`;
+  `annotate_node` bị chặn write trên embedded store read-only. = gap hạ tầng
+  đã root-cause, track riêng (port `lbug` crate); rollback per-service bằng
+  `CORTEX_MCP_BACKEND=python`.
+
 ## Gate
 
 - [x] 2 bug chặn fix + mirror 2 phía + test xanh (pytest 162 passed / 0 failed).

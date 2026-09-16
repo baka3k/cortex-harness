@@ -32,6 +32,7 @@
 //! query_graph_rag_langextract.
 
 pub mod flow_reconstruct;
+pub mod ladybug;
 pub mod runtime;
 pub mod tools_bridge;
 pub mod tools_explore;

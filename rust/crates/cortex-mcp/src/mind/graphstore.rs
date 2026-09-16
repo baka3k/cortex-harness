@@ -50,8 +50,13 @@ pub fn normalize_driver_error(message: &str) -> String {
 /// One FalkorDB-backed graph view (client + graph name), like
 /// `FalkorDBGraphStore`.
 pub struct DocGraphStore {
-    client: FalkorDbClient,
+    backend: DocBackend,
     graph: String,
+}
+
+enum DocBackend {
+    Falkor(FalkorDbClient),
+    Ladybug(crate::graph::ladybug::LadybugStore),
 }
 
 impl DocGraphStore {
@@ -65,25 +70,114 @@ impl DocGraphStore {
         cypher: &str,
         params: BTreeMap<String, Param>,
     ) -> Result<Vec<Map<String, Value>>, GraphError> {
-        let result = self
-            .client
-            .query(&self.graph, cypher, &params, None)?;
-        let names: Vec<String> =
-            result.header.iter().map(|column| column.name.clone()).collect();
-        Ok(result
-            .records
-            .iter()
-            .map(|row| {
-                let mut map = Map::new();
-                for (index, value) in row.iter().enumerate() {
-                    let key =
-                        names.get(index).cloned().unwrap_or_else(|| format!("column_{index}"));
-                    map.insert(key, normalize_value(value));
-                }
-                map
-            })
-            .collect())
+        match &mut self.backend {
+            DocBackend::Falkor(client) => {
+                let result = client.query(&self.graph, cypher, &params, None)?;
+                let names: Vec<String> =
+                    result.header.iter().map(|column| column.name.clone()).collect();
+                Ok(result
+                    .records
+                    .iter()
+                    .map(|row| {
+                        let mut map = Map::new();
+                        for (index, value) in row.iter().enumerate() {
+                            let key = names
+                                .get(index)
+                                .cloned()
+                                .unwrap_or_else(|| format!("column_{index}"));
+                            map.insert(key, normalize_value(value));
+                        }
+                        map
+                    })
+                    .collect())
+            }
+            DocBackend::Ladybug(store) => {
+                store.query(cypher, &params).map_err(|error| GraphError {
+                    exception: "RuntimeError",
+                    message: error,
+                })
+            }
+        }
     }
+}
+
+fn is_ladybug_provider() -> bool {
+    let provider = std::env::var("DOC_GRAPH_PROVIDER")
+        .or_else(|_| std::env::var("GRAPH_PROVIDER"))
+        .unwrap_or_default();
+    matches!(provider.trim().to_lowercase().as_str(), "ladybug" | "ladybugdb" | "kuzu")
+        || std::env::var("LADYBUG_DOC_PATH")
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+}
+
+/// `<owner>.lbug` directory holding the doc graph store files —
+/// `LADYBUG_DOC_PATH`'s parent, else the storage layout default.
+fn ladybug_doc_dir() -> Option<std::path::PathBuf> {
+    if let Some(primary) = crate::graph::ladybug::env_primary_store("doc") {
+        return primary.parent().map(std::path::Path::to_path_buf);
+    }
+    let home = std::env::var("CORTEX_DATA_HOME").ok().filter(|v| !v.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            let mut home = std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default();
+            home.push(".cortext-harness");
+            home
+        });
+    let instance = std::env::var("CORTEX_STORAGE_INSTANCE")
+        .map(|v| v.trim().to_lowercase().replace('.', "-"))
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    Some(
+        home.join("v1")
+            .join("instances")
+            .join(instance)
+            .join("ladybug")
+            .join("doc")
+            .join("doc.lbug"),
+    )
+}
+
+/// Mirror of `cortex_storage::layout::ladybug_store_file_name` — a graph name
+/// becomes a store FILE name; names outside `[A-Za-z0-9_.-]` fail closed.
+fn ladybug_store_file_name(graph_name: &str) -> Option<String> {
+    let name = graph_name.trim();
+    if name.is_empty() || !name.chars().all(|ch| ch.is_alphanumeric() || "_-.".contains(ch)) {
+        return None;
+    }
+    Some(name.to_string())
+}
+
+/// Open the doc ladybug store for one graph file, `None` when the store file
+/// does not exist yet (python raises `database does not exist` at query time;
+/// callers skip the candidate — observable parity for the fan-out lanes).
+fn ladybug_doc_store(graph: &str) -> Result<Option<DocGraphStore>, GraphError> {
+    let Some(dir) = ladybug_doc_dir() else {
+        return Err(GraphError {
+            exception: "ConnectionError",
+            message: "no ladybug doc store configured (LADYBUG_DOC_PATH)".to_string(),
+        });
+    };
+    let Some(file_name) = ladybug_store_file_name(graph) else {
+        return Err(GraphError {
+            exception: "RuntimeError",
+            message: format!("Ladybug graph name {graph:?} must only contain letters, digits, '_', '-', or '.'"),
+        });
+    };
+    let path = dir.join(&file_name);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let store = crate::graph::ladybug::LadybugStore::open(&path, false)
+        .or_else(|_| crate::graph::ladybug::LadybugStore::open(&path, true))
+        .map_err(|error| GraphError { exception: "ConnectionError", message: error })?;
+    Ok(Some(DocGraphStore {
+        backend: DocBackend::Ladybug(store),
+        graph: graph.to_string(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -145,16 +239,66 @@ pub fn project_store(project_id: Option<&str>) -> Result<DocGraphStore, GraphErr
         {
             let (host, port) = parse_uri(uri);
             let client = connect(&host, port)?;
-            return Ok(DocGraphStore { client, graph: targets.doc_graph });
+            return Ok(DocGraphStore { backend: DocBackend::Falkor(client), graph: targets.doc_graph });
+        }
+        if is_ladybug_provider() {
+            // Ladybug primary: the env-seeded store file — python opens
+            // `LADYBUG_PATH` regardless of the graph name when the per-graph
+            // store file does not exist yet.
+            if let Some(store) = ladybug_doc_store(&targets.doc_graph)? {
+                return Ok(store);
+            }
+            if let Some(primary) = crate::graph::ladybug::env_primary_store("doc")
+                && primary.is_file()
+            {
+                let store = crate::graph::ladybug::LadybugStore::open(&primary, false)
+                    .or_else(|_| {
+                        crate::graph::ladybug::LadybugStore::open(&primary, true)
+                    })
+                    .map_err(|error| GraphError {
+                        exception: "ConnectionError",
+                        message: error,
+                    })?;
+                return Ok(DocGraphStore {
+                    backend: DocBackend::Ladybug(store),
+                    graph: targets.doc_graph,
+                });
+            }
+            return Err(GraphError {
+                exception: "RuntimeError",
+                message: format!(
+                    "database does not exist: {} (no LadybugDB store in {})",
+                    targets.doc_graph,
+                    ladybug_doc_dir()
+                        .map(|dir| dir.display().to_string())
+                        .unwrap_or_default(),
+                ),
+            });
         }
         let (host, port) = env_falkordb_uri().ok_or_else(|| GraphError {
             exception: "ConnectionError",
             message: "no falkordb_uri configured (remote section or FALKORDB_URI)".to_string(),
         })?;
         let client = connect(&host, port)?;
-        return Ok(DocGraphStore { client, graph: targets.doc_graph });
+        return Ok(DocGraphStore { backend: DocBackend::Falkor(client), graph: targets.doc_graph });
     }
     // Unscoped base store (`create_graph_store_from_env`).
+    if is_ladybug_provider() {
+        let Some(primary) = crate::graph::ladybug::env_primary_store("doc") else {
+            return Err(GraphError {
+                exception: "ConnectionError",
+                message: "no ladybug doc store configured (LADYBUG_DOC_PATH)".to_string(),
+            });
+        };
+        let graph = primary
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().to_string())
+            .unwrap_or_else(|| "hyper_graph".to_string());
+        let store = crate::graph::ladybug::LadybugStore::open(&primary, false)
+            .or_else(|_| crate::graph::ladybug::LadybugStore::open(&primary, true))
+            .map_err(|error| GraphError { exception: "ConnectionError", message: error })?;
+        return Ok(DocGraphStore { backend: DocBackend::Ladybug(store), graph });
+    }
     let (host, port) = env_falkordb_uri().ok_or_else(|| GraphError {
         exception: "ConnectionError",
         message: "no falkordb_uri configured (FALKORDB_URI)".to_string(),
@@ -163,7 +307,7 @@ pub fn project_store(project_id: Option<&str>) -> Result<DocGraphStore, GraphErr
     let graph = std::env::var("FALKORDB_GRAPH")
         .or_else(|_| std::env::var("FALKORDB_DATABASE"))
         .unwrap_or_else(|_| "neo4j".to_string());
-    Ok(DocGraphStore { client, graph })
+    Ok(DocGraphStore { backend: DocBackend::Falkor(client), graph })
 }
 
 /// `_graph_store_candidates(project_id)` — the deterministic store list for
@@ -212,6 +356,18 @@ pub fn graph_store_candidates(
     if graph_names.is_empty() {
         return Ok(vec![(project_store(None)?, false)]);
     }
+    if is_ladybug_provider() {
+        // Ladybug fan-out: one store FILE per graph; missing files are
+        // skipped (python raises `database does not exist` at query time,
+        // which the fail-soft lanes skip identically).
+        let mut stores = Vec::new();
+        for graph in graph_names {
+            if let Some(store) = ladybug_doc_store(&graph)? {
+                stores.push((store, false));
+            }
+        }
+        return Ok(stores);
+    }
     let (host, port) = env_falkordb_uri().ok_or_else(|| GraphError {
         exception: "ConnectionError",
         message: "no falkordb_uri configured (FALKORDB_URI)".to_string(),
@@ -220,7 +376,7 @@ pub fn graph_store_candidates(
         .into_iter()
         .map(|graph| {
             let client = connect(&host, port).expect("falkordb connect");
-            (DocGraphStore { client, graph }, false)
+            (DocGraphStore { backend: DocBackend::Falkor(client), graph }, false)
         })
         .collect())
 }

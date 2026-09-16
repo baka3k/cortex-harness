@@ -41,6 +41,7 @@ use std::process::Child;
 use std::sync::Mutex;
 
 use cortex_falkordb::client::{Column, FalkorDbClient, Param, QueryResult};
+use super::ladybug;
 use cortex_falkordb::normalize::normalize_value;
 use serde_json::{Map, Number, Value};
 
@@ -174,6 +175,55 @@ pub fn discover_ladybug_store_files() -> Vec<PathBuf> {
         }
     }
     files
+}
+
+/// Open the process-local Ladybug stores: primary (`LADYBUG_CODE_PATH` /
+/// `LADYBUG_PATH`) first, then discovery siblings. Primary tries read-write
+/// (python opens the primary RW); everything falls back to read-only when the
+/// file is locked by another writer. Graph name = store file stem, appended
+/// to `graph_clients` for `list_databases`.
+fn boot_ladybug_stores(
+    graph_clients: &mut Vec<(String, usize)>,
+    _falkordb_count: usize,
+) -> Vec<(String, ladybug::LadybugStore)> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(primary) = ladybug::env_primary_store("code") {
+        candidates.push(primary);
+    }
+    for file in discover_ladybug_store_files() {
+        if !candidates.contains(&file) {
+            candidates.push(file);
+        }
+    }
+    let mut stores: Vec<(String, ladybug::LadybugStore)> = Vec::new();
+    for path in candidates {
+        if !path.is_file() {
+            continue;
+        }
+        let name = match path.file_stem() {
+            Some(stem) => stem.to_string_lossy().to_string(),
+            None => continue,
+        };
+        if stores.iter().any(|(existing, _)| existing == &name)
+            || graph_clients.iter().any(|(existing, _)| existing == &name)
+        {
+            continue;
+        }
+        let store = match ladybug::LadybugStore::open(&path, false) {
+            Ok(store) => store,
+            Err(_) => match ladybug::LadybugStore::open(&path, true) {
+                Ok(store) => store,
+                Err(error) => {
+                    eprintln!("[runtime] skipping ladybug store {}: {error}", path.display());
+                    continue;
+                }
+            },
+        };
+        eprintln!("[runtime] ladybug store loaded graph={name} path={}", path.display());
+        graph_clients.push((name.clone(), usize::MAX));
+        stores.push((name, store));
+    }
+    stores
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +384,10 @@ fn raw_graph_list(client: &mut FalkorDbClient) -> Result<Vec<String>, String> {
 pub struct GraphRuntime {
     /// `data.rdb path hoặc label remote → (client, embedded handle — None nếu remote)`.
     clients: Vec<(String, FalkorDbClient, Option<EmbeddedFalkor>)>,
+    /// Ladybug store files (`<owner>.lbug/<graph>`) — graph name = file stem.
+    ladybug_clients: Vec<(String, ladybug::LadybugStore)>,
     /// graph name → client index, theo thứ tự đăng ký (primary file wins).
+    /// Index âm qui ước không dùng; ladybug tra riêng qua `ladybug_clients`.
     graph_clients: Vec<(String, usize)>,
     /// Default graph (`FALKORDB_GRAPH` env của unified/cplus boot).
     pub default_graph: String,
@@ -371,6 +424,7 @@ impl GraphRuntime {
             }
             return Ok(Self {
                 clients: vec![(format!("remote://{host}:{port}"), client, None)],
+                ladybug_clients: boot_ladybug_stores(&mut graph_clients, 0),
                 graph_clients,
                 default_graph,
             });
@@ -379,9 +433,12 @@ impl GraphRuntime {
         if files.is_empty() {
             // Không có data file nào: runtime rỗng (mọi query → lỗi db) —
             // mirror driver không list được graph nào.
+            let mut graph_clients: Vec<(String, usize)> = Vec::new();
+            let ladybug_clients = boot_ladybug_stores(&mut graph_clients, 0);
             return Ok(Self {
                 clients: Vec::new(),
-                graph_clients: Vec::new(),
+                ladybug_clients,
+                graph_clients,
                 default_graph,
             });
         }
@@ -411,18 +468,46 @@ impl GraphRuntime {
             }
             clients.push((path.to_string_lossy().to_string(), client, Some(embedded)));
         }
+        let ladybug_clients = boot_ladybug_stores(&mut graph_clients, clients.len());
         Ok(Self {
             clients,
+            ladybug_clients,
             graph_clients,
             default_graph,
         })
     }
 
     pub fn graph_names(&self) -> Vec<String> {
-        self.graph_clients
+        let mut names: Vec<String> = self
+            .graph_clients
             .iter()
             .map(|(name, _)| name.clone())
-            .collect()
+            .collect();
+        for (name, _) in &self.ladybug_clients {
+            if !names.contains(name) {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+
+    /// Ladybug store cho một graph name — exact match, hoặc store duy nhất
+    /// (tên registry có thể lệch tên file vật lý; python mở file bất kể tên).
+    pub fn ladybug_store_for(&self, graph_name: &str) -> Option<&ladybug::LadybugStore> {
+        if self.ladybug_clients.is_empty() {
+            return None;
+        }
+        self.ladybug_clients
+            .iter()
+            .find(|(name, _)| name == graph_name)
+            .or_else(|| {
+                if self.ladybug_clients.len() == 1 {
+                    self.ladybug_clients.first()
+                } else {
+                    None
+                }
+            })
+            .map(|(_, store)| store)
     }
 
     /// `driver.list_databases()` — graph names; rỗng → [default].
@@ -445,21 +530,17 @@ impl GraphRuntime {
         let graph_name = database
             .map(str::to_string)
             .unwrap_or_else(|| self.default_graph.clone());
+        // Ladybug lane first when a store file matches the name (or when a
+        // single ladybug store carries the data under a different name —
+        // registry graph names can diverge from the physical file, and the
+        // python driver opens the file regardless of the requested name).
+        if let Some(store) = self.ladybug_store_for(&graph_name) {
+            return store.query(cypher, params);
+        }
         let index = self
             .graph_clients
             .iter()
             .find(|(name, _)| name == &graph_name)
-            .or_else(|| {
-                // Registry graph names can diverge from the physical graph
-                // name inside a migrated Ladybug store — the python driver
-                // opens the file regardless of the requested name. Fall back
-                // to the store's own graph when it is unambiguous.
-                if self.graph_clients.len() == 1 {
-                    self.graph_clients.first()
-                } else {
-                    None
-                }
-            })
             .map(|(_, index)| *index);
         let result: Result<QueryResult, cortex_falkordb::client::ClientError> = match index {
             Some(index) => self.clients[index].1.ro_query(&graph_name, cypher, params),
@@ -560,6 +641,31 @@ pub fn list_node_labels(
 ) -> Option<Vec<String>> {
     let mut collected: Option<Vec<String>> = None;
     for db in dbs.iter().filter(|item| !item.is_empty()) {
+        // Ladybug: `CALL show_tables()` + filter type == NODE (case kept).
+        if let Some(store) = runtime.ladybug_store_for(db) {
+            let empty = BTreeMap::new();
+            let Ok(rows) =
+                store.query("CALL show_tables() RETURN *", &empty)
+            else {
+                continue;
+            };
+            if collected.is_none() {
+                collected = Some(Vec::new());
+            }
+            let collected_ref = collected.as_mut().expect("initialized");
+            for row in rows {
+                let table_type = row.get("type").and_then(Value::as_str).unwrap_or("").to_uppercase();
+                if table_type != "NODE" {
+                    continue;
+                }
+                if let Some(name) = row.get("name").and_then(Value::as_str) {
+                    if !collected_ref.contains(&name.to_string()) {
+                        collected_ref.push(name.to_string());
+                    }
+                }
+            }
+            continue;
+        }
         let query = "CALL db.labels() YIELD label RETURN label AS label";
         let params = BTreeMap::new();
         let rows = match runtime.execute_query(query, &params, Some(db)) {
@@ -603,6 +709,33 @@ pub fn list_relationship_types(
 ) -> Option<Vec<String>> {
     let mut collected: Option<Vec<String>> = None;
     for db in dbs.iter().filter(|item| !item.is_empty()) {
+        // Ladybug: `CALL show_tables()` + filter type == REL (uppercase),
+        // mirror `LadybugDriver.list_relationship_types`.
+        if let Some(store) = runtime.ladybug_store_for(db) {
+            let empty = BTreeMap::new();
+            let Ok(rows) =
+                store.query("CALL show_tables() RETURN *", &empty)
+            else {
+                continue;
+            };
+            if collected.is_none() {
+                collected = Some(Vec::new());
+            }
+            let collected_ref = collected.as_mut().expect("initialized");
+            for row in rows {
+                let table_type = row.get("type").and_then(Value::as_str).unwrap_or("").to_uppercase();
+                if table_type != "REL" {
+                    continue;
+                }
+                if let Some(name) = row.get("name").and_then(Value::as_str) {
+                    let upper = name.to_uppercase();
+                    if !collected_ref.contains(&upper) {
+                        collected_ref.push(upper);
+                    }
+                }
+            }
+            continue;
+        }
         let query =
             "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType AS rel_type";
         let params = BTreeMap::new();

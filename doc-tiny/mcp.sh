@@ -27,7 +27,7 @@ if [ "${CORTEX_MCP_BACKEND:-}" != "python" ]; then
                "$repo_root/rust/target/release/cortex-mcp" \
                "$repo_root/rust/target/debug/cortex-mcp"; do
         if [ -n "$bin" ] && [ -x "$bin" ]; then
-            exec "$bin" "$@"
+            exec "$bin" --server mind "$@"
         fi
     done
 fi
