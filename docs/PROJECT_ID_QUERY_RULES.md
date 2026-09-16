@@ -86,13 +86,13 @@ WHERE ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_no
 - Khi `project_id` không truyền, guard `$project_id IS NULL` phải skip predicate
   (R1) — param `project_id_normalized` được inject kèm giá trị `None` nếu key
   `project_id` có trong params.
-- `STARTS WITH` được cả FalkorDB và Neo4j hỗ trợ.
+- `STARTS WITH` được cả FalkorDB, Neo4j và LadybugDB hỗ trợ.
 - **Cấm** dùng lại `n.project_id_normalized = $project_id_normalized` trong query
   đọc — đó là bug mất kết quả khi query theo stem (`bank` vs `bank_android`).
 
 Các vị trí đã chuyển sang `STARTS WITH` (kể cả bản sao backend):
 
-- `tools/graph/core/cypher_driver.py`, `tools/graph/driver/{falkordb,neo4j}_driver.py`
+- `tools/graph/core/cypher_driver.py`, `tools/graph/driver/{falkordb,neo4j,ladybug}_driver.py`
 - `tools/common/graph_expander.py`, `tools/common/intelligent_retrieval.py`
 - `tools/ts/workflow_finder.py` (param `$pid_normalized`)
 - `mcp/{cplus,android,java}/…_mcp.py`, `mcp/fastmcp_server.py` (toàn bộ query template đọc)

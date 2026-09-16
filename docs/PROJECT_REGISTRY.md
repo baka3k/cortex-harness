@@ -127,7 +127,7 @@ The loader reuses the existing `dev.json` shape:
   graph fields on `ProjectTargets`. Omitting them triggers the naming rule.
 * `code.env.QDRANT_COLLECTION` and `doc.env.QDRANT_COLLECTION` map directly to
   the Qdrant collection fields. Omitting them triggers the naming rule.
-* `code.env.GRAPH_PROVIDER` selects the backend (`"falkordb"` or `"neo4j"`).
+* `code.env.GRAPH_PROVIDER` selects the backend (`"falkordb"`, `"neo4j"`, or the embedded `"ladybug"` option).
 
 The loader reads the entire `config/` directory on every call. There is no
 in-process cache. Config files are small (one project per file) and the cost

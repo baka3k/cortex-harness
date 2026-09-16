@@ -24,6 +24,9 @@ neo4j = ["neo4j", "neo4j-graphrag"]
 # falkordb is already pulled in by default on Windows; this extra stays for
 # Linux/macOS users who flip storage_backend to "remote".
 falkordb-remote = ["falkordb"]
+# Embedded LadybugDB graph provider (Kuzu successor). Selected with
+# GRAPH_PROVIDER=ladybug; FalkorDB remains the default provider.
+ladybug = ["ladybug==0.20.4"]
 
 [project.scripts]
 dev = "cortex_harness.dev:cli"

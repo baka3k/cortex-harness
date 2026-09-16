@@ -1,6 +1,8 @@
 qdrant-client==1.18.0
 falkordblite==0.10.0 ; sys_platform != 'win32'
 falkordb ; sys_platform == 'win32'
+# Embedded LadybugDB graph provider (enabled per project with GRAPH_PROVIDER=ladybug)
+ladybug==0.20.4
 python-dotenv
 pydantic
 openai

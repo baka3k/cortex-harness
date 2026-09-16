@@ -31,6 +31,7 @@ LOCAL_STORAGE_KEYS = frozenset({
     "CORTEX_DATA_HOME", "CORTEX_STORAGE_INSTANCE", "CORTEX_CODE_STORAGE_OWNER",
     "CORTEX_DOC_STORAGE_OWNER", "QDRANT_PATH", "QDRANT_CODE_PATH",
     "QDRANT_DOC_PATH", "FALKORDB_PATH", "FALKORDB_CODE_PATH", "FALKORDB_DOC_PATH",
+    "LADYBUG_PATH", "LADYBUG_CODE_PATH", "LADYBUG_DOC_PATH",
 })
 
 REMOTE_STORAGE_KEYS = frozenset({
@@ -40,6 +41,7 @@ REMOTE_STORAGE_KEYS = frozenset({
 })
 
 _FALKORDB_PROVIDER_VALUES = frozenset({"falkor", "falkordb"})
+_LADYBUG_PROVIDER_VALUES = frozenset({"ladybug", "ladybugdb", "ladybug-db"})
 
 
 def normalize_graph_provider(env: Dict[str, str], scoped_provider: str) -> str:
@@ -52,9 +54,11 @@ def normalize_graph_provider(env: Dict[str, str], scoped_provider: str) -> str:
         return "falkordb"
     if value == "neo4j":
         return "neo4j"
+    if value in _LADYBUG_PROVIDER_VALUES:
+        return "ladybug"
     raise ValueError(
         f"Unsupported graph provider for {source}: {value!r}; expected "
-        "'falkordb' (alias 'falkor') or 'neo4j'"
+        "'falkordb' (alias 'falkor'), 'neo4j', or 'ladybug'"
     )
 
 
@@ -66,11 +70,24 @@ def isolate_graph_provider_environment(
     env["GRAPH_PROVIDER"] = provider
     env[scoped_provider] = provider
     for key in tuple(env):
-        if provider == "falkordb" and key.startswith("NEO4J_"):
+        if provider == "falkordb" and (
+            key.startswith("NEO4J_") or key.startswith("LADYBUG_")
+        ):
             env.pop(key, None)
         elif provider == "neo4j" and (
-            key.startswith("FALKORDB_") or key == "DOC_FALKORDB_GRAPH"
+            key.startswith("FALKORDB_")
+            or key.startswith("LADYBUG_")
+            or key == "DOC_FALKORDB_GRAPH"
         ):
+            env.pop(key, None)
+        elif provider == "ladybug" and key.startswith("NEO4J_"):
+            env.pop(key, None)
+        elif provider == "ladybug" and key.startswith("FALKORDB_") and key not in {
+            # Graph names are provider-neutral; ladybug keeps reading them.
+            "FALKORDB_GRAPH",
+            "DOC_FALKORDB_GRAPH",
+            "FALKORDB_DATABASE",
+        }:
             env.pop(key, None)
     return provider
 
@@ -201,7 +218,7 @@ def runtime_environment(
 
     provider = isolate_graph_provider_environment(env, scoped_provider)
 
-    if provider == "falkordb":
+    if provider in {"falkordb", "ladybug"}:
         explicit_graph = (env.get("FALKORDB_GRAPH") or "").strip()
         graph = (
             (explicit_graph or project_id or "default")
@@ -230,7 +247,7 @@ def runtime_environment(
         # preserving an explicit top-level ``storage_backend: remote`` config.
         for key in LOCAL_STORAGE_KEYS | REMOTE_STORAGE_KEYS:
             env.pop(key, None)
-        env.update(storage_overlay(resolved, owner=role))
+        env.update(storage_overlay(resolved, owner=role, graph_provider=provider))
         env["FALKORDB_GRAPH"] = doc_graph if role == StorageRole.DOCUMENT else graph
     isolate_graph_provider_environment(env, scoped_provider)
     env["CORTEX_HARNESS_CONFIG_PATH"] = str(config_path)
@@ -251,14 +268,21 @@ def format_bash_exports(env: Dict[str, str]) -> str:
     if provider == "falkordb":
         lines.extend(
             (
-                'for _cortex_inactive_key in "${!NEO4J_@}"; do unset "$_cortex_inactive_key"; done',
+                'for _cortex_inactive_key in "${!NEO4J_@}" "${!LADYBUG_@}"; do unset "$_cortex_inactive_key"; done',
                 "unset _cortex_inactive_key 2>/dev/null || true",
             )
         )
     elif provider == "neo4j":
         lines.extend(
             (
-                'for _cortex_inactive_key in "${!FALKORDB_@}"; do unset "$_cortex_inactive_key"; done',
+                'for _cortex_inactive_key in "${!FALKORDB_@}" "${!LADYBUG_@}"; do unset "$_cortex_inactive_key"; done',
+                "unset DOC_FALKORDB_GRAPH _cortex_inactive_key 2>/dev/null || true",
+            )
+        )
+    elif provider == "ladybug":
+        lines.extend(
+            (
+                'for _cortex_inactive_key in "${!FALKORDB_@}" "${!NEO4J_@}"; do unset "$_cortex_inactive_key"; done',
                 "unset DOC_FALKORDB_GRAPH _cortex_inactive_key 2>/dev/null || true",
             )
         )

@@ -472,9 +472,11 @@ def _graph_provider(env: dict, scoped_key: str) -> str:
         return "falkordb"
     if provider == "neo4j":
         return "neo4j"
+    if provider in {"ladybug", "ladybugdb", "ladybug-db"}:
+        return "ladybug"
     raise ValueError(
         f"Unsupported graph provider for {source}: {provider!r}; expected "
-        "'falkordb' (alias 'falkor') or 'neo4j'"
+        "'falkordb' (alias 'falkor'), 'neo4j', or 'ladybug'"
     )
 
 
@@ -484,11 +486,24 @@ def _isolate_graph_provider_environment(env: dict, scoped_key: str) -> str:
     env["GRAPH_PROVIDER"] = provider
     env[scoped_key] = provider
     for key in tuple(env):
-        if provider == "falkordb" and key.startswith("NEO4J_"):
+        if provider == "falkordb" and (
+            key.startswith("NEO4J_") or key.startswith("LADYBUG_")
+        ):
             env.pop(key, None)
         elif provider == "neo4j" and (
-            key.startswith("FALKORDB_") or key == "DOC_FALKORDB_GRAPH"
+            key.startswith("FALKORDB_")
+            or key.startswith("LADYBUG_")
+            or key == "DOC_FALKORDB_GRAPH"
         ):
+            env.pop(key, None)
+        elif provider == "ladybug" and key.startswith("NEO4J_"):
+            env.pop(key, None)
+        elif provider == "ladybug" and key.startswith("FALKORDB_") and key not in {
+            # Graph names are provider-neutral; ladybug keeps reading them.
+            "FALKORDB_GRAPH",
+            "DOC_FALKORDB_GRAPH",
+            "FALKORDB_DATABASE",
+        }:
             env.pop(key, None)
     return provider
 
@@ -506,6 +521,10 @@ def _env_to_neo4j_args(env: dict) -> list:
                 args += ["--falkordb-ssl"]
         elif env.get("FALKORDB_PATH"):
             args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
+        args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
+    elif provider == "ladybug":
+        if env.get("LADYBUG_PATH"):
+            args += ["--ladybug-path", str(env["LADYBUG_PATH"])]
         args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
     else:
         args += [
@@ -529,6 +548,10 @@ def _neo4j_args_code(env: dict) -> list:
                 args += ["--falkordb-ssl"]
         elif env.get("FALKORDB_PATH"):
             args += ["--falkordb-path", str(env["FALKORDB_PATH"])]
+        args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
+    elif provider == "ladybug":
+        if env.get("LADYBUG_PATH"):
+            args += ["--ladybug-path", str(env["LADYBUG_PATH"])]
         args += ["--falkordb-graph", env.get("FALKORDB_GRAPH", "hyper_graph")]
     else:
         args += [
@@ -773,7 +796,10 @@ def _doc_env_for_process(
         doc_collection = targets.doc_qdrant_collection
     if doc_collection:
         result.setdefault("QDRANT_COLLECTION_DOC", str(doc_collection))
-    if targets is not None and _graph_provider(result, "DOC_GRAPH_PROVIDER") == "falkordb":
+    if targets is not None and _graph_provider(result, "DOC_GRAPH_PROVIDER") in {
+        "falkordb",
+        "ladybug",
+    }:
         result["FALKORDB_GRAPH"] = targets.doc_graph
     _isolate_graph_provider_environment(result, "DOC_GRAPH_PROVIDER")
     return result
@@ -2179,21 +2205,27 @@ def _pause_mcp_for_sync(
     Other instances keep serving queries.
     """
     provider_key = "CODE_GRAPH_PROVIDER" if owner == "code" else "DOC_GRAPH_PROVIDER"
-    if not enabled or _graph_provider(process_env, provider_key) != "falkordb":
+    provider = _graph_provider(process_env, provider_key)
+    if not enabled or provider not in {"falkordb", "ladybug"}:
         yield
         return
-    if not str(process_env.get("FALKORDB_PATH") or "").strip():
-        # Remote FalkorDB project: no embedded lease to hand over.
+    path_key = "LADYBUG_PATH" if provider == "ladybug" else "FALKORDB_PATH"
+    if not str(process_env.get(path_key) or "").strip():
+        # Remote project or path-less config: no embedded lease to hand over.
         yield
         return
 
     service_name = f"{owner}-tiny"
     service = MCP_SERVICES[service_name]
-    configured_path = str(process_env.get("FALKORDB_PATH") or "").strip()
+    configured_path = str(process_env.get(path_key) or "").strip()
     db_path = Path(configured_path) if configured_path else None
     instance_id = _resolve_storage_instance(process_env)
     was_running = bool(_mcp_pids(service["pattern"], instance_id=instance_id))
-    orphan_running = bool(db_path and _embedded_falkordb_pids(db_path))
+    # LadybugDB is embedded in-process: the MCP server itself owns the lease,
+    # so there is no sidecar database process to hunt for orphans.
+    orphan_running = bool(
+        db_path and provider == "falkordb" and _embedded_falkordb_pids(db_path)
+    )
     if not was_running and not orphan_running:
         yield
         return
@@ -2201,19 +2233,23 @@ def _pause_mcp_for_sync(
     if was_running:
         click.echo(
             f"[sync] Pausing {owner} MCP (instance={instance_id}) "
-            f"to acquire the embedded FalkorDB lease"
+            f"to acquire the embedded {provider} lease"
         )
         _mcp_stop_pattern(service["pattern"], instance_id=instance_id)
     else:
-        click.echo("[sync] Stopping orphaned embedded FalkorDB before sync")
-    if db_path is not None:
+        click.echo(f"[sync] Stopping orphaned embedded {provider} before sync")
+    if provider == "falkordb" and db_path is not None:
         _stop_embedded_falkordb(db_path)
     if _mcp_pids(service["pattern"], instance_id=instance_id):
         raise click.ClickException(
             "Could not stop the code MCP process; sync was not started. "
             "Stop the MCP server manually and retry."
         )
-    if db_path is not None and _embedded_falkordb_pids(db_path):
+    if (
+        provider == "falkordb"
+        and db_path is not None
+        and _embedded_falkordb_pids(db_path)
+    ):
         raise click.ClickException(
             "Could not stop the embedded FalkorDB process; sync was not started. "
             "Stop the local FalkorDB process manually and retry."

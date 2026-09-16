@@ -15,7 +15,7 @@ param(
     [int]$DocPort = 0,
     [string]$BindHost = "",
     [string]$McpPath = "",
-    [ValidateSet("", "falkordb", "neo4j")]
+    [ValidateSet("", "falkordb", "neo4j", "ladybug")]
     [string]$Provider = "",
     [string]$Collection = "",
     [string]$CodeCollection = "",
@@ -826,7 +826,8 @@ function Get-GraphProvider {
     }
     if ($value -eq "falkor" -or $value -eq "falkordb") { return "falkordb" }
     if ($value -eq "neo4j") { return "neo4j" }
-    throw "Unsupported graph provider for ${source}: '$value'; expected 'falkordb' (alias 'falkor') or 'neo4j'"
+    if ($value -eq "ladybug" -or $value -eq "ladybugdb" -or $value -eq "ladybug-db") { return "ladybug" }
+    throw "Unsupported graph provider for ${source}: '$value'; expected 'falkordb' (alias 'falkor'), 'neo4j', or 'ladybug'"
 }
 
 function Remove-InactiveGraphEnvironment {
@@ -841,9 +842,14 @@ function Remove-InactiveGraphEnvironment {
     $Environment[$scopedProvider] = $provider
     foreach ($key in @($Environment.Keys)) {
         $name = [string]$key
-        if ($provider -eq "falkordb" -and $name.StartsWith("NEO4J_")) {
+        if ($provider -eq "falkordb" -and ($name.StartsWith("NEO4J_") -or $name.StartsWith("LADYBUG_"))) {
             $Environment.Remove($key)
-        } elseif ($provider -eq "neo4j" -and ($name.StartsWith("FALKORDB_") -or $name -eq "DOC_FALKORDB_GRAPH")) {
+        } elseif ($provider -eq "neo4j" -and ($name.StartsWith("FALKORDB_") -or $name.StartsWith("LADYBUG_") -or $name -eq "DOC_FALKORDB_GRAPH")) {
+            $Environment.Remove($key)
+        } elseif ($provider -eq "ladybug" -and $name.StartsWith("NEO4J_")) {
+            $Environment.Remove($key)
+        } elseif ($provider -eq "ladybug" -and $name.StartsWith("FALKORDB_") -and ($name -ne "FALKORDB_GRAPH") -and ($name -ne "DOC_FALKORDB_GRAPH") -and ($name -ne "FALKORDB_DATABASE")) {
+            # Graph names are provider-neutral; ladybug keeps reading them.
             $Environment.Remove($key)
         }
     }
@@ -984,7 +990,7 @@ function Get-RuntimeOverrides {
     }
     $effectiveProvider = Get-GraphProvider -Environment $providerEnvironment -ServerName $ServerConfig.Name
     if ($databaseName) {
-        if ($effectiveProvider -eq "falkordb") {
+        if ($effectiveProvider -eq "falkordb" -or $effectiveProvider -eq "ladybug") {
             $overrides.FALKORDB_GRAPH = $databaseName
         } else {
             $overrides.NEO4J_DB = $databaseName
@@ -1108,10 +1114,22 @@ if (Test-Path -LiteralPath `$envFile) {
 if (`$activeProvider -eq 'falkordb') {
     Get-ChildItem Env:NEO4J_* -ErrorAction SilentlyContinue |
         Remove-Item -ErrorAction SilentlyContinue
+    Get-ChildItem Env:LADYBUG_* -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
 } elseif (`$activeProvider -eq 'neo4j') {
     Get-ChildItem Env:FALKORDB_* -ErrorAction SilentlyContinue |
         Remove-Item -ErrorAction SilentlyContinue
     Remove-Item Env:DOC_FALKORDB_GRAPH -ErrorAction SilentlyContinue
+    Get-ChildItem Env:LADYBUG_* -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
+} elseif (`$activeProvider -eq 'ladybug') {
+    Get-ChildItem Env:NEO4J_* -ErrorAction SilentlyContinue |
+        Remove-Item -ErrorAction SilentlyContinue
+    # Graph names (FALKORDB_GRAPH / DOC_FALKORDB_GRAPH / FALKORDB_DATABASE)
+    # stay: ladybug reads them as its logical graph-name carriers.
+    Get-ChildItem Env:FALKORDB_* -ErrorAction SilentlyContinue |
+        Where-Object { `$_.Name -notin @('FALKORDB_GRAPH', 'DOC_FALKORDB_GRAPH', 'FALKORDB_DATABASE') } |
+        Remove-Item -ErrorAction SilentlyContinue
 } else {
     throw "Unsupported graph provider in runtime environment: '`$activeProvider'"
 }

@@ -24,7 +24,7 @@ _creation_tasks: Dict[Tuple[Hashable, ...], "asyncio.Task[GraphDriver]"] = {}
 def _driver_key(
     provider: GraphProvider, config: Dict[str, Any]
 ) -> Tuple[Hashable, ...]:
-    if provider == GraphProvider.FALKORDB:
+    if provider in {GraphProvider.FALKORDB, GraphProvider.LADYBUG}:
         raw_path = config.get("path")
         path = str(Path(raw_path).resolve()) if raw_path else ""
         uri = str(config.get("uri") or "")

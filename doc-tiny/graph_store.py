@@ -2,7 +2,9 @@
 Graph-store adapter for doc-tiny scripts.
 
 Neo4j remains the default provider. FalkorDB can be selected with
-``--graph-provider falkordb`` or ``DOC_GRAPH_PROVIDER=falkordb``.
+``--graph-provider falkordb`` or ``DOC_GRAPH_PROVIDER=falkordb``; the embedded
+LadybugDB provider with ``--graph-provider ladybug`` or
+``DOC_GRAPH_PROVIDER=ladybug``.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ if _CODE_TINY not in sys.path:
     sys.path.insert(0, _CODE_TINY)
 
 from tools.graph.driver.falkordb_driver import FalkorDBDriver
+from tools.graph.driver.ladybug_driver import LadybugDBDriver
 
 
 DOC_INDEXES = [
@@ -134,12 +137,60 @@ class Neo4jGraphStore:
                 print(f"Applied: {statement}")
 
 
+class LadybugDBSession(FalkorDBSession):
+    """Session over the embedded LadybugDB driver (same run() contract)."""
+
+
+class LadybugDBGraphStore:
+    """Embedded LadybugDB store: one catalog per ``.lbdb`` file.
+
+    LadybugDB keeps a single catalog per file, so the logical graph name is
+    recorded for parity with the FalkorDB store but does not select a
+    subgraph; project scoping is enforced by the project_id query rules.
+    """
+
+    provider = "ladybug"
+
+    def __init__(
+        self,
+        driver: LadybugDBDriver,
+        database: Optional[str] = None,
+        *,
+        owns_driver: bool = True,
+    ):
+        self._driver = driver
+        self._database = database or getattr(driver, "database", "default_doc")
+        self._owns_driver = owns_driver
+
+    def session(self) -> LadybugDBSession:
+        return LadybugDBSession(self._driver, self._database)
+
+    def for_graph(self, database: str) -> "LadybugDBGraphStore":
+        """Return a lightweight view over this store's shared driver."""
+        return LadybugDBGraphStore(self._driver, database, owns_driver=False)
+
+    def close(self) -> None:
+        if self._owns_driver:
+            self._driver.close()
+
+    def setup_indexes(self) -> None:
+        import asyncio
+
+        async def _apply() -> None:
+            await self._driver.create_indexes(DOC_INDEXES)
+
+        asyncio.run(_apply())
+        print("Applied LadybugDB doc schema (PK-backed identity indexes)")
+
+
 def normalize_provider(value: Optional[str]) -> str:
     provider = (value or "neo4j").strip().lower()
     if provider in {"falkor", "falkordb"}:
         return "falkordb"
     if provider == "neo4j":
         return provider
+    if provider in {"ladybug", "ladybugdb", "ladybug-db"}:
+        return "ladybug"
     raise ValueError(f"Unsupported graph provider: {value}")
 
 
@@ -150,9 +201,14 @@ def env_graph_provider() -> str:
 def add_graph_store_args(parser) -> None:
     parser.add_argument(
         "--graph-provider",
-        choices=["neo4j", "falkordb"],
+        choices=["neo4j", "falkordb", "ladybug"],
         default=env_graph_provider(),
         help="Graph database provider for doc-tiny graph operations.",
+    )
+    parser.add_argument(
+        "--ladybug-path",
+        default=os.getenv("LADYBUG_PATH"),
+        help="Embedded LadybugDB .lbdb path (derived when omitted).",
     )
     parser.add_argument("--falkordb-path", default=os.getenv("FALKORDB_PATH"))
     parser.add_argument(
@@ -181,6 +237,15 @@ def add_graph_store_args(parser) -> None:
     )
 
 
+def _ladybug_path_or_default(value: Optional[str]) -> str:
+    path = value or os.getenv("LADYBUG_PATH")
+    if not path:
+        from cortex_harness.storage import resolve_storage
+
+        path = str(resolve_storage(Path.cwd()).ladybug_doc_path)
+    return path
+
+
 def create_graph_store_from_args(args):
     provider = normalize_provider(getattr(args, "graph_provider", None))
     if provider == "neo4j":
@@ -189,6 +254,15 @@ def create_graph_store_from_args(args):
             args.neo4j_user,
             args.neo4j_pass,
             getattr(args, "neo4j_db", None) or os.getenv("NEO4J_DB"),
+        )
+    if provider == "ladybug":
+        return LadybugDBGraphStore(
+            LadybugDBDriver(
+                path=_ladybug_path_or_default(getattr(args, "ladybug_path", None)),
+                database=getattr(args, "falkordb_graph", None),
+                owner_id=os.getenv("CORTEX_STORAGE_OWNER", "doc"),
+                instance_id=os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+            )
         )
     falkordb_uri = getattr(args, "falkordb_uri", None)
     if falkordb_uri:
@@ -223,6 +297,16 @@ def create_graph_store_from_env():
             os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j"),
             os.getenv("NEO4J_PASS", "password"),
             os.getenv("NEO4J_DB"),
+        )
+    if provider == "ladybug":
+        return LadybugDBGraphStore(
+            LadybugDBDriver(
+                path=_ladybug_path_or_default(None),
+                database=os.getenv("FALKORDB_GRAPH")
+                or os.getenv("FALKORDB_DATABASE", "default_doc"),
+                owner_id=os.getenv("CORTEX_STORAGE_OWNER", "doc"),
+                instance_id=os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+            )
         )
     falkordb_uri = (os.getenv("FALKORDB_URI") or "").strip()
     if falkordb_uri:
@@ -263,6 +347,15 @@ def create_graph_store_for_project(project_id: str):
             os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j"),
             os.getenv("NEO4J_PASS", "password"),
             targets.doc_graph,
+        )
+    if provider == "ladybug":
+        return LadybugDBGraphStore(
+            LadybugDBDriver(
+                path=_ladybug_path_or_default(None),
+                database=targets.doc_graph,
+                owner_id=os.getenv("CORTEX_STORAGE_OWNER", "doc"),
+                instance_id=os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+            )
         )
     falkordb_uri = (os.getenv("FALKORDB_URI") or "").strip()
     if falkordb_uri:
