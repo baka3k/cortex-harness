@@ -66,9 +66,15 @@ def add_graph_provider_args(parser: ArgumentParser) -> None:
     if not _has_option(parser, "--graph-provider"):
         parser.add_argument(
             "--graph-provider",
-            choices=["neo4j", "falkordb"],
+            choices=["neo4j", "falkordb", "ladybug"],
             default=env_graph_provider(),
             help="Graph database provider used for graph writes.",
+        )
+    if not _has_option(parser, "--ladybug-path"):
+        parser.add_argument(
+            "--ladybug-path",
+            default=os.getenv("LADYBUG_PATH"),
+            help="Owner-specific embedded LadybugDB .lbdb path (derived when omitted).",
         )
     if not _has_option(parser, "--falkordb-path"):
         parser.add_argument(
@@ -210,6 +216,23 @@ def prepare_graph_args(args: Namespace) -> bool:
             and getattr(args, "neo4j_user", None)
             and getattr(args, "neo4j_password", None)
         )
+    if provider == GraphProvider.LADYBUG:
+        path = getattr(args, "ladybug_path", None)
+        if not path:
+            from cortex_harness.storage import resolve_storage
+
+            path = str(resolve_storage(Path.cwd()).ladybug_code_path)
+            setattr(args, "ladybug_path", path)
+        setattr(args, "neo4j_uri", None)
+        setattr(args, "neo4j_user", "")
+        setattr(args, "neo4j_password", "")
+        resolved_graph = (
+            getattr(args, "falkordb_graph", None)
+            or getattr(args, "project_id", None)
+            or "hyper_graph"
+        )
+        setattr(args, "neo4j_db", resolved_graph)
+        return True
 
     explicit_target = getattr(args, "_explicit_falkordb_target", None)
     if explicit_target == "path":
@@ -269,6 +292,30 @@ async def create_graph_driver_from_args(
     if not prepare_graph_args(args):
         return None
     provider = normalize_graph_provider(getattr(args, "graph_provider", None))
+    if provider == GraphProvider.LADYBUG:
+        graph_name = (
+            getattr(args, "falkordb_graph", None)
+            or getattr(args, "project_id", None)
+            or "hyper_graph"
+        )
+        setattr(args, "neo4j_db", graph_name)
+        driver = await GraphDriverFactory.create_driver(
+            GraphProvider.LADYBUG,
+            {
+                "path": getattr(args, "ladybug_path", None),
+                "database": graph_name,
+                "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+                "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
+            },
+        )
+        if attach_journal:
+            from tools.graph.journal.config import attach_journal_config
+            from tools.graph.journal.consumer import resume_journal
+
+            journal_config = attach_journal_config(driver, args)
+            if journal_config is not None and journal_config.required:
+                await resume_journal(journal_config, driver)
+        return driver
     if provider == GraphProvider.NEO4J:
         uri = getattr(args, "neo4j_uri", None)
         user = getattr(args, "neo4j_user", None)

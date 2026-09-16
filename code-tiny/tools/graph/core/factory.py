@@ -99,6 +99,16 @@ class GraphDriverFactory:
         elif provider == GraphProvider.KUZU:
             # Future implementation
             raise NotImplementedError("Kuzu driver not yet implemented")
+        elif provider == GraphProvider.LADYBUG:
+            from tools.graph.driver.ladybug_driver import LadybugDBDriver
+
+            return LadybugDBDriver(
+                path=config.get("path"),
+                database=config.get("database") or config.get("graph"),
+                instance_id=config.get("instance_id"),
+                owner_id=config.get("owner_id"),
+                additional_paths=config.get("additional_paths"),
+            )
         elif provider == GraphProvider.FALKORDB:
             from tools.graph.driver.falkordb_driver import FalkorDBDriver
 
@@ -174,6 +184,21 @@ class GraphDriverFactory:
                     not in ("", "0", "false", "no"),
                     _suppress_deprecation=True,
                 )
+            return await GraphDriverFactory.create_driver(provider, config)
+        elif provider == GraphProvider.LADYBUG:
+            path = os.getenv("LADYBUG_PATH")
+            if not path:
+                from cortex_harness.storage import resolve_storage
+
+                path = str(resolve_storage(Path.cwd()).ladybug_code_path)
+            config: Dict[str, Any] = {
+                "path": path,
+                "database": os.getenv("LADYBUG_GRAPH")
+                or os.getenv("FALKORDB_GRAPH")
+                or "hyper_graph",
+                "instance_id": os.getenv("CORTEX_STORAGE_INSTANCE", "default"),
+                "owner_id": os.getenv("CORTEX_STORAGE_OWNER", "code"),
+            }
             return await GraphDriverFactory.create_driver(provider, config)
         else:
             raise NotImplementedError(f"Environment config not implemented for {provider}")

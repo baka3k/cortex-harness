@@ -165,6 +165,43 @@ dev storage-backup --owner doc
 
 Each backup is written under the instance `backups/` directory with a manifest and SHA-256 verification. Keep the original owner data until restore validation succeeds.
 
+## LadybugDB (embedded, optional third provider)
+
+LadybugDB (`pip install ladybug`, the KuzuDB successor) is an embedded
+columnar graph database selected with `GRAPH_PROVIDER=ladybug`. FalkorDB
+remains the default; LadybugDB is an option, not a replacement, and it has no
+remote/server mode.
+
+```json
+{
+  "project": {"code": "my_project", "name": "My Project"},
+  "code": {"env": {"GRAPH_PROVIDER": "ladybug"}},
+  "doc": {"env": {"DOC_GRAPH_PROVIDER": "ladybug"}}
+}
+```
+
+Key facts:
+
+* Storage: one catalog per `.lbdb` file under
+  `<data-home>/v1/instances/<id>/ladybug/{code,doc}/data.lbdb`
+  (`LADYBUG_PATH` / `LADYBUG_CODE_PATH` / `LADYBUG_DOC_PATH` overrides).
+* Schema-first: `tools/graph/schema/ladybug_schema.py` compiles the writer
+  property inventory into `CREATE NODE/REL TABLE IF NOT EXISTS` DDL with a
+  JSON `_properties` spill column for heterogeneous payloads. Tables are
+  ensured lazily by the driver (`ensure_schema` preflight and a self-healing
+  retry on missing-table binder errors).
+* Dialect rewrites happen inside `tools/graph/driver/ladybug_driver.py`
+  (`SET n += row`, `CALL { WITH row ... }` guards, `FOREACH`, `datetime()`,
+  list comprehensions, reserved-word parameters such as `$end`).
+* Project ID rules R1–R6 run unchanged: the
+  `($project_id IS NULL OR n.project_id_normalized STARTS WITH ...)` predicate
+  executes natively on LadybugDB.
+* Cross-instance fan-out: `code-tiny/mcp/ladybug_discovery.py` discovers
+  sibling `data.lbdb` catalogs which the driver opens read-only.
+* Install with `pip install 'cortex-harness[ladybug]'` (or add `ladybug` to
+  your environment). Missing package fails the driver constructor with a clear
+  import error.
+
 ## Troubleshooting
 
 - **Unsupported Python:** install Python 3.12+ and rerun `make build`.
