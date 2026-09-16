@@ -634,10 +634,10 @@
     }
   ],
   "summary": {
-    "elapsed_ms": 913,
+    "elapsed_ms": 27,
     "error_count": 3,
     "processed_files": 6,
-    "skipped_files": 0,
+    "skipped_files": 6,
     "type": "summary"
   }
 }

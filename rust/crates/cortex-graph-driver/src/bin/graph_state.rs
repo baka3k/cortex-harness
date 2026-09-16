@@ -17,19 +17,19 @@ use std::path::PathBuf;
 use lbug::{Connection, Database, SystemConfig};
 use serde_json::{json, Value};
 
-fn quote(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() + 2);
-    out.push('\'');
-    for c in value.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\'' => out.push_str("\\'"),
-            _ => out.push(c),
-        }
-    }
-    out.push('\'');
-    out
-}
+// fn quote(value: &str) -> String {
+//     let mut out = String::with_capacity(value.len() + 2);
+//     out.push('\'');
+//     for c in value.chars() {
+//         match c {
+//             '\\' => out.push_str("\\\\"),
+//             '\'' => out.push_str("\\'"),
+//             _ => out.push(c),
+//         }
+//     }
+//     out.push('\'');
+//     out
+// }
 
 fn rows(connection: &Connection, query: &str) -> Vec<(Vec<String>, Vec<Value>)> {
     let result = connection.query(query).expect("query failed");

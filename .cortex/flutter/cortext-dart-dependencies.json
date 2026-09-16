@@ -1,5 +1,11 @@
 {
   "dependencies": {
+    ".qwen/worktrees/phase06-embed/tests/fixtures/flutter-app/lib/app.dart": [
+      ".qwen/worktrees/phase06-embed/tests/fixtures/flutter-app/lib/widgets/home_page.dart"
+    ],
+    ".qwen/worktrees/phase06-embed/tests/fixtures/flutter-app/lib/main.dart": [
+      ".qwen/worktrees/phase06-embed/tests/fixtures/flutter-app/lib/app.dart"
+    ],
     "tests/fixtures/flutter-app/lib/app.dart": [
       "tests/fixtures/flutter-app/lib/widgets/home_page.dart"
     ],

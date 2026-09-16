@@ -7,9 +7,11 @@ use std::path::PathBuf;
 
 use crate::util;
 
-/// Repo root (parent of `code-tiny`), derived from the executable location:
-/// `<repo>/rust/target/release/cortex-sync`. Overridable via
-/// `CORTEX_REPO_ROOT` for non-standard target dirs.
+/// Repo root (sentinel: `cortex_harness/dev.py` — cùng marker với
+/// `cortex-dev/src/util.rs`; phase-06 sync closure xoá marker cũ
+/// `code-tiny/tools/sync/incremental_sync.py` cùng commit), derived from
+/// the executable location: `<repo>/rust/target/release/cortex-sync`.
+/// Overridable via `CORTEX_REPO_ROOT` for non-standard target dirs.
 pub fn repo_root() -> PathBuf {
     if let Ok(from_env) = std::env::var("CORTEX_REPO_ROOT")
         && !from_env.trim().is_empty() {
@@ -18,7 +20,7 @@ pub fn repo_root() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         // exe = <repo>/rust/target/{release,debug}/cortex-sync
         if let Some(repo) = exe.parent().and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.parent())
-            && repo.join("code-tiny/tools/sync/incremental_sync.py").is_file() {
+            && repo.join("cortex_harness/dev.py").is_file() {
                 return repo.to_path_buf();
             }
     }
