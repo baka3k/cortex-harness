@@ -40,6 +40,33 @@ async def cleanup_neo4j_for_files(
     if verbose:
         print(f"[cleanup][graph] deleting graph data for {len(paths)} files")
 
+    # LadybugDB is table-typed: anonymous ``MATCH (n)`` with arbitrary
+    # property access cannot bind. Its driver exposes per-label cleanup
+    # equivalents instead of the schema-less Cypher below.
+    ladybug_delete = getattr(driver, "delete_nodes_by_paths", None)
+    if callable(ladybug_delete):
+        deleted_nodes = int(
+            await ladybug_delete(
+                project_id=project_id, file_paths=paths, database=database
+            )
+            or 0
+        )
+        ladybug_prune = getattr(driver, "prune_orphan_unknown_functions", None)
+        deleted_unknown = (
+            int(await ladybug_prune(database=database) or 0)
+            if callable(ladybug_prune)
+            else 0
+        )
+        if verbose:
+            print(
+                "[cleanup][graph] deleted_nodes=%d deleted_unknown_functions=%d"
+                % (deleted_nodes, deleted_unknown)
+            )
+        return {
+            "deleted_nodes": deleted_nodes,
+            "deleted_unknown_functions": deleted_unknown,
+        }
+
     delete_query = """
     WITH $paths AS paths, $project_id AS project_id
     MATCH (n)

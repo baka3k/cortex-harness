@@ -46,6 +46,7 @@ from tools.common.project_registry import (  # noqa: E402
 )
 from semantic_graph_expansion import expand_semantic_results
 from tool_metadata import build_catalog
+from tool_error_middleware import install_tool_error_middleware
 from framework_registry import servlet_active_generation_predicate
 from falkordb_discovery import discover_falkordb_data_files
 
@@ -2764,54 +2765,13 @@ def _install_global_tool_error_wrapper() -> None:
         for item in catalog_entries
         if item.get("name")
     }
-    original_call_tool_mcp = mcp_server._call_tool_mcp
 
-    async def _safe_call_tool_mcp(key: str, arguments: Dict[str, Any]) -> Any:
-        try:
-            return await original_call_tool_mcp(key, arguments)
-        except Exception as exc:
-            provided = _extract_call_payload(arguments)
-            input_entries = inputs_by_tool.get(key, [])
-            required = [
-                str(entry.get("name"))
-                for entry in input_entries
-                if isinstance(entry, dict) and entry.get("required") and entry.get("name")
-            ]
-            accepted = [
-                str(entry.get("name"))
-                for entry in input_entries
-                if isinstance(entry, dict) and entry.get("name")
-            ]
-            missing = [name for name in required if _is_missing_value(provided.get(name))]
-            error_type = "tool_execution_error"
-            if missing:
-                error_type = "missing_required_parameters"
-            elif isinstance(exc, (ValueError, TypeError)):
-                error_type = "invalid_parameters"
-
-            payload: Dict[str, Any] = {
-                "ok": False,
-                "error": {
-                    "type": error_type,
-                    "tool": key,
-                    "backend": "fast",
-                    "message": str(exc),
-                    "missing_required_params": missing,
-                    "required_params": required,
-                    "accepted_params": accepted,
-                    "received_params": sorted([name for name in provided.keys() if not _is_missing_value(provided.get(name))]),
-                    "example": examples_by_tool.get(key),
-                    "next_step": "Call list_mcp_functions and retry with exact parameter names.",
-                },
-            }
-            return mcp_types.CallToolResult(
-                isError=True,
-                structuredContent=payload,
-                content=[mcp_types.TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
-            )
-
-    mcp_server._call_tool_mcp = _safe_call_tool_mcp
-    setattr(mcp_server, "_safe_tool_wrapper_installed", True)
+    install_tool_error_middleware(
+        mcp_server,
+        inputs_by_tool=inputs_by_tool,
+        example_for=examples_by_tool.get,
+        backend="fast",
+    )
 
 
 _install_global_tool_error_wrapper()

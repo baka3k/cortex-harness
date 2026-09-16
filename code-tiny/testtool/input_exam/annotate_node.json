@@ -1,7 +1,7 @@
 {
-    "node_id": "YOUR_NODE_ID",
-    "project_id": "hyper_graph",
-    "note": "Important function",
-    "tags": "review,todo",
-    "severity": "medium"
+  "node_id": "hi.baka3k.digitalkey.MainActivity",
+  "project_id": "digitalkey",
+  "note": "Important function",
+  "tags": "review,todo",
+  "severity": "medium"
 }

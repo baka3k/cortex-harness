@@ -3117,7 +3117,7 @@ m.project_id_normalized = row.project_id_normalized,
                 MERGE (d:GradleDependency {id: row.id})
                 SET d:GradleDependency,
                     d.coordinate = row.coordinate,
-                    d.group = row.group,
+                    d.`group` = row.group,
                     d.artifact = row.artifact,
                     d.version = row.version,
                     d.summary = row.summary,

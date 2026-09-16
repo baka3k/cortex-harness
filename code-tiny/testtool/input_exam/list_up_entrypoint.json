@@ -1,7 +1,7 @@
 {
-    "modules": [
-        "src/main"
-    ],
-    "project_id": "hyper_graph",
-    "limit": 200
+  "modules": [
+    "DigitalKey/src/main"
+  ],
+  "project_id": "digitalkey",
+  "limit": 200
 }
