@@ -38,3 +38,9 @@ fancy-regex = "0.14"
 uuid = { version = "1", features = ["v5"] }
 # `unsafe_code = "deny"` lives as a source-level attribute in main.rs so the
 # test build can scope-lift it (registry_tests mutates process env).
+
+[dev-dependencies]
+# journal_replay_fixture test: copy + inspect the legacy journal fixture
+# (run metadata + blocked→open flip) and open a scratch ladybug store.
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3"

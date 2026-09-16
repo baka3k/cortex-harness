@@ -9,6 +9,7 @@ pub mod graphops;
 pub mod hash_vector;
 pub mod inventory;
 pub mod journalenv;
+pub mod journal_replay;
 pub mod message_scan;
 pub mod orchestrator;
 pub mod registry;

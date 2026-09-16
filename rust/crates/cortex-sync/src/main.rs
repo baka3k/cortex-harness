@@ -6,6 +6,11 @@ use std::collections::BTreeMap;
 
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    // Hidden flag (phase-03): dev journalx pre-run drains the required lane
+    // through the same native replay lib (replaces the python consumer spawn).
+    if raw.iter().any(|arg| arg == "--journal-recover-only") {
+        std::process::exit(cortex_sync::journal_replay::recover_only_main());
+    }
     let (root, config) = pre_scan(&raw);
     let default_config = std::path::Path::new(&root)
         .join(".cortext-harness/config/dev.json")
