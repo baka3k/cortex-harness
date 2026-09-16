@@ -55,6 +55,12 @@ pub trait VectorWriteOps {
     fn finalize(&self) -> Result<(), String> {
         Ok(())
     }
+
+    /// Drop unflushed deferred state after a failed pass (local: evict the
+    /// process-cached client so a later unrelated op cannot flush the failed
+    /// pass's partial mutations to disk; remote: every call already waited,
+    /// nothing deferred).
+    fn discard(&self) {}
 }
 
 impl VectorWriteOps for RemoteQdrantStore {
@@ -130,6 +136,13 @@ impl VectorWriteOps for LocalQdrantStore {
 
     fn finalize(&self) -> Result<(), String> {
         LocalQdrantStore::flush(self).map_err(|error| error.to_string())
+    }
+
+    fn discard(&self) {
+        // Evict the diverged in-memory state (failed pass leaves deferred
+        // mutations only in memory): re-read disk into this handle AND the
+        // process cache, keeping the storage lease.
+        let _ = LocalQdrantStore::reload_from_disk(self);
     }
 }
 
@@ -404,6 +417,39 @@ fn ensure_scope_indexes(store: &impl VectorWriteOps, collection: &str) -> Result
 /// JSON engine via the [`VectorWriteOps`] seam.
 #[allow(clippy::too_many_arguments)] // mirrors sync_vector_documents' parameter list 1:1
 pub fn sync_vector_documents(
+    store: &impl VectorWriteOps,
+    embedder: &dyn Embedder,
+    collection: &str,
+    documents: &[VectorDocument],
+    parser: &str,
+    project_id: &str,
+    root_scope: &str,
+    cleanup_paths: &[String],
+    full_replace: bool,
+) -> Result<usize, String> {
+    let result = sync_vector_documents_inner(
+        store,
+        embedder,
+        collection,
+        documents,
+        parser,
+        project_id,
+        root_scope,
+        cleanup_paths,
+        full_replace,
+    );
+    if result.is_err() {
+        // A failed pass must not leave deferred (local) mutations in the
+        // process-cached client — an unrelated later flush would persist
+        // them while the run reports this pass as failed.
+        store.discard();
+    }
+    result
+}
+
+/// The `sync_vector_documents` contract body (see the public wrapper).
+#[allow(clippy::too_many_arguments)]
+fn sync_vector_documents_inner(
     store: &impl VectorWriteOps,
     embedder: &dyn Embedder,
     collection: &str,

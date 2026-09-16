@@ -563,7 +563,10 @@ pub fn reset_clients() {
 pub struct LocalQdrantStore {
     resolved: ResolvedStorage,
     role: String,
-    client: Arc<Mutex<LocalClient>>,
+    /// Swappable so [`LocalQdrantStore::reload_from_disk`] can evict diverged
+    /// in-memory state (failed persist-mode pass) without releasing the lease
+    /// held in the process cache.
+    client: std::sync::RwLock<Arc<Mutex<LocalClient>>>,
 }
 
 impl LocalQdrantStore {
@@ -571,8 +574,40 @@ impl LocalQdrantStore {
         Ok(Self {
             resolved: resolved.clone(),
             role: role.to_string(),
-            client: get_client(resolved, role)?,
+            client: std::sync::RwLock::new(get_client(resolved, role)?),
         })
+    }
+
+    /// Drop diverged in-memory state: re-read the store from disk and swap
+    /// the fresh client into both this handle and the process cache (the
+    /// storage lease stays held by the cache entry). Used after a failed
+    /// persist-mode pass so a later unrelated flush cannot persist the
+    /// failed pass's partial mutations.
+    pub fn reload_from_disk(&self) -> StoreResult<()> {
+        let path = self.resolved.path_for_role(&self.role)?;
+        let fresh = Arc::new(Mutex::new(LocalClient::open(path)?));
+        let key = path.to_string_lossy().into_owned();
+        if let Some(cached) = client_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_mut(&key)
+        {
+            cached.client = fresh.clone();
+        }
+        *self
+            .client
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = fresh;
+        Ok(())
+    }
+
+    // Snapshot the swappable client Arc — the returned Arc outlives the
+    // caller's MutexGuard because the caller binds it first.
+    fn current_client_arc(&self) -> Arc<Mutex<LocalClient>> {
+        self.client
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub fn role(&self) -> &str {
@@ -589,7 +624,10 @@ impl LocalQdrantStore {
         body: impl FnOnce(&mut Collection) -> StoreResult<T>,
         persist: bool,
     ) -> StoreResult<T> {
-        let mut client = lock_client(&self.client);
+        let client_arc = self.current_client_arc();
+        let mut client = client_arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let result = {
             let collection = client
                 .data
@@ -607,19 +645,28 @@ impl LocalQdrantStore {
     // ── collections ─────────────────────────────────────────────────────────
 
     pub fn list_collection_names(&self) -> StoreResult<Vec<String>> {
-        let client = lock_client(&self.client);
+        let client_arc = self.current_client_arc();
+        let client = client_arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         Ok(client.data.collections.keys().cloned().collect())
     }
 
     pub fn collection_exists(&self, name: &str) -> bool {
-        lock_client(&self.client)
+        let client_arc = self.current_client_arc();
+        client_arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .data
             .collections
             .contains_key(name)
     }
 
     pub fn get_collection_info(&self, name: &str) -> StoreResult<Value> {
-        let client = lock_client(&self.client);
+        let client_arc = self.current_client_arc();
+        let client = client_arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let collection = client
             .data
             .collections
@@ -629,7 +676,10 @@ impl LocalQdrantStore {
     }
 
     pub fn create_collection(&self, name: &str, vectors_config: &Value) -> StoreResult<()> {
-        let mut client = lock_client(&self.client);
+        let client_arc = self.current_client_arc();
+        let mut client = client_arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if client.data.collections.contains_key(name) {
             return Err(StoreError::Value(format!(
                 "Collection `{name}` already exists!"
@@ -647,7 +697,10 @@ impl LocalQdrantStore {
     }
 
     pub fn recreate_collection(&self, name: &str, vectors_config: &Value) -> StoreResult<()> {
-        let mut client = lock_client(&self.client);
+        let client_arc = self.current_client_arc();
+        let mut client = client_arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         client.data.collections.remove(name);
         client.data.collections.insert(
             name.to_string(),
@@ -661,7 +714,10 @@ impl LocalQdrantStore {
     }
 
     pub fn delete_collection(&self, name: &str) -> StoreResult<()> {
-        let mut client = lock_client(&self.client);
+        let client_arc = self.current_client_arc();
+        let mut client = client_arc
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         client.data.collections.remove(name);
         client.flush()
     }
@@ -723,7 +779,9 @@ impl LocalQdrantStore {
     /// Serialize the whole store now (one atomic rename) — the single flush
     /// that closes a deferred persist-mode pass.
     pub fn flush(&self) -> StoreResult<()> {
-        self.client.lock()
+        let client_arc = self.current_client_arc();
+        client_arc
+            .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .flush()
     }
@@ -732,7 +790,8 @@ impl LocalQdrantStore {
     /// signal for the persist-mode gate (bytes + wall-time, not flush
     /// counts).
     pub fn flush_bytes_written(&self) -> u64 {
-        self.client
+        let client_arc = self.current_client_arc();
+        client_arc
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .flush_bytes
@@ -845,7 +904,10 @@ impl LocalQdrantStore {
         filter_selector: Option<&Value>,
         persist: bool,
     ) -> StoreResult<()> {
-        if points_selector_ids.is_none() && filter_selector.is_none() {
+        // `Some(&[])` ids + no filter would fall through to the filter branch
+        // below and erase the whole collection — refuse the ambiguous call.
+        if points_selector_ids.map(|ids| ids.is_empty()).unwrap_or(true) && filter_selector.is_none()
+        {
             return Err(StoreError::Value(
                 "delete requires point IDs or a filter selector".to_string(),
             ));
@@ -915,6 +977,13 @@ impl LocalQdrantStore {
         filter: Option<&Value>,
         overwrite: bool,
     ) -> StoreResult<()> {
+        // Ambiguous-call guard (mirrors delete): `Some(&[])` ids + no filter
+        // would rewrite every point's payload.
+        if points.map(|ids| ids.is_empty()).unwrap_or(true) && filter.is_none() {
+            return Err(StoreError::Value(
+                "payload update requires point IDs or a filter".to_string(),
+            ));
+        }
         self.with_collection(
             collection_name,
             |collection| {
@@ -998,14 +1067,6 @@ impl std::fmt::Debug for LocalQdrantStore {
     }
 }
 
-fn lock_client(
-    client: &Arc<Mutex<LocalClient>>,
-) -> std::sync::MutexGuard<'_, LocalClient> {
-    client
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
 // ---------------------------------------------------------------------------
 // Shared read paths — LocalQdrantStore (lease-holding writer) and
 // LocalQdrantReader (lock-free reader) must score/shape hits identically.
@@ -1042,14 +1103,16 @@ fn search_in_collection(
         })
         .collect();
     scored.sort_by(|a, b| {
-        let ordering = b
-            .0
-            .partial_cmp(&a.0)
-            .unwrap_or(std::cmp::Ordering::Equal);
+        // Similarity scores (Cosine/Dot) rank descending; Euclid is a plain
+        // distance and ranks ASCENDING (qdrant returns nearest first with the
+        // distance as score). Ties break by id sort-key for similarity, and
+        // stay score-stable for Euclid.
+        let ordering = match distance {
+            Distance::Euclid => a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal),
+            _ => b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal),
+        };
         if ordering == std::cmp::Ordering::Equal && !matches!(distance, Distance::Euclid) {
             a.1.id.sort_key().cmp(&b.1.id.sort_key())
-        } else if ordering == std::cmp::Ordering::Equal {
-            a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
         } else {
             ordering
         }

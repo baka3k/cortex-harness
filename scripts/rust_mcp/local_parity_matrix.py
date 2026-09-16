@@ -191,7 +191,7 @@ def leg_scope(root: Path) -> None:
     )
 
 
-# ── leg 5: explore seeds + merge ─────────────────────────────────────────────
+# ── leg 5: explore seeds + REAL merge_hits (lane probe) ─────────────────────
 def leg_explore_seeds(root: Path) -> None:
     store = root / "seeds"
     shared = [
@@ -205,36 +205,28 @@ def leg_explore_seeds(root: Path) -> None:
     run_binary(STORAGE_PROBE, ["init", str(store), "/dev/stdin", "seed_a", str(DIM)], stdin=json.dumps(shared))
     run_binary(STORAGE_PROBE, ["init", str(store), "/dev/stdin", "seed_b", str(DIM)], stdin=json.dumps(shared))
 
-    per_collection = []
-    for collection in ("seed_a", "seed_b"):
-        result = run_binary(
-            STORAGE_PROBE,
-            ["search", str(store), "/dev/stdin"],
-            stdin=json.dumps({"collection": collection, "vector": [0.4] * DIM, "limit": 5}),
-        )
-        body = json.loads(result.stdout)
-        for hit in body["hits"]:
-            hit["_collection"] = collection
-        per_collection.append(body["hits"])
-
-    # merge_hits semantics: dedupe by str(id) keep-higher-score, stable sort
-    # desc, cut to top_k.
-    order: list[str] = []
-    combined: dict[str, dict] = {}
-    for hits in per_collection:
-        for hit in hits:
-            key = str(hit["id"])
-            if key not in combined:
-                order.append(key)
-                combined[key] = hit
-            elif hit["score"] > combined[key]["score"]:
-                combined[key] = hit
-    merged = sorted(order, key=lambda k: -combined[k]["score"])[:5]
-    ok = len(merged) == 5 and len(set(merged)) == 5
+    probe = RUST_TARGET / "debug" / "examples" / "vector_lane_probe"
+    result = run_binary(
+        probe,
+        [str(store), "seed_a,seed_b", "5"],
+        stdin=json.dumps([0.4] * DIM),
+        env_extra={"CORTEX_VECTOR_BACKEND": "rust"},
+    )
+    body = json.loads(result.stdout)
+    merged = body.get("merged", [])
+    ids = [str(hit["id"]) for hit in merged]
+    scores = [float(hit["score"]) for hit in merged]
+    # Real merge_hits semantics: dedupe by str(id) (each seed id appears in
+    # BOTH collections), keep the higher score, stable sort desc, cut top_k.
+    deduped = len(ids) == len(set(ids)) == 5
+    ordered = scores == sorted(scores, reverse=True)
+    tagged = all(hit.get("_collection") in ("seed_a", "seed_b") for hit in merged)
+    sizes_ok = body.get("sizes", {}).get("seed_a", {}).get("default") == DIM
     leg(
         "explore-seeds/merge-dedupe",
-        ok,
-        f"collections=2 hits={sum(len(h) for h in per_collection)} merged={len(merged)} unique={len(set(merged))}",
+        deduped and ordered and tagged and sizes_ok,
+        f"merged={len(ids)} unique={len(set(ids))} desc={ordered} "
+        f"provenance={tagged} sizes_ok={sizes_ok} (real vector_lane::search_collection + merge_hits)",
     )
 
 

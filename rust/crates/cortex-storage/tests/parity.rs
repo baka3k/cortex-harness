@@ -1001,6 +1001,96 @@ fn payload_index_is_idempotent() {
     let _ = std::fs::remove_dir_all(&_root);
 }
 
+/// Euclid ranks NEAREST-first (ascending distance), matching qdrant; the
+/// pre-review sort returned farthest-first (review finding 6).
+#[test]
+fn euclid_distance_ranks_nearest_first() {
+    let (_root, _store_root, store) = phase01_store("euclid-order");
+    store
+        .create_collection("code", &serde_json::json!({"size": 1, "distance": "Euclid"}))
+        .unwrap();
+    store
+        .upsert(
+            "code",
+            &[
+                serde_json::json!({"id": "far", "vector": [10.0], "payload": {}}),
+                serde_json::json!({"id": "near", "vector": [0.1], "payload": {}}),
+                serde_json::json!({"id": "mid", "vector": [3.0], "payload": {}}),
+            ],
+        )
+        .unwrap();
+    let hits = store.search("code", &[0.0], 3, None, false, false, None).unwrap();
+    let ids: Vec<&str> = hits.iter().map(|hit| hit["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["near", "mid", "far"], "ascending distance order");
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// Ambiguous selectors refuse: `Some(&[])` ids + no filter must not fall
+/// through to the filter branch (which would erase the whole collection /
+/// rewrite every payload) — review finding 7.
+#[test]
+fn empty_ids_selector_refuses_instead_of_wiping() {
+    let (_root, _store_root, store) = phase01_store("empty-ids");
+    store
+        .create_collection("code", &serde_json::json!({"size": 1, "distance": "Cosine"}))
+        .unwrap();
+    store
+        .upsert(
+            "code",
+            &[serde_json::json!({"id": "a", "vector": [1.0], "payload": {"k": "v"}})],
+        )
+        .unwrap();
+    assert!(store.delete("code", Some(&[]), None).is_err());
+    assert!(store.set_payload("code", &serde_json::json!({"k": "x"}), Some(&[]), None).is_err());
+    assert_eq!(store.count("code", None).unwrap(), 1, "no wipe happened");
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// `reload_from_disk` evicts diverged in-memory (deferred) state from both
+/// the handle and the process cache, keeping the lease — the mechanism
+/// behind `VectorWriteOps::discard` after a failed pass (review finding 2).
+#[test]
+fn reload_from_disk_discards_deferred_state() {
+    let (_root, store_root, store) = phase01_store("reload-discard");
+    store
+        .create_collection("code", &serde_json::json!({"size": 1, "distance": "Cosine"}))
+        .unwrap();
+    store
+        .upsert(
+            "code",
+            &[serde_json::json!({"id": "committed", "vector": [1.0], "payload": {}})],
+        )
+        .unwrap();
+    // Simulate a failed pass: deferred (unflushed) mutation in memory only.
+    store
+        .upsert_deferred(
+            "code",
+            &[serde_json::json!({"id": "partial", "vector": [1.0], "payload": {}})],
+        )
+        .unwrap();
+    store.reload_from_disk().unwrap();
+    assert_eq!(store.count("code", None).unwrap(), 1, "deferred partial state is gone");
+    // A fresh handle on the same cache must agree (cache was swapped too).
+    let resolved2 = resolve_storage(
+        &_root,
+        None,
+        &ResolveOverrides {
+            data_home: Some(_root.to_string_lossy().into_owned()),
+            ..ResolveOverrides::default()
+        },
+    )
+    .unwrap();
+    let store2 = LocalQdrantStore::open(&resolved2, StorageRole::Code.as_str()).unwrap();
+    assert_eq!(store2.count("code", None).unwrap(), 1);
+    let reader = cortex_storage::qdrant::LocalQdrantReader::open(&store_root).unwrap();
+    assert_eq!(reader.count("code", None).unwrap(), 1);
+    store.close();
+    store2.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
 // ---------------------------------------------------------------------------
 // GatewayLimits::from_profile lane budgets.
 // ---------------------------------------------------------------------------

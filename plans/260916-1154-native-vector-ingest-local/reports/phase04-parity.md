@@ -29,6 +29,35 @@ Hai lần chạy `local_parity_matrix.py` liên tiếp: **8/8 legs green** cả 
 fixture 8 điểm × 8 dims × query [0.5]×8. Chênh lệch ở mức machine epsilon,
 cách xa tolerance 1e-6 (F8 đóng lại; **không nới tolerance**).
 
+## Review-fix cập nhật (2026-09-16, sau code-review rev1 của execution)
+
+1. **Twin meta leg giờ THẬT**: `local_vector_probe search` emit `sizes` đọc từ
+   JSON engine qua `LocalQdrantReader::get_collection_info` — không còn
+   hardcode `{"default": DIM}` (review finding 3).
+2. **Explore-seeds leg chạy `merge_hits` THẬT**: probe mới
+   `cortex-mcp/examples/vector_lane_probe.rs` drive `vector_lane::
+   search_collection` + `merge_hits` thực (kèm `_collection` provenance tag,
+   desc-order assert) — không còn Python re-implementation (finding 4).
+3. **Phạm vi RSS gate (finding 5, relabel)**: gate đo peak RSS của **reader
+   process probe** (`local_vector_probe read-big` — chính là code
+   `LocalQdrantReader` mà lane MCP dùng), KHÔNG phải toàn bộ MCP process
+   (không gồm baseline MCP + ONNX embedder). Plan phase-03 gate ghi "ΔRSS MCP
+   process" — số đo 71MB/118MB là lower-bound của khoản đó (reader là phần
+   dominan theo dung lượng; embedder/axum thêm cố định). Ghi nhận trung thực,
+   không claim vượt phạm vi.
+4. **Euclid sort direction (finding 6)**: engine sửa ascending (nearest-first)
+   + unit test pin.
+5. **Empty-ids footgun (finding 7)**: `delete`/`apply_payload` từ chối
+   `Some(&[])` + filter None.
+6. **Failed-pass deferred state (finding 2)**: `sync_vector_documents` wrapper
+   gọi `VectorWriteOps::discard` trên lỗi → local `reload_from_disk` (swap
+   client trong handle + process cache, giữ lease) — pass lỗi không thể bị
+   flush lén bởi op khác.
+7. **Reader root derivation (finding 1)**: `vector_lane::local_store_root` giờ
+   đi qua `cortex_storage::resolve_storage` (writer/reader cùng một resolver —
+   config-file + relative-data-home + instance normalization); env-chain cũ
+   chỉ còn là fallback khi resolution fail.
+
 ## Danh sách divergence được chấp nhận (đóng windows risk #3)
 
 1. **`version` field**: native hit không có `version`; sidecar hit có. Inert
