@@ -89,6 +89,69 @@ pub const MESSAGE_UPSERT_QUERY: &str = r#"
     RETURN count(m) AS count
     "#;
 
+/// Ladybug variant (phase-02 sync-cutover): embedded 0.20.4 không parse được
+/// `FOREACH (_ IN CASE WHEN … END | …)` (kỳ vọng oC_MultiQuery) nên upsert
+/// tách 3 query FOREACH-free, semantics giữ nguyên:
+/// (1) Message + sender endpoint + SENDS_MESSAGE;
+/// (2) receiver endpoint + TARGETS_ENDPOINT cho rows có receiver;
+/// (3) CONTAINS link tới File khớp project.
+pub const MESSAGE_UPSERT_MESSAGES_LADYBUG_QUERY: &str = r#"
+    UNWIND $rows AS row
+    MERGE (m:Message {id: row.id})
+    SET m.name = row.name,
+        m.sender = row.sender,
+        m.receiver = row.receiver,
+        m.payload = row.payload,
+        m.response = row.response,
+        m.explanation = row.explanation,
+        m.file_path = row.file_path,
+        m.line = row.line,
+        m.confidence = row.confidence,
+        m.project_id = row.project_id,
+        m.project_id_normalized = row.project_id_normalized,
+        m.project_name = row.project_name,
+        m.language = row.language,
+        m.repo = row.repo,
+        m.build_system = row.build_system,
+        m.updated_at = timestamp()
+    WITH m, row
+    MERGE (s:MessageEndpoint {id: row.sender_endpoint_id})
+    SET s.name = row.sender,
+        s.project_id = row.project_id,
+        s.project_id_normalized = row.project_id_normalized,
+        s.project_name = row.project_name,
+        s.updated_at = timestamp()
+    MERGE (s)-[:SENDS_MESSAGE]->(m)
+    RETURN count(m) AS count
+    "#;
+
+/// Ladybug variant — chỉ chạy với $rows đã lọc `receiver_endpoint_id != ''`.
+pub const MESSAGE_UPSERT_RECEIVER_LADYBUG_QUERY: &str = r#"
+    UNWIND $rows AS row
+    MERGE (r:MessageEndpoint {id: row.receiver_endpoint_id})
+    SET r.name = row.receiver,
+        r.project_id = row.project_id,
+        r.project_id_normalized = row.project_id_normalized,
+        r.project_name = row.project_name,
+        r.updated_at = timestamp()
+    WITH r, row
+    MATCH (m:Message {id: row.id})
+    MERGE (m)-[:TARGETS_ENDPOINT]->(r)
+    RETURN count(*) AS count
+    "#;
+
+/// Ladybug variant — link CONTAINS tới File khớp project (nếu có).
+pub const MESSAGE_UPSERT_FILE_LINK_LADYBUG_QUERY: &str = r#"
+    UNWIND $rows AS row
+    OPTIONAL MATCH (f:File {id: row.file_path})
+    WHERE f.project_id = row.project_id
+    WITH row, f
+    WHERE f IS NOT NULL
+    MATCH (m:Message {id: row.id})
+    MERGE (f)-[:CONTAINS]->(m)
+    RETURN count(*) AS count
+    "#;
+
 /// Query xoá `Message` theo file paths của `cleanup_message_nodes_neo4j`.
 pub const MESSAGE_CLEANUP_BY_FILES_QUERY: &str = r#"
     WITH $project_id AS project_id, $paths AS paths
@@ -247,10 +310,54 @@ pub fn upsert_messages_to_graph(
             .collect();
         let mut params = BTreeMap::new();
         params.insert("rows".to_string(), Value::Array(rows));
+        if store.provider() == "ladybug" {
+            written += upsert_messages_ladybug(store, database, &params, batch)?;
+            continue;
+        }
         let out = store
             .execute_query(MESSAGE_UPSERT_QUERY, &params, database)
             .map_err(|error| error.to_string())?;
         written += query_count(&out, "count");
+    }
+    Ok(written)
+}
+
+/// Ladybug batch path — 3 query FOREACH-free (xem
+/// `MESSAGE_UPSERT_MESSAGES_LADYBUG_QUERY`). Trả về số message upserted.
+fn upsert_messages_ladybug(
+    store: &mut dyn GraphStore,
+    database: Option<&str>,
+    params: &BTreeMap<String, Value>,
+    batch: &[MessageRecord],
+) -> Result<u64, String> {
+    let out = store
+        .execute_query(MESSAGE_UPSERT_MESSAGES_LADYBUG_QUERY, params, database)
+        .map_err(|error| error.to_string())?;
+    let written = query_count(&out, "count");
+    // Receiver links — chỉ rows có receiver (FOREACH-guard biến thành lọc
+    // rows trước khi UNWIND).
+    let receiver_rows: Vec<Value> = batch
+        .iter()
+        .zip(params["rows"].as_array().cloned().unwrap_or_default().iter())
+        .filter(|(record, _)| !record.receiver.is_empty())
+        .map(|(_, row)| row.clone())
+        .collect();
+    if !receiver_rows.is_empty() {
+        let mut receiver_params = BTreeMap::new();
+        receiver_params.insert("rows".to_string(), Value::Array(receiver_rows));
+        store
+            .execute_query(MESSAGE_UPSERT_RECEIVER_LADYBUG_QUERY, &receiver_params, database)
+            .map_err(|error| error.to_string())?;
+    }
+    // CONTAINS link tới File khớp project — best-effort trên ladybug:
+    // rel table `CONTAINS` của manifest chỉ khai báo endpoint File→Function/
+    // File→Type; File→Message nằm ngoài schema (trên falkordb không ràng
+    // buộc nên link luôn lập được). Violation không được đánh hỏng lane —
+    // Message/MessageEndpoint đã upsert xong.
+    if let Err(error) =
+        store.execute_query(MESSAGE_UPSERT_FILE_LINK_LADYBUG_QUERY, params, database)
+    {
+        eprintln!("[message-scan][ladybug] File CONTAINS link skipped: {error}");
     }
     Ok(written)
 }

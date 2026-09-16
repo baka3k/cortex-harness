@@ -564,6 +564,13 @@ fn expand_set_plus_equals(query: &str) -> String {
         // sẽ fail như trước thay vì sai semantics).
         return query.to_string();
     }
+    // Merge key per var (post natural-key rewrite mọi merge đều `{id: …}`).
+    // Assignment `<var>.<merge_key> = <cùng expr>` là PK-set → binder ladybug
+    // từ chối — loại khỏi expansion (redundant: merge đã đặt giá trị đó).
+    let mut merge_keys: Vec<(String, String)> = Vec::new();
+    for caps in merge_node_pattern_re().captures_iter(query) {
+        merge_keys.push((caps[1].to_string(), caps[3].to_string()));
+    }
     let re = set_plus_equals_row_re();
     re.replace_all(query, |caps: &regex::Captures| {
         // Follow char phải không phải `.`/identifier — `+= row.props` KHÔNG
@@ -577,8 +584,19 @@ fn expand_set_plus_equals(query: &str) -> String {
         let var = &caps[1];
         let assigns: Vec<String> = keys
             .iter()
+            .filter(|key| {
+                // Bỏ key trùng merge key CÙNG expr (node merged trên id đã có
+                // giá trị; SET lại là PK-set violation).
+                !merge_keys
+                    .iter()
+                    .any(|(mv, mk)| mv == var && mk == *key)
+            })
             .map(|key| format!("{var}.{key} = row.{key}"))
             .collect();
+        if assigns.is_empty() {
+            // Mọi key đều là merge key — SET list rỗng không parse được.
+            return caps[0].to_string();
+        }
         format!("SET {}{follow}", assigns.join(", "))
     })
     .into_owned()
@@ -597,29 +615,30 @@ fn is_plain_identifier(value: &str) -> bool {
 
 /// Top-level keys (thứ tự xuất hiện) của map đầu tiên trong đoạn
 /// `UNWIND [<literal>] AS <var>` sau khi params đã render. Parser
-/// depth-aware + string-aware (single-quote + `\\` escape) vì rendered
-/// string value có thể chứa `}`/`[`/`,`/backtick.
+/// depth-aware + string-aware (NHẢY ĐƠN lẫn NHÁY KÉP — `quote_cypher` render
+/// string bằng `"…"` với `\\` escape — string value có thể chứa
+/// `}`/`[`/`,`/backtick).
 fn unwind_row_keys(query: &str) -> Option<Vec<String>> {
     let unwind = query.find("UNWIND ")?;
     let open = query[unwind..].find('[')? + unwind;
     let bytes = query.as_bytes();
     let mut depth = 0i32;
-    let mut in_str = false;
+    let mut in_str: Option<char> = None;
     let mut escaped = false;
     for (offset, &byte) in bytes.iter().enumerate().skip(open) {
         let c = byte as char;
-        if in_str {
+        if let Some(quote) = in_str {
             if escaped {
                 escaped = false;
             } else if c == '\\' {
                 escaped = true;
-            } else if c == '\'' {
-                in_str = false;
+            } else if c == quote {
+                in_str = None;
             }
             continue;
         }
         match c {
-            '\'' => in_str = true,
+            '\'' | '"' => in_str = Some(c),
             '[' | '{' | '(' => depth += 1,
             ']' | '}' | ')' => {
                 depth -= 1;
@@ -640,26 +659,26 @@ fn first_map_keys(segment: &str) -> Vec<String> {
     let bytes = segment.as_bytes();
     let mut keys = Vec::new();
     let mut depth = 0i32;
-    let mut in_str = false;
+    let mut in_str: Option<char> = None;
     let mut escaped = false;
     let mut pending_key = String::new();
     let mut started = false;
     for &byte in bytes {
         let c = byte as char;
-        if in_str {
+        if let Some(quote) = in_str {
             pending_key.push(c);
             if escaped {
                 escaped = false;
             } else if c == '\\' {
                 escaped = true;
-            } else if c == '\'' {
-                in_str = false;
+            } else if c == quote {
+                in_str = None;
             }
             continue;
         }
         match c {
-            '\'' => {
-                in_str = true;
+            '\'' | '"' => {
+                in_str = Some(c);
                 escaped = false;
                 pending_key.push(c);
             }
@@ -668,6 +687,7 @@ fn first_map_keys(segment: &str) -> Vec<String> {
                 if started && depth == 1 {
                     return keys;
                 }
+                pending_key.clear();
             }
             ']' | '}' | ')' => {
                 depth -= 1;
@@ -1177,11 +1197,14 @@ mod tests {
                      SET endpoint += row, endpoint.topology_owned = true\n\
                      RETURN count(endpoint) AS count";
         let out = expand_set_plus_equals(query);
+        // `id` là merge key (PK) — bị loại khỏi expansion (SET lại = PK-set
+        // violation trên ladybug).
         assert!(
-            out.contains("SET endpoint.id = row.id, endpoint.count = row.count, endpoint.name = row.name, endpoint.topology_owned = true"),
+            out.contains("SET endpoint.count = row.count, endpoint.name = row.name, endpoint.topology_owned = true"),
             "{out}"
         );
         assert!(!out.contains("+="), "{out}");
+        assert!(!out.contains("endpoint.id = row.id"), "{out}");
     }
 
     #[test]
@@ -1255,6 +1278,18 @@ ON MATCH SET
     fn unwind_row_keys_skips_strings_with_braces() {
         let query = "UNWIND [{`id`: `a`, `snippet`: '}{[`'}, {`id`: `b`, `snippet`: NULL}] AS row RETURN count(*) AS c";
         assert_eq!(unwind_row_keys(query), Some(vec!["id".into(), "snippet".into()]));
+        // quote_cypher render dùng NHÁY KÉP (route chứa {code} trong string).
+        let dq = "UNWIND [{`id`: `a`, `route`: \"/legacy/{code}\", `n`: 1}, {`id`: `b`, `route`: NULL, `n`: 2}] AS row\nMERGE (node:ApiEndpoint {id: row.id})\nSET node += row\nRETURN count(node) AS count";
+        assert_eq!(
+            unwind_row_keys(dq),
+            Some(vec!["id".into(), "route".into(), "n".into()])
+        );
+        let expanded = expand_set_plus_equals(dq);
+        assert!(
+            expanded.contains("SET node.route = row.route, node.n = row.n"),
+            "{expanded}"
+        );
+        assert!(!expanded.contains("node.id = row.id"), "{expanded}");
     }
 
     #[test]
