@@ -799,10 +799,9 @@ mod tests {
         store.close();
     }
 
-    /// Hatch gate (red-team H2/C1, pre-flip): flag unset → frozen Unsupported
-    /// (zero writes, behavior identical to before the plan); `=python` →
-    /// frozen too; `=rust` → the local JSON engine opens for business. The
-    /// phase-05 flip commit swaps unset to native.
+    /// Hatch gate (D5, phase-05 flipped): unset → native ON; `=python` →
+    /// frozen Unsupported (zero writes, the rollback leg); `=rust` → the
+    /// local JSON engine opens for business.
     #[test]
     fn open_native_store_honours_vector_backend_hatch() {
         let _env = backend_env_lock().lock().unwrap();
@@ -833,20 +832,17 @@ mod tests {
         );
         restore("QDRANT_CODE_PATH", Some(store_root.to_string_lossy().into_owned()));
 
-        // Unset flag → frozen (byte-identical outcome to pre-plan behavior).
-        restore("CORTEX_VECTOR_BACKEND", None);
+        // `=python` → frozen (the rollback leg: zero writes, loud reason).
+        restore("CORTEX_VECTOR_BACKEND", Some("python".into()));
         match open_native_store(Some(&store_root.to_string_lossy())) {
             NativeStore::Unsupported(reason) => {
                 assert!(reason.contains("FROZEN at zero writes"), "honest frozen reason: {reason}");
                 assert!(reason.contains("CORTEX_VECTOR_BACKEND=rust"), "escape hatch named: {reason}");
             }
-            _ => panic!("unset hatch must stay frozen before the flip"),
+            _ => panic!("=python hatch must stay frozen"),
         }
-        // `=python` → frozen as well.
-        restore("CORTEX_VECTOR_BACKEND", Some("python".into()));
-        assert!(matches!(open_native_store(Some(&store_root.to_string_lossy())), NativeStore::Unsupported(_)));
-        // `=rust` → Local JSON engine; the store file appears after a flush.
-        restore("CORTEX_VECTOR_BACKEND", Some("rust".into()));
+        // Unset (phase-05 flip) → native local JSON engine.
+        restore("CORTEX_VECTOR_BACKEND", None);
         match open_native_store(Some(&store_root.to_string_lossy())) {
             NativeStore::Local(store) => {
                 store.create_collection("code", &json!({"size": 2, "distance": "Cosine"})).unwrap();
@@ -854,8 +850,11 @@ mod tests {
                 assert!(store_root.join("cortex-local-store.json").exists());
                 store.close();
             }
-            other => panic!("=rust must resolve the local JSON engine, got {other:?}"),
+            other => panic!("flipped default must resolve the local JSON engine, got {other:?}"),
         }
+        // `=rust` → explicit opt-in, same outcome.
+        restore("CORTEX_VECTOR_BACKEND", Some("rust".into()));
+        assert!(matches!(open_native_store(Some(&store_root.to_string_lossy())), NativeStore::Local(_)));
 
         restore("CORTEX_STORAGE_PROJECT_ID", saved_project);
         restore("CORTEX_HARNESS_CONFIG_PATH", saved_config);
