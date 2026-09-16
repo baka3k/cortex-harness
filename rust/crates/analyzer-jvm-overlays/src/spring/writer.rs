@@ -214,7 +214,22 @@ impl<'a> SpringFactWriter<'a> {
             return Ok(out);
         }
         self.ensure_schema()?;
-        let query = r#"
+        // Ladybug mất node type qua collect/UNWIND (binder) — DETACH DELETE
+        // phải chạy trực tiếp trên MATCH (khớp cleanup.rs).
+        let query = if self.store.provider() == "ladybug" {
+            r#"
+        MATCH (n)
+        WHERE n.project_id = $project_id
+          AND n.framework = 'spring'
+          AND (
+            coalesce(n.file_path, '') IN $paths
+            OR coalesce(n.path, '') IN $paths
+          )
+        DETACH DELETE n
+        RETURN count(*) AS deleted_nodes
+        "#
+        } else {
+            r#"
         MATCH (n)
         WHERE n.project_id = $project_id
           AND n.framework = 'spring'
@@ -227,7 +242,8 @@ impl<'a> SpringFactWriter<'a> {
         WITH DISTINCT n
         DETACH DELETE n
         RETURN count(n) AS deleted_nodes
-        "#;
+        "#
+        };
         let mut params = BTreeMap::new();
         params.insert("project_id".to_string(), json!(project_id));
         params.insert("paths".to_string(), json!(paths));

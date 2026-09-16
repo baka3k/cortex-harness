@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Map, Value};
 
 use cortex_analyzer_framework::cli::{abs_root, AnalyzerArgs};
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::manifest::load_manifest_paths;
 use cortex_graph_writer::language_writer::{
     FilesVariant, LanguageCodeWriter, WriteAllPayload,
@@ -414,6 +415,7 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
         .filter(|item| !item.is_empty())
         .collect();
 
+    let mut selected: Option<BTreeSet<String>> = None;
     let all_file_paths: Vec<PathBuf> = if args.incremental {
         let changed_existing: HashSet<String> = changed_set
             .iter()
@@ -422,12 +424,13 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
             .collect();
         let deps_by_file = cscan::collect_include_graph(&all_scanned_paths, &root);
         let impacted = cscan::expand_impacted_files_by_includes(&changed_existing, &deps_by_file);
-        let mut selected = BTreeSet::new();
-        selected.extend(changed_existing.iter().cloned());
-        selected.extend(impacted.iter().cloned());
+        let mut sel = BTreeSet::new();
+        sel.extend(changed_existing.iter().cloned());
+        sel.extend(impacted.iter().cloned());
+        selected = Some(sel);
         all_rel_paths
             .iter()
-            .filter(|path| selected.contains(*path))
+            .filter(|path| selected.as_ref().unwrap().contains(*path))
             .map(|path| rel_to_abs[path].clone())
             .collect()
     } else {
@@ -883,6 +886,9 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
         let mut buf_possible_calls: Vec<Row> = Vec::new();
         let mut buf_unknown_calls: Vec<Row> = Vec::new();
         let mut files_in_buf = 0usize;
+        // Phase-02: accumulate embedding categories across all flush batches
+        // (plan `260916-1432-legacy-17-vector-emit`).
+        let mut embedding_accumulator: Vec<(String, Vec<Value>)> = Vec::new();
 
         let mut func_metas: Vec<(String, Option<String>, String, String)> = Vec::new();
         let mut infer_type_ids: HashSet<String> = HashSet::new();
@@ -1341,6 +1347,7 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
                     &mut buf_resource_elements, &mut buf_relations,
                     &mut buf_possible_calls, &mut buf_unknown_calls,
                     &mut files_in_buf,
+                    &mut embedding_accumulator,
                 )?;
             }
         }
@@ -1353,6 +1360,7 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
             &mut buf_resource_elements, &mut buf_relations,
             &mut buf_possible_calls, &mut buf_unknown_calls,
             &mut files_in_buf,
+            &mut embedding_accumulator,
         )?;
 
         // Deferred INCLUDES (đích có thể thuộc buffer sau).
@@ -1523,6 +1531,32 @@ pub fn execute(args: &AnalyzerArgs, extra: &CplusExtraArgs) -> Result<i32, Strin
                 })
                 .map_err(|e| e.to_string())?;
         }
+
+        // Phase-02: emit EmbeddingInputArtifact after all flushes
+        // (plan `260916-1432-legacy-17-vector-emit`).
+        if let Some(output) = args.embedding_input_output() {
+            let files_selected: Vec<String> = if let Some(set) = &selected {
+                set.iter().cloned().collect()
+            } else {
+                all_rel_paths.clone()
+            };
+            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+                Some(output),
+                EmbeddingEmission {
+                    parser: "cplus",
+                    project_id: &project_id,
+                    root_scope: &repo,
+                    full_replace: !args.incremental,
+                    scanned_directory: true,
+                    files_selected,
+                    files_deleted: deleted_files.iter().cloned().collect(),
+                    categories: embedding_accumulator,
+                },
+            ) {
+                eprintln!("cplus embedding-input artifact failed: {error}");
+                return Ok(1);
+            }
+        }
     }
 
     println!(
@@ -1554,6 +1588,7 @@ fn flush_write_buffers(
     buf_possible_calls: &mut Vec<Row>,
     buf_unknown_calls: &mut Vec<Row>,
     files_in_buf: &mut usize,
+    embedding_accumulator: &mut Vec<(String, Vec<Value>)>,
 ) -> Result<(), String> {
     if *files_in_buf == 0 {
         return Ok(());
@@ -1584,42 +1619,46 @@ fn flush_write_buffers(
         || !buf_aliases.is_empty()
         || !buf_templates.is_empty();
     if has_nodes || !buf_relations.is_empty() {
+        let payload = WriteAllPayload {
+            projects: &[],
+            packages: &[],
+            namespaces: buf_namespaces,
+            files: buf_files,
+            classes: &[],
+            types: buf_types,
+            function_types: buf_function_types,
+            functions: buf_functions,
+            fields: buf_fields,
+            aliases: buf_aliases,
+            templates: buf_templates,
+            relations: buf_relations,
+            calls: &[],
+            calls_with_site: &[],
+            properties: &[],
+            events: &[],
+            interfaces: &[],
+            enums: &[],
+            constants: &[],
+            variables: &[],
+            navigators: &[],
+            has_routes: &[],
+            param_lists: &[],
+            workflows: &[],
+            workflow_steps: &[],
+            call_evidence_sites: &[],
+            call_evidence_observations: &[],
+            build_configurations: &[],
+            semantic_coverage: &[],
+            proc_function_joins: &[],
+            proc_host_declarations: &[],
+            use_full_writers: true,
+            files_variant: FilesVariant::Default,
+        };
+        // Phase-02: capture embedding categories BEFORE write_all consumes
+        // the row buffers (plan `260916-1432-legacy-17-vector-emit`).
+        embedding_accumulator.extend(payload.embedding_categories());
         writer
-            .write_all(&WriteAllPayload {
-                projects: &[],
-                packages: &[],
-                namespaces: buf_namespaces,
-                files: buf_files,
-                classes: &[],
-                types: buf_types,
-                function_types: buf_function_types,
-                functions: buf_functions,
-                fields: buf_fields,
-                aliases: buf_aliases,
-                templates: buf_templates,
-                relations: buf_relations,
-                calls: &[],
-                calls_with_site: &[],
-                properties: &[],
-                events: &[],
-                interfaces: &[],
-                enums: &[],
-                constants: &[],
-                variables: &[],
-                navigators: &[],
-                has_routes: &[],
-                param_lists: &[],
-                workflows: &[],
-                workflow_steps: &[],
-                call_evidence_sites: &[],
-                call_evidence_observations: &[],
-                build_configurations: &[],
-                semantic_coverage: &[],
-                proc_function_joins: &[],
-                proc_host_declarations: &[],
-                use_full_writers: true,
-                files_variant: FilesVariant::Default,
-            })
+            .write_all(&payload)
             .map_err(|e| e.to_string())?;
     }
     if !buf_possible_calls.is_empty() {

@@ -2500,7 +2500,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolCicsCommand"
       },
-      "confidence": 1.0,
+      "confidence": 0.65,
       "dynamic": false
     },
     {
@@ -2522,7 +2522,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolSqlStatement"
       },
-      "confidence": 1.0,
+      "confidence": 0.65,
       "dynamic": false
     },
     {
@@ -3801,7 +3801,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolProgram"
       },
-      "confidence": 1.0,
+      "confidence": 0.65,
       "dynamic": false
     },
     {
@@ -3824,7 +3824,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolProgram"
       },
-      "confidence": 1.0,
+      "confidence": 0.65,
       "dynamic": false
     },
     {
@@ -3916,7 +3916,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolProgram"
       },
-      "confidence": 1.0,
+      "confidence": 0.65,
       "dynamic": false
     },
     {
@@ -4094,7 +4094,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolParagraph"
       },
-      "confidence": 0.65,
+      "confidence": 0.7,
       "dynamic": true
     },
     {
@@ -4118,7 +4118,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolParagraph"
       },
-      "confidence": 0.65,
+      "confidence": 0.7,
       "dynamic": true
     },
     {
@@ -4665,7 +4665,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolDataItem"
       },
-      "confidence": 0.65,
+      "confidence": 1.0,
       "dynamic": false
     },
     {
@@ -4689,7 +4689,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolDataItem"
       },
-      "confidence": 0.65,
+      "confidence": 1.0,
       "dynamic": false
     },
     {
@@ -4833,7 +4833,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolDataItem"
       },
-      "confidence": 1.0,
+      "confidence": 0.65,
       "dynamic": false
     },
     {
@@ -4857,7 +4857,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolDataItem"
       },
-      "confidence": 1.0,
+      "confidence": 0.65,
       "dynamic": false
     },
     {
@@ -4905,7 +4905,7 @@
         "_source_label": "CobolParagraph",
         "_target_label": "CobolDataItem"
       },
-      "confidence": 0.65,
+      "confidence": 0.7,
       "dynamic": false
     },
     {
@@ -5271,6 +5271,24 @@
   ],
   "diagnostics": [
     {
+      "code": "COBOL_SYNTAX_ERROR",
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "severity": "warning",
+      "recoverable": true,
+      "evidence": {
+        "file": "tests/fixtures/cobol-application/common.cpy",
+        "start_line": 1,
+        "start_column": 8,
+        "end_line": 4,
+        "end_column": 20,
+        "start_byte": 7,
+        "end_byte": 112
+      },
+      "details": {
+        "node_type": "ERROR"
+      }
+    },
+    {
       "code": "COBOL_COPYBOOK_CYCLE",
       "message": "copybook cycle: tests/fixtures/cobol-application/cycle-b.copy -> tests/fixtures/cobol-application/cycle-a.copy -> tests/fixtures/cobol-application/cycle-b.copy",
       "severity": "warning",
@@ -5290,6 +5308,24 @@
           "tests/fixtures/cobol-application/cycle-a.copy",
           "tests/fixtures/cobol-application/cycle-b.copy"
         ]
+      }
+    },
+    {
+      "code": "COBOL_SYNTAX_ERROR",
+      "message": "Tree-sitter reported ERROR while parsing source",
+      "severity": "warning",
+      "recoverable": true,
+      "evidence": {
+        "file": "tests/fixtures/cobol-application/cycle-a.copy",
+        "start_line": 2,
+        "start_column": 8,
+        "end_line": 2,
+        "end_column": 31,
+        "start_byte": 28,
+        "end_byte": 51
+      },
+      "details": {
+        "node_type": "ERROR"
       }
     },
     {
@@ -5320,121 +5356,13 @@
       "severity": "warning",
       "recoverable": true,
       "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 1,
+        "file": "tests/fixtures/cobol-application/cycle-b.copy",
+        "start_line": 2,
         "start_column": 8,
-        "end_line": 7,
-        "end_column": 12,
-        "start_byte": 7,
-        "end_byte": 206
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 6,
-        "start_column": 39,
-        "end_line": 6,
-        "end_column": 40,
-        "start_byte": 178,
-        "end_byte": 179
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 6,
-        "start_column": 39,
-        "end_line": 6,
-        "end_column": 40,
-        "start_byte": 178,
-        "end_byte": 179
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 6,
-        "start_column": 53,
-        "end_line": 6,
-        "end_column": 54,
-        "start_byte": 192,
-        "end_byte": 193
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 6,
-        "start_column": 53,
-        "end_line": 6,
-        "end_column": 54,
-        "start_byte": 192,
-        "end_byte": 193
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 9,
-        "start_column": 11,
-        "end_line": 9,
-        "end_column": 20,
-        "start_byte": 248,
-        "end_byte": 257
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 18,
-        "start_column": 18,
-        "end_line": 18,
-        "end_column": 26,
-        "start_byte": 527,
-        "end_byte": 535
+        "end_line": 2,
+        "end_column": 31,
+        "start_byte": 28,
+        "end_byte": 51
       },
       "details": {
         "node_type": "ERROR"
@@ -5465,48 +5393,12 @@
       "recoverable": true,
       "evidence": {
         "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 26,
-        "start_column": 25,
-        "end_line": 26,
-        "end_column": 54,
-        "start_byte": 762,
-        "end_byte": 791
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/main.cbl",
-        "start_line": 41,
-        "start_column": 8,
+        "start_line": 30,
+        "start_column": 12,
         "end_line": 41,
-        "end_column": 19,
-        "start_byte": 1185,
-        "end_byte": 1196
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/malformed.cbl",
-        "start_line": 1,
-        "start_column": 8,
-        "end_line": 6,
-        "end_column": 27,
-        "start_byte": 7,
-        "end_byte": 174
+        "end_column": 29,
+        "start_byte": 880,
+        "end_byte": 1206
       },
       "details": {
         "node_type": "ERROR"
@@ -5527,42 +5419,6 @@
         "end_byte": 147
       },
       "details": {}
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/malformed.cbl",
-        "start_line": 6,
-        "start_column": 8,
-        "end_line": 6,
-        "end_column": 26,
-        "start_byte": 155,
-        "end_byte": 173
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/malformed.cbl",
-        "start_line": 8,
-        "start_column": 12,
-        "end_line": 9,
-        "end_column": 36,
-        "start_byte": 205,
-        "end_byte": 262
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
     },
     {
       "code": "COBOL_COPYBOOK_NOT_FOUND",
@@ -5588,13 +5444,13 @@
       "severity": "warning",
       "recoverable": true,
       "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
+        "file": "tests/fixtures/cobol-application/nested.copy",
         "start_line": 1,
         "start_column": 8,
-        "end_line": 8,
-        "end_column": 18,
+        "end_line": 1,
+        "end_column": 39,
         "start_byte": 7,
-        "end_byte": 255
+        "end_byte": 38
       },
       "details": {
         "node_type": "ERROR"
@@ -5608,173 +5464,11 @@
       "evidence": {
         "file": "tests/fixtures/cobol-application/payroll.cbl",
         "start_line": 6,
-        "start_column": 38,
-        "end_line": 6,
-        "end_column": 39,
-        "start_byte": 176,
-        "end_byte": 177
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 6,
-        "start_column": 38,
-        "end_line": 6,
-        "end_column": 39,
-        "start_byte": 176,
-        "end_byte": 177
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 6,
-        "start_column": 50,
-        "end_line": 7,
-        "end_column": 47,
-        "start_byte": 188,
-        "end_byte": 236
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 6,
-        "start_column": 50,
-        "end_line": 6,
-        "end_column": 51,
-        "start_byte": 188,
-        "end_byte": 189
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 8,
         "start_column": 19,
-        "end_line": 9,
-        "end_column": 12,
-        "start_byte": 256,
-        "end_byte": 300
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 8,
-        "start_column": 38,
-        "end_line": 8,
-        "end_column": 39,
-        "start_byte": 275,
-        "end_byte": 276
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 8,
-        "start_column": 49,
-        "end_line": 8,
-        "end_column": 50,
-        "start_byte": 286,
-        "end_byte": 287
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 8,
-        "start_column": 49,
-        "end_line": 8,
-        "end_column": 50,
-        "start_byte": 286,
-        "end_byte": 287
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 11,
-        "start_column": 11,
-        "end_line": 11,
-        "end_column": 19,
-        "start_byte": 342,
-        "end_byte": 350
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 13,
-        "start_column": 11,
-        "end_line": 13,
-        "end_column": 19,
-        "start_byte": 392,
-        "end_byte": 400
+        "end_line": 7,
+        "end_column": 31,
+        "start_byte": 157,
+        "end_byte": 220
       },
       "details": {
         "node_type": "ERROR"
@@ -5805,12 +5499,12 @@
       "recoverable": true,
       "evidence": {
         "file": "tests/fixtures/cobol-application/payroll.cbl",
-        "start_line": 21,
-        "start_column": 18,
-        "end_line": 21,
-        "end_column": 26,
-        "start_byte": 675,
-        "end_byte": 683
+        "start_line": 16,
+        "start_column": 30,
+        "end_line": 16,
+        "end_column": 37,
+        "start_byte": 493,
+        "end_byte": 500
       },
       "details": {
         "node_type": "ERROR"
@@ -5840,191 +5534,11 @@
       "evidence": {
         "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
         "start_line": 1,
-        "start_column": 8,
-        "end_line": 1,
-        "end_column": 15,
-        "start_byte": 7,
-        "end_byte": 14
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
-        "start_line": 2,
-        "start_column": 8,
-        "end_line": 2,
-        "end_column": 9,
-        "start_byte": 32,
-        "end_byte": 33
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
-        "start_line": 3,
-        "start_column": 11,
-        "end_line": 3,
-        "end_column": 19,
-        "start_byte": 59,
-        "end_byte": 67
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/ansi-free.cbl",
-        "start_line": 5,
-        "start_column": 10,
+        "start_column": 7,
         "end_line": 5,
-        "end_column": 13,
-        "start_byte": 90,
-        "end_byte": 93
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 1,
-        "start_column": 8,
-        "end_line": 1,
-        "end_column": 9,
-        "start_byte": 7,
-        "end_byte": 8
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 1,
-        "start_column": 10,
-        "end_line": 1,
-        "end_column": 24,
-        "start_byte": 9,
-        "end_byte": 23
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 2,
-        "start_column": 8,
-        "end_line": 2,
-        "end_column": 15,
-        "start_byte": 31,
-        "end_byte": 38
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 3,
-        "start_column": 8,
-        "end_line": 3,
-        "end_column": 9,
-        "start_byte": 56,
-        "end_byte": 57
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 4,
-        "start_column": 11,
-        "end_line": 4,
-        "end_column": 19,
-        "start_byte": 82,
-        "end_byte": 90
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 6,
-        "start_column": 13,
-        "end_line": 6,
-        "end_column": 18,
-        "start_byte": 116,
-        "end_byte": 121
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 6,
-        "start_column": 13,
-        "end_line": 6,
         "end_column": 14,
-        "start_byte": 116,
-        "end_byte": 117
+        "start_byte": 6,
+        "end_byte": 94
       },
       "details": {
         "node_type": "ERROR"
@@ -6037,30 +5551,12 @@
       "recoverable": true,
       "evidence": {
         "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 6,
-        "start_column": 17,
-        "end_line": 6,
-        "end_column": 18,
-        "start_byte": 120,
-        "end_byte": 121
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/gnucobol-free.cob",
-        "start_line": 7,
-        "start_column": 10,
+        "start_line": 1,
+        "start_column": 7,
         "end_line": 7,
-        "end_column": 13,
-        "start_byte": 132,
-        "end_byte": 135
+        "end_column": 14,
+        "start_byte": 6,
+        "end_byte": 136
       },
       "details": {
         "node_type": "ERROR"
@@ -6074,28 +5570,10 @@
       "evidence": {
         "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
         "start_line": 1,
-        "start_column": 8,
-        "end_line": 1,
-        "end_column": 11,
-        "start_byte": 7,
-        "end_byte": 10
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/ibm-fixed.cbl",
-        "start_line": 1,
-        "start_column": 12,
+        "start_column": 16,
         "end_line": 1,
         "end_column": 16,
-        "start_byte": 11,
+        "start_byte": 15,
         "end_byte": 15
       },
       "details": {
@@ -6110,173 +5588,11 @@
       "evidence": {
         "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
         "start_line": 1,
-        "start_column": 8,
-        "end_line": 1,
-        "end_column": 24,
-        "start_byte": 7,
-        "end_byte": 23
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 1,
-        "start_column": 18,
-        "end_line": 1,
-        "end_column": 19,
-        "start_byte": 17,
-        "end_byte": 18
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 1,
-        "start_column": 23,
-        "end_line": 1,
-        "end_column": 24,
-        "start_byte": 22,
-        "end_byte": 23
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 2,
-        "start_column": 8,
-        "end_line": 2,
-        "end_column": 15,
-        "start_byte": 31,
-        "end_byte": 38
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 3,
-        "start_column": 8,
-        "end_line": 3,
-        "end_column": 9,
-        "start_byte": 56,
-        "end_byte": 57
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 4,
-        "start_column": 11,
-        "end_line": 4,
-        "end_column": 19,
-        "start_byte": 81,
-        "end_byte": 89
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 6,
-        "start_column": 8,
-        "end_line": 6,
-        "end_column": 19,
-        "start_byte": 110,
-        "end_byte": 121
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 6,
-        "start_column": 13,
-        "end_line": 6,
-        "end_column": 14,
-        "start_byte": 115,
-        "end_byte": 116
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 6,
-        "start_column": 25,
-        "end_line": 6,
-        "end_column": 26,
-        "start_byte": 127,
-        "end_byte": 128
-      },
-      "details": {
-        "node_type": "ERROR"
-      }
-    },
-    {
-      "code": "COBOL_SYNTAX_ERROR",
-      "message": "Tree-sitter reported ERROR while parsing source",
-      "severity": "warning",
-      "recoverable": true,
-      "evidence": {
-        "file": "tests/fixtures/cobol-dialects/micro-focus.cob",
-        "start_line": 6,
-        "start_column": 25,
-        "end_line": 6,
-        "end_column": 26,
-        "start_byte": 127,
-        "end_byte": 128
+        "start_column": 7,
+        "end_line": 7,
+        "end_column": 12,
+        "start_byte": 6,
+        "end_byte": 141
       },
       "details": {
         "node_type": "ERROR"
@@ -6287,8 +5603,8 @@
     "processed_files": 13,
     "node_count": 76,
     "edge_count": 134,
-    "diagnostic_count": 56,
-    "syntax_error_count": 50,
+    "diagnostic_count": 18,
+    "syntax_error_count": 12,
     "analyzer_version": "1.0.0",
     "schema_version": "1",
     "runtime": {
@@ -6297,8 +5613,8 @@
       "architecture": "aarch64",
       "tree_sitter_version": "unknown",
       "grammar_abi": 14,
-      "library_path": "/Users/hieplq1.aip/AI/cortex-harness/code-tiny/tools/cobol/lib/cobol.cpython-310-darwin.so",
-      "library_sha256": "6f1a2c69976a3669383d3f529129ae2e58fe7acd32edd5094d67b3d076d8bcc6"
+      "library_path": "/Users/hieplq1.aip/AI/cortex-harness/code-tiny/tools/cobol/lib/libtree-sitter-cobol.dylib",
+      "library_sha256": "c1db07a216ddfdcd72dec63d39d74cf05ce04f7f41446ad418f5ffa5a63edbe3"
     },
     "invalidated_files": 13
   }

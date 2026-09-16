@@ -1,0 +1,667 @@
+{
+  "cache_version": "spring-v2026-07-13-1",
+  "config_values": [
+    {
+      "key": "mybatis.mapper-locations",
+      "profile": "",
+      "raw_value": "classpath:mappers/*.xml",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/framework-java-app/src/main/resources/application.yml",
+        "start_line": 1
+      },
+      "value": "classpath:mappers/*.xml"
+    },
+    {
+      "key": "spring.application.name",
+      "profile": "",
+      "raw_value": "framework-java-app",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/framework-java-app/src/main/resources/application.yml",
+        "start_line": 1
+      },
+      "value": "framework-java-app"
+    }
+  ],
+  "diagnostics": [],
+  "language_facts": [
+    {
+      "annotations": [
+        "MapperScan",
+        "SpringBootApplication"
+      ],
+      "declarations": [
+        "CatalogApplication"
+      ],
+      "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogApplication.java",
+      "language": "java",
+      "package_name": "com.example.catalog",
+      "parser_status": "base_adapter_pending",
+      "source_symbol_id": "java::file::tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogApplication.java"
+    },
+    {
+      "annotations": [
+        "GetMapping",
+        "RequestMapping",
+        "RestController"
+      ],
+      "declarations": [
+        "CatalogController"
+      ],
+      "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+      "language": "java",
+      "package_name": "com.example.catalog",
+      "parser_status": "base_adapter_pending",
+      "source_symbol_id": "java::file::tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java"
+    },
+    {
+      "annotations": [],
+      "declarations": [
+        "CatalogItem"
+      ],
+      "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogItem.java",
+      "language": "java",
+      "package_name": "com.example.catalog",
+      "parser_status": "base_adapter_pending",
+      "source_symbol_id": "java::file::tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogItem.java"
+    },
+    {
+      "annotations": [
+        "Mapper",
+        "Param",
+        "Select"
+      ],
+      "declarations": [
+        "CatalogMapper"
+      ],
+      "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogMapper.java",
+      "language": "java",
+      "package_name": "com.example.catalog",
+      "parser_status": "base_adapter_pending",
+      "source_symbol_id": "java::file::tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogMapper.java"
+    },
+    {
+      "annotations": [
+        "Service",
+        "Transactional"
+      ],
+      "declarations": [
+        "CatalogService"
+      ],
+      "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+      "language": "java",
+      "package_name": "com.example.catalog",
+      "parser_status": "base_adapter_pending",
+      "source_symbol_id": "java::file::tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java"
+    },
+    {
+      "annotations": [
+        "Override",
+        "WebServlet"
+      ],
+      "declarations": [
+        "LegacyCatalogServlet"
+      ],
+      "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/LegacyCatalogServlet.java",
+      "language": "java",
+      "package_name": "com.example.catalog",
+      "parser_status": "base_adapter_pending",
+      "source_symbol_id": "java::file::tests/fixtures/framework-java-app/src/main/java/com/example/catalog/LegacyCatalogServlet.java"
+    }
+  ],
+  "modules": [
+    {
+      "build_files": [
+        "tests/fixtures/framework-java-app/pom.xml"
+      ],
+      "confidence": 1.0,
+      "config_files": [
+        "tests/fixtures/framework-java-app/src/main/resources/application.yml"
+      ],
+      "evidence": [
+        "tests/fixtures/framework-java-app/pom.xml:org.springframework",
+        "tests/fixtures/framework-java-app/pom.xml:org.springframework.boot",
+        "tests/fixtures/framework-java-app/pom.xml:spring-boot-starter",
+        "tests/fixtures/framework-java-app/pom.xml:springframework",
+        "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogApplication.java:@SpringBootApplication",
+        "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java:@RestController",
+        "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java:@Service"
+      ],
+      "languages": [
+        "java"
+      ],
+      "rel_path": "tests/fixtures/framework-java-app",
+      "root": "/Users/hieplq1.aip/AI/cortex-harness"
+    },
+    {
+      "build_files": [
+        "tests/fixtures/java-spring-overlays/pom.xml"
+      ],
+      "confidence": 1.0,
+      "config_files": [
+        "tests/fixtures/java-spring-overlays/src/main/resources/application-prod.properties",
+        "tests/fixtures/java-spring-overlays/src/main/resources/application.properties",
+        "tests/fixtures/java-spring-overlays/src/main/resources/application.yml"
+      ],
+      "evidence": [
+        "tests/fixtures/java-spring-overlays/pom.xml:org.springframework",
+        "tests/fixtures/java-spring-overlays/pom.xml:org.springframework.boot",
+        "tests/fixtures/java-spring-overlays/pom.xml:spring-boot-starter",
+        "tests/fixtures/java-spring-overlays/pom.xml:springframework",
+        "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/CacheConfig.java:org.springframework.",
+        "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/CatalogRepository.java:@Repository",
+        "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/PricingService.java:@Service",
+        "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/ShopApplication.java:@SpringBootApplication",
+        "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/web/CatalogController.java:@RestController"
+      ],
+      "languages": [
+        "java"
+      ],
+      "rel_path": "tests/fixtures/java-spring-overlays",
+      "root": "/Users/hieplq1.aip/AI/cortex-harness"
+    },
+    {
+      "build_files": [
+        "tests/fixtures/sql-family/mybatis/pom.xml"
+      ],
+      "confidence": 0.75,
+      "config_files": [],
+      "evidence": [
+        "tests/fixtures/sql-family/mybatis/pom.xml:spring-boot-starter",
+        "tests/fixtures/sql-family/mybatis/src/main/java/com/acme/config/MyBatisConfig.java:org.springframework."
+      ],
+      "languages": [
+        "java"
+      ],
+      "rel_path": "tests/fixtures/sql-family/mybatis",
+      "root": "/Users/hieplq1.aip/AI/cortex-harness"
+    }
+  ],
+  "parser_version": "spring-v2026-07-13-1",
+  "project_id": "cortext",
+  "project_name": "cortext",
+  "relationships": [
+    {
+      "confidence": 1.0,
+      "from_id": "spring_app::cortext::com.example.catalog.CatalogApplication",
+      "from_label": "SpringApplication",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Spring semantic class anchor",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 13,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogApplication.java",
+        "start_line": 9
+      },
+      "to_id": "com.example.catalog.CatalogApplication",
+      "to_label": "Class",
+      "type": "SEMANTIC_OF"
+    },
+    {
+      "confidence": 1.0,
+      "from_id": "spring_bean::cortext::ac19ef71502c477e::catalogController",
+      "from_label": "SpringBean",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Spring semantic class anchor",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 21,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+        "start_line": 10
+      },
+      "to_id": "com.example.catalog.CatalogController",
+      "to_label": "Class",
+      "type": "SEMANTIC_OF"
+    },
+    {
+      "confidence": 1.0,
+      "from_id": "spring_controller::cortext::ac19ef71502c477e",
+      "from_label": "Controller",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Spring semantic class anchor",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 21,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+        "start_line": 10
+      },
+      "to_id": "com.example.catalog.CatalogController",
+      "to_label": "Class",
+      "type": "SEMANTIC_OF"
+    },
+    {
+      "confidence": 1.0,
+      "from_id": "spring_endpoint::cortext::7740e1e95c68dc3c::GET::b348a5b39f26df67",
+      "from_label": "ApiEndpoint",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Endpoint handler anchor",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 20,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+        "start_line": 17
+      },
+      "to_id": "com.example.catalog.CatalogController.list/0@tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+      "to_label": "Function",
+      "type": "SEMANTIC_OF"
+    },
+    {
+      "confidence": 1.0,
+      "from_id": "spring_controller::cortext::ac19ef71502c477e",
+      "from_label": "Controller",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Controller handles endpoint",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 20,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+        "start_line": 17
+      },
+      "to_id": "spring_endpoint::cortext::7740e1e95c68dc3c::GET::b348a5b39f26df67",
+      "to_label": "ApiEndpoint",
+      "type": "HANDLES"
+    },
+    {
+      "confidence": 1.0,
+      "from_id": "spring_bean::cortext::333d101139e08625::catalogService",
+      "from_label": "SpringBean",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Spring semantic class anchor",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+        "start_line": 8
+      },
+      "to_id": "com.example.catalog.CatalogService",
+      "to_label": "Class",
+      "type": "SEMANTIC_OF"
+    },
+    {
+      "confidence": 1.0,
+      "from_id": "spring_service::cortext::333d101139e08625",
+      "from_label": "Service",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Spring semantic class anchor",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+        "start_line": 8
+      },
+      "to_id": "com.example.catalog.CatalogService",
+      "to_label": "Class",
+      "type": "SEMANTIC_OF"
+    },
+    {
+      "confidence": 1.0,
+      "from_id": "spring_tx::cortext::8f63a4ba50e54456:16:1",
+      "from_label": "TransactionBoundary",
+      "project_id": "cortext",
+      "properties": {},
+      "reason": "Transactional boundary applies to method",
+      "resolution_status": "resolved",
+      "source": {
+        "end_line": 18,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+        "start_line": 16
+      },
+      "to_id": "com.example.catalog.CatalogService.findVisible/0@tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+      "to_label": "Function",
+      "type": "APPLIES_TO"
+    }
+  ],
+  "root": "/Users/hieplq1.aip/AI/cortex-harness",
+  "semantic_facts": [
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringModule",
+      "language": "spring",
+      "name": "tests/fixtures/framework-java-app",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "build_files": [
+          "tests/fixtures/framework-java-app/pom.xml"
+        ],
+        "config_files": [
+          "tests/fixtures/framework-java-app/src/main/resources/application.yml"
+        ],
+        "evidence": [
+          "tests/fixtures/framework-java-app/pom.xml:org.springframework",
+          "tests/fixtures/framework-java-app/pom.xml:org.springframework.boot",
+          "tests/fixtures/framework-java-app/pom.xml:spring-boot-starter",
+          "tests/fixtures/framework-java-app/pom.xml:springframework",
+          "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogApplication.java:@SpringBootApplication",
+          "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java:@RestController",
+          "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java:@Service"
+        ],
+        "languages": [
+          "java"
+        ],
+        "module_path": "tests/fixtures/framework-java-app"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/framework-java-app/pom.xml",
+        "start_line": 1
+      },
+      "source_symbol_id": "",
+      "stable_id": "spring_module::cortext::tests.fixtures.framework-java-app"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringModule",
+      "language": "spring",
+      "name": "tests/fixtures/java-spring-overlays",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "build_files": [
+          "tests/fixtures/java-spring-overlays/pom.xml"
+        ],
+        "config_files": [
+          "tests/fixtures/java-spring-overlays/src/main/resources/application-prod.properties",
+          "tests/fixtures/java-spring-overlays/src/main/resources/application.properties",
+          "tests/fixtures/java-spring-overlays/src/main/resources/application.yml"
+        ],
+        "evidence": [
+          "tests/fixtures/java-spring-overlays/pom.xml:org.springframework",
+          "tests/fixtures/java-spring-overlays/pom.xml:org.springframework.boot",
+          "tests/fixtures/java-spring-overlays/pom.xml:spring-boot-starter",
+          "tests/fixtures/java-spring-overlays/pom.xml:springframework",
+          "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/CacheConfig.java:org.springframework.",
+          "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/CatalogRepository.java:@Repository",
+          "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/PricingService.java:@Service",
+          "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/ShopApplication.java:@SpringBootApplication",
+          "tests/fixtures/java-spring-overlays/src/main/java/com/example/shop/web/CatalogController.java:@RestController"
+        ],
+        "languages": [
+          "java"
+        ],
+        "module_path": "tests/fixtures/java-spring-overlays"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/java-spring-overlays/pom.xml",
+        "start_line": 1
+      },
+      "source_symbol_id": "",
+      "stable_id": "spring_module::cortext::tests.fixtures.java-spring-overlays"
+    },
+    {
+      "confidence": 0.75,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringModule",
+      "language": "spring",
+      "name": "tests/fixtures/sql-family/mybatis",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "build_files": [
+          "tests/fixtures/sql-family/mybatis/pom.xml"
+        ],
+        "config_files": [],
+        "evidence": [
+          "tests/fixtures/sql-family/mybatis/pom.xml:spring-boot-starter",
+          "tests/fixtures/sql-family/mybatis/src/main/java/com/acme/config/MyBatisConfig.java:org.springframework."
+        ],
+        "languages": [
+          "java"
+        ],
+        "module_path": "tests/fixtures/sql-family/mybatis"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/sql-family/mybatis/pom.xml",
+        "start_line": 1
+      },
+      "source_symbol_id": "",
+      "stable_id": "spring_module::cortext::tests.fixtures.sql-family.mybatis"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringConfiguration",
+      "language": "spring",
+      "name": "mybatis.mapper-locations",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "config_key": "mybatis.mapper-locations",
+        "config_value": "classpath:mappers/*.xml",
+        "profile": ""
+      },
+      "raw_value": "classpath:mappers/*.xml",
+      "resolution_status": "resolved",
+      "resolved_value": "classpath:mappers/*.xml",
+      "source": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/framework-java-app/src/main/resources/application.yml",
+        "start_line": 1
+      },
+      "source_symbol_id": "",
+      "stable_id": "spring_config_value::cortext::58c7659e3b8a2540"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringConfiguration",
+      "language": "spring",
+      "name": "spring.application.name",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "config_key": "spring.application.name",
+        "config_value": "framework-java-app",
+        "profile": ""
+      },
+      "raw_value": "framework-java-app",
+      "resolution_status": "resolved",
+      "resolved_value": "framework-java-app",
+      "source": {
+        "end_line": 1,
+        "file_path": "tests/fixtures/framework-java-app/src/main/resources/application.yml",
+        "start_line": 1
+      },
+      "source_symbol_id": "",
+      "stable_id": "spring_config_value::cortext::600c59b7b9c5d1a9"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringApplication",
+      "language": "spring-java",
+      "name": "CatalogApplication",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "application_class": "com.example.catalog.CatalogApplication",
+        "exclusions": [],
+        "scan_packages": []
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 13,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogApplication.java",
+        "start_line": 9
+      },
+      "source_symbol_id": "com.example.catalog.CatalogApplication",
+      "stable_id": "spring_app::cortext::com.example.catalog.CatalogApplication"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringBean",
+      "language": "spring-java",
+      "name": "catalogController",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "bean_type": "com.example.catalog.CatalogController",
+        "primary": false,
+        "profiles": [],
+        "qualifiers": [],
+        "stereotype": "RestController"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 21,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+        "start_line": 10
+      },
+      "source_symbol_id": "com.example.catalog.CatalogController",
+      "stable_id": "spring_bean::cortext::ac19ef71502c477e::catalogController"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "Controller",
+      "language": "spring-java",
+      "name": "CatalogController",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "controller_class": "com.example.catalog.CatalogController",
+        "controller_type": "RestController"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 21,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+        "start_line": 10
+      },
+      "source_symbol_id": "com.example.catalog.CatalogController",
+      "stable_id": "spring_controller::cortext::ac19ef71502c477e"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "ApiEndpoint",
+      "language": "spring-java",
+      "name": "GET /catalog",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "controller_class": "com.example.catalog.CatalogController",
+        "framework": "spring",
+        "handler_names": [
+          "list"
+        ],
+        "http_method": "GET",
+        "path": "/catalog"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 20,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+        "start_line": 17
+      },
+      "source_symbol_id": "com.example.catalog.CatalogController.list/0@tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogController.java",
+      "stable_id": "spring_endpoint::cortext::7740e1e95c68dc3c::GET::b348a5b39f26df67"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "SpringBean",
+      "language": "spring-java",
+      "name": "catalogService",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "bean_type": "com.example.catalog.CatalogService",
+        "primary": false,
+        "profiles": [],
+        "qualifiers": [],
+        "stereotype": "Service"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+        "start_line": 8
+      },
+      "source_symbol_id": "com.example.catalog.CatalogService",
+      "stable_id": "spring_bean::cortext::333d101139e08625::catalogService"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "Service",
+      "language": "spring-java",
+      "name": "CatalogService",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "service_class": "com.example.catalog.CatalogService"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 19,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+        "start_line": 8
+      },
+      "source_symbol_id": "com.example.catalog.CatalogService",
+      "stable_id": "spring_service::cortext::333d101139e08625"
+    },
+    {
+      "confidence": 1.0,
+      "extraction_method": "spring_foundation",
+      "kind": "TransactionBoundary",
+      "language": "spring-java",
+      "name": "CatalogService.findVisible",
+      "project_id": "cortext",
+      "project_name": "cortext",
+      "properties": {
+        "extraction_method": "annotation",
+        "isolation": "",
+        "propagation": "",
+        "read_only": true,
+        "target_kind": "method"
+      },
+      "raw_value": "",
+      "resolution_status": "resolved",
+      "resolved_value": "",
+      "source": {
+        "end_line": 18,
+        "file_path": "tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+        "start_line": 16
+      },
+      "source_symbol_id": "com.example.catalog.CatalogService.findVisible/0@tests/fixtures/framework-java-app/src/main/java/com/example/catalog/CatalogService.java",
+      "stable_id": "spring_tx::cortext::8f63a4ba50e54456:16:1"
+    }
+  ]
+}

@@ -185,7 +185,22 @@ impl<'a> MyBatisFactWriter<'a> {
             return Ok(0);
         }
         self.ensure_schema()?;
-        let query = r#"
+        // Ladybug mất node type qua collect/UNWIND (binder) — DETACH DELETE
+        // phải chạy trực tiếp trên MATCH (khớp cleanup.rs).
+        let query = if self.store.provider() == "ladybug" {
+            r#"
+        MATCH (n)
+        WHERE n.project_id = $project_id
+          AND n.framework = 'mybatis'
+          AND (
+            coalesce(n.file_path, '') IN $paths
+            OR coalesce(n.path, '') IN $paths
+          )
+        DETACH DELETE n
+        RETURN count(*) AS deleted_nodes
+        "#
+        } else {
+            r#"
         MATCH (n)
         WHERE n.project_id = $project_id
           AND n.framework = 'mybatis'
@@ -198,7 +213,8 @@ impl<'a> MyBatisFactWriter<'a> {
         WITH DISTINCT n
         DETACH DELETE n
         RETURN count(n) AS deleted_nodes
-        "#;
+        "#
+        };
         let mut params: BTreeMap<String, Value> = BTreeMap::new();
         params.insert("project_id".to_string(), json!(project_id));
         params.insert(

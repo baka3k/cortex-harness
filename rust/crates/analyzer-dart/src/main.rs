@@ -11,7 +11,7 @@
 //! Đường có chủ đích (theo plan):
 //! * `--mode all` → exit 2, hướng dẫn chạy `dart` và `flutter` riêng
 //!   (orchestrator chỉ gọi từng mode).
-//! * Vector/embedding KHÔNG port (dart ∈ SHARED_VECTOR_CLI_PARSERS nhưng
+//! * Vector/embedding KHÔNG port (dart ∈ EMITTING_VECTOR_CLI_PARSERS nhưng
 //!   embedding là plane orchestrator-level, phase-06) — flags nhận và bỏ qua.
 //! * Message scan là plane Python-side — flag nhận, skip có kiểm soát.
 
@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 
 use cache::{select_incremental_facts, DependencyIndex};
 use cortex_analyzer_framework::cli::{parse_falkordb_uri, validate_falkordb_uri};
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_graph_writer::language_writer::{FilesVariant, LanguageCodeWriter, WriteAllPayload};
 use cortex_graph_writer::store::{FalkorDbStore, GraphStore, LadybugStore};
 use models::AnalysisFacts;
@@ -102,6 +103,10 @@ pub struct DartArgs {
     pub batch_size: Option<i64>,
     #[arg(long, hide = true)]
     pub max_embed_chars: Option<i64>,
+
+    /// Phase-02 (R12): emit EmbeddingInputArtifact cho orchestrator.
+    #[arg(long, hide = true)]
+    pub embedding_input_output: Option<String>,
 
     // ── Neo4j legacy flags: nhận và bỏ qua (graph qua provider falkordb/
     // ladybug; chỉ --neo4j-db được writer Python dùng làm database).
@@ -402,14 +407,14 @@ fn write_fact_artifact(path: &Path, facts: &AnalysisFacts) -> Result<(), String>
 }
 
 /// `write_graph` — normalize + write_all + flutter incremental cleanup.
-/// Trả counts (graph= tổng) — cleanup chạy sau, không cộng vào counts
-/// (như Python: return value của write_batches bị bỏ qua).
+/// Trả (counts, embedding_categories) — counts = graph totals; embedding_categories
+/// = rows sẵn cho phase-06 orchestrator (plan `260916-1432-legacy-17-vector-emit` R12).
 fn write_graph(
     args: &DartArgs,
     facts: &AnalysisFacts,
     root: &Path,
     cleanup_paths: &[String],
-) -> Result<BTreeMap<String, i64>, String> {
+) -> Result<(BTreeMap<String, i64>, Vec<(String, Vec<Value>)>), String> {
     let store = open_store(args)?;
     let mut writer = LanguageCodeWriter::new(store, args.neo4j_db.clone(), 1000, args.verbose);
     let repo = args
@@ -428,42 +433,45 @@ fn write_graph(
         &repo,
         &build_system,
     )?;
+    let payload = WriteAllPayload {
+        projects: &[],
+        packages: &[],
+        namespaces: &[],
+        files: &batch.files,
+        classes: &batch.classes,
+        types: &batch.types,
+        function_types: &[],
+        functions: &batch.functions,
+        fields: &batch.fields,
+        aliases: &[],
+        templates: &[],
+        relations: &batch.relations,
+        calls: &[],
+        calls_with_site: &[],
+        properties: &[],
+        events: &[],
+        interfaces: &[],
+        enums: &[],
+        constants: &[],
+        variables: &[],
+        navigators: &[],
+        has_routes: &[],
+        param_lists: &[],
+        workflows: &[],
+        workflow_steps: &[],
+        call_evidence_sites: &[],
+        call_evidence_observations: &[],
+        build_configurations: &[],
+        semantic_coverage: &[],
+        proc_function_joins: &[],
+        proc_host_declarations: &[],
+        use_full_writers: true,
+        files_variant: FilesVariant::WithImports,
+    };
+    // Phase-02 / R12: capture embedding categories BEFORE write_all consumes.
+    let embedding_categories = payload.embedding_categories();
     let counts = writer
-        .write_all(&WriteAllPayload {
-            projects: &[],
-            packages: &[],
-            namespaces: &[],
-            files: &batch.files,
-            classes: &batch.classes,
-            types: &batch.types,
-            function_types: &[],
-            functions: &batch.functions,
-            fields: &batch.fields,
-            aliases: &[],
-            templates: &[],
-            relations: &batch.relations,
-            calls: &[],
-            calls_with_site: &[],
-            properties: &[],
-            events: &[],
-            interfaces: &[],
-            enums: &[],
-            constants: &[],
-            variables: &[],
-            navigators: &[],
-            has_routes: &[],
-            param_lists: &[],
-            workflows: &[],
-            workflow_steps: &[],
-            call_evidence_sites: &[],
-            call_evidence_observations: &[],
-            build_configurations: &[],
-            semantic_coverage: &[],
-            proc_function_joins: &[],
-            proc_host_declarations: &[],
-            use_full_writers: true,
-            files_variant: FilesVariant::WithImports,
-        })
+        .write_all(&payload)
         .map_err(|e| e.to_string())?;
 
     if !cleanup_paths.is_empty() {
@@ -490,7 +498,7 @@ fn write_graph(
             .execute_query(query, &parameters, args.neo4j_db.as_deref())
             .map_err(|e| e.to_string())?;
     }
-    Ok(counts)
+    Ok((counts, embedding_categories))
 }
 
 fn run(args: &DartArgs) -> i32 {
@@ -677,11 +685,11 @@ fn run(args: &DartArgs) -> i32 {
     } else {
         Vec::new()
     };
-    let counts = if graph_writes_disabled() {
-        BTreeMap::new()
+    let (counts, embedding_categories) = if graph_writes_disabled() {
+        (BTreeMap::new(), Vec::new())
     } else {
         match write_graph(args, &facts, &root, &cleanup_paths) {
-            Ok(counts) => counts,
+            Ok(value) => value,
             Err(error) => {
                 eprintln!("[flutter] ERROR: graph write failed after staged analysis: {error}");
                 return 3;
@@ -690,8 +698,45 @@ fn run(args: &DartArgs) -> i32 {
     };
 
     // ── Vector plane — orchestrator-level (phase-06); Rust không embed ──
-    let vector_count = 0;
-    let vector_status = "disabled";
+    // Phase-02 / R12: emit EmbeddingInputArtifact (nếu orchestrator yêu cầu).
+    let mut vector_count = 0i64;
+    let mut vector_status = "disabled";
+    if let Some(output) = args.embedding_input_output.as_deref() {
+        let repo = args
+            .repo
+            .clone()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| root.to_string_lossy().to_string());
+        match embedding_artifact::maybe_emit_embedding_artifact(
+            Some(output),
+            EmbeddingEmission {
+                parser: "dart",
+                project_id: &project_id,
+                root_scope: &repo,
+                full_replace: !args.incremental,
+                scanned_directory: true,
+                files_selected: changed.iter().cloned().collect(),
+                files_deleted: deleted.iter().cloned().collect(),
+                categories: embedding_categories,
+            },
+        ) {
+            Ok(Some(path)) => {
+                vector_status = "success";
+                // Sum documents across categories for the SCAN_RESULT tally.
+                vector_count = 0; // orchestrator owns actual qdrant count
+                if args.verbose {
+                    println!("[embedding] dart artifact written {}", path.display());
+                }
+            }
+            Ok(None) => {
+                vector_status = "disabled";
+            }
+            Err(error) => {
+                eprintln!("dart embedding-input artifact failed: {error}");
+                return 1;
+            }
+        }
+    }
     if args.message_scan_enabled_by_absence() && args.verbose {
         println!("[message] message scan là plane Python; Rust backend skip (phase 02)");
     }

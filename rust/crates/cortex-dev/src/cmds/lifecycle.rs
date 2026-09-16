@@ -36,6 +36,11 @@ const USAGE: &str = "Usage (equivalent forms):
   make storage-init                 Create the canonical instance tree and manifest.
   make storage-migrate-layout       Dry-run legacy repository-local migration.
   make storage-backup               Create a verified owner backup (OWNER=code|doc).
+  make embedding-install            Ensure the ONNX Runtime dylib and the pinned
+                                    embedding model graphs (jina-v3 + bge-m3) in
+                                    .cache/embed/ — skips models already present.
+                                    Force per-model re-fetch: make embed-jina-onnx
+                                    or make embed-bge-onnx.
   make doctor      | dev doctor      Check local storage and list every running Cortex MCP.
                                       Also reports active code/doc sync workers and
                                       remote-backend reachability.

@@ -56,6 +56,28 @@ pub fn default_worker_project() -> PathBuf {
     PathBuf::from("code-tiny/tools/csharp/roslyn_worker/CSharpRoslynWorker.csproj")
 }
 
+/// Resolve `code-tiny/tools/csharp/...` theo repo root — đi lên từ cwd tìm
+/// ancestor chứa path. Orchestrator chạy child với cwd = `<repo>/code-tiny`
+/// nên join thẳng vào cwd sẽ trỏ nhầm `<repo>/code-tiny/code-tiny/...`
+/// (MSB1009 Project file does not exist).
+fn resolve_default_worker_project() -> PathBuf {
+    let default_path = default_worker_project();
+    if default_path.is_absolute() && default_path.is_file() {
+        return default_path;
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut ancestor: Option<&std::path::Path> = Some(cwd.as_path());
+        while let Some(dir) = ancestor {
+            let candidate = dir.join(&default_path);
+            if candidate.is_file() {
+                return candidate;
+            }
+            ancestor = dir.parent();
+        }
+    }
+    default_path
+}
+
 /// `_runtime_majors()` — các major version của Microsoft.NETCore.App đã cài.
 fn runtime_majors(runtime: &WorkerRuntime) -> Vec<String> {
     let output = match std::process::Command::new(&runtime.dotnet_bin)
@@ -218,16 +240,7 @@ pub fn ensure_worker_built(
 ) -> Result<PathBuf, String> {
     let candidate: PathBuf = match project_path {
         Some(path) if !path.is_empty() => PathBuf::from(path),
-        _ => {
-            let default_path = default_worker_project();
-            if default_path.is_absolute() {
-                default_path
-            } else {
-                std::env::current_dir()
-                    .unwrap_or_else(|_| PathBuf::from("."))
-                    .join(&default_path)
-            }
-        }
+        _ => resolve_default_worker_project(),
     };
     let project = realpath(&candidate);
     let mut cache = BUILD_CACHE.lock().expect("build cache lock");

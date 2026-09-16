@@ -169,19 +169,32 @@ pub fn compile_relationship_upsert(group: &RelationshipGroup) -> String {
 /// Ladybug không hỗ trợ `SET r += …` trên relationship và không có literal
 /// map rỗng — variant này bỏ dynamic properties (caller phải fail-closed
 /// khi row mang properties khác rỗng).
-pub fn compile_relationship_upsert_ladybug(group: &RelationshipGroup) -> String {
+pub fn compile_relationship_upsert_ladybug(
+    group: &RelationshipGroup,
+    property_keys: &[String],
+) -> String {
+    // Union key của batch properties → SET explicit. Property thiếu cột trên
+    // rel table được store-level auto-DDL ALTER ADD theo lỗi binder; key
+    // không an toàn identifier đã bị caller lọc trước khi vào đây.
+    let mut sets = vec![
+        "r.project_id = row.project_id".to_string(),
+        "r.project_id_normalized = row.project_id_normalized".to_string(),
+    ];
+    for key in property_keys {
+        sets.push(format!("r.`{key}` = row.`{key}`"));
+    }
     format!(
         "UNWIND $rows AS row \
          MATCH (a:{source} {{id: row.source_id, project_id_normalized: row.project_id_normalized}}) \
          WITH row, a \
          MATCH (b:{target} {{id: row.target_id, project_id_normalized: row.project_id_normalized}}) \
          MERGE (a)-[r:{rel}]->(b) \
-         SET r.project_id = row.project_id, \
-         r.project_id_normalized = row.project_id_normalized \
+         SET {sets} \
          RETURN count(r) AS count",
         source = group.source_label,
         target = group.target_label,
         rel = group.relationship_type,
+        sets = sets.join(", "),
     )
 }
 

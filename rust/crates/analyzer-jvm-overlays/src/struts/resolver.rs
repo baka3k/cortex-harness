@@ -827,7 +827,10 @@ pub fn resolve_struts_project(input: &ResolveInput) -> StrutsResolution {
                     let mut target_props = Map::new();
                     target_props.insert("path".into(), json!(target_route));
                     target_props.insert("http_method".into(), json!("ALL"));
-                    target_props.insert("synthetic_target".into(), json!(true));
+                    // STRING (không bool): batch UNWIND ladybug phải unify
+                    // kiểu per-column — trộn BOOL/STRING trong cùng key làm
+                    // vỡ binder ("Implicit cast is not supported").
+                    target_props.insert("synthetic_target".into(), json!("true"));
                     let target_fact = collector.fact(
                         "HttpEndpoint",
                         &target_route,

@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use cortex_analyzer_framework::cleanup::cleanup_graph_files;
 use cortex_analyzer_framework::cli::{abs_root, AnalyzerArgs};
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::manifest::load_manifest_paths;
 use cortex_analyzer_framework::scan::rel_posix;
 use cortex_graph_writer::language_writer::{FilesVariant, LanguageCodeWriter, WriteAllPayload};
@@ -302,7 +303,7 @@ pub fn execute(args: &AnalyzerArgs, extra: &JavaExtraArgs) -> Result<i32, String
         );
         let batch_size = extra.neo4j_batch_size.unwrap_or(1000).max(1) as usize;
         let mut writer = LanguageCodeWriter::new(store, args.neo4j_db.clone(), batch_size, verbose);
-        let counts = writer.write_all(&WriteAllPayload {
+        let payload = WriteAllPayload {
             projects: &graph.projects,
             packages: &graph.packages,
             namespaces: &graph.namespaces,
@@ -336,7 +337,11 @@ pub fn execute(args: &AnalyzerArgs, extra: &JavaExtraArgs) -> Result<i32, String
             proc_host_declarations: &[],
             use_full_writers: true,
             files_variant: FilesVariant::WithPackage,
-        });
+        };
+        // Phase-02: capture embedding categories BEFORE write_all consumes graph
+        // (plan `260916-1432-legacy-17-vector-emit`).
+        let embedding_categories = payload.embedding_categories();
+        let counts = writer.write_all(&payload);
         match counts {
             Ok(_) => {
                 if verbose {
@@ -344,6 +349,25 @@ pub fn execute(args: &AnalyzerArgs, extra: &JavaExtraArgs) -> Result<i32, String
                 }
             }
             Err(error) => return Err(format!("[graph] write failed: {error}")),
+        }
+        // Phase-02: emit EmbeddingInputArtifact.
+        if let Some(output) = args.embedding_input_output() {
+            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+                Some(output),
+                EmbeddingEmission {
+                    parser: "java",
+                    project_id: &project_id,
+                    root_scope: &repo,
+                    full_replace: !args.incremental,
+                    scanned_directory: true,
+                    files_selected: selected_rel_paths.iter().cloned().collect(),
+                    files_deleted: deleted_set.iter().cloned().collect(),
+                    categories: embedding_categories,
+                },
+            ) {
+                eprintln!("java embedding-input artifact failed: {error}");
+                return Ok(1);
+            }
         }
     }
 

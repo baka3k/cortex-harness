@@ -219,9 +219,14 @@ impl<'a> AspNetFactWriter<'a> {
         params.insert("project_id".to_string(), json!(project_id));
         params.insert("module_id".to_string(), json!(module_id));
         params.insert("framework".to_string(), json!(framework));
+        let query = if self.store.provider() == "ladybug" {
+            CLEANUP_QUERY_LADYBUG
+        } else {
+            CLEANUP_QUERY
+        };
         let records = self
             .store
-            .execute_query(CLEANUP_QUERY, &params, self.database.as_deref())
+            .execute_query(query, &params, self.database.as_deref())
             .map_err(|error| error.to_string())?;
         Ok(records
             .first()
@@ -367,6 +372,19 @@ WITH collect(DISTINCT node) AS nodes
 UNWIND nodes AS node
 DETACH DELETE node
 RETURN count(node) AS deleted_nodes
+";
+
+/// Ladybug mất node type qua collect/UNWIND (binder) — DETACH DELETE phải
+/// chạy trực tiếp trên MATCH (khớp cleanup.rs).
+const CLEANUP_QUERY_LADYBUG: &str = "
+MATCH (state:AspNetAnalysisState {project_id: $project_id, module_id: $module_id, framework: $framework})
+MATCH (node)
+WHERE node.project_id = $project_id
+  AND node.module_id = $module_id
+  AND node.framework = $framework
+  AND node.generation_id <> state.active_generation
+DETACH DELETE node
+RETURN count(*) AS deleted_nodes
 ";
 
 fn count_of(records: &[cortex_graph_writer::json_row::Row], default: usize) -> usize {

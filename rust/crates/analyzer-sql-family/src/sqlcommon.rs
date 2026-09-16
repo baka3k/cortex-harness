@@ -13,6 +13,7 @@ use serde_json::{json, Map, Value};
 
 use cortex_analyzer_framework::cleanup::cleanup_graph_files;
 use cortex_analyzer_framework::cli::AnalyzerArgs;
+use cortex_analyzer_framework::embedding_artifact::{self, EmbeddingEmission};
 use cortex_analyzer_framework::manifest::load_manifest_paths;
 use cortex_graph_writer::language_writer::{FilesVariant, LanguageCodeWriter, WriteAllPayload};
 
@@ -1188,7 +1189,7 @@ pub fn run(
             neo4j_batch_size.max(1),
             verbose,
         );
-        let counts = writer.write_all(&WriteAllPayload {
+        let payload = WriteAllPayload {
             projects: &project_rows(&project_id, &project_name, &language, &repo, &args.root, &build_system),
             packages: &[],
             namespaces: &all_namespaces,
@@ -1222,9 +1223,36 @@ pub fn run(
             proc_host_declarations: &[],
             use_full_writers: true,
             files_variant: FilesVariant::WithImports,
-        });
+        };
+        // Phase-02: capture embedding categories BEFORE write_all consumes
+        // (plan `260916-1432-legacy-17-vector-emit`).
+        let embedding_categories = payload.embedding_categories();
+        let counts = writer.write_all(&payload);
         if let Err(error) = counts {
             return Err(format!("[graph] write failed: {error}"));
+        }
+        // Phase-02: emit EmbeddingInputArtifact.
+        if let Some(output) = args.embedding_input_output() {
+            let files_selected: Vec<String> = selected_files
+                .iter()
+                .map(|path| rel_slash(&root, path))
+                .collect();
+            if let Err(error) = embedding_artifact::maybe_emit_embedding_artifact(
+                Some(output),
+                EmbeddingEmission {
+                    parser: spec.language_default,
+                    project_id: &project_id,
+                    root_scope: &repo,
+                    full_replace: !args.incremental,
+                    scanned_directory: true,
+                    files_selected,
+                    files_deleted: deleted_set.iter().cloned().collect(),
+                    categories: embedding_categories,
+                },
+            ) {
+                eprintln!("sql embedding-input artifact failed: {error}");
+                return Ok(1);
+            }
         }
         if verbose {
             let ratio = if total_calls > 0 {

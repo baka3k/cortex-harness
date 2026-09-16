@@ -946,10 +946,14 @@ pub fn sync_code(m: &Matches) {
             "coverage_warnings": child_summary.get("coverage_warnings").cloned().unwrap_or(json!([])),
             "parse_quality": child_summary.get("parse_quality").cloned().unwrap_or(json!({})),
             "journal": child_summary.get("journal").cloned().unwrap_or(json!({})),
+            "collections": collections_from_child_summary(&child_summary),
+            "journal_paths": journal_paths_from_child_summary(&child_summary),
+            "state_path": first_string(&child_summary, &["scope", "cache_dir"]),
         }));
     }
     drop(guard);
-    print_summary(&summaries, total_start.elapsed().as_secs_f64());
+    let dest = lane_destinations(&process_env, "code", &sync_mode);
+    print_summary(&summaries, total_start.elapsed().as_secs_f64(), &dest);
 }
 
 pub fn sync_code_all(m: &Matches) {
@@ -1090,10 +1094,14 @@ pub fn sync_code_all(m: &Matches) {
             "coverage_warnings": child_summary.get("coverage_warnings").cloned().unwrap_or(json!([])),
             "parse_quality": child_summary.get("parse_quality").cloned().unwrap_or(json!({})),
             "journal": child_summary.get("journal").cloned().unwrap_or(json!({})),
+            "collections": collections_from_child_summary(&child_summary),
+            "journal_paths": journal_paths_from_child_summary(&child_summary),
+            "state_path": first_string(&child_summary, &["scope", "cache_dir"]),
         }));
     }
     drop(guard);
-    print_summary(&summaries, total_start.elapsed().as_secs_f64());
+    let dest = lane_destinations(&process_env, "code", &sync_mode);
+    print_summary(&summaries, total_start.elapsed().as_secs_f64(), &dest);
 }
 
 pub fn sync_code_stop(m: &Matches) {
@@ -1109,10 +1117,427 @@ pub fn sync_code_stop(m: &Matches) {
 
 
 // ---------------------------------------------------------------------------
+// Storage destinations
+// ---------------------------------------------------------------------------
+
+/// Where one lane writes its data. Resolved from the per-process environment
+/// that was actually handed to the children, so it reports the effective
+/// target rather than what the config file happens to say.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Destination {
+    pub backend: String,
+    /// `local file` / `local dir` (embedded store on disk), `local server`
+    /// (a server on this host) or `remote`.
+    pub scope: String,
+    pub location: String,
+    pub namespace: String,
+    pub tls: bool,
+    /// A credential was supplied for this endpoint. The value is never shown.
+    pub auth: bool,
+}
+
+/// The write targets of one sync run, plus the lanes a `--sync-mode` subset
+/// deliberately left alone.
+#[derive(Debug, Clone, Default)]
+pub struct LaneDestinations {
+    pub instance: String,
+    pub graph: Option<Destination>,
+    pub vectors: Option<Destination>,
+    pub graph_skipped: bool,
+    pub vectors_skipped: bool,
+}
+
+/// Engine name as users see it in config and docs.
+pub fn backend_label(backend: &str) -> String {
+    match backend {
+        "falkordb" => "FalkorDB".to_string(),
+        other => {
+            let mut chars = other.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        }
+    }
+}
+
+fn env_text(env: &Value, key: &str) -> String {
+    match env.get(key) {
+        Some(Value::String(s)) => s.trim().to_string(),
+        None | Some(Value::Null) => String::new(),
+        Some(other) => other.to_string().trim_matches('"').trim().to_string(),
+    }
+}
+
+fn first_text(env: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .map(|k| env_text(env, k))
+        .find(|v| !v.is_empty())
+        .unwrap_or_default()
+}
+
+/// `local server` for a loopback endpoint, `remote` otherwise.
+fn endpoint_scope(url: &str) -> String {
+    if crate::config::is_local(url) {
+        "local server".to_string()
+    } else {
+        "remote".to_string()
+    }
+}
+
+/// The graph write target for one lane (`code` | `doc`).
+pub fn graph_destination(env: &Value, lane: &str) -> Option<Destination> {
+    let scoped = if lane == "code" {
+        "CODE_GRAPH_PROVIDER"
+    } else {
+        "DOC_GRAPH_PROVIDER"
+    };
+    let provider = graph_provider(env, scoped).ok()?;
+    let (location, scope, tls) = match provider.as_str() {
+        "falkordb" => {
+            let uri = env_text(env, "FALKORDB_URI");
+            if uri.is_empty() {
+                let path = first_text(env, &["FALKORDB_PATH"]);
+                if path.is_empty() {
+                    return None;
+                }
+                (path, "local file".to_string(), false)
+            } else {
+                let tls = uri.starts_with("rediss://") || env.get("FALKORDB_SSL").map(truthy).unwrap_or(false);
+                (uri.clone(), endpoint_scope(&uri), tls)
+            }
+        }
+        "ladybug" => {
+            let path = env_text(env, "LADYBUG_PATH");
+            if path.is_empty() {
+                return None;
+            }
+            (path, "local file".to_string(), false)
+        }
+        _ => {
+            let uri = env_text(env, "NEO4J_URI");
+            let uri = if uri.is_empty() {
+                "bolt://localhost:7687".to_string()
+            } else {
+                uri
+            };
+            let tls = uri.starts_with("bolt+ssc") || uri.starts_with("neo4js://");
+            let scope = endpoint_scope(&uri);
+            (uri, scope, tls)
+        }
+    };
+    let namespace = match provider.as_str() {
+        "ladybug" => first_text(env, &["LADYBUG_GRAPH", "FALKORDB_GRAPH"]),
+        "falkordb" => first_text(env, &["FALKORDB_GRAPH", "LADYBUG_GRAPH"]),
+        _ => first_text(env, &["NEO4J_DB"]),
+    };
+    // The graph-name providers fall back to the engine default the children
+    // are given (`neo4j_args_code`), Neo4j addresses databases by name only.
+    let namespace = if namespace.is_empty() && provider != "neo4j" {
+        "hyper_graph".to_string()
+    } else {
+        namespace
+    };
+    let auth = !first_text(env, &["NEO4J_PASS", "FALKORDB_PASSWORD"]).is_empty();
+    Some(Destination {
+        backend: provider,
+        scope,
+        location,
+        namespace,
+        tls,
+        auth,
+    })
+}
+
+/// The vector write target for one lane (`code` | `doc`). A local embedded
+/// Qdrant store is a directory; a server backend is an endpoint. The lane path
+/// key is what the children actually receive (`cortex-sync` reads
+/// `QDRANT_CODE_PATH`, the doc ingestor `--qdrant-path`), and the storage
+/// overlay rewrites it to the remote URL, so it is preferred over `QDRANT_URL`.
+pub fn vector_destination(env: &Value, lane: &str) -> Option<Destination> {
+    let path_key = if lane == "code" {
+        "QDRANT_CODE_PATH"
+    } else {
+        "QDRANT_DOC_PATH"
+    };
+    let location = first_text(env, &[path_key, "QDRANT_URL"]);
+    if location.is_empty() {
+        return None;
+    }
+    let (scope, tls) = if location.contains("://") {
+        (
+            endpoint_scope(&location),
+            location.starts_with("https://"),
+        )
+    } else {
+        ("local dir".to_string(), false)
+    };
+    let namespace = if lane == "code" {
+        first_text(env, &["QDRANT_COLLECTION_CODE", "QDRANT_COLLECTION"])
+    } else {
+        first_text(env, &["QDRANT_COLLECTION_DOC", "QDRANT_COLLECTION"])
+    };
+    let auth = !env_text(env, "QDRANT_API_KEY").is_empty();
+    Some(Destination {
+        backend: "qdrant".to_string(),
+        scope,
+        location,
+        namespace,
+        tls,
+        auth,
+    })
+}
+
+/// Both targets for a lane, with the halves `--sync-mode` excluded marked as
+/// skipped rather than hidden.
+pub fn lane_destinations(env: &Value, lane: &str, sync_mode: &str) -> LaneDestinations {
+    LaneDestinations {
+        instance: env_text(env, "CORTEX_STORAGE_INSTANCE"),
+        graph: graph_destination(env, lane),
+        vectors: vector_destination(env, lane),
+        graph_skipped: sync_mode == "embedding",
+        vectors_skipped: sync_mode == "graph",
+    }
+}
+
+/// `[{name, points}]` for every collection the child reported writing.
+/// `points` is null when the lane names a collection without reporting how
+/// many points it put there (the message lane, the Python doc ingestor).
+fn collections_from_child_summary(summary: &Value) -> Vec<Value> {
+    let mut out: Vec<(String, Option<i64>)> = Vec::new();
+    let mut push = |name: String, points: Option<i64>| {
+        if name.is_empty() {
+            return;
+        }
+        match out.iter_mut().find(|(existing, _)| *existing == name) {
+            Some(slot) => {
+                if let Some(added) = points {
+                    slot.1 = Some(slot.1.unwrap_or(0) + added);
+                }
+            }
+            None => out.push((name, points)),
+        }
+    };
+    if let Some(entries) = summary.get("vector_embeddings").and_then(|v| v.as_array()) {
+        for entry in entries {
+            let name = entry
+                .get("qdrant_collection")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            push(name, entry.get("vector_count").and_then(|v| v.as_i64()));
+        }
+    }
+    if let Some(messages) = summary.get("native_message_scan") {
+        let name = messages
+            .get("qdrant_collection")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        push(name, None);
+    }
+    out.into_iter()
+        .map(|(name, points)| json!({"name": name, "points": points}))
+        .collect()
+}
+
+fn first_string(summary: &Value, path: &[&str]) -> String {
+    let mut node = summary;
+    for key in path {
+        node = match node.get(*key) {
+            Some(v) => v,
+            None => return String::new(),
+        };
+    }
+    node.as_str().unwrap_or("").to_string()
+}
+
+/// The graph-journal SQLite files the run used: the replay's own journal when
+/// it reported one, plus every per-stage `journal_path`. These are the exact
+/// paths `dev journal status --journal-path` expects.
+fn journal_paths_from_child_summary(summary: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |path: &str| {
+        if !path.is_empty() && !out.iter().any(|existing| existing == path) {
+            out.push(path.to_string());
+        }
+    };
+    push(&first_string(summary, &["journal", "path"]));
+    for key in [
+        "primary_parsers",
+        "framework_overlays",
+        "topology_overlays",
+        "vector_embeddings",
+    ] {
+        let Some(entries) = summary.get(key).and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for entry in entries {
+            push(entry.get("journal_path").and_then(|v| v.as_str()).unwrap_or(""));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// One `  <label> <Backend> (<scope>): <location>` line, with the namespace,
+/// TLS and credential presence appended without ever exposing a secret.
+fn render_destination(label: &str, dest: &Destination, namespace_label: &str) -> String {
+    let mut line = format!(
+        "  {:<9} {} ({}): {}",
+        label,
+        backend_label(&dest.backend),
+        dest.scope,
+        dest.location
+    );
+    if !dest.namespace.is_empty() {
+        line.push_str(&format!("  {namespace_label}={}", dest.namespace));
+    }
+    if dest.scope == "remote" || dest.scope.ends_with("server") {
+        line.push_str(if dest.tls { "  tls=yes" } else { "  tls=no" });
+        if dest.auth {
+            line.push_str("  auth=set");
+        }
+    }
+    line
+}
+
+/// The "where did the data go" block: the effective targets for the lane plus
+/// the on-disk artifacts (collections, journal, state) the run touched. Built
+/// as lines so the summary box and the tests share one rendering.
+fn destination_lines(dest: &LaneDestinations, summaries: &[Value]) -> Vec<String> {
+    let mut out = Vec::new();
+    let instance = if dest.instance.is_empty() {
+        "default"
+    } else {
+        dest.instance.as_str()
+    };
+    out.push(format!("  Stored in  instance={instance}"));
+
+    if dest.graph_skipped {
+        out.push("  graph     skipped (--sync-mode embedding)".to_string());
+    } else if let Some(graph) = &dest.graph {
+        let label = if graph.backend == "neo4j" { "db" } else { "graph" };
+        out.push(render_destination("graph", graph, label));
+    } else {
+        out.push("  graph     no graph target resolved".to_string());
+    }
+
+    if dest.vectors_skipped {
+        out.push("  vectors   skipped (--sync-mode graph)".to_string());
+    } else if let Some(vectors) = &dest.vectors {
+        let collected = collected_writes(summaries);
+        // None while no lane reported a count, so an unknown never prints as 0.
+        let mut total: Option<i64> = None;
+        for (_, points) in collected.iter() {
+            if let Some(value) = points {
+                total = Some(total.unwrap_or(0) + value);
+            }
+        }
+        let mut line = render_destination("vectors", vectors, "collection");
+        if let Some(sum) = total {
+            line.push_str(&format!("  points={sum}"));
+        }
+        out.push(line);
+        for (name, points) in collected.iter().take(6) {
+            out.push(match points {
+                Some(count) => format!("             {name}  {count}"),
+                None => format!("             {name}"),
+            });
+        }
+        if collected.len() > 6 {
+            out.push(format!(
+                "             +{} more collection(s)",
+                collected.len() - 6
+            ));
+        }
+    } else {
+        out.push("  vectors   no vector target resolved".to_string());
+    }
+
+    out.extend(artifact_lines("journal", &artifact_paths(summaries, "journal_paths")));
+    out.extend(artifact_lines("state", &artifact_paths(summaries, "state_path")));
+    out
+}
+
+/// Unique paths recorded under one summary key across every folder.
+fn artifact_paths(summaries: &[Value], key: &str) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    for s in summaries {
+        match s.get(key) {
+            Some(Value::String(text)) => {
+                if !text.is_empty() && !paths.contains(text) {
+                    paths.push(text.clone());
+                }
+            }
+            Some(Value::Array(items)) => {
+                for item in items.iter().filter_map(|v| v.as_str()) {
+                    if !item.is_empty() && !paths.iter().any(|existing| existing == item) {
+                        paths.push(item.to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    paths.sort();
+    paths
+}
+
+/// Three pasteable paths at most; every printed path is exact.
+fn artifact_lines(label: &str, paths: &[String]) -> Vec<String> {
+    let Some(first) = paths.first() else {
+        return Vec::new();
+    };
+    let mut out = vec![format!("  {:<9} {}", label, first)];
+    for path in paths.iter().skip(1).take(2) {
+        out.push(format!("             {path}"));
+    }
+    if paths.len() > 3 {
+        out.push(format!("             +{} more", paths.len() - 3));
+    }
+    out
+}
+
+/// Every collection the run reported writing, merged across folders.
+fn collected_writes(summaries: &[Value]) -> Vec<(String, Option<i64>)> {
+    let mut collected: Vec<(String, Option<i64>)> = Vec::new();
+    for s in summaries {
+        let Some(entries) = s.get("collections").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for entry in entries {
+            let name = entry.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let points = entry.get("points").and_then(|v| v.as_i64());
+            match collected.iter_mut().find(|(existing, _)| *existing == name) {
+                Some(slot) => {
+                    if let Some(added) = points {
+                        slot.1 = Some(slot.1.unwrap_or(0) + added);
+                    }
+                }
+                None => collected.push((name.to_string(), points)),
+            }
+        }
+    }
+    collected.sort();
+    collected
+}
+
+fn print_destinations(dest: &LaneDestinations, summaries: &[Value]) {
+    echo(&"─".repeat(52));
+    for line in destination_lines(dest, summaries) {
+        echo(&line);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Summary printer (dev.py `_print_summary`)
 // ---------------------------------------------------------------------------
 
-pub(super) fn print_summary(summaries: &[Value], total_elapsed: f64) {
+pub(super) fn print_summary(summaries: &[Value], total_elapsed: f64, dest: &LaneDestinations) {
     let eq = "═".repeat(52);
     let dash = "─".repeat(52);
     echo(&format!("\n{}", eq));
@@ -1215,6 +1640,7 @@ pub(super) fn print_summary(summaries: &[Value], total_elapsed: f64) {
         .iter()
         .filter(|s| s.get("status").and_then(|v| v.as_str()) == Some("error"))
         .count();
+    print_destinations(dest, summaries);
     echo(&dash);
     echo(&format!(
         "  {} ok  {} skipped  {} errors  total {:.1}s",
@@ -1367,4 +1793,239 @@ pub fn default_workers() -> i64 {
         .map(|n| n.get() as i64)
         .unwrap_or(2);
     (cpus / 2).clamp(1, 4)
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+
+    fn env(pairs: &[(&str, &str)]) -> Value {
+        let mut map = serde_json::Map::new();
+        for (key, value) in pairs {
+            map.insert((*key).to_string(), json!(*value));
+        }
+        Value::Object(map)
+    }
+
+    #[test]
+    fn ladybug_reports_the_embedded_store_file_and_graph() {
+        let dest = graph_destination(
+            &env(&[
+                ("CODE_GRAPH_PROVIDER", "ladybug"),
+                ("LADYBUG_PATH", "/data/ladybug/code/code.lbug/hyper_graph"),
+                ("LADYBUG_GRAPH", "cortext"),
+            ]),
+            "code",
+        )
+        .expect("ladybug target");
+        assert_eq!(dest.backend, "ladybug");
+        assert_eq!(dest.scope, "local file");
+        assert_eq!(dest.location, "/data/ladybug/code/code.lbug/hyper_graph");
+        assert_eq!(dest.namespace, "cortext");
+        assert!(!dest.tls);
+    }
+
+    #[test]
+    fn falkordb_distinguishes_embedded_file_from_remote_endpoint() {
+        let embedded = graph_destination(
+            &env(&[
+                ("CODE_GRAPH_PROVIDER", "falkordb"),
+                ("FALKORDB_PATH", "/data/falkordb/code/data.rdb"),
+                ("FALKORDB_GRAPH", "cortext"),
+            ]),
+            "code",
+        )
+        .expect("embedded target");
+        assert_eq!(embedded.scope, "local file");
+        assert_eq!(embedded.namespace, "cortext");
+
+        let remote = graph_destination(
+            &env(&[
+                ("DOC_GRAPH_PROVIDER", "falkordb"),
+                ("FALKORDB_URI", "rediss://db.example.com:6379"),
+                ("FALKORDB_PASSWORD", "hunter2"),
+            ]),
+            "doc",
+        )
+        .expect("remote target");
+        assert_eq!(remote.scope, "remote");
+        assert!(remote.tls, "rediss:// implies TLS");
+        assert!(remote.auth);
+        // The name the doc lane writes is the role-scoped graph default.
+        assert_eq!(remote.namespace, "hyper_graph");
+        assert!(
+            !remote.location.contains("hunter2"),
+            "credentials never reach the location"
+        );
+    }
+
+    #[test]
+    fn loopback_endpoints_are_local_servers_not_remote() {
+        let dest = graph_destination(
+            &env(&[
+                ("CODE_GRAPH_PROVIDER", "neo4j"),
+                ("NEO4J_URI", "bolt://localhost:7687"),
+                ("NEO4J_DB", "cortext"),
+            ]),
+            "code",
+        )
+        .expect("neo4j target");
+        assert_eq!(dest.scope, "local server");
+        assert_eq!(dest.location, "bolt://localhost:7687");
+        assert_eq!(dest.namespace, "cortext");
+    }
+
+    #[test]
+    fn vector_target_prefers_the_lane_path_the_children_receive() {
+        let local = vector_destination(
+            &env(&[("QDRANT_CODE_PATH", "/data/qdrant/code"), ("QDRANT_COLLECTION", "cortext")]),
+            "code",
+        )
+        .expect("local vector target");
+        assert_eq!(local.scope, "local dir");
+        assert_eq!(local.location, "/data/qdrant/code");
+        assert_eq!(local.namespace, "cortext");
+
+        let remote = vector_destination(
+            &env(&[
+                ("QDRANT_DOC_PATH", "http://127.0.0.1:6333"),
+                ("QDRANT_URL", "http://127.0.0.1:6333"),
+                ("QDRANT_API_KEY", "secret"),
+                ("QDRANT_COLLECTION_DOC", "cortext_doc"),
+            ]),
+            "doc",
+        )
+        .expect("server vector target");
+        assert_eq!(remote.scope, "local server");
+        assert_eq!(remote.namespace, "cortext_doc");
+        assert!(remote.auth);
+        assert!(!remote.location.contains("secret"));
+    }
+
+    #[test]
+    fn sync_mode_subsets_are_reported_as_skipped() {
+        let env = env(&[
+            ("CODE_GRAPH_PROVIDER", "ladybug"),
+            ("LADYBUG_PATH", "/data/lbug"),
+            ("QDRANT_CODE_PATH", "/data/qdrant/code"),
+        ]);
+        let graph_only = lane_destinations(&env, "code", "graph");
+        assert!(graph_only.vectors_skipped);
+        assert!(!graph_only.graph_skipped);
+        assert!(graph_only.graph.is_some());
+
+        let embedding_only = lane_destinations(&env, "code", "embedding");
+        assert!(embedding_only.graph_skipped);
+        assert!(!embedding_only.vectors_skipped);
+    }
+
+    #[test]
+    fn collections_merge_per_parser_entries_and_keep_unknown_counts_null() {
+        let summary = json!({
+            "vector_embeddings": [
+                {"qdrant_collection": "cortext__ab12__go_functions", "vector_count": 7},
+                {"qdrant_collection": "cortext__ab12__go_functions", "vector_count": 3},
+                {"qdrant_collection": "", "vector_count": 5},
+                {"qdrant_collection": "cortext__ab12__rust_functions", "vector_count": Value::Null}
+            ],
+            "native_message_scan": {"qdrant_collection": "cortext_mess"}
+        });
+        let collections = collections_from_child_summary(&summary);
+        assert_eq!(
+            collections,
+            vec![
+                json!({"name": "cortext__ab12__go_functions", "points": 10}),
+                json!({"name": "cortext__ab12__rust_functions", "points": null}),
+                json!({"name": "cortext_mess", "points": null}),
+            ]
+        );
+    }
+
+    #[test]
+    fn journal_paths_collect_every_stage_and_drop_blanks() {
+        assert_eq!(
+            journal_paths_from_child_summary(&json!({
+                "journal": {"path": "/j/replay.sqlite3"},
+                "primary_parsers": [
+                    {"journal_path": "/j/scope/cobol.sqlite3"},
+                    {"journal_path": null},
+                    {"journal_path": "/j/scope/cobol.sqlite3"}
+                ],
+                "framework_overlays": [{"journal_path": "/j/scope/spring.sqlite3"}]
+            })),
+            vec![
+                "/j/replay.sqlite3".to_string(),
+                "/j/scope/cobol.sqlite3".to_string(),
+                "/j/scope/spring.sqlite3".to_string(),
+            ]
+        );
+        assert!(journal_paths_from_child_summary(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn rendered_lines_name_the_engine_scope_and_namespace() {
+        let dest = Destination {
+            backend: "falkordb".to_string(),
+            scope: "remote".to_string(),
+            location: "redis://db.example.com:6379".to_string(),
+            namespace: "cortext".to_string(),
+            tls: false,
+            auth: true,
+        };
+        assert_eq!(
+            render_destination("graph", &dest, "graph"),
+            "  graph     FalkorDB (remote): redis://db.example.com:6379  graph=cortext  \
+             tls=no  auth=set"
+        );
+        let local = Destination {
+            backend: "qdrant".to_string(),
+            scope: "local dir".to_string(),
+            location: "/data/qdrant/code".to_string(),
+            namespace: String::new(),
+            tls: false,
+            auth: false,
+        };
+        assert_eq!(
+            render_destination("vectors", &local, "collection"),
+            "  vectors   Qdrant (local dir): /data/qdrant/code"
+        );
+    }
+
+    #[test]
+    fn block_lists_targets_writes_and_local_artifacts() {
+        let env = env(&[
+            ("CORTEX_STORAGE_INSTANCE", "cortex"),
+            ("CODE_GRAPH_PROVIDER", "ladybug"),
+            ("LADYBUG_PATH", "/data/ladybug/code/code.lbug/hyper_graph"),
+            ("LADYBUG_GRAPH", "cortext"),
+            ("QDRANT_CODE_PATH", "/data/qdrant/code"),
+            ("QDRANT_COLLECTION_CODE", "cortext"),
+        ]);
+        let summaries = vec![json!({
+            "folder": "rust",
+            "status": "ok",
+            "collections": [
+                {"name": "cortext__ab12__rust_functions", "points": 412},
+                {"name": "cortext_mess", "points": null}
+            ],
+            "journal_paths": ["/data/journal/0708/cobol.sqlite3"],
+            "state_path": "/repo/.cache/incremental_sync/rust",
+        })];
+        assert_eq!(
+            destination_lines(&lane_destinations(&env, "code", "both"), &summaries),
+            vec![
+                "  Stored in  instance=cortex".to_string(),
+                "  graph     Ladybug (local file): /data/ladybug/code/code.lbug/hyper_graph  \
+                 graph=cortext"
+                    .to_string(),
+                "  vectors   Qdrant (local dir): /data/qdrant/code  collection=cortext  \
+                 points=412"
+                    .to_string(),
+                "             cortext__ab12__rust_functions  412".to_string(),
+                "             cortext_mess".to_string(),
+                "  journal   /data/journal/0708/cobol.sqlite3".to_string(),
+                "  state     /repo/.cache/incremental_sync/rust".to_string(),
+            ]
+        );
+    }
 }

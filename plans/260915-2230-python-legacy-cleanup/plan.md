@@ -5,6 +5,7 @@ created: 2026-09-15
 target: "code-tiny/ (mcp/, tools/, tests/, testtool/, livingdoc/, skills/), doc-tiny/, cortex_harness/, harness/scripts/, scripts/ (mcp-lifecycle, benchmarks, rust_parity, rust_mcp), tests/ (suites Python), installers/ (py helpers), Makefile, .github/workflows, docs/cutover-runbook.md, ReadMe.md, requirements*.txt"
 blockedBy:
   - "260915-2027-vector-lane-rust-port"  # phase-03/04/05 chưa xong — Python MCP (unified + mind) vẫn là rollback/baseline; phase-04 còn TẠO THÊM vector_worker.py làm sidecar
+  - "260916-1154-native-vector-ingest-local"  # flip local vector lane (JSON store native, 2026-09-16) — disposition children vector code-lane (primary_vector_sync.py, local_qdrant.py nhánh code, sidecar-for-code) chờ plan này flip + dogfood
 blocks: []
 relatedPlans:
   - "260913-2130-rust-full-migration"       # umbrella — mục tiêu "xoá dần sau cutover" là chính plan này

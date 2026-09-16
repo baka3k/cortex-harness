@@ -34,18 +34,22 @@ endif
 .PHONY: help update build install uninstall infra-up infra-down storage-layout storage-init storage-migrate-layout storage-backup export-db export import-db import doctor start stop sync code doc sync-code-stop sync-doc-stop \
 	rust-build rust-test rust-clippy rust-check rust-pyo3 rust-fixtures rust-clean \
 	ort-ensure embed-artifacts embed-jina-onnx embed-bge-onnx embed-parity \
+	embed-jina-onnx-if-needed embed-bge-onnx-if-needed embed-artifacts-if-needed \
+	embedding-install \
 	journal-shadow-diff
 
 help:
 	@$(LIFECYCLE) help
 
 # `update` refreshes the working tree and every dependency layer in one shot:
-#   git pull -> cargo fetch (rust crates) -> uv venv + pip install (python).
+#   git pull -> cargo fetch (rust crates) -> uv venv + pip install (python)
+#   -> ONNX embed artifacts, last because it is by far the slowest layer.
 # The Python layer follows the dev-lifecycle convention: create `.venv` via
 # `uv venv` when missing, then install root + code-tiny + doc-tiny
 # requirements plus the editable root in one `uv pip install --python`
-# invocation. Heavy weights (models, ONNX runtime) stay with `make build` /
-# embed-artifacts; run those afterwards when the runtime itself must update.
+# invocation. Embed artifacts are fetched only when the pinned graph is
+# missing (`embed-artifacts-if-needed`); ONNX Runtime shared library stays
+# with `make build` (ort-ensure).
 ifeq ($(OS),Windows_NT)
 VENV_READY := $(wildcard .venv/Scripts/python.exe)
 else
@@ -59,7 +63,10 @@ ifeq ($(VENV_READY),)
 	$(UV) venv
 endif
 	$(UV) pip install --python $(PYTHON) -r requirements.txt -r code-tiny/requirements.txt -r doc-tiny/requirements.txt -e .
-	@echo "update: code + dependencies refreshed. Run 'make build' to rebuild the cortex-dev binary (and 'make install' if it is installed)."
+	@echo "update: code + dependencies refreshed."
+	@echo "update: ONNX embed artifacts last — on a fresh machine this downloads/exports ~4.2 GB of model weights and is the slowest step (many minutes)."
+	@$(MAKE) --no-print-directory embed-artifacts-if-needed
+	@echo "update: done. Run 'make build' to rebuild the cortex-dev binary (and 'make install' if it is installed)."
 
 # `build` also provisions ONNX Runtime for cortex-embed: everything the runtime
 # needs to load a graph is installed here, model weights are not (see embed-artifacts).
@@ -181,6 +188,40 @@ embed-jina-onnx:
 
 embed-bge-onnx:
 	$(PYTHON) scripts/rust_parity/fetch_bge_onnx.py
+
+# update-friendly variants: no-op when the pinned graph already exists.
+# Presence of `model.onnx` is the completeness check — both fetch scripts pin
+# bytes via metadata.json (digest pin, cortex-embed gate G7) and neither
+# re-exports/refetches an existing graph unless forced. Make-level wildcard
+# guards (not shell `test`) so the targets stay cross-platform.
+EMBED_JINA_GRAPH := .cache/embed/jina-v3-onnx-fp32/model.onnx
+EMBED_BGE_GRAPH := .cache/embed/BAAI--bge-m3/model.onnx
+
+embed-jina-onnx-if-needed:
+ifeq ($(wildcard $(EMBED_JINA_GRAPH)),)
+	@echo "[embed] jina-v3 ONNX graph MISSING — downloading torch weights + exporting + verifying (multi-GB, the slowest step, expect many minutes)..."
+	$(PYTHON) scripts/rust_parity/export_jina_onnx.py --verify
+else
+	@echo "[embed] jina-v3 graph present ($(EMBED_JINA_GRAPH)) — skip"
+endif
+
+embed-bge-onnx-if-needed:
+ifeq ($(wildcard $(EMBED_BGE_GRAPH)),)
+	@echo "[embed] bge-m3 ONNX graph MISSING — downloading pinned snapshot from Hugging Face (~2.1 GB)..."
+	$(PYTHON) scripts/rust_parity/fetch_bge_onnx.py
+else
+	@echo "[embed] bge-m3 graph present ($(EMBED_BGE_GRAPH)) — skip"
+endif
+
+embed-artifacts-if-needed: embed-jina-onnx-if-needed embed-bge-onnx-if-needed
+
+# Standalone on-demand embedding install: provisions everything cortex-embed
+# needs at runtime (ONNX Runtime dylib + the two pinned model graphs) without
+# a full `make build`/`make update`. Idempotent — the `*-if-needed` legs no-op
+# when the graphs are already present, so re-running is always cheap.
+# Force a re-export/re-download of one model with `make embed-jina-onnx` /
+# `make embed-bge-onnx`.
+embedding-install: ort-ensure embed-artifacts-if-needed
 
 # Re-run the Python reference dump + the Rust cosine/token-id gate. Needs both
 # artifacts above; the Rust half is `#[ignore]`d so CI stays weights-free.

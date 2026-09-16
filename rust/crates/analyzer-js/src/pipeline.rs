@@ -776,6 +776,8 @@ pub fn build_call_graph(
             use_full_writers: true,
             files_variant: FilesVariant::WithJsx,
         };
+        // Phase-02: capture embedding categories BEFORE write_all consumes.
+        let _embedding_categories = payload.embedding_categories();
         match writer.write_all(&payload) {
             Ok(_counts) => {
                 if verbose {

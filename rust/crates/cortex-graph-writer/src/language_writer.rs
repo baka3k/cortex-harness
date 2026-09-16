@@ -74,8 +74,19 @@ const STRONG_CALL_REQUIRED_PROPS: [&str; 7] = [
     "manifest_key",
 ];
 
-fn is_strong_call_evidence(props: &Map<String, Value>) -> bool {
-    if row_get(props, "resolution_class").as_str() != Some(RESOLUTION_CLASS_DIRECT_RESOLVED) {
+/// Property key đủ an toàn để compile vào `SET r.`{key}`` — identifier
+/// Cypher trần (đã được backtick ở compile site, nhưng từ khóa Cypher
+/// trùng tên property vẫn an toàn nhờ quote).
+fn is_safe_cypher_identifier(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_') && !key.is_empty()
+}
+
+fn is_strong_call_evidence(props: &Map<String, Value>) -> bool {    if row_get(props, "resolution_class").as_str() != Some(RESOLUTION_CLASS_DIRECT_RESOLVED) {
         return false;
     }
     if row_get(props, "semantic_provider").as_str() != Some(SEMANTIC_PROVIDERS[0]) {
@@ -698,11 +709,7 @@ impl LanguageCodeWriter {
                 );
             }
             for (rel, endpoints) in pairs {
-                let statement = format!(
-                    "CREATE REL TABLE IF NOT EXISTS `{rel}` ({})",
-                    endpoints.into_iter().collect::<Vec<_>>().join(", ")
-                );
-                self.store.execute_query(&statement, &BTreeMap::new(), self.database.as_deref())?;
+                self.ensure_ladybug_rel_endpoints(&rel, &endpoints)?;
             }
         }
 
@@ -713,6 +720,56 @@ impl LanguageCodeWriter {
             total_written += written;
         }
         Ok(total_written)
+    }
+
+    /// Ladybug rel table bind chặt endpoint pairs và KHÔNG hỗ trợ ALTER
+    /// endpoint; `CREATE … IF NOT EXISTS` là no-op khi bảng đã tồn tại với
+    /// pair khác (bootstrap manifest, parser khác) → query pair mới dính
+    /// Binder "Query node a violates schema". Đọc endpoints hiện tại qua
+    /// `CALL show_connection`, thiếu pair nào thì DROP+CREATE lại với
+    /// UNION (endpoints cũ giữ nguyên để parser khác không vỡ).
+    fn ensure_ladybug_rel_endpoints(
+        &mut self,
+        rel: &str,
+        session_pairs: &BTreeSet<String>,
+    ) -> Result<(), WriterError> {
+        let existing = match self
+            .store
+            .execute_query(
+                &format!("CALL show_connection('{rel}')"),
+                &BTreeMap::new(),
+                self.database.as_deref(),
+            ) {
+            Ok(records) => {
+                let mut set: BTreeSet<String> = BTreeSet::new();
+                for row in &records {
+                    let source = row.get("source table name").and_then(Value::as_str);
+                    let target = row.get("destination table name").and_then(Value::as_str);
+                    if let (Some(source), Some(target)) = (source, target) {
+                        set.insert(format!("FROM `{source}` TO `{target}`"));
+                    }
+                }
+                set
+            }
+            Err(_) => BTreeSet::new(), // bảng chưa tồn tại — CREATE bên dưới
+        };
+        if session_pairs.iter().all(|pair| existing.contains(pair)) {
+            return Ok(());
+        }
+        let mut union = existing.clone();
+        union.extend(session_pairs.iter().cloned());
+        let pairs_sql = union.into_iter().collect::<Vec<_>>().join(", ");
+        let _ = self.store.execute_query(
+            &format!("DROP TABLE `{rel}`"),
+            &BTreeMap::new(),
+            self.database.as_deref(),
+        );
+        self.store.execute_query(
+            &format!("CREATE REL TABLE `{rel}` ({pairs_sql})"),
+            &BTreeMap::new(),
+            self.database.as_deref(),
+        )?;
+        Ok(())
     }
 
     fn write_group_with_audit(
@@ -848,22 +905,51 @@ impl LanguageCodeWriter {
         }
 
         let ladybug = self.store.provider() == "ladybug";
-        let query = if ladybug {
-            // Fail-closed: variant ladybug không áp dynamic properties.
-            if batch.iter().any(|row| {
-                row.get("properties")
-                    .and_then(Value::as_object)
-                    .map(|props| !props.is_empty())
-                    .unwrap_or(false)
-            }) {
-                return Err(WriterError::Contract(format!(
-                    "ladybug provider does not support typed relation row properties \
-                     (state_key={state_key}); drop the properties or extend the writer"
-                )));
+        let (query, batch) = if ladybug {
+            // Ladybug rel table là fixed-schema: SET explicit từng property
+            // (không có `SET r += row`), property thiếu cột được auto-DDL
+            // ALTER TABLE ADD theo lỗi binder. Fail-closed cũ (chặn mọi
+            // row properties) làm POSSIBLE_CALLS/evidence relation mất dữ
+            // liệu — giờ flatten properties lên top-level row + compile
+            // SET r.<key> = row.<key> cho union key của batch.
+            let mut property_keys: BTreeSet<String> = BTreeSet::new();
+            for row in &batch {
+                if let Some(props) = row.get("properties").and_then(Value::as_object) {
+                    property_keys.extend(props.keys().cloned());
+                }
             }
-            compile_relationship_upsert_ladybug(group)
+            let flat_batch: Vec<Row> = if property_keys.is_empty() {
+                batch.to_vec()
+            } else {
+                batch
+                    .iter()
+                    .map(|row| {
+                        let Some(props) = row.get("properties").and_then(Value::as_object) else {
+                            return row.clone();
+                        };
+                        let mut flat = row.clone();
+                        for (key, value) in props {
+                            if flat.contains_key(key) {
+                                continue;
+                            }
+                            if !is_safe_cypher_identifier(key) {
+                                continue;
+                            }
+                            flat.insert(key.clone(), value.clone());
+                        }
+                        flat
+                    })
+                    .collect()
+            };
+            (
+                compile_relationship_upsert_ladybug(
+                    group,
+                    &property_keys.into_iter().collect::<Vec<String>>(),
+                ),
+                flat_batch,
+            )
         } else {
-            compile_relationship_upsert(group)
+            (compile_relationship_upsert(group), batch.to_vec())
         };
         let count = self.exec_rows_count(&query, &batch)?;
         if count != batch.len() as i64 {
@@ -961,13 +1047,45 @@ impl LanguageCodeWriter {
                  {identity_property:?} identity index"
             )));
         }
+        // Ladybug: `SET n += row.properties` không parse — flatten properties
+        // lên top-level row rồi merge trên `row` trơn (expand_set_plus_equals
+        // sẽ bung thành gán per-property). Top-level giữ ưu tiên — key đã
+        // tồn tại không bị property ghi đè.
+        let ladybug = self.store.provider() == "ladybug";
+        let (rows, row_properties_property): (Vec<Row>, Option<&str>) = if ladybug {
+            match row_properties_property {
+                Some(prop) => {
+                    let flat: Vec<Row> = rows
+                        .iter()
+                        .map(|row| {
+                            let mut flat = row.clone();
+                            if let Some(props) =
+                                row.get(prop).and_then(Value::as_object).cloned()
+                            {
+                                for (key, value) in props {
+                                    if is_safe_cypher_identifier(&key) && !flat.contains_key(&key)
+                                    {
+                                        flat.insert(key, value);
+                                    }
+                                }
+                            }
+                            flat
+                        })
+                        .collect();
+                    (flat, None)
+                }
+                None => (rows.to_vec(), None),
+            }
+        } else {
+            (rows.to_vec(), row_properties_property)
+        };
         let query = upserts::compile_node_identity_merge(
             node_label,
             identity_property,
             row_identity_property,
             row_properties_property,
         );
-        self.write_batch_if_any(key, rows, Self::simple_batch_fn_static(&query))
+        self.write_batch_if_any(key, &rows, Self::simple_batch_fn_static(&query))
     }
 
     fn simple_batch_fn_static(
@@ -1162,12 +1280,7 @@ impl LanguageCodeWriter {
                     ));
             }
             for (rel, endpoints) in pairs {
-                let statement = format!(
-                    "CREATE REL TABLE IF NOT EXISTS `{rel}` ({})",
-                    endpoints.into_iter().collect::<Vec<_>>().join(", ")
-                );
-                self.store
-                    .execute_query(&statement, &BTreeMap::new(), self.database.as_deref())?;
+                self.ensure_ladybug_rel_endpoints(&rel, &endpoints)?;
             }
         }
         let mut written = 0usize;
