@@ -1,0 +1,1710 @@
+{
+  "format": "cortex-graph-state/canonical-v1",
+  "store": "hyper_graph",
+  "graph": "sp1golden",
+  "schema_fingerprint": "8613fc08894a26c2",
+  "labels": {
+    "Action": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Advice": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Alias": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AndroidAnnotation": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AndroidComponent": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AndroidHandlerMessage": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AndroidIntentAction": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AndroidManifest": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AndroidNavRoute": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AndroidResource": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ApiEndpoint": {
+      "count": 12,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "ApplicationEvent": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AspNetAnalysisState": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Aspect": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AsyncBoundary": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AuthenticationScheme": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Authority": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "AuthorizationPolicy": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "BatchProgram": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "BuildConfiguration": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "BuildDescriptor": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CacheOperation": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CacheRegion": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CallSite": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Class": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolCicsCommand": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolCopybook": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolDataItem": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolFile": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolParagraph": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolProgram": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolSection": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "CobolSqlStatement": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ConfigurationKey": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Constant": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Controller": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ControllerAction": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "DataRepository": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Database": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "DatabaseColumn": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "DatabaseTable": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Dependency": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Directory": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Document": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Enum": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ErrorPage": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Event": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Field": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "File": {
+      "count": 6,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "Filter": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "FilterMapping": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "FrameworkInstance": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Function": {
+      "count": 15,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "FunctionType": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "GradleDependency": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "GradleModule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "GraphWriteReceipt": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "GrpcEndpoint": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "GrpcService": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "HttpEndpoint": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "HttpHandler": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "HttpModule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "InfraNode": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Interface": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "JSPView": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Jp1Unit": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "JpaEntity": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "JspExpression": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "JspTag": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Layout": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "LifecycleEvent": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Listener": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Message": {
+      "count": 2,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "MessageDestination": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MessageEndpoint": {
+      "count": 3,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "Middleware": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Model": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisArtifact": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisCache": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisConfig": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisDynamicNode": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisExtension": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisInclude": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisJavaProperty": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisMapper": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisMapperMethod": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisModule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisParameter": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisResultMap": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisResultMapping": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisSpringBridge": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisSqlFragment": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisSqlJoin": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisSqlParameter": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisSqlProvider": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisSqlStatement": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisStatement": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "MyBatisXmlDocument": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Namespace": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Navigator": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Package": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "PageHandler": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Paragraph": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ParseRun": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "PartialView": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Pointcut": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Procedure": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Project": {
+      "count": 1,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "ProjectModule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Property": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "RazorPage": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Repository": {
+      "count": 1,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "Resource": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Result": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Route": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "RouteParam": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ScheduledTask": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SecurityConstraint": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SecurityFilterChain": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SecurityRule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SemanticCoverage": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Service": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Servlet": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ServletEndpoint": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ServletJspAnalysisState": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ServletJspModule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ServletMapping": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SessionState": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ShellFunction": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ShellInvocation": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ShellScript": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SpringApplication": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SpringBean": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SpringConfiguration": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SpringModule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SqlCursor": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SqlDirective": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SqlHostVariable": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "SqlStatement": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "StateSlot": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Table": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Template": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "TransactionBoundary": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Type": {
+      "count": 2,
+      "keys": [],
+      "node_property_hashes": [
+        "44136fa355b3678a"
+      ]
+    },
+    "UIControl": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "UnknownFunction": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ValidationConstraint": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ValidationRule": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Variable": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "View": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "ViewModel": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "WebConfiguration": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "WebDescriptor": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "WebFormPage": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "WebTarget": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "WelcomePage": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    },
+    "Workflow": {
+      "count": 0,
+      "keys": [],
+      "node_property_hashes": []
+    }
+  },
+  "edges": {
+    "CONTAINS": {
+      "count": 19
+    },
+    "EXECUTES_SQL": {
+      "count": 0
+    },
+    "HANDLES": {
+      "count": 12
+    },
+    "HAS_CALLSITE": {
+      "count": 0
+    },
+    "HAS_FILE": {
+      "count": 0
+    },
+    "HAS_REPOSITORY": {
+      "count": 1
+    },
+    "IN_CONFIGURATION": {
+      "count": 0
+    },
+    "MAPS_TO_SOURCE": {
+      "count": 0
+    },
+    "OBSERVED_AS": {
+      "count": 0
+    },
+    "RESOLVES_HOST_DECLARATION": {
+      "count": 0
+    },
+    "RESOLVES_TO": {
+      "count": 0
+    },
+    "SEMANTIC_OF": {
+      "count": 12
+    },
+    "SENDS_MESSAGE": {
+      "count": 2
+    },
+    "TARGETS_ENDPOINT": {
+      "count": 1
+    }
+  },
+  "indexes": [
+    {
+      "table": "SemanticCoverage",
+      "name": "idx_semanticcoverage_fingerprint",
+      "type": "ART"
+    },
+    {
+      "table": "CallSite",
+      "name": "idx_callsite_site_id",
+      "type": "ART"
+    },
+    {
+      "table": "SemanticCoverage",
+      "name": "idx_semanticcoverage_tu_key",
+      "type": "ART"
+    },
+    {
+      "table": "Repository",
+      "name": "idx_repository_name",
+      "type": "ART"
+    },
+    {
+      "table": "Service",
+      "name": "idx_service_symbol_id",
+      "type": "ART"
+    },
+    {
+      "table": "Middleware",
+      "name": "idx_middleware_symbol_id",
+      "type": "ART"
+    },
+    {
+      "table": "Database",
+      "name": "idx_database_symbol_id",
+      "type": "ART"
+    },
+    {
+      "table": "BuildConfiguration",
+      "name": "idx_buildconfiguration_config_fingerprint",
+      "type": "ART"
+    },
+    {
+      "table": "DataRepository",
+      "name": "idx_datarepository_symbol_id",
+      "type": "ART"
+    },
+    {
+      "table": "ApiEndpoint",
+      "name": "idx_apiendpoint_symbol_id",
+      "type": "ART"
+    },
+    {
+      "table": "Controller",
+      "name": "idx_controller_symbol_id",
+      "type": "ART"
+    },
+    {
+      "table": "ProjectModule",
+      "name": "idx_projectmodule_project_id_normalized",
+      "type": "ART"
+    },
+    {
+      "table": "Project",
+      "name": "idx_project_project_id",
+      "type": "ART"
+    },
+    {
+      "table": "Workflow",
+      "name": "idx_workflow_workflow_id",
+      "type": "ART"
+    },
+    {
+      "table": "Message",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "BuildConfiguration",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Repository",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Database",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisArtifact",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "WebTarget",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolCopybook",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Variable",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ValidationRule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "PartialView",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Procedure",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "UIControl",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SecurityRule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "UnknownFunction",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Service",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ShellInvocation",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ProjectModule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "RouteParam",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Pointcut",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "WebConfiguration",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "GrpcService",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MessageEndpoint",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisXmlDocument",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Middleware",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "DataRepository",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Resource",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Table",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ScheduledTask",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SpringConfiguration",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AuthenticationScheme",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "GrpcEndpoint",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SpringApplication",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "JpaEntity",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ServletJspModule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SecurityConstraint",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "WebDescriptor",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SqlStatement",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Jp1Unit",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Property",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "StateSlot",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SqlHostVariable",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "RazorPage",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Template",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisSqlFragment",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "PageHandler",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Paragraph",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ValidationConstraint",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "HttpModule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Package",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisSqlStatement",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "TransactionBoundary",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisSqlProvider",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SqlDirective",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Result",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolSqlStatement",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisSqlJoin",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisSpringBridge",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolDataItem",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisResultMapping",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AndroidNavRoute",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "View",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisModule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Namespace",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisJavaProperty",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisResultMap",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisExtension",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "JspExpression",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "GradleDependency",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ServletJspAnalysisState",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisDynamicNode",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "LifecycleEvent",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisCache",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Navigator",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisParameter",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Model",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Field",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Layout",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "GraphWriteReceipt",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Servlet",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolProgram",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "FilterMapping",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ApplicationEvent",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Filter",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolParagraph",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Aspect",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "FunctionType",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MessageDestination",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Event",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "JSPView",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisStatement",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisConfig",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Document",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "DatabaseColumn",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ErrorPage",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Controller",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SpringModule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Project",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolFile",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolSection",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisMapper",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Constant",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SqlCursor",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Class",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Advice",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "InfraNode",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ConfigurationKey",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisSqlParameter",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AspNetAnalysisState",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "JspTag",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CacheRegion",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Type",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CallSite",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "BatchProgram",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ServletMapping",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AsyncBoundary",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AndroidAnnotation",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AuthorizationPolicy",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "DatabaseTable",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ShellFunction",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ViewModel",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ParseRun",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Authority",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "File",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ShellScript",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Listener",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AndroidIntentAction",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Interface",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CobolCicsCommand",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "WelcomePage",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Alias",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SpringBean",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SemanticCoverage",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Route",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisInclude",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Action",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "MyBatisMapperMethod",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "WebFormPage",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Workflow",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "HttpHandler",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Enum",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AndroidResource",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SecurityFilterChain",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AndroidComponent",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ApiEndpoint",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Function",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "CacheOperation",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "SessionState",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AndroidHandlerMessage",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "GradleModule",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "AndroidManifest",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Dependency",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "BuildDescriptor",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "FrameworkInstance",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "HttpEndpoint",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "Directory",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ServletEndpoint",
+      "name": "_PK",
+      "type": "HASH"
+    },
+    {
+      "table": "ControllerAction",
+      "name": "_PK",
+      "type": "HASH"
+    }
+  ]
+}

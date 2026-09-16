@@ -396,12 +396,15 @@ pub fn query_impacted_files(
     if changed_paths.is_empty() {
         return Ok(impacted);
     }
+    // ladybug 0.20.4 không có hàm TYPE() — LABEL(rel) trả tên rel table
+    // (repro PyPI ladybug). falkordb giữ type().
+    let type_fn = if store.provider() == "ladybug" { "LABEL" } else { "type" };
     let queries = [
         r#"
         MATCH (src:File)-[r]->(dst:File)
         WHERE src.project_id = $project_id
           AND dst.project_id = $project_id
-          AND type(r) IN ["INCLUDES", "DEPENDS_ON", "USES", "USES_TYPE", "EXTENDS", "IMPLEMENTS", "INHERITS", "MIXES_IN"]
+          AND {type_fn}(r) IN ["INCLUDES", "DEPENDS_ON", "USES", "USES_TYPE", "EXTENDS", "IMPLEMENTS", "INHERITS", "MIXES_IN"]
           AND dst.id IN $changed_paths
         RETURN DISTINCT src.id AS file_path
         "#,
@@ -409,7 +412,7 @@ pub fn query_impacted_files(
         MATCH (src:File)-[:CONTAINS]->(:Function)-[r]->(:Function)<-[:CONTAINS]-(dst:File)
         WHERE src.project_id = $project_id
           AND dst.project_id = $project_id
-          AND type(r) IN ["CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER"]
+          AND {type_fn}(r) IN ["CALLS", "POSSIBLE_CALLS", "CALLS_FUNCTION_POINTER"]
           AND dst.id IN $changed_paths
         RETURN DISTINCT src.id AS file_path
         "#,
@@ -417,12 +420,13 @@ pub fn query_impacted_files(
         MATCH (src:File)-[:CONTAINS]->(srcNode)-[r]->(dstNode)<-[:CONTAINS]-(dst:File)
         WHERE src.project_id = $project_id
           AND dst.project_id = $project_id
-          AND type(r) IN ["USES_TYPE", "EXTENDS", "IMPLEMENTS", "INHERITS", "MIXES_IN", "DEPENDS_ON_TYPE"]
+          AND {type_fn}(r) IN ["USES_TYPE", "EXTENDS", "IMPLEMENTS", "INHERITS", "MIXES_IN", "DEPENDS_ON_TYPE"]
           AND dst.id IN $changed_paths
         RETURN DISTINCT src.id AS file_path
         "#,
     ];
-    for query in queries {
+    for template in queries {
+        let query = template.replace("{type_fn}", type_fn);
         let mut params = BTreeMap::new();
         params.insert("project_id".to_string(), json!(project_id));
         params.insert(
@@ -430,7 +434,7 @@ pub fn query_impacted_files(
             json!(changed_paths.iter().cloned().collect::<Vec<_>>()),
         );
         let rows = store
-            .execute_query(query, &params, database)
+            .execute_query(&query, &params, database)
             .map_err(|error| error.to_string())?;
         for row in rows {
             if let Some(value) = row.get("file_path").and_then(|v| v.as_str()) {
