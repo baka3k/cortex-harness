@@ -55,6 +55,10 @@ _BOOL_PROPERTIES = frozenset(
         "active",
         "is_public",
         "is_abstract",
+        "generated",
+        "redacted",
+        "secret_bearing",
+        "canonical",
     }
 )
 # String-typed columns whose values may be lists/dicts; they are JSON-encoded
@@ -78,9 +82,23 @@ _JSON_PROPERTIES = frozenset(
 )
 
 
+# Columns that are genuine LIST(STRING) values: queries filter with
+# ``x IN coalesce(n.frameworks, [])`` which cannot work against JSON strings.
+_LIST_PROPERTIES = frozenset(
+    {
+        "frameworks",
+        "build_systems",
+        "languages",
+        "source_roots",
+    }
+)
+
+
 def column_type(property_name: str) -> str:
     """Return the LadybugDB column type for a well-known property name."""
 
+    if property_name in _LIST_PROPERTIES:
+        return "STRING[]"
     if property_name in _INT64_PROPERTIES:
         return "INT64"
     if property_name in _DOUBLE_PROPERTIES:
@@ -166,7 +184,7 @@ def _core(extend: Sequence[str] = ()) -> List[str]:
 _NODE_SPECS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "File": ("id", ("path", "node_type", "imports", "exports", "jsx_tags",
                     "jsx_components", "package_name")),
-    "Project": ("project_id", ("node_type", "root", "qualified_name")),
+    "Project": ("project_id", ("node_type", "root", "qualified_name", "slug", "created_at", "id")),
     "Package": ("id", ("package_name", "qualified_name")),
     "Namespace": ("id", ("qualified_name", "package_name")),
     "Class": (
@@ -180,12 +198,13 @@ _NODE_SPECS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
         ("node_type", "qualified_name", "kind", "class_name", "package_name", "scope_name",
          "start_byte", "end_byte", "arity", "exported", "visibility", "is_public_api",
          "visibility_source", "export_evidence", "signature", "external", "builtin",
-         "react_role", "middleware_kind", "module_id"),
+         "react_role", "middleware_kind", "module_id", "symbol_id"),
     ),
     "Property": ("id", ("qualified_name", "kind", "scope_name", "class_name", "package_name",
                         "parameters", "return_type", "exported")),
     "Event": ("id", ("qualified_name", "kind", "scope_name", "class_name", "package_name",
-                     "parameters", "exported")),
+                     "parameters", "exported", "namespace", "payload_example", "payload_schema",
+                     "payload_type", "payload_version", "source", "version")),
     "Interface": ("id", ("qualified_name", "kind", "base_interfaces", "module_id")),
     "Enum": ("id", ("qualified_name", "kind", "scope_name", "class_name", "package_name", "members")),
     "Constant": ("id", ("qualified_name", "kind", "scope_name", "class_name", "package_name",
@@ -199,22 +218,38 @@ _NODE_SPECS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "Navigator": ("id", ("var_name", "nav_type", "factory", "param_list_ref")),
     "RouteParam": ("id", ("param_list_name", "route", "type_str")),
     "Workflow": ("workflow_id", ("name", "domain", "description", "confidence", "entrypoint_id",
-                                 "language", "project", "kind")),
-    "CallSite": ("site_id", ()),
-    "BuildConfiguration": ("config_fingerprint", ("project_id", "project_id_normalized", "tu_key")),
-    "SemanticCoverage": ("fingerprint", ("tu_key", "project_id", "project_id_normalized")),
-    "Repository": ("name", ("node_type", "project_id", "project_id_normalized")),
+                                 "language", "project", "kind", "id")),
+    "CallSite": ("site_id", ("id",)),
+    "BuildConfiguration": ("config_fingerprint", ("project_id", "project_id_normalized", "tu_key", "id")),
+    "SemanticCoverage": ("fingerprint", ("tu_key", "project_id", "project_id_normalized", "id")),
+    "Repository": ("name", ("node_type", "project_id", "project_id_normalized", "id", "created_at")),
     "AspNetAnalysisState": ("id", ("project_id", "module_id", "framework", "active_generation",
                                    "snapshot_checksum", "coverage_status")),
     "ServletJspAnalysisState": ("id", ("project_id", "module_id", "framework", "active_generation",
                                        "snapshot_checksum", "coverage_status")),
-    "ProjectModule": ("id", ("qualified_name", "path", "build_file", "topology_owned")),
-    "BuildDescriptor": ("id", ("topology_owned",)),
+    "ProjectModule": ("id", ("qualified_name", "path", "build_file", "topology_owned", "module_path",
+                        "kind", "confidence", "diagnostics", "frameworks", "build_systems",
+                        "languages", "source_roots")),
+    "BuildDescriptor": ("id", ("topology_owned", "module_path", "canonical", "descriptor_type",
+                           "diagnostics", "framework", "frameworks", "freshness", "generated",
+                           "parse_depth", "parser", "redacted", "role", "secret_bearing", "status")),
     "Dependency": ("id", ("coordinate", "kind", "topology_owned")),
-    "GrpcEndpoint": ("id", ("topology_owned",)),
-    "GrpcService": ("id", ("topology_owned",)),
-    "FrameworkInstance": ("id", ("topology_owned",)),
-    "GradleModule": ("id", ()),
+    "GrpcEndpoint": ("id", ("topology_owned", "module_path")),
+    "GrpcService": ("id", ("topology_owned", "module_path")),
+    "FrameworkInstance": ("id", ("topology_owned", "module_path", "confidence", "diagnostics",
+                              "dimensions", "evidence", "facts", "framework", "version")),
+    "GradleModule": ("id", ("application_id", "module_path", "module_type", "namespace")),
+    "GradleDependency": ("id", ("artifact", "coordinate", "group", "version")),
+    "Directory": ("id", ("path", "depth")),
+    "AndroidManifest": ("id", ("package_name", "path", "module_path")),
+    "AndroidComponent": ("id", ("class_name", "component_type", "direct_boot_aware",
+                                "enabled", "exported", "intent_actions", "intent_categories",
+                                "intent_data", "path", "permission", "process",
+                                "target_activity")),
+    "AndroidHandlerMessage": ("id", ("token",)),
+    "AndroidIntentAction": ("id", ("action",)),
+    "AndroidNavRoute": ("id", ("route",)),
+    "AndroidResource": ("id", ("qualifier", "res_type")),
     "InfraNode": ("id", ("type", "description", "module_path", "cohesion_score", "coupling_score",
                          "status", "created_at")),
     "Document": ("id", ("title", "name", "content", "doc_type", "created_at",
@@ -225,7 +260,7 @@ _NODE_SPECS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "Paragraph": (
         "__pk",
         ("source_id", "paragraph_id", "text", "short", "created_at",
-         "project_id", "project_id_normalized"),
+         "project_id", "project_id_normalized", "id"),
     ),
     "Entity": ("id", ("name", "type", "name_norm", "project_id", "project_id_normalized")),
 }
@@ -270,7 +305,7 @@ _REL_SPECS: Dict[str, Tuple[_ENDPOINT_PAIRS, Tuple[str, ...]]] = {
     "HAS_FILE": ((("Repository", "File"),), ()),
     "CALLS": ((("Function", "Function"),), ()),
     "POSSIBLE_CALLS": ((("Function", "Function"),), ()),
-    "HAS_ROUTE": ((("Navigator", "Function"),), ("param_schema",)),
+    "HAS_ROUTE": ((("Navigator", "Function"),), ("param_schema", "name")),
     "HAS_STEP": (
         (("Workflow", "Function"), ("File", "Function"), ("ProjectModule", "Function")),
         (),
@@ -288,6 +323,7 @@ _REL_SPECS: Dict[str, Tuple[_ENDPOINT_PAIRS, Tuple[str, ...]]] = {
          ("ProjectModule", "Route"), ("ProjectModule", "ControllerAction"),
          ("ProjectModule", "ServletEndpoint"), ("ProjectModule", "AndroidManifest"),
          ("ProjectModule", "AndroidComponent"), ("ProjectModule", "AndroidResource"),
+         ("Package", "File"),
          ("Class", "Function"), ("Class", "Class"), ("Namespace", "Class"),
          ("Namespace", "Namespace"), ("Package", "Class"), ("Package", "Function"),
          ("Package", "Namespace"), ("Package", "Type"), ("Package", "Interface"),
@@ -298,14 +334,24 @@ _REL_SPECS: Dict[str, Tuple[_ENDPOINT_PAIRS, Tuple[str, ...]]] = {
     "SAME_MODULE": ((("ProjectModule", "ProjectModule"),), ()),
     "HAS_DESCRIPTOR": ((("Project", "BuildDescriptor"), ("ProjectModule", "BuildDescriptor")), ()),
     "DEPENDS_ON": ((("ProjectModule", "Dependency"), ("Dependency", "Dependency"),
-                    ("ProjectModule", "ProjectModule")), ()),
+                    ("ProjectModule", "ProjectModule")), ("scope",)),
     "EXPOSES_ENDPOINT": ((("ProjectModule", "GrpcEndpoint"), ("GrpcService", "GrpcEndpoint")), ()),
     "DECLARES_SERVICE": ((("ProjectModule", "GrpcService"),), ()),
     "HAS_RPC": ((("GrpcService", "GrpcEndpoint"),), ()),
     "USES_FRAMEWORK": ((("ProjectModule", "FrameworkInstance"), ("Project", "FrameworkInstance")), ()),
     "EXPOSES_API": ((("ProjectModule", "ApiEndpoint"), ("ProjectModule", "HttpEndpoint"),
                      ("ProjectModule", "Route"), ("ProjectModule", "ControllerAction"),
-                     ("ProjectModule", "ServletEndpoint")), ()),
+                     ("ProjectModule", "ServletEndpoint"),
+                     ("ProjectModule", "Function"), ("ProjectModule", "Class"),
+                     ("ProjectModule", "Type"), ("ProjectModule", "Interface"),
+                     ("ProjectModule", "Enum"), ("ProjectModule", "Variable"),
+                     ("ProjectModule", "Constant"), ("ProjectModule", "Property"),
+                     ("ProjectModule", "Event")), ()),
+    "HANDLED_BY": ((("ApiEndpoint", "Function"), ("HttpEndpoint", "Function"),
+                    ("Route", "Function"), ("ServletEndpoint", "Function"),
+                    ("ControllerAction", "Function"),
+                    ("ApiEndpoint", "Class"), ("HttpEndpoint", "Class"),
+                    ("Route", "Class"), ("ServletEndpoint", "Class")), ()),
     "HAS_CALLSITE": ((("Function", "CallSite"),), ("evidence_id",)),
     "RESOLVES_TO": ((("CallSite", "Function"),), ("evidence_id",)),
     "OBSERVED_AS": ((("Function", "CallSite"),), ("evidence_id",)),
@@ -353,7 +399,6 @@ _REL_SPECS: Dict[str, Tuple[_ENDPOINT_PAIRS, Tuple[str, ...]]] = {
     "WRITES_TO": ((("Function", "DatabaseTable"),), ()),
     "REFERENCES_TABLE": ((("Function", "DatabaseTable"),), ()),
     "HAS_ATTRIBUTE": ((("DatabaseTable", "DatabaseColumn"),), ()),
-    "GradleModule": ((("Project", "GradleModule"),), ()),
 }
 
 # Spring (39), mybatis (18), aspnet (17) and servlet-jsp (19) relationship

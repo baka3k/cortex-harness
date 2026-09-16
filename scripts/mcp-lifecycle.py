@@ -1843,9 +1843,10 @@ def invoke_start(options: argparse.Namespace | None = None) -> None:
             )
 
         provider = isolate_graph_provider_environment(runtime_env, str(server["name"]))
-        graph = runtime_env.get(
-            "FALKORDB_GRAPH" if provider == "falkordb" else "NEO4J_DB", ""
+        graph_key = (
+            "NEO4J_DB" if provider == "neo4j" else "FALKORDB_GRAPH"
         )
+        graph = runtime_env.get(graph_key, "")
         existing = next(
             (
                 record

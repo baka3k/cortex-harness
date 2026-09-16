@@ -1,8 +1,8 @@
 {
-    "start_id": "START_NODE_ID",
-    "project_id": "hyper_graph",
-    "direction": "out",
-    "max_depth": 6,
-    "content_mode": "summary",
-    "include_raw_fields": false
+  "start_id": "hi.baka3k.digitalkey.MainActivity",
+  "project_id": "digitalkey",
+  "direction": "out",
+  "max_depth": 4,
+  "content_mode": "summary",
+  "include_raw_fields": false
 }

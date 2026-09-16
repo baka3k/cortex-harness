@@ -1,8 +1,8 @@
 {
-    "modules": [
-        "src/main"
-    ],
-    "project_id": "hyper_graph",
-    "content_mode": "summary",
-    "include_raw_fields": false
+  "modules": [
+    "DigitalKey/src/main"
+  ],
+  "project_id": "digitalkey",
+  "content_mode": "summary",
+  "include_raw_fields": false
 }

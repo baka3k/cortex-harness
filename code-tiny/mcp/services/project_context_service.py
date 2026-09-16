@@ -172,7 +172,7 @@ class ProjectContextService:
                      scope: dep.scope,
                      target_labels: labels(target)
                    }) AS dependencies
-            ORDER BY m.module_path, m.id
+            ORDER BY module_path, module_id
             SKIP $offset LIMIT $limit
             """,
             params,
@@ -315,7 +315,7 @@ class ProjectContextService:
                    symbol.module_id AS module_id,
                    symbol.public_api_confidence AS confidence,
                    coalesce(symbol.visibility = 'inferred', false) AS inferred
-            ORDER BY symbol.file_path, symbol.start_line, symbol.id
+            ORDER BY file_path, start_line, symbol_id
             SKIP $offset LIMIT $limit
             """,
             params,

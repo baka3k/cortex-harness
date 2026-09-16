@@ -280,10 +280,17 @@ def format_bash_exports(env: Dict[str, str]) -> str:
             )
         )
     elif provider == "ladybug":
+        # LadybugDB reads its logical graph name from the provider-neutral
+        # FALKORDB_* plumbing, so only connection-style keys are dropped.
         lines.extend(
             (
-                'for _cortex_inactive_key in "${!FALKORDB_@}" "${!NEO4J_@}"; do unset "$_cortex_inactive_key"; done',
-                "unset DOC_FALKORDB_GRAPH _cortex_inactive_key 2>/dev/null || true",
+                'for _cortex_inactive_key in "${!FALKORDB_@}" "${!NEO4J_@}"; do',
+                '  case "$_cortex_inactive_key" in',
+                "    FALKORDB_GRAPH|FALKORDB_DATABASE|DOC_FALKORDB_GRAPH) ;;",
+                '    *) unset "$_cortex_inactive_key" ;;',
+                "  esac",
+                "done",
+                "unset _cortex_inactive_key 2>/dev/null || true",
             )
         )
     else:
