@@ -215,12 +215,13 @@ class MakeLifecycleTests(unittest.TestCase):
         lifecycle = (ROOT / "scripts" / "mcp-lifecycle.ps1").read_text(encoding="utf-8")
         self.assertIn("function Get-GraphProvider", lifecycle)
         self.assertIn("function Remove-InactiveGraphEnvironment", lifecycle)
-        self.assertIn('if ($effectiveProvider -eq "falkordb")', lifecycle)
+        self.assertIn('-eq "falkordb" -or $effectiveProvider -eq "ladybug"', lifecycle)
         self.assertIn('$overrides.FALKORDB_GRAPH = $databaseName', lifecycle)
         self.assertIn('$overrides.NEO4J_DB = $databaseName', lifecycle)
         self.assertIn("Unsupported graph provider", lifecycle)
         self.assertIn("Env:NEO4J_*", lifecycle)
         self.assertIn("Env:FALKORDB_*", lifecycle)
+        self.assertIn("Env:LADYBUG_*", lifecycle)
 
     def test_install_and_uninstall_use_user_local_bin(self):
         with tempfile.TemporaryDirectory() as home:

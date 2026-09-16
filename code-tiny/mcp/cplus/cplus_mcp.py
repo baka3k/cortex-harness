@@ -152,7 +152,11 @@ else:
     DEFAULT_NEO4J_PASSWORD = None
     DEFAULT_NEO4J_DB = "hyper_graph"
 DEFAULT_FALKORDB_GRAPH = os.environ.get("FALKORDB_GRAPH") or os.environ.get("FALKORDB_DATABASE") or "hyper_graph"
-DEFAULT_GRAPH_DB = DEFAULT_FALKORDB_GRAPH if DEFAULT_GRAPH_PROVIDER == "falkordb" else DEFAULT_NEO4J_DB
+DEFAULT_GRAPH_DB = (
+    DEFAULT_FALKORDB_GRAPH
+    if DEFAULT_GRAPH_PROVIDER in {"falkordb", "ladybug"}
+    else DEFAULT_NEO4J_DB
+)
 FULLTEXT_SYMBOL_TEXT_INDEX = "mcp_symbol_text_ft_v2"
 FULLTEXT_SYMBOL_CODE_INDEX = "mcp_symbol_code_ft_v2"
 
@@ -242,6 +246,21 @@ async def _get_graph_driver() -> GraphDriver:
             # without a lease (see ``falkordb_driver._open_additional_local_clients``).
             config["additional_paths"] = discover_falkordb_data_files()
         _graph_driver = await get_shared_graph_driver(GraphProvider.FALKORDB, config)
+        return _graph_driver
+    if DEFAULT_GRAPH_PROVIDER == "ladybug":
+        from cortex_harness.storage import resolve_storage
+
+        from ladybug_discovery import discover_ladybug_databases
+
+        config = {
+            "path": os.environ.get("LADYBUG_PATH")
+            or str(resolve_storage(Path.cwd()).ladybug_code_path),
+            "database": DEFAULT_FALKORDB_GRAPH,
+            "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+            "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+            "additional_paths": discover_ladybug_databases(),
+        }
+        _graph_driver = await get_shared_graph_driver(GraphProvider.LADYBUG, config)
         return _graph_driver
     if not DEFAULT_NEO4J_USER or not DEFAULT_NEO4J_PASSWORD:
         raise RuntimeError("NEO4J_USER and NEO4J_PASS must be set.")
