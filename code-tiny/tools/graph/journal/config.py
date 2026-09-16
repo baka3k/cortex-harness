@@ -331,6 +331,8 @@ def legacy_physical_target_from_env(env: Mapping[str, str]) -> str:
     ).casefold()
     if provider in {"neo4j", "neo"}:
         return f"neo4j:{env.get('NEO4J_URI', '')}:{env.get('NEO4J_DB', 'neo4j')}"
+    if provider in {"ladybug", "ladybugdb", "ladybug-db"}:
+        return f"ladybug:{env.get('LADYBUG_PATH', '')}:{env.get('FALKORDB_GRAPH', 'hyper_graph')}"
     path = str(env.get("FALKORDB_PATH") or "embedded")
     graph = str(
         env.get("FALKORDB_GRAPH")

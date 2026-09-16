@@ -315,6 +315,7 @@ class StorageFactory:
         graph_name: Optional[str] = None,
         *,
         role: StorageRole | QdrantStorageRole | str = StorageRole.CODE,
+        provider: str = "falkordb",
     ) -> EffectiveStorageTarget:
         """Describe the graph target selected before any connection attempt.
 
@@ -336,6 +337,13 @@ class StorageFactory:
                 role=role_value,
                 password=self._remote.falkordb_password,
                 ssl=self._remote.falkordb_ssl,
+            )
+        if str(provider).casefold() == "ladybug":
+            return local_graph_target(
+                self._resolved.ladybug_path_for_role(role_value),
+                graph=namespace,
+                role=role_value,
+                provider="ladybug",
             )
         return local_graph_target(
             self._resolved.falkordb_path_for_role(role_value),
@@ -378,6 +386,7 @@ class StorageFactory:
         role: StorageRole | QdrantStorageRole | str = StorageRole.CODE,
         generation_id: str = "unbound",
         project_scope: Optional[str] = None,
+        provider: str = "falkordb",
     ) -> EffectiveStorageTopology:
         """Return the canonical graph/vector topology used for compatibility."""
 
@@ -386,7 +395,7 @@ class StorageFactory:
             requested_backend=self._requested_mode.value,
             forced_local=self._forced_local,
             generation_id=str(generation_id or "unbound"),
-            graph=self.effective_graph_target(graph_name, role=role),
+            graph=self.effective_graph_target(graph_name, role=role, provider=provider),
             vector=self.effective_vector_target(collection_name, role=role),
         )
 
