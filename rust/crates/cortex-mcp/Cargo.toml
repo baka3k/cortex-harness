@@ -14,6 +14,7 @@ path = "src/main.rs"
 cortex-embed = { path = "../cortex-embed" }
 cortex-graph-writer = { path = "../cortex-graph-writer" }
 cortex-falkordb = { path = "../cortex-falkordb" }
+lbug = "0.20.4"
 cortex-retrieval = { path = "../cortex-retrieval" }
 redis = { version = "1.7", default-features = false, features = ["script"] }
 rmcp = { version = "3.3.0", features = ["server", "transport-streamable-http-server"] }

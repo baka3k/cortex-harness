@@ -105,7 +105,7 @@ fn rewrite_merge_natural_keys(query: &str) -> String {
 
     let mut out = String::with_capacity(query.len());
     let mut cursor = 0usize;
-    for r in rewrites {
+    for r in &rewrites {
         out.push_str(&query[cursor..r.start]);
         out.push_str(&r.replacement);
         let rest = &query[r.end..];
@@ -132,7 +132,43 @@ fn rewrite_merge_natural_keys(query: &str) -> String {
         }
     }
     out.push_str(&query[cursor..]);
-    out
+    // PK-guard (phase-02, ladybug): id là PRIMARY KEY của mọi node table —
+    // sau khi merge key đã rewrite sang id, assignment `<var>.id = <expr>`
+    // còn sót trong SET (thường trùng với merge expr) bị binder từ chối
+    // ("Cannot set property id … primary key"). Cùng expr với merge key →
+    // redundant → bỏ; expr khác → fail-closed giữ nguyên (để query báo lỗi
+    // rõ thay vì silently đổi semantics).
+    let mut deduped = out;
+    for r in &rewrites {
+        // Assignment `<var>.id = <expr>` chỉ redundant khi TRÙNG expr của
+        // merge key; expr khác → giữ nguyên (query báo lỗi rõ, không silent).
+        let assignment = format!(
+            r"{}\s*\.\s*id\s*=\s*{}",
+            regex::escape(&r.inject.var),
+            regex::escape(&r.inject.expr)
+        );
+        let exact = Regex::new(&format!(r"(?i){assignment}")).unwrap();
+        if !exact.is_match(&deduped) {
+            continue;
+        }
+        // Ăn đúng MỘT dấu phẩy kèm theo mỗi lần; lặp tới hết (assignment có
+        // thể xuất hiện ở cả ON CREATE SET lẫn ON MATCH SET).
+        let with_pre = Regex::new(&format!(r"(?i),\s*{assignment}")).unwrap();
+        let with_post = Regex::new(&format!(r"(?i){assignment}\s*,")).unwrap();
+        let bare = Regex::new(&format!(r"(?i){assignment}")).unwrap();
+        loop {
+            deduped = if with_pre.is_match(&deduped) {
+                with_pre.replace(&deduped, "").into_owned()
+            } else if with_post.is_match(&deduped) {
+                with_post.replace(&deduped, "").into_owned()
+            } else if bare.is_match(&deduped) {
+                bare.replace(&deduped, "").into_owned()
+            } else {
+                break;
+            };
+        }
+    }
+    deduped
 }
 
 fn rel_var_re(var: &str) -> Regex {
@@ -215,17 +251,28 @@ impl LadybugStore {
         let query = rewrite_merge_natural_keys(query);
         let normalized = normalize_call_importing_subqueries(&query);
         let scoped = prepare_project_scope_parameters(parameters);
-        // datetime() rewrite — inline timestamp('<iso>') như docstring.
-        let timestamp = if normalized.contains("datetime()") {
+        // datetime()/timestamp() rewrite — inline timestamp('<iso>') như
+        // docstring; python driver rewrite cả hai (ladybug_driver.py:269-274,
+        // replacement "timestamp(${param})") vì ladybug không có zero-arg
+        // timestamp() (chỉ có timestamp(STRING)).
+        let timestamp = if normalized.contains("datetime()") || normalized.contains("timestamp()")
+        {
             Some(crate::query_normalize::utc_timestamp())
         } else {
             None
         };
         let query = match &timestamp {
-            Some(iso) => normalized.replace("datetime()", &format!("timestamp('{iso}')")),
+            Some(iso) => normalized
+                .replace("datetime()", &format!("timestamp('{iso}')"))
+                .replace("timestamp()", &format!("timestamp('{iso}')")),
             None => normalized,
         };
-        render_params(&query, &scoped)
+        let rendered = render_params(&query, &scoped)?;
+        // `SET v += row` expansion PHẢI chạy sau render — cần key set từ
+        // literals đã render (uniform-key). Chỉ đụng shape `+= row` trơn;
+        // `+= row.props` / `coalesce(row.props, {})` chưa expand (null-props
+        // row sẽ đổi semantics) — fail-closed như trước.
+        Ok(expand_set_plus_equals(&rendered))
     }
 
     fn execute_one(
@@ -502,6 +549,155 @@ fn resolve_rel_pairs_from_query(query: &str, table: &str) -> String {
 
 /// Render toàn bộ params vào query text: mỗi `$name` → literal.
 /// `rows`-kiểu list-of-map render uniform-key (union key của cả list).
+/// `SET <var> += <map>` **không parse được** trên ladybug 0.20.4 (dialect
+/// note ở docstring crate). Sau khi params đã render thành literals, batch
+/// `UNWIND [{...}, …] AS row` có sẵn key set (uniform-key union) trong chữ
+/// ký query — expand `SET v += row` thành gán per-property `SET v.k = row.k, …`
+/// giữ đúng semantics `+=` của FalkorDB (key thiếu đã được render `NULL`,
+/// gán NULL = xoá property, trùng semantics falkordb).
+fn expand_set_plus_equals(query: &str) -> String {
+    let Some(keys) = unwind_row_keys(query) else {
+        return query.to_string();
+    };
+    if keys.is_empty() || keys.iter().any(|key| !is_plain_identifier(key)) {
+        // Key không phải identifier trơn — không expand (fail-closed, query
+        // sẽ fail như trước thay vì sai semantics).
+        return query.to_string();
+    }
+    let re = set_plus_equals_row_re();
+    re.replace_all(query, |caps: &regex::Captures| {
+        // Follow char phải không phải `.`/identifier — `+= row.props` KHÔNG
+        // được match (expand sai semantics null-props); trả nguyên fragment.
+        let follow = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        if follow == "."
+            || follow.chars().next().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+        {
+            return caps[0].to_string();
+        }
+        let var = &caps[1];
+        let assigns: Vec<String> = keys
+            .iter()
+            .map(|key| format!("{var}.{key} = row.{key}"))
+            .collect();
+        format!("SET {}{follow}", assigns.join(", "))
+    })
+    .into_owned()
+}
+
+fn set_plus_equals_row_re() -> &'static Regex {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\bSET ([A-Za-z_][A-Za-z0-9_]*) \+= row(.?)").unwrap())
+}
+
+fn is_plain_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Top-level keys (thứ tự xuất hiện) của map đầu tiên trong đoạn
+/// `UNWIND [<literal>] AS <var>` sau khi params đã render. Parser
+/// depth-aware + string-aware (single-quote + `\\` escape) vì rendered
+/// string value có thể chứa `}`/`[`/`,`/backtick.
+fn unwind_row_keys(query: &str) -> Option<Vec<String>> {
+    let unwind = query.find("UNWIND ")?;
+    let open = query[unwind..].find('[')? + unwind;
+    let bytes = query.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    for (offset, &byte) in bytes.iter().enumerate().skip(open) {
+        let c = byte as char;
+        if in_str {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '\'' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '\'' => in_str = true,
+            '[' | '{' | '(' => depth += 1,
+            ']' | '}' | ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(first_map_keys(&query[open + 1..offset]));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Keys ở map-depth 1 của map đầu tiên trong segment (nội dung giữa `[` và
+/// `]` của list literal): đợi `{` đầu tiên, thu `` `key` `` (hoặc key trơn)
+/// ngay trước `:` cho tới khi map đóng.
+fn first_map_keys(segment: &str) -> Vec<String> {
+    let bytes = segment.as_bytes();
+    let mut keys = Vec::new();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escaped = false;
+    let mut pending_key = String::new();
+    let mut started = false;
+    for &byte in bytes {
+        let c = byte as char;
+        if in_str {
+            pending_key.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '\'' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '\'' => {
+                in_str = true;
+                escaped = false;
+                pending_key.push(c);
+            }
+            '[' | '{' | '(' => {
+                depth += 1;
+                if started && depth == 1 {
+                    return keys;
+                }
+            }
+            ']' | '}' | ')' => {
+                depth -= 1;
+                if started && depth == 0 {
+                    return keys;
+                }
+            }
+            ':' if depth == 1 => {
+                let key = pending_key.trim().to_string();
+                let key = key
+                    .strip_prefix('`')
+                    .and_then(|k| k.strip_suffix('`'))
+                    .unwrap_or(key.trim());
+                if !key.is_empty() {
+                    keys.push(key.to_string());
+                }
+                pending_key.clear();
+                started = true;
+            }
+            ',' if depth == 1 => pending_key.clear(),
+            _ => {
+                if depth >= 1 {
+                    pending_key.push(c);
+                }
+            }
+        }
+    }
+    keys
+}
+
 fn render_params(query: &str, params: &BTreeMap<String, Value>) -> Result<String, StoreError> {
     // Single-pass: quét query một lần, thay mọi $token có trong params.
     // Không thay tuần tự qua nhiều vòng vì literal của param trước có thể
@@ -809,6 +1005,13 @@ impl GraphStore for LadybugStore {
         &mut self,
         database: Option<&str>,
     ) -> Result<Vec<BTreeMap<String, Value>>, StoreError> {
+        // Preflight gọi inspect đầu tiên trước create_indexes — bảng phải
+        // tồn tại trước index, nên bootstrap ở đây (idempotent qua cờ).
+        // FalkorDbStore::ensure_schema tự gọi preflight nên bootstrap KHÔNG
+        // thể đặt trong preflight::ensure_schema_with (recursion).
+        if !self.bootstrapped {
+            self.bootstrap_schema()?;
+        }
         // Port inspect_indexes: show_indexes() → map ART→range, _PK→range,
         // FTS→fulltext.
         let records = self.execute_query(
@@ -902,19 +1105,44 @@ impl GraphStore for LadybugStore {
                     .map_err(|e| StoreError::Ladybug(format!("{e}")))
             };
             if let Err(StoreError::Ladybug(message)) = result {
-                // Soft-skip: (1) "already exists" như Python; (2) column-missing
-                // — trên store mới, property của identity (vd
-                // Workflow.workflow_id) chưa có trong table vì bootstrap chỉ
-                // khai báo base columns; auto-DDL sẽ ADD column khi query đầu
-                // tiên tham chiếu. Python driver ở đây raise (ladybug provider
-                // chưa từng qua preflight trọn vẹn) — Rust soft-skip để local
-                // provider dùng được, đã ghi trong phase-03 notes.
+                // (2) column-missing — bootstrap chỉ khai báo base columns;
+                // index-required identity property (workflow_id, site_id,
+                // config_fingerprint, …) là STRING id → auto-DDL ADD column
+                // rồi retry index để preflight verified đủ (phase-02: preflight
+                // strict poll-to-online sẽ deadline nếu index không tồn tại).
                 let column_missing = message.contains("does not exist in table");
-                if !exists_re.is_match(&message) && !column_missing {
-                    return Err(StoreError::Ladybug(format!(
-                        "failed to create {} index on {label}({prop}): {message}",
-                        index.index_type
-                    )));
+                let local_result = if column_missing && index.index_type != "fulltext" {
+                    let idx = index_name(&label, &[prop.as_str()]);
+                    let added = connection.query(&format!(
+                        "ALTER TABLE `{label}` ADD `{prop}` STRING"
+                    ));
+                    match added {
+                        Ok(_) => connection
+                            .query(&format!(
+                                "CREATE ART INDEX `{idx}` FOR (t:`{label}`) ON (t.`{prop}`)"
+                            ))
+                            .map(|_| ())
+                            .map_err(|e| StoreError::Ladybug(format!("{e}"))),
+                        Err(add_error) => Err(StoreError::Ladybug(format!(
+                            "auto-DDL ADD `{prop}` on `{label}`: {add_error}"
+                        ))),
+                    }
+                } else {
+                    Err(StoreError::Ladybug(message))
+                };
+                if let Err(StoreError::Ladybug(message)) = local_result {
+                    // Soft-skip: (1) "already exists" như Python.
+                    // (3) PK-collision (phase-02 sync-cutover): identity property
+                    // đã là PRIMARY KEY (HASH index) từ bootstrap — index yêu cầu
+                    // tồn tại ở dạng mạnh hơn; inspect_indexes map `_PK` → "range"
+                    // nên đây chính là "already exists" dưới tên khác.
+                    let pk_backed = message.contains("primary-key index");
+                    if !exists_re.is_match(&message) && !pk_backed {
+                        return Err(StoreError::Ladybug(format!(
+                            "failed to create {} index on {label}({prop}): {message}",
+                            index.index_type
+                        )));
+                    }
                 }
             }
         }
@@ -941,6 +1169,93 @@ pub fn index_name(label: &str, props: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_plus_equals_expands_top_level_keys_in_order() {
+        let query = "UNWIND [{`id`: `a`, `count`: 1, `name`: 'x'}, {`id`: `b`, `count`: NULL, `name`: NULL}] AS row\n\
+                     MERGE (endpoint:ApiEndpoint {id: row.id})\n\
+                     SET endpoint += row, endpoint.topology_owned = true\n\
+                     RETURN count(endpoint) AS count";
+        let out = expand_set_plus_equals(query);
+        assert!(
+            out.contains("SET endpoint.id = row.id, endpoint.count = row.count, endpoint.name = row.name, endpoint.topology_owned = true"),
+            "{out}"
+        );
+        assert!(!out.contains("+="), "{out}");
+    }
+
+    #[test]
+    fn project_repository_setup_query_pk_strip() {
+        let query = r#"
+MERGE (p:Project {project_id: $project_id})
+ON CREATE SET
+    p.name                  = $project_name,
+    p.slug                  = $project_slug,
+    p.project_id_normalized = $project_id_normalized,
+    p.created_at            = timestamp()
+ON MATCH SET
+    p.name                  = $project_name,
+    p.slug                  = $project_slug,
+    p.project_id_normalized = $project_id_normalized
+WITH p, r
+MERGE (r:Repository {name: $repo_name})
+ON CREATE SET
+    r.id                    = $repo_name,
+    r.project_id            = $project_id,
+    r.project_id_normalized = $project_id_normalized,
+    r.created_at            = timestamp()
+ON MATCH SET
+    r.id                    = $repo_name,
+    r.project_id            = $project_id,
+    r.project_id_normalized = $project_id_normalized
+"#;
+        let out = rewrite_merge_natural_keys(query);
+        eprintln!("=== REWRITTEN ===\n{out}\n=== END ===");
+        assert!(!out.contains("r.id"), "r.id should be stripped:\n{out}");
+    }
+
+    #[test]
+    fn pk_id_assignment_stripped_after_natural_key_rewrite() {
+        let query = "MERGE (r:Repository {name: $repo_name})\n\
+                     ON CREATE SET\n    r.id = $repo_name, r.project_id = $project_id, r.created_at = timestamp()\n\
+                     RETURN count(r) AS count";
+        let out = rewrite_merge_natural_keys(query);
+        assert!(out.contains("MERGE (r:Repository {id: $repo_name})"), "{out}");
+        assert!(out.contains("r.name = $repo_name,"), "{out}");
+        assert!(!out.contains("r.id = $repo_name"), "{out}");
+        assert!(out.contains("r.project_id = $project_id"), "{out}");
+    }
+
+    #[test]
+    fn pk_id_assignment_different_expr_kept() {
+        // id assignment với expr KHÁC merge expr → giữ nguyên (fail-closed).
+        let query = "MERGE (r:Repository {name: $repo_name})\n\
+                     ON CREATE SET\n    r.id = $other, r.project_id = $project_id\n\
+                     RETURN count(r) AS count";
+        let out = rewrite_merge_natural_keys(query);
+        assert!(out.contains("r.id = $other"), "{out}");
+    }
+
+
+    #[test]
+    fn set_plus_equals_skips_when_no_unwind_literal() {
+        // Chưa render (vẫn $rows) — không expand.
+        let query = "UNWIND $rows AS row\nMERGE (n:File {id: row.id})\nSET n += row";
+        assert_eq!(expand_set_plus_equals(query), query);
+    }
+
+    #[test]
+    fn set_plus_equals_ignores_props_shapes() {
+        // `+= row.props` chưa expand (null-props row đổi semantics) — giữ nguyên.
+        let query = "UNWIND [{`site_id`: `s`, `props`: {`count`: 1}}] AS row\nSET site += row.props";
+        assert_eq!(expand_set_plus_equals(query), query);
+    }
+
+    #[test]
+    fn unwind_row_keys_skips_strings_with_braces() {
+        let query = "UNWIND [{`id`: `a`, `snippet`: '}{[`'}, {`id`: `b`, `snippet`: NULL}] AS row RETURN count(*) AS c";
+        assert_eq!(unwind_row_keys(query), Some(vec!["id".into(), "snippet".into()]));
+    }
 
     #[test]
     fn merge_natural_key_rewrite_set_continuation() {
