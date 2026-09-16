@@ -822,6 +822,7 @@ dependencies = [
  "cortex-graph-core",
  "lbug",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -921,10 +922,12 @@ dependencies = [
  "once_cell",
  "redis",
  "regex",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha1",
  "sha2",
+ "tempfile",
  "uuid",
 ]
 

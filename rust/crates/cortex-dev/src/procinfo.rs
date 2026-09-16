@@ -105,8 +105,9 @@ fn is_dev_sync(record: &ProcessRecord, owner: &str, root: &Path) -> bool {
     false
 }
 
-const CODE_WORKER_NAMES: [&str; 3] =
-    ["build_owner_manifests.py", "clang_worker.py", "incremental_sync.py"];
+// Phase-06 sync closure: build_owner_manifests.py + incremental_sync.py đã
+// xoá — worker detect chỉ còn worker runtime không thuộc sync closure.
+const CODE_WORKER_NAMES: [&str; 1] = ["clang_worker.py"];
 
 fn is_code_worker(record: &ProcessRecord, root: &Path) -> bool {
     let code_root = crate::env::abspath(&root.join("code-tiny"));

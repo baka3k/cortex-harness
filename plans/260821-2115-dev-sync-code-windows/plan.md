@@ -1,6 +1,6 @@
 ---
 title: "dev sync code on Windows — Remote FalkorDB Plumbing + Platform Fixes"
-status: active
+status: superseded (2026-09-16, phase-06 sync-plane-rust-cutover: targets của plan này — incremental_sync.py, tools/graph/cli.py, core/factory.py — thuộc DELETE closure; remote-falkordb plumbing trên Windows giờ là native cortex-sync với embedded fail-closed; re-scope bất kỳ residual Windows work sang python-legacy-cleanup disposition)
 created: 2026-08-21
 updated: 2026-08-21
 mode: hi-plan (fast)

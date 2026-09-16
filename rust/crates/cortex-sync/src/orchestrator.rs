@@ -28,9 +28,6 @@ use crate::walk;
 
 const MAX_OUTPUT_TAIL_CHARS: usize = 65_536;
 
-/// Sentinel prefix marking Python-plane delegation.
-const DELEGATE_SENTINEL: &str = "__delegate__";
-
 // Phase-08 build-commit handshake (plan §2, red-team F5 stale binary):
 // before the first spawn of each analyzer binary the orchestrator probes
 // `<binary> --version` and hard-errors when the child's baked build commit
@@ -250,14 +247,14 @@ fn tail_window(line: &str) -> String {
 /// `_run_incremental` exit codes: 0 success, 1 failure, 2 lock busy.
 pub fn run_incremental(args: &Args) -> i32 {
     let started = Instant::now();
-    // Rollback hatch (phase-02, L2): explicit `CORTEX_SYNC_BACKEND=python`
-    // forces delegation even when native paths are ready — runbook §flags.
-    if env_lookup("CORTEX_SYNC_BACKEND")
-        .map(|v| v.trim().to_lowercase())
-        .as_deref()
-        == Some("python")
-    {
-        return delegate_to_python("explicit CORTEX_SYNC_BACKEND=python");
+    // Phase-06 retire (mirror phase-08 runbook §5): the python sync plane
+    // is deleted — `CORTEX_SYNC_BACKEND` is a loud retired-error, not a hatch.
+    if let Some(value) = env_lookup("CORTEX_SYNC_BACKEND") {
+        eprintln!(
+            "[phase-06] CORTEX_SYNC_BACKEND is retired: the Python sync plane was deleted at the \
+             sync-plane cutover; rollback = git revert of the cutover commits (tag pre-syncplane-delete). \
+             Ignoring value {value:?}."
+        );
     }
     let run_id = env_lookup("CORTEX_RUN_ID").unwrap_or_else(util::uuid4_hex);
     let correlation_id = env_lookup("CORTEX_CORRELATION_ID").unwrap_or_else(|| run_id.clone());
@@ -286,7 +283,11 @@ pub fn run_incremental(args: &Args) -> i32 {
         match graphops::prepare_graph_args(&mut args) {
             Ok(context) => context,
             Err(reason) => {
-                return delegate_to_python(&format!("graph target resolution: {reason}"))
+                // Phase-06: no python fallback — graph target config errors
+                // are loud fail-closed (mirror argparse `die`, exit 1).
+                eprintln!("error: graph target resolution failed: {reason}");
+                let _ = std::io::stderr().flush();
+                std::process::exit(1);
             }
         }
     };
@@ -329,9 +330,7 @@ pub fn run_incremental(args: &Args) -> i32 {
     let mut current_inventory: Option<SourceInventory> = None;
     let mut parse_quality_manifest_path: Option<String> = None;
 
-    // Backend stamp (L2): the run is committed native from here on — any
-    // later delegation goes through the DELEGATE_SENTINEL strip below which
-    // re-execs Python and stamps its own summary instead.
+    // Backend stamp (L2): the run is native from here on.
     summary.insert("backend".into(), json!("rust-native"));
     match run_flow(
         &args,
@@ -356,9 +355,6 @@ pub fn run_incremental(args: &Args) -> i32 {
     ) {
         Ok(()) => {}
         Err(message) => {
-            if let Some(reason) = message.strip_prefix(DELEGATE_SENTINEL) {
-                return delegate_to_python(reason);
-            }
             summary.insert("status".into(), json!("failed"));
             summary.insert("outcome".into(), json!("failed"));
             summary.insert("error".into(), json!(message));
@@ -625,7 +621,7 @@ fn set_change_source(
     }
 }
 
-/// The main-line flow; `Err(DELEGATE_SENTINEL + reason)` requests Python-plane
+/// The main-line flow (native; python plane deleted at phase-06).
 /// delegation, other messages mirror the Python exception path.
 #[allow(clippy::too_many_arguments)]
 fn run_flow(
@@ -2983,54 +2979,6 @@ pub fn write_summary(target: &Path, payload: &Value) {
         }
     } else {
         let _ = std::fs::remove_file(&temporary);
-    }
-}
-
-/// Delegation: run the Python orchestrator with identical args.
-pub fn delegate_to_python(reason: &str) -> i32 {
-    println!("[cortex-sync] python-plane delegation: {reason}");
-    let _ = std::io::stdout().flush();
-    let repo_root = crate::registry::repo_root();
-    let script = repo_root.join("code-tiny/tools/sync/incremental_sync.py");
-    let raw: Vec<String> = std::env::args().skip(1).collect();
-    let python_bin = crate::cli::resolve_python_bin(&raw);
-    let status = std::process::Command::new(python_bin)
-        .arg(script)
-        .args(&raw)
-        .status();
-    let code = match status {
-        Ok(status) => status.code().unwrap_or(1),
-        Err(error) => {
-            eprintln!("[cortex-sync] python delegation failed: {error}");
-            return 1;
-        }
-    };
-    stamp_delegated_summary(&raw);
-    code
-}
-
-/// Backend stamp (L2) for the delegated leg: the Python child wrote the
-/// summary — patch `backend="python"` into it so dogfood/drill verification
-/// can tell legs apart from the artifact alone. Best-effort; only when
-/// `--summary-path` was passed (the dev flow always passes it).
-fn stamp_delegated_summary(raw: &[String]) {
-    let Some(path) = raw
-        .iter()
-        .position(|arg| arg == "--summary-path")
-        .and_then(|index| raw.get(index + 1))
-    else {
-        return;
-    };
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(mut payload) = serde_json::from_str::<serde_json::Map<String, Value>>(text.trim())
-    else {
-        return;
-    };
-    payload.insert("backend".into(), json!("python"));
-    if let Ok(rendered) = serde_json::to_string_pretty(&payload) {
-        let _ = std::fs::write(path, rendered);
     }
 }
 
