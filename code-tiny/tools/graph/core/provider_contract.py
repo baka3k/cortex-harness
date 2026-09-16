@@ -18,6 +18,9 @@ _PROVIDER_ALIASES = {
     "falkor-db": GraphProvider.FALKORDB,
     "neo": GraphProvider.NEO4J,
     "neo4j": GraphProvider.NEO4J,
+    "ladybug": GraphProvider.LADYBUG,
+    "ladybugdb": GraphProvider.LADYBUG,
+    "ladybug-db": GraphProvider.LADYBUG,
 }
 
 _DIRECTION_ALIASES = {
@@ -73,7 +76,7 @@ def normalize_graph_provider_name(
             f"got {type(candidate).__name__}"
         )
 
-    if provider not in {GraphProvider.FALKORDB, GraphProvider.NEO4J}:
+    if provider not in {GraphProvider.FALKORDB, GraphProvider.NEO4J, GraphProvider.LADYBUG}:
         raise ValueError(f"Unsupported graph provider: {provider.value}")
     return provider.value
 
@@ -109,11 +112,24 @@ def isolate_graph_provider_environment(
         environment["MCP_GRAPH_PROVIDER"] = provider
 
     for key in tuple(environment):
-        if provider == "falkordb" and key.startswith("NEO4J_"):
+        if provider == "falkordb" and (
+            key.startswith("NEO4J_") or key.startswith("LADYBUG_")
+        ):
             environment.pop(key, None)
         elif provider == "neo4j" and (
-            key.startswith("FALKORDB_") or key == "DOC_FALKORDB_GRAPH"
+            key.startswith("FALKORDB_") or key.startswith("LADYBUG_") or key == "DOC_FALKORDB_GRAPH"
         ):
+            environment.pop(key, None)
+        elif provider == "ladybug" and key.startswith("NEO4J_"):
+            environment.pop(key, None)
+        elif provider == "ladybug" and key.startswith("FALKORDB_") and key not in {
+            # Logical graph names are provider-neutral metadata; the ladybug
+            # branches read them from the existing FALKORDB_* plumbing, so
+            # only connection-style keys are stripped for ladybug.
+            "FALKORDB_GRAPH",
+            "DOC_FALKORDB_GRAPH",
+            "FALKORDB_DATABASE",
+        }:
             environment.pop(key, None)
     return provider
 

@@ -208,6 +208,9 @@ RUNTIME_METADATA_KEYS = frozenset(
         "FALKORDB_PATH",
         "FALKORDB_CODE_PATH",
         "FALKORDB_DOC_PATH",
+        "LADYBUG_PATH",
+        "LADYBUG_CODE_PATH",
+        "LADYBUG_DOC_PATH",
         "CORTEX_HARNESS_CONFIG_PATH",
     }
 )

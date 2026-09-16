@@ -14,6 +14,7 @@ class GraphProvider(Enum):
     NEO4J = "neo4j"
     KUZU = "kuzu"
     FALKORDB = "falkordb"
+    LADYBUG = "ladybug"
     NEPTUNE = "neptune"
 
 

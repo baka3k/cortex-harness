@@ -67,7 +67,7 @@ the existing `dev.json` shape:
   the graph fields. Omitting them triggers the naming rule.
 * `code.env.QDRANT_COLLECTION` and `doc.env.QDRANT_COLLECTION` map
   directly to the Qdrant collection fields.
-* `code.env.GRAPH_PROVIDER` selects the backend (`"falkordb"` or `"neo4j"`).
+* `code.env.GRAPH_PROVIDER` selects the backend (`"falkordb"`, `"neo4j"`, or the embedded `"ladybug"` option).
 
 The registry is re-read on every call. There is no in-process cache
 (accepted trade-off; revisit only if profiling shows a real bottleneck).

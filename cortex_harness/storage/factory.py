@@ -453,6 +453,28 @@ class StorageFactory:
             instance_id=self._resolved.instance_id,
         )
 
+    # ── LadybugDB ───────────────────────────────────────────────────────────
+
+    def get_ladybug_driver(
+        self,
+        graph_name: str,
+        role: StorageRole = StorageRole.CODE,
+    ) -> "LadybugDBDriver":
+        """Return an embedded LadybugDB driver for the role's ``.lbdb`` path."""
+
+        from tools.graph.driver.ladybug_driver import LadybugDBDriver
+
+        return LadybugDBDriver(
+            path=str(self._resolved.ladybug_path_for_role(role)),
+            database=graph_name,
+            owner_id=(
+                self._resolved.doc_owner_id
+                if role == StorageRole.DOCUMENT
+                else self._resolved.code_owner_id
+            ),
+            instance_id=self._resolved.instance_id,
+        )
+
 
 def create_storage(
     targets: "ProjectTargets",

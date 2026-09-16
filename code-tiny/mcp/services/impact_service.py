@@ -54,6 +54,18 @@ class ImpactAnalyzer:
                     "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
                     "additional_paths": discover_falkordb_data_files(),
                 }
+            elif provider == GraphProvider.LADYBUG:
+                from cortex_harness.storage import resolve_storage  # noqa: PLC0415
+                from ladybug_discovery import discover_ladybug_databases  # noqa: PLC0415
+
+                config = {
+                    "path": os.environ.get("LADYBUG_PATH")
+                    or str(resolve_storage(Path.cwd()).ladybug_code_path),
+                    "database": db,
+                    "owner_id": os.environ.get("CORTEX_STORAGE_OWNER", "code"),
+                    "instance_id": os.environ.get("CORTEX_STORAGE_INSTANCE", "default"),
+                    "additional_paths": discover_ladybug_databases(),
+                }
             else:
                 uri = os.environ.get("NEO4J_URI", "")
                 user = os.environ.get("NEO4J_USER", "")
