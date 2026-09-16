@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 06:02:32
 - fixture: `tests/fixtures/web-overlays/fastapi_django`
-- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django`
+- rust bin: `/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django`
 - base parser (prerequisite): `python` (python, journal-shadow)
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']` + `_start_id`/`_end_id`
 

@@ -16,7 +16,7 @@
   "duration_seconds": 3.180188,
   "status": "failed",
   "outcome": "failed",
-  "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+  "error": "Command '['/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
   "before_sha": "full_scan",
   "after_sha": "694378ae0041d6937f900ace93e2685c08bde55d",
   "services": {
@@ -60,7 +60,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -292,14 +292,14 @@
         "routers/users.py:fastapi_django"
       ],
       "status": "failed",
-      "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "error": "Command '['/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
       "started_at": "2026-09-15T23:34:39Z",
       "finished_at": "2026-09-15T23:34:39Z",
       "duration_seconds": 0.894721,
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_changed_6c5c33e1d2d2_80934_87360101.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_deleted_6c5c33e1d2d2_80934_87360101.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -454,7 +454,7 @@
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_changed_6c5c33e1d2d2_80934_87360101.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_deleted_6c5c33e1d2d2_80934_87360101.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-topology",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-topology",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -499,7 +499,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "sp1golden_mess",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -545,7 +545,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -779,14 +779,14 @@
         "routers/users.py:fastapi_django"
       ],
       "status": "failed",
-      "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "error": "Command '['/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
       "started_at": "2026-09-15T23:34:39Z",
       "finished_at": "2026-09-15T23:34:39Z",
       "duration_seconds": 0.894721,
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_changed_6c5c33e1d2d2_80934_87360101.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_deleted_6c5c33e1d2d2_80934_87360101.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -943,7 +943,7 @@
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_changed_6c5c33e1d2d2_80934_87360101.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_deleted_6c5c33e1d2d2_80934_87360101.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-topology",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-topology",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -990,7 +990,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "sp1golden_mess",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -1016,7 +1016,7 @@
       "component": "overlay:fastapi_django",
       "role": "overlay",
       "name": "fastapi_django",
-      "error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "error": "Command '['/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
       "exception_type": "CalledProcessError",
       "failure_class": "parser_isolation",
       "failure_code": "analyzer_child_failed",
@@ -1057,7 +1057,7 @@
     "dirty_inventory_paths": [
       "/private/tmp/sp1-golden/.cache/inventories/6c5c33e1d2d2406e25f619f6f055889ead9ea75f7c36a468c563c84029a71a34.json"
     ],
-    "last_error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+    "last_error": "Command '['/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
     "last_run_before": "full_scan",
     "last_run_after": "694378ae0041d6937f900ace93e2685c08bde55d"
   },
@@ -1124,7 +1124,7 @@
       "retryable": false,
       "run_id": "2d0443013de74e7fa272c0fc58f379e6",
       "correlation_id": "2d0443013de74e7fa272c0fc58f379e6",
-      "summary": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+      "summary": "Command '['/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
       "safe_action": "inspect the child debug artifact and quarantine or correct the failing input",
       "artifacts": [
         {

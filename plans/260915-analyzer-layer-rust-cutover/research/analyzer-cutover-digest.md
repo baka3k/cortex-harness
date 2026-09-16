@@ -1,6 +1,6 @@
 # Research digest — cutover analyzer layer (per-language parsers) sang Rust làm default
 
-Date: 2026-09-15. All paths relative to repo root `/Users/hieplq1.aip/AI/cortex-harness/` unless absolute. Line numbers verified against working tree (git `4e21731`, no uncommitted changes to files cited except as noted by `git status`).
+Date: 2026-09-15. All paths relative to repo root `/Users/user/AI/cortex-harness/` unless absolute. Line numbers verified against working tree (git `4e21731`, no uncommitted changes to files cited except as noted by `git status`).
 
 ## Findings
 

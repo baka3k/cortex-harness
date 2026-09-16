@@ -4,7 +4,7 @@
   "root": "/private/tmp/sp1-golden",
   "last_good_sha": "",
   "dirty": true,
-  "last_error": "Command '['/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
+  "last_error": "Command '['/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django', '--root', '/private/tmp/sp1-golden', '--project-id', 'sp1golden', '--project-name', 'sp1golden', '--commit-sha-before', 'full_scan', '--commit-sha-after', '694378ae0041d6937f900ace93e2685c08bde55d', '--framework', 'fastapi_django', '--graph-provider', 'ladybug', '--ladybug-path', '/private/tmp/sp1-golden-data/v1/instances/sp1-golden/ladybug/code/code.lbug/hyper_graph', '--ladybug-graph', 'sp1golden', '--disable-message-scan']' returned non-zero exit status 3.",
   "last_run_before": "full_scan",
   "last_run_after": "694378ae0041d6937f900ace93e2685c08bde55d",
   "updated_at": "2026-09-15T23:34:40.220499+00:00",

@@ -65,7 +65,7 @@ on top of the built-in defaults (`_SCAN_EXCLUDE` / `COMMON_SCAN_EXCLUDE` /
 
 ## Smoke (procsample, real project)
 
-Re-ran `dev init` on `/Users/hieplq1.aip/Migration/procsample` answering the
+Re-ran `dev init` on `/Users/user/Migration/procsample` answering the
 new prompt with `_pc2c`: config preserved (remote backend, endpoints, code
 root) and gained `"ignore": {"folders": ["_pc2c"]}`. Verified on the real
 tree: `dev ignore list` → `_pc2c`; env var exported; full-scan `.c` snapshot

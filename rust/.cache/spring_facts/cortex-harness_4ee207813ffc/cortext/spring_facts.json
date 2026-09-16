@@ -134,7 +134,7 @@
         "java"
       ],
       "rel_path": "tests/fixtures/framework-java-app",
-      "root": "/Users/hieplq1.aip/AI/cortex-harness"
+      "root": "/Users/user/AI/cortex-harness"
     },
     {
       "build_files": [
@@ -161,7 +161,7 @@
         "java"
       ],
       "rel_path": "tests/fixtures/java-spring-overlays",
-      "root": "/Users/hieplq1.aip/AI/cortex-harness"
+      "root": "/Users/user/AI/cortex-harness"
     },
     {
       "build_files": [
@@ -177,7 +177,7 @@
         "java"
       ],
       "rel_path": "tests/fixtures/sql-family/mybatis",
-      "root": "/Users/hieplq1.aip/AI/cortex-harness"
+      "root": "/Users/user/AI/cortex-harness"
     }
   ],
   "parser_version": "spring-v2026-07-13-1",
@@ -321,7 +321,7 @@
       "type": "APPLIES_TO"
     }
   ],
-  "root": "/Users/hieplq1.aip/AI/cortex-harness",
+  "root": "/Users/user/AI/cortex-harness",
   "semantic_facts": [
     {
       "confidence": 1.0,

@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 03:09:06
 - testdata: `tests/fixtures/kotlin-analyzer` (src/com/example/...)
-- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-kotlin`
+- rust bin: `/Users/user/AI/cortex-harness/rust/target/release/analyzer-kotlin`
 - grammar pin: **tree-sitter-kotlin-ng 1.1.0** (Rust, crates.io) == **tree-sitter-kotlin 1.1.0** (PyPI venv; `_get_kotlin_parser` fallback vì tree_sitter_languages.get_parser TypeError với tree_sitter 0.26) — parse trees byte-identical (diff sexp trên corpus enum/data-class/companion/delegation/lambda).
 - tree-sitter pin: 0.25 (Rust) / 0.26.0 (PyPI venv) — FFI khác grammar không ảnh hưởng node kinds.
 - stock corpus: **skip** — không có file .kt

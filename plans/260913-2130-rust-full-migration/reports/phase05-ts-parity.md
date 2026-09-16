@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 16:22:56
 - testdata: `tests/fixtures/ts-analyzer`
-- stock frontend: `/Users/hieplq1.aip/baka3k/stock/frontend`
+- stock frontend: `/Users/user/baka3k/stock/frontend`
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']`
 
 ### scan_result testdata_full

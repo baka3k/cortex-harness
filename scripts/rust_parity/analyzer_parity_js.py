@@ -39,7 +39,7 @@ from tools.graph.driver.falkordb_driver import FalkorDBDriver  # noqa: E402
 from tools.graph.journal.config import configure_journal_env  # noqa: E402
 from dual_write_diff import MASKED_PROPS, diff_dump, dump_graph  # noqa: E402
 
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 TESTDATA = REPO / "tests" / "fixtures" / "js-analyzer"
 PY_BIN = REPO / ".venv" / "bin" / "python"
 PY_ANALYZER = REPO / "code-tiny" / "tools" / "js" / "js_analyzer.py"

@@ -58,7 +58,7 @@ REPORT_PATH = (
     REPO / "plans" / "260913-2130-rust-full-migration" / "reports"
     / "phase07-cobol-parity.md"
 )
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 
 SCAN_RE = re.compile(
     r"\[SCAN_RESULT\] parser=cobol files=(\d+) nodes=(\d+) edges=(\d+) "

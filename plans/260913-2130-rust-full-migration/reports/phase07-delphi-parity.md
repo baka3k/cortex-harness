@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 04:16:30
 - testdata: `tests/fixtures/delphi-analyzer` (Runner.dpr + geom/Shapes.pas + logic/AppLogic.pas + report/Report.pas)
-- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-delphi`
+- rust bin: `/Users/user/AI/cortex-harness/rust/target/release/analyzer-delphi`
 - grammar pin: tree-sitter-pascal 0.10.2 (Rust, Isopod) == grammar `pascal` của tree_sitter_language_pack (PyPI venv, cùng dòng Isopod; node kinds `interface`/`implementation` bare ⇒ section ranges rỗng trên cả 2 — verify golden test)
 - stock corpus: **skip** — không có file .pas/.dpr
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']`

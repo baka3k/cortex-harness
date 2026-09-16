@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 02:34:23
 - testdata: `tests/fixtures/php-analyzer`
-- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-php`
+- rust bin: `/Users/user/AI/cortex-harness/rust/target/release/analyzer-php`
 - python ref: `code-tiny/tools/php/php_analyzer.py` (--config /dev/null)
 - grammar pins: tree-sitter = 0.25, tree-sitter-php = 0.24 (crates.io không có 0.25 cho php; PyPI ref dùng tree-sitter-php 0.24.1 vì tree-sitter-languages 1.10.2 broken với tree_sitter 0.26)
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']` + internal edge ids `['_start_id', '_end_id']`

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-world test trên repo thật: /Users/hieplq1.aip/baka3k/stock
+"""Real-world test trên repo thật: /Users/user/baka3k/stock
 
 Chạy toàn bộ stack vừa port trên dữ liệu thật (bounded sample):
   1. Inventory: walk source .py thật (bỏ venv/pyc/build), trích symbols.
@@ -38,7 +38,7 @@ sys.path.insert(0, str(REPO / "code-tiny"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 RUST_DIR = REPO / "rust"
 
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 MAX_FILES = 150
 MAX_SYMBOLS_PER_FILE = 5
 

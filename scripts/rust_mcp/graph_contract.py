@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
-REPO_ROOT = "/Users/hieplq1.aip/AI/cortex-harness"
+REPO_ROOT = "/Users/user/AI/cortex-harness"
 
 # Node id tĩnh có thật trong graph `dogfood_p05` (sibling instance) — được
 # dùng cho các case hit-path; dữ liệu harness không đổi giữa record/compare.

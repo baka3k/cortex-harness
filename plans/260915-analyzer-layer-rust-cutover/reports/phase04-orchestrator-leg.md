@@ -84,8 +84,8 @@ $ FALKORDB_GRAPH=p04_smoke_py ./.venv/bin/python \
 `command` (recorded in `summary-py.json::topology_overlays[0].command`):
 
 ```
-/Users/hieplq1.aip/AI/cortex-harness/.venv/bin/python
-/Users/hieplq1.aip/AI/cortex-harness/code-tiny/tools/project_topology/topology_analyzer.py
+/Users/user/AI/cortex-harness/.venv/bin/python
+/Users/user/AI/cortex-harness/code-tiny/tools/project_topology/topology_analyzer.py
 --root /private/tmp/cortex-p04-smoke/topology-fixture --project-id p04smoke ...
 --graph-provider falkordb --falkordb-path <FALKORDB_PATH>
 --falkordb-graph p04_smoke_py --disable-message-scan
@@ -96,7 +96,7 @@ $ FALKORDB_GRAPH=p04_smoke_py ./.venv/bin/python \
 ```
 $ rm -rf /tmp/cortex-p04-smoke/cache-rs
 $ CORTEX_RUST_ANALYZER=rust \
-  CORTEX_RUST_ANALYZER_BIN_DIR=/Users/hieplq1.aip/AI/cortex-harness/rust/target/release \
+  CORTEX_RUST_ANALYZER_BIN_DIR=/Users/user/AI/cortex-harness/rust/target/release \
   FALKORDB_GRAPH=p04_smoke_rs ./.venv/bin/python \
     code-tiny/tools/sync/incremental_sync.py \
     --parsers project_topology --project-id p04smoke --project-name p04smoke \
@@ -117,7 +117,7 @@ $ CORTEX_RUST_ANALYZER=rust \
 `command`:
 
 ```
-/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-topology
+/Users/user/AI/cortex-harness/rust/target/release/analyzer-topology
 --root /private/tmp/cortex-p04-smoke/topology-fixture --project-id p04smoke ...
 --graph-provider falkordb --falkordb-path <FALKORDB_PATH>
 --falkordb-graph p04_smoke_rs --disable-message-scan
@@ -167,7 +167,7 @@ $ FALKORDB_URI=127.0.0.1:6379 \
 [state] incremental sync completed successfully
 ```
 
-`topology_overlays[0].command[0]` = `/Users/hieplq1.aip/AI/cortex-harness/.venv/bin/python`
+`topology_overlays[0].command[0]` = `/Users/user/AI/cortex-harness/.venv/bin/python`
 — vì `CORTEX_RUST_ANALYZER` UNSET, `AUTO_FLIP_DEFAULT=false` (phase 01–07
 giữ default = Python; phase-08 mới flip). Đây là behavior mong đợi.
 

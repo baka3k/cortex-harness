@@ -15,7 +15,7 @@
 | G3b rust ingest | **PASS** | {"entity_nodes":105,"entity_relations":0,"files":7,"graph":"p14_doc_rs","graph_batches":113,"ok":true,"paragraphs":113} |
 | G3 graph diff | **PASS** | nodes py=168 rs=168; edges py=218 rs=218; diff_total=0 |
 | G4 query | **PASS** | python query on both graphs byte-identical (10 ids) <br> rust query on rs-graph byte-identical to python; {'entity_ids': 10, 'passages': 5} |
-| G5 embed smoke (optional) | **PASS** | dimension=1024 via /Users/hieplq1.aip/AI/cortex-harness/.venv/bin/python |
+| G5 embed smoke (optional) | **PASS** | dimension=1024 via /Users/user/AI/cortex-harness/.venv/bin/python |
 
 **OVERALL: PASS** (optional gates excluded from verdict)
 

@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 16:23:37
 - testdata: `tests/fixtures/java-analyzer` (src/com/example/...)
-- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-java`
+- rust bin: `/Users/user/AI/cortex-harness/rust/target/release/analyzer-java`
 - grammar pin: tree-sitter-java 0.23.5 (Rust) == tree-sitter-java 0.23.5 (PyPI venv)
 - stock corpus: **skip** — không có file .java
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']`

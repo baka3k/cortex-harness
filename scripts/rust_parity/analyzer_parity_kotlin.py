@@ -8,7 +8,7 @@ impact), dump và so exact ngoài mask chuẩn từ dual_write_diff.
 Usage (từ repo root):
     .venv/bin/python scripts/rust_parity/analyzer_parity_kotlin.py
 
-Ghi chú: stock corpus (/Users/hieplq1.aip/baka3k/stock) KHÔNG có file .kt
+Ghi chú: stock corpus (/Users/user/baka3k/stock) KHÔNG có file .kt
 nên gate stock được skip (recorded trong report).
 
 Grammar pin:
@@ -55,7 +55,7 @@ from dual_write_diff import MASKED_PROPS, diff_dump, dump_graph  # noqa: E402
 # Analyzer không sinh chúng; mask ở harness thay vì sửa dual_write_diff chung.
 ENGINE_INTERNAL_PROPS = MASKED_PROPS | {"_start_id", "_end_id"}
 
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 TESTDATA = REPO / "tests" / "fixtures" / "kotlin-analyzer"
 PY_BIN = REPO / ".venv" / "bin" / "python"
 PY_ANALYZER = REPO / "code-tiny" / "tools" / "kotlin" / "kotlin_analyzer.py"

@@ -20,7 +20,7 @@ not waive schema, ordering, recovery, integrity, backend, or scale gates.
 
 ## C++/Pro*C real-sample canary
 
-Source: `/Users/hieplq1.aip/Migration/procsample` (24 files).  
+Source: `/Users/user/Migration/procsample` (24 files).  
 Remote target: FalkorDB `localhost:6379`, graph
 `procsample_v3_canary_final`.
 Local parity target: `/tmp/procsample-v3-local.rdb`, graph

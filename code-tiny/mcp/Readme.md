@@ -212,14 +212,14 @@ Preferred: use the harness launcher, which sets provider, storage, and
 embedding environment for you:
 
 ```bash
-cd /Users/hieplq1.aip/AI/cortex-harness
+cd /Users/user/AI/cortex-harness
 python cortex_harness/dev.py code-tiny   # serves http://127.0.0.1:8788/mcp
 ```
 
 Or start the server directly from the repository root:
 
 ```bash
-cd /Users/hieplq1.aip/AI/cortex-harness
+cd /Users/user/AI/cortex-harness
 python code-tiny/mcp/unified_mcp.py --transport streamable-http \
   --host 127.0.0.1 --port 8788 --path /mcp
 ```
@@ -335,7 +335,7 @@ shape examples, not fixed snapshots of your data.
 Install dependencies from the repository root:
 
 ```bash
-cd /Users/hieplq1.aip/AI/cortex-harness
+cd /Users/user/AI/cortex-harness
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -467,7 +467,7 @@ project to its graph/DB per `code.env.GRAPH_PROVIDER`).
 ## Start The Unified MCP Server
 
 ```bash
-cd /Users/hieplq1.aip/AI/cortex-harness
+cd /Users/user/AI/cortex-harness
 python code-tiny/mcp/unified_mcp.py --transport streamable-http \
   --host 127.0.0.1 --port 8788 --path /mcp
 ```
@@ -2042,7 +2042,7 @@ per-engine raw results under `parser_results`. Use targeted
 The repository includes an interactive MCP tester:
 
 ```bash
-cd /Users/hieplq1.aip/AI/cortex-harness
+cd /Users/user/AI/cortex-harness
 source .venv/bin/activate
 python code-tiny/testtool/mcp_tester.py --endpoint http://127.0.0.1:8788/mcp
 ```

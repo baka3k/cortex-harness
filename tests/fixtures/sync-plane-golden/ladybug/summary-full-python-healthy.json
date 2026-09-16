@@ -60,7 +60,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -299,7 +299,7 @@
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_changed_6c5c33e1d2d2_12094_d07255e7.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_deleted_6c5c33e1d2d2_12094_d07255e7.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -443,7 +443,7 @@
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_changed_6c5c33e1d2d2_12094_d07255e7.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_deleted_6c5c33e1d2d2_12094_d07255e7.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-topology",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-topology",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -488,7 +488,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "sp1golden_mess",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -534,7 +534,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -775,7 +775,7 @@
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_changed_6c5c33e1d2d2_12094_d07255e7.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/fastapi_django_deleted_6c5c33e1d2d2_12094_d07255e7.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-fastapi-django",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -921,7 +921,7 @@
       "changed_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_changed_6c5c33e1d2d2_12094_d07255e7.json",
       "deleted_manifest": "/private/tmp/sp1-golden/.cache/incremental_sync_manifests/sp1-golden_bcc6d3761809/9ecd97edc6737b51e1db1909/project_topology_deleted_6c5c33e1d2d2_12094_d07255e7.json",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-topology",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-topology",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",
@@ -968,7 +968,7 @@
       "ignore_cache": false,
       "message_qdrant_collection": "sp1golden_mess",
       "command": [
-        "/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-python",
+        "/Users/user/AI/cortex-harness/rust/target/release/analyzer-python",
         "--root",
         "/private/tmp/sp1-golden",
         "--project-id",

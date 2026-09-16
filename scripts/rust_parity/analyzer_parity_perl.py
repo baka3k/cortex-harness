@@ -53,7 +53,7 @@ try:
 except ImportError:  # pragma: no cover — code-tiny luôn có module này
     configure_journal_env = None  # type: ignore[assignment]
 
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 TESTDATA = REPO / "tests" / "fixtures" / "perl-application"
 PY_BIN = REPO / ".venv" / "bin" / "python"
 PY_ANALYZER = REPO / "code-tiny" / "tools" / "perl" / "perl_analyzer.py"

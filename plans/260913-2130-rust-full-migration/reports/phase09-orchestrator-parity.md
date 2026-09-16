@@ -145,7 +145,7 @@ When any of these paths would execute, `cortex-sync` prints
 ## 7. Reproduce
 
 ```bash
-cd /Users/hieplq1.aip/AI/cortex-harness
+cd /Users/user/AI/cortex-harness
 cargo build --release -p cortex-sync
 .venv/bin/python scripts/rust_parity/sync_orchestrator_parity.py [--keep]
 # → prints per-gate JSON; exit 0 when all gates pass

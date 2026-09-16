@@ -8,8 +8,8 @@
 
 ### scan_result testdata_full
 
-- py: `[SCAN_RESULT] parser=cobol files=9 nodes=64 edges=122 diagnostics=31 graph=195 vectors=0 artifact=/Users/hieplq1.aip/AI/cortex-harness/tests/fixtures/cobol-application/.cortex/cobol/facts.json`
-- rust: `[SCAN_RESULT] parser=cobol files=9 nodes=64 edges=122 diagnostics=31 graph=195 vectors=0 artifact=/Users/hieplq1.aip/AI/cortex-harness/tests/fixtures/cobol-application/.cortex/cobol/facts.json`
+- py: `[SCAN_RESULT] parser=cobol files=9 nodes=64 edges=122 diagnostics=31 graph=195 vectors=0 artifact=/Users/user/AI/cortex-harness/tests/fixtures/cobol-application/.cortex/cobol/facts.json`
+- rust: `[SCAN_RESULT] parser=cobol files=9 nodes=64 edges=122 diagnostics=31 graph=195 vectors=0 artifact=/Users/user/AI/cortex-harness/tests/fixtures/cobol-application/.cortex/cobol/facts.json`
 
 
 ### TESTDATA_FULL

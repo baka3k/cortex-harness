@@ -31,7 +31,7 @@ Run the checked-in `procsample` suite (39 graph tools and 5 mind tools):
 ```bash
 ./.venv/bin/python code-tiny/testtool/mcp_batch_report.py \
   --suite code-tiny/testtool/suites/procsample-all-tools.json \
-  --output /Users/hieplq1.aip/Migration/procsample/output_porting
+  --output /Users/user/Migration/procsample/output_porting
 ```
 
 The `--output` value can be a directory (timestamped filename is generated)

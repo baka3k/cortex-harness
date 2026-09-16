@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 16:23:27
 - testdata: `tests/fixtures/cplus-analyzer` (include/alice + src/alice + res)
-- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-cplus`
+- rust bin: `/Users/user/AI/cortex-harness/rust/target/release/analyzer-cplus`
 - grammar pin: tree-sitter-c **0.24.2** + tree-sitter-cpp **0.23.4** (Rust) == tree-sitter-c 0.24.2 + tree-sitter-cpp 0.23.4 (PyPI venv; `tree_sitter_languages.get_parser` raise TypeError với tree_sitter 0.26 nên Python dùng fallback binding trực tiếp — verify bằng import)
 - mode: tree-sitter fallback (không compile_commands.json, không bootstrap clang) trên CẢ HAI bên
 - stock corpus: **skip**

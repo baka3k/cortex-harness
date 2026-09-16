@@ -76,8 +76,8 @@
   }
  },
  "environment": {
-  "CORTEX_HARNESS_CONFIG_PATH": "/Users/hieplq1.aip/AI/cortex-harness/scripts/rust_mcp/fixtures/mind_config",
-  "CORTEX_DATA_HOME": "/Users/hieplq1.aip/AI/cortex-harness/scripts/rust_mcp/fixtures/mind_local_store",
+  "CORTEX_HARNESS_CONFIG_PATH": "/Users/user/AI/cortex-harness/scripts/rust_mcp/fixtures/mind_config",
+  "CORTEX_DATA_HOME": "/Users/user/AI/cortex-harness/scripts/rust_mcp/fixtures/mind_local_store",
   "CORTEX_STORAGE_INSTANCE": "default",
   "FALKORDB_URI": "redis://127.0.0.1:6379",
   "FALKORDB_GRAPH": "mindfix_doc",

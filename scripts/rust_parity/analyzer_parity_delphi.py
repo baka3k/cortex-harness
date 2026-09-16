@@ -8,7 +8,7 @@ dump và so exact ngoài mask chuẩn từ dual_write_diff.
 Usage (từ repo root):
     .venv/bin/python scripts/rust_parity/analyzer_parity_delphi.py
 
-Ghi chú: stock corpus (/Users/hieplq1.aip/baka3k/stock) KHÔNG có file
+Ghi chú: stock corpus (/Users/user/baka3k/stock) KHÔNG có file
 .pas/.dpr nên gate stock được skip (recorded trong report).
 """
 
@@ -47,7 +47,7 @@ from dual_write_diff import MASKED_PROPS, diff_dump, dump_graph  # noqa: E402
 # của TỪNG graph — cùng bản chất với `_graph_id`/`_edge_id` đã có trong mask).
 ENGINE_INTERNAL_PROPS = MASKED_PROPS | {"_start_id", "_end_id"}
 
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 TESTDATA = REPO / "tests" / "fixtures" / "delphi-analyzer"
 PY_BIN = REPO / ".venv" / "bin" / "python"
 PY_ANALYZER = REPO / "code-tiny" / "tools" / "delphi" / "delphi_analyzer.py"

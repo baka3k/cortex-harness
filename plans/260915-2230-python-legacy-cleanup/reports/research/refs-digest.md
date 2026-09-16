@@ -1,6 +1,6 @@
 # refs-digest — every live reference to a Python (`.py`) file
 
-Research date: 2026-09-15, branch `feat/change-db`, repo `/Users/hieplq1.aip/AI/cortex-harness`.
+Research date: 2026-09-15, branch `feat/change-db`, repo `/Users/user/AI/cortex-harness`.
 Scope: all references/spawns/invocations of `.py` files from live (non-archived) repo surfaces.
 Excluded per brief: `.venv/`, `.qwen/`, `__pycache__/`, `rust/target/`, `node_modules/`, `scripts/archived/`, `tests/fixtures/`, `plans/` (except where a live reference points into them).
 

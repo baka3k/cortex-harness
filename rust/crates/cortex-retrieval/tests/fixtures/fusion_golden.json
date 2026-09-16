@@ -1,5 +1,5 @@
 {
-  "generator": "/Users/hieplq1.aip/AI/cortex-harness/scripts/rust_parity/gen_fusion_fixtures.py",
+  "generator": "/Users/user/AI/cortex-harness/scripts/rust_parity/gen_fusion_fixtures.py",
   "cases": [
     {
       "name": "structural_with_bm25",

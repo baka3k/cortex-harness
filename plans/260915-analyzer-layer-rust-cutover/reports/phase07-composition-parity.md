@@ -17,7 +17,7 @@
 - csharp parity: script present, re-run by phase-csharp gate
 - project_topology parity: script present, re-run by phase-project_topology gate
 - grep gate: 2 active files reference _analyzer.py; expected=1, deferred-to-phase-08=1, unexpected-blocking=0
-  deferred: ['/Users/hieplq1.aip/AI/cortex-harness/cortex_harness/sync_processes.py']
+  deferred: ['/Users/user/AI/cortex-harness/cortex_harness/sync_processes.py']
 
 ## Failures
 

@@ -58,7 +58,7 @@ REPORT_PATH = (
     REPO / "plans" / "260913-2130-rust-full-migration" / "reports"
     / "phase07-jp1-parity.md"
 )
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 PROJECT_ID = "parity_jp1"
 
 SCAN_RE = re.compile(

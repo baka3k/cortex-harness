@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tools.graph.driver.falkordb_driver import FalkorDBDriver  # noqa: E402
 from dual_write_diff import MASKED_PROPS, diff_dump, dump_graph  # noqa: E402
 
-STOCK_FRONTEND = Path("/Users/hieplq1.aip/baka3k/stock/frontend")
+STOCK_FRONTEND = Path("/Users/user/baka3k/stock/frontend")
 TESTDATA = REPO / "tests" / "fixtures" / "ts-analyzer"
 PY_BIN = REPO / ".venv" / "bin" / "python"
 PY_ANALYZER = REPO / "code-tiny" / "tools" / "ts" / "ts_analyzer.py"

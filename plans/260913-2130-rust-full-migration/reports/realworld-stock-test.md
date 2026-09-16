@@ -1,4 +1,4 @@
-# Real-world test: repo /Users/hieplq1.aip/baka3k/stock (2026-09-13)
+# Real-world test: repo /Users/user/baka3k/stock (2026-09-13)
 
 Script: `scripts/rust_parity/realworld_stock_test.py` — chạy từ repo root:
 `.venv/bin/python scripts/rust_parity/realworld_stock_test.py`

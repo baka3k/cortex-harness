@@ -2,7 +2,7 @@
 
 - chạy: 2026-09-14 06:02:45
 - fixture: `tests/fixtures/web-overlays/express_js`
-- rust bin: `/Users/hieplq1.aip/AI/cortex-harness/rust/target/release/analyzer-express-js`
+- rust bin: `/Users/user/AI/cortex-harness/rust/target/release/analyzer-express-js`
 - base parser (prerequisite): `js` (python, journal-shadow)
 - mask: `['_dst', '_edge_id', '_graph_id', '_src', 'created_at', 'last_updated', 'summary_updated_at', 'updated_at']` + `_start_id`/`_end_id`
 

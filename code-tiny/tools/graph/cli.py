@@ -194,9 +194,9 @@ def apply_project_registry_defaults(args: Namespace) -> Namespace:
 def _resolve_config_dir(args: Namespace) -> Optional[Path]:
     """Pick the registry's config directory using --root when available.
 
-    Walks up from --root so a scan of ``/Users/hieplq1.aip/HyperDev/hyper-pack``
+    Walks up from --root so a scan of ``/Users/user/HyperDev/hyper-pack``
     finds ``<root>/.cortext-harness/config/*.json`` even when the process
-    CWD lives somewhere unrelated (e.g. ``/Users/hieplq1.aip/AI/cortex-harness``).
+    CWD lives somewhere unrelated (e.g. ``/Users/user/AI/cortex-harness``).
     Falls back to ``None`` so the registry uses its default CWD-based
     discovery when --root is not supplied.
     """

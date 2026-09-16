@@ -7,7 +7,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
 ## Findings
 
 1. **Orchestrator splits parsers in embedding pass by `SHARED_VECTOR_CLI_PARSERS`** —
-   `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2115-2116`:
+   `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2115-2116`:
    ```rust
    let mut native_parser = native_store.is_some()
        && registry::SHARED_VECTOR_CLI_PARSERS.contains(&parser_name);
@@ -16,7 +16,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
    else branch at `:2309+` that scrapes `vectors=N` from `[SCAN_RESULT]`.
 
 2. **Shared-7 set is hard-coded** —
-   `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/registry.rs:438-439`:
+   `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/registry.rs:438-439`:
    ```rust
    pub const SHARED_VECTOR_CLI_PARSERS: [&str; 7] =
        ["dart", "go", "jp1", "perl", "rust", "shell", "swift"];
@@ -26,7 +26,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
    `csharp`, `plsql`) is in the list.
 
 3. **Registry still marks legacy parsers as `writes_vectors: true`** — all 24
-   primary parsers in `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/registry.rs:93-133`
+   primary parsers in `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/registry.rs:93-133`
    get the default `writes_vectors: true` (`:61` and `:74`); the embedding
    pass gate is `:2105` (`config.writes_vectors`), which every legacy parser
    passes. So every legacy parser enters the embedding pass loop — but never
@@ -61,7 +61,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
      `analyzer-sql-family/src/sqlcommon.rs:1251`,
      `analyzer-js/src/pipeline.rs:795`).
    - The orchestrator parser
-     `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2782-2785`:
+     `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2782-2785`:
      ```rust
      fn scan_result_vector_count(output: &str) -> Option<i64> {
          let re = regex::Regex::new(r"(?m)^\[SCAN_RESULT].*\bvectors=(\d+)\b").ok()?;
@@ -74,7 +74,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
      `scan_result_vector_count` call at `:2310-2312`).
 
 6. **The Rust children explicitly do NOT embed (per analyzer-frame's note)** —
-   `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-analyzer-framework/src/cli.rs:215-233`:
+   `/Users/user/AI/cortex-harness/rust/crates/cortex-analyzer-framework/src/cli.rs:215-233`:
    ```rust
    pub fn note_orchestrated_embedding(&self) {
        ...
@@ -90,7 +90,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
    it is unwired.
 
 7. **Vector lane has only one write path** —
-   `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2264-2316`
+   `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2264-2316`
    is the ONLY branch that calls `finish_native_embedding_pass` (the only
    function that ever writes vectors to Qdrant / the local JSON engine).
    The else branch at `:2309-2316` is the read-`vectors=N`-from-child-stdout
@@ -98,10 +98,10 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
 
 8. **Each legacy analyzer's primary pass DOES build a `WriteAllPayload` with
    the same shape the embedding pass consumes** —
-   `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/analyzer-cplus/src/analyzer.rs:1588-1621`
+   `/Users/user/AI/cortex-harness/rust/crates/analyzer-cplus/src/analyzer.rs:1588-1621`
    calls `LanguageCodeWriter::write_all(&WriteAllPayload { … functions, types, …})`.
    `WriteAllPayload::embedding_categories()`
-   (`/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-graph-writer/src/language_writer.rs:2069-2111`)
+   (`/Users/user/AI/cortex-harness/rust/crates/cortex-graph-writer/src/language_writer.rs:2069-2111`)
    is the producer the orchestrator needs — but it's never called by any
    legacy analyzer.
 
@@ -109,7 +109,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
    `project_id` (and tolerates `name`, `qualified_name`, `node_type`/`kind`,
    `file_path`, `summary`/`comment`/`note`/`code`, `start_line`/`end_line`,
    `repo`, `language`, `project_name`)** —
-   `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/vector_sync.rs:275-360`
+   `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/vector_sync.rs:275-360`
    (and `documents_from_categories` at `:369-402`). Missing `symbol_id`/`id`
    fails loudly (`:283`, test at `:632-637`).
    Legacy `WriteAllPayload` rows do carry the field — `analyzer-cplus/src/analyzer.rs:64-79`
@@ -119,7 +119,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
    (`:85-95`). So the data is already in shape.
 
 10. **EmbeddingInputArtifact fields (the schema the orchestrator will read)** —
-    `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-analyzer-framework/src/embedding_artifact.rs:29-45`:
+    `/Users/user/AI/cortex-harness/rust/crates/cortex-analyzer-framework/src/embedding_artifact.rs:29-45`:
     ```rust
     pub struct EmbeddingInputArtifact {
         pub schema_version: u64,           // = 1, hard-pinned
@@ -138,7 +138,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
     hard error (`:65-69`). Files are atomic 0600 (`:99-140`, test at `:200-221`).
 
 11. **Orchestrator's reader expects everything the artifact promises** —
-    `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2793-2884`
+    `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2793-2884`
     (`finish_native_embedding_pass`):
     1. reads file (`:2803`),
     2. parses via `EmbeddingInputArtifact::from_json_str` (`:2810`),
@@ -153,7 +153,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
     8. calls `vector_store::sync_vector_documents(...)` (`:2873+`).
 
 12. **`vector_store::sync_vector_documents` is the single writer seam** —
-    `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/vector_store.rs:406-463`
+    `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/vector_store.rs:406-463`
     takes `&impl VectorWriteOps` (`:44-58` trait) with two impls —
     `RemoteQdrantStore` (`:60-97`) and `LocalQdrantStore` (`:99-134`).
     Pass-flow: ensure collection (`:445`), ensure scope indexes (`:446`),
@@ -163,7 +163,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
     `--embed-model` → `CODE_EMBEDDING_MODEL` → `jinaai/jina-embeddings-v3`).
 
 13. **Cache contracts present today (`.cache/`)** —
-    sampled at `/Users/hieplq1.aip/Migration/procsample/.cache/`:
+    sampled at `/Users/user/Migration/procsample/.cache/`:
     - `incremental_sync/<proj>_<snapshot>.json` — sync run state.
     - `incremental_sync_manifests/<proj>_<hash>/<snapshot>/<parser>_{changed,deleted,embedding_changed,embedding_deleted}_<token>_<pid>_<hash>.json`
       — file path lists per cell.
@@ -181,7 +181,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
 
 14. **Summary schema (the `incremental_sync_summaries/...json`)** —
     from the live sample at
-    `/Users/hieplq1.aip/Migration/procsample/.cache/incremental_sync_summaries/dev_01505e12e56b56c2_29507_5a082f7fe9964253979c10db8a366614.json`,
+    `/Users/user/Migration/procsample/.cache/incremental_sync_summaries/dev_01505e12e56b56c2_29507_5a082f7fe9964253979c10db8a366614.json`,
     one `parsers[]` entry carries (for cplus):
     - `parser`, `role: "primary"`, `changed`, `impacted`, `scan`, `deleted`,
     - `incremental_supported`, `status`, `error`, `started_at`, `finished_at`, `duration_seconds`,
@@ -198,7 +198,7 @@ Researched 2026-09-16 14:33 (branch `feat/change-db`, HEAD `b17f5ba`). All refs 
     `orchestrator.rs:2193, 2195`).
 
 15. **Inventories dir is empty in the live run** —
-    `/Users/hieplq1.aip/Migration/procsample/.cache/inventories/` is present
+    `/Users/user/Migration/procsample/.cache/inventories/` is present
     but contains zero files. The inventory file (`:1-27` schema, content
     fingerprints) is created by the orchestrator's pre-scan
     (`inventory::load_inventory_generation` called at
@@ -318,8 +318,8 @@ only on-disk side effect — and it has not been audited (unknown: see R1).
 
 ## `EmbeddingInputArtifact` format (exact)
 
-From `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-analyzer-framework/src/embedding_artifact.rs:29-45` +
-orchestrator read at `/Users/hieplq1.aip/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2803-2852`:
+From `/Users/user/AI/cortex-harness/rust/crates/cortex-analyzer-framework/src/embedding_artifact.rs:29-45` +
+orchestrator read at `/Users/user/AI/cortex-harness/rust/crates/cortex-sync/src/orchestrator.rs:2803-2852`:
 
 | Field | Type | Notes |
 |---|---|---|
@@ -437,7 +437,7 @@ The `categories` payload is fed into `documents_from_categories`
 
 ### Hybrid D — use the graph-write-journal as the fact source
 
-- **Where:** `/Users/hieplq1.aip/Migration/procsample/.cache/graph-write-journal/<snapshot>/<parser>.sqlite3`
+- **Where:** `/Users/user/Migration/procsample/.cache/graph-write-journal/<snapshot>/<parser>.sqlite3`
   (see F13). Read the journal, replay rows into `EmbeddingEmission`.
 - **Pros:** zero analyzer changes if the journal captures full rows.
 - **Cons:** **Unknown** whether the journal contains the full row payload

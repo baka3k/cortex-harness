@@ -45,7 +45,7 @@ from tools.graph.journal.config import configure_journal_env  # noqa: E402
 from tools.common.project_scope import project_id_lookup_key  # noqa: E402
 from dual_write_diff import MASKED_PROPS, diff_dump, dump_graph  # noqa: E402
 
-STOCK = Path("/Users/hieplq1.aip/baka3k/stock")
+STOCK = Path("/Users/user/baka3k/stock")
 TESTDATA = REPO / "tests" / "fixtures" / "go-analyzer"
 PY_BIN = REPO / ".venv" / "bin" / "python"
 PY_REFERENCE = REPO / "scripts" / "rust_parity" / "run_go_reference.py"
