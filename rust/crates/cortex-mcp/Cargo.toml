@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 cortex-embed = { path = "../cortex-embed" }
+cortex-storage = { path = "../cortex-storage" }
 cortex-graph-writer = { path = "../cortex-graph-writer" }
 cortex-falkordb = { path = "../cortex-falkordb" }
 lbug = "0.20.4"

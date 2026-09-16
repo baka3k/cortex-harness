@@ -2086,12 +2086,13 @@ fn run_flow(
             .to_lowercase();
         let native_allowed =
             !matches!(native_env.as_str(), "python" | "off" | "0" | "false" | "no");
-        let native_store = if !native_allowed {
+        let native_store: Option<vector_store::NativeStore> = if !native_allowed {
             println!("[embedding] native pass disabled by CORTEX_EMBED_ORCHESTRATOR={native_env:?}");
             None
         } else {
             match vector_store::open_native_store(args.qdrant_url.as_deref()) {
-                vector_store::NativeStore::Remote(store) => Some(store),
+                vector_store::NativeStore::Remote(store) => Some(vector_store::NativeStore::Remote(store)),
+                vector_store::NativeStore::Local(store) => Some(vector_store::NativeStore::Local(store)),
                 vector_store::NativeStore::Unsupported(reason) => {
                     println!("[embedding] native pass unavailable: {reason}");
                     None
@@ -2261,18 +2262,37 @@ fn run_flow(
                         set_list_field(&mut vector_summaries, index, "vector_status", json!("success"));
                     }
                     if native_parser {
-                        match finish_native_embedding_pass(
-                            parser_name,
-                            project_id,
-                            &collection,
-                            embedding_artifact
-                                .as_ref()
-                                .expect("set above exactly when native_parser"),
-                            args.max_embed_chars,
-                            args.embed_model.as_deref(),
-                            &mut native_embedder,
-                            native_store.as_ref().expect("native_parser implies an open store"),
-                        ) {
+                        let ops = native_store.as_ref().expect("native_parser implies an open store");
+                        let result = match ops {
+                            vector_store::NativeStore::Remote(store) => finish_native_embedding_pass(
+                                parser_name,
+                                project_id,
+                                &collection,
+                                embedding_artifact
+                                    .as_ref()
+                                    .expect("set above exactly when native_parser"),
+                                args.max_embed_chars,
+                                args.embed_model.as_deref(),
+                                &mut native_embedder,
+                                store,
+                            ),
+                            vector_store::NativeStore::Local(store) => finish_native_embedding_pass(
+                                parser_name,
+                                project_id,
+                                &collection,
+                                embedding_artifact
+                                    .as_ref()
+                                    .expect("set above exactly when native_parser"),
+                                args.max_embed_chars,
+                                args.embed_model.as_deref(),
+                                &mut native_embedder,
+                                store,
+                            ),
+                            vector_store::NativeStore::Unsupported(_) => {
+                                unreachable!("native_parser implies a resolved store")
+                            }
+                        };
+                        match result {
                             Ok(count) => {
                                 set_list_field(&mut vector_summaries, index, "vector_count", json!(count));
                                 propagate_vector_status(
@@ -2770,7 +2790,7 @@ fn scan_result_vector_count(output: &str) -> Option<i64> {
 /// the upserted document count (`vector_count`). The child itself succeeded;
 /// a failure here is a LANE failure, recorded via `record_lane_failure`.
 #[allow(clippy::too_many_arguments)] // artifact + pass-scoped slots; grouping adds no clarity
-fn finish_native_embedding_pass(
+fn finish_native_embedding_pass<S: vector_store::VectorWriteOps>(
     parser_name: &str,
     project_id: &str,
     collection: &str,
@@ -2778,7 +2798,7 @@ fn finish_native_embedding_pass(
     max_embed_chars: i64,
     embed_model: Option<&str>,
     embedder_slot: &mut Option<Box<dyn cortex_embed::Embedder>>,
-    store: &cortex_storage::qdrant_remote::RemoteQdrantStore,
+    store: &S,
 ) -> Result<usize, String> {
     let text = std::fs::read_to_string(artifact_path).map_err(|error| {
         format!(

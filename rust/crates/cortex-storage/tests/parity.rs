@@ -561,6 +561,447 @@ fn local_qdrant_store_boundary() {
 }
 
 // ---------------------------------------------------------------------------
+// qdrant.rs — phase-01 engine hardening (native vector-ingest local lane).
+// ---------------------------------------------------------------------------
+
+fn phase01_store(label: &str) -> (PathBuf, PathBuf, LocalQdrantStore) {
+    let root = temp_dir(label);
+    let resolved = resolve_storage(
+        &root,
+        None,
+        &ResolveOverrides {
+            data_home: Some(root.to_string_lossy().into_owned()),
+            ..ResolveOverrides::default()
+        },
+    )
+    .unwrap();
+    resolved.ensure_directories().unwrap();
+    let store_root = resolved.path_for_role(StorageRole::Code.as_str()).unwrap().to_path_buf();
+    let store = LocalQdrantStore::open(&resolved, StorageRole::Code.as_str()).unwrap();
+    (root, store_root, store)
+}
+
+/// `stale_filter` golden shape (`{"must": [...], "must_not": [{"has_id": …}]}`)
+/// — the delete MUST keep the has_id points and remove only the scoped stale
+/// ones. Before the phase-01 fix the local engine ignored `must_not` entirely
+/// and deleted the kept points too.
+#[test]
+fn stale_filter_delete_honours_must_not_has_id() {
+    let (_root, _store_root, store) = phase01_store("stale-filter");
+    store
+        .create_collection("code", &serde_json::json!({"size": 2, "distance": "Cosine"}))
+        .unwrap();
+    let point = |id: &str, parser: &str, file: &str| {
+        serde_json::json!({
+            "id": id,
+            "vector": [1.0, 0.0],
+            "payload": {
+                "parser": parser,
+                "project_id_normalized": "proj",
+                "root_scope": "/r",
+                "file_path": file,
+            },
+        })
+    };
+    store
+        .upsert(
+            "code",
+            &[
+                point("keep-1", "go", "/r/a.go"),
+                point("keep-2", "go", "/r/b.go"),
+                point("stale-1", "go", "/r/deleted.go"),
+                point("other-parser", "py", "/r/a.go"),
+            ],
+        )
+        .unwrap();
+
+    // Byte-shape of vector_sync::stale_filter (must + must_not has_id).
+    let filter = serde_json::json!({
+        "must": [
+            {"key": "project_id_normalized", "match": {"value": "proj"}},
+            {"key": "parser", "match": {"value": "go"}},
+            {"key": "root_scope", "match": {"value": "/r"}},
+            {"key": "file_path", "match": {"any": ["/r/deleted.go"]}},
+        ],
+        "must_not": [{"has_id": ["keep-1", "keep-2"]}],
+    });
+    store.delete("code", None, Some(&filter)).unwrap();
+
+    let mut remaining: Vec<String> = store
+        .scroll("code", None, 100, false, false, None)
+        .unwrap()
+        .0
+        .iter()
+        .map(|hit| hit["id"].as_str().unwrap().to_string())
+        .collect();
+    remaining.sort();
+    assert_eq!(remaining, vec!["keep-1", "keep-2", "other-parser"]);
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// Full-filter grammar: has_id membership, nested must_not filters, should
+/// with min_should.
+#[test]
+fn filter_grammar_must_not_has_id_should() {
+    let (_root, _store_root, store) = phase01_store("filter-grammar");
+    store
+        .create_collection("code", &serde_json::json!({"size": 1, "distance": "Cosine"}))
+        .unwrap();
+    store
+        .upsert(
+            "code",
+            &[
+                serde_json::json!({"id": "a", "vector": [1.0], "payload": {"tag": "x"}}),
+                serde_json::json!({"id": "b", "vector": [1.0], "payload": {"tag": "y"}}),
+                serde_json::json!({"id": "c", "vector": [1.0], "payload": {"tag": "z"}}),
+            ],
+        )
+        .unwrap();
+
+    // has_id inside must: only listed ids pass.
+    let hits = store
+        .search(
+            "code",
+            &[1.0],
+            10,
+            Some(&serde_json::json!({"must": [{"has_id": ["a", "c"]}]})),
+            true,
+            false,
+            None,
+        )
+        .unwrap();
+    let mut ids: Vec<&str> = hits.iter().map(|hit| hit["id"].as_str().unwrap()).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["a", "c"]);
+
+    // must_not nested filter: exclude tag=x via a sub-filter.
+    let hits = store
+        .search(
+            "code",
+            &[1.0],
+            10,
+            Some(&serde_json::json!({
+                "must_not": [{"must": [{"key": "tag", "match": {"value": "x"}}]}],
+            })),
+            true,
+            false,
+            None,
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 2, "b and c survive the must_not sub-filter");
+
+    // should (min_should default 1): at least one condition must match.
+    let hits = store
+        .search(
+            "code",
+            &[1.0],
+            10,
+            Some(&serde_json::json!({
+                "should": [
+                    {"key": "tag", "match": {"value": "x"}},
+                    {"key": "tag", "match": {"value": "y"}},
+                ],
+            })),
+            true,
+            false,
+            None,
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 2, "x and y match should");
+    let hits = store
+        .search(
+            "code",
+            &[1.0],
+            10,
+            Some(&serde_json::json!({
+                "min_should": 2,
+                "should": [
+                    {"key": "tag", "match": {"value": "x"}},
+                    {"key": "tag", "match": {"value": "y"}},
+                ],
+            })),
+            true,
+            false,
+            None,
+        )
+        .unwrap();
+    assert!(hits.is_empty(), "no point matches both should conditions");
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// `get_collection_info` must carry the vector config in the REST shape so
+/// the cortex-sync drift guard (`vector_sizes`) keeps working on local stores.
+#[test]
+fn collection_info_carries_vector_config_rest_shape() {
+    let (_root, _store_root, store) = phase01_store("info-shape");
+    store
+        .create_collection("anon", &serde_json::json!({"vectors": {"size": 1024, "distance": "Cosine"}}))
+        .unwrap();
+    store
+        .create_collection(
+            "named",
+            &serde_json::json!({"vectors": {"code": {"size": 512, "distance": "Cosine"}}}),
+        )
+        .unwrap();
+    let anon = store.get_collection_info("anon").unwrap();
+    assert_eq!(
+        anon.pointer("/result/config/params/vectors"),
+        Some(&serde_json::json!({"size": 1024, "distance": "Cosine"})),
+        "anonymous wrapper must surface as the bare VectorParams"
+    );
+    let named = store.get_collection_info("named").unwrap();
+    assert_eq!(
+        named.pointer("/result/config/params/vectors/code/size"),
+        Some(&serde_json::json!(512))
+    );
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// Legacy pickle root (`collection/` or root `storage.sqlite`, no JSON store)
+/// fails closed on BOTH the writer client and the read-only reader; during
+/// the re-index window (JSON present) the legacy markers may coexist.
+#[test]
+fn legacy_pickle_root_refused_loudly() {
+    let root = temp_dir("legacy-guard");
+
+    // Legacy-only root: writer refuses.
+    std::fs::create_dir_all(root.join("collection").join("some_collection")).unwrap();
+    std::fs::write(root.join("collection").join("some_collection").join("storage.sqlite"), b"x").unwrap();
+    let resolved = resolve_storage(
+        &root,
+        None,
+        &ResolveOverrides {
+            data_home: Some(root.to_string_lossy().into_owned()),
+            ..ResolveOverrides::default()
+        },
+    )
+    .unwrap();
+    resolved.ensure_directories().unwrap();
+    let store_root = resolved.path_for_role(StorageRole::Code.as_str()).unwrap().to_path_buf();
+    std::fs::create_dir_all(&store_root).unwrap();
+    std::fs::create_dir_all(store_root.join("collection")).unwrap();
+
+    let writer_error =
+        LocalQdrantStore::open(&resolved, StorageRole::Code.as_str()).err().expect("writer refuses legacy root");
+    assert!(
+        writer_error.to_string().contains("legacy qdrant-client pickle store"),
+        "honest legacy message, got: {writer_error}"
+    );
+    let reader_error = cortex_storage::qdrant::LocalQdrantReader::open(&store_root)
+        .err()
+        .expect("reader refuses legacy root too");
+    assert!(
+        reader_error.to_string().contains("legacy qdrant-client pickle store"),
+        "reader legacy message, got: {reader_error}"
+    );
+
+    // Old single-file-at-root layout variant also trips the compound key.
+    let old_root = store_root.join("collection");
+    std::fs::remove_dir_all(&old_root).unwrap();
+    std::fs::write(store_root.join("storage.sqlite"), b"x").unwrap();
+    assert!(LocalQdrantStore::open(&resolved, StorageRole::Code.as_str()).is_err());
+
+    // Re-index window: JSON store present + legacy subtree → allowed. The
+    // JSON store comes from an earlier successful flush, so open WITHOUT the
+    // marker first, flush once, then let the legacy subtree coexist.
+    // (`collection/` is already gone; only the root sqlite marker remains.)
+    std::fs::remove_file(store_root.join("storage.sqlite")).unwrap();
+    let store = LocalQdrantStore::open(&resolved, StorageRole::Code.as_str()).unwrap();
+    store
+        .create_collection("code", &serde_json::json!({"size": 1, "distance": "Cosine"}))
+        .unwrap();
+    assert!(store_root.join("cortex-local-store.json").exists(), "flush produced the JSON store");
+    std::fs::create_dir_all(store_root.join("collection")).unwrap();
+    assert!(cortex_storage::qdrant::LocalQdrantReader::open(&store_root).is_ok());
+    store.close();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Reader: missing dir → loud error; mutations via the writer become visible
+/// to the reader without reopening (mtime+size revalidate); a wiped store
+/// file reads as empty, never as stale cached data.
+#[test]
+fn readonly_reader_revalidates_snapshots() {
+    let (_root, store_root, store) = phase01_store("reader-revalidate");
+
+    let missing = store_root.join("does-not-exist");
+    let err = cortex_storage::qdrant::LocalQdrantReader::open(&missing)
+        .err()
+        .expect("missing store dir is a loud error");
+    assert!(err.to_string().contains("not found"), "got: {err}");
+
+    store
+        .create_collection("code", &serde_json::json!({"size": 1, "distance": "Cosine"}))
+        .unwrap();
+    let reader = cortex_storage::qdrant::LocalQdrantReader::open(&store_root).unwrap();
+    assert_eq!(reader.list_collection_names().unwrap(), vec!["code"]);
+    assert!(!reader.collection_exists("other").unwrap());
+
+    store
+        .upsert(
+            "code",
+            &[serde_json::json!({"id": "p1", "vector": [2.0], "payload": {"k": "v"}})],
+        )
+        .unwrap();
+    let hits = reader
+        .search("code", &[2.0], 5, None, true, false, None)
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["payload"]["k"], "v");
+    assert_eq!(reader.count("code", None).unwrap(), 1);
+    let info = reader.get_collection_info("code").unwrap();
+    assert_eq!(info.pointer("/result/config/params/vectors/size"), Some(&serde_json::json!(1)));
+
+    // Hit shape audit: {id, score, payload, vector} — no `version` field
+    // (sidecar/QdrantLocal hits carry one; documented divergence).
+    assert!(hits[0].get("version").is_none());
+    assert!(hits[0].get("score").and_then(serde_json::Value::as_f64).is_some());
+
+    store.delete_collection("code").unwrap();
+    assert!(!reader.collection_exists("code").unwrap(), "revalidated snapshot sees the deletion");
+    assert_eq!(reader.list_collection_names().unwrap(), Vec::<String>::new());
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// Concurrent writer (lease-holding, flushed upserts) + lock-free reader —
+/// no torn reads (every parse succeeds), no deadlock, counts converge.
+#[test]
+fn concurrent_writer_and_lockfree_reader() {
+    let (_root, store_root, store) = phase01_store("concurrent");
+    store
+        .create_collection("code", &serde_json::json!({"size": 8, "distance": "Cosine"}))
+        .unwrap();
+    let reader = std::sync::Arc::new(
+        cortex_storage::qdrant::LocalQdrantReader::open(&store_root).unwrap(),
+    );
+    let reader_for_thread = reader.clone();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_for_thread = stop.clone();
+    let reader_handle = std::thread::spawn(move || {
+        let mut searches = 0u64;
+        while !stop_for_thread.load(std::sync::atomic::Ordering::Relaxed) {
+            // Any observable state must parse cleanly — a torn read would
+            // surface as Err here.
+            let hits = reader_for_thread
+                .search("code", &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5, None, false, false, None)
+                .expect("reader search must never see a torn store");
+            assert!(hits.len() <= 5);
+            searches += 1;
+        }
+        searches
+    });
+
+    let total_batches = 10u64;
+    for batch in 0..total_batches {
+        let points: Vec<serde_json::Value> = (0..25u64)
+            .map(|index| {
+                let id = batch * 25 + index;
+                serde_json::json!({
+                    "id": format!("point-{id}"),
+                    "vector": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    "payload": {"batch": batch},
+                })
+            })
+            .collect();
+        store.upsert("code", &points).unwrap();
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let searches = reader_handle.join().unwrap();
+    assert_eq!(store.count("code", None).unwrap(), 250);
+    assert_eq!(reader.count("code", None).unwrap(), 250, "reader converges to the final state");
+    eprintln!("concurrent reader completed {searches} searches");
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// Persist-mode bulk: deferred batches + one closing flush serialize the
+/// store a constant number of times, versus the per-op flush that
+/// re-serializes per batch (the O(n²)-between-ops cost, F5). Gate = bytes
+/// + wall-time, not flush counts.
+#[test]
+fn persist_mode_bulk_serializes_constant_volume() {
+    let (_root, _store_root, store) = phase01_store("persist-bulk");
+    store
+        .create_collection("code", &serde_json::json!({"size": 64, "distance": "Cosine"}))
+        .unwrap();
+    let batch = |offset: usize| -> Vec<serde_json::Value> {
+        (0..128usize)
+            .map(|index| {
+                let id = (offset * 128 + index) as u64;
+                serde_json::json!({
+                    "id": id,
+                    "vector": (0..64).map(|dim| ((id * 64 + dim) % 97) as f64 / 97.0).collect::<Vec<f64>>(),
+                    "payload": {"file_path": format!("/r/file{}.go", id), "project_id_normalized": "proj"},
+                })
+            })
+            .collect()
+    };
+
+    // Bulk leg: 16 deferred batches + 1 flush.
+    let started = std::time::Instant::now();
+    for offset in 0..16usize {
+        store.upsert_deferred("code", &batch(offset)).unwrap();
+    }
+    store.flush().unwrap();
+    let bulk_elapsed = started.elapsed();
+    let bulk_bytes = store.flush_bytes_written();
+
+    // Eager leg (today's status quo): 16 flushed batches on a second
+    // collection of the same shape.
+    store
+        .create_collection("eager", &serde_json::json!({"size": 64, "distance": "Cosine"}))
+        .unwrap();
+    let before_eager = store.flush_bytes_written();
+    let eager_started = std::time::Instant::now();
+    for offset in 0..16usize {
+        store.upsert("eager", &batch(offset)).unwrap();
+    }
+    let eager_elapsed = eager_started.elapsed();
+    let eager_bytes = store.flush_bytes_written() - before_eager;
+
+    eprintln!(
+        "persist-mode bulk: {bulk_bytes} bytes in {bulk_elapsed:?}; eager per-op flush: \
+         {eager_bytes} bytes in {eager_elapsed:?}"
+    );
+    // Bulk = 1 create + 1 final serialization; eager = 17 serializations on a
+    // growing store. The mechanism gap must stay visible.
+    assert!(
+        bulk_bytes < eager_bytes / 4,
+        "bulk serialized {bulk_bytes}B vs eager {eager_bytes}B — flush coalescing regressed?"
+    );
+    assert!(
+        bulk_elapsed <= eager_elapsed,
+        "bulk wall-time {bulk_elapsed:?} exceeded eager {eager_elapsed:?}"
+    );
+    assert_eq!(store.count("code", None).unwrap(), 2048);
+    assert_eq!(store.count("eager", None).unwrap(), 2048);
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+/// `create_payload_index` is idempotent on local stores (the remote server is
+/// idempotent server-side; re-issuing must not accumulate rows).
+#[test]
+fn payload_index_is_idempotent() {
+    let (_root, _store_root, store) = phase01_store("payload-index");
+    store
+        .create_collection("code", &serde_json::json!({"size": 1, "distance": "Cosine"}))
+        .unwrap();
+    for _ in 0..3 {
+        store.create_payload_index("code", "project_id_normalized", None).unwrap();
+    }
+    let info = store.get_collection_info("code").unwrap();
+    let indexes = info.pointer("/result/payload_indexes").unwrap().as_array().unwrap();
+    assert_eq!(indexes.len(), 1, "duplicate index calls collapse: {indexes:?}");
+    store.close();
+    let _ = std::fs::remove_dir_all(&_root);
+}
+
+// ---------------------------------------------------------------------------
 // GatewayLimits::from_profile lane budgets.
 // ---------------------------------------------------------------------------
 

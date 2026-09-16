@@ -1,25 +1,32 @@
 //! Vector lane for the unified graph server — phases 03/04 of
-//! `plans/260915-2027-vector-lane-rust-port`.
+//! `plans/260915-2027-vector-lane-rust-port`, flipped local-native by
+//! `plans/260916-1154-native-vector-ingest-local` (phase-03 reader wire).
 //!
 //! Query embedding runs natively (`cortex-embed` ONNX, jina-v3, `Plane::Code`)
 //! and qdrant search goes through one of two backends:
 //!
 //! * `Remote` — REST (`/points/search`) for projects registered with
 //!   `storage_backend: "remote"` (wire protocol, mirrors `mind::qdrant`);
-//! * `Local` — the [`crate::vector_sidecar`] python worker reading the same
-//!   store the python ingest writes (QdrantLocal pickles must not be parsed
-//!   in Rust; see the plan ADR D2).
+//! * `Local` — dual-mode under `CORTEX_VECTOR_BACKEND` (D5): when the local
+//!   lane is native (`=rust`, or unset after the phase-05 flip) the lock-free
+//!   [`cortex_storage::qdrant::LocalQdrantReader`] reads the Rust JSON store
+//!   the native writer owns (no lease — writer durability is atomic-rename,
+//!   snapshots revalidate on mtime+size); otherwise the code lane falls back
+//!   to the [`crate::vector_sidecar`] python worker over the legacy
+//!   qdrant-client pickle store (mind/doc lane keeps the sidecar either way).
 //!
 //! Merge/dedupe/provenance semantics mirror `qdrant_query_support.merge_hits`
 //! byte-for-byte: dedupe by `str(id)` keeping the higher score, stable
 //! sort by score desc, cut to `top_k`.
 
-use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde_json::{json, Map, Value};
 
 use cortex_embed::{Backend, Embedder, OnnxEmbedder, Plane, spec_from_env};
+use cortex_storage::qdrant::{local_native_enabled, LocalQdrantReader};
 
 use crate::project_registry;
 use crate::vector_sidecar;
@@ -135,12 +142,36 @@ pub fn embed_query(query: &str) -> Result<Vec<f64>, String> {
 // Store operations
 // ---------------------------------------------------------------------------
 
+/// One lock-free native reader per store root, process-wide. The reader's
+/// mtime+size-revalidated snapshot cache must survive across the ops of one
+/// tool call (list → sizes → search) — reopening per op would re-parse the
+/// whole store every time.
+fn local_native_reader(store_root: &Path) -> Result<Arc<LocalQdrantReader>, String> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<LocalQdrantReader>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().map_err(|_| "local reader cache poisoned".to_string())?;
+    if let Some(reader) = guard.get(store_root) {
+        return Ok(reader.clone());
+    }
+    let reader = LocalQdrantReader::open(store_root).map_err(|error| error.to_string())?;
+    guard.insert(store_root.to_path_buf(), Arc::new(reader));
+    Ok(guard.get(store_root).expect("just inserted").clone())
+}
+
 /// `list_collections` — names in store order (local: client order; remote:
 /// server response order).
 pub fn list_collection_names(store: &VectorStore) -> Result<Vec<String>, String> {
+    list_collection_names_with(store, local_native_enabled())
+}
+
+fn list_collection_names_with(store: &VectorStore, native_local: bool) -> Result<Vec<String>, String> {
     match store {
         VectorStore::Local { store_root } => {
-            vector_sidecar::list_collections(store_root)
+            if native_local {
+                local_native_reader(store_root)?.list_collection_names().map_err(|e| e.to_string())
+            } else {
+                vector_sidecar::list_collections(store_root)
+            }
         }
         VectorStore::Remote { url, api_key } => {
             let payload = remote_request(url, api_key.as_deref(), "GET", "/collections", None)?;
@@ -158,36 +189,75 @@ pub fn list_collection_names(store: &VectorStore) -> Result<Vec<String>, String>
     }
 }
 
+/// REST `config.params.vectors` → `{"default": 1024}` or a named size map —
+/// shared by the remote and native-local arms (phase-01 gave the local
+/// `get_collection_info` exactly this shape).
+fn parse_collection_vector_sizes(payload: &Value) -> Map<String, Value> {
+    let mut sizes = Map::new();
+    let vectors = payload.pointer("/result/config/params/vectors");
+    if let Some(Value::Object(map)) = vectors {
+        if map.contains_key("size") {
+            if let Some(size) = map.get("size").and_then(Value::as_i64) {
+                sizes.insert("default".to_string(), json!(size));
+            }
+        } else {
+            for (name, params) in map {
+                if let Some(size) = params.get("size").and_then(Value::as_i64) {
+                    sizes.insert(name.clone(), json!(size));
+                }
+            }
+        }
+    }
+    sizes
+}
+
 /// `vector_sizes` — `{"default": 1024}` or a named-vector size map.
 pub fn collection_vector_sizes(
     store: &VectorStore,
     collection: &str,
 ) -> Result<Map<String, Value>, String> {
+    collection_vector_sizes_with(store, collection, local_native_enabled())
+}
+
+fn collection_vector_sizes_with(
+    store: &VectorStore,
+    collection: &str,
+    native_local: bool,
+) -> Result<Map<String, Value>, String> {
     match store {
         VectorStore::Local { store_root } => {
-            vector_sidecar::collection_vector_sizes(store_root, collection)
+            if native_local {
+                let info = local_native_reader(store_root)?
+                    .get_collection_info(collection)
+                    .map_err(|e| e.to_string())?;
+                Ok(parse_collection_vector_sizes(&info))
+            } else {
+                vector_sidecar::collection_vector_sizes(store_root, collection)
+            }
         }
         VectorStore::Remote { url, api_key } => {
             let payload =
                 remote_request(url, api_key.as_deref(), "GET", &format!("/collections/{collection}"), None)?;
-            let mut sizes = Map::new();
-            let vectors = payload.pointer("/result/config/params/vectors");
-            if let Some(Value::Object(map)) = vectors {
-                if map.contains_key("size") {
-                    if let Some(size) = map.get("size").and_then(Value::as_i64) {
-                        sizes.insert("default".to_string(), json!(size));
-                    }
-                } else {
-                    for (name, params) in map {
-                        if let Some(size) = params.get("size").and_then(Value::as_i64) {
-                            sizes.insert(name.clone(), json!(size));
-                        }
-                    }
-                }
-            }
-            Ok(sizes)
+            Ok(parse_collection_vector_sizes(&payload))
         }
     }
+}
+
+/// Native-hit lane shape: python's `PayloadSelectorExclude(["text"])` parity
+/// (post-strip — the engine returns full payloads) minus the inert null
+/// `vector` key. Native hits carry no `version` field (QdrantLocal hits do);
+/// that divergence is pinned by the shape-audit in phase01-engine.md and
+/// tolerated by the parity comparator.
+fn lane_hit_shape(mut hit: Value) -> Value {
+    if let Some(payload) = hit.get_mut("payload").and_then(Value::as_object_mut) {
+        payload.remove("text");
+    }
+    if let Some(object) = hit.as_object_mut() {
+        if object.get("vector").map(Value::is_null).unwrap_or(false) {
+            object.remove("vector");
+        }
+    }
+    hit
 }
 
 /// One qdrant search — raw hit objects `{id, version, score, payload}`.
@@ -201,9 +271,29 @@ pub fn search_collection(
     limit: usize,
     filter: Option<&Value>,
 ) -> Result<Vec<Value>, String> {
+    search_collection_with(store, collection, vector, vector_name, limit, filter, local_native_enabled())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn search_collection_with(
+    store: &VectorStore,
+    collection: &str,
+    vector: &[f64],
+    vector_name: Option<&str>,
+    limit: usize,
+    filter: Option<&Value>,
+    native_local: bool,
+) -> Result<Vec<Value>, String> {
     match store {
         VectorStore::Local { store_root } => {
-            vector_sidecar::search_with_using(store_root, collection, vector, vector_name, limit, filter)
+            if native_local {
+                let hits = local_native_reader(store_root)?
+                    .search(collection, vector, limit, filter, true, false, vector_name)
+                    .map_err(|e| e.to_string())?;
+                Ok(hits.into_iter().map(lane_hit_shape).collect())
+            } else {
+                vector_sidecar::search_with_using(store_root, collection, vector, vector_name, limit, filter)
+            }
         }
         VectorStore::Remote { url, api_key } => {
             let mut body = json!({
@@ -382,4 +472,120 @@ pub fn filter_collections_for_vector(
         }
     }
     (selected, errors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Native local arms (hatch `=rust`, post-flip unset): list/sizes/search
+    /// over the JSON store with lane-hit shape — `text` stripped (python
+    /// PayloadSelectorExclude parity), null `vector` dropped, no `version`.
+    #[test]
+    fn local_native_arms_read_json_store() {
+        let isolation = tempfile::tempdir().unwrap();
+        let store_root = isolation.path().to_path_buf();
+
+        // Seed the JSON store through the owning writer engine.
+        let resolved = cortex_storage::config::resolve_storage(
+            isolation.path(),
+            None,
+            &cortex_storage::config::ResolveOverrides {
+                qdrant_code_path: Some(store_root.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        resolved.ensure_directories().unwrap();
+        let writer = cortex_storage::qdrant::LocalQdrantStore::open(
+            &resolved,
+            cortex_storage::StorageRole::Code.as_str(),
+        )
+        .unwrap();
+        writer
+            .create_collection("code", &json!({"size": 4, "distance": "Cosine"}))
+            .unwrap();
+        writer
+            .upsert(
+                "code",
+                &[
+                    json!({
+                        "id": "hit-1",
+                        "vector": [1.0, 0.0, 0.0, 0.0],
+                        "payload": {
+                            "project_id_normalized": "proj",
+                            "text": "raw body that must never cross merge_hits",
+                            "symbol": "main",
+                        },
+                    }),
+                    json!({
+                        "id": "hit-2",
+                        "vector": [0.0, 1.0, 0.0, 0.0],
+                        "payload": {
+                            "project_id_normalized": "other",
+                            "text": "foreign project",
+                        },
+                    }),
+                ],
+            )
+            .unwrap();
+
+        let store = VectorStore::Local { store_root: store_root.clone() };
+
+        assert_eq!(list_collection_names_with(&store, true).unwrap(), vec!["code"]);
+        let sizes = collection_vector_sizes_with(&store, "code", true).unwrap();
+        assert_eq!(sizes.get("default"), Some(&json!(4)));
+        assert!(sizes.get("text").is_none(), "anonymous config must not leak param keys as sizes");
+
+        let filter = json!({
+            "must": [{"key": "project_id_normalized", "match": {"any": ["proj"]}}],
+        });
+        let hits = search_collection_with(
+            &store, "code", &[1.0, 0.0, 0.0, 0.0], None, 5, Some(&filter), true,
+        )
+        .unwrap();
+        assert_eq!(hits.len(), 1, "scope filter keeps only the matching project");
+        let hit = &hits[0];
+        assert_eq!(hit["id"], "hit-1");
+        assert!(hit.get("score").and_then(Value::as_f64).is_some());
+        assert!(hit.get("version").is_none(), "native hits carry no version (phase-01 audit)");
+        assert!(hit.get("vector").is_none(), "inert null vector key is dropped");
+        let payload = hit.get("payload").and_then(Value::as_object).unwrap();
+        assert!(!payload.contains_key("text"), "text must be stripped lane-side");
+        assert_eq!(payload.get("symbol"), Some(&json!("main")));
+
+        // Merged across collections exactly like the python merge contract.
+        let merged = merge_hits(vec![hits.clone(), hits.clone()], 2);
+        assert_eq!(merged.len(), 1, "dedupe by str(id) keeps one entry");
+
+        writer.close();
+    }
+
+    /// Pre-flip default: unset flag keeps the code lane on the sidecar path
+    /// (behavior identical to today). Hermetic routing proof: on a
+    /// quarantined root (JSON store present, pickle subtree gone) the
+    /// sidecar arm hits the loud refusal guard before any spawn, while the
+    /// native arm reads the JSON store fine.
+    #[test]
+    fn local_default_still_routes_to_sidecar_before_flip() {
+        let isolation = tempfile::tempdir().unwrap();
+        let store_root = isolation.path().to_path_buf();
+        std::fs::write(
+            store_root.join("cortex-local-store.json"),
+            "{\"collections\":{}}",
+        )
+        .unwrap();
+        let store = VectorStore::Local { store_root };
+
+        let error = list_collection_names_with(&store, false).unwrap_err();
+        assert!(
+            error.contains("refuses") && error.contains("JSON vector store"),
+            "pre-flip local lane stays on the (guarded) sidecar path, got: {error}"
+        );
+        assert_eq!(
+            list_collection_names_with(&store, true).unwrap(),
+            Vec::<String>::new(),
+            "native arm reads the quarantined root's JSON store without a lease"
+        );
+    }
 }
