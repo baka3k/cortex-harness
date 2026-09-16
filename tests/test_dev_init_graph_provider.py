@@ -444,6 +444,43 @@ class DevInitGraphProviderTests(unittest.TestCase):
                 self.assertEqual(code_projects[0]["git"], "")
                 self.assertEqual(code_projects[0]["folder"], [str(project_path)])
 
+    def test_init_dot_defaults_doc_source_to_resolved_current_directory(self):
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with runner.isolated_filesystem(temp_dir):
+                project_path = Path.cwd()
+                result = runner.invoke(cli, ["init", "."], input="\n" * 60)
+
+                self.assertEqual(result.exit_code, 0, result.output)
+
+                config_path = project_path / ".cortext-harness" / "config" / "dev.json"
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                doc_projects = config["doc"]["source"]["projects"]
+
+                self.assertEqual(doc_projects[0]["git"], "")
+                self.assertEqual(doc_projects[0]["folder"], [str(project_path)])
+
+    def test_bare_init_defaults_both_sources_to_resolved_current_directory(self):
+        runner = CliRunner()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with runner.isolated_filesystem(temp_dir):
+                project_path = Path.cwd()
+                result = runner.invoke(cli, ["init"], input="\n" * 60)
+
+                self.assertEqual(result.exit_code, 0, result.output)
+
+                config_path = project_path / ".cortext-harness" / "config" / "dev.json"
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+
+                self.assertEqual(
+                    config["code"]["source"]["projects"][0]["folder"], [str(project_path)]
+                )
+                self.assertEqual(
+                    config["doc"]["source"]["projects"][0]["folder"], [str(project_path)]
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

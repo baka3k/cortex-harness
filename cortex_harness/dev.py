@@ -2747,8 +2747,11 @@ def init(env, project_dir, path):
 
     PATH can be passed positionally, e.g. 'dev init .' to use the current directory.
     """
-    path_is_current_dir = path is not None and Path(path) == Path(".")
     project_path = Path(path or project_dir or ".").resolve()
+    # The folder prompts default to the directory the user ran `dev init` in
+    # (covers `dev init .`, bare `dev init`, and `--project-dir .`); running
+    # init against another directory keeps the auto-scaffold default.
+    project_is_cwd = project_path == Path.cwd()
     config_path  = _config_path(project_path, env)
 
     existing: dict = {}
@@ -2971,7 +2974,7 @@ def init(env, project_dir, path):
         click.echo("  (Run 'dev sync code add' to add more; editing here updates project #1 only)")
 
     code_folders_default = ", ".join(f for f in first_code.get("folder", []) if f)
-    if not code_folders_default and path_is_current_dir:
+    if not code_folders_default and project_is_cwd:
         code_folders_default = str(project_path)
 
     code_git     = click.prompt("  Git URL (blank = local)", default=first_code.get("git", "") or "")
@@ -2991,10 +2994,13 @@ def init(env, project_dir, path):
             click.echo(f"    [{i}] git={p.get('git') or '(local)'}  folders={p.get('folder', [])}")
         click.echo("  (Run 'dev sync doc add' to add more; editing here updates project #1 only)")
 
+    doc_folders_default = ", ".join(f for f in first_doc.get("folder", []) if f)
+    if not doc_folders_default and project_is_cwd:
+        doc_folders_default = str(project_path)
     doc_git      = click.prompt("  Git URL (blank = local)", default=first_doc.get("git", "") or "")
     doc_folders_raw = click.prompt(
         "  Doc folders (comma-separated, blank = auto-scaffold)",
-        default=", ".join(f for f in first_doc.get("folder", []) if f) or "",
+        default=doc_folders_default,
     )
 
     # ── Ignore folders (scan-time excludes, applies to code + doc sync) ─────
