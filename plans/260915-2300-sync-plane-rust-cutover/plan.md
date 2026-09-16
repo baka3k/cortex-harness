@@ -14,6 +14,7 @@ relatedPlans:
   - "260913-1715-rust-retrieval-graph-port"# journal primitives; phase-03 kế thừa cortex-graph-core::journal
   - "260821-2115-dev-sync-code-windows"    # active, target đè deletion manifest — phải đóng/re-scope trước phase-06 (M3b)
   - "260915-2027-vector-lane-rust-port"    # uncommitted runbook edits cùng file — commit trước khi phase-02 đụng runbook (M3a)
+  - "260916-0936-presence-gating-parser-retirement"  # blocked bởi plan này (blockedBy của nó): retirement (phase-04) cần Box<dyn GraphStore> từ phase-02; phase-01/03 đụng orchestrator.rs vùng gate :1487/:3041 — execute sau khi phase-02 của plan này commit
 research: "plans/260915-2300-sync-plane-rust-cutover/research/repository-findings.md"
 redTeam: "plans/260915-2300-sync-plane-rust-cutover/reports/red-team-rev1.md"
 ---

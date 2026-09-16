@@ -1728,6 +1728,24 @@ impl Journal {
         }
     }
 
+    /// `list_batches` (consumer.py dùng cho endpoint audit) — mọi batch của
+    /// một run, theo sequence.
+    pub fn list_batches(&self, run_id_value: &str) -> Result<Vec<BatchRecord>, JournalError> {
+        let conn = self.connection.lock().unwrap();
+        let mut statement = conn
+            .prepare("SELECT * FROM batches WHERE run_id = ?1 ORDER BY sequence, created_at, job_id")
+            .map_err(sqlite_err)?;
+        let rows = statement
+            .query_map([run_id_value], batch_row_to_map)
+            .map_err(sqlite_err)?;
+        let mut batches = Vec::new();
+        for row in rows {
+            let map = row.map_err(sqlite_err)?;
+            batches.push(batch_from_map(&map)?);
+        }
+        Ok(batches)
+    }
+
     // ── claims / leases ───────────────────────────────────────
 
     pub fn claim_batch(&self, run_id_value: Option<&str>, lease_seconds: i64)
