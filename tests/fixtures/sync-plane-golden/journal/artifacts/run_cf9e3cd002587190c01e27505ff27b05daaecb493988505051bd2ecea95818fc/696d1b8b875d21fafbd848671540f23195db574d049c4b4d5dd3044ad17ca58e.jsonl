@@ -1,0 +1,1 @@
+{"edge_id":"cortext","project_id":"cortext","project_id_normalized":"cortext","props":{"project_id":"cortext","project_id_normalized":"cortext"},"rel_type":"HAS_REPOSITORY","source_id":"cortext","source_label":"Project","source_property":"project_id","target_id":"cortext/cortex-harness","target_label":"Repository","target_property":"name"}
