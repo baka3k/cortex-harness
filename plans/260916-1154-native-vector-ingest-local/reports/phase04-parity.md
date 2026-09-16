@@ -58,6 +58,23 @@ cách xa tolerance 1e-6 (F8 đóng lại; **không nới tolerance**).
    config-file + relative-data-home + instance normalization); env-chain cũ
    chỉ còn là fallback khi resolution fail.
 
+### Re-review verdict (fix cycle 1, commit 6c47af1)
+
+**9.5/10 — auto-approve** (0 Critical/High; reviewer tự re-run pin tests xanh).
+Hai Low đã fix tiếp (commit sau): `discard` log loudly khi reload lỗi (không nuốt
+error của chính cơ chế correctness), matrix precheck đủ 3 probe binaries.
+Low residue chấp nhận (reviewer xác nhận không reachable trong wiring production,
+ghi nhận để không mất dấu):
+
+- Sibling `LocalQdrantStore` handle mở TRƯỚC reload giữ Arc cũ — production
+  single-handle (orchestrator mở 1 lần), test/exotic-only.
+- In-flight swap race (thread đang `with_collection` trên Arc cũ lúc discard) —
+  sync pass tuần tự, single-writer.
+- `local_store_root` fallback chain không normalize instance — chỉ chạy khi
+  shared resolver fail (writer cùng fail loud, không có divergence scenario).
+- Twin probe `sizes` chỉ đọc shape anonymous config — fixture là anonymous;
+  named-vector fixture sẽ cần mở rộng probe.
+
 ## Danh sách divergence được chấp nhận (đóng windows risk #3)
 
 1. **`version` field**: native hit không có `version`; sidecar hit có. Inert
@@ -78,9 +95,9 @@ cách xa tolerance 1e-6 (F8 đóng lại; **không nới tolerance**).
 
 - Probes là tool nội bộ (không phải user tool), build:
   `cargo build -p cortex-storage --example local_vector_probe -p cortex-sync
-  --example vector_writer_probe` (thêm `-p cortex-mcp --example
-  sidecar_guard_probe` cho drill). Sau khi sửa example nhớ rebuild — cargo
-  đã có lần không relink example khi chỉ lib đổi.
+  --example vector_writer_probe -p cortex-mcp --example vector_lane_probe`
+  (thêm `-p cortex-mcp --example sidecar_guard_probe` cho drill). Sau khi sửa
+  example nhớ rebuild — cargo đã có lần không relink example khi chỉ lib đổi.
 - RSS leg dùng `/usr/bin/time -l` (macOS: byte count đứng ĐẦU dòng
   "maximum resident set size"; GNU time -v thì số đứng cuối, đơn vị KiB —
   script xử lý cả hai).
