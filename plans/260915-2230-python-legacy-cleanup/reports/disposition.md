@@ -40,6 +40,15 @@ Riêng `rc_parser.py` đã "PORT đầy đủ" (main.rs:25) — xoá được �
 ### A3. Sidecars của Rust runtime (kept-by-design, vector-lane phase-04)
 - `scripts/rust_mcp/embed_worker.py` — spawn `cortex-embed/src/sidecar.rs` + `cortex-mcp/src/mind/embed.rs` (rollback `CORTEX_EMBED_BACKEND=python`)
 - `scripts/rust_mcp/vector_worker.py` — spawn `cortex-mcp/src/vector_sidecar.rs` (MỚI, vector-lane phase-04)
+  - **Update 2026-09-16** (native-vector-ingest-local phase-05 executed): code lane
+    local chạy native JSON engine (`CORTEX_VECTOR_BACKEND` unset/rust → native
+    reader/writer). `vector_worker.py` còn ĐÚNG MỘT consumer runtime: mind/doc
+    lane local reads + rollback leg `CORTEX_VECTOR_BACKEND=python` của code lane
+    (có guard từ chối loudly trên root đã quarantine). Cleanup sau flip: các
+    coupling code-lane python vector (`code-tiny/tests/test_local_qdrant_runtime.py`,
+    wrapper `LocalQdrantStore` role code, `primary_vector_sync.py` reference khi
+    parity sign-off) chuyển **retirable** — xoá theo phase 02–04 của plan này,
+    không thuộc plan native-vector-ingest-local.
 - **Sửa theo refs-digest (researcher):** `gliner_sidecar.py` KHÔNG được spawn bởi cortex-mcp
   (`mind/qdrant.rs` không có gliner spawn) — nó chỉ là parity tool (`compare_mind.py:293`) →
   chuyển nhóm **B**. GLiNER runtime sống dưới dạng **inline `python -c` script** trong

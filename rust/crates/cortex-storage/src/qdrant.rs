@@ -1339,11 +1339,11 @@ impl std::fmt::Debug for LocalQdrantReader {
 
 pub const VECTOR_BACKEND_ENV: &str = "CORTEX_VECTOR_BACKEND";
 
-/// Phase-05 flip point: before it only an explicit `CORTEX_VECTOR_BACKEND=rust`
-/// opts the local lane into the native JSON engine; after it an unset value
-/// means native and only `=python` keeps the lane frozen (writer) /
-/// sidecar-routed (reader).
-pub const LOCAL_NATIVE_DEFAULT: bool = false;
+/// Phase-05 FLIP (2026-09-16, this constant IS the flip commit): after it an
+/// unset `CORTEX_VECTOR_BACKEND` means the native local lane is ON; only
+/// `=python` keeps the lane frozen (writer) / sidecar-routed (reader). Revert
+/// this one commit to return to opt-in-only (`=rust`).
+pub const LOCAL_NATIVE_DEFAULT: bool = true;
 
 /// Whether the LOCAL code-vector lane runs native right now. `=rust` → yes,
 /// `=python` → never, unset/unknown → [`LOCAL_NATIVE_DEFAULT`]. The REMOTE

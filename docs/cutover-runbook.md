@@ -90,6 +90,69 @@ riêng. Rollback tức thì per-service: `CORTEX_MCP_BACKEND=python dev start`.
 
 ---
 
+## 0c. Vector local lane — native JSON engine (plans/260916-1154-native-vector-ingest-local, 2026-09-16)
+
+Từ phase-05 của plan này, **code lane local chạy native hoàn toàn**: writer
+ghi JSON engine `LocalQdrantStore` (`<qdrant-code-root>/cortex-local-store.json`,
+ghi atomic-rename), reader MCP đọc qua `LocalQdrantReader` **không giữ flock**
+(writer giữ exclusive lease như cũ; reader revalidate snapshot theo mtime+size).
+Mind/doc lane KHÔNG đổi — sidecar `vector_worker.py` vẫn sống cho doc store.
+
+### Cờ hatch
+
+| `CORTEX_VECTOR_BACKEND` | Writer (embedding pass) | Reader (code lane) |
+|---|---|---|
+| *(unset)* — **mặc định sau flip** | native local JSON engine | native reader (không lock) |
+| `rust` | native (opt-in, như unset) | native reader |
+| `python` | **FROZEN — zero writes** (python children không embed từ phase-08; không có đường delegate) | sidecar đọc pickle legacy |
+
+Remote lane không chịu ảnh hưởng của flag này. Flag liên quan khác giữ nguyên:
+`CORTEX_EMBED_BACKEND` (embedder), `CORTEX_EMBED_ORCHESTRATOR` (kill-switch
+toàn pass), `CORTEX_MCP_BACKEND` (whole-server rollback).
+
+### Re-index (bắt buộc 1 lần cho instance cũ)
+
+Dữ liệu pickle legacy **đóng băng từ phase-08** (không ai ghi) — sau flip cần
+re-index. Trình tự cho 1 instance (guard trong `LocalQdrantStore::open` +
+`LocalQdrantReader::open` sẽ bắt buộc đúng thứ tự này):
+
+```bash
+# 1. Quarantine subtree pickle (giữ lại làm backup — KHÔNG xoá):
+mv <qdrant-code-root>/collection <qdrant-code-root>/collection.legacy-pickle.bak
+
+# 2. Re-index (full scan → full_replace scope delete + upsert lại):
+dev sync code --full-scan
+#    embedding-only: dev sync code --sync-mode embedding --full-scan
+
+# 3. Verify JSON store sống:
+ls <qdrant-code-root>/cortex-local-store.json
+```
+
+Lần đầu `dev sync code` trên root còn nguyên pickle → lỗi trung thực
+"legacy qdrant-client pickle store detected …" kèm recipe trên — đó là guard
+chủ động, không phải hỏng hóc.
+
+### Rollback
+
+- `CORTEX_VECTOR_BACKEND=python` — writer frozen, reader code-lane quay sidecar.
+- **Sau quarantine**: python leg **từ chối LOUDLY** (guard trong
+  `vector_sidecar`: JSON store present + `collection/` absent → refuse — không
+  bao giờ phục empty pickle). Recovery = bỏ flag (quay native) hoặc restore
+  `collection.legacy-pickle.bak` → `collection` (mất re-index, chấp nhận stale).
+- Flip là 1 commit — `git revert <flip-commit>` trả về opt-in-only.
+- JSON store hỏng → xoá + `dev sync code --full-scan` re-embed (embedding là
+  derived data).
+
+### Verify gates
+
+- Parity matrix ×2: `.venv/bin/python scripts/rust_mcp/local_parity_matrix.py`
+  (thêm `--rss` để chạy RSS gate — store 118MB, peak reader < 300MB).
+- Rollback drill: `.venv/bin/python scripts/rust_mcp/vector_local_drill.py`
+  (3 legs: frozen + refusal + convergence).
+- Chi tiết: `plans/260916-1154-native-vector-ingest-local/reports/`.
+
+---
+
 ## 0. Build một lần
 
 ```bash
