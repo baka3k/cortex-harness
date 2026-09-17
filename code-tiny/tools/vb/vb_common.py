@@ -1,14 +1,27 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+import sys
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Type, TypeVar
 
 from tree_sitter import Language, Parser
 
+try:
+    from tools.common.project_scope import project_id_lookup_key
+except ImportError:  # standalone use outside code-tiny
+    def project_id_lookup_key(value):
+        normalized = str(value or "").strip().lower()
+        return normalized or None
 
-_PARSE_CACHE_VERSION = "vb-family-v2026-04-03-2"
+
+
+# Bumped for the ANTLR engine payload changes (plan 260917-1200 AD-08):
+# parse_meta engine fields + CallEdge resolution fields + Class symbol ids now
+# carry @rel_path. Old caches must not hydrate into the new shape.
+_PARSE_CACHE_VERSION = "vb-family-v2026-09-17-1"
 
 
 @dataclass
@@ -27,6 +40,9 @@ class FunctionDef:
     comment: str = ""
     summary: str = ""
     note: str = ""
+    # plan 260917-1200: project-model fields consumed by the VB6 resolver
+    module_name: str = ""
+    is_private: bool = False
 
 
 @dataclass
@@ -174,6 +190,10 @@ class VariableDef:
     comment: str = ""
     summary: str = ""
     note: str = ""
+    # plan 260917-1200: scope fields for the VB6 resolver (module-level vs
+    # procedure-local declarations)
+    module_name: str = ""
+    procedure_name: str = ""
 
 
 @dataclass
@@ -184,6 +204,12 @@ class CallEdge:
     callee_id: Optional[str]
     callee_arity: Optional[int]
     call_line: int = 0
+    # plan 260917-1200 evidence fields (defaults keep old caches hydratable)
+    call_type: str = ""
+    resolution_status: str = ""
+    candidate_ids: List[str] = field(default_factory=list)
+    site_column: int = 0
+    callee_member: str = ""
 
 
 @dataclass
@@ -198,6 +224,21 @@ class RelationEdge:
 
 def _safe_rel(path: str) -> str:
     return (path or "").replace("\\", "/")
+
+
+_T = TypeVar("_T")
+
+
+def dataclass_from_payload(cls: Type[_T], item: Dict[str, Any]) -> _T:
+    """Hydrate a dataclass from a (possibly richer) payload dict.
+
+    The ANTLR worker and cached payloads may carry extra keys beyond the
+    current dataclass fields; unknown keys are dropped instead of raising so
+    payload evolution never breaks cache hydration.
+    """
+
+    known = {f.name for f in dataclasses.fields(cls)}
+    return cls(**{key: value for key, value in item.items() if key in known})
 
 
 def _line_slice(lines: Sequence[str], start_line: int, end_line: int) -> str:
@@ -330,12 +371,23 @@ def get_vbnet_parser() -> Parser:
 
 
 def get_vb6_parser() -> Parser:
+    """Legacy tree-sitter entry point; no vb6 grammar exists on PyPI.
+
+    The vb6 dialect no longer uses tree-sitter: extraction is ANTLR-first via
+    the vendored ProLeap worker with a regex fallback (plan 260917-1200). This
+    factory stays registered so the regex cascade has a parser_factory to
+    degrade from; it always raises and parse_vb_file records the reason.
+    """
+
     try:
         import tree_sitter_vb6 as vb6
 
         return _build_ts_parser(vb6.language())
     except Exception as exc:
-        raise RuntimeError("VB6 parser unavailable. Install tree-sitter-vb6.") from exc
+        raise RuntimeError(
+            "tree_sitter_vb6 is not installable from PyPI; the vb6 dialect "
+            "uses the ANTLR worker or regex fallback (see tools/vb/README.md)"
+        ) from exc
 
 
 def get_vba_parser() -> Parser:
@@ -439,6 +491,40 @@ def _strip_inline_comment(line: str) -> str:
     return "".join(out)
 
 
+_TS_WARNED: set = set()
+
+
+def _warn_tree_sitter_unavailable_once(dialect: str, reason: str) -> None:
+    """Warn once per (dialect, reason) that tree-sitter degraded to regex."""
+
+    key = (dialect, reason)
+    if key in _TS_WARNED:
+        return
+    _TS_WARNED.add(key)
+    print(
+        f"[vb][engine] tree-sitter grammar unavailable for {dialect} ({reason}); "
+        "parsing with regex — see code-tiny/tools/vb/README.md",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+# plan 260917-1200: authoritative VB6 module name (Attribute VB_Name), used
+# by the regex path so every engine fills the same project-model field
+_VB_NAME_RE = re.compile(r'^\s*Attribute\s+VB_Name\s*=\s*"([^"]+)"', re.IGNORECASE)
+_VISIBILITY_PRIVATE_RE = re.compile(r"^\s*(?:Public\s+|Private\s+|Friend\s+|Static\s+)*Private\b", re.IGNORECASE)
+
+
+def _module_name_of(lines: Sequence[str], path: str) -> str:
+    for line in lines[:60]:
+        match = _VB_NAME_RE.match(line)
+        if match:
+            return match.group(1)
+    base = os.path.basename(path or "")
+    stem = os.path.splitext(base)[0]
+    return stem or base
+
+
 def parse_vb_file(
     path: str,
     root: str,
@@ -466,12 +552,18 @@ def parse_vb_file(
     with open(path, "rb") as handle:
         source_bytes = handle.read()
     has_error, error_nodes = False, 0
+    tree_sitter_unavailable_reason = ""
     try:
         parser = parser_factory()
         tree = parser.parse(source_bytes)
         has_error, error_nodes = _tree_error_stats(tree)
-    except Exception:
-        pass  # tree-sitter parser unavailable; continue with regex-only parsing
+    except Exception as exc:
+        # tree-sitter grammar unavailable (raised as ImportError/RuntimeError
+        # by the factories, but _build_ts_parser may raise anything); continue
+        # with regex-only parsing but make the degrade observable: parse_meta
+        # marker + one warning per process
+        tree_sitter_unavailable_reason = str(exc).splitlines()[0][:200] if str(exc) else exc.__class__.__name__
+        _warn_tree_sitter_unavailable_once(dialect, tree_sitter_unavailable_reason)
 
     source = source_bytes.decode("utf-8", errors="ignore")
     lines = source.splitlines()
@@ -498,6 +590,7 @@ def parse_vb_file(
     ns_stack: List[Tuple[str, int]] = []
     type_stack: List[Tuple[str, str, int]] = []
     func_stack: List[Dict[str, Any]] = []
+    module_name = _module_name_of(lines, path) if dialect == "vb6" else ""
 
     for idx, raw in enumerate(lines, start=1):
         line = raw.rstrip("\n")
@@ -538,6 +631,8 @@ def parse_vb_file(
                     comment=comment,
                     summary=summary,
                     note=note,
+                    module_name=module_name,
+                    is_private=bool(open_func.get("is_private", False)),
                 )
             )
 
@@ -572,7 +667,9 @@ def parse_vb_file(
             namespace_name = ".".join(item[0] for item in ns_stack) if ns_stack else None
             code = _line_slice(lines, start_line, end_line)
             qualified = ".".join([part for part in [namespace_name, type_name] if part])
-            class_id = qualified or type_name
+            # plan 260917-1200: include rel_path so same-named types in
+            # different files cannot collide on one node id
+            class_id = f"{qualified or type_name}@{rel_path}"
             summary = ""
             comment = ""
             note = _build_note(code, comment, summary)
@@ -647,6 +744,7 @@ def parse_vb_file(
                     "start_line": idx,
                     "namespace_name": namespace_name,
                     "class_name": class_name,
+                    "is_private": bool(_VISIBILITY_PRIVATE_RE.match(stripped)),
                 }
             )
             continue
@@ -682,6 +780,8 @@ def parse_vb_file(
                 comment="",
                 summary="",
                 note=note,
+                module_name=module_name,
+                is_private=bool(open_func.get("is_private", False)),
             )
         )
 
@@ -690,7 +790,7 @@ def parse_vb_file(
         namespace_name = ".".join(item[0] for item in ns_stack) if ns_stack else None
         code = _line_slice(lines, start_line, end_line)
         qualified = ".".join([part for part in [namespace_name, type_name] if part])
-        class_id = qualified or type_name
+        class_id = f"{qualified or type_name}@{rel_path}"
         note = _build_note(code, "", "")
         classes.append(
             ClassDef(
@@ -1017,7 +1117,8 @@ def parse_vb_file(
         "has_error": has_error,
         "error_nodes": error_nodes,
         "line_count": end_line,
-        "parser_engine": "regex",
+        "parser_engine": "regex_unavailable_ts" if tree_sitter_unavailable_reason else "regex",
+        "tree_sitter_unavailable_reason": tree_sitter_unavailable_reason,
         "semantic_mode": vbnet_semantic if dialect == "vbnet" else "off",
         "semantic_enabled": False,
         "fallback_reason": fallback_reason,
@@ -1078,6 +1179,7 @@ def asdict_function(func: FunctionDef, project_id: str, project_name: str, langu
         "note": func.note,
         "exported": False,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1099,6 +1201,7 @@ def asdict_class(cls: ClassDef, project_id: str, project_name: str, language: st
         "summary": cls.summary,
         "note": cls.note,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1119,6 +1222,7 @@ def asdict_namespace(ns: NamespaceDef, project_id: str, project_name: str, langu
         "summary": ns.summary,
         "note": ns.note,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1139,6 +1243,7 @@ def asdict_file(file_def: FileDef, project_id: str, project_name: str, language:
         "imports": list(file_def.imports or []),
         "exports": list(file_def.exports or []),
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1166,6 +1271,7 @@ def asdict_property(prop: PropertyDef, project_id: str, project_name: str, langu
         "note": prop.note,
         "exported": False,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1192,6 +1298,7 @@ def asdict_event(event: EventDef, project_id: str, project_name: str, language: 
         "note": event.note,
         "exported": False,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1215,6 +1322,7 @@ def asdict_interface(iface: InterfaceDef, project_id: str, project_name: str, la
         "summary": iface.summary,
         "note": iface.note,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1241,6 +1349,7 @@ def asdict_enum(enum: EnumDef, project_id: str, project_name: str, language: str
         "summary": enum.summary,
         "note": enum.note,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1266,6 +1375,7 @@ def asdict_constant(const: ConstantDef, project_id: str, project_name: str, lang
         "summary": const.summary,
         "note": const.note,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,
@@ -1292,6 +1402,7 @@ def asdict_variable(var: VariableDef, project_id: str, project_name: str, langua
         "summary": var.summary,
         "note": var.note,
         "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
         "language": language,
         "repo": repo,

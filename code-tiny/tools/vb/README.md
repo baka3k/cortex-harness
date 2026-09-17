@@ -41,6 +41,27 @@ dotnet --info
 dotnet --list-runtimes
 ```
 
+### Cho VB6 ANTLR engine (mặc định `auto`, plan 260917-1200)
+
+- JDK 17+ (bản build phát triển dùng JDK 26; bytecode pin `--release 17`) và
+  Maven 3.9+ — CHỈ cần khi engine antlr hoạt động; thiếu java/maven thì engine
+  `auto` tự chuyển sang regex kèm WARNING một dòng (không bao giờ im lặng).
+- Worker vendored ProLeap (`antlr_worker/vendor/proleap-vb6-parser`, pin
+  commit `53e7b5c5`, MIT): lần sync antlr đầu tiên sẽ `mvn package` (cached,
+  thread-locked). Build thủ công:
+
+```bash
+mvn -q -f code-tiny/tools/vb/antlr_worker/pom.xml -DskipTests package
+```
+
+- Biến môi trường: `VB6_PARSER_ENGINE` (`auto|antlr|regex`),
+  `VB6_ANTLR_TIMEOUT_SEC` (mặc định 600), `VB6_ANTLR_WORKSPACE_TIMEOUT_MS`
+  (mặc định 300000). CLI: `--vb6-parser-engine`, `--vb6-antlr-timeout-sec`,
+  `--vb6-antlr-workspace-timeout-ms`.
+- Trạng thái engine: `dev doctor` mục `vb6 antlr ...` (report-only).
+- `.frm`/`.ctl`/`.pag` được materialize thành `.cls` tạm (strip designer
+  block, pad dòng trắng giữ số dòng) trước khi đưa vào worker.
+
 ## 3) Cài đặt
 
 Từ thư mục `hyper-dev/hyper-graph`:
@@ -51,12 +72,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`requirements.txt` đã bao gồm grammar packages cho:
+Lưu ý grammar tree-sitter (sửa claim sai trước đây — xem plan
+260917-1200):
 
-- VB.NET tree-sitter
-- VB6 tree-sitter
-- VBA tree-sitter
-- VBScript tree-sitter
+- `requirements.txt` chỉ có `tree-sitter-vb-dot-net` (VB.NET, dùng cho
+  error-stats path) — đây là grammar vb duy nhất tồn tại trên PyPI.
+- KHÔNG có (và không cài được) `tree_sitter_vb6` / `tree_sitter_vba` /
+  `tree_sitter_vbscript` từ PyPI. VB6 dùng engine ANTLR (worker ProLeap
+  vendored) hoặc regex; VBA/VBScript chạy regex extraction như trước.
 
 ## 4) Biến môi trường khuyến nghị
 

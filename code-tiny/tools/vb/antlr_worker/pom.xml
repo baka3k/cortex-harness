@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<name>vb6-antlr-worker (aggregator)</name>
+	<description>Whole-program VB6 ASG worker wrapping the vendored proleap-vb6-parser.</description>
+	<groupId>io.cortex</groupId>
+	<artifactId>vb6-antlr-worker-parent</artifactId>
+	<version>1.0.0</version>
+	<packaging>pom</packaging>
+
+	<properties>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+		<maven.compiler.release>17</maven.compiler.release>
+	</properties>
+
+	<modules>
+		<module>vendor/proleap-vb6-parser</module>
+		<module>worker</module>
+	</modules>
+</project>

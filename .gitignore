@@ -134,6 +134,11 @@ code-tiny/tools/common/aspnet/roslyn_worker/bin/
 code-tiny/tools/common/aspnet/roslyn_worker/obj/
 code-tiny/tools/csharp/roslyn_worker/bin/
 code-tiny/tools/csharp/roslyn_worker/obj/
+# VB6 ANTLR worker (Maven aggregator) — ignore Maven build outputs.
+# Source-of-truth: pom.xml, src/main, VENDOR.md, LICENSE inside
+# code-tiny/tools/vb/antlr_worker/{vendor/proleap-vb6-parser,worker}/
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/target/
+code-tiny/tools/vb/antlr_worker/worker/target/
 .cortext-harness/config/dev.json
 .cortex/flutter/
 .cortex/flutter/**
@@ -145,3 +150,4 @@ compile_commands.json
 .mimosa/
 .mimosa/**
 .cortext-harness/sync-state/sync-code.lock
+target/
