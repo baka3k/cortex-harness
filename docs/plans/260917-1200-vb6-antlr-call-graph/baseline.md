@@ -5,17 +5,17 @@ improvement claims (M1/M2/M4) are measured against these numbers.
 
 - date: 2026-09-17
 - engine: regex (parse_vb_file + resolve_calls)
-- files parsed with >=1 function: 11
-- functions extracted: 30
-- raw call edges: 39
-- resolved after resolve_calls: 37 / 39
+- files parsed with >=1 function: 13
+- functions extracted: 38
+- raw call edges: 51
+- resolved after resolve_calls: 45 / 51
 
 ## Capture against expected.json
 
-- expected callsites: 47
-- expected-resolvable (M2 denominator): 29
-- captured (name match): 20 / 47
-- captured of expected-resolvable: 18 / 29
+- expected callsites: 55
+- expected-resolvable (M2 denominator): 33
+- captured (name match): 24 / 55
+- captured of expected-resolvable: 20 / 33
 - string-literal trap false positives: 1 (modMain.bas:29:Fake)
 
 Known regex limitations demonstrated by this baseline: no-paren Sub

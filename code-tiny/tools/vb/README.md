@@ -56,11 +56,42 @@ mvn -q -f code-tiny/tools/vb/antlr_worker/pom.xml -DskipTests package
 
 - Biến môi trường: `VB6_PARSER_ENGINE` (`auto|antlr|regex`),
   `VB6_ANTLR_TIMEOUT_SEC` (mặc định 600), `VB6_ANTLR_WORKSPACE_TIMEOUT_MS`
-  (mặc định 300000). CLI: `--vb6-parser-engine`, `--vb6-antlr-timeout-sec`,
+  (mặc định 300000), `VB6_ANTLR_STRIP_DESIGNER` (=`1` để quay lại fallback
+  strip designer block — mặc định là GIỮ nguyên designer, plan 260917-1628).
+  CLI: `--vb6-parser-engine`, `--vb6-antlr-timeout-sec`,
   `--vb6-antlr-workspace-timeout-ms`.
 - Trạng thái engine: `dev doctor` mục `vb6 antlr ...` (report-only).
-- `.frm`/`.ctl`/`.pag` được materialize thành `.cls` tạm (strip designer
-  block, pad dòng trắng giữ số dòng) trước khi đưa vào worker.
+- `.frm`/`.ctl`/`.pag` được materialize thành `.cls` tạm trước khi đưa vào
+  worker. Mặc định (keep-designer) file được copy NGUYÊN VẸN — designer block
+  parse bình thường, số dòng giữ 1:1 với file gốc, và `controls[]` (cây
+  control của form) được xuất từ chính parse đó. Fallback
+  `VB6_ANTLR_STRIP_DESIGNER=1` blank phần designer (vẫn giữ số dòng); khi
+  active, payload ghi `parse_meta.designer_stripped=true`, `controls[]`
+  rỗng và log có dòng cảnh báo — controls không bao giờ biến mất im lặng.
+
+### Plane payload VB6 (plan 260917-1628)
+
+Ngoài `functions/classes/calls/variables`, payload antlr còn có:
+
+- `enums[]`, `constants[]`, `events[]` — symbol id theo đúng convention
+  regex (`<Name>@<rel>`); parity set với engine regex là 3 plane này.
+- `declares[]` — **ANTLR-only** (regex không emit Declare): signature API
+  Windows (`proc_kind`, `lib`, `alias`, `return_type`, `is_private`);
+  được publish qua functions lane với `kind='declare'` và
+  `parse_meta.declares_regex_support=false` ghi rõ sự lệch nền.
+- `controls[]` — chỉ file designer: `{name, type, parent, index,
+  properties{Caption/Text/Name/Index/TabIndex}, line}`; cha đứng trước con;
+  property `Tab(n).Control(m)` giữ nguyên dạng raw (không resolve).
+- `functions[]` += `min_arity`/`has_optional_args`/`has_paramarray`
+  (min_arity loại trừ arg ParamArray) và `vb6_event`/`vb6_control_type`
+  cho handler được wire (match longest-control-name-first với bộ suffix
+  đóng `VB6_EVENT_SUFFIXES` — `Command1_Clicked` không bao giờ khớp).
+- `calls[]` += dòng `call_type="dictionary_call"` cho `obj!Field`
+  (`default_member=true`): chỉ nằm ở POSSIBLE_CALLS, không bao giờ drop,
+  không vào CALLS tier.
+- `comment`/`summary`/`note` được điền từ comment liền kề (hidden-channel
+  COMMENT tokens) → Qdrant embedding text (`note or code`) tự giàu; comment
+  chỉ có ở engine antlr (regex giữ nguyên hành vi cũ).
 
 ## 3) Cài đặt
 
@@ -222,4 +253,9 @@ export EMBED_DEVICE=cpu
   - `fallback_reason`, `worker_elapsed_ms`
   - `workspace_kind`, `solution_or_project_path`
   - `semantic_errors`, `requested_engine`
-- `PARSE_CACHE_VERSION` đã bump để tránh cache contract cũ.
+- `parse_meta` của VB6 (engine antlr) có thêm (plan 260917-1628):
+  - `module_attributes` (key lowercase, ví dụ `vb_predeclaredid: "True"`)
+  - `designer_stripped` (true chỉ khi fallback strip đang bật)
+  - `declares_regex_support` (false; engine regex cũng ghi field này)
+- `PARSE_CACHE_VERSION` đã bump mỗi lần payload shape đổi (hiện
+  `vb-family-v2026-09-17-4`) — cache contract cũ tự miss.

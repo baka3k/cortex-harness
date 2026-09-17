@@ -186,5 +186,235 @@ class VB6ResolverTest(unittest.TestCase):
         self.assertEqual(registry.modules["frmmain"].kind, "frm")
 
 
+@unittest.skipUnless(True, "always on")
+class VB6ResolverDepthUpgradeTest(unittest.TestCase):
+    """Plan 260917-1628: interface dispatch, arity range, predeclared-id,
+    dictionary calls (phase-03 unit level over synthetic payloads)."""
+
+    def _payloads(self):
+        fn_ship_order_order = _fn("clsOrder", "Ship_Order", arity=1, rel="clsOrder.cls")
+        fn_ship_order_ship = _fn("clsShip", "Ship_Order", arity=1, rel="clsShip.cls")
+        fn_iface = _fn("IShip", "Ship_Order", arity=1, rel="IShip.cls")
+        fn_flexible = FunctionDef(
+            symbol_id="modApi.Flexible/3@modApi.bas",
+            qualified_name="modApi.Flexible",
+            name="Flexible",
+            kind="sub",
+            class_name=None,
+            namespace_name=None,
+            file_path="modApi.bas",
+            start_line=26,
+            end_line=30,
+            arity=3,
+            code="",
+            module_name="modApi",
+            min_arity=1,
+            has_optional_args=True,
+            has_paramarray=True,
+        )
+        return (
+            [
+                {"file_def": {"file_path": "IShip.cls"},
+                 "functions": [fn_iface], "variables": [],
+                 "parse_meta": {"module_name": "IShip"}},
+                {"file_def": {"file_path": "clsOrder.cls"},
+                 "functions": [fn_ship_order_order], "variables": [],
+                 "parse_meta": {"module_name": "clsOrder", "implements": ["IShip"]}},
+                {"file_def": {"file_path": "clsShip.cls"},
+                 "functions": [fn_ship_order_ship], "variables": [],
+                 "parse_meta": {"module_name": "clsShip", "implements": ["IShip"]}},
+                {"file_def": {"file_path": "modApi.bas"},
+                 "functions": [fn_flexible], "variables": [],
+                 "parse_meta": {"module_name": "modApi"}},
+                {"file_def": {"file_path": "modMain.bas"},
+                 "functions": [], "variables": [],
+                 "parse_meta": {"module_name": "modMain"}},
+            ],
+            fn_flexible,
+        )
+
+    def test_interface_dispatch_ambiguous_across_implementers(self) -> None:
+        payloads, _ = self._payloads()
+        ship_payload = {
+            "file_def": {"file_path": "frmMain.frm"},
+            "functions": [],
+            "variables": [{
+                "name": "ship", "type_name": "IShip",
+                "module_name": "frmMain", "procedure_name": "Form_Load",
+            }],
+            "parse_meta": {"module_name": "frmMain"},
+        }
+        calls = [_call("frmMain", "Form_Load", "ship.Ship_Order",
+                       member="Ship_Order", arity=1,
+                       callee_id="IShip.Ship_Order/1@IShip.cls")]
+        resolve_vb6_calls([], calls, payloads=payloads + [ship_payload])
+        call = calls[0]
+        # the arbitrary ASG pick (the interface module itself) is dropped: the
+        # implementer set is genuinely ambiguous -> POSSIBLE_CALLS candidates
+        self.assertEqual(call.resolution_status, "ambiguous")
+        self.assertIsNone(call.callee_id)
+        self.assertEqual(
+            sorted(call.candidate_ids),
+            ["clsOrder.Ship_Order/1@clsOrder.cls", "clsShip.Ship_Order/1@clsShip.cls"],
+        )
+
+    def test_interface_dispatch_unique_implementer_resolves(self) -> None:
+        payloads, _ = self._payloads()
+        # drop clsShip: single implementer -> name_resolved
+        payloads = [p for p in payloads if p["file_def"]["file_path"] != "clsShip.cls"]
+        ship_payload = {
+            "file_def": {"file_path": "frmMain.frm"},
+            "functions": [],
+            "variables": [{
+                "name": "ship", "type_name": "IShip",
+                "module_name": "frmMain", "procedure_name": "Form_Load",
+            }],
+            "parse_meta": {"module_name": "frmMain"},
+        }
+        calls = [_call("frmMain", "Form_Load", "ship.Ship_Order",
+                       member="Ship_Order", arity=1)]
+        resolve_vb6_calls([], calls, payloads=payloads + [ship_payload])
+        self.assertEqual(calls[0].resolution_status, "name_resolved")
+        self.assertEqual(calls[0].callee_id, "clsOrder.Ship_Order/1@clsOrder.cls")
+
+    def test_arity_range_accepts_optional_and_paramarray(self) -> None:
+        payloads, _ = self._payloads()
+        calls = [
+            _call("modMain", "Run", "Flexible", member="Flexible", arity=1,
+                  callee_id="modApi.Flexible/3@modApi.bas"),
+            _call("modMain", "Run", "Flexible", member="Flexible", arity=3,
+                  callee_id="modApi.Flexible/3@modApi.bas"),
+        ]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        for call in calls:
+            self.assertEqual(call.resolution_status, "name_resolved")
+            self.assertEqual(call.callee_id, "modApi.Flexible/3@modApi.bas")
+
+    def test_arity_range_narrows_multi_candidates(self) -> None:
+        payloads, _ = self._payloads()
+        # a second, signature-incompatible Flexible (regex-shaped: exact 0)
+        exact_zero = _fn("modOther", "Flexible")
+        payloads.append({
+            "file_def": {"file_path": "modOther.bas"},
+            "functions": [exact_zero], "variables": [],
+            "parse_meta": {"module_name": "modOther"},
+        })
+        # bound arity 5: only the ParamArray signature accepts it
+        calls = [_call("modMain", "Run", "Flexible", member="Flexible", arity=5,
+                       callee_id="modApi.Flexible/3@modApi.bas")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "name_resolved")
+        self.assertEqual(calls[0].callee_id, "modApi.Flexible/3@modApi.bas")
+        # bound arity 0: the ParamArray signature (min 1) is excluded instead
+        calls = [_call("modMain", "Run", "Flexible", member="Flexible", arity=0,
+                       callee_id="modOther.Flexible/0@modOther.bas")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "name_resolved")
+        self.assertEqual(calls[0].callee_id, "modOther.Flexible/0@modOther.bas")
+
+    def test_predeclared_class_intrinsic_external_missing_unresolved(self) -> None:
+        payloads, _ = self._payloads()
+        payloads.append({
+            "file_def": {"file_path": "clsGlobal.cls"},
+            "functions": [],
+            "variables": [],
+            "parse_meta": {"module_name": "clsGlobal",
+                           "module_attributes": {"vb_predeclaredid": "True"}},
+        })
+        # intrinsic member of a predeclared instance stays external
+        calls = [_call("modMain", "Run", "clsGlobal.Show", member="Show")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "external")
+        # a missing NON-intrinsic member is a typo, not an intrinsic —
+        # unresolved (review fix F4: no vocabulary dilution)
+        calls = [_call("modMain", "Run", "clsGlobal.Typo", member="Typo")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "unresolved")
+
+    def test_predeclared_form_member_resolves_cross_module(self) -> None:
+        payloads, _ = self._payloads()
+        payloads.append({
+            "file_def": {"file_path": "frmGlobal.frm"},
+            "functions": [_fn("frmGlobal", "Setup", rel="frmGlobal.frm")],
+            "variables": [],
+            "parse_meta": {"module_name": "frmGlobal",
+                           "module_attributes": {"vb_predeclaredid": "True"}},
+        })
+        calls = [_call("modMain", "Run", "frmGlobal.Setup", member="Setup")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "asg_resolved")
+        self.assertEqual(calls[0].callee_id, "frmGlobal.Setup/0@frmGlobal.frm")
+
+    def test_dictionary_late_bound_receiver(self) -> None:
+        payloads, _ = self._payloads()
+        payloads.append({
+            "file_def": {"file_path": "modApi.bas"},
+            "functions": [],
+            "variables": [{
+                "name": "rs", "type_name": "Object",
+                "module_name": "modApi", "procedure_name": "ReadField",
+            }],
+            "parse_meta": {"module_name": "modApi"},
+        })
+        calls = [_call("modApi", "ReadField", "rs!FieldName", member="FieldName")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "late_bound")
+        self.assertIsNone(calls[0].callee_id)
+
+    def test_dictionary_typed_receiver_external(self) -> None:
+        payloads, _ = self._payloads()
+        payloads.append({
+            "file_def": {"file_path": "modApi.bas"},
+            "functions": [],
+            "variables": [{
+                "name": "rs", "type_name": "Recordset",
+                "module_name": "modApi", "procedure_name": "ReadField",
+            }],
+            "parse_meta": {"module_name": "modApi"},
+        })
+        calls = [_call("modApi", "ReadField", "rs!FieldName", member="FieldName")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "external")
+        self.assertIsNone(calls[0].callee_id)
+
+    def test_declared_api_call_external(self) -> None:
+        # review fix F1: unqualified calls to a declared API (declares plane)
+        # classify external, never unresolved
+        payloads, _ = self._payloads()
+        payloads[3]["declares"] = [{
+            "symbol_id": "GetTickCount@modApi.bas", "name": "GetTickCount",
+            "proc_kind": "function", "lib": "kernel32",
+        }]
+        calls = [_call("modApi", "ElapsedMs", "GetTickCount", member="GetTickCount")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "external")
+        self.assertIsNone(calls[0].callee_id)
+
+    def test_exact_arity_beats_range_match(self) -> None:
+        # review fix F2: exact-signature hits take precedence over range hits
+        payloads, _ = self._payloads()
+        payloads.append({
+            "file_def": {"file_path": "modOther.bas"},
+            "functions": [_fn("modOther", "Flexible", arity=1, kind="sub")],
+            "variables": [],
+            "parse_meta": {"module_name": "modOther"},
+        })
+        # bound arity 1: modOther.Flexible is an EXACT match and must win over
+        # the range-accepting modApi.Flexible (optional + ParamArray)
+        calls = [_call("modMain", "Run", "Flexible", member="Flexible", arity=1,
+                       callee_id="modOther.Flexible/1@modOther.bas")]
+        resolve_vb6_calls([], calls, payloads=payloads)
+        self.assertEqual(calls[0].resolution_status, "name_resolved")
+        self.assertEqual(calls[0].callee_id, "modOther.Flexible/1@modOther.bas")
+
+    def test_split_callee_bang_receiver(self) -> None:
+        from tools.vb.vb6_resolver import _split_callee
+        call = _call("modApi", "ReadField", "rs!FieldName", member="FieldName")
+        receiver, member = _split_callee(call)
+        self.assertEqual((receiver, member), ("rs", "FieldName"))
+        call = _call("modMain", "Run", "modUtil.CalcTotal", member="CalcTotal")
+        self.assertEqual(_split_callee(call), ("modUtil", "CalcTotal"))
+
+
 if __name__ == "__main__":
     unittest.main()

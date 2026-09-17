@@ -149,6 +149,29 @@ class Vb6GraphContractTest(unittest.TestCase):
         multi = {site: ids for site, ids in sites.items() if len(ids) > 1}
         self.assertTrue(multi, "ambiguous TestSameName must publish one row per candidate")
 
+    def test_dictionary_call_survives_as_possible_with_default_member(self) -> None:
+        # M2 (plan 260917-1628): the rs!FieldName dictionary row must reach
+        # POSSIBLE_CALLS (never dropped, never strict CALLS) with the
+        # default_member prop and a standard-vocabulary status
+        rows = [
+            row for row in self._possible_rows()
+            if (row.get("props") or {}).get("call_type") == "dictionary_call"
+        ]
+        self.assertTrue(rows, "dictionary call dropped from POSSIBLE_CALLS")
+        for row in rows:
+            props = row.get("props") or {}
+            self.assertTrue(props.get("default_member"))
+            self.assertEqual(props.get("callee_name"), "rs!FieldName")
+            self.assertIn(
+                props.get("resolution_status"),
+                {"ambiguous", "late_bound", "external", "unresolved", "asg_resolved",
+                 "name_resolved", ""},
+            )
+            self.assertEqual(props.get("resolution_class"), "lexical_candidate")
+        # and no dictionary row may appear in the strict CALLS tier
+        for row in self._calls_rows():
+            self.assertNotEqual(row.get("call_type"), "dictionary_call")
+
     def test_external_symbol_placeholders_written(self) -> None:
         rows = self._function_rows()
         placeholders = {row.get("id") for row in rows if row.get("kind") == "external_symbol"}

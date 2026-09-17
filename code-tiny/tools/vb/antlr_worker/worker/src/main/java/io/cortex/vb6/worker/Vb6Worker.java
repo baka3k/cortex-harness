@@ -47,6 +47,8 @@ import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.RecognitionException;
 import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.ParserRuleContext;
+import org.antlr.v4.runtime.Token;
+import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTree;
 
 import com.google.gson.Gson;
@@ -58,6 +60,8 @@ import com.google.gson.JsonParser;
 
 import io.proleap.vb6.VisualBasic6Lexer;
 import io.proleap.vb6.VisualBasic6Parser;
+import io.proleap.vb6.asg.metamodel.Arg;
+import io.proleap.vb6.asg.metamodel.Attribute;
 import io.proleap.vb6.asg.metamodel.ClazzModule;
 import io.proleap.vb6.asg.metamodel.Module;
 import io.proleap.vb6.asg.metamodel.Procedure;
@@ -66,6 +70,10 @@ import io.proleap.vb6.asg.metamodel.StandardModule;
 import io.proleap.vb6.asg.metamodel.VisibilityEnum;
 import io.proleap.vb6.asg.metamodel.call.Call;
 import io.proleap.vb6.asg.metamodel.call.MembersCall;
+import io.proleap.vb6.asg.metamodel.statement.constant.Constant;
+import io.proleap.vb6.asg.metamodel.statement.enumeration.Enumeration;
+import io.proleap.vb6.asg.metamodel.statement.enumeration.EnumerationConstant;
+import io.proleap.vb6.asg.metamodel.statement.event.Event;
 import io.proleap.vb6.asg.metamodel.statement.function.Function;
 import io.proleap.vb6.asg.metamodel.statement.property.get.PropertyGet;
 import io.proleap.vb6.asg.metamodel.statement.property.let.PropertyLet;
@@ -104,6 +112,7 @@ public final class Vb6Worker {
 		String content;         // content of parsePath
 		String originalContent; // content of root/filePath (for file_def)
 		int syntaxErrors;
+		boolean designerStripped; // adapter blanked the designer block (strip fallback)
 
 		FileEntry(final String filePath, final String parsePath) {
 			this.filePath = filePath;
@@ -152,7 +161,10 @@ public final class Vb6Worker {
 			final String parsePath = fileObj.has("parse_path")
 					? fileObj.get("parse_path").getAsString()
 					: null;
-			entries.add(new FileEntry(filePath, parsePath));
+			final FileEntry entry = new FileEntry(filePath, parsePath);
+			entry.designerStripped = fileObj.has("designer_stripped")
+					&& fileObj.get("designer_stripped").getAsBoolean();
+			entries.add(entry);
 		}
 
 		final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -389,25 +401,27 @@ public final class Vb6Worker {
 		final String relPath = entry.filePath;
 		final String moduleName = module.getName();
 		final boolean isClassModule = module instanceof ClazzModule;
+		final boolean isDesignerModule = kindForFile(relPath).equals("form");
+		final CommentIndex comments = CommentIndex.of(module);
 
 		final JsonObject payload = new JsonObject();
 
 		// --- functions -------------------------------------------------
 		final JsonArray functions = new JsonArray();
 		for (final Sub sub : module.getSubs()) {
-			functions.add(procedureJson(sub, moduleName, "sub", lines, relPath));
+			functions.add(procedureJson(sub, moduleName, "sub", lines, relPath, comments));
 		}
 		for (final Function function : module.getFunctions()) {
-			functions.add(procedureJson(function, moduleName, "function", lines, relPath));
+			functions.add(procedureJson(function, moduleName, "function", lines, relPath, comments));
 		}
 		for (final PropertyGet propertyGet : module.getPropertyGets()) {
-			functions.add(procedureJson(propertyGet, moduleName, "property get", lines, relPath));
+			functions.add(procedureJson(propertyGet, moduleName, "property get", lines, relPath, comments));
 		}
 		for (final PropertyLet propertyLet : module.getPropertyLets()) {
-			functions.add(procedureJson(propertyLet, moduleName, "property let", lines, relPath));
+			functions.add(procedureJson(propertyLet, moduleName, "property let", lines, relPath, comments));
 		}
 		for (final PropertySet propertySet : module.getPropertySets()) {
-			functions.add(procedureJson(propertySet, moduleName, "property set", lines, relPath));
+			functions.add(procedureJson(propertySet, moduleName, "property set", lines, relPath, comments));
 		}
 		payload.add("functions", functions);
 
@@ -423,7 +437,12 @@ public final class Vb6Worker {
 		//     Class-ID collision fix) ------------------------------------
 		final JsonArray classes = new JsonArray();
 		if (isClassModule) {
-			classes.add(typeJson(moduleName, kindForFile(entry.filePath), lines, relPath));
+			final JsonObject classJson = typeJson(moduleName, kindForFile(relPath), lines, relPath);
+			final String classComment = comments.forDeclaration(1);
+			classJson.addProperty("comment", classComment);
+			classJson.addProperty("summary", classComment);
+			classJson.addProperty("note", buildNote(classJson.get("code").getAsString(), classComment, ""));
+			classes.add(classJson);
 		}
 		payload.add("classes", classes);
 
@@ -435,13 +454,19 @@ public final class Vb6Worker {
 		}
 		payload.add("interfaces", interfaces);
 
-		// --- empty planes ----------------------------------------------
+		// --- empty planes (namespaces/relations out of scope) -----------
 		payload.add("namespaces", new JsonArray());
 		payload.add("relations", new JsonArray());
-		payload.add("properties", new JsonArray());
-		payload.add("events", new JsonArray());
-		payload.add("enums", new JsonArray());
-		payload.add("constants", new JsonArray());
+		payload.add("properties", new JsonArray()); // ANTLR represents properties as functions (kind property get/let/set)
+
+		// --- hydrated planes (plan 260917-1628 phase 01) ----------------
+		payload.add("events", eventsJson(module, lines, relPath, comments));
+		payload.add("enums", enumsJson(module, lines, relPath, comments));
+		payload.add("constants", constantsJson(module, lines, relPath, comments));
+		payload.add("declares", declaresJson(module, moduleName, lines, relPath, comments));
+
+		// --- controls[] (phase 02: designer files only; parse-tree walk) --
+		payload.add("controls", isDesignerModule ? controlsJson(module) : new JsonArray());
 
 		// --- variables (module-level + procedure-local, for late-bound
 		//     detection and project model) -------------------------------
@@ -455,8 +480,10 @@ public final class Vb6Worker {
 		fileDef.addProperty("start_line", 1);
 		fileDef.addProperty("end_line", Math.max(1, lineCount));
 		fileDef.addProperty("code", original == null ? "" : original);
-		fileDef.addProperty("comment", "");
-		fileDef.addProperty("summary", "");
+		fileDef.addProperty("comment", comments.forDeclaration(1));
+		fileDef.addProperty("summary", entry.designerStripped
+				? "Designer block stripped (VB6_ANTLR_STRIP_DESIGNER=1); control tree unavailable."
+				: "");
 		fileDef.addProperty("note", "");
 		fileDef.add("imports", new JsonArray());
 		fileDef.add("exports", new JsonArray());
@@ -480,10 +507,10 @@ public final class Vb6Worker {
 		parseMeta.addProperty("resolution_source", "asg");
 		parseMeta.addProperty("requested_engine", "antlr");
 		parseMeta.addProperty("module_name", moduleName);
+		parseMeta.addProperty("designer_stripped", entry.designerStripped);
+		parseMeta.addProperty("declares_regex_support", false);
+		parseMeta.add("module_attributes", moduleAttributesJson(module, program));
 		final JsonArray implemented = new JsonArray();
-		for (final Procedure procedure : module.getProcedures()) {
-			// no-op; procedures enumerated above
-		}
 		final List<String> ownImplements = implementsNames(lines);
 		for (final String name : ownImplements) {
 			implemented.add(name);
@@ -508,13 +535,16 @@ public final class Vb6Worker {
 			final String moduleName,
 			final String kind,
 			final List<String> lines,
-			final String relPath) {
+			final String relPath,
+			final CommentIndex comments) {
 		final int startLine = ctxLine(procedure.getCtx(), true);
 		final int endLine = Math.max(startLine, ctxLine(procedure.getCtx(), false));
 		final String code = sliceLines(lines, startLine, endLine);
 		final int arity = procedure.getArgsList() == null ? 0 : procedure.getArgsList().size();
+		final ArityInfo arityInfo = arityInfo(procedure);
 		final boolean isPrivate = procedure.getVisibility() == VisibilityEnum.PRIVATE;
 		final String qualified = moduleName + "." + procedure.getName();
+		final String comment = comments.forDeclaration(startLine);
 
 		final JsonObject json = new JsonObject();
 		json.addProperty("symbol_id", qualified + "/" + arity + "@" + relPath);
@@ -527,13 +557,43 @@ public final class Vb6Worker {
 		json.addProperty("start_line", startLine);
 		json.addProperty("end_line", endLine);
 		json.addProperty("arity", arity);
+		json.addProperty("min_arity", arityInfo.minArity);
+		json.addProperty("has_optional_args", arityInfo.hasOptionalArgs);
+		json.addProperty("has_paramarray", arityInfo.hasParamArray);
 		json.addProperty("code", code);
-		json.addProperty("comment", "");
-		json.addProperty("summary", "");
-		json.addProperty("note", "");
+		json.addProperty("comment", comment);
+		json.addProperty("summary", comment);
+		json.addProperty("note", buildNote(code, comment, ""));
 		json.addProperty("module_name", moduleName);
 		json.addProperty("is_private", isPrivate);
 		return json;
+	}
+
+	/** min_arity excludes Optional args AND the ParamArray arg (red-team F6). */
+	private static ArityInfo arityInfo(final Procedure procedure) {
+		final ArityInfo info = new ArityInfo();
+		if (procedure.getArgsList() == null) {
+			return info;
+		}
+		for (final Arg arg : procedure.getArgsList()) {
+			final boolean paramArray = arg.getCtx() != null && arg.getCtx().PARAMARRAY() != null;
+			if (paramArray) {
+				info.hasParamArray = true;
+				continue;
+			}
+			if (arg.isOptional()) {
+				info.hasOptionalArgs = true;
+				continue;
+			}
+			info.minArity++;
+		}
+		return info;
+	}
+
+	private static final class ArityInfo {
+		int minArity;
+		boolean hasOptionalArgs;
+		boolean hasParamArray;
 	}
 
 	private static String symbolId(final String moduleName, final Procedure procedure, final String relPath) {
@@ -569,6 +629,15 @@ public final class Vb6Worker {
 			final ParseTree node = stack.remove(stack.size() - 1);
 			if (node instanceof ParserRuleContext) {
 				final ParserRuleContext ctx = (ParserRuleContext) node;
+				if (ctx instanceof VisualBasic6Parser.DictionaryCallStmtContext) {
+					// default-member access (obj!Field): ProLeap leaves these
+					// UNREGISTERED in the ASG registry (spike 1.1), so emit
+					// straight from the parse ctx — same dedup/collapse
+					// pipeline as registry-bound rows (red-team F17)
+					emitDictionaryCall((VisualBasic6Parser.DictionaryCallStmtContext) ctx,
+							callerId, moduleName, seen, out);
+					continue;
+				}
 				final Object element = registry.lookup(ctx);
 				// concrete calls only: CallDelegate wrappers re-visit the same
 				// underlying call from their own context and would duplicate
@@ -581,6 +650,74 @@ public final class Vb6Worker {
 				stack.add(node.getChild(i));
 			}
 		}
+	}
+
+	/**
+	 * Dictionary (default-member) call row from its parse ctx. The receiver
+	 * chain comes from the enclosing iCS_S_MembersCall text ("rs!FieldName");
+	 * the member is the bare identifier after '!'.
+	 */
+	private static void emitDictionaryCall(
+			final VisualBasic6Parser.DictionaryCallStmtContext ctx,
+			final String callerId,
+			final String moduleName,
+			final java.util.Set<String> seen,
+			final JsonArray out) {
+
+		if (ctx.ambiguousIdentifier() == null) {
+			return;
+		}
+		final String memberName = ctx.ambiguousIdentifier().getText();
+		if (memberName == null || memberName.isEmpty()) {
+			return;
+		}
+		String display = memberName;
+		String fallback = null;   // receiver-less chain text ("!Field.Count")
+		int bestLength = Integer.MAX_VALUE;
+		ParseTree parent = ctx.getParent();
+		while (parent instanceof ParserRuleContext) {
+			final String text = ((ParserRuleContext) parent).getText();
+			final String lower = text.toLowerCase(Locale.ROOT);
+			if (lower.contains("!" + memberName.toLowerCase(Locale.ROOT))
+					&& text.length() < bestLength) {
+				bestLength = text.length();
+				if (text.startsWith("!")) {
+					fallback = text;
+				} else {
+					display = text;
+					break; // smallest ancestor carrying the receiver chain
+				}
+			}
+			if (!lower.contains("!") && !lower.endsWith(memberName.toLowerCase(Locale.ROOT))) {
+				break; // left the access chain entirely
+			}
+			parent = parent.getParent();
+		}
+		if (display.equals(memberName) && fallback != null) {
+			display = fallback;
+		}
+		final int line = ctxLine(ctx, true);
+		final int column = ctx.getStart() == null ? 0 : ctx.getStart().getCharPositionInLine() + 1;
+		// dedup on the full display: rs!A and rs2!A on one line are two sites
+		final String dedupKey = line + "|DICTIONARY_CALL|" + display.toLowerCase(Locale.ROOT)
+				+ "|" + column;
+		if (!seen.add(dedupKey)) {
+			return;
+		}
+
+		final JsonObject row = new JsonObject();
+		row.addProperty("caller_id", callerId);
+		row.addProperty("caller_scope", moduleName);
+		row.addProperty("callee_name", display);
+		row.add("callee_id", com.google.gson.JsonNull.INSTANCE);
+		row.add("callee_arity", com.google.gson.JsonNull.INSTANCE);
+		row.addProperty("call_line", line);
+		row.addProperty("site_column", column);
+		row.addProperty("call_type", "dictionary_call");
+		row.addProperty("resolution_status", "undefined");
+		row.addProperty("callee_member", memberName);
+		row.addProperty("default_member", true);
+		out.add(row);
 	}
 
 	/** Minimal indirection over ProLeap's ASGElementRegistry. */
@@ -949,6 +1086,442 @@ public final class Vb6Worker {
 	}
 
 	// ------------------------------------------------------------------
+	// hydrated planes (plan 260917-1628): enums / constants / events /
+	// declares / controls — shapes mirror the vb_common.py dataclasses
+	// ------------------------------------------------------------------
+
+	/** EnumDef mirror: bare-name symbol_id (`<Name>@<rel>`, red-team F2). */
+	private static JsonArray enumsJson(
+			final Module module,
+			final List<String> lines,
+			final String relPath,
+			final CommentIndex comments) {
+		final JsonArray enums = new JsonArray();
+		final List<Enumeration> sorted = new ArrayList<>(module.getEnumerations().values());
+		sorted.sort(java.util.Comparator.comparing(Enumeration::getName,
+				String.CASE_INSENSITIVE_ORDER));
+		for (final Enumeration enumeration : sorted) {
+			final String name = enumeration.getName() == null ? "" : enumeration.getName();
+			final int startLine = ctxLine(enumeration.getCtx(), true);
+			final int endLine = Math.max(startLine, ctxLine(enumeration.getCtx(), false));
+			final String code = sliceLines(lines, startLine, endLine);
+			final String comment = comments.forDeclaration(startLine);
+
+			final List<EnumerationConstant> members =
+					new ArrayList<>(enumeration.getEnumerationConstants().values());
+			members.sort(java.util.Comparator.comparingInt(EnumerationConstant::getPosition));
+			final JsonArray memberRows = new JsonArray();
+			for (final EnumerationConstant member : members) {
+				final JsonArray pair = new JsonArray();
+				pair.add(member.getName() == null ? "" : member.getName());
+				String value = "";
+				if (member.getCtx() != null && member.getCtx().valueStmt() != null) {
+					value = member.getCtx().valueStmt().getText();
+				}
+				pair.add(value);
+				memberRows.add(pair);
+			}
+
+			final JsonObject json = new JsonObject();
+			json.addProperty("symbol_id", name + "@" + relPath);
+			json.addProperty("qualified_name", name);
+			json.addProperty("name", name);
+			json.add("namespace_name", com.google.gson.JsonNull.INSTANCE);
+			json.add("class_name", com.google.gson.JsonNull.INSTANCE);
+			json.addProperty("file_path", relPath);
+			json.addProperty("start_line", startLine);
+			json.addProperty("end_line", endLine);
+			json.add("members", memberRows);
+			json.addProperty("code", code);
+			json.addProperty("comment", comment);
+			json.addProperty("summary", comment);
+			json.addProperty("note", buildNote(code, comment, ""));
+			enums.add(json);
+		}
+		return enums;
+	}
+
+	/** ConstantDef mirror: module-level `Const` declarations. */
+	private static JsonArray constantsJson(
+			final Module module,
+			final List<String> lines,
+			final String relPath,
+			final CommentIndex comments) {
+		final JsonArray constants = new JsonArray();
+		final List<Constant> sorted = new ArrayList<>(module.getConstants());
+		sorted.sort(java.util.Comparator.comparing(Constant::getName,
+				String.CASE_INSENSITIVE_ORDER));
+		for (final Constant constant : sorted) {
+			final String name = constant.getName() == null ? "" : constant.getName();
+			final int line = ctxLine(constant.getCtx(), true);
+			final String code = sliceLines(lines, line, line);
+			final String comment = comments.forDeclaration(line);
+			String value = "";
+			String typeName = "";
+			if (constant.getCtx() != null) {
+				if (constant.getCtx().valueStmt() != null) {
+					value = constant.getCtx().valueStmt().getText();
+				}
+				if (constant.getCtx().asTypeClause() != null) {
+					typeName = stripAsPrefix(constant.getCtx().asTypeClause().getText());
+				}
+			}
+
+			final JsonObject json = new JsonObject();
+			json.addProperty("symbol_id", name + "@" + relPath);
+			json.addProperty("qualified_name", name);
+			json.addProperty("name", name);
+			json.addProperty("value", value);
+			json.addProperty("type_name", typeName);
+			json.add("class_name", com.google.gson.JsonNull.INSTANCE);
+			json.add("namespace_name", com.google.gson.JsonNull.INSTANCE);
+			json.addProperty("file_path", relPath);
+			json.addProperty("line_number", line);
+			json.addProperty("code", code);
+			json.addProperty("comment", comment);
+			json.addProperty("summary", comment);
+			json.addProperty("note", buildNote(code, comment, ""));
+			constants.add(json);
+		}
+		return constants;
+	}
+
+	/**
+	 * EventDef mirror. Events have no Module-level ASG getter (research §4):
+	 * walk the module parse tree for EventStmtContext, resolving through the
+	 * registry when available (spike 1.1 verified the ctx walk).
+	 */
+	private static JsonArray eventsJson(
+			final Module module,
+			final List<String> lines,
+			final String relPath,
+			final CommentIndex comments) {
+		final JsonArray events = new JsonArray();
+		for (final VisualBasic6Parser.EventStmtContext ctx : collectCtxs(
+				module.getCtx(), VisualBasic6Parser.EventStmtContext.class)) {
+			final String name = ctx.ambiguousIdentifier() == null
+					? "" : ctx.ambiguousIdentifier().getText();
+			final int line = ctxLine(ctx, true);
+			final String code = sliceLines(lines, line, line);
+			final String comment = comments.forDeclaration(line);
+			final String parameters = rawInnerArgList(ctx.argList());
+			final boolean isPrivate = ctx.visibility() != null
+					&& "Private".equalsIgnoreCase(ctx.visibility().getText());
+
+			final JsonObject json = new JsonObject();
+			json.addProperty("symbol_id", name + "@" + relPath);
+			json.addProperty("qualified_name", name);
+			json.addProperty("name", name);
+			json.add("class_name", com.google.gson.JsonNull.INSTANCE);
+			json.add("namespace_name", com.google.gson.JsonNull.INSTANCE);
+			json.addProperty("file_path", relPath);
+			json.addProperty("start_line", line);
+			json.addProperty("end_line", line);
+			json.addProperty("parameters", parameters);
+			json.addProperty("is_private", isPrivate);
+			json.addProperty("code", code);
+			json.addProperty("comment", comment);
+			json.addProperty("summary", comment);
+			json.addProperty("note", buildNote(code, comment, ""));
+			events.add(json);
+		}
+		return events;
+	}
+
+	/**
+	 * Declare rows: VB6-ONLY plane (regex engine emits nothing for Declare —
+	 * vb_common.py has no Declare matcher). LIB/ALIAS/return live on the
+	 * DeclareStmtContext (spike 1.1 verified).
+	 */
+	private static JsonArray declaresJson(
+			final Module module,
+			final String moduleName,
+			final List<String> lines,
+			final String relPath,
+			final CommentIndex comments) {
+		final JsonArray declares = new JsonArray();
+		for (final VisualBasic6Parser.DeclareStmtContext ctx : collectCtxs(
+				module.getCtx(), VisualBasic6Parser.DeclareStmtContext.class)) {
+			final String name = ctx.ambiguousIdentifier() == null
+					? "" : ctx.ambiguousIdentifier().getText();
+			final int line = ctxLine(ctx, true);
+			final String code = sliceLines(lines, line, line);
+			final String comment = comments.forDeclaration(line);
+			final String lib = ctx.STRINGLITERAL(0) == null
+					? "" : unquote(ctx.STRINGLITERAL(0).getText());
+			final String alias = ctx.ALIAS() != null && ctx.STRINGLITERAL(1) != null
+					? unquote(ctx.STRINGLITERAL(1).getText()) : "";
+			final String returnType = ctx.asTypeClause() == null
+					? "" : stripAsPrefix(ctx.asTypeClause().getText());
+			final boolean isPrivate = ctx.visibility() != null
+					&& "Private".equalsIgnoreCase(ctx.visibility().getText());
+			final String procKind = ctx.FUNCTION() != null ? "function" : "sub";
+
+			final JsonObject json = new JsonObject();
+			json.addProperty("symbol_id", name + "@" + relPath);
+			json.addProperty("qualified_name", moduleName + "." + name);
+			json.addProperty("name", name);
+			json.addProperty("proc_kind", procKind);
+			json.addProperty("lib", lib);
+			json.addProperty("alias", alias);
+			json.addProperty("return_type", returnType);
+			json.addProperty("is_private", isPrivate);
+			json.addProperty("module_name", moduleName);
+			json.addProperty("file_path", relPath);
+			json.addProperty("line_number", line);
+			json.addProperty("code", code);
+			json.addProperty("comment", comment);
+			json.addProperty("summary", comment);
+			json.addProperty("note", buildNote(code, comment, ""));
+			declares.add(json);
+		}
+		return declares;
+	}
+
+	/**
+	 * controls[] from the .frm/.ctl/.pag designer block (phase 02). Controls
+	 * have no ASG model — pure parse-tree walk of controlProperties (g4:97).
+	 */
+	private static JsonArray controlsJson(final Module module) {
+		final JsonArray controls = new JsonArray();
+		final VisualBasic6Parser.ControlPropertiesContext root = module.getCtx().controlProperties();
+		if (root == null) {
+			return controls;
+		}
+		collectControls(root, "", controls);
+		return controls;
+	}
+
+	private static void collectControls(
+			final VisualBasic6Parser.ControlPropertiesContext ctx,
+			final String parentName,
+			final JsonArray out) {
+		final String type = ctx.cp_ControlType() == null ? "" : ctx.cp_ControlType().getText();
+		String name = ctx.cp_ControlIdentifier() == null ? "" : ctx.cp_ControlIdentifier().getText();
+		String index = "";
+		final java.util.regex.Matcher indexMatch = CONTROL_INDEX_PATTERN.matcher(name);
+		if (indexMatch.matches()) {
+			name = indexMatch.group(1);
+			index = indexMatch.group(2);
+		}
+
+		final JsonObject control = new JsonObject();
+		control.addProperty("name", name);
+		control.addProperty("type", type);
+		control.addProperty("parent", parentName);
+		control.addProperty("index", index);
+		control.addProperty("line", ctxLine(ctx, true));
+		final JsonObject properties = new JsonObject();
+		control.add("properties", properties);
+		out.add(control); // parents list before children
+		if (ctx.cp_Properties() != null) {
+			for (final VisualBasic6Parser.Cp_PropertiesContext prop : ctx.cp_Properties()) {
+				if (prop.cp_SingleProperty() != null) {
+					final VisualBasic6Parser.Cp_SinglePropertyContext single = prop.cp_SingleProperty();
+					if (single.implicitCallStmt_InStmt() == null || single.cp_PropertyValue() == null) {
+						continue;
+					}
+					final String key = single.implicitCallStmt_InStmt().getText();
+					if (!CONTROL_PROPERTY_KEYS.contains(key.toLowerCase(Locale.ROOT))) {
+						continue;
+					}
+					properties.addProperty(key, unquote(single.cp_PropertyValue().getText()));
+				} else if (prop.controlProperties() != null) {
+					// nested control (Begin VB.TextBox inside Begin VB.Frame)
+					collectControls(prop.controlProperties(), name, out);
+				}
+				// cp_NestedProperty (BEGINPROPERTY font blocks): kept out —
+				// Tab(n).Control(m) stays raw by design (plan 2.2)
+			}
+		}
+	}
+
+	private static final java.util.Set<String> CONTROL_PROPERTY_KEYS = new java.util.HashSet<>(
+			java.util.Arrays.asList("caption", "text", "name", "index", "tabindex"));
+
+	private static final Pattern CONTROL_INDEX_PATTERN = Pattern.compile("^(.+)\\((\\d+)\\)$");
+
+	/** Attribute map (lowercased key → literal value; ASG literal is unquoted). */
+	private static JsonObject moduleAttributesJson(final Module module, final Program program) {
+		final JsonObject attrs = new JsonObject();
+		final VisualBasic6Parser.ModuleAttributesContext mctx = module.getCtx().moduleAttributes();
+		if (mctx == null) {
+			return attrs;
+		}
+		final ASGElementRegistryLike registry = registryOf(program);
+		for (final VisualBasic6Parser.AttributeStmtContext actx : mctx.attributeStmt()) {
+			if (actx.implicitCallStmt_InStmt() == null) {
+				continue;
+			}
+			final String key = actx.implicitCallStmt_InStmt().getText().toLowerCase(Locale.ROOT);
+			String value = "";
+			final Object element = registry.lookup(actx);
+			if (element instanceof Attribute
+					&& ((Attribute) element).getLiteral() != null
+					&& ((Attribute) element).getLiteral().getValue() != null) {
+				value = ((Attribute) element).getLiteral().getValue();
+			} else if (actx.literal(0) != null) {
+				value = unquote(actx.literal(0).getText());
+			}
+			attrs.addProperty(key, value);
+		}
+		return attrs;
+	}
+
+	// ------------------------------------------------------------------
+	// comments (phase 04): hidden-channel COMMENT tokens keyed by line
+	// ------------------------------------------------------------------
+
+	/**
+	 * Line-keyed index of COMMENT hidden-channel tokens from the module's own
+	 * token stream. "Adjacent" = same line (trailing) or contiguous lines
+	 * directly above the declaration (blank/code lines stop the run).
+	 */
+	static final class CommentIndex {
+		private final Map<Integer, List<String>> byLine = new HashMap<>();
+
+		static CommentIndex of(final Module module) {
+			final CommentIndex index = new CommentIndex();
+			final CommonTokenStream tokens = module.getTokens();
+			if (tokens == null) {
+				return index;
+			}
+			try {
+				tokens.fill();
+			} catch (final Throwable ignored) {
+				return index;
+			}
+			for (final Token token : tokens.getTokens()) {
+				if (token.getChannel() != Token.HIDDEN_CHANNEL
+						|| token.getType() != VisualBasic6Lexer.COMMENT) {
+					continue;
+				}
+				final String text = stripCommentMarker(token.getText());
+				if (text.isEmpty()) {
+					continue;
+				}
+				index.byLine.computeIfAbsent(token.getLine(), key -> new ArrayList<>()).add(text);
+			}
+			return index;
+		}
+
+		String forDeclaration(final int startLine) {
+			final List<Integer> above = new ArrayList<>();
+			int line = startLine - 1;
+			while (byLine.containsKey(line)) {
+				above.add(line);
+				line--;
+			}
+			java.util.Collections.reverse(above);
+			final List<String> parts = new ArrayList<>();
+			for (final int commentLine : above) {
+				parts.addAll(byLine.get(commentLine));
+			}
+			if (byLine.containsKey(startLine)) {
+				parts.addAll(byLine.get(startLine));
+			}
+			return String.join("\n", parts);
+		}
+	}
+
+	private static String stripCommentMarker(final String text) {
+		if (text == null) {
+			return "";
+		}
+		String cleaned = text.trim();
+		if (cleaned.startsWith("'")) {
+			cleaned = cleaned.substring(1).trim();
+		} else if (cleaned.toLowerCase(Locale.ROOT).startsWith("rem ")) {
+			cleaned = cleaned.substring(4).trim();
+		} else if (cleaned.equalsIgnoreCase("rem")) {
+			cleaned = "";
+		}
+		return cleaned;
+	}
+
+	/** Mirrors python _build_note so embedding text stays comparable. */
+	private static String buildNote(final String code, final String comment, final String summary) {
+		final StringBuilder builder = new StringBuilder();
+		if (summary != null && !summary.isEmpty()) {
+			builder.append("Summary:\n").append(summary);
+		}
+		if (comment != null && !comment.isEmpty()) {
+			if (builder.length() > 0) {
+				builder.append("\n\n");
+			}
+			builder.append("Comment:\n").append(comment);
+		}
+		if (code != null && !code.isEmpty()) {
+			if (builder.length() > 0) {
+				builder.append("\n\n");
+			}
+			builder.append("Code:\n").append(code);
+		}
+		return builder.toString();
+	}
+
+	/** First-level contexts of the given type anywhere under {@code root}. */
+	private static <T extends ParserRuleContext> List<T> collectCtxs(
+			final ParserRuleContext root,
+			final Class<T> type) {
+		final List<T> found = new ArrayList<>();
+		if (root == null) {
+			return found;
+		}
+		final List<ParseTree> stack = new ArrayList<>();
+		stack.add(root);
+		while (!stack.isEmpty()) {
+			final ParseTree node = stack.remove(stack.size() - 1);
+			if (type.isInstance(node)) {
+				found.add(type.cast(node));
+				continue; // declarations do not nest
+			}
+			for (int i = 0; i < node.getChildCount(); i++) {
+				stack.add(node.getChild(i));
+			}
+		}
+		return found;
+	}
+
+	/** Raw arg-list text inside the parens, whitespace-normalized. */
+	private static String rawInnerArgList(final VisualBasic6Parser.ArgListContext ctx) {
+		if (ctx == null || ctx.LPAREN() == null || ctx.RPAREN() == null
+				|| ctx.LPAREN().getSymbol() == null || ctx.RPAREN().getSymbol() == null) {
+			return "";
+		}
+		final int start = ctx.LPAREN().getSymbol().getStopIndex() + 1;
+		final int stop = ctx.RPAREN().getSymbol().getStartIndex() - 1;
+		if (stop < start) {
+			return "";
+		}
+		try {
+			final String raw = ctx.getStart().getInputStream().getText(new Interval(start, stop));
+			return raw.replace("\r", " ").replace("\n", " ")
+					.replaceAll("_\\s+", " ").replaceAll("\\s+", " ").trim();
+		} catch (final Throwable ignored) {
+			return "";
+		}
+	}
+
+	private static String unquote(final String text) {
+		if (text == null || text.length() < 2) {
+			return text == null ? "" : text;
+		}
+		if (text.startsWith("\"") && text.endsWith("\"")) {
+			return text.substring(1, text.length() - 1);
+		}
+		return text;
+	}
+
+	private static String stripAsPrefix(final String text) {
+		final String cleaned = (text == null ? "" : text.trim());
+		if (cleaned.toLowerCase(Locale.ROOT).startsWith("as ")) {
+			return cleaned.substring(3).trim();
+		}
+		return cleaned;
+	}
+
+	// ------------------------------------------------------------------
 	// helpers
 	// ------------------------------------------------------------------
 
@@ -961,9 +1534,12 @@ public final class Vb6Worker {
 	}
 
 	private static String declaredModuleName(final String content, final String filePath) {
+		// scan the WHOLE content (plan 260917-1628 AD-02 / red-team F11): a
+		// real .frm designer block routinely exceeds the old 60-line window,
+		// which made the module-name fallback kick in and lost the module.
 		final String[] lines = content.split("\n", -1);
-		for (int i = 0; i < Math.min(lines.length, 60); i++) {
-			final Matcher matcher = VB_NAME_PATTERN.matcher(lines[i]);
+		for (final String line : lines) {
+			final Matcher matcher = VB_NAME_PATTERN.matcher(line);
 			if (matcher.find()) {
 				return matcher.group(1);
 			}
