@@ -59,8 +59,12 @@ class VariableInfo:
     procedure_name: Optional[str]
 
     @property
+    def type_key(self) -> str:
+        return _norm(self.type_name)
+
+    @property
     def late_bound(self) -> bool:
-        return _norm(self.type_name) in {"object", "variant", ""}
+        return self.type_key in {"object", "variant", ""}
 
 
 @dataclass
@@ -72,6 +76,9 @@ class ModuleInfo:
     # Property Get and Property Let with the same name)
     functions: Dict[str, List[FunctionDef]] = field(default_factory=dict)
     implements: List[str] = field(default_factory=list)
+    # plan 260917-1628 3.3: Attribute VB_PredeclaredId = True registers a
+    # default instance (forms AND class modules)
+    predeclared: bool = False
 
     def functions_named(self, member: str) -> List[FunctionDef]:
         return self.functions.get(_norm(member), [])
@@ -89,6 +96,12 @@ class VB6ModuleRegistry:
         self.variables: List[VariableInfo] = []
         self.public_by_name: Dict[str, List[Tuple[str, FunctionDef]]] = {}
         self.any_by_name: Dict[str, List[Tuple[str, FunctionDef]]] = {}
+        # interface name -> implementing module keys (plan 260917-1628 3.1;
+        # reverse-derived from the payloads' implements lists, red-team F4-ctx)
+        self.implementers_of: Dict[str, List[str]] = {}
+        # declared Windows API names (declares plane) -> unqualified calls to
+        # them classify external, not unresolved (review fix F1)
+        self.api_names: set = set()
 
     # -- construction -------------------------------------------------
 
@@ -120,16 +133,33 @@ class VB6ModuleRegistry:
                 module_name = os.path.splitext(base)[0]
             ext = os.path.splitext(file_path)[1].lower().lstrip(".")
             kind = ext if ext in {"bas", "cls", "frm", "ctl", "pag"} else "bas"
+            attrs = _meta_field(payload, "module_attributes") or {}
+            predeclared = str(
+                attrs.get("vb_predeclaredid", "") if isinstance(attrs, dict) else ""
+            ).strip().lower() == "true"
             module = ModuleInfo(
                 module_name=module_name,
                 file_path=file_path,
                 kind=kind,
+                predeclared=predeclared,
             )
             for fn in payload.get("functions", []):
                 module.functions.setdefault(_norm(fn.name), []).append(fn)
             module.implements = list(_meta_field(payload, "implements") or [])
             registry.modules.setdefault(_norm(module_name), module)
             registry.module_by_file.setdefault(file_path, module)
+            for iface in module.implements:
+                key = _norm(iface)
+                if key:
+                    registry.implementers_of.setdefault(key, []).append(_norm(module_name))
+
+            for declare in payload.get("declares") or []:
+                declare_name = (
+                    declare.get("name") if isinstance(declare, dict)
+                    else getattr(declare, "name", "")
+                )
+                if declare_name:
+                    registry.api_names.add(_norm(declare_name))
 
             for var in payload.get("variables", []):
                 def _var_field(key: str) -> Any:
@@ -186,20 +216,79 @@ class VB6ModuleRegistry:
             best = best or var
         return best
 
+    def interface_member_candidates(
+        self, interface_name: str, member: str
+    ) -> List[Tuple[str, FunctionDef]]:
+        """(module_key, fn) candidates for an interface-typed receiver."""
+
+        implementers = self.implementers_of.get(_norm(interface_name)) or []
+        hits: List[Tuple[str, FunctionDef]] = []
+        seen: set = set()
+        for module_key in implementers:
+            module = self.modules.get(module_key)
+            if module is None:
+                continue
+            for fn in module.functions_named(member):
+                if fn.symbol_id in seen:
+                    continue
+                seen.add(fn.symbol_id)
+                hits.append((module_key, fn))
+        return hits
+
+
+#: intrinsic form instance members: a predeclared form receiver calling these
+#: stays external even though a matching project member does not exist
+_FORM_INTRINSIC_MEMBERS = frozenset({
+    "show", "hide", "refresh", "cls", "print", "move", "scale", "setfocus",
+    "line", "circle", "pset", "point", "textwidth", "textheight",
+    "popupmenu", "validatecontrols", "showwhatsthismode", "zorder",
+    "linkexecute", "linkpoke", "linkrequest", "linksend",
+})
+
+
+def _arity_accepts(fn: FunctionDef, arg_count: Optional[int]) -> bool:
+    """Signature-compatibility check (plan 260917-1628 3.2).
+
+    ``arg_count`` is the arity the worker observed on the bound callee.
+    ANTLR rows carry min_arity/optional/paramarray; regex rows fall back to
+    the exact-arity behavior (defaults 0/False — no regress, red-team F4).
+    """
+
+    if arg_count is None:
+        return True
+    if getattr(fn, "has_paramarray", False):
+        if arg_count >= int(getattr(fn, "min_arity", 0) or 0):
+            return True
+    if getattr(fn, "has_optional_args", False):
+        if int(getattr(fn, "min_arity", 0) or 0) <= arg_count <= fn.arity:
+            return True
+    return fn.arity == arg_count
+
 
 def _split_callee(call: CallEdge) -> Tuple[str, str]:
-    """Return (receiver_or_empty, member) for a callee name."""
+    """Return (receiver_or_empty, member) for a callee name.
+
+    Handles both ``rs.Field`` member calls and dictionary (default-member)
+    ``rs!Field`` rows (plan 260917-1628 3.4).
+    """
 
     member = str(call.callee_member or "").strip()
     name = str(call.callee_name or "").strip()
     if member:
-        if name.lower().endswith("." + member.lower()) or name.lower().endswith(member.lower()):
+        for separator in (".", "!"):
+            if name.lower().endswith(separator + member.lower()):
+                receiver = name[: len(name) - len(member) - 1]
+                return receiver, member
+        if name.lower().endswith(member.lower()):
             receiver = name[: len(name) - len(member)]
-            receiver = receiver.rstrip(".")
+            receiver = receiver.rstrip(".!")
             return receiver, member
         return "", member
     if not name:
         return "", ""
+    if "!" in name:
+        receiver, _, member = name.rpartition("!")
+        return receiver, member
     if "." in name:
         receiver, _, member = name.rpartition(".")
         return receiver, member
@@ -263,6 +352,22 @@ def resolve_vb6_calls(
             record(call.resolution_status)
             continue
 
+        # --- dictionary (default-member) calls: `rs!Field` (plan 3.4) -----
+        # never dropped, never CALLS-tier: receiver late-bound → late_bound,
+        # otherwise external (collection/recordset accessors)
+        if call.call_type == "dictionary_call" or "!" in str(call.callee_name or ""):
+            call.callee_id = None
+            if receiver:
+                variable = registry.find_late_bound_variable(receiver, caller_module, caller_proc)
+                if variable is not None and variable.late_bound:
+                    call.resolution_status = "late_bound"
+                else:
+                    call.resolution_status = "external"
+            else:
+                call.resolution_status = "external"
+            record(call.resolution_status)
+            continue
+
         # --- With-block members (".ProcessOrder"): trust the ASG binding ---
         if str(call.callee_name or "").startswith(".") and worker_resolved:
             call.resolution_status = "asg_resolved"
@@ -294,8 +399,13 @@ def resolve_vb6_calls(
                     else:
                         call.callee_id = call.callee_id or target.symbol_id
                         call.resolution_status = "asg_resolved"
-                elif module.kind in {"frm", "ctl", "pag"}:
-                    call.resolution_status = "external"  # form intrinsic (Show/Refresh/...)
+                elif (module.kind in {"frm", "ctl", "pag"} or module.predeclared) and (
+                    callee_key in _FORM_INTRINSIC_MEMBERS
+                ):
+                    # form instance intrinsics (Show/Hide/Refresh/...) have no
+                    # project member and never resolve (review fix F4: a
+                    # missing NON-intrinsic member stays unresolved)
+                    call.resolution_status = "external"
                 else:
                     call.resolution_status = "unresolved"
                 record(call.resolution_status)
@@ -306,14 +416,64 @@ def resolve_vb6_calls(
                 record(call.resolution_status)
                 continue
 
-            # typed-receiver member call already bound by the ASG
-            # (ord.Total, ship.Ship_Order): keep the worker binding
+            # typed receiver: interface dispatch / class-typed member call
+            # (plan 260917-1628 3.1) — runs BEFORE the worker-binding keep so
+            # an arbitrary ASG pick against the interface module cannot mask
+            # the implementer set
+            variable = registry.find_late_bound_variable(receiver, caller_module, caller_proc)
+            if variable is not None and not variable.late_bound:
+                implementer_hits = registry.interface_member_candidates(
+                    variable.type_key, member
+                )
+                if implementer_hits:
+                    unique_ids = {fn.symbol_id for _key, fn in implementer_hits}
+                    if len(unique_ids) == 1:
+                        target = implementer_hits[0][1]
+                        if target.is_private:
+                            call.resolution_status = "unresolved"
+                        else:
+                            call.callee_id = next(iter(unique_ids))
+                            call.resolution_status = "name_resolved"
+                    else:
+                        # genuinely ambiguous dispatch: POSSIBLE_CALLS keeps
+                        # every implementer candidate
+                        call.callee_id = None
+                        call.candidate_ids = sorted(unique_ids)
+                        call.resolution_status = "ambiguous"
+                    record(call.resolution_status)
+                    continue
+                type_module = registry.modules.get(variable.type_key)
+                if type_module is not None:
+                    candidates = type_module.functions_named(member)
+                    unique = {fn.symbol_id for fn in candidates}
+                    if len(unique) == 1:
+                        target = candidates[0]
+                        if target.is_private:
+                            call.resolution_status = "unresolved"
+                        else:
+                            call.callee_id = call.callee_id or next(iter(unique))
+                            call.resolution_status = "asg_resolved"
+                        record(call.resolution_status)
+                        continue
+                    if len(unique) > 1:
+                        # property Get+Let pair: the ASG binding knows which
+                        # kind the call site used — keep it when it points at
+                        # one of them, else mark ambiguous
+                        if worker_resolved and call.callee_id in unique:
+                            call.resolution_status = "asg_resolved"
+                        else:
+                            call.callee_id = None
+                            call.candidate_ids = sorted(unique)
+                            call.resolution_status = "ambiguous"
+                        record(call.resolution_status)
+                        continue
+
+            # bare late-bound/untyped receiver member call
             if worker_resolved:
                 call.resolution_status = "asg_resolved"
                 record(call.resolution_status)
                 continue
 
-            variable = registry.find_late_bound_variable(receiver, caller_module, caller_proc)
             if variable is not None and variable.late_bound:
                 call.resolution_status = "late_bound"
             else:
@@ -347,7 +507,11 @@ def resolve_vb6_calls(
                 record(call.resolution_status)
                 continue
             if call.callee_arity is not None:
+                # exact arity first, range fallback (review fix F2: a range
+                # match must never beat an exact signature when both exist)
                 by_arity = [fn for fn in locals_ if fn.arity == call.callee_arity]
+                if not by_arity:
+                    by_arity = [fn for fn in locals_ if _arity_accepts(fn, call.callee_arity)]
                 if len(by_arity) == 1:
                     call.callee_id = by_arity[0].symbol_id
                     call.resolution_status = "name_resolved"
@@ -362,14 +526,21 @@ def resolve_vb6_calls(
         public_candidates = registry.public_by_name.get(callee_key) or []
         any_candidates = registry.any_by_name.get(callee_key) or []
         if call.callee_arity is not None:
-            arity_hits = [
+            # exact signature preferred, range fallback (review fix F2);
+            # narrowing runs BEFORE concluding ambiguous (plan 3.2)
+            exact_hits = [
                 (key, fn) for key, fn in public_candidates
                 if fn.arity == call.callee_arity
             ]
-            if len(arity_hits) == 1:
-                public_candidates = arity_hits
-            elif len(arity_hits) > 1:
-                public_candidates = arity_hits
+            if exact_hits:
+                public_candidates = exact_hits
+            else:
+                range_hits = [
+                    (key, fn) for key, fn in public_candidates
+                    if _arity_accepts(fn, call.callee_arity)
+                ]
+                if range_hits:
+                    public_candidates = range_hits
 
         if len(public_candidates) == 1:
             key, fn = public_candidates[0]
@@ -384,6 +555,12 @@ def resolve_vb6_calls(
             call.callee_id = None
             call.candidate_ids = [fn.symbol_id for _key, fn in any_candidates]
             call.resolution_status = "ambiguous"
+            record(call.resolution_status)
+            continue
+        if callee_key in registry.api_names:
+            # declared Windows API (declares plane, ANTLR engine): external,
+            # never unresolved (review fix F1)
+            call.resolution_status = "external"
             record(call.resolution_status)
             continue
         if callee_key in _BUILTIN_FUNCTIONS:
