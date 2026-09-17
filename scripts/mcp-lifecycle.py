@@ -1113,6 +1113,40 @@ def doctor_check(name: str, ok: bool, message: str, *, required: bool = True) ->
     return failures
 
 
+def doctor_vb6_antlr_checks() -> None:
+    """Report-only status of the VB6 ANTLR engine (plan 260917-1200, Q4).
+
+    Never builds anything: java/mvn presence + vendored worker jar state, so
+    `dev doctor` tells the user which engine a vb6 sync will pick (auto -> antlr
+    when everything is green, regex + WARNING otherwise).
+    """
+
+    import shutil as _shutil
+
+    java = _shutil.which("java")
+    maven = _shutil.which("mvn")
+    jar = ROOT / "code-tiny" / "tools" / "vb" / "antlr_worker" / "worker" / "target" / "vb6-antlr-worker.jar"
+    doctor_check(
+        "vb6 antlr java",
+        java is not None,
+        java or "not found (engine auto falls back to regex)",
+        required=False,
+    )
+    doctor_check(
+        "vb6 antlr maven",
+        maven is not None,
+        maven or "not found (needed once to build the worker jar)",
+        required=False,
+    )
+    if java and maven:
+        doctor_check(
+            "vb6 antlr worker jar",
+            jar.exists(),
+            str(jar) if jar.exists() else "not built yet (first vb6 antlr sync builds it)",
+            required=False,
+        )
+
+
 def doctor_process_checks(resolved: object | None) -> None:
     """Report active sync workers and embedded graph processes without mutation."""
 
@@ -1360,6 +1394,9 @@ def invoke_doctor() -> None:
         failures += doctor_check("local storage", False, str(error))
 
     doctor_process_checks(resolved)
+
+    # ── VB6 ANTLR engine (report-only) ─────────────────────────────────
+    doctor_vb6_antlr_checks()
 
     # ── Remote backend checks ─────────────────────────────────────────
     try:

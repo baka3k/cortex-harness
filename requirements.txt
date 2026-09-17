@@ -25,6 +25,10 @@ psutil>=5.9,<8
 networkx
 # Pinned Clang backend for the isolated semantic callsite worker (Phase 02).
 libclang==18.1.1
+# VB.NET tree-sitter grammar (error-stats path; import name
+# tree_sitter_vb_dotnet); the only vb-family grammar that exists on PyPI.
+# VB6 has none — vb6 extraction is ANTLR-first via the
+# vendored ProLeap worker with regex fallback (plan 260917-1200).
 # Additional dependencies for C++ analysis and web services
 fastapi
 uvicorn[standard]
