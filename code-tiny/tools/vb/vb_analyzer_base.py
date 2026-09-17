@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import concurrent.futures
 import gc
+import json
 import os
 import sys
 import time
@@ -44,6 +45,7 @@ from tools.vb.vb_common import (
     asdict_namespace,
     asdict_property,
     asdict_variable,
+    dataclass_from_payload,
     get_vb6_parser,
     get_vba_parser,
     get_vbnet_parser,
@@ -51,6 +53,12 @@ from tools.vb.vb_common import (
     parse_vb_file,
     resolve_calls,
 )
+from tools.vb.vb6_antlr_adapter import (
+    ensure_worker_built as ensure_vb6_antlr_worker_built,
+    parse_vb6_files_with_antlr,
+)
+from tools.common.call_evidence import callsite_site_id
+from tools.vb.vb6_resolver import resolve_vb6_calls
 from tools.vb.vb_path_classifier import VBPathClassifier
 from tools.vb.vb_roslyn_adapter import parse_vbnet_files_with_roslyn
 
@@ -307,18 +315,18 @@ def _hydrate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     return {
-        "functions": [FunctionDef(**item) for item in payload.get("functions", [])],
-        "calls": [CallEdge(**item) for item in payload.get("calls", [])],
-        "classes": [ClassDef(**item) for item in payload.get("classes", [])],
-        "namespaces": [NamespaceDef(**item) for item in payload.get("namespaces", [])],
-        "relations": [RelationEdge(**item) for item in payload.get("relations", [])],
-        "properties": [PropertyDef(**item) for item in payload.get("properties", [])],
-        "events": [EventDef(**item) for item in payload.get("events", [])],
-        "interfaces": [InterfaceDef(**item) for item in payload.get("interfaces", [])],
-        "enums": [EnumDef(**item) for item in payload.get("enums", [])],
-        "constants": [ConstantDef(**item) for item in payload.get("constants", [])],
-        "variables": [VariableDef(**item) for item in payload.get("variables", [])],
-        "file_def": FileDef(**payload.get("file_def", {})),
+        "functions": [dataclass_from_payload(FunctionDef, item) for item in payload.get("functions", [])],
+        "calls": [dataclass_from_payload(CallEdge, item) for item in payload.get("calls", [])],
+        "classes": [dataclass_from_payload(ClassDef, item) for item in payload.get("classes", [])],
+        "namespaces": [dataclass_from_payload(NamespaceDef, item) for item in payload.get("namespaces", [])],
+        "relations": [dataclass_from_payload(RelationEdge, item) for item in payload.get("relations", [])],
+        "properties": [dataclass_from_payload(PropertyDef, item) for item in payload.get("properties", [])],
+        "events": [dataclass_from_payload(EventDef, item) for item in payload.get("events", [])],
+        "interfaces": [dataclass_from_payload(InterfaceDef, item) for item in payload.get("interfaces", [])],
+        "enums": [dataclass_from_payload(EnumDef, item) for item in payload.get("enums", [])],
+        "constants": [dataclass_from_payload(ConstantDef, item) for item in payload.get("constants", [])],
+        "variables": [dataclass_from_payload(VariableDef, item) for item in payload.get("variables", [])],
+        "file_def": dataclass_from_payload(FileDef, payload.get("file_def", {})),
         "parse_meta": dict(payload.get("parse_meta", {})),
         "parse_cache_version": payload.get("parse_cache_version", ""),
     }
@@ -508,6 +516,173 @@ async def _parse_vbnet_with_roslyn_batch(
     return hydrated
 
 
+async def _parse_vb6_with_antlr_batch(
+    *,
+    parse_files: List[str],
+    all_source_files: List[str],
+    root: str,
+    parse_fn: Callable[[], Parser],
+    cache_dir: Optional[str],
+    parse_cache: bool,
+    vb6_parser_engine: str,
+    vb6_antlr_timeout_sec: float,
+    vb6_antlr_workspace_timeout_ms: int,
+    verbose: bool,
+) -> List[Dict[str, Any]]:
+    """VB6 whole-program ANTLR batch with per-file regex fallback cascade.
+
+    AD-02 (review checklist item): the worker ALWAYS receives the complete
+    project file list — ``all_source_files``, never just the cache-miss or
+    changed files — because cross-module resolution inside the worker's single
+    Program needs every module. The parse cache is used only to serve/refresh
+    per-file OUTPUT payloads; it must never shrink the worker input.
+    """
+
+    parse_cache_root = safe_cache_root(cache_dir, "vb6_analyzer", project_root=root)
+    payload_by_rel: Dict[str, Dict[str, Any]] = {}
+    signatures: Dict[str, Dict[str, int]] = {}
+
+    for abs_path in parse_files:
+        rel_path = os.path.relpath(abs_path, root).replace("\\", "/")
+        signatures[rel_path] = file_signature(abs_path)
+
+    worker_payloads: Dict[str, Dict] = {}
+    worker_errors: Dict[str, str] = {}
+    worker_meta: Dict[str, Any] = {
+        "workspace_kind": "none",
+        "solution_or_project_path": "",
+    }
+    worker_batch_error = ""
+
+    if all_source_files:
+        if verbose:
+            print(
+                f"[parse][engine] parser=vb6 engine=antlr files={len(all_source_files)} "
+                f"(requested={len(parse_files)})",
+                flush=True,
+            )
+        try:
+            worker_payloads, worker_errors, worker_meta = parse_vb6_files_with_antlr(
+                root=root,
+                files=all_source_files,
+                timeout_sec=vb6_antlr_timeout_sec,
+                workspace_timeout_ms=vb6_antlr_workspace_timeout_ms,
+                parse_cache_version=PARSE_CACHE_VERSION,
+                verbose=verbose,
+            )
+        except Exception as exc:
+            worker_batch_error = str(exc)
+            if verbose:
+                print(f"[parse][fallback] parser=vb6 reason=batch_error detail={worker_batch_error}", flush=True)
+
+    for abs_path in parse_files:
+        rel_path = os.path.relpath(abs_path, root).replace("\\", "/")
+        signature = signatures[rel_path]
+        payload = worker_payloads.get(rel_path)
+        fallback_reason = ""
+
+        if payload is None or not _is_valid_payload_shape(payload):
+            fallback_reason = (
+                worker_errors.get(rel_path)
+                or worker_batch_error
+                or "vb6_antlr_payload_missing_or_invalid"
+            )
+            # a fresh worker miss may still be served from cache (recovery
+            # path only — the worker already ran over the whole project)
+            if parse_cache:
+                cached = load_parse_cache(parse_cache_root, rel_path, signature)
+                if cached and cached.get("parse_cache_version") == PARSE_CACHE_VERSION:
+                    payload = cached
+                    fallback_reason = ""
+        if payload is None or not _is_valid_payload_shape(payload):
+            if verbose:
+                print(f"[parse][fallback] parser=vb6 file={rel_path} reason={fallback_reason}", flush=True)
+            (
+                functions,
+                calls,
+                classes,
+                namespaces,
+                relations,
+                properties,
+                events,
+                interfaces,
+                enums,
+                constants,
+                variables,
+                file_def,
+                parse_meta,
+            ) = parse_vb_file(
+                abs_path,
+                root,
+                parse_fn,
+                "vb6",
+                fallback_reason=fallback_reason,
+            )
+            payload = _payload_from_parsed(
+                functions=functions,
+                calls=calls,
+                classes=classes,
+                namespaces=namespaces,
+                relations=relations,
+                properties=properties,
+                events=events,
+                interfaces=interfaces,
+                enums=enums,
+                constants=constants,
+                variables=variables,
+                file_def=file_def,
+                parse_meta=parse_meta,
+            )
+            _ensure_parse_meta_defaults(
+                payload,
+                parser_engine="regex",
+                requested_engine=vb6_parser_engine,
+                semantic_mode="off",
+                fallback_reason=fallback_reason,
+                workspace_kind=str(worker_meta.get("workspace_kind") or "none"),
+                solution_or_project_path=str(worker_meta.get("solution_or_project_path") or ""),
+            )
+        else:
+            _ensure_parse_meta_defaults(
+                payload,
+                parser_engine="antlr",
+                requested_engine=vb6_parser_engine,
+                semantic_mode="off",
+                workspace_kind=str(worker_meta.get("workspace_kind") or "vbp"),
+                solution_or_project_path=str(worker_meta.get("solution_or_project_path") or ""),
+            )
+            if worker_meta.get("implements_map") is not None:
+                payload["parse_meta"].setdefault("project_implements_map", worker_meta["implements_map"])
+
+        payload_by_rel[rel_path] = payload
+        if parse_cache:
+            write_parse_cache(parse_cache_root, rel_path, signature, payload)
+
+    hydrated: List[Dict[str, Any]] = []
+    for abs_path in parse_files:
+        rel_path = os.path.relpath(abs_path, root).replace("\\", "/")
+        payload = payload_by_rel.get(rel_path)
+        if payload:
+            hydrated.append(_hydrate_payload(payload))
+    return hydrated
+
+
+def _vb6_external_symbol_name(call: Any) -> str:
+    """Display name for a placeholder external/late-bound callee."""
+
+    member = str(getattr(call, "callee_member", "") or "").strip()
+    if member:
+        return member
+    name = str(getattr(call, "callee_name", "") or "").strip()
+    return name.rsplit(".", 1)[-1].lstrip(".") or name or "unknown"
+
+
+def _vb6_external_symbol_id(call: Any) -> str:
+    """Stable per-project placeholder Function id (plan 4.4 option a)."""
+
+    return f"external::vb6/{_vb6_external_symbol_name(call).lower()}"
+
+
 async def build_call_graph(
     root: str,
     *,
@@ -535,6 +710,9 @@ async def build_call_graph(
     vbnet_roslyn_timeout_sec: float = 600.0,
     vbnet_roslyn_workspace_timeout_ms: int = 120000,
     vbnet_roslyn_file_timeout_ms: int = 60000,
+    vb6_parser_engine: str = "auto",
+    vb6_antlr_timeout_sec: float = 600.0,
+    vb6_antlr_workspace_timeout_ms: int = 300000,
 ) -> None:
     start_time = time.time()
 
@@ -548,6 +726,12 @@ async def build_call_graph(
             for path in all_source_files
             if os.path.relpath(path, root).replace("\\", "/") in changed_set
         ]
+        if dialect == "vb6":
+            # AD-09: incremental sync must be able to rebuild INCOMING edges
+            # from unchanged callers into changed files. The ANTLR batch runs
+            # over the whole project anyway (AD-02), so keep every payload and
+            # filter only node writes/embedding by the changed set below.
+            parse_files = all_source_files
     else:
         parse_files = all_source_files
 
@@ -574,6 +758,23 @@ async def build_call_graph(
             f"[parse][start] parser={dialect} files={len(parse_files)} parallel_workers={parallel_workers} cache={'on' if parse_cache else 'off'}",
             flush=True,
         )
+
+    # vb6 engine resolution (AD-07): auto = antlr when java+worker are ready,
+    # else regex with ONE loud warning — never a silent degrade.
+    vb6_engine_effective = vb6_parser_engine
+    if dialect == "vb6" and vb6_parser_engine == "auto":
+        try:
+            ensure_vb6_antlr_worker_built(verbose=verbose)
+            vb6_engine_effective = "antlr"
+        except Exception as exc:
+            vb6_engine_effective = "regex"
+            print(
+                f"[vb6][engine] antlr unavailable ({str(exc).splitlines()[0][:200]}), falling back to regex",
+                flush=True,
+            )
+    if dialect == "vb6" and vb6_parser_engine == "antlr":
+        # explicit engine: fail loudly if the worker cannot be built
+        ensure_vb6_antlr_worker_built(verbose=verbose)
     if dialect == "vbnet" and verbose:
         engine_for_run = "regex" if vbnet_parser_engine == "regex" else "roslyn"
         print(
@@ -581,8 +782,23 @@ async def build_call_graph(
             flush=True,
         )
 
+    # VB6 ANTLR path (plan 260917-1200): whole-program worker with per-file
+    # regex fallback cascade; worker input is always the full project (AD-02).
+    if dialect == "vb6" and vb6_engine_effective == "antlr":
+        payloads = await _parse_vb6_with_antlr_batch(
+            parse_files=parse_files,
+            all_source_files=all_source_files,
+            root=root,
+            parse_fn=parse_fn,
+            cache_dir=cache_dir,
+            parse_cache=parse_cache,
+            vb6_parser_engine=vb6_parser_engine,
+            vb6_antlr_timeout_sec=vb6_antlr_timeout_sec,
+            vb6_antlr_workspace_timeout_ms=vb6_antlr_workspace_timeout_ms,
+            verbose=verbose,
+        )
     # Roslyn path for VB.NET (phase A/B): use batch worker then fallback to regex per file.
-    if dialect == "vbnet" and vbnet_parser_engine != "regex":
+    elif dialect == "vbnet" and vbnet_parser_engine != "regex":
         payloads = await _parse_vbnet_with_roslyn_batch(
             parse_files=parse_files,
             root=root,
@@ -674,7 +890,38 @@ async def build_call_graph(
 
     all_functions = [func for payload in payloads for func in payload["functions"]]
     all_calls = [call for payload in payloads for call in payload["calls"]]
-    resolve_calls(all_functions, all_calls)
+    if dialect == "vb6":
+        resolve_vb6_calls(all_functions, all_calls, payloads=payloads, verbose=verbose)
+    else:
+        resolve_calls(all_functions, all_calls)
+
+    # M6: engine + resolution summary is ALWAYS printed (never verbose-only)
+    if dialect == "vb6":
+        engine_counts: Dict[str, int] = {}
+        fallback_count = 0
+        for payload in payloads:
+            meta = payload.get("parse_meta", {}) or {}
+            engine = str(meta.get("parser_engine") or "regex")
+            if meta.get("fallback_reason"):
+                engine = f"{engine}_fallback"
+                fallback_count += 1
+            engine_counts[engine] = engine_counts.get(engine, 0) + 1
+        engine_label = "+".join(
+            f"{name}({count})" if len(engine_counts) > 1 else name
+            for name, count in sorted(engine_counts.items())
+        )
+        total_calls = len(all_calls)
+        resolved_calls = sum(1 for call in all_calls if call.callee_id)
+        possible_calls = sum(
+            1 for call in all_calls
+            if call.resolution_status in {"ambiguous", "late_bound", "external", "unresolved"}
+        )
+        rate = 100.0 * resolved_calls / total_calls if total_calls > 0 else 0.0
+        print(
+            f"[vb6][summary] engine={engine_label} files={len(payloads)} fallback={fallback_count} "
+            f"callsites={total_calls} resolved={resolved_calls} possible={possible_calls} rate={rate:.1f}%",
+            flush=True,
+        )
 
     # Debug: print call resolution stats
     if verbose:
@@ -709,6 +956,8 @@ async def build_call_graph(
         functions_rows: List[Dict[str, Any]] = []
         relations_rows: List[Dict[str, Any]] = []
         calls_rows: List[Dict[str, Any]] = []
+        possible_rows: List[Dict[str, Any]] = []
+        external_symbol_names: set = set()
         properties_rows: List[Dict[str, Any]] = []
         events_rows: List[Dict[str, Any]] = []
         interfaces_rows: List[Dict[str, Any]] = []
@@ -716,8 +965,30 @@ async def build_call_graph(
         constants_rows: List[Dict[str, Any]] = []
         variables_rows: List[Dict[str, Any]] = []
 
+        semantic_provider = "vb6_antlr_worker"
+        if any(
+            str((payload.get("parse_meta") or {}).get("parser_engine") or "regex") == "regex"
+            for payload in payloads
+        ):
+            semantic_provider = "vb6_regex"
+
+        # VB6 (plan 260917-1200): incremental syncs keep whole-project payloads
+        # (AD-09) — only node writes and embedding are filtered to the changed
+        # set; edges are selected source-or-target below.
+        vb6_node_filter = None
+        if dialect == "vb6" and incremental:
+            vb6_node_filter = changed_set
+
+        def _vb6_write_file(payload_file_path: str) -> bool:
+            if vb6_node_filter is None:
+                return True
+            return payload_file_path.replace("\\", "/") in vb6_node_filter
+
         for payload in payloads:
             file_def = payload["file_def"]
+            payload_rel = str(file_def.file_path or "").replace("\\", "/")
+            if not _vb6_write_file(payload_rel):
+                continue
             file_row = asdict_file(file_def, project_id, project_name, language, repo, build_system)
             files_rows.append(file_row)
             relations_rows.append({"source_id": project_id, "target_id": file_row["id"], "rel_type": "CONTAINS", "properties": {}})
@@ -731,6 +1002,19 @@ async def build_call_graph(
                 row = asdict_class(cls, project_id, project_name, language, repo, build_system)
                 types_rows.append(row)
                 relations_rows.append({"source_id": file_row["id"], "target_id": row["id"], "rel_type": "CONTAINS", "properties": {}})
+                if dialect == "vb6":
+                    # a VB6 class/form module contains every procedure in it
+                    # (labels are explicit because class nodes ride the types
+                    # lane and may be absent from an incremental batch)
+                    for fn in payload["functions"]:
+                        relations_rows.append({
+                            "source_id": row["id"],
+                            "source_label": "Type",
+                            "target_id": fn.symbol_id,
+                            "target_label": "Function",
+                            "rel_type": "CONTAINS",
+                            "properties": {},
+                        })
 
             for fn in payload["functions"]:
                 row = asdict_function(fn, project_id, project_name, language, repo, build_system)
@@ -746,12 +1030,13 @@ async def build_call_graph(
                 })
 
             for call in payload["calls"]:
-                if call.callee_id:
-                    calls_rows.append({
-                        "caller_id": call.caller_id,
-                        "callee_id": call.callee_id,
-                        "call_type": "call_expression",
-                    })
+                if dialect != "vb6":
+                    if call.callee_id:
+                        calls_rows.append({
+                            "caller_id": call.caller_id,
+                            "callee_id": call.callee_id,
+                            "call_type": "call_expression",
+                        })
 
             for prop in payload.get("properties", []):
                 row = asdict_property(prop, project_id, project_name, language, repo, build_system)
@@ -783,6 +1068,141 @@ async def build_call_graph(
                 variables_rows.append(row)
                 relations_rows.append({"source_id": file_row["id"], "target_id": row["id"], "rel_type": "CONTAINS", "properties": {}})
 
+        if dialect == "vb6":
+            # VB6 two-tier publication (plan 4.4): deterministic targets become
+            # CALLS; every weak call survives as POSSIBLE_CALLS. This loop runs
+            # over ALL payloads — including unchanged files — because AD-09
+            # re-publishes edges by source OR target, and incoming edges from
+            # unchanged callers must be rebuilt after incremental cleanup.
+            for payload in payloads:
+                edge_file = str(payload["file_def"].file_path or "").replace("\\", "/")
+                for call in payload["calls"]:
+                    if call.callee_id and call.resolution_status != "ambiguous":
+                        calls_rows.append({
+                            "project_id": project_id,
+                            "caller_id": call.caller_id,
+                            "callee_id": call.callee_id,
+                            "call_type": call.call_type or "call_expression",
+                            "resolution_status": call.resolution_status,
+                        })
+                        continue
+                    targets = call.candidate_ids or []
+                    if not targets:
+                        targets = [_vb6_external_symbol_id(call)]
+                        external_symbol_names.add(_vb6_external_symbol_name(call))
+                    for target_id in targets:
+                        # site identity is callee-INDEPENDENT (one callsite, n
+                        # candidate rows share the id; uuid5 over
+                        # caller/file/line/column/type — same key shape as
+                        # callsite_site_id with an empty callee)
+                        possible_rows.append({
+                            "project_id": project_id,
+                            "caller_id": call.caller_id,
+                            "callee_id": target_id,
+                            "site_id": callsite_site_id(
+                                call.caller_id,
+                                "",
+                                edge_file,
+                                call.call_line,
+                                call.site_column,
+                                call.call_type or "call",
+                            ),
+                            "props": {
+                                "file_path": edge_file,
+                                "line": call.call_line,
+                                "column": call.site_column,
+                                "arity": int(call.callee_arity or 0),
+                                "call_type": call.call_type or "call_expression",
+                                "callee_name": call.callee_name,
+                                # free-text vb6 status (AD-04): never a custom
+                                # resolution_class — standard vocabulary only
+                                "resolution_status": call.resolution_status or "unresolved",
+                                "resolution_class": "lexical_candidate",
+                                "semantic_provider": semantic_provider,
+                                "candidates": json.dumps(call.candidate_ids or [], ensure_ascii=True),
+                            },
+                        })
+
+        if dialect == "vb6":
+            # IMPLEMENTS edges (plan 4.5 / AD-10): Class -> Interface using the
+            # worker's implements map and the emitted interface nodes.
+            interface_ids: Dict[str, str] = {}
+            interface_files: Dict[str, str] = {}
+            for payload in payloads:
+                payload_file = str(payload["file_def"].file_path or "").replace("\\", "/")
+                for iface in payload.get("interfaces", []):
+                    interface_ids[(iface.name or "").lower()] = iface.symbol_id
+                    interface_files[(iface.name or "").lower()] = payload_file
+            for payload in payloads:
+                payload_file = str(payload["file_def"].file_path or "").replace("\\", "/")
+                meta = payload.get("parse_meta") or {}
+                implemented = list(meta.get("implements") or [])
+                if not implemented or not payload["classes"]:
+                    continue
+                class_id = payload["classes"][0].symbol_id
+                for iface_name in implemented:
+                    iface_key = (iface_name or "").lower()
+                    target = interface_ids.get(iface_key)
+                    if not target:
+                        continue
+                    if vb6_node_filter is not None:
+                        # AD-09 applies to IMPLEMENTS too: when either the
+                        # implementing class OR the interface file changed,
+                        # cleanup destroyed the edge and it must be re-published
+                        iface_file = interface_files.get(iface_key, "")
+                        if payload_file not in vb6_node_filter and iface_file not in vb6_node_filter:
+                            continue
+                    relations_rows.append({
+                        "source_id": class_id,
+                        "source_label": "Type",
+                        "target_id": target,
+                        "target_label": "Interface",
+                        "rel_type": "IMPLEMENTS",
+                        "properties": {},
+                    })
+
+            # placeholder external/late-bound targets (plan 4.4 option a):
+            # POSSIBLE_CALLS is Function->Function, so weak callees without a
+            # project target get a per-project external_symbol node.
+            from tools.vb.vb_common import FunctionDef as _VbFunctionDef
+
+            for name in sorted(external_symbol_names):
+                placeholder = _VbFunctionDef(
+                    symbol_id=f"external::vb6/{name.lower()}",
+                    qualified_name=name,
+                    name=name,
+                    kind="external_symbol",
+                    class_name=None,
+                    namespace_name=None,
+                    file_path="",
+                    start_line=0,
+                    end_line=0,
+                    arity=-1,
+                    code="",
+                )
+                functions_rows.append(
+                    asdict_function(placeholder, project_id, project_name, language, repo, build_system)
+                )
+
+            if vb6_node_filter is not None:
+                # AD-09 (red-team F1): re-publish every edge whose source OR
+                # target file is in the changed set. Incremental cleanup DETACH
+                # DELETEs nodes of changed files, which also destroys INCOMING
+                # edges from unchanged callers — those must be rebuilt here.
+                def _edge_file(symbol_id: str) -> str:
+                    return symbol_id.rsplit("@", 1)[1] if "@" in symbol_id else ""
+
+                calls_rows = [
+                    row for row in calls_rows
+                    if _edge_file(row["caller_id"]) in vb6_node_filter
+                    or _edge_file(row["callee_id"]) in vb6_node_filter
+                ]
+                possible_rows = [
+                    row for row in possible_rows
+                    if _edge_file(row["caller_id"]) in vb6_node_filter
+                    or _edge_file(row["callee_id"]) in vb6_node_filter
+                ]
+
         await code_writer.write_all(
             projects=projects,
             namespaces=namespaces_rows or None,
@@ -801,14 +1221,40 @@ async def build_call_graph(
             files_variant="with_imports",
         )
 
+        if dialect == "vb6" and possible_rows:
+            await code_writer.write_possible_calls_with_site(possible_rows)
+
+        if dialect == "vb6":
+            # placeholder lifecycle (red-team F8): drop external_symbol nodes
+            # nothing points at anymore so they cannot accumulate per sync
+            try:
+                await code_writer.driver.execute_query(
+                    """
+                    MATCH (f:Function {kind: 'external_symbol'})
+                    WHERE f.project_id = $project_id
+                      AND NOT ()-[:POSSIBLE_CALLS]->(f)
+                      AND NOT ()-[:CALLS]->(f)
+                    DETACH DELETE f
+                    RETURN count(f) AS pruned
+                    """,
+                    {"project_id": project_id},
+                    code_writer.database,
+                )
+            except Exception:
+                pass
+
         if verbose:
-            print(f"[graph] write stats: {len(functions_rows)} functions, {len(calls_rows)} calls, {len(relations_rows)} relations")
+            print(f"[graph] write stats: {len(functions_rows)} functions, {len(calls_rows)} calls, {len(possible_rows)} possible_calls, {len(relations_rows)} relations")
 
     if qdrant_writer and embedder:
         qdrant_writer.ensure_collection()
         items: List[Tuple[str, Dict[str, Any]]] = []
 
         for payload in payloads:
+            if dialect == "vb6" and incremental:
+                payload_rel = str(payload["file_def"].file_path or "").replace("\\", "/")
+                if payload_rel not in changed_set:
+                    continue
             for fn in payload["functions"]:
                 text = fn.note or fn.code or ""
                 items.append(
@@ -1119,6 +1565,24 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=os.environ.get("VBNET_ROSLYN_FILE_TIMEOUT_MS", "60000"),
         help="Timeout in ms for each file parse in Roslyn worker",
     )
+    parser.add_argument(
+        "--vb6-parser-engine",
+        choices=("auto", "antlr", "regex"),
+        default=os.environ.get("VB6_PARSER_ENGINE", "auto"),
+        help="VB6 parser engine selection: antlr (whole-program ProLeap worker), regex, or auto (default)",
+    )
+    parser.add_argument(
+        "--vb6-antlr-timeout-sec",
+        type=float,
+        default=os.environ.get("VB6_ANTLR_TIMEOUT_SEC", "600"),
+        help="Timeout in seconds for the VB6 ANTLR worker subprocess",
+    )
+    parser.add_argument(
+        "--vb6-antlr-workspace-timeout-ms",
+        type=int,
+        default=os.environ.get("VB6_ANTLR_WORKSPACE_TIMEOUT_MS", "300000"),
+        help="Timeout in ms for the VB6 ANTLR whole-program batch",
+    )
     parser.add_argument("--qdrant-timeout", type=float, default=300.0)
     parser.add_argument("--qdrant-retries", type=int, default=3)
     parser.add_argument("--qdrant-retry-sleep", type=float, default=2.0)
@@ -1253,6 +1717,9 @@ async def main(argv: Optional[List[str]] = None) -> int:
         vbnet_roslyn_timeout_sec=args.vbnet_roslyn_timeout_sec,
         vbnet_roslyn_workspace_timeout_ms=args.vbnet_roslyn_workspace_timeout_ms,
         vbnet_roslyn_file_timeout_ms=args.vbnet_roslyn_file_timeout_ms,
+        vb6_parser_engine=args.vb6_parser_engine,
+        vb6_antlr_timeout_sec=args.vb6_antlr_timeout_sec,
+        vb6_antlr_workspace_timeout_ms=args.vb6_antlr_workspace_timeout_ms,
     )
 
     if args.enable_message_scan:
