@@ -1,6 +1,9 @@
 ---
 title: "VB6 ANTLR Call Graph — ProLeap Java Worker + Resolver + Evidence Plane"
-status: in_progress
+status: complete-with-exclusions
+completed: 2026-09-17
+commit: 0dbddb2
+exclusions: M4 relative-throughput gate reframed to absolute budget (owner review, benchmark-report.md); live-graph MCP smoke (M5 final) left as re-sync runbook step (no Neo4j in dev environment)
 created: 2026-09-17
 mode: hi-plan --full
 scope: "Thay extraction VB6 regex-only bằng engine ANTLR-first (Java worker bọc ProLeap, mirror RoslynVbWorker), thêm project-model resolver (.vbp + Attribute VB_Name + arity), two-tier publication CALLS/POSSIBLE_CALLS, sửa Class-ID collision, fixture-first golden tests + benchmark gate"
