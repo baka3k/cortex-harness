@@ -1,14 +1,18 @@
-"""VB6 ANTLR worker adapter (plan 260917-1200, phase 03).
+"""VB6 ANTLR worker adapter (plan 260917-1200 phase 03; depth upgrade 260917-1628).
 
 Mirrors ``vb_roslyn_adapter.py``: thread-locked build cache over a Maven
 build of the vendored ProLeap worker, a JSON manifest protocol, and a single
 subprocess run whose stdout is one JSON document with per-file payloads.
 
-Design notes (plan AD-02/Q5/AD-07):
+Design notes:
 - ``.frm``/``.ctl``/``.pag`` are materialized into temp ``.cls`` files by
   THIS adapter (not the worker) because ProLeap only creates ASG modules for
-  ``.bas``/``.cls`` (upstream issue #20). Designer blocks are replaced with
-  blank lines so worker line numbers match the ORIGINAL file numbers.
+  ``.bas``/``.cls`` (upstream issue #20). DEFAULT (keep-designer, plan
+  260917-1628 AD-02): the file is copied VERBATIM so line numbers stay 1:1
+  and the designer block parses (its controlProperties feed the controls[]
+  plane). Set ``VB6_ANTLR_STRIP_DESIGNER=1`` to restore the old strip
+  fallback (designer block blanked); the worker flags such payloads with
+  ``parse_meta.designer_stripped=true`` so empty controls[] stay observable.
 - The worker always receives the WHOLE project file list, even in
   incremental syncs, so cross-module resolution sees the complete program.
   The parse cache only filters OUTPUT (which payloads to re-embed/re-write),
@@ -44,14 +48,26 @@ def _normalize_rel(path: str) -> str:
     return (path or "").replace("\\", "/")
 
 
+def strip_designer_requested() -> bool:
+    """Env-guard fallback (plan 260917-1628 AD-02): strip the designer block."""
+
+    return os.environ.get("VB6_ANTLR_STRIP_DESIGNER", "") == "1"
+
+
 def materializeDesignerModule(source_path: str, target_path: str) -> bool:
     """Copy a .frm/.ctl/.pag file to ``target_path`` as a .cls-compatible module.
 
-    Everything before the first ``Attribute VB_Name`` line (the designer
-    block, which ProLeap cannot turn into an ASG module) is replaced with
-    blank lines so line numbers in the worker payload still refer to the
-    ORIGINAL file. Returns True when a designer block was stripped.
+    Default (keep-designer): the file is copied verbatim — ProLeap parses the
+    designer block (controlProperties) fine in a .cls and line numbers refer
+    to the ORIGINAL positions. With ``VB6_ANTLR_STRIP_DESIGNER=1`` the old
+    fallback applies instead: everything before the first ``Attribute
+    VB_Name`` line is blanked (same line count) and True is returned so the
+    worker can flag the payload ``designer_stripped``.
     """
+
+    if not strip_designer_requested():
+        shutil.copyfile(source_path, target_path)
+        return False
 
     with open(source_path, "r", encoding="utf-8", errors="ignore") as handle:
         lines = handle.read().split("\n")
@@ -206,16 +222,28 @@ def parse_vb6_files_with_antlr(
         temp_dir = tempfile.mkdtemp(prefix="vb6_antlr_")
         entries: List[Dict[str, str]] = []
         materialized = 0
+        stripped_files = 0
         for rel in rel_files:
             entry = {"file_path": rel}
             ext = os.path.splitext(rel)[1].lower()
             if ext in _MATERIALIZED_EXTS:
                 target = os.path.join(temp_dir, rel.replace("/", "__") + ".cls")
                 os.makedirs(os.path.dirname(target), exist_ok=True)
-                materializeDesignerModule(os.path.join(root_abs, rel), target)
+                if materializeDesignerModule(os.path.join(root_abs, rel), target):
+                    # strip fallback active: worker flags parse_meta so empty
+                    # controls[] stay observable (red-team F13)
+                    entry["designer_stripped"] = "true"
+                    stripped_files += 1
                 entry["parse_path"] = target
                 materialized += 1
             entries.append(entry)
+
+        if stripped_files and verbose:
+            print(
+                f"[vb6][engine] designer stripped for {stripped_files} file(s) "
+                "(VB6_ANTLR_STRIP_DESIGNER=1); controls[] unavailable for them",
+                flush=True,
+            )
 
         project_path = find_vbp(root_abs, files)
         project_rel = (
@@ -279,6 +307,8 @@ def parse_vb6_files_with_antlr(
         meta: Dict[str, Any] = dict(data.get("worker_meta") or {})
         meta.setdefault("workspace_kind", "vbp")
         meta["materialized_files"] = materialized
+        meta["designer_stripped_files"] = stripped_files
+        meta["designer_keep_mode"] = not strip_designer_requested()
         return payloads, errors, meta
     finally:
         if manifest_file and os.path.exists(manifest_file):

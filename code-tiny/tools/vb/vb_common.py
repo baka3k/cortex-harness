@@ -18,10 +18,11 @@ except ImportError:  # standalone use outside code-tiny
 
 
 
-# Bumped for the ANTLR engine payload changes (plan 260917-1200 AD-08):
-# parse_meta engine fields + CallEdge resolution fields + Class symbol ids now
-# carry @rel_path. Old caches must not hydrate into the new shape.
-_PARSE_CACHE_VERSION = "vb-family-v2026-09-17-1"
+# Bumped per payload-shape change (plan 260917-1628 AD-05): -2 phase-01
+# (hydrated planes + arity/dictionary enrichment), -3 phase-02 (controls[] +
+# keep-designer + event-wiring fields), -4 phase-04 (comment extraction).
+# Old caches must not hydrate into the new shape.
+_PARSE_CACHE_VERSION = "vb-family-v2026-09-17-4"
 
 
 @dataclass
@@ -43,6 +44,13 @@ class FunctionDef:
     # plan 260917-1200: project-model fields consumed by the VB6 resolver
     module_name: str = ""
     is_private: bool = False
+    # plan 260917-1628: arity range + event wiring (defaults keep the regex
+    # path and old caches hydratable — red-team F4)
+    min_arity: int = 0
+    has_optional_args: bool = False
+    has_paramarray: bool = False
+    vb6_event: str = ""
+    vb6_control_type: str = ""
 
 
 @dataclass
@@ -194,6 +202,33 @@ class VariableDef:
     # procedure-local declarations)
     module_name: str = ""
     procedure_name: str = ""
+
+
+@dataclass
+class Vb6DeclareRow:
+    """Windows API `Declare Function/Sub` row — VB6-ONLY plane.
+
+    The regex engine emits NOTHING for Declare (no `_FUNC_START_RE` match and
+    no Declare plane), so there is no regex shape to mirror; payloads without
+    a declares key hydrate to an empty list. `parse_meta.
+    declares_regex_support` records the asymmetry (plan 260917-1628 AD-03).
+    """
+
+    symbol_id: str
+    name: str
+    proc_kind: str  # function | sub
+    module_name: str = ""
+    file_path: str = ""
+    line_number: int = 0
+    lib: str = ""
+    alias: str = ""
+    return_type: str = ""
+    is_private: bool = False
+    qualified_name: str = ""
+    code: str = ""
+    comment: str = ""
+    summary: str = ""
+    note: str = ""
 
 
 @dataclass

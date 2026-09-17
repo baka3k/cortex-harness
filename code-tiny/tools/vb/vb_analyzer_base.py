@@ -312,6 +312,7 @@ def _hydrate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         PropertyDef,
         RelationEdge,
         VariableDef,
+        Vb6DeclareRow,
     )
 
     return {
@@ -326,6 +327,11 @@ def _hydrate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "enums": [dataclass_from_payload(EnumDef, item) for item in payload.get("enums", [])],
         "constants": [dataclass_from_payload(ConstantDef, item) for item in payload.get("constants", [])],
         "variables": [dataclass_from_payload(VariableDef, item) for item in payload.get("variables", [])],
+        # plan 260917-1628: declares is an ANTLR-only plane (tolerant default
+        # for regex payloads) and controls stay plain dicts (event-wiring
+        # metadata consumed by the analyzer, no graph nodes)
+        "declares": [dataclass_from_payload(Vb6DeclareRow, item) for item in payload.get("declares", [])],
+        "controls": [item for item in (payload.get("controls") or []) if isinstance(item, dict)],
         "file_def": dataclass_from_payload(FileDef, payload.get("file_def", {})),
         "parse_meta": dict(payload.get("parse_meta", {})),
         "parse_cache_version": payload.get("parse_cache_version", ""),
@@ -642,6 +648,9 @@ async def _parse_vb6_with_antlr_batch(
                 workspace_kind=str(worker_meta.get("workspace_kind") or "none"),
                 solution_or_project_path=str(worker_meta.get("solution_or_project_path") or ""),
             )
+            # declares are an ANTLR-only plane (plan 260917-1628 AD-03): the
+            # regex engine emits none — record the asymmetry explicitly
+            payload["parse_meta"]["declares_regex_support"] = False
         else:
             _ensure_parse_meta_defaults(
                 payload,
@@ -681,6 +690,105 @@ def _vb6_external_symbol_id(call: Any) -> str:
     """Stable per-project placeholder Function id (plan 4.4 option a)."""
 
     return f"external::vb6/{_vb6_external_symbol_name(call).lower()}"
+
+
+def _vb6_declare_as_function(declare: Any) -> Any:
+    """Publish a Declare row through the functions lane (no new node label).
+
+    Graph labels already cover functions; declares are Windows API entries,
+    so they become Function nodes with kind='declare' (plan 260917-1628:
+    no schema change — research §2).
+    """
+
+    from tools.vb.vb_common import FunctionDef
+
+    return FunctionDef(
+        symbol_id=declare.symbol_id,
+        qualified_name=declare.qualified_name,
+        name=declare.name,
+        kind="declare",
+        class_name=None,
+        namespace_name=None,
+        file_path=declare.file_path,
+        start_line=declare.line_number,
+        end_line=declare.line_number,
+        arity=0,
+        code=declare.code,
+        comment=declare.comment,
+        summary=declare.summary,
+        note=declare.note,
+        module_name=declare.module_name,
+        is_private=declare.is_private,
+    )
+
+
+#: closed VB6 event-suffix set (plan 260917-1628 Q3, red-team F9). A sub only
+#: counts as an event handler when the part after the last candidate control
+#: name is one of these suffixes — so `Command1_Clicked` never matches.
+VB6_EVENT_SUFFIXES = (
+    "Click", "DblClick", "Change", "GotFocus", "LostFocus",
+    "KeyDown", "KeyPress", "KeyUp",
+    "MouseDown", "MouseMove", "MouseUp",
+    "Load", "Unload", "QueryUnload",
+    "Activate", "Deactivate", "Resize",
+    "Initialize", "Terminate", "Error", "Scroll", "Validate",
+    "DragDrop", "DragOver", "Timer",
+)
+
+#: pseudo-controls with module-level event handlers (Form_Load, MDIForm_Load,
+#: UserControl_Initialize); Class_Initialize deliberately NOT matched — class
+#: lifecycle is not a control event (Q3)
+VB6_EVENT_MODULE_CONTROLS = ("Form", "MDIForm", "UserControl")
+
+
+def match_event_handlers(controls: Sequence[Any], functions: Sequence[Any]) -> int:
+    """Annotate functions with `vb6_event` wiring metadata (in place).
+
+    Match rule (plan 260917-1628 2.3): `^(ctrl)_(evt)$` case-insensitive with
+    LONGEST-control-name-first so `cmd_OK_Click` splits as (cmd_OK, Click).
+    `evt` must belong to VB6_EVENT_SUFFIXES and `ctrl` must exist among this
+    module's controls (or be a module-level pseudo-control for designer
+    files). Returns the number of annotated handlers.
+    """
+
+    control_names: Dict[str, Dict[str, str]] = {}
+    for control in controls or []:
+        if isinstance(control, dict) and control.get("name"):
+            key = str(control["name"]).lower()
+            control_names[key] = {
+                "name": str(control["name"]),
+                "type": str(control.get("type") or ""),
+            }
+    if not control_names:
+        return 0
+    # pseudo-controls are matchable only in designer files (controls exist)
+    for pseudo in VB6_EVENT_MODULE_CONTROLS:
+        control_names.setdefault(pseudo.lower(), {"name": pseudo, "type": pseudo})
+
+    ordered = sorted(control_names.keys(), key=len, reverse=True)
+    suffixes = tuple(suffix.lower() for suffix in VB6_EVENT_SUFFIXES)
+    annotated = 0
+    for fn in functions:
+        name = (getattr(fn, "name", "") or "").strip()
+        lowered = name.lower()
+        match = None
+        for control_key in ordered:
+            if not lowered.startswith(control_key + "_"):
+                continue
+            evt = name[len(control_key) + 1:]
+            if evt.lower() in suffixes:
+                match = (control_key, evt)
+                break
+        if match is None:
+            continue
+        control_key, evt = match
+        info = control_names[control_key]
+        fn.vb6_event = f"{info['name']}.{evt}"  # type: ignore[attr-defined]
+        fn.vb6_control_type = info["type"]  # type: ignore[attr-defined]
+        if not (getattr(fn, "note", "") or ""):
+            fn.note = f"Event handler for {fn.vb6_event}"  # type: ignore[attr-defined]
+        annotated += 1
+    return annotated
 
 
 async def build_call_graph(
@@ -892,6 +1000,15 @@ async def build_call_graph(
     all_calls = [call for payload in payloads for call in payload["calls"]]
     if dialect == "vb6":
         resolve_vb6_calls(all_functions, all_calls, payloads=payloads, verbose=verbose)
+        # event wiring (plan 260917-1628 2.3): annotate handlers from the
+        # controls[] plane BEFORE rows/embeddings are built
+        wired_handlers = 0
+        for payload in payloads:
+            wired_handlers += match_event_handlers(
+                payload.get("controls") or [], payload["functions"]
+            )
+        if verbose:
+            print(f"[vb6][events] wired handlers: {wired_handlers}", flush=True)
     else:
         resolve_calls(all_functions, all_calls)
 
@@ -1021,6 +1138,21 @@ async def build_call_graph(
                 functions_rows.append(row)
                 relations_rows.append({"source_id": file_row["id"], "target_id": row["id"], "rel_type": "CONTAINS", "properties": {}})
 
+            if dialect == "vb6":
+                # declares ride the functions lane (kind='declare'; AD-01: no
+                # new labels/writers)
+                for declare in payload.get("declares", []):
+                    functions_rows.append(
+                        asdict_function(
+                            _vb6_declare_as_function(declare),
+                            project_id,
+                            project_name,
+                            language,
+                            repo,
+                            build_system,
+                        )
+                    )
+
             for rel in payload["relations"]:
                 relations_rows.append({
                     "source_id": rel.source_id,
@@ -1077,7 +1209,14 @@ async def build_call_graph(
             for payload in payloads:
                 edge_file = str(payload["file_def"].file_path or "").replace("\\", "/")
                 for call in payload["calls"]:
-                    if call.callee_id and call.resolution_status != "ambiguous":
+                    # dictionary (default-member) calls never enter the strict
+                    # CALLS tier even when bound — POSSIBLE_CALLS only (plan
+                    # 260917-1628 AD-07)
+                    if (
+                        call.callee_id
+                        and call.resolution_status != "ambiguous"
+                        and call.call_type != "dictionary_call"
+                    ):
                         calls_rows.append({
                             "project_id": project_id,
                             "caller_id": call.caller_id,
@@ -1095,6 +1234,25 @@ async def build_call_graph(
                         # candidate rows share the id; uuid5 over
                         # caller/file/line/column/type — same key shape as
                         # callsite_site_id with an empty callee)
+                        props = {
+                            "file_path": edge_file,
+                            "line": call.call_line,
+                            "column": call.site_column,
+                            "arity": int(call.callee_arity or 0),
+                            "call_type": call.call_type or "call_expression",
+                            "callee_name": call.callee_name,
+                            # free-text vb6 status (AD-04): never a custom
+                            # resolution_class — standard vocabulary only
+                            "resolution_status": call.resolution_status or "unresolved",
+                            "resolution_class": "lexical_candidate",
+                            "semantic_provider": semantic_provider,
+                            "candidates": json.dumps(call.candidate_ids or [], ensure_ascii=True),
+                        }
+                        if call.call_type == "dictionary_call" or "!" in str(call.callee_name or ""):
+                            # default-member access survives as a prop (AD-07);
+                            # the "!" catch also covers chained rs!Field.Count
+                            # rows whose dict sub-ctx ProLeap folds away
+                            props["default_member"] = True
                         possible_rows.append({
                             "project_id": project_id,
                             "caller_id": call.caller_id,
@@ -1107,20 +1265,7 @@ async def build_call_graph(
                                 call.site_column,
                                 call.call_type or "call",
                             ),
-                            "props": {
-                                "file_path": edge_file,
-                                "line": call.call_line,
-                                "column": call.site_column,
-                                "arity": int(call.callee_arity or 0),
-                                "call_type": call.call_type or "call_expression",
-                                "callee_name": call.callee_name,
-                                # free-text vb6 status (AD-04): never a custom
-                                # resolution_class — standard vocabulary only
-                                "resolution_status": call.resolution_status or "unresolved",
-                                "resolution_class": "lexical_candidate",
-                                "semantic_provider": semantic_provider,
-                                "candidates": json.dumps(call.candidate_ids or [], ensure_ascii=True),
-                            },
+                            "props": props,
                         })
 
         if dialect == "vb6":
@@ -1274,6 +1419,10 @@ async def build_call_graph(
                                 "comment": fn.comment,
                                 "summary": fn.summary,
                                 "note": fn.note,
+                                # event wiring (plan 260917-1628 AD-06): empty
+                                # for non-handlers and regex-path functions
+                                "vb6_event": getattr(fn, "vb6_event", "") or "",
+                                "vb6_control_type": getattr(fn, "vb6_control_type", "") or "",
                                 "project_id": project_id,
                                 "project_name": project_name,
                                 "language": language,
@@ -1283,34 +1432,69 @@ async def build_call_graph(
                         },
                     )
                 )
+            if dialect == "vb6":
+                # declares embed through the functions lane too (kind=declare)
+                for declare in payload.get("declares", []):
+                    dfn = _vb6_declare_as_function(declare)
+                    text = dfn.note or dfn.code or ""
+                    items.append(
+                        (
+                            text,
+                            {
+                                "id": _stable_point_id(dfn.symbol_id),
+                                "payload": {
+                                    "node_type": "function",
+                                    "symbol_id": dfn.symbol_id,
+                                    "qualified_name": dfn.qualified_name,
+                                    "name": dfn.name,
+                                    "kind": "declare",
+                                    "lib": getattr(declare, "lib", "") or "",
+                                    "alias": getattr(declare, "alias", "") or "",
+                                    "return_type": getattr(declare, "return_type", "") or "",
+                                    "file_path": dfn.file_path,
+                                    "start_line": dfn.start_line,
+                                    "end_line": dfn.end_line,
+                                    "comment": dfn.comment,
+                                    "summary": dfn.summary,
+                                    "note": dfn.note,
+                                    "project_id": project_id,
+                                    "project_name": project_name,
+                                    "language": language,
+                                    "repo": repo,
+                                    "build_system": build_system,
+                                },
+                            },
+                        )
+                    )
             for cls in payload["classes"]:
                 text = cls.note or cls.code or ""
-                items.append(
-                    (
-                        text,
-                        {
-                            "id": _stable_point_id(cls.symbol_id),
-                            "payload": {
-                                "node_type": "class",
-                                "symbol_id": cls.symbol_id,
-                                "qualified_name": cls.qualified_name,
-                                "name": cls.name,
-                                "kind": cls.kind,
-                                "file_path": cls.file_path,
-                                "start_line": cls.start_line,
-                                "end_line": cls.end_line,
-                                "comment": cls.comment,
-                                "summary": cls.summary,
-                                "note": cls.note,
-                                "project_id": project_id,
-                                "project_name": project_name,
-                                "language": language,
-                                "repo": repo,
-                                "build_system": build_system,
-                            },
-                        },
-                    )
-                )
+                cls_payload = {
+                    "node_type": "class",
+                    "symbol_id": cls.symbol_id,
+                    "qualified_name": cls.qualified_name,
+                    "name": cls.name,
+                    "kind": cls.kind,
+                    "file_path": cls.file_path,
+                    "start_line": cls.start_line,
+                    "end_line": cls.end_line,
+                    "comment": cls.comment,
+                    "summary": cls.summary,
+                    "note": cls.note,
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "language": language,
+                    "repo": repo,
+                    "build_system": build_system,
+                }
+                controls_summary = [
+                    {"name": c.get("name"), "type": c.get("type")}
+                    for c in (payload.get("controls") or [])
+                    if isinstance(c, dict) and c.get("name")
+                ]
+                if controls_summary:
+                    # designer control tree, compacted (plan 260917-1628 2.3)
+                    cls_payload["controls"] = controls_summary
+                items.append((text, {"id": _stable_point_id(cls.symbol_id), "payload": cls_payload}))
             for prop in payload.get("properties", []):
                 text = prop.note or prop.code or ""
                 items.append(
