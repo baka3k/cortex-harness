@@ -7,7 +7,7 @@ import signal
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
@@ -987,16 +987,14 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    mcp = FastMCP(
-        MCP_NAME,
-        host=args.host,
-        port=args.port,
-        streamable_http_path=args.stream_path,
-        stateless_http=True,
-        json_response=True,
-    )
+    # FastMCP 4.x moved transport config (host/port/path/stateless_http/
+    # json_response) out of the constructor into ``run`` kwargs. Mirrors the
+    # pattern used by code-tiny's unified_mcp.py.
+    mcp = FastMCP(MCP_NAME)
     register_tools(mcp)
     transport = args.transport
+    if args.stream_path and not args.stream_path.startswith("/"):
+        args.stream_path = "/" + args.stream_path
     endpoint = f"http://{args.host}:{args.port}{args.stream_path}"
     print(f"Starting MCP server: {MCP_NAME}")
     print(f"Transport: {transport}")
@@ -1004,4 +1002,12 @@ if __name__ == "__main__":
         print(f"Endpoint: {endpoint}")
     else:
         print("Endpoint: (stdio)")
-    mcp.run(transport=args.transport)
+    run_kwargs: dict = {"transport": transport}
+    if transport != "stdio":
+        run_kwargs.update({"host": args.host, "port": args.port})
+        if args.stream_path:
+            run_kwargs["path"] = args.stream_path
+    if transport == "streamable-http":
+        run_kwargs["stateless_http"] = True
+        run_kwargs["json_response"] = True
+    mcp.run(**run_kwargs)

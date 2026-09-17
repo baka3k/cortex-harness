@@ -4,10 +4,9 @@
     "code": "cortext",
     "name": "cortext"
   },
-  "storage_backend": "local",
+  "storage_backend": "remote",
   "code": {
     "env": {
-      "CORTEX_STORAGE_INSTANCE": "cortex",
       "GRAPH_PROVIDER": "falkordb",
       "CODE_GRAPH_PROVIDER": "falkordb",
       "FALKORDB_GRAPH": "cortext",
@@ -30,7 +29,6 @@
   },
   "doc": {
     "env": {
-      "CORTEX_STORAGE_INSTANCE": "cortex",
       "GRAPH_PROVIDER": "falkordb",
       "DOC_GRAPH_PROVIDER": "falkordb",
       "FALKORDB_GRAPH": "cortext_doc",
@@ -43,9 +41,16 @@
       "projects": [
         {
           "git": "",
-          "folder": []
+          "folder": [
+            "/Users/hieplq1.aip/AI/cortex-harness"
+          ]
         }
       ]
     }
+  },
+  "remote": {
+    "qdrant_url": "http://localhost:6333",
+    "falkordb_uri": "localhost:6379",
+    "falkordb_ssl": false
   }
 }
