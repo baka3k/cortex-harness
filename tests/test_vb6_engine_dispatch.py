@@ -33,9 +33,10 @@ def _fixture_files():
 
 class Vb6EngineDispatchTest(unittest.TestCase):
     def test_parse_cache_version_bumped(self) -> None:
-        # AD-08: the version must have moved past the pre-ANTLR value so old
-        # caches cannot hydrate into the new payload shape
-        self.assertEqual(PARSE_CACHE_VERSION, "vb-family-v2026-09-17-1")
+        # AD-05 (plan 260917-1628): bumped per payload-shape change — phase-01
+        # hydrated planes, phase-02 controls/keep-designer, phase-04 comments
+        self.assertEqual(PARSE_CACHE_VERSION, "vb-family-v2026-09-17-4")
+        self.assertNotEqual(PARSE_CACHE_VERSION, "vb-family-v2026-09-17-1")
         self.assertNotEqual(PARSE_CACHE_VERSION, "vb-family-v2026-04-03-2")
 
     def _run_build_call_graph(self, engine: str):

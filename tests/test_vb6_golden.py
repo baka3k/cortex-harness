@@ -144,14 +144,17 @@ class Vb6GoldenAntlrTest(unittest.TestCase):
     def test_special_statuses_classified(self) -> None:
         by = {}
         for file_name, needle in (
-            ("latebas.bas", "LateBound"),
+            ("latebas.bas", "x.LateBound"),
             ("modMain.bas", "TestSameName"),
             ("modMain.bas", "MsgBox"),
         ):
             for edge in self.edges_by_file.get(file_name, []):
-                if (edge.get("callee_name") or "").endswith(needle):
+                # exact callee_name: the fixture also carries a resolved
+                # frmMain.TestSameName receiver call (UseGlobalForm) that
+                # endswith-matching would conflate with the ambiguous site
+                if (edge.get("callee_name") or "") == needle:
                     by[needle] = edge.get("resolution_status")
-        self.assertEqual(by.get("LateBound"), "late_bound")
+        self.assertEqual(by.get("x.LateBound"), "late_bound")
         self.assertEqual(by.get("TestSameName"), "ambiguous")
         self.assertEqual(by.get("MsgBox"), "external")
 

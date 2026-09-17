@@ -1,0 +1,771 @@
+{
+  "schema_version": "1",
+  "description": "Golden expectations for the vb6-application corpus (plan 260917-1200). expect_resolution vocabulary: resolved (must publish CALLS with expect_callee), external / ambiguous / late_bound / possible / unresolved (must publish POSSIBLE_CALLS with that resolution_status, never dropped), no_call (no edge may exist for this name at this line). M2 recall denominator = every callsite with expect_resolution=resolved. Depth upgrade (260917-1628): modApi/clsEvents exercise hydrated planes, arity ranges, dictionary calls and predeclared-id instances; frmMain designer is a real >60-line control tree.",
+  "case_matrix": [
+    "no-paren sub call with args",
+    "no-paren call without args",
+    "Call statement",
+    "builtin external (MsgBox)",
+    "line continuation",
+    "cross-module unqualified",
+    "qualified cross-module",
+    "module-local private call",
+    "same-name ambiguous (two forms)",
+    "property get/let (self, typed receiver)",
+    "Implements interface dispatch",
+    "late-bound As Object",
+    "form default instance method",
+    "With block member call",
+    "string-literal trap (no call)"
+  ],
+  "implements_expectations": [
+    {
+      "source": "clsOrder",
+      "target": "IShip"
+    },
+    {
+      "source": "clsShip",
+      "target": "IShip"
+    }
+  ],
+  "files": {
+    "modMain.bas": {
+      "module_name": "modMain",
+      "functions": [
+        {
+          "name": "DoWork",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 7
+        },
+        {
+          "name": "DoSomething",
+          "kind": "sub",
+          "arity": 2,
+          "start_line": 33
+        },
+        {
+          "name": "InitData",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 38
+        },
+        {
+          "name": "Main",
+          "kind": "function",
+          "arity": 0,
+          "start_line": 42
+        },
+        {
+          "name": "UseGlobalForm",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 47
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "DoSomething",
+          "line": 9,
+          "expect_resolution": "resolved",
+          "expect_callee": "modMain.DoSomething"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "InitData",
+          "line": 11,
+          "expect_resolution": "resolved",
+          "expect_callee": "modMain.InitData"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "InitData",
+          "line": 13,
+          "expect_resolution": "resolved",
+          "expect_callee": "modMain.InitData",
+          "call_type": "call_statement"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "MsgBox",
+          "line": 15,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "LogMessage",
+          "line": 18,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.LogMessage"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "CalcTotal",
+          "line": 21,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.CalcTotal"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "modUtil.CalcTotal",
+          "line": 24,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.CalcTotal"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "TestSameName",
+          "line": 26,
+          "expect_resolution": "ambiguous",
+          "expect_candidates": [
+            "frmMain.TestSameName",
+            "frmAbout.TestSameName"
+          ]
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "Fake",
+          "line": 29,
+          "expect_resolution": "no_call"
+        },
+        {
+          "caller": "modMain.DoWork",
+          "callee_name": "Debug.Print",
+          "line": 30,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "modMain.Main",
+          "callee_name": "DoWork",
+          "line": 43,
+          "expect_resolution": "resolved",
+          "expect_callee": "modMain.DoWork"
+        },
+        {
+          "caller": "modMain.UseGlobalForm",
+          "callee_name": "frmMain.TestSameName",
+          "line": 49,
+          "expect_resolution": "resolved",
+          "expect_callee": "frmMain.TestSameName",
+          "note": "predeclared-id default instance member call (plan 260917-1628 3.3)"
+        },
+        {
+          "caller": "modMain.UseGlobalForm",
+          "callee_name": "frmAbout.ShowAbout",
+          "line": 50,
+          "expect_resolution": "resolved",
+          "expect_callee": "frmAbout.ShowAbout"
+        },
+        {
+          "caller": "modMain.UseGlobalForm",
+          "callee_name": "frmAbout.Hide",
+          "line": 52,
+          "expect_resolution": "external",
+          "note": "form intrinsic stays external"
+        }
+      ]
+    },
+    "modUtil.bas": {
+      "module_name": "modUtil",
+      "functions": [
+        {
+          "name": "CalcTotal",
+          "kind": "function",
+          "arity": 2,
+          "start_line": 7
+        },
+        {
+          "name": "LogMessage",
+          "kind": "sub",
+          "arity": 1,
+          "start_line": 11
+        },
+        {
+          "name": "HelperSub",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 15,
+          "visibility": "private"
+        },
+        {
+          "name": "RunHelper",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 20
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "modUtil.LogMessage",
+          "callee_name": "Debug.Print",
+          "line": 12,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "modUtil.HelperSub",
+          "callee_name": "Debug.Print",
+          "line": 17,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "modUtil.RunHelper",
+          "callee_name": "HelperSub",
+          "line": 22,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.HelperSub"
+        }
+      ]
+    },
+    "modA.bas": {
+      "module_name": "modA",
+      "functions": [
+        {
+          "name": "A_Run",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 7
+        },
+        {
+          "name": "A_Calc",
+          "kind": "function",
+          "arity": 1,
+          "start_line": 16
+        },
+        {
+          "name": "A_UseUtil",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 20
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "modA.A_Run",
+          "callee_name": "B_Helper",
+          "line": 8,
+          "expect_resolution": "resolved",
+          "expect_callee": "modB.B_Helper"
+        },
+        {
+          "caller": "modA.A_Run",
+          "callee_name": "B_Check",
+          "line": 9,
+          "expect_resolution": "resolved",
+          "expect_callee": "modB.B_Check"
+        },
+        {
+          "caller": "modA.A_Run",
+          "callee_name": "Debug.Print",
+          "line": 10,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "modA.A_Run",
+          "callee_name": "B_Calc",
+          "line": 13,
+          "expect_resolution": "resolved",
+          "expect_callee": "modB.B_Calc"
+        },
+        {
+          "caller": "modA.A_UseUtil",
+          "callee_name": "CalcTotal",
+          "line": 22,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.CalcTotal"
+        },
+        {
+          "caller": "modA.A_UseUtil",
+          "callee_name": "A_Calc",
+          "line": 22,
+          "expect_resolution": "resolved",
+          "expect_callee": "modA.A_Calc"
+        },
+        {
+          "caller": "modA.A_UseUtil",
+          "callee_name": "LogMessage",
+          "line": 23,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.LogMessage"
+        }
+      ]
+    },
+    "modB.bas": {
+      "module_name": "modB",
+      "functions": [
+        {
+          "name": "B_Run",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 5
+        },
+        {
+          "name": "B_Helper",
+          "kind": "sub",
+          "arity": 1,
+          "start_line": 11
+        },
+        {
+          "name": "B_Check",
+          "kind": "function",
+          "arity": 1,
+          "start_line": 15
+        },
+        {
+          "name": "B_Calc",
+          "kind": "function",
+          "arity": 1,
+          "start_line": 19
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "modB.B_Run",
+          "callee_name": "A_Run",
+          "line": 6,
+          "expect_resolution": "resolved",
+          "expect_callee": "modA.A_Run"
+        },
+        {
+          "caller": "modB.B_Run",
+          "callee_name": "A_Calc",
+          "line": 8,
+          "expect_resolution": "resolved",
+          "expect_callee": "modA.A_Calc"
+        },
+        {
+          "caller": "modB.B_Helper",
+          "callee_name": "Debug.Print",
+          "line": 12,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "modB.B_Calc",
+          "callee_name": "A_Calc",
+          "line": 20,
+          "expect_resolution": "resolved",
+          "expect_callee": "modA.A_Calc"
+        }
+      ]
+    },
+    "latebas.bas": {
+      "module_name": "latebas",
+      "functions": [
+        {
+          "name": "RunLate",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 7
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "latebas.RunLate",
+          "callee_name": "CreateObject",
+          "line": 9,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "latebas.RunLate",
+          "callee_name": "x.LateBound",
+          "line": 10,
+          "expect_resolution": "late_bound"
+        }
+      ]
+    },
+    "clsOrder.cls": {
+      "module_name": "clsOrder",
+      "functions": [
+        {
+          "name": "Total",
+          "kind": "property get",
+          "arity": 0,
+          "start_line": 13
+        },
+        {
+          "name": "Total",
+          "kind": "property let",
+          "arity": 1,
+          "start_line": 17
+        },
+        {
+          "name": "ProcessOrder",
+          "kind": "sub",
+          "arity": 1,
+          "start_line": 21
+        },
+        {
+          "name": "IShip_Ship_Order",
+          "kind": "sub",
+          "arity": 1,
+          "start_line": 28,
+          "visibility": "private"
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "clsOrder.ProcessOrder",
+          "callee_name": "Total",
+          "line": 22,
+          "expect_resolution": "resolved",
+          "expect_callee": "clsOrder.Total",
+          "expect_kind": "property let"
+        },
+        {
+          "caller": "clsOrder.ProcessOrder",
+          "callee_name": "Total",
+          "line": 24,
+          "expect_resolution": "resolved",
+          "expect_callee": "clsOrder.Total",
+          "expect_kind": "property get"
+        },
+        {
+          "caller": "clsOrder.ProcessOrder",
+          "callee_name": "LogMessage",
+          "line": 25,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.LogMessage"
+        },
+        {
+          "caller": "clsOrder.ProcessOrder",
+          "callee_name": "CStr",
+          "line": 25,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "clsOrder.IShip_Ship_Order",
+          "callee_name": "ProcessOrder",
+          "line": 29,
+          "expect_resolution": "resolved",
+          "expect_callee": "clsOrder.ProcessOrder"
+        }
+      ]
+    },
+    "clsShip.cls": {
+      "module_name": "clsShip",
+      "functions": [
+        {
+          "name": "Ship_Order",
+          "kind": "sub",
+          "arity": 1,
+          "start_line": 12
+        },
+        {
+          "name": "IShip_Ship_Order",
+          "kind": "sub",
+          "arity": 1,
+          "start_line": 16,
+          "visibility": "private"
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "clsShip.Ship_Order",
+          "callee_name": "LogMessage",
+          "line": 13,
+          "expect_resolution": "resolved",
+          "expect_callee": "modUtil.LogMessage"
+        },
+        {
+          "caller": "clsShip.Ship_Order",
+          "callee_name": "CStr",
+          "line": 13,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "clsShip.IShip_Ship_Order",
+          "callee_name": "Ship_Order",
+          "line": 17,
+          "expect_resolution": "resolved",
+          "expect_callee": "clsShip.Ship_Order"
+        }
+      ]
+    },
+    "IShip.cls": {
+      "module_name": "IShip",
+      "functions": [
+        {
+          "name": "Ship_Order",
+          "kind": "sub",
+          "arity": 1,
+          "start_line": 10
+        },
+        {
+          "name": "Ship_Status",
+          "kind": "function",
+          "arity": 1,
+          "start_line": 13
+        }
+      ],
+      "callsites": []
+    },
+    "frmMain.frm": {
+      "module_name": "frmMain",
+      "functions": [
+        {
+          "name": "Form_Load",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 102
+        },
+        {
+          "name": "TestSameName",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 127
+        },
+        {
+          "name": "cmdGo_Click",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 133
+        },
+        {
+          "name": "txtName_Change",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 138
+        },
+        {
+          "name": "Helper_Click_Validate",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 142
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": "modMain.DoWork",
+          "line": 104,
+          "expect_resolution": "resolved",
+          "expect_callee": "modMain.DoWork"
+        },
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": "Me.Refresh",
+          "line": 106,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": "DoSomething",
+          "line": 108,
+          "expect_resolution": "resolved",
+          "expect_callee": "modMain.DoSomething"
+        },
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": ".ProcessOrder",
+          "line": 113,
+          "expect_resolution": "resolved",
+          "expect_callee": "clsOrder.ProcessOrder"
+        },
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": "ord.Total",
+          "line": 116,
+          "expect_resolution": "resolved",
+          "expect_callee": "clsOrder.Total",
+          "expect_kind": "property let"
+        },
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": "ord.Total",
+          "line": 118,
+          "expect_resolution": "resolved",
+          "expect_callee": "clsOrder.Total",
+          "expect_kind": "property get"
+        },
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": "ship.Ship_Order",
+          "line": 122,
+          "expect_resolution": "possible",
+          "note": "interface-typed receiver: ambiguous across implementers (plan 3.1)"
+        },
+        {
+          "caller": "frmMain.Form_Load",
+          "callee_name": "frmAbout.Show",
+          "line": 124,
+          "expect_resolution": "possible"
+        },
+        {
+          "caller": "frmMain.TestSameName",
+          "callee_name": "Debug.Print",
+          "line": 129,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "frmMain.cmdGo_Click",
+          "callee_name": "Form_Load",
+          "line": 134,
+          "expect_resolution": "resolved",
+          "expect_callee": "frmMain.Form_Load"
+        }
+      ]
+    },
+    "frmAbout.frm": {
+      "module_name": "frmAbout",
+      "functions": [
+        {
+          "name": "TestSameName",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 30
+        },
+        {
+          "name": "ShowAbout",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 34
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "frmAbout.TestSameName",
+          "callee_name": "Debug.Print",
+          "line": 31,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "frmAbout.ShowAbout",
+          "callee_name": "frmAbout.Refresh",
+          "line": 36,
+          "expect_resolution": "external"
+        }
+      ]
+    },
+    "malformed.bas": {
+      "module_name": "malformed",
+      "malformed": true,
+      "functions": [],
+      "callsites": []
+    },
+    "modApi.bas": {
+      "module_name": "modApi",
+      "functions": [
+        {
+          "name": "ElapsedMs",
+          "kind": "function",
+          "arity": 0,
+          "start_line": 22
+        },
+        {
+          "name": "Flexible",
+          "kind": "sub",
+          "arity": 3,
+          "start_line": 26,
+          "note": "optional + ParamArray: min_arity 1"
+        },
+        {
+          "name": "CallFlexible",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 30
+        },
+        {
+          "name": "ReadField",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 37
+        }
+      ],
+      "enums": [
+        {
+          "name": "AppColor",
+          "members": [
+            [
+              "acBackground",
+              "1"
+            ],
+            [
+              "acHighlight",
+              "2"
+            ]
+          ],
+          "start_line": 7
+        }
+      ],
+      "constants": [
+        {
+          "name": "MAX_RETRY",
+          "value": "3",
+          "line": 13
+        },
+        {
+          "name": "APP_TITLE",
+          "value": "\"Fixture\"",
+          "type": "String",
+          "line": 14
+        }
+      ],
+      "declares": [
+        {
+          "name": "GetTickCount",
+          "lib": "kernel32",
+          "alias": "GetTickCount",
+          "return_type": "Long",
+          "line": 16
+        }
+      ],
+      "callsites": [
+        {
+          "caller": "modApi.ElapsedMs",
+          "callee_name": "GetTickCount",
+          "line": 23,
+          "expect_resolution": "external",
+          "note": "declared API: external via declares plane"
+        },
+        {
+          "caller": "modApi.CallFlexible",
+          "callee_name": "Flexible",
+          "line": 32,
+          "expect_resolution": "resolved",
+          "expect_callee": "modApi.Flexible",
+          "note": "arity range: 1 arg >= min_arity 1"
+        },
+        {
+          "caller": "modApi.CallFlexible",
+          "callee_name": "Flexible",
+          "line": 33,
+          "expect_resolution": "resolved",
+          "expect_callee": "modApi.Flexible",
+          "note": "arity range: 4 args with ParamArray"
+        },
+        {
+          "caller": "modApi.ReadField",
+          "callee_name": "CreateObject",
+          "line": 39,
+          "expect_resolution": "external"
+        },
+        {
+          "caller": "modApi.ReadField",
+          "callee_name": "rs!FieldName",
+          "line": 41,
+          "expect_resolution": "possible",
+          "note": "dictionary (default-member) call: never dropped, POSSIBLE_CALLS only (plan 3.4)"
+        }
+      ]
+    },
+    "clsEvents.cls": {
+      "module_name": "clsEvents",
+      "functions": [
+        {
+          "name": "Save",
+          "kind": "sub",
+          "arity": 0,
+          "start_line": 12
+        }
+      ],
+      "events": [
+        {
+          "name": "BeforeSave",
+          "parameters": "Cancel As Boolean",
+          "start_line": 10
+        }
+      ],
+      "callsites": []
+    }
+  }
+}
