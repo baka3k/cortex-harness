@@ -2957,6 +2957,15 @@ def init(env, project_dir, path):
         f"{project_code}_doc",
         provider_default=code_provider,
     )
+    # Mirror the code section: persist the doc Qdrant collection so the saved
+    # config is fully self-describing for ``dev start``. Without this prompt
+    # the runtime reconstructs ``{project_id}_doc`` at startup, which works
+    # but leaves the doc section without an explicit vector target.
+    doc_qdrant_collection = _p(
+        "QDRANT_COLLECTION_DOC",
+        ["doc", "env", "QDRANT_COLLECTION_DOC"],
+        f"{project_code}_doc",
+    )
     doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], "BAAI/bge-m3")
     doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],      "8")
     doc_max_chars   = _p("MAX_EMBED_CHARS", ["doc", "env", "MAX_EMBED_CHARS"], "500")
@@ -3051,6 +3060,7 @@ def init(env, project_dir, path):
             "env": {
                 **storage_env,
                 **doc_graph_env,
+                "QDRANT_COLLECTION_DOC": doc_qdrant_collection,
                 "EMBEDDING_MODEL": doc_embed_model, "BATCH_SIZE": doc_batch_size,
                 "MAX_EMBED_CHARS": doc_max_chars,   "device": doc_device,
             },
