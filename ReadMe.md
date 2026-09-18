@@ -1,425 +1,305 @@
 # CortexHarness
 
-CortexHarness is a cognition-aware context orchestration framework for AI systems.
+**Give AI agents full understanding of your codebase — not just fragments.**
 
-It combines Graph Database relationships, Vector Database semantic retrieval, and structured harness engineering to build reliable, scalable, and context-consistent AI applications.
+CortexHarness extracts real structure from your source code and documentation, stores it in a hybrid Graph + Vector engine, and serves it to AI agents through MCP. The result: agents that reason over your actual architecture instead of guessing from incomplete context.
 
-Instead of treating prompts as isolated inputs, CortexHarness focuses on constructing a persistent contextual cognition layer for models — enabling better memory synthesis, contextual reasoning, execution stability, and orchestration control.
+---
 
-## Core Capabilities
+## The Problem It Solves
 
-* Graph + Vector hybrid context retrieval
-* Structured system context generation
-* Harness engineering support for stable execution flows
-* Context contracts and orchestration pipelines
-* Semantic memory layering
-* Multi-source context synthesis
-* AI-agent and Copilot-ready architecture
-* Extensible runtime integration
+AI coding agents hallucinate when context is missing. They see a file but not the call graph. They read a function but not the framework convention. They answer questions but can't trace impact.
 
-## Philosophy
+CortexHarness fixes this by building a **persistent, queryable knowledge layer** that gives agents:
 
-Modern AI systems should not rely on prompts alone.
+- **Structural truth** — call graphs, dependencies, type hierarchies, framework routes (not just text)
+- **Semantic understanding** — embeddings for similarity search across code and docs
+- **Complete context** — one query returns the function, its callers, its framework role, and related documentation
+- **Less token waste** — agents ask the graph instead of stuffing entire files into prompts
 
-CortexHarness treats context as infrastructure:
+## How It Works
 
-* memory is structured,
-* cognition is composable,
-* execution is orchestrated.
+```
+ Your Codebase (20+ languages)        Your Documentation (PDF, DOCX, MD, PPTX)
+          │                                      │
+          ▼                                      ▼
+ ┌────────────────────┐               ┌────────────────────┐
+ │  Language-Specific │               │  GraphRAG Pipeline │
+ │  Analyzers         │               │  Entity Extraction │
+ │  Extract: calls,   │               │  Extract: entities,│
+ │  types, flows,     │               │  relationships,    │
+ │  framework roles   │               │  summaries         │
+ └────────┬───────────┘               └────────┬───────────┘
+          │                                      │
+          ▼                                      ▼
+ ┌─────────────────────────────────────────────────────────┐
+ │           Hybrid Storage (Embedded or Remote)           │
+ │                                                         │
+ │   Graph Providers             Qdrant                    │
+ │   ───────────────             ─────────────────────     │
+ │   • FalkorDB (default)        • Code embeddings         │
+ │   • LadybugDB (Kuzu-based)    • Doc embeddings          │
+ │   • Neo4j (optional)          • Entity-linked paragraphs│
+ │   • Call graphs, dependencies,• Semantic similarity     │
+ │     type hierarchies, flows   • RAG-ready retrieval     │
+ │                                                         │
+ └────────────────────────┬────────────────────────────────┘
+                          │
+                          ▼
+ ┌─────────────────────────────────────────────────────────┐
+ │         Unified MCP Server — 30+ Query Tools            │
+ │                                                         │
+ │   "What calls this function?"        → Graph traversal  │
+ │   "Find similar implementations"     → Vector search    │
+ │   "Trace this API end-to-end"        → Fullstack chain  │
+ │   "What breaks if I change this?"    → Impact analysis  │
+ │   "Summarize this module"            → Graph + vectors  │
+ └────────────────────────┬────────────────────────────────┘
+                          │
+            ┌─────────────┼─────────────┐
+            ▼             ▼             ▼
+      Claude Code    Qwen Code    Cursor / Copilot
+```
 
-The goal is to provide a foundational layer for building reliable AI-native systems at scale.
+---
 
-## Use Cases
+## Why Developers Choose CortexHarness
 
-* AI Copilot systems
-* Multi-agent architectures
-* Enterprise AI orchestration
-* Long-context memory systems
-* Knowledge graph enhanced AI
-* Retrieval-augmented generation (RAG)
-* Harness engineering platforms
-* Cognitive runtime infrastructure
+### Zero-Config Start
 
-## Installation
+Embedded FalkorDB + Qdrant = **no Docker, no daemon, no infrastructure**. Clone, `make install`, `dev sync code` — done. Switch to remote (Docker or cloud) when your team needs shared storage.
 
-Clone the repo once, install the `dev` command globally — no aliases, no path prefixes needed.
+```bash
+make install          # one command: venv + deps + global CLI
+dev init              # interactive wizard
+dev sync code         # graph + embeddings in one pass
+dev start             # MCP servers ready for your AI agent
+```
 
-The lifecycle commands use Python on macOS/Linux and Windows PowerShell on Windows. Python 3.12+ is required. Qdrant and FalkorDBLite run as embedded, file-backed libraries; no database daemon or container runtime is required.
+### Accurate, Not Just Fast
+
+- **Graph-first pipeline**: topology and relationships are written before embeddings. Agents can query structure immediately.
+- **Incremental sync**: Git-aware change detection → SHA-256 content verification → only reprocess what changed. A 500K-line repo syncs in seconds after a one-file commit.
+- **Framework-aware**: Spring controllers, ASP.NET routes, Struts actions, MyBatis mappers — extracted as first-class graph nodes, not buried in raw text.
+- **Crash-safe ingestion**: write-ahead journal for graph mutations. If sync fails mid-write, recovery replays exactly what was interrupted.
+
+### Less Context, More Signal
+
+AI agents have finite context windows. CortexHarness helps them use it wisely:
+
+| Without CortexHarness | With CortexHarness |
+| --- | --- |
+| Agent reads 10 files to find callers | `query_subgraph` returns the call tree in one tool call |
+| Agent guesses the framework pattern | `get_framework_context` returns the exact overlay |
+| Agent stuffs entire modules into prompt | `semantic_search` returns the 5 relevant paragraphs |
+| Agent hallucinates the dependency chain | `trace_flow` returns the verified path |
+
+### End-to-End Workflow
+
+Not just ingestion — a complete pipeline from source to agent query:
+
+1. **Ingest** — `dev sync code` / `dev sync doc` extracts structure and semantics
+2. **Store** — graph relationships + vector embeddings persisted to disk
+3. **Serve** — MCP servers expose 30+ query tools on localhost
+4. **Query** — AI agents call MCP tools instead of reading raw files
+5. **Update** — next sync only processes changes, graph stays current
+
+### ADLC — Skills That Teach Agents How to Work
+
+The ADLC skill pack (`make install-adlc`) installs 12+ battle-tested skills into your AI agent:
+
+- **Plan before code** — architecture-first planning, not dive-and-pray
+- **Debug systematically** — root cause analysis with evidence, not guess-and-check
+- **Predict risks** — 5-persona panel reviews changes before implementation
+- **Generate edge cases** — 12-dimension scenario coverage
+- **Audit security** — STRIDE + OWASP with automated fix suggestions
+
+Works with: Claude Code, Qwen Code, OpenCode, GitHub Copilot, Cursor, Continue.
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/) (fast Python package manager)
+- Node.js ≥ 18 (only for ADLC skill pack)
+
+### Install & Sync
 
 ```bash
 git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
-uv --version      # uv is required; install it first if this command is unavailable
-make build         # create/reuse .venv and install dependencies with uv
-make storage-init   # create ~/.cortext-harness/v1/instances/default and its manifest
-make storage-layout # show resolved owner paths, manifest, and leases
-make install        # create/reuse .venv, install dependencies, and install global dev command
-make doctor         # isolated Qdrant/FalkorDBLite round-trips plus MCP port diagnostics
-make start          # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
-make stop           # stop MCP terminal/processes started by make start
-make install-adlc   # bootstrap the ADLC agent skill pack (dev-kit) via `npx skill-dev`
-make uninstall      # remove the global dev command installed by make install
+make install          # create .venv, install deps, register global `dev` CLI
+make storage-init     # initialize persistent storage at ~/.cortext-harness/v1/
+make doctor           # verify Qdrant + FalkorDB connectivity
+
+dev init              # interactive wizard — configure project, backend, folders
+dev sync code         # ingest source code → graph + embeddings
+dev sync doc          # ingest documentation → knowledge graph + vectors
+dev start             # MCP servers: code (:8788) + doc (:8789)
 ```
 
-Set `UV` when the executable is not on the default `PATH`, for example `make build UV=/opt/homebrew/bin/uv`.
+Point your AI agent at `http://localhost:8788` (code) or `http://localhost:8789` (doc). The agent gets full graph + vector query access through standard MCP protocol.
 
-The default persistent-data tree is independent of every indexed source checkout:
+---
+
+## Supported Languages
+
+Compiler-grade parsers — not regex, not naive AST. Each analyzer uses the right tool for the language:
+
+| Language | Parser Technology | What It Extracts |
+| --- | --- | --- |
+| **C# / VB.NET** | Roslyn workspace (semantic model) | Full type resolution, method invocations, LINQ, async/await, ASP.NET overlays |
+| **VB6 / VBA** | ANTLR4 (whole-program parse) | Call graphs, control flow, designer forms, control arrays |
+| **Java / Kotlin** | Tree-sitter + Spring/Struts/MyBatis overlays | Calls, generics, inheritance, framework routes, DI wiring |
+| **C / C++** | Clang-based | Pointers, templates, macros, header resolution |
+| **Go, Rust, Swift** | Tree-sitter | Calls, types, interfaces, concurrency patterns |
+| **TypeScript / JavaScript** | Tree-sitter | Imports, exports, async, React/Vue components |
+| **Python** | AST + import graph | Decorators, generators, type hints |
+| **COBOL** | Custom parser (copybook-aware) | Paragraphs, COPY resolution, file I/O |
+| **Perl, Delphi, Dart** | Tree-sitter / custom | Module structure, calls, inheritance |
+| **Android** | Mixed Java + Kotlin analyzer | Cross-language calls, Activity lifecycle |
+
+**Framework overlays**: Spring, Struts, MyBatis, Flutter, ASP.NET Core, ASP.NET Framework, Express.js, FastAPI/Django, Laravel
+
+**Document formats**: PDF, Markdown, DOCX, PPTX, XLSX, TXT
+
+---
+
+## Storage
+
+**Embedded by default** — data lives on disk, no network required.
 
 ```text
 ~/.cortext-harness/v1/instances/default/
 ├── manifest.json
-├── qdrant/{code,doc}/
-├── falkordb/{code,doc}/data.rdb
+├── qdrant/{code,doc}/              # vector embeddings
+├── falkordb/{code,doc}/data.rdb    # graph relationships
 └── backups/
 ```
 
-Set `CORTEX_DATA_HOME` for an isolated test/portable root and `CORTEX_STORAGE_INSTANCE` for a disjoint named deployment. Code and document processes own distinct stores; stop an owner before backup, migration, reset, or another direct open.
-
-Legacy repository-local data is copied, verified, and retained:
+**Remote mode** for shared team infrastructure:
 
 ```bash
-make storage-migrate-layout                         # dry-run
-make storage-migrate-layout MIGRATE_ARGS="--apply" # copy and verify
-make storage-backup OWNER=code
+make infra-up     # start Docker: Qdrant (:6333) + FalkorDB (:6379)
+dev init          # select "remote" backend, enter connection details
 ```
 
-`infra-up` and `infra-down` now also manage the local Docker containers for projects that point at remote Qdrant + FalkorDB endpoints over `127.0.0.1`:
-
-- `make infra-up` is idempotent: it inspects `cortex-qdrant` and `cortex-falkordb` first. Running containers are left alone; stopped containers are restarted; missing containers are pulled (only when the image is not cached) and started with ports pinned to `127.0.0.1`. Re-running the command never re-pulls or re-creates an already-running container.
-- `make infra-down` stops both managed containers (idempotent — no-op when they are missing or the docker daemon is unreachable) and closes cached remote clients. Local file-backed storage is left on disk by design.
-- The FalkorDB image (`falkordb/falkordb`) ships with a Browser UI on `http://127.0.0.1:3000`; the Qdrant Dashboard is reachable at `http://127.0.0.1:6333/dashboard`. Port pinning to `127.0.0.1` means the services are never exposed beyond the local machine.
-- Because FalkorDB serves the database and the Browser UI on separate ports, `infra-up` lists both under the container line so it is clear which is which:
-
-  ```
-  [ok] cortex-falkordb running (http://127.0.0.1:3000)
-         redis      : redis://127.0.0.1:6379
-         Browser UI : http://127.0.0.1:3000
-  ```
-
-- For a project on `storage_backend: remote`, `make doctor` appends the Browser UI URL to the FalkorDB check once it is reachable — for example `remote:my_app:falkordb - redis://db.internal:6379 — reachable — Browser UI: http://db.internal:3000`. The host is derived from the configured `falkordb_uri`; the URL is an informational hint and is never probed, so a remote host that does not publish port 3000 still passes. A `unix://` socket URI has no host and therefore shows no UI URL.
-- Override the image tag with `QDRANT_IMAGE` / `FALKORDB_IMAGE`; override the host ports with `QDRANT_HTTP_PORT`, `QDRANT_GRPC_PORT`, `FALKORDB_PORT`, `FALKORDB_UI_PORT`. Invalid port values fall back to the defaults rather than crashing `infra-up`. `FALKORDB_UI_PORT` drives the advertised UI URL in both `infra-up` and `doctor`.
-- When the docker daemon is unreachable, `make infra-up` logs `[warn] docker not available — skipping container ensure` and continues — purely local projects are unaffected, and remote projects that point at `127.0.0.1` will simply fail the subsequent reachability probe.
-
-If a host port is already bound (for example, by a natively running Qdrant/FalkorDB), `infra-up` reports `[fail] host port already in use — service may already be running natively; remote probe will report reachability` and lets the probe decide.
-
-`make install` installs `dev.cmd` to `%USERPROFILE%\.local\bin` on Windows and `dev` to `~/.local/bin` on macOS/Linux. Make sure that directory is on your shell `PATH`.
-
-After installation, every root Make lifecycle target has a matching global `dev` command and can be run from any directory:
-
-```bash
-dev help
-dev build
-dev install
-dev uninstall
-dev storage-layout
-dev storage-init
-dev storage-migrate-layout                 # dry-run
-dev storage-migrate-layout --apply
-dev storage-backup --owner code
-dev doctor
-dev start
-dev stop
-```
-
-For example, `dev start` is equivalent to `make start`: it opens code-tiny (`:8788`) and doc-tiny (`:8789`) in separate terminal windows, but it can be invoked from any directory. Storage commands resolve the same centralized paths from any working directory.
-
-`dev start` and `make start` keep that behavior when called without parameters. Parameterized starts create named instances that can run alongside one another:
-
-```bash
-# One code MCP for project SHOP / graph SHOP on :8790
-dev start --server code --name shop-code --project SHOP --port 8790
-
-# Both MCPs for project CRM, with independent ports
-dev start --name crm --project CRM --code-port 8800 --doc-port 8801
-
-# Separate graph databases or vector collections per service
-dev start --name mixed --code-database CODE_DB --doc-database DOC_DB \
-  --code-collection code_vectors --doc-collection doc_vectors \
-  --code-port 8810 --doc-port 8811
-
-# Stop one named instance; `dev stop` without options still stops every MCP
-dev stop --name crm
-```
-
-The equivalent Make syntax passes lifecycle arguments through `START_ARGS` and `STOP_ARGS`:
-
-```bash
-make start START_ARGS="--server doc --name shop-doc --project SHOP --port 8791"
-make stop STOP_ARGS="--name shop-doc"
-```
-
-Useful start options include `--server all|code|doc`, `--name`, `--project`, `--database`/`--db`, service-specific database and collection overrides, `--port`, `--code-port`, `--doc-port`, `--host`, `--path`, and `--provider falkordb|neo4j`. When `--project` is given, it also acts as the default graph database and vector collection unless a more specific option overrides it.
-
-Lifecycle compatibility is gated in GitHub Actions on both Intel and Apple Silicon macOS runners. The gate executes the installed `~/.local/bin/dev` wrapper from outside the repository and validates Make/dev parity, Terminal launcher construction, and start/stop state handling.
-
-Because the install is **editable** (`-e`), `git pull` automatically picks up any updates — no reinstall needed.
+Multiple projects share one storage instance with isolated graph/collection namespaces. Override paths with `CORTEX_DATA_HOME` or `CORTEX_STORAGE_INSTANCE`.
 
 ---
 
-## 1. Commands
+## CLI Reference
 
-The CLI has **two independent command groups** serving different roles:
-
-| Group | Purpose |
-| --- | --- |
-| `dev init / sync / mcp` | **Data pipeline** — ingest code & docs into Neo4j + Qdrant, manage MCP servers |
-
-### Setup
+### Lifecycle
 
 | Command | Description |
 | --- | --- |
-| `dev init` | Interactive wizard — create/update config and scaffold project folders |
-| `dev init --env prod` | Configure the `prod` environment (default: `dev`) |
-| `dev init --project-dir /path` | Target a specific project directory |
-| `dev ignore add <FOLDER>...` | Add folders (names or globs like `generated-*`) to the scan-ignore list of the active config |
-| `dev ignore remove <FOLDER>...` | Remove entries from the scan-ignore list (exact match) |
-| `dev ignore list` | Print the configured ignore folders |
-| `dev status` | Show active config (Neo4j, Qdrant, folders, environments) |
-| `dev journal status --journal-path PATH` | Show payload-free recovery queue state |
-| `dev journal purge --journal-path PATH --run-id ID --project-id ID --root ROOT` | Purge one expired terminal run after exact-scope safety checks |
+| `dev build` | Create/reuse `.venv`, install dependencies |
+| `dev doctor` | Connectivity probes + MCP port diagnostics |
+| `dev start` | Launch MCP servers (code + doc) |
+| `dev start --server code --name shop --port 8790` | Named instance with custom port |
+| `dev stop` | Stop all MCP servers |
+| `dev stop --name shop` | Stop one named instance |
 
-> **Remote storage:** `dev init` prompts for `local` or `remote` backend. Press Enter
-> to accept local Docker defaults (`http://localhost:6333` / `localhost:6379`), then
-> run `dev infra-up --provision` to start containers. For remote servers, enter
-> non-localhost URLs and the wizard will prompt for credentials. Secrets are stored
-> in plaintext in `.cortext-harness/config/{env}.json` — do not commit populated
-> configs to shared repos.
-
-> **Ignore folders:** `dev init` also asks for folders to skip while scanning
-> (comma-separated, globs like `generated-*` allowed). Entries add to the
-> built-in defaults and apply to both code and doc sync; manage them later
-> with `dev ignore add|remove|list`.
-
-Backend selection is per project. A remote project may configure only Qdrant
-or only FalkorDB; the missing component is resolved as an explicit local
-component before ingest starts. Runtime connection failures never cause a
-local fallback. Changing an endpoint, graph, collection, TLS mode, or backend
-requires a fresh ingest because journal compatibility is bound to the
-credential-free effective target fingerprint. See
-[`docs/DATABASE_INTEGRATION.md`](docs/DATABASE_INTEGRATION.md) for the schema,
-switching procedure, and force-local behavior.
-
-### Sync — Source Code
+### Sync
 
 | Command | Description |
 | --- | --- |
-| `dev sync code` | Interactive folder picker; reliable hybrid incremental scan by default |
-| `dev sync code all` | Run all analyzers on every non-overlapping configured root; still incremental unless `--full-scan` is set |
-| `dev sync code add` | Add a new source project (git URL + folders) to the active config |
+| `dev sync code` | Incremental code sync (graph + embeddings) |
+| `dev sync code all` | Full sync across all configured source roots |
+| `dev sync code --sync-mode graph --full-scan` | Graph-only rebuild |
+| `dev sync code --sync-mode embedding --full-scan` | Embedding-only rebuild |
+| `dev sync doc` | Incremental doc sync (GraphRAG + vectors) |
+| `dev sync doc all` | Full doc sync across all configured doc roots |
 
-> **First run:** always a full sync (no baseline).
-> **Later runs:** Git supplies committed/staged/unstaged/untracked candidates and SHA-256 inventory confirms content changes. Initialized submodules are discovered recursively. Non-Git roots automatically use hash mode.
-> Use `--change-detection hash` or `--reconcile` for a full content check, `--submodules ignore` to disable recursive submodule coverage, and `--lock-timeout-seconds N` to control same-scope contention.
-> Support: C#, C/C++, Java, JavaScript, Kotlin, PHP, PL/SQL, Swift, TypeScript, Android Kotlin, Android Java, Python, Go, Perl 5 (`.pl`, `.pm`, `.t`), Rust, Delphi
-
-Graph-write recovery is controlled by `CORTEX_GRAPH_JOURNAL_MODE`: `off`,
-`cplus-canary`, `shared-shadow`, or `shared-required`. Global `all-required`
-remains fail-closed until every direct mutation path is migrated. Positive
-integer overrides are available for `CORTEX_GRAPH_JOURNAL_MAX_BATCHES`,
-`CORTEX_GRAPH_JOURNAL_MAX_PAYLOAD_BYTES`,
-`CORTEX_GRAPH_JOURNAL_MAX_ARTIFACT_BYTES`,
-`CORTEX_GRAPH_JOURNAL_MAX_DATABASE_BYTES`,
-`CORTEX_GRAPH_JOURNAL_MIN_FREE_BYTES`,
-`CORTEX_GRAPH_JOURNAL_RETENTION_SECONDS`,
-`CORTEX_GRAPH_JOURNAL_LEASE_SECONDS`,
-`CORTEX_GRAPH_JOURNAL_MAX_ATTEMPTS`, and the retry base/maximum seconds. Invalid
-values stop ingestion before graph mutation. Use
-`dev journal status --journal-path <exact-path> --json-output` for payload-free
-queue state. `dev journal purge` additionally requires the exact run, project,
-and source root; active, leased, or retained runs are refused.
-
-#### Graph and embedding phases
-
-`dev sync code` uses `--sync-mode both` by default. In this mode it writes the
-primary graph and framework overlays first, runs `project_topology`, and only
-then writes embeddings to Qdrant. This guarantees that graph and module
-topology queries are available without waiting for embedding to finish.
-
-| Mode | Runs | Storage isolation |
-| --- | --- | --- |
-| `both` | Graph, framework overlays, topology, then embedding | Normal incremental sync is supported |
-| `graph` | Graph, framework overlays, and topology only | Does not open or write Qdrant |
-| `embedding` | Embedding only | Does not open or mutate the graph database |
-
-```bash
-# Full graph + embedding pipeline
-dev sync code --full-scan --sync-mode both
-
-# Rebuild graph and project topology only
-dev sync code --full-scan --sync-mode graph
-
-# Rebuild embeddings only
-dev sync code --full-scan --sync-mode embedding
-
-# Graph-only full scan for every configured source root
-dev sync code --full-scan --sync-mode graph all
-```
-
-The specialized `graph` and `embedding` modes require `--full-scan`. They do
-not replace the shared incremental baseline; use the default `both` mode for
-normal incremental synchronization. If embedding fails in `both` mode after
-topology succeeds, the graph/topology result remains persisted and the command
-returns a non-zero status with separate phase results.
-
-### Sync — Documentation
+### Configuration & Maintenance
 
 | Command | Description |
 | --- | --- |
-| `dev sync doc` | Interactive folder picker; incremental if baseline exists |
-| `dev sync doc all` | Full sync for every configured doc folder |
-| `dev sync doc add` | Add a new doc project (git URL + folders) to the active config |
-
-> **First run:** always a full sync (no baseline).
-> **Subsequent runs:** incremental — detects changes via git diff → SHA-256 hash comparison → mtime.
-> **Supported formats:** `.pdf`, `.md`, `.docx`, `.txt`, `.pptx`, `.xlsx`
-
-
-### Harness — Agent Session Orchestration
-
-The agent skill pack used by CortexHarness is published as
-[`baka3k/dev-kit`](https://github.com/baka3k/dev-kit). We call this the
-**ADLC skill pack** — Agent Development Lifecycle skills that the agent
-should load before planning, coding, debugging, or reviewing any change.
-
-#### Bootstrap the skill pack
-
-CortexHarness ships two wrappers around the upstream
-[`npx skill-dev`](https://www.npmjs.com/package/skill-dev) installer —
-pick whichever matches your shell:
-
-| Command | Use when |
-| --- | --- |
-| `make install-adlc` | You are in the repo root and want the standard `make` flow |
-| `dev install-adlc`  | You prefer the global `dev` CLI (already on `PATH` after `make install`) |
-| `dev install-adlc doctor` | Pre-flight check: verifies `node`, `npx`, and npm registry reachability |
-
-Both wrappers resolve the correct `npx` binary per platform
-(`npx.cmd` on Windows, `npx` on macOS/Linux) and run `npx -y skill-dev`
-against the default source
-[`https://github.com/baka3k/dev-kit`](https://github.com/baka3k/dev-kit).
-The upstream installer is **interactive** — it walks you through picking
-skills, the target agent (Claude Code / OpenCode / Qwen Code / GitHub
-Copilot / Cursor / Continue / Generic), and the install location
-(Global `~/.claude/skills` or Current project):
-
-```
-$ make install-adlc
->> ADLC: bootstrapping dev-kit via npx -y skill-dev ...
->> Source: https://github.com/baka3k/dev-kit
-┌   devkit   Dev Kit Installer
-│
-◆  Select skills
-│  ◼ hi-craft
-│  ◼ hi-debug
-│  ◼ hi-explorer
-│  ◼ hi-fix
-│  ◼ knows
-│  ◼ hi-log
-│  ◼ hi-plan (Should ALWAYS activate before implementing ANY implement , or fix.)
-│  ◼ hi-predict
-│  ◼ hi-problem-solving
-│  ◼ hi-scenario
-│  ◼ hi-security
-│  ◼ hi-sequential-thinking
-└ ....
-
-◇ Select target agent
-❯ Claude Code
-  OpenCode
-  Qwen Code
-  GitHub Copilot
-  Cursor
-  Continue
-  Generic
-
-◇ Install location
-❯ Global (~/.claude/skills)
-  Current project
-
-◇ Summary
-Agent: Claude Code
-Skills: 12 selected
-Location: Global
-Install? (Y/n)
-
----
-```
-
-#### Customization
-
-| Variable / flag | Purpose |
-| --- | --- |
-| `SOURCE=owner/repo` (Make) <br/> `--source owner/repo` (CLI) | Install from a fork or private mirror instead of `baka3k/dev-kit` |
-| `SYNC_FILE=~/notes/AGENTS.md` (Make, repeatable) <br/> `--sync-file PATH` (CLI, repeatable) | Copy extra `AGENTS.md` / `CLAUDE.md` files into the install target |
-| `NO_MANIFEST=1` (Make) <br/> `--no-manifest` (CLI) | Skip auto-install of `AGENTS.md` / `CLAUDE.md` from the source repo root |
-| `--non-interactive` (CLI) | Forward args to `npx` without attaching a TTY (for wrapper scripts / CI) |
-
-Examples:
-
-```bash
-# Install from a private fork
-make install-adlc SOURCE=myorg/dev-kit
-
-# Sync a local AGENTS.md into the install target as well
-make install-adlc SYNC_FILE=~/notes/AGENTS.md SYNC_FILE=~/notes/CLAUDE.md
-
-# Skip the bundled AGENTS.md / CLAUDE.md (use only your own)
-make install-adlc NO_MANIFEST=1
-```
-
-#### Prerequisites
-
-- Node.js ≥ 18 (for `npx`)
-- Network access to `https://registry.npmjs.org`
-- Run `dev install-adlc doctor` first if you are unsure your machine is ready.
+| `dev init` | Interactive setup wizard |
+| `dev status` | Show active config |
+| `dev ignore add <FOLDER>...` | Add folders to scan-ignore list |
+| `dev install-adlc` | Bootstrap ADLC skill pack for AI agents |
+| `make export-db OUTPUT=project.cortexdb` | Export project database |
+| `make import-db ARCHIVE=project.cortexdb` | Import project database |
 
 ---
 
+## MCP Tools for AI Agents
+
+One server, every query pattern:
+
+| Category | Key Tools |
+| --- | --- |
+| **Symbol & graph** | `search_functions`, `get_symbol`, `query_subgraph`, `explore_graph` |
+| **Flow tracing** | `trace_flow`, `reconstruct_flow`, `find_workflows_containing` |
+| **Impact analysis** | `analyze_workflow_impact`, `find_paths`, `compute_scc` |
+| **Fullstack bridge** | `get_api_call_chain`, `find_callers_of_endpoint` |
+| **Semantic search** | `semantic_search`, `search_by_code` |
+| **Project context** | `get_project_modules`, `get_framework_context`, `get_public_apis` |
+| **Dependency planning** | `topological_sort`, `plan_dependency_order` |
+
+---
+
+## Architecture
+
+```
+cortex-harness/
+├── cortex_harness/     # CLI (dev.py), config, storage management
+├── code-tiny/          # Language analyzers, MCP servers, graph writers
+│   ├── tools/          # Per-language analyzers (csharp, java, go, rust, ...)
+│   ├── mcp/            # Unified MCP server + per-language backends
+│   └── tools/graph/    # Shared graph schema, writers, CLI helpers
+├── doc-tiny/           # Document pipeline, GraphRAG, entity extraction
+└── scripts/            # Lifecycle, MCP management, migrations
 ```
 
-### Common Windows Issues
+**Design principles:**
+- **Embedded-first** — zero infrastructure for individual developers
+- **Provider-neutral** — swap FalkorDB ↔ Neo4j without touching analyzers
+- **Project-scoped** — multiple projects, one storage, isolated namespaces
+- **Incremental by default** — Git-aware, SHA-256 verified, only changed files
+- **Crash-safe** — write-ahead journal for graph mutations with automatic replay
 
-**Issue**: `ModuleNotFoundError: No module named 'requests'`
-**Fix**: Install code-tiny dependencies: `uv pip install --python C:\ai\cortex-harness\.venv\Scripts\python.exe --requirements C:\ai\cortex-harness\code-tiny\requirements.txt`
+---
 
-**Issue**: `TypeError: got multiple values for keyword argument 'fix_mistral_regex'`
-**Fix**: Downgrade transformers: `uv pip install --python C:\ai\cortex-harness\.venv\Scripts\python.exe "transformers<5.0"`
+## Troubleshooting
 
-**Issue**: `AssertionError: Torch not compiled with CUDA enabled`
-**Fix**: Install CUDA PyTorch: `uv pip install --python C:\ai\cortex-harness\.venv\Scripts\python.exe torch torchvision torchaudio --default-index https://download.pytorch.org/whl/cu124`
+<details>
+<summary>Windows: <code>ModuleNotFoundError: No module named 'requests'</code></summary>
 
-**Issue**: `'dev' is not recognized as a command`
-**Fix**: Use one of the CLI setup methods above or run: `C:\ai\cortex-harness\.venv\Scripts\dev.exe <command>`
-
-## CUDA ONLY 
-Clean install
+```powershell
+uv pip install --python .venv\Scripts\python.exe --requirements code-tiny\requirements.txt
 ```
-uv pip uninstall torch torchvision torchaudio
-uv cache clean
+</details>
+
+<details>
+<summary>Windows: <code>'dev' is not recognized as a command</code></summary>
+
+Run directly: `.venv\Scripts\dev.exe <command>`, or add `%USERPROFILE%\.local\bin` to PATH.
+</details>
+
+<details>
+<summary>CUDA / PyTorch issues</summary>
+
+```bash
 uv pip install torch torchvision torchaudio --default-index https://download.pytorch.org/whl/cu128
+python -c "import torch; print(torch.cuda.is_available())"
 ```
-check cuda
-```
-python -c "import torch; print('torch', torch.__version__); print('cuda', torch.version.cuda); print('cuda_available', torch.cuda.is_available()); print('gpu', torch.cuda.get_device_name(0))"
-```
-you can see:
-```
-torch 2.x.x+cu128
-cuda 12.8
-cuda_available True
-gpu NVIDIA GeForce RTX 5060 Ti
-```
+</details>
 
-## ASP.NET Semantic Overlays
+<details>
+<summary>Port already in use</summary>
 
-`dev sync code` supports detector-gated `aspnet_framework` and `aspnet_core`
-overlays. Both require the canonical `csharp` analyzer and preserve exclusive
-`.cs` ownership. The overlays add routes, request pipelines, controllers,
-pages/views, services, configuration, state, validation, and result semantics
-through one migration-oriented graph contract.
+`dev start --port 8790` to pick a different port, or `dev stop` to clear existing servers.
+</details>
 
-Use `aspnet-framework`, `asp.net-framework`, `aspnet-core`, or `asp.net-core`
-as unified MCP parser aliases. Roslyn workspace loading is attempted in
-`auto` mode; unavailable legacy reference assemblies or SDK workloads produce
-explicit partial coverage.
+---
+
+## License
+
+See [LICENSE](LICENSE) for details.
