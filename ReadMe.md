@@ -51,14 +51,15 @@ git clone https://github.com/baka3k/cortex-harness.git
 cd cortex-harness
 
 uv --version      # uv is required; install it first if this command is unavailable
-make build       # create/reuse .venv and install dependencies with uv
-make storage-init # create ~/.cortext-harness/v1/instances/default and its manifest
+make build         # create/reuse .venv and install dependencies with uv
+make storage-init   # create ~/.cortext-harness/v1/instances/default and its manifest
 make storage-layout # show resolved owner paths, manifest, and leases
-make install     # create/reuse .venv, install dependencies, and install global dev command
-make doctor      # isolated Qdrant/FalkorDBLite round-trips plus MCP port diagnostics
-make start       # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
-make stop        # stop MCP terminal/processes started by make start
-make uninstall   # remove the global dev command installed by make install
+make install        # create/reuse .venv, install dependencies, and install global dev command
+make doctor         # isolated Qdrant/FalkorDBLite round-trips plus MCP port diagnostics
+make start          # open code-tiny (:8788) and doc-tiny (:8789) in separate terminal windows
+make stop           # stop MCP terminal/processes started by make start
+make install-adlc   # bootstrap the ADLC agent skill pack (dev-kit) via `npx skill-dev`
+make uninstall      # remove the global dev command installed by make install
 ```
 
 Set `UV` when the executable is not on the default `PATH`, for example `make build UV=/opt/homebrew/bin/uv`.
@@ -276,8 +277,36 @@ returns a non-zero status with separate phase results.
 
 ### Harness — Agent Session Orchestration
 
-Make sure you installed `dev-kit`  https://github.com/baka3k/dev-kit
-$ npx skill-dev
+The agent skill pack used by CortexHarness is published as
+[`baka3k/dev-kit`](https://github.com/baka3k/dev-kit). We call this the
+**ADLC skill pack** — Agent Development Lifecycle skills that the agent
+should load before planning, coding, debugging, or reviewing any change.
+
+#### Bootstrap the skill pack
+
+CortexHarness ships two wrappers around the upstream
+[`npx skill-dev`](https://www.npmjs.com/package/skill-dev) installer —
+pick whichever matches your shell:
+
+| Command | Use when |
+| --- | --- |
+| `make install-adlc` | You are in the repo root and want the standard `make` flow |
+| `dev install-adlc`  | You prefer the global `dev` CLI (already on `PATH` after `make install`) |
+| `dev install-adlc doctor` | Pre-flight check: verifies `node`, `npx`, and npm registry reachability |
+
+Both wrappers resolve the correct `npx` binary per platform
+(`npx.cmd` on Windows, `npx` on macOS/Linux) and run `npx -y skill-dev`
+against the default source
+[`https://github.com/baka3k/dev-kit`](https://github.com/baka3k/dev-kit).
+The upstream installer is **interactive** — it walks you through picking
+skills, the target agent (Claude Code / OpenCode / Qwen Code / GitHub
+Copilot / Cursor / Continue / Generic), and the install location
+(Global `~/.claude/skills` or Current project):
+
+```
+$ make install-adlc
+>> ADLC: bootstrapping dev-kit via npx -y skill-dev ...
+>> Source: https://github.com/baka3k/dev-kit
 ┌   devkit   Dev Kit Installer
 │
 ◆  Select skills
@@ -313,6 +342,37 @@ Agent: Claude Code
 Skills: 12 selected
 Location: Global
 Install? (Y/n)
+
+---
+```
+
+#### Customization
+
+| Variable / flag | Purpose |
+| --- | --- |
+| `SOURCE=owner/repo` (Make) <br/> `--source owner/repo` (CLI) | Install from a fork or private mirror instead of `baka3k/dev-kit` |
+| `SYNC_FILE=~/notes/AGENTS.md` (Make, repeatable) <br/> `--sync-file PATH` (CLI, repeatable) | Copy extra `AGENTS.md` / `CLAUDE.md` files into the install target |
+| `NO_MANIFEST=1` (Make) <br/> `--no-manifest` (CLI) | Skip auto-install of `AGENTS.md` / `CLAUDE.md` from the source repo root |
+| `--non-interactive` (CLI) | Forward args to `npx` without attaching a TTY (for wrapper scripts / CI) |
+
+Examples:
+
+```bash
+# Install from a private fork
+make install-adlc SOURCE=myorg/dev-kit
+
+# Sync a local AGENTS.md into the install target as well
+make install-adlc SYNC_FILE=~/notes/AGENTS.md SYNC_FILE=~/notes/CLAUDE.md
+
+# Skip the bundled AGENTS.md / CLAUDE.md (use only your own)
+make install-adlc NO_MANIFEST=1
+```
+
+#### Prerequisites
+
+- Node.js ≥ 18 (for `npx`)
+- Network access to `https://registry.npmjs.org`
+- Run `dev install-adlc doctor` first if you are unsure your machine is ready.
 
 ---
 
