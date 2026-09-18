@@ -1562,13 +1562,20 @@ async def build_call_graph(
                     "rel_type": "CONTAINS", "properties": {},
                 })
             for delegate_def in payload.get("delegates", []):
+                # FalkorDB only accepts primitive arrays; ``parameters`` is a
+                # list of dicts from Roslyn. Serialize to JSON so the writer
+                # can store it without raising
+                # ``Property values can only be of primitive types ...``.
+                import json as _json
+                _params = delegate_def.get("parameters", []) or []
+                _tparams = delegate_def.get("type_parameters", []) or []
                 all_delegates.append({
                     "id": delegate_def.get("symbol_id") or f"{delegate_def.get('qualified_name', delegate_def.get('name', ''))}@{file_id}",
                     "name": delegate_def.get("name", ""),
                     "qualified_name": delegate_def.get("qualified_name", ""),
                     "return_type": delegate_def.get("return_type", ""),
-                    "type_parameters": delegate_def.get("type_parameters", []),
-                    "parameters": delegate_def.get("parameters", []),
+                    "type_parameters": _json.dumps(_tparams),
+                    "parameters": _json.dumps(_params),
                     "kind": "delegate",
                     "file_path": file_id,
                     "start_line": delegate_def.get("start_line", 0),
@@ -1613,7 +1620,7 @@ async def build_call_graph(
             properties=all_properties or None,
             fields=all_fields or None,
             events=all_events or None,
-            constants=all_delegates or None,
+            delegates=all_delegates or None,
             use_full_writers=True,
             files_variant="default",
         )
