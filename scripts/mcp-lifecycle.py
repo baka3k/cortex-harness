@@ -329,6 +329,21 @@ def invoke_build() -> None:
     run(arguments)
     print("[build] Dependency sync complete (uv).")
 
+    # Ensure the prebuilt VB6 ANTLR worker jar is present so fresh clones can
+    # run ``engine=antlr`` without a separate Maven step. Best-effort: a host
+    # without ``java``/``mvn`` can still use ``engine=regex``.
+    try:
+        from tools.vb.vb6_antlr_adapter import ensure_worker_built  # type: ignore
+
+        jar_path = ensure_worker_built(verbose=True)
+        print(f"[build] VB6 ANTLR worker jar ready: {jar_path}")
+    except RuntimeError as exc:
+        print(
+            f"[build] WARN: VB6 ANTLR worker jar not built ({exc}). "
+            "Install Java + Maven, or rely on engine=regex.",
+            file=sys.stderr,
+        )
+
 
 def user_bin_dir() -> Path:
     home = os.environ.get("HOME")

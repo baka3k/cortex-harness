@@ -137,8 +137,13 @@ code-tiny/tools/csharp/roslyn_worker/obj/
 # VB6 ANTLR worker (Maven aggregator) — ignore Maven build outputs.
 # Source-of-truth: pom.xml, src/main, VENDOR.md, LICENSE inside
 # code-tiny/tools/vb/antlr_worker/{vendor/proleap-vb6-parser,worker}/
-code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/target/
-code-tiny/tools/vb/antlr_worker/worker/target/
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/target/**
+code-tiny/tools/vb/antlr_worker/worker/target/**
+# Track the prebuilt shaded jar so fresh clones can run `engine=antlr`
+# without a Maven toolchain. `make build` re-stamps via ensure_worker_built()
+# when sources change. Other Maven outputs (classes/, original-*.jar,
+# generated-sources/) remain ignored.
+!code-tiny/tools/vb/antlr_worker/worker/target/vb6-antlr-worker.jar
 .cortext-harness/config/dev.json
 .cortex/flutter/
 .cortex/flutter/**
@@ -150,4 +155,3 @@ compile_commands.json
 .mimosa/
 .mimosa/**
 .cortext-harness/sync-state/sync-code.lock
-target/
