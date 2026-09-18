@@ -2697,6 +2697,13 @@ public abstract class ScopeImpl extends ScopedElementImpl implements Scope {
 	}
 
 	protected void linkArrayElementCallWithVariable(final ArrayElementCall arrayElementCall, final Variable variable) {
+		// Upstream guard: addCall(ScopeImpl:737) can enter the ArrayElementCall
+		// branch with ``variable == null`` when the name resolves to an ``Arg``
+		// whose ``isCollection()`` is true. Without this null check the
+		// addVariableCall invocation below throws NPE and the whole batch dies.
+		if (variable == null) {
+			return;
+		}
 		variable.addVariableCall(arrayElementCall);
 	}
 

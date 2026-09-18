@@ -1660,6 +1660,60 @@ class LanguageCodeWriter:
 
         return await self.write_batches("variables", variables, write_batch, state, state_writer)
 
+    async def write_delegates_full(
+        self,
+        delegates: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write C# delegate declarations to :Delegate nodes.
+
+        The csharp analyzer previously passed them via the ``constants`` slot
+        which labeled them :Constant; the ``File→CONTAINS→Delegate`` relations
+        then failed the endpoint preflight because no :Delegate nodes existed.
+        """
+        if not delegates:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            # parameters / type_parameters are nested objects — FalkorDB only
+            # accepts primitive arrays, so the adapter must serialize them to
+            # JSON strings before they reach the query (see csharp analyzer).
+            query = """
+            UNWIND $rows AS row
+            MERGE (d:Delegate {id: row.id})
+            SET d.name = row.name,
+                d.qualified_name = row.qualified_name,
+                d.kind = row.kind,
+                d.scope_name = row.scope_name,
+                d.class_name = row.class_name,
+                d.package_name = row.package_name,
+                d.file_path = row.file_path,
+                d.start_line = row.start_line,
+                d.end_line = row.end_line,
+                d.return_type = row.return_type,
+                d.type_parameters = row.type_parameters,
+                d.parameters = row.parameters,
+                d.code = row.code,
+                d.comment = row.comment,
+                d.summary = row.summary,
+                d.note = row.note,
+                d.project_id = row.project_id,
+                d.project_id_normalized = row.project_id_normalized,
+                d.project_name = row.project_name,
+                d.language = row.language,
+                d.repo = row.repo,
+                d.build_system = row.build_system,
+                d.updated_at = datetime()
+            RETURN count(d) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("delegates", delegates, write_batch, state, state_writer)
+
     async def write_relations_typed(
         self,
         relations: List[Dict[str, Any]],
@@ -2723,6 +2777,8 @@ class LanguageCodeWriter:
         enums: List[Dict[str, Any]] = None,
         constants: List[Dict[str, Any]] = None,
         variables: List[Dict[str, Any]] = None,
+        # C# delegate declarations (namespace/class-level reference types)
+        delegates: List[Dict[str, Any]] = None,
         # React Navigation navigator graph
         navigators: List[Dict[str, Any]] = None,
         has_routes: List[Dict[str, Any]] = None,
@@ -2766,6 +2822,8 @@ class LanguageCodeWriter:
             enums: Enum definitions (VB.NET, VB6, VBA)
             constants: Constant definitions (VB6, VBA)
             variables: Variable definitions (VB6, VBA)
+            delegates: C# delegate declarations (written to :Delegate label so
+                ``File→CONTAINS→Delegate`` relations match the identity index)
             state: State dict for resume
             state_writer: Function to persist state
             use_full_writers: When True use the *_full inline-Cypher methods that
@@ -2976,6 +3034,10 @@ class LanguageCodeWriter:
         if variables:
             if use_full_writers:
                 counts["variables"] = await self.write_variables_full(variables, state, state_writer)
+
+        # --- Delegates (C#-specific) ---
+        if delegates:
+            counts["delegates"] = await self.write_delegates_full(delegates, state, state_writer)
 
         if fields:
             counts["fields"] = await self.write_fields(fields, state, state_writer)
