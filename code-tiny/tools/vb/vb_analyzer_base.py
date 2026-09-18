@@ -1669,14 +1669,19 @@ async def build_call_graph(
             for (_, point), vector in zip(batch, vectors):
                 points.append({"id": point["id"], "vector": vector, "payload": point["payload"]})
             qdrant_writer.upsert(enrich_project_scope(points))
-            del texts, vectors, points, batch
             batch_no = (idx // qdrant_batch_size) + 1
+            # Capture points_in_batch BEFORE we del points so the progress
+            # print doesn't hit UnboundLocalError on the final iteration
+            # (when total_batches == 1 the verbose branch runs for the same
+            # iteration that just deleted ``points``).
+            points_in_batch = len(points)
+            del texts, vectors, points, batch
             if batch_no % 20 == 0:
                 gc.collect()
             if verbose:
                 if batch_no == 1 or batch_no % 10 == 0 or batch_no == total_batches:
                     print(
-                        f"[embed][progress] parser={dialect} batch={batch_no}/{total_batches} points={len(points)}",
+                        f"[embed][progress] parser={dialect} batch={batch_no}/{total_batches} points={points_in_batch}",
                         flush=True,
                     )
 

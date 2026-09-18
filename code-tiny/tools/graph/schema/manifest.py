@@ -174,6 +174,7 @@ CODE_GRAPH_SCHEMA = GraphSchemaManifest(
                 "Database",
                 "DatabaseColumn",
                 "DatabaseTable",
+                "Delegate",
                 "Dependency",
                 "Directory",
                 "Document",
