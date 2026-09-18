@@ -914,6 +914,7 @@ public final class Vb6Worker {
 		}
 		String cleaned = stripArgs(sanitizeDisplay(raw), memberName);
 		if (cleaned.length() > memberName.length()
+				&& cleaned.length() >= 4
 				&& cleaned.substring(0, 4).equalsIgnoreCase("Call")) {
 			cleaned = cleaned.substring(4);
 		}

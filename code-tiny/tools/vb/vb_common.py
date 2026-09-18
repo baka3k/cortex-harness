@@ -22,7 +22,7 @@ except ImportError:  # standalone use outside code-tiny
 # (hydrated planes + arity/dictionary enrichment), -3 phase-02 (controls[] +
 # keep-designer + event-wiring fields), -4 phase-04 (comment extraction).
 # Old caches must not hydrate into the new shape.
-_PARSE_CACHE_VERSION = "vb-family-v2026-09-17-4"
+_PARSE_CACHE_VERSION = "vb-family-v2026-09-18-1"  # bump: drop ``Const`` from _VAR_DECL_RE
 
 
 @dataclass
@@ -474,11 +474,19 @@ _EVENT_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Variable/field declaration patterns
+# Variable/field declaration patterns.
+# NOTE: ``Const`` is intentionally excluded from the scope group so it does not
+# also create a Variable row — ``_CONST_RE`` owns module-level constants and
+# both regexes would otherwise emit the same ``symbol_id`` under two labels
+# (Constant + Variable), which the shared writer rejects as ``cannot infer
+# target_label`` when the symbol is referenced from a typed relationship.
+# ``Const`` is also excluded from the name slot via a negative lookahead so
+# that ``Public Const X As ...`` does not yield a stray Variable named
+# ``Const``.
 _VAR_DECL_RE = re.compile(
-    r"^\s*(?P<scope>Public|Private|Friend|Protected|Global|Shared|Static|Dim|Const)\s+"
+    r"^\s*(?P<scope>Public|Private|Friend|Protected|Global|Shared|Static|Dim)\s+"
     r"(?P<with_events>WithEvents\s+)?"
-    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\((?:\d+|\s*(?:To)?\s*\d+(?:\s*,\s*\d+)*)\))?\s*"
+    r"(?P<name>(?!Const\b)[A-Za-z_][A-Za-z0-9_]*)\s*(?:\((?:\d+|\s*(?:To)?\s*\d+(?:\s*,\s*\d+)*)\))?\s*"
     r"(?:As\s+(?P<type>[A-Za-z0-9_.()]+))?"
     r"(?:\s*=\s*(?P<init>[^'\n]+))?",
     re.IGNORECASE | re.MULTILINE,

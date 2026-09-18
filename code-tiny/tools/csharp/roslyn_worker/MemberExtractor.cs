@@ -384,11 +384,15 @@ internal static class MemberExtractor
         var delegateType = node.Declaration.Type.ToString();
         foreach (var variable in node.Declaration.Variables)
         {
+            // Plan: canonical_symbol_id uses ``<qualified_name>/0@<rel_path>``
+            // so the identity indexes in the graph agree with ``resolved``
+            // forms; the previous leading ``::`` made every event/delegate
+            // lookup miss and abort the relation write.
             yield return new EventEvidence(
                 variable.Identifier.ValueText,
                 variable.Identifier.ValueText,
                 Line(variable), EndLine(variable),
-                $"::{variable.Identifier.ValueText}@{Path.GetRelativePath(root, tree.FilePath).Replace('\\', '/')}",
+                $"{variable.Identifier.ValueText}/0@{Path.GetRelativePath(root, tree.FilePath).Replace('\\', '/')}",
                 delegateType, accessibility, isStatic, false,
                 attributeNames, xmlDoc);
         }
@@ -409,7 +413,7 @@ internal static class MemberExtractor
             node.Identifier.ValueText,
             symbol?.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat) ?? node.Identifier.ValueText,
             Line(node), EndLine(node),
-            $"::{node.Identifier.ValueText}@{Path.GetRelativePath(root, tree.FilePath).Replace('\\', '/')}",
+            $"{node.Identifier.ValueText}/0@{Path.GetRelativePath(root, tree.FilePath).Replace('\\', '/')}",
             returnType, typeParameters,
             symbol?.DeclaredAccessibility.ToString().ToLowerInvariant() ?? ExtractAccessibility(node.Modifiers),
             attributes, parameters,

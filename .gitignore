@@ -139,6 +139,19 @@ code-tiny/tools/csharp/roslyn_worker/obj/
 # code-tiny/tools/vb/antlr_worker/{vendor/proleap-vb6-parser,worker}/
 code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/target/**
 code-tiny/tools/vb/antlr_worker/worker/target/**
+# Eclipse IDE metadata (.project, .classpath, .settings) — local IDE
+# state from antlr_worker builds, never to be tracked.
+code-tiny/tools/vb/antlr_worker/.project
+code-tiny/tools/vb/antlr_worker/.classpath
+code-tiny/tools/vb/antlr_worker/.settings/**
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/.project
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/.classpath
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/.settings/**
+code-tiny/tools/vb/antlr_worker/worker/.project
+code-tiny/tools/vb/antlr_worker/worker/.classpath
+code-tiny/tools/vb/antlr_worker/worker/.settings/**
+# Backup / swap files left by ad-hoc edits in the antlr_worker.
+code-tiny/tools/vb/antlr_worker/**/*.bak
 # Track the prebuilt shaded jar so fresh clones can run `engine=antlr`
 # without a Maven toolchain. `make build` re-stamps via ensure_worker_built()
 # when sources change. Other Maven outputs (classes/, original-*.jar,
@@ -155,3 +168,4 @@ compile_commands.json
 .mimosa/
 .mimosa/**
 .cortext-harness/sync-state/sync-code.lock
+doc-tiny/http:/.localhost:6333.cortex-owner.lock
