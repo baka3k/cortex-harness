@@ -5181,5 +5181,165 @@ def import_alias(archive: Path, overwrite: bool, role: str, project_dir: str):
         sys.exit(1)
 
 
+# ── install-adlc ────────────────────────────────────────────────────────────────
+#
+# ADLC = Agent Development Lifecycle.
+# Bootstraps the agent skill pack (a.k.a. "dev-kit") published at
+# https://github.com/baka3k/dev-kit via the `skill-dev` npm CLI.
+#
+# Examples:
+#   dev install-adlc
+#   dev install-adlc --source baka3k/dev-kit
+#   dev install-adlc --sync-file ~/notes/AGENTS.md
+#   dev install-adlc doctor
+
+DEFAULT_ADLC_SOURCE = "https://github.com/baka3k/dev-kit"
+
+
+def _resolve_npx_cmd() -> list:
+    """Return the platform-correct npx invocation prefix."""
+    if sys.platform == "win32":
+        return ["npx.cmd", "-y"]
+    return ["npx", "-y"]
+
+
+@cli.group()
+def install_adlc():
+    """Install the ADLC agent skill pack (dev-kit) via `npx skill-dev`.
+
+    \b
+    ADLC = Agent Development Lifecycle. This wraps the upstream
+    https://github.com/baka3k/dev-kit installer (`skill-dev`) so the
+    team can bootstrap any supported target agent (Claude Code,
+    OpenCode, Qwen Code, Cursor, Continue, ...) with a single command.
+
+    The upstream installer is interactive — it prompts for skills,
+    target agent, and install location. Pass `--non-interactive` only
+    when the caller has pre-staged those choices (e.g. via wrapper
+    scripts); the default is the guided flow.
+    """
+
+
+@install_adlc.command("run")
+@click.option(
+    "--source",
+    "source",
+    default=DEFAULT_ADLC_SOURCE,
+    show_default=True,
+    help="Source repo to install skills from (URL or owner/repo).",
+)
+@click.option(
+    "--sync-file",
+    "sync_files",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Extra file (e.g. AGENTS.md / CLAUDE.md) to copy into the install target. Repeatable.",
+)
+@click.option(
+    "--no-manifest",
+    is_flag=True,
+    default=False,
+    help="Skip auto-install of AGENTS.md / CLAUDE.md from the source repo root.",
+)
+@click.option(
+    "--non-interactive",
+    is_flag=True,
+    default=False,
+    help="Run skill-dev without a TTY (assumes the caller has provided scripted input).",
+)
+@click.pass_context
+def install_adlc_run(ctx, source: str, sync_files, no_manifest: bool, non_interactive: bool):
+    """Run the upstream `npx skill-dev` installer against SOURCE."""
+    npx = _resolve_npx_cmd()
+    cmd = list(npx) + ["skill-dev", source]
+    for sf in sync_files:
+        cmd.extend(["--sync-file", str(sf)])
+    if no_manifest:
+        cmd.append("--no-manifest")
+
+    click.echo(">> ADLC: bootstrapping dev-kit")
+    click.echo(f">> Source: {source}")
+    if sync_files:
+        click.echo(f">> Sync files: {', '.join(str(p) for p in sync_files)}")
+    if no_manifest:
+        click.echo(">> --no-manifest: skip AGENTS.md / CLAUDE.md install")
+    click.echo(f">> Command: {' '.join(cmd)}")
+
+    if non_interactive:
+        # Caller explicitly opted out of the guided flow; forward stdin as-is.
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
+    # Interactive: pass through stdin/stdout so the user can answer prompts.
+    # If stdin is not a TTY (e.g. CI), fall back to a clear error message.
+    if not sys.stdin.isatty():
+        click.echo(
+            "[error] stdin is not a TTY. Re-run with --non-interactive or attach a TTY.",
+            err=True,
+        )
+        click.echo(
+            "        For scripted installs, use: "
+            "make install-adlc SOURCE=owner/repo",
+            err=True,
+        )
+        sys.exit(2)
+
+    try:
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        click.echo("\n[aborted] user interrupted.")
+        sys.exit(130)
+    except FileNotFoundError as exc:
+        click.echo(f"[error] {exc}. Is Node.js >= 18 installed and on PATH?", err=True)
+        sys.exit(1)
+
+
+@install_adlc.command("doctor")
+def install_adlc_doctor():
+    """Check prerequisites for `dev install-adlc` (node, npx, network)."""
+    import shutil
+
+    ok = True
+    node_bin = shutil.which("node")
+    npx_bin = shutil.which("npx") or shutil.which("npx.cmd")
+
+    if node_bin:
+        try:
+            out = subprocess.check_output(
+                [node_bin, "--version"], text=True, stderr=subprocess.STDOUT
+            ).strip()
+            click.echo(f"  [ok] node: {node_bin} ({out})")
+        except (subprocess.CalledProcessError, OSError) as exc:
+            click.echo(f"  [warn] node: {node_bin} (failed to report version: {exc})")
+    else:
+        click.echo("  [fail] node: not found on PATH (install Node.js >= 18)")
+        ok = False
+
+    if npx_bin:
+        click.echo(f"  [ok] npx: {npx_bin}")
+    else:
+        click.echo("  [fail] npx: not found on PATH (install Node.js >= 18)")
+        ok = False
+
+    # Probe npm registry reachability (best-effort).
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "https://registry.npmjs.org/skill-dev", timeout=5
+        ) as resp:
+            click.echo(f"  [ok] npm registry: skill-dev metadata HTTP {resp.status}")
+    except Exception as exc:  # noqa: BLE001 - best-effort probe
+        click.echo(f"  [warn] npm registry probe failed: {exc}")
+
+    click.echo(f"  default source: {DEFAULT_ADLC_SOURCE}")
+    if ok:
+        click.echo("[ready] dev install-adlc")
+        sys.exit(0)
+    click.echo("[fail] fix the items above and re-run `dev install-adlc doctor`", err=True)
+    sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
