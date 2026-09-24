@@ -169,6 +169,7 @@ CODE_GRAPH_SCHEMA = GraphSchemaManifest(
                 "CobolSqlStatement",
                 "Constant",
                 "ConfigurationKey",
+                "Control",
                 "Controller",
                 "DataRepository",
                 "Database",
