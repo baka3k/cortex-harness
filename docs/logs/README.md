@@ -2,6 +2,9 @@
 
 Implementation and maintenance records, newest first:
 
+- [VB6 anchor graph coverage: Control nodes, UI wiring, type/state edges](2026-09-24-vb6-anchor-graph-coverage.md)
+- [VB6 ANTLR depth upgrade: plane hydration, controls/events, resolver precision](2026-09-17-vb6-antlr-depth-upgrade.md)
+- [VB6 ANTLR-first call graph engine](2026-09-17-vb6-antlr-call-graph.md)
 - [Durable C++/Pro*C node-first recovery](2026-08-28-durable-cplus-node-first-recovery.md)
 - [MCP storage concurrency hardening](2026-08-28-mcp-storage-concurrency-hardening.md)
 - [Graph journal recovery hardening](2026-08-28-graph-journal-recovery-hardening.md)
