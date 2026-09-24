@@ -24,9 +24,9 @@ from tools.vb.vb6_antlr_adapter import (  # noqa: E402
     ensure_worker_built,
     parse_vb6_files_with_antlr,
 )
+from tools.vb.vb_common import PARSE_CACHE_VERSION  # noqa: E402
 
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "vb6-application"
-PARSE_CACHE_VERSION = "vb-family-v2026-09-17-4"
 
 JAVA_AVAILABLE = Path("/usr/bin/java").exists() or os.environ.get("JAVA_HOME") is not None
 
@@ -260,6 +260,101 @@ class Vb6AntlrWorkerContractTest(unittest.TestCase):
                 meta.get("designer_stripped", False),
                 f"{rel}: strip fallback must be OFF by default",
             )
+
+    # ------------------------------------------------------------------
+    # plan 260924: anchor planes (instantiations / with_targets /
+    # ui_access / redim) + variable flags + declared signatures
+    # ------------------------------------------------------------------
+
+    def test_anchor_planes_present_and_shape(self) -> None:
+        for rel, payload in self.payloads.items():
+            for plane in ("instantiations", "with_targets", "ui_access", "redim"):
+                self.assertIn(plane, payload, f"{rel} missing anchor plane {plane}")
+            for row in payload["instantiations"]:
+                for key in ("proc", "name", "line", "call_type"):
+                    self.assertIn(key, row)
+                self.assertEqual(row["call_type"], "NEW")
+            for row in payload["with_targets"]:
+                for key in ("proc", "expr_raw", "line", "block_end_line"):
+                    self.assertIn(key, row)
+            for row in payload["ui_access"]:
+                for key in ("proc", "receiver_raw", "member", "access", "via_with", "line"):
+                    self.assertIn(key, row)
+                self.assertIn(row["access"], ("read", "write"))
+            for row in payload["redim"]:
+                for key in ("proc", "name", "preserve", "line"):
+                    self.assertIn(key, row)
+
+    def test_new_instantiations_captured(self) -> None:
+        # `Set ord = New clsOrder` was previously filtered out of calls[] by
+        # the moduleNames guard (Vb6Worker); it must live in its own plane
+        frm_main = self.payloads["frmMain.frm"]
+        names = {(row["proc"], row["name"]) for row in frm_main["instantiations"]}
+        self.assertIn(("Form_Load", "clsOrder"), names)
+        self.assertIn(("Form_Load", "clsShip"), names)
+        # As New in a class module
+        sink = {(row["proc"], row["name"]) for row in self.payloads["clsSink.cls"]["instantiations"]}
+        self.assertIn(("Class_Initialize", "clsSource"), sink)
+        self.assertIn(("QueryRows", "ADODB.Recordset"), sink)
+
+    def test_with_targets_carry_block_range(self) -> None:
+        frm_main = self.payloads["frmMain.frm"]
+        targets = [row for row in frm_main["with_targets"] if row["proc"] == "Form_Load"]
+        self.assertTrue(targets)
+        target = targets[0]
+        self.assertEqual(target["expr_raw"], "ord")
+        self.assertGreater(target["block_end_line"], target["line"])
+        # nested-With-capable: frmAnchor has two sibling With blocks
+        anchor = {(row["expr_raw"], row["block_end_line"])
+                  for row in self.payloads["frmAnchor.frm"]["with_targets"]}
+        self.assertTrue(any(expr == "frmMain" for expr, _end in anchor))
+        self.assertTrue(any(expr == "cboType" for expr, _end in anchor))
+
+    def test_ui_access_member_rows(self) -> None:
+        rows = self.payloads["frmAnchor.frm"]["ui_access"]
+        by_line = {row["line"]: row for row in rows}
+        # control state read with member + access
+        read = by_line[60]
+        self.assertEqual((read["receiver_raw"], read["member"], read["access"]),
+                         ("txtUsername", "Text", "read"))
+        # with-target member: via_with + raw receiver empty
+        show = [row for row in rows if row["member"] == "Show" and row["via_with"]]
+        self.assertTrue(show, "With <form> ... .Show member row missing")
+        # write access detected on assignment target
+        writes = [row for row in rows if row["access"] == "write"]
+        self.assertTrue(any(row["member"] == "ListIndex" for row in writes))
+
+    def test_ui_access_state_rows_and_redim(self) -> None:
+        # bare module-state references (member=="") only for program-wide
+        # module-level names — the state anchor
+        mod_state = self.payloads["modState.bas"]["ui_access"]
+        app_rows = [row for row in mod_state if row["receiver_raw"] == "AppStatus"]
+        self.assertTrue(app_rows)
+        self.assertTrue(any(row["access"] == "write" for row in app_rows))
+        const_rows = [row for row in mod_state if row["receiver_raw"] == "MAX_LOGIN_TRIES"]
+        self.assertTrue(const_rows and all(row["member"] == "" for row in const_rows))
+        # ReDim Preserve plane
+        redims = self.payloads["clsSink.cls"]["redim"]
+        self.assertEqual(redims, [
+            {"proc": "ResizeBuffer", "name": "buffer", "preserve": True, "line": redims[0]["line"]}
+        ] if redims else ["missing"])
+
+    def test_variable_flags_static_with_events_global(self) -> None:
+        sink_vars = {v["name"]: v for v in self.payloads["clsSink.cls"]["variables"]}
+        self.assertTrue(sink_vars["mSource"]["with_events"], "WithEvents flag lost")
+        self.assertTrue(sink_vars["buffer"]["is_static"], "Static local flag lost (S2)")
+        self.assertFalse(sink_vars["userStatus"]["with_events"])
+        # S1: `Global AppStatus` must keep is_global (distinct VisibilityEnum.GLOBAL)
+        state_vars = {v["name"]: v for v in self.payloads["modState.bas"]["variables"]}
+        self.assertTrue(state_vars["AppStatus"]["is_global"])
+
+    def test_function_signature_types(self) -> None:
+        calc = [f for f in self.payloads["modUtil.bas"]["functions"] if f["name"] == "CalcTotal"][0]
+        self.assertEqual(calc["param_types"], ["Double", "Double"])
+        self.assertEqual(calc["return_type"], "Double")
+        work = [f for f in self.payloads["modMain.bas"]["functions"] if f["name"] == "DoWork"][0]
+        self.assertEqual(work["param_types"], [])
+        self.assertEqual(work["return_type"], "")
 
 
 if __name__ == "__main__":
