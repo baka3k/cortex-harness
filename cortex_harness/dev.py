@@ -5283,7 +5283,8 @@ def install_adlc():
     ADLC = Agent Development Lifecycle. This wraps the upstream
     https://github.com/baka3k/dev-kit installer (`skill-dev`) so the
     team can bootstrap any supported target agent (Claude Code,
-    OpenCode, Qwen Code, Cursor, Continue, ...) with a single command.
+    OpenCode, Qwen Code, Cursor, Continue, Antigravity, ...) with a
+    single command.
 
     The upstream installer is interactive — it prompts for skills,
     target agent, and install location. Pass `--non-interactive` only
