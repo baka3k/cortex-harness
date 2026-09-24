@@ -98,7 +98,7 @@ AI agents have finite context windows. CortexHarness helps them use it wisely:
 
 Not just ingestion — a complete pipeline from source to agent query:
 
-1. **Ingest** — `dev sync code` / `dev sync doc` extracts structure and semantics
+1. **Ingest** — `dev sync code` / `dev sync doc` extracts structure and semantics; doc sync also generates dynamic YAKE entity rules per document before GLiNER extraction
 2. **Store** — graph relationships + vector embeddings persisted to disk
 3. **Serve** — MCP servers expose 30+ query tools on localhost
 4. **Query** — AI agents call MCP tools instead of reading raw files

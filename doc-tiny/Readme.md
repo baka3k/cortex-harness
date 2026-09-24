@@ -174,7 +174,19 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 
 - `--entity-provider`: Entity extractor: `spacy`, `gliner`, `gemini`, or `langextract` (default: `gliner`).
 - `--spacy-model`: spaCy model name (default: `en_core_web_sm`).
-- `--ruler-json`: Path to spaCy `EntityRuler` JSON.
+- `--ruler-json`: Path to spaCy `EntityRuler` JSON (repeatable). On the `gliner` provider every
+  entry is merged (union) with the dynamic YAKE rules through a ruler-only sidecar pipeline
+  (`spacy.blank` + `entity_ruler`, no NER model needed); the `spacy` provider keeps its
+  historical single-path behavior (first entry).
+- `--yake-rules` / `--no-yake-rules`: Generate per-source YAKE EntityRuler rules from the
+  loaded text **before** extraction runs (default: env `YAKE_ENABLED`, on). Rules are written
+  to `rules/from-yake/<project>/ruler.from-yake.<source>.json`; sources with 0 patterns write
+  nothing (and remove their stale rule file). Requires the `yake` package — when missing, the
+  pre-pass is skipped with a clear warn and the sync continues.
+- `--yake-language`: YAKE stopword language (default: env `YAKE_LANGUAGE` or `en`).
+- `--yake-top`: Max keywords per document (default: env `YAKE_TOP` or `150`).
+- `--yake-max-ngram`: Max n-gram length (default: env `YAKE_MAX_NGRAM` or `3`).
+- `--yake-rules-dir`: Directory for generated rules (default: `<script dir>/rules/from-yake/<safe project id>`).
 - `--gliner-model-name`: GLiNER model name (default: `urchade/gliner_large-v2.1`).
 - `--gliner-model-path`: Local GLiNER model path (recommended for offline).
 - `--gliner-model`: Deprecated alias; use `--gliner-model-name` or `--gliner-model-path`.
@@ -219,7 +231,13 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 | Embed  | `--skip-llm-short`        | Skip LLM for short paragraphs                                                       | `false`                                            |
 | Entity | `--entity-provider`       | `spacy`, `gliner`, `gemini`, `langextract`                                          | `gliner`                                           |
 | Entity | `--spacy-model`           | spaCy model name                                                                    | `en_core_web_sm`                                   |
-| Entity | `--ruler-json`            | spaCy EntityRuler JSON                                                              | `None`                                             |
+| Entity | `--ruler-json`            | spaCy EntityRuler JSON (repeatable; gliner merges all + YAKE dir)                   | `None`                                             |
+| Entity | `--yake-rules`            | YAKE dynamic-rules pre-pass                                                         | env `YAKE_ENABLED` (`on`)                          |
+| Entity | `--no-yake-rules`         | Disable the YAKE pre-pass                                                           | —                                                  |
+| Entity | `--yake-language`         | YAKE stopword language                                                              | env `YAKE_LANGUAGE` (`en`)                         |
+| Entity | `--yake-top`              | Max keywords per document                                                           | env `YAKE_TOP` (`150`)                             |
+| Entity | `--yake-max-ngram`        | Max n-gram length                                                                   | env `YAKE_MAX_NGRAM` (`3`)                         |
+| Entity | `--yake-rules-dir`        | Directory for generated rule files                                                  | `rules/from-yake/<project>`                        |
 | Entity | `--gliner-model-name`     | GLiNER model name                                                                   | `urchade/gliner_large-v2.1`                        |
 | Entity | `--gliner-model-path`     | Local GLiNER model path                                                             | env `GLINER_MODEL_PATH`                            |
 | Entity | `--gliner-model`          | Deprecated alias                                                                    | `None`                                             |
@@ -241,6 +259,41 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 | Neo4j  | `--neo4j-batch-size`      | Paragraphs per batch write                                                          | `50`                                               |
 | Qdrant | `--qdrant-path`           | Embedded document-vector store path                                                 | env `QDRANT_DOC_PATH`, then shared storage default |
 
+### Dynamic rules (YAKE)
+
+On the default `gliner` provider, every ingest runs a YAKE pre-pass on the text it has
+already loaded (no second document parse): top keywords become `{"label","pattern"}` rules
+via label heuristics (`STANDARD`/`TRANSPORT`/`CRYPTO`/`KDF_HASH`/`CERT`/`DOCUMENT`/
+`ALGORITHM`/`KEYWORD`), written per source before extraction. GLiNER predictions are then
+merged with EntityRuler matches from all rule sources — the per-project dynamic dir plus any
+`--ruler-json` entries — on a `spacy.blank("en")` sidecar (no NER model required). Ruler
+matches carry `confidence: 1.0` and win `(name, type)` collisions at the merge layer.
+
+Lifecycle:
+
+- **Generate** — during sync, before the source's own extraction (`yake rules: N patterns -> <path>`).
+- **Skip** — 0 patterns writes nothing and removes the source's stale rule file.
+- **Prune** — folder/full sync prunes to the current file list; `dev sync doc` prunes rule
+  files of deleted docs (including deletion-only incremental runs).
+- **Ignored by git** — `rules/from-yake/` is generated state, never committed.
+
+| Env (`doc.env`)  | Default | Meaning                              |
+| ---------------- | ------- | ------------------------------------ |
+| `YAKE_ENABLED`   | `1`     | `0`/`false`/`no`/`off` disables      |
+| `YAKE_LANGUAGE`  | `en`    | YAKE stopword language (`en`/`vi`)   |
+| `YAKE_TOP`       | `150`   | Max keywords per document            |
+| `YAKE_MAX_NGRAM` | `3`     | Max n-gram length                    |
+
+Manual generation / pruning (mirrors the `yake-vi` prototype CLI):
+
+```bash
+python yake_rules.py --file spec.pdf -l en --top 150 --format ruler -o out.json
+python yake_rules.py --rules-dir rules/from-yake/<project> --prune-sources <source_id> ...
+```
+
+If the `yake` package is missing, the pre-pass prints one clear warn and the sync continues
+without dynamic rules (GLiNER-only extraction).
+
 - `--pdf`: Path to a single PDF file.
 - `--text-file`: Path to a UTF-8 text file (.txt).
 - `--md`: Path to a UTF-8 Markdown file (.md).
@@ -257,7 +310,8 @@ Exactly one input source is required: `--pdf`, `--text-file`, `--md`, `--docx`, 
 - `--skip-llm-short`: Skip LLM for short paragraphs, still store in Qdrant.
 - `--entity-provider`: Entity extractor: `spacy`, `gliner`, `gemini`, or `langextract` (default: `gliner`).
 - `--spacy-model`: spaCy model name (default: `en_core_web_sm`).
-- `--ruler-json`: Path to spaCy `EntityRuler` JSON.
+- `--ruler-json`: Path to spaCy `EntityRuler` JSON (repeatable; merged into the gliner path).
+- `--yake-rules` / `--no-yake-rules`: Toggle the YAKE dynamic-rules pre-pass (default: env `YAKE_ENABLED`, on).
 - `--gliner-model-name`: GLiNER model name (default: `urchade/gliner_large-v2.1`).
 - `--gliner-model-path`: Local GLiNER model path (recommended for offline).
 - `--gliner-model`: Deprecated alias; use `--gliner-model-name` or `--gliner-model-path`.
