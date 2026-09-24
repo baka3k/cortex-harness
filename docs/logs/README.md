@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [YAKE dynamic entity rules for doc sync](2026-09-24-yake-dynamic-rules-doc-sync.md)
 - [VB6 anchor graph coverage: Control nodes, UI wiring, type/state edges](2026-09-24-vb6-anchor-graph-coverage.md)
 - [VB6 ANTLR depth upgrade: plane hydration, controls/events, resolver precision](2026-09-17-vb6-antlr-depth-upgrade.md)
 - [VB6 ANTLR-first call graph engine](2026-09-17-vb6-antlr-call-graph.md)
