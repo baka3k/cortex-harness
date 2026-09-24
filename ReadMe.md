@@ -114,7 +114,7 @@ The ADLC skill pack (`make install-adlc`) installs 12+ battle-tested skills into
 - **Generate edge cases** — 12-dimension scenario coverage
 - **Audit security** — STRIDE + OWASP with automated fix suggestions
 
-Works with: Claude Code, Qwen Code, OpenCode, GitHub Copilot, Cursor, Continue.
+Works with: Claude Code, Qwen Code, OpenCode, GitHub Copilot, Cursor, Continue, Antigravity.
 
 ---
 
