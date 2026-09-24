@@ -119,7 +119,7 @@ endif
 # Notes:
 #   - The installer is interactive by design; it prompts for:
 #       (1) which skills to include
-#       (2) which target agent (Claude Code / OpenCode / Qwen Code / Cursor / ...)
+#       (2) which target agent (Claude Code / OpenCode / Qwen Code / Cursor / Antigravity / ...)
 #       (3) install location (Global ~/.claude/skills  or  Current project)
 #   - `npx -y` auto-confirms the package install prompt.
 #   - Override the source repo with SOURCE=owner/repo (e.g. a private fork).
