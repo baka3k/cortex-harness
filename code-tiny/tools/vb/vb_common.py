@@ -20,9 +20,12 @@ except ImportError:  # standalone use outside code-tiny
 
 # Bumped per payload-shape change (plan 260917-1628 AD-05): -2 phase-01
 # (hydrated planes + arity/dictionary enrichment), -3 phase-02 (controls[] +
-# keep-designer + event-wiring fields), -4 phase-04 (comment extraction).
-# Old caches must not hydrate into the new shape.
-_PARSE_CACHE_VERSION = "vb-family-v2026-09-18-1"  # bump: drop ``Const`` from _VAR_DECL_RE
+# keep-designer + event-wiring fields), -4 phase-04 (comment extraction),
+# 09-18-1 (drop ``Const`` from _VAR_DECL_RE).
+# 260924-1: anchor-graph planes (instantiations/with_targets/ui_access/redim)
+# + functions param_types/return_type + variables is_static/with_events
+# (plan 260924 phase 02). Old caches must not hydrate into the new shape.
+_PARSE_CACHE_VERSION = "vb-family-v2026-09-24-1"
 
 
 @dataclass
@@ -51,6 +54,11 @@ class FunctionDef:
     has_paramarray: bool = False
     vb6_event: str = ""
     vb6_control_type: str = ""
+    # plan 260924 anchor graph: declared signatures (USES_TYPE + COM receiver
+    # classification). Defaults keep regex-path rows hydratable.
+    param_types: List[str] = field(default_factory=list)
+    param_names: List[str] = field(default_factory=list)
+    return_type: str = ""
 
 
 @dataclass
@@ -202,6 +210,13 @@ class VariableDef:
     # procedure-local declarations)
     module_name: str = ""
     procedure_name: str = ""
+    # plan 260924 anchor graph: `Static x` local (state anchor). Default False
+    # keeps old caches hydratable (dataclass_from_payload drops unknown keys
+    # and missing keys take the dataclass default).
+    is_static: bool = False
+    # plan 260924: `Dim WithEvents x As T` — ANTLR-only flag (the regex path
+    # matches the token but discards it, vb_common _VAR_DECL_RE with_events)
+    with_events: bool = False
 
 
 @dataclass
@@ -1220,7 +1235,11 @@ def asdict_function(func: FunctionDef, project_id: str, project_name: str, langu
         "comment": func.comment,
         "summary": func.summary,
         "note": func.note,
-        "exported": False,
+        # plan 260924 AD-04: publish the public surface — `is_private` is
+        # hydrated by BOTH engines, `exported`/`is_public_api` are already SET
+        # by write_functions_full (Friend counts as exported)
+        "exported": not func.is_private,
+        "is_public_api": not func.is_private,
         "project_id": project_id,
         "project_id_normalized": project_id_lookup_key(project_id),
         "project_name": project_name,
@@ -1440,6 +1459,7 @@ def asdict_variable(var: VariableDef, project_id: str, project_name: str, langua
         "type_name": var.type_name,
         "is_global": var.is_global,
         "is_shared": var.is_shared,
+        "is_static": var.is_static,
         "code": var.code,
         "comment": var.comment,
         "summary": var.summary,

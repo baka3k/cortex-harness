@@ -34,8 +34,11 @@ def _fixture_files():
 class Vb6EngineDispatchTest(unittest.TestCase):
     def test_parse_cache_version_bumped(self) -> None:
         # AD-05 (plan 260917-1628): bumped per payload-shape change — phase-01
-        # hydrated planes, phase-02 controls/keep-designer, phase-04 comments
-        self.assertEqual(PARSE_CACHE_VERSION, "vb-family-v2026-09-17-4")
+        # hydrated planes, phase-02 controls/keep-designer, phase-04 comments;
+        # 09-18-1 dropped Const from _VAR_DECL_RE; 260924-1 added the anchor
+        # planes (plan 260924 phase 02). Was red BEFORE plan 260924 (pinned
+        # 09-17-4 vs actual 09-18-1) — fixed as part of this bump.
+        self.assertEqual(PARSE_CACHE_VERSION, "vb-family-v2026-09-24-1")
         self.assertNotEqual(PARSE_CACHE_VERSION, "vb-family-v2026-09-17-1")
         self.assertNotEqual(PARSE_CACHE_VERSION, "vb-family-v2026-04-03-2")
 

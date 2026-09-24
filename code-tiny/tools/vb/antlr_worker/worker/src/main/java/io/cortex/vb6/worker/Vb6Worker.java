@@ -472,6 +472,24 @@ public final class Vb6Worker {
 		//     detection and project model) -------------------------------
 		payload.add("variables", variablesJson(module, relPath));
 
+		// --- anchor planes (plan 260924 phase 02): New / With targets /
+		//     member+state access / ReDim — pure parse-tree ctx walks per
+		//     procedure (no extra parse pass). Every row carries the owner
+		//     `proc` (red-team H4) and leaves receiver/New targets RAW for
+		//     the Python resolver (phase 03) -------------------------------
+		final java.util.Set<String> stateNames = programStateNames(program);
+		final JsonArray instantiations = new JsonArray();
+		final JsonArray withTargets = new JsonArray();
+		final JsonArray uiAccess = new JsonArray();
+		final JsonArray redims = new JsonArray();
+		for (final Procedure procedure : module.getProcedures()) {
+			collectAnchorPlanes(procedure, stateNames, instantiations, withTargets, uiAccess, redims);
+		}
+		payload.add("instantiations", instantiations);
+		payload.add("with_targets", withTargets);
+		payload.add("ui_access", uiAccess);
+		payload.add("redim", redims);
+
 		// --- file def --------------------------------------------------
 		final String original = entry.originalContent;
 		final int lineCount = original == null ? 0 : original.split("\n", -1).length;
@@ -560,6 +578,11 @@ public final class Vb6Worker {
 		json.addProperty("min_arity", arityInfo.minArity);
 		json.addProperty("has_optional_args", arityInfo.hasOptionalArgs);
 		json.addProperty("has_paramarray", arityInfo.hasParamArray);
+		// anchor graph (plan 260924): declared parameter + return types feed
+		// USES_TYPE publication and COM receiver classification (resolver P3)
+		json.add("param_types", paramTypesJson(procedure));
+		json.add("param_names", paramNamesJson(procedure));
+		json.addProperty("return_type", returnTypeOf(procedure));
 		json.addProperty("code", code);
 		json.addProperty("comment", comment);
 		json.addProperty("summary", comment);
@@ -594,6 +617,48 @@ public final class Vb6Worker {
 		int minArity;
 		boolean hasOptionalArgs;
 		boolean hasParamArray;
+	}
+
+	/** Declared parameter types ("" when the arg carries no As clause). */
+	private static JsonArray paramTypesJson(final Procedure procedure) {
+		final JsonArray paramTypes = new JsonArray();
+		if (procedure.getArgsList() == null) {
+			return paramTypes;
+		}
+		for (final Arg arg : procedure.getArgsList()) {
+			String typeName = "";
+			if (arg.getCtx() != null && arg.getCtx().asTypeClause() != null) {
+				typeName = stripAsPrefix(arg.getCtx().asTypeClause().getText());
+			}
+			paramTypes.add(typeName);
+		}
+		return paramTypes;
+	}
+
+	/** Parameter NAMES aligned with {@link #paramTypesJson} (typed-receiver lookup). */
+	private static JsonArray paramNamesJson(final Procedure procedure) {
+		final JsonArray paramNames = new JsonArray();
+		if (procedure.getArgsList() == null) {
+			return paramNames;
+		}
+		for (final Arg arg : procedure.getArgsList()) {
+			paramNames.add(arg.getName() == null ? "" : arg.getName());
+		}
+		return paramNames;
+	}
+
+	/** Declared return type of Function/Property Get ("" otherwise). */
+	private static String returnTypeOf(final Procedure procedure) {
+		final ParserRuleContext ctx = procedure.getCtx();
+		if (ctx instanceof VisualBasic6Parser.FunctionStmtContext
+				&& ((VisualBasic6Parser.FunctionStmtContext) ctx).asTypeClause() != null) {
+			return stripAsPrefix(((VisualBasic6Parser.FunctionStmtContext) ctx).asTypeClause().getText());
+		}
+		if (ctx instanceof VisualBasic6Parser.PropertyGetStmtContext
+				&& ((VisualBasic6Parser.PropertyGetStmtContext) ctx).asTypeClause() != null) {
+			return stripAsPrefix(((VisualBasic6Parser.PropertyGetStmtContext) ctx).asTypeClause().getText());
+		}
+		return "";
 	}
 
 	private static String symbolId(final String moduleName, final Procedure procedure, final String relPath) {
@@ -1002,6 +1067,268 @@ public final class Vb6Worker {
 		return cleaned;
 	}
 
+	// ------------------------------------------------------------------
+	// anchor planes (plan 260924 phase 02)
+	// ------------------------------------------------------------------
+
+	/**
+	 * Module-level variable + constant names across the WHOLE program (S1/S2
+	 * evidence): bare identifiers matching these are state anchors. The set is
+	 * what keeps bare-name ui_access rows precise — without it every local
+	 * variable and builtin would flood the plane.
+	 */
+	private static java.util.Set<String> programStateNames(final Program program) {
+		final java.util.Set<String> names = new java.util.HashSet<>();
+		for (final Module module : program.getModules()) {
+			for (final io.proleap.vb6.asg.metamodel.Variable variable : module.getVariables()) {
+				if (variable.getName() != null) {
+					names.add(variable.getName().toLowerCase(Locale.ROOT));
+				}
+			}
+			for (final Constant constant : module.getConstants()) {
+				if (constant.getName() != null) {
+					names.add(constant.getName().toLowerCase(Locale.ROOT));
+				}
+			}
+		}
+		return names;
+	}
+
+	/**
+	 * Walk one procedure's parse tree and fill the anchor planes:
+	 *
+	 * - instantiations[]: `Set x = New X`, `Dim x As New X`, `With New X`
+	 *   (vsNew contexts + asTypeClause NEW + WithStmt NEW) → {proc, name,
+	 *   line, call_type:"NEW"} (AD-02: New X is NOT a procedure call — the
+	 *   moduleNames filter of the calls walk no longer hides it)
+	 * - with_targets[]: `With <EXPR>` → {proc, expr_raw, line,
+	 *   block_end_line} — block_end_line is what lets the resolver attach
+	 *   member rows to the INNERMOST nested block (red-team H4)
+	 * - ui_access[]: member chains (`txt.Text`, `.SetFocus`, `obj.Method 1`)
+	 *   → {proc, receiver_raw, member, access:read|write, via_with, line};
+	 *   plus bare module-state references (`AppStatus = 1`, reads of
+	 *   `MAX_LOGIN_TRIES`) → same shape with member:"" — receiver_raw holds
+	 *   the state name. Names are RAW; classification happens in Python.
+	 * - redim[]: `ReDim [Preserve] arr(...)` per redimSubStmt → {proc, name,
+	 *   preserve, line} (g4:461-463)
+	 */
+	private static void collectAnchorPlanes(
+			final Procedure procedure,
+			final java.util.Set<String> stateNames,
+			final JsonArray instantiations,
+			final JsonArray withTargets,
+			final JsonArray uiAccess,
+			final JsonArray redims) {
+
+		final String procName = procedure.getName() == null ? "" : procedure.getName();
+		if (procedure.getCtx() == null) {
+			return;
+		}
+		final java.util.Set<String> seenUi = new java.util.HashSet<>();
+		final List<ParseTree> stack = new ArrayList<>();
+		stack.add(procedure.getCtx());
+		while (!stack.isEmpty()) {
+			final ParseTree node = stack.remove(stack.size() - 1);
+			if (node instanceof ParserRuleContext) {
+				final ParserRuleContext ctx = (ParserRuleContext) node;
+				if (ctx instanceof VisualBasic6Parser.VsNewContext) {
+					emitInstantiation(((VisualBasic6Parser.VsNewContext) ctx).valueStmt(),
+							procName, instantiations);
+					// the New target is a type reference, not a member access —
+					// descending would emit an `ADODB.Recordset` chain row
+					continue;
+				} else if (ctx instanceof VisualBasic6Parser.AsTypeClauseContext) {
+					final VisualBasic6Parser.AsTypeClauseContext asType =
+							(VisualBasic6Parser.AsTypeClauseContext) ctx;
+					if (asType.NEW() != null) {
+						emitInstantiation(asType.type(), procName, instantiations);
+						continue;
+					}
+				} else if (ctx instanceof VisualBasic6Parser.WithStmtContext) {
+					final VisualBasic6Parser.WithStmtContext with =
+							(VisualBasic6Parser.WithStmtContext) ctx;
+					final JsonObject row = new JsonObject();
+					row.addProperty("proc", procName);
+					row.addProperty("expr_raw", with.implicitCallStmt_InStmt() == null
+							? "" : sanitizeDisplay(with.implicitCallStmt_InStmt().getText()));
+					row.addProperty("is_new", with.NEW() != null);
+					row.addProperty("line", ctxLine(with, true));
+					row.addProperty("block_end_line", ctxLine(with, false));
+					withTargets.add(row);
+					if (with.NEW() != null) {
+						emitInstantiation(with.implicitCallStmt_InStmt(), procName, instantiations);
+					}
+				} else if (ctx instanceof VisualBasic6Parser.RedimStmtContext) {
+					final VisualBasic6Parser.RedimStmtContext redim =
+							(VisualBasic6Parser.RedimStmtContext) ctx;
+					final boolean preserve = redim.PRESERVE() != null;
+					for (final VisualBasic6Parser.RedimSubStmtContext sub : redim.redimSubStmt()) {
+						final JsonObject row = new JsonObject();
+						row.addProperty("proc", procName);
+						row.addProperty("name", sub.implicitCallStmt_InStmt() == null
+								? "" : sub.implicitCallStmt_InStmt().getText());
+						row.addProperty("preserve", preserve);
+						row.addProperty("line", ctxLine(sub, true));
+						redims.add(row);
+					}
+				} else if (ctx instanceof VisualBasic6Parser.ICS_S_MembersCallContext) {
+					emitMembersAccess((VisualBasic6Parser.ICS_S_MembersCallContext) ctx,
+							procName, seenUi, uiAccess);
+				} else if (ctx instanceof VisualBasic6Parser.ICS_B_MemberProcedureCallContext
+						|| ctx instanceof VisualBasic6Parser.ECS_MemberProcedureCallContext) {
+					// statement-position member procedure calls (`obj.Method`,
+					// `obj.Method args`, `Call obj.Method args`; g4 iCS_B_/
+					// ecsMemberProcedureCall). Receiver stays raw (`a.b` chain
+					// or empty for dot-prefixed With members).
+					final String receiver;
+					final String member;
+					if (ctx instanceof VisualBasic6Parser.ICS_B_MemberProcedureCallContext) {
+						final VisualBasic6Parser.ICS_B_MemberProcedureCallContext icsB =
+								(VisualBasic6Parser.ICS_B_MemberProcedureCallContext) ctx;
+						receiver = icsB.implicitCallStmt_InStmt() == null
+								? "" : sanitizeDisplay(icsB.implicitCallStmt_InStmt().getText());
+						member = icsB.ambiguousIdentifier() == null
+								? "" : icsB.ambiguousIdentifier().getText();
+					} else {
+						final VisualBasic6Parser.ECS_MemberProcedureCallContext ecs =
+								(VisualBasic6Parser.ECS_MemberProcedureCallContext) ctx;
+						receiver = ecs.ambiguousIdentifier() == null
+								? "" : ecs.ambiguousIdentifier().getText();
+						member = ecs.implicitCallStmt_InStmt() == null
+								? "" : sanitizeDisplay(ecs.implicitCallStmt_InStmt().getText());
+					}
+					String memberName = member;
+					final int paren = memberName.indexOf('(');
+					if (paren >= 0) {
+						memberName = memberName.substring(0, paren);
+					}
+					final int lastDot = memberName.lastIndexOf('.');
+					memberName = lastDot >= 0 ? memberName.substring(lastDot + 1) : memberName;
+					memberName = memberName.trim();
+					if (!memberName.isEmpty()) {
+						emitUiAccess(procName, receiver, memberName,
+								assignmentSide(ctx), receiver.isEmpty(),
+								ctxLine(ctx, true), seenUi, uiAccess);
+					}
+				} else if (ctx instanceof VisualBasic6Parser.ICS_S_VariableOrProcedureCallContext
+						&& ctx.getParent() instanceof VisualBasic6Parser.ImplicitCallStmt_InStmtContext) {
+					// bare atomic reference: a state anchor ONLY when the name
+					// matches a program-wide module-level variable/constant
+					final String name = ctx.getText();
+					if (stateNames.contains(name.toLowerCase(Locale.ROOT))) {
+						emitUiAccess(procName, name, "", assignmentSide(ctx),
+								false, ctxLine(ctx, true), seenUi, uiAccess);
+					}
+				}
+			}
+			for (int i = node.getChildCount() - 1; i >= 0; i--) {
+				stack.add(node.getChild(i));
+			}
+		}
+	}
+
+	private static void emitInstantiation(
+			final ParserRuleContext typeCtx,
+			final String procName,
+			final JsonArray out) {
+		if (typeCtx == null) {
+			return;
+		}
+		final String name = sanitizeDisplay(typeCtx.getText());
+		if (name.isEmpty()) {
+			return;
+		}
+		final JsonObject row = new JsonObject();
+		row.addProperty("proc", procName);
+		row.addProperty("name", name);
+		row.addProperty("line", ctxLine(typeCtx, true));
+		row.addProperty("call_type", "NEW");
+		out.add(row);
+	}
+
+	/** `a.b.c` chain: receiver = first atomic part, member = last member name. */
+	private static void emitMembersAccess(
+			final VisualBasic6Parser.ICS_S_MembersCallContext ctx,
+			final String procName,
+			final java.util.Set<String> seenUi,
+			final JsonArray out) {
+		final List<VisualBasic6Parser.ICS_S_MemberCallContext> members = ctx.iCS_S_MemberCall();
+		if (members.isEmpty()) {
+			return; // dictionary-only chain — covered by the calls plane
+		}
+		String receiver = "";
+		final ParseTree first = ctx.getChildCount() > 0 ? ctx.getChild(0) : null;
+		if (first instanceof VisualBasic6Parser.ICS_S_VariableOrProcedureCallContext
+				|| first instanceof VisualBasic6Parser.ICS_S_ProcedureOrArrayCallContext) {
+			receiver = first.getText();
+		}
+		final VisualBasic6Parser.ICS_S_MemberCallContext last = members.get(members.size() - 1);
+		final String member = memberNameOf(last);
+		if (member.isEmpty()) {
+			return;
+		}
+		emitUiAccess(procName, receiver, member, assignmentSide(ctx),
+				receiver.isEmpty(), ctxLine(ctx, true), seenUi, out);
+	}
+
+	/** Inner identifier of a member link (".Text" → "Text", args stripped). */
+	private static String memberNameOf(final VisualBasic6Parser.ICS_S_MemberCallContext member) {
+		if (member.iCS_S_VariableOrProcedureCall() != null) {
+			return member.iCS_S_VariableOrProcedureCall().getText();
+		}
+		if (member.iCS_S_ProcedureOrArrayCall() != null
+				&& member.iCS_S_ProcedureOrArrayCall().ambiguousIdentifier() != null) {
+			return member.iCS_S_ProcedureOrArrayCall().ambiguousIdentifier().getText();
+		}
+		return "";
+	}
+
+	/**
+	 * write when the ctx is the assignment TARGET of an enclosing Let/Set
+	 * statement (`x.y = 1`, `Set x = ...`), read otherwise.
+	 */
+	private static String assignmentSide(final ParserRuleContext ctx) {
+		ParserRuleContext current = ctx;
+		ParserRuleContext parent = ctx.getParent();
+		while (parent instanceof ParserRuleContext) {
+			if (parent instanceof VisualBasic6Parser.LetStmtContext) {
+				return current == ((VisualBasic6Parser.LetStmtContext) parent).implicitCallStmt_InStmt()
+						? "write" : "read";
+			}
+			if (parent instanceof VisualBasic6Parser.SetStmtContext) {
+				return current == ((VisualBasic6Parser.SetStmtContext) parent).implicitCallStmt_InStmt()
+						? "write" : "read";
+			}
+			current = parent;
+			parent = parent.getParent();
+		}
+		return "read";
+	}
+
+	private static void emitUiAccess(
+			final String procName,
+			final String receiverRaw,
+			final String member,
+			final String access,
+			final boolean viaWith,
+			final int line,
+			final java.util.Set<String> seenUi,
+			final JsonArray out) {
+		final String dedupKey = line + "|" + access + "|"
+				+ receiverRaw.toLowerCase(Locale.ROOT) + "|" + member.toLowerCase(Locale.ROOT);
+		if (!seenUi.add(dedupKey)) {
+			return;
+		}
+		final JsonObject row = new JsonObject();
+		row.addProperty("proc", procName);
+		row.addProperty("receiver_raw", sanitizeDisplay(receiverRaw));
+		row.addProperty("member", member);
+		row.addProperty("access", access);
+		row.addProperty("via_with", viaWith);
+		row.addProperty("line", line);
+		out.add(row);
+	}
+
 	private static JsonArray variablesJson(final Module module, final String relPath) {
 		final JsonArray variables = new JsonArray();
 		final String moduleName = module.getName();
@@ -1032,7 +1359,18 @@ public final class Vb6Worker {
 			typeName = "";
 		}
 		final boolean moduleLevel = procedureName == null;
-		final boolean isPublic = variable.getVisibility() == VisibilityEnum.PUBLIC;
+		// spike S1 (plan 260924): `Global` maps to the DISTINCT VisibilityEnum
+		// value GLOBAL (ScopeImpl:2403), it does not normalize to PUBLIC — the
+		// flag must accept both or module-level `Global x` rows lose is_global
+		final boolean isPublic = variable.getVisibility() == VisibilityEnum.PUBLIC
+				|| variable.getVisibility() == VisibilityEnum.GLOBAL;
+		// spike S2 (plan 260924): procedure.getVariables() holds EVERY
+		// variableStmt of the procedure scope (Dim AND Static) — the
+		// STATIC()/WITHEVENTS() tokens on the enclosing VariableStmtContext
+		// are the only reliable discriminators
+		final VisualBasic6Parser.VariableStmtContext varStmt = enclosingVariableStmt(variable);
+		final boolean isStatic = varStmt != null && varStmt.STATIC() != null;
+		final boolean withEvents = varStmt != null && varStmt.WITHEVENTS() != null;
 		final String qualified = moduleLevel
 				? moduleName + "." + name
 				: moduleName + "." + procedureName + "." + name;
@@ -1046,6 +1384,8 @@ public final class Vb6Worker {
 		json.addProperty("type_name", typeName);
 		json.addProperty("is_global", moduleLevel && isPublic);
 		json.addProperty("is_shared", false);
+		json.addProperty("is_static", isStatic);
+		json.addProperty("with_events", withEvents);
 		json.add("class_name", com.google.gson.JsonNull.INSTANCE);
 		json.add("namespace_name", com.google.gson.JsonNull.INSTANCE);
 		json.addProperty("file_path", relPath);
@@ -1059,6 +1399,19 @@ public final class Vb6Worker {
 			json.addProperty("procedure_name", procedureName);
 		}
 		return json;
+	}
+
+	/** The `Dim|Static|visibility [WithEvents] ...` statement owning a variable. */
+	private static VisualBasic6Parser.VariableStmtContext enclosingVariableStmt(
+			final io.proleap.vb6.asg.metamodel.Variable variable) {
+		ParserRuleContext ctx = variable.getCtx();
+		while (ctx != null) {
+			if (ctx instanceof VisualBasic6Parser.VariableStmtContext) {
+				return (VisualBasic6Parser.VariableStmtContext) ctx;
+			}
+			ctx = ctx.getParent();
+		}
+		return null;
 	}
 
 	private static JsonObject typeJson(

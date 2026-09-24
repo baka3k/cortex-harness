@@ -1640,6 +1640,7 @@ class LanguageCodeWriter:
                 v.type_name = row.type_name,
                 v.is_global = row.is_global,
                 v.is_shared = row.is_shared,
+                v.is_static = coalesce(row.is_static, false),
                 v.code = row.code,
                 v.comment = row.comment,
                 v.summary = row.summary,
@@ -1659,6 +1660,53 @@ class LanguageCodeWriter:
             return records[0]["count"] if records else 0
 
         return await self.write_batches("variables", variables, write_batch, state, state_writer)
+
+    async def write_controls_full(
+        self,
+        controls: List[Dict[str, Any]],
+        state: Optional[Dict[str, int]] = None,
+        state_writer: Optional[Callable] = None,
+    ) -> int:
+        """Write VB6 designer control nodes (:Control) in batches.
+
+        New node plane (plan 260924 AD-01): ``write_all`` has no generic node
+        lane, so — like constants/variables — every label needs its own
+        writer. Rows are produced by the vb6 analyzer's ``control_rows``.
+        """
+        if not controls:
+            return 0
+
+        async def write_batch(batch: List[Dict[str, Any]]) -> int:
+            query = """
+            UNWIND $rows AS row
+            MERGE (c:Control {id: row.id})
+            SET c.name = row.name,
+                c.qualified_name = row.qualified_name,
+                c.kind = row.kind,
+                c.scope_name = row.scope_name,
+                c.class_name = row.class_name,
+                c.package_name = row.package_name,
+                c.file_path = row.file_path,
+                c.line_number = row.line_number,
+                c.code = row.code,
+                c.comment = row.comment,
+                c.summary = row.summary,
+                c.note = row.note,
+                c.project_id = row.project_id,
+                c.project_id_normalized = row.project_id_normalized,
+                c.project_name = row.project_name,
+                c.language = row.language,
+                c.repo = row.repo,
+                c.build_system = row.build_system,
+                c.updated_at = datetime()
+            RETURN count(c) as count
+            """
+            records, _, _ = await self.driver.execute_query(
+                query, {"rows": batch}, self.database
+            )
+            return records[0]["count"] if records else 0
+
+        return await self.write_batches("controls", controls, write_batch, state, state_writer)
 
     async def write_delegates_full(
         self,
@@ -2777,6 +2825,8 @@ class LanguageCodeWriter:
         enums: List[Dict[str, Any]] = None,
         constants: List[Dict[str, Any]] = None,
         variables: List[Dict[str, Any]] = None,
+        # VB6 designer controls (:Control node plane, plan 260924)
+        controls: List[Dict[str, Any]] = None,
         # C# delegate declarations (namespace/class-level reference types)
         delegates: List[Dict[str, Any]] = None,
         # React Navigation navigator graph
@@ -2889,6 +2939,7 @@ class LanguageCodeWriter:
                 (enums, "Enum"),
                 (constants, "Constant"),
                 (variables, "Variable"),
+                (controls, "Control"),
                 (navigators, "Navigator"),
             )
             labels_by_id: Dict[str, set[str]] = {}
@@ -3034,6 +3085,12 @@ class LanguageCodeWriter:
         if variables:
             if use_full_writers:
                 counts["variables"] = await self.write_variables_full(variables, state, state_writer)
+
+        # --- Controls (VB6 designer controls, plan 260924) ---
+        # Written before relations so HAS_CONTROL/WIRED_TO endpoint MATCHes
+        # resolve against existing :Control nodes.
+        if controls:
+            counts["controls"] = await self.write_controls_full(controls, state, state_writer)
 
         # --- Delegates (C#-specific) ---
         if delegates:

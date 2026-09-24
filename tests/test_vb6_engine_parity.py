@@ -105,6 +105,55 @@ class Vb6EngineParityTest(unittest.TestCase):
             if payload["parse_meta"].get("parser_engine") == "regex":
                 self.assertFalse(payload["parse_meta"].get("declares_regex_support", True))
 
+    # ------------------------------------------------------------------
+    # plan 260924 M6: the official ANTLR-only anchor asymmetry table.
+    # These anchors have NO regex parity by design (parse_meta records the
+    # engine; the parity sets above stay the shared coverage contract).
+    # ------------------------------------------------------------------
+
+    ANTLR_ONLY_ANCHOR_PLANES = (
+        "instantiations",   # `New X` plane (AD-02)
+        "with_targets",     # `With <EXPR>` block targets
+        "ui_access",        # member/state read-write rows
+        "redim",            # ReDim [Preserve] mutation sites
+    )
+
+    def test_anchor_planes_are_antlr_only(self) -> None:
+        for plane in self.ANTLR_ONLY_ANCHOR_PLANES:
+            antlr_rows = sum(
+                len(p.get(plane) or []) for p in self.antlr_payloads.values()
+            )
+            self.assertGreater(
+                antlr_rows, 0, f"{plane} must carry rows on the fixture"
+            )
+            for name, payload in self.regex_payloads.items():
+                self.assertIsNone(
+                    payload.get(plane),
+                    f"regex payload unexpectedly carries {plane}",
+                )
+
+    def test_exported_publication_derives_on_both_engines(self) -> None:
+        # AD-04: exported/public-surface derives from is_private, which BOTH
+        # engines hydrate — publication parity holds without regex upgrades
+        from tools.vb.vb_common import asdict_function
+
+        parsed = parse_vb_file(
+            str(FIXTURE_DIR / "modUtil.bas"), str(FIXTURE_DIR), get_vb6_parser, "vb6"
+        )
+        regex_by_name = {fn.name: fn for fn in parsed[0]}
+        public_row = asdict_function(regex_by_name["CalcTotal"], "p", "p", "vb6", "r", "")
+        self.assertTrue(public_row["exported"])
+        private_row = asdict_function(regex_by_name["HelperSub"], "p", "p", "vb6", "r", "")
+        self.assertFalse(private_row["exported"])
+
+        antlr_by_id = {
+            row["symbol_id"]: row
+            for payload in self.antlr_payloads.values()
+            for row in payload.get("functions", [])
+        }
+        self.assertTrue(antlr_by_id["modUtil.HelperSub/0@modUtil.bas"]["is_private"])
+        self.assertFalse(antlr_by_id["modUtil.CalcTotal/2@modUtil.bas"]["is_private"])
+
 
 if __name__ == "__main__":
     unittest.main()

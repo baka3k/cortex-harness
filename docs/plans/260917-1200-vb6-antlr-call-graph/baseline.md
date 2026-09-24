@@ -5,10 +5,10 @@ improvement claims (M1/M2/M4) are measured against these numbers.
 
 - date: 2026-09-17
 - engine: regex (parse_vb_file + resolve_calls)
-- files parsed with >=1 function: 13
-- functions extracted: 38
-- raw call edges: 51
-- resolved after resolve_calls: 45 / 51
+- files parsed with >=1 function: 17
+- functions extracted: 48
+- raw call edges: 69
+- resolved after resolve_calls: 55 / 69
 
 ## Capture against expected.json
 

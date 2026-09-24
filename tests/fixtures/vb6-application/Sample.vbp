@@ -18,3 +18,7 @@ HelpContextID="0"
 CompatibleMode="0"
 MajorVer=1
 MinorVer=0
+Module=modState; modState.bas
+Class=clsSource; clsSource.cls
+Class=clsSink; clsSink.cls
+Form=frmAnchor.frm
