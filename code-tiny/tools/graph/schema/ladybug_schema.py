@@ -59,6 +59,7 @@ _BOOL_PROPERTIES = frozenset(
         "redacted",
         "secret_bearing",
         "canonical",
+        "is_static",
     }
 )
 # String-typed columns whose values may be lists/dicts; they are JSON-encoded
@@ -193,6 +194,11 @@ _NODE_SPECS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
          "visibility_source", "export_evidence", "signature", "module_id"),
     ),
     "Type": ("id", ("qualified_name", "kind", "package_name", "exported", "module_id")),
+    # VB6 designer control (plan 260924 anchor graph): one node per real
+    # designer control of a form; pseudo-controls (Form/MDIForm/UserControl)
+    # stay on the Type node of their form.
+    "Control": ("id", ("qualified_name", "kind", "scope_name", "class_name",
+                       "line_number", "package_name")),
     "Function": (
         "id",
         ("node_type", "qualified_name", "kind", "class_name", "package_name", "scope_name",
@@ -210,7 +216,7 @@ _NODE_SPECS: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "Constant": ("id", ("qualified_name", "kind", "scope_name", "class_name", "package_name",
                         "line_number", "value", "type_name")),
     "Variable": ("id", ("qualified_name", "kind", "scope_name", "class_name", "package_name",
-                        "line_number", "type_name", "is_global", "is_shared")),
+                        "line_number", "type_name", "is_global", "is_shared", "is_static")),
     "FunctionType": ("id", ("type_signature",)),
     "Field": ("id", ("qualified_name", "scope_name", "type_signature")),
     "Alias": ("id", ("qualified_name", "kind", "target_name")),
@@ -382,8 +388,16 @@ _REL_SPECS: Dict[str, Tuple[_ENDPOINT_PAIRS, Tuple[str, ...]]] = {
                       ("Interface", "Namespace"), ("Enum", "Namespace"),
                       ("Constant", "Namespace"), ("Variable", "Namespace")), ()),
     "USES": ((("Function", "Type"), ("Class", "Type"), ("Function", "Function"),
-              ("Class", "Class"), ("Function", "Variable"), ("Function", "Constant")), ()),
+              ("Class", "Class"), ("Function", "Variable"), ("Function", "Constant"),
+              ("Function", "Control")), ()),
     "USES_TYPE": ((("Function", "Type"), ("Class", "Type"), ("Type", "Type")), ()),
+    # VB6 anchor graph (plan 260924): forms ride the types lane (:Type, NOT
+    # :Class — test_vb6_graph_contract pins it), so HAS_CONTROL sources on
+    # Type and WIRED_TO keeps a (Function, Type) pair for pseudo-control
+    # lifecycle handlers (Form_Load -> form Type node).
+    "HAS_CONTROL": ((("Type", "Control"),), ()),
+    "WIRED_TO": ((("Function", "Control"), ("Function", "Type")), ()),
+    "INSTANTIATES": ((("Function", "Type"),), ()),
     "POINTER_TO": ((("Type", "Type"),), ()),
     "REFERENCE_TO": ((("Type", "Type"),), ()),
     "ALIAS_OF": ((("Alias", "Type"), ("Alias", "Alias")), ()),

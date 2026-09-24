@@ -30,7 +30,7 @@ from tools.common.analyzer_cache import file_signature, load_parse_cache, safe_c
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files, cleanup_qdrant_with_writer
 from tools.common.message_scan import default_message_collection_name, run_message_scan_pipeline
-from tools.common.project_scope import enrich_project_scope
+from tools.common.project_scope import enrich_project_scope, project_id_lookup_key
 from tools.graph.cli import add_graph_provider_args, create_graph_driver_from_args, prepare_graph_args
 from tools.graph.writer.language_writer import LanguageCodeWriter
 from tools.vb.vb_common import (
@@ -332,6 +332,14 @@ def _hydrate_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         # metadata consumed by the analyzer, no graph nodes)
         "declares": [dataclass_from_payload(Vb6DeclareRow, item) for item in payload.get("declares", [])],
         "controls": [item for item in (payload.get("controls") or []) if isinstance(item, dict)],
+        # plan 260924 anchor planes (red-team H3): raw-dict passthrough like
+        # controls — hydration drops unknown TOP-LEVEL keys silently, so each
+        # new plane needs an explicit whitelist entry or the adapter's output
+        # never reaches the resolver/builders
+        "instantiations": [item for item in (payload.get("instantiations") or []) if isinstance(item, dict)],
+        "with_targets": [item for item in (payload.get("with_targets") or []) if isinstance(item, dict)],
+        "ui_access": [item for item in (payload.get("ui_access") or []) if isinstance(item, dict)],
+        "redim": [item for item in (payload.get("redim") or []) if isinstance(item, dict)],
         "file_def": dataclass_from_payload(FileDef, payload.get("file_def", {})),
         "parse_meta": dict(payload.get("parse_meta", {})),
         "parse_cache_version": payload.get("parse_cache_version", ""),
@@ -736,19 +744,22 @@ VB6_EVENT_SUFFIXES = (
 )
 
 #: pseudo-controls with module-level event handlers (Form_Load, MDIForm_Load,
-#: UserControl_Initialize); Class_Initialize deliberately NOT matched — class
-#: lifecycle is not a control event (Q3)
-VB6_EVENT_MODULE_CONTROLS = ("Form", "MDIForm", "UserControl")
+#: UserControl_Initialize). Plan 260924 4.1 adds "Class" so class lifecycle
+#: handlers (Class_Initialize/Terminate) wire to the module's Type node —
+#: overriding the earlier Q3 exclusion. Form/MDIForm/UserControl stay
+#: designer-only (they must not match in plain .bas modules).
+VB6_EVENT_MODULE_CONTROLS = ("Form", "MDIForm", "UserControl", "Class")
 
 
-def match_event_handlers(controls: Sequence[Any], functions: Sequence[Any]) -> int:
+def match_event_handlers(controls: Sequence[Any], functions: Sequence[Any]) -> List[Tuple[Any, str, str]]:
     """Annotate functions with `vb6_event` wiring metadata (in place).
 
     Match rule (plan 260917-1628 2.3): `^(ctrl)_(evt)$` case-insensitive with
     LONGEST-control-name-first so `cmd_OK_Click` splits as (cmd_OK, Click).
     `evt` must belong to VB6_EVENT_SUFFIXES and `ctrl` must exist among this
     module's controls (or be a module-level pseudo-control for designer
-    files). Returns the number of annotated handlers.
+    files). Returns the wired (function, control_name, control_type) triples
+    (plan 260924: WIRED_TO rows need the resolved control, not just a count).
     """
 
     control_names: Dict[str, Dict[str, str]] = {}
@@ -759,15 +770,20 @@ def match_event_handlers(controls: Sequence[Any], functions: Sequence[Any]) -> i
                 "name": str(control["name"]),
                 "type": str(control.get("type") or ""),
             }
-    if not control_names:
-        return 0
-    # pseudo-controls are matchable only in designer files (controls exist)
+    designer_file = bool(control_names)
+    if not designer_file:
+        # no designer controls: only the Class pseudo-control stays matchable
+        # (Class_Initialize/Terminate in .cls modules — plan 260924 4.1)
+        control_names["class"] = {"name": "Class", "type": "Class"}
+    # Form/MDIForm/UserControl are matchable only in designer files — a
+    # `Form_Load` helper in a plain .bas must never be annotated (0-false-match)
     for pseudo in VB6_EVENT_MODULE_CONTROLS:
-        control_names.setdefault(pseudo.lower(), {"name": pseudo, "type": pseudo})
+        if pseudo == "Class" or designer_file:
+            control_names.setdefault(pseudo.lower(), {"name": pseudo, "type": pseudo})
 
     ordered = sorted(control_names.keys(), key=len, reverse=True)
     suffixes = tuple(suffix.lower() for suffix in VB6_EVENT_SUFFIXES)
-    annotated = 0
+    wired: List[Tuple[Any, str, str]] = []
     for fn in functions:
         name = (getattr(fn, "name", "") or "").strip()
         lowered = name.lower()
@@ -787,8 +803,463 @@ def match_event_handlers(controls: Sequence[Any], functions: Sequence[Any]) -> i
         fn.vb6_control_type = info["type"]  # type: ignore[attr-defined]
         if not (getattr(fn, "note", "") or ""):
             fn.note = f"Event handler for {fn.vb6_event}"  # type: ignore[attr-defined]
-        annotated += 1
-    return annotated
+        wired.append((fn, info["name"], info["type"]))
+    return wired
+
+
+# ---------------------------------------------------------------------------
+# anchor-graph row builders (plan 260924, phase 01 frame — P4 pours payload
+# data in). All builders are TARGET-IN-BATCH GUARDED: USES/WIRED_TO/
+# INSTANTIATES are not in _OPTIONAL_EXTERNAL_RELATION_TYPES, so a row pointing
+# at a missing node would abort the whole write batch (red-team M4). Rows are
+# only emitted when the target node is part of the same batch.
+# ---------------------------------------------------------------------------
+
+#: designer types that ARE the module itself — no Control node (AD-01); their
+#: handlers wire to the form's Type node on the types lane instead. "class"
+#: covers Class_Initialize/Terminate wiring (plan 260924 4.1; no designer
+#: control ever carries a VB.Class type, so the node filter is unaffected).
+VB6_PSEUDO_CONTROL_TYPES = frozenset({"form", "mdiform", "usercontrol", "class"})
+
+
+def _vb6_row_scope(
+    project_id: str, project_name: str, language: str, repo: str, build_system: str
+) -> Dict[str, Any]:
+    return {
+        "project_id": project_id,
+        "project_id_normalized": project_id_lookup_key(project_id),
+        "project_name": project_name,
+        "language": language,
+        "repo": repo,
+        "build_system": build_system,
+    }
+
+
+def _vb6_payload_file(payload: Dict[str, Any]) -> str:
+    file_def = payload.get("file_def")
+    return str(getattr(file_def, "file_path", "") or "").replace("\\", "/")
+
+
+def _vb6_payload_module(payload: Dict[str, Any]) -> str:
+    meta = payload.get("parse_meta") or {}
+    if isinstance(meta, dict):
+        module_name = str(meta.get("module_name") or "")
+        if module_name:
+            return module_name
+    return os.path.splitext(os.path.basename(_vb6_payload_file(payload)))[0]
+
+
+def _vb6_is_pseudo_control(control_type: str) -> bool:
+    return str(control_type or "").rsplit(".", 1)[-1].lower() in VB6_PSEUDO_CONTROL_TYPES
+
+
+def vb6_control_index(payloads: Sequence[Dict[str, Any]]) -> Dict[Tuple[str, str], str]:
+    """(module_key, control_key) -> Control node id over controls[] planes."""
+
+    index: Dict[Tuple[str, str], str] = {}
+    for payload in payloads or []:
+        module = _vb6_payload_module(payload)
+        for control in payload.get("controls") or []:
+            if not isinstance(control, dict):
+                continue
+            name = str(control.get("name") or "").strip()
+            if not name or _vb6_is_pseudo_control(str(control.get("type") or "")):
+                continue
+            index.setdefault(
+                (module.lower(), name.lower()), f"{module}.{name}@control"
+            )
+    return index
+
+
+def control_rows(
+    payloads: Sequence[Dict[str, Any]],
+    *,
+    project_id: str,
+    project_name: str,
+    language: str,
+    repo: str,
+    build_system: str,
+) -> List[Dict[str, Any]]:
+    """Control node rows (:Control) from the designer controls[] planes.
+
+    qualified_name is ``<Module>.<Control>``; kind carries the designer type
+    (``VB.CommandButton``); class_name names the owning form. Pseudo-controls
+    (Form/MDIForm/UserControl) never produce a row (AD-01).
+    """
+
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+    for payload in payloads or []:
+        module = _vb6_payload_module(payload)
+        rel_path = _vb6_payload_file(payload)
+        for control in payload.get("controls") or []:
+            if not isinstance(control, dict):
+                continue
+            name = str(control.get("name") or "").strip()
+            ctype = str(control.get("type") or "").strip()
+            if not name or _vb6_is_pseudo_control(ctype):
+                continue
+            node_id = f"{module}.{name}@control"
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            rows.append(
+                {
+                    "id": node_id,
+                    "name": name,
+                    "qualified_name": f"{module}.{name}",
+                    "kind": ctype,
+                    "scope_name": module,
+                    "class_name": module,
+                    "package_name": "",
+                    "file_path": rel_path,
+                    "line_number": int(control.get("line") or 0),
+                    "code": "",
+                    "comment": "",
+                    "summary": "",
+                    "note": "",
+                    **_vb6_row_scope(project_id, project_name, language, repo, build_system),
+                }
+            )
+    return rows
+
+
+def has_control_rows(
+    payloads: Sequence[Dict[str, Any]],
+    control_ids: Optional[set] = None,
+) -> List[Dict[str, Any]]:
+    """HAS_CONTROL rows (Type→Control): the owning form's Type node.
+
+    VB6 forms ride the types lane (``:Type`` — pinned by
+    test_vb6_graph_contract), so the source is ``<Module>@<rel>``.
+    """
+
+    index = vb6_control_index(payloads)
+    rows: List[Dict[str, Any]] = []
+    for payload in payloads or []:
+        module = _vb6_payload_module(payload)
+        rel_path = _vb6_payload_file(payload)
+        type_id = f"{module}@{rel_path}"
+        for control in payload.get("controls") or []:
+            if not isinstance(control, dict):
+                continue
+            name = str(control.get("name") or "").strip()
+            if not name or _vb6_is_pseudo_control(str(control.get("type") or "")):
+                continue
+            target = index.get((module.lower(), name.lower()))
+            if target is None:
+                continue
+            if control_ids is not None and target not in control_ids:
+                continue  # target-in-batch guard (red-team M4)
+            rows.append(
+                {
+                    "source_id": type_id,
+                    "source_label": "Type",
+                    "target_id": target,
+                    "target_label": "Control",
+                    "rel_type": "HAS_CONTROL",
+                    "properties": {},
+                }
+            )
+    return rows
+
+
+def wiring_rows(payloads: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """WIRED_TO rows from event-annotated functions (M2).
+
+    Real control handlers wire Function→Control; pseudo-control lifecycle
+    handlers (Form_Load etc.) wire Function→Type of the owning module. Targets
+    must exist in the batch or the row is skipped (red-team M4).
+    """
+
+    index = vb6_control_index(payloads)
+    type_ids = {
+        cls.symbol_id
+        for payload in payloads or []
+        for cls in (payload.get("classes") or [])
+        if getattr(cls, "symbol_id", None)
+    }
+    rows: List[Dict[str, Any]] = []
+    for payload in payloads or []:
+        module = _vb6_payload_module(payload)
+        rel_path = _vb6_payload_file(payload)
+        for fn in payload.get("functions") or []:
+            event = str(getattr(fn, "vb6_event", "") or "")
+            if not event:
+                continue
+            control_name = event.split(".", 1)[0]
+            target = index.get((module.lower(), control_name.lower()))
+            if target is not None:
+                rows.append(
+                    {
+                        "source_id": fn.symbol_id,
+                        "source_label": "Function",
+                        "target_id": target,
+                        "target_label": "Control",
+                        "rel_type": "WIRED_TO",
+                        "properties": {
+                            "event": event,
+                            "control_type": str(getattr(fn, "vb6_control_type", "") or ""),
+                        },
+                    }
+                )
+                continue
+            if control_name.lower() in VB6_PSEUDO_CONTROL_TYPES:
+                type_id = f"{module}@{rel_path}"
+                if type_id in type_ids:
+                    rows.append(
+                        {
+                            "source_id": fn.symbol_id,
+                            "source_label": "Function",
+                            "target_id": type_id,
+                            "target_label": "Type",
+                            "rel_type": "WIRED_TO",
+                            "properties": {"event": event},
+                        }
+                    )
+    return rows
+
+
+def vb6_external_type_id(name: str) -> str:
+    """Stable Type id for an external/COM class (AD-02).
+
+    Mirrors the ``external::vb6/`` placeholder convention of weak callees;
+    labels differ (:Type vs :Function) so the shared namespace is safe.
+    """
+
+    return f"external::vb6/{(name or '').strip().lower()}"
+
+
+def instantiation_rows(
+    payloads: Sequence[Dict[str, Any]],
+    *,
+    project_id: str,
+    project_name: str,
+    language: str,
+    repo: str,
+    build_system: str,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """``New X`` planes → INSTANTIATES (Function→Type) rows + external Type rows.
+
+    Consumes the resolver's ``target_kind``/``target_id`` annotations when
+    present (phase 03); falls back to a module-name match for unannotated
+    rows. Project classes resolve to the existing types-lane node
+    (``<Class>@<rel>``); unknown names become ``kind="com"`` Type nodes plus a
+    USES_TYPE edge. The caller is attributed through the plane's ``proc`` owner
+    (red-team H4), never a line-range join. Returns (type_node_rows, rel_rows).
+    """
+
+    module_file: Dict[str, str] = {}
+    type_ids: set = set()
+    for payload in payloads or []:
+        module = _vb6_payload_module(payload)
+        if module:
+            module_file.setdefault(module.lower(), _vb6_payload_file(payload))
+        for cls in payload.get("classes") or []:
+            if getattr(cls, "symbol_id", None):
+                type_ids.add(cls.symbol_id)
+
+    type_node_rows: List[Dict[str, Any]] = []
+    rel_rows: List[Dict[str, Any]] = []
+    external_seen: set = set()
+    for payload in payloads or []:
+        module = _vb6_payload_module(payload)
+        procs_by_name: Dict[str, List[Any]] = {}
+        for fn in payload.get("functions") or []:
+            name = (getattr(fn, "name", "") or "").strip().lower()
+            if name:
+                procs_by_name.setdefault(name, []).append(fn)
+        for row in payload.get("instantiations") or []:
+            if not isinstance(row, dict):
+                continue
+            cls_name = str(row.get("name") or "").strip()
+            proc = str(row.get("proc") or "").strip().lower()
+            if not cls_name or not proc or len(procs_by_name.get(proc, [])) != 1:
+                continue  # guarded: unattributable instantiation
+            caller = procs_by_name[proc][0]
+            target_kind = str(row.get("target_kind") or "")
+            target_id = str(row.get("target_id") or "")
+            if not target_kind:
+                # legacy fallback (unannotated payload): module-name match
+                module_key = cls_name.lower()
+                if module_key in module_file:
+                    candidate = f"{cls_name}@{module_file[module_key]}"
+                    target_kind, target_id = (
+                        ("project", candidate) if candidate in type_ids else ("", "")
+                    )
+                else:
+                    target_kind, target_id = "external", vb6_external_type_id(cls_name)
+            if target_kind == "project":
+                if target_id not in type_ids:
+                    continue  # target-in-batch guard (red-team M4)
+                rel_rows.append(
+                    {
+                        "source_id": caller.symbol_id,
+                        "source_label": "Function",
+                        "target_id": target_id,
+                        "target_label": "Type",
+                        "rel_type": "INSTANTIATES",
+                        "properties": {"line": int(row.get("line") or 0)},
+                    }
+                )
+                continue
+            if target_kind != "external":
+                continue
+            if target_id not in external_seen:
+                external_seen.add(target_id)
+                type_node_rows.append(
+                    {
+                        "id": target_id,
+                        "name": cls_name,
+                        "qualified_name": cls_name,
+                        "kind": "com",
+                        "package_name": "",
+                        "file_path": _vb6_payload_file(payload),
+                        "start_line": 0,
+                        "end_line": 0,
+                        "code": "",
+                        "comment": "",
+                        "summary": "",
+                        "note": "",
+                        **_vb6_row_scope(project_id, project_name, language, repo, build_system),
+                    }
+                )
+            rel_rows.append(
+                {
+                    "source_id": caller.symbol_id,
+                    "source_label": "Function",
+                    "target_id": target_id,
+                    "target_label": "Type",
+                    "rel_type": "USES_TYPE",
+                    "properties": {"line": int(row.get("line") or 0), "com_type": cls_name},
+                }
+            )
+    return type_node_rows, rel_rows
+
+
+def ui_access_rows(payloads: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """USES/USES_TYPE rows from the RESOLVED ui_access planes (4.1).
+
+    - target_kind control → USES Function→Control {member, access}
+    - with-attached members (via_with) → USES to the With target
+      (control → Control; form/class → Type — the addbook.frm:529 form-nav
+      flavor resolves to the Type node without a CALLS edge)
+    - target_kind com_type/type → USES_TYPE Function→Type
+    - target_kind variable/constant → USES Function→Variable|Constant {access}
+
+    Unannotated/unresolvable rows produce nothing — no edge is fabricated.
+    """
+
+    rows: List[Dict[str, Any]] = []
+    for payload in payloads or []:
+        procs_by_name: Dict[str, List[Any]] = {}
+        for fn in payload.get("functions") or []:
+            name = (getattr(fn, "name", "") or "").strip().lower()
+            if name:
+                procs_by_name.setdefault(name, []).append(fn)
+        for row in payload.get("ui_access") or []:
+            if not isinstance(row, dict):
+                continue
+            kind = str(row.get("with_target_kind") or row.get("target_kind") or "")
+            target_id = str(row.get("with_target_id") or row.get("target_id") or "")
+            if not kind or not target_id or kind in {"unknown", "late_bound",
+                                                     "local_shadow", "unresolved_type", "new"}:
+                continue
+            proc = str(row.get("proc") or "").strip().lower()
+            callers = procs_by_name.get(proc, [])
+            if len(callers) != 1:
+                continue  # guarded: unattributable access
+            props: Dict[str, Any] = {"line": int(row.get("line") or 0)}
+            member = str(row.get("member") or "")
+            access = str(row.get("access") or "")
+            if member:
+                props["member"] = member
+            if access:
+                props["access"] = access
+            via_with = bool(row.get("via_with") and row.get("with_target_kind"))
+            if kind == "control" or (via_with and kind in {"control", "type", "com_type"}):
+                # With-attached members ride USES (plan 260924 3.3): the
+                # form-nav flavor (`.Show`) references the form Type node
+                # without implying a procedure call
+                target_label = (
+                    "Control" if kind == "control"
+                    else "Variable" if kind == "variable"
+                    else "Constant" if kind == "constant"
+                    else "Type"
+                )
+                rel_type = "USES"
+            elif kind == "variable":
+                target_label, rel_type = "Variable", "USES"
+            elif kind == "constant":
+                target_label, rel_type = "Constant", "USES"
+            else:  # direct typed receiver (com_type / type): USES_TYPE
+                target_label, rel_type = "Type", "USES_TYPE"
+                if row.get("com_type"):
+                    props["com_type"] = str(row["com_type"])
+            rows.append(
+                {
+                    "source_id": callers[0].symbol_id,
+                    "source_label": "Function",
+                    "target_id": target_id,
+                    "target_label": target_label,
+                    "rel_type": rel_type,
+                    "properties": props,
+                }
+            )
+    return rows
+
+
+def redim_rows(payloads: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """USES (Function→Variable) mutation rows from the redim planes (AD-03).
+
+    ``properties.mutation`` distinguishes ``redim_preserve`` from plain
+    ``redim``. Target = the declared array variable (procedure-local wins);
+    rows without a matching Variable node in the batch are skipped (guarded).
+    """
+
+    rows: List[Dict[str, Any]] = []
+    for payload in payloads or []:
+        var_local: Dict[Tuple[str, str], str] = {}
+        var_module: Dict[str, str] = {}
+        for var in payload.get("variables") or []:
+            name = (getattr(var, "name", "") or "").strip().lower()
+            symbol_id = getattr(var, "symbol_id", "")
+            if not name or not symbol_id:
+                continue
+            procedure_name = (getattr(var, "procedure_name", "") or "").strip().lower()
+            if procedure_name:
+                var_local.setdefault((procedure_name, name), symbol_id)
+            else:
+                var_module.setdefault(name, symbol_id)
+        procs_by_name: Dict[str, List[Any]] = {}
+        for fn in payload.get("functions") or []:
+            name = (getattr(fn, "name", "") or "").strip().lower()
+            if name:
+                procs_by_name.setdefault(name, []).append(fn)
+        for row in payload.get("redim") or []:
+            if not isinstance(row, dict):
+                continue
+            proc = str(row.get("proc") or "").strip().lower()
+            array_name = str(row.get("name") or "").strip().lower()
+            target = var_local.get((proc, array_name)) or var_module.get(array_name)
+            callers = procs_by_name.get(proc, [])
+            if not target or len(callers) != 1:
+                continue  # guarded
+            preserve = bool(row.get("preserve"))
+            rows.append(
+                {
+                    "source_id": callers[0].symbol_id,
+                    "source_label": "Function",
+                    "target_id": target,
+                    "target_label": "Variable",
+                    "rel_type": "USES",
+                    "properties": {
+                        "mutation": "redim_preserve" if preserve else "redim",
+                        "line": int(row.get("line") or 0),
+                    },
+                }
+            )
+    return rows
 
 
 async def build_call_graph(
@@ -1001,12 +1472,19 @@ async def build_call_graph(
     if dialect == "vb6":
         resolve_vb6_calls(all_functions, all_calls, payloads=payloads, verbose=verbose)
         # event wiring (plan 260917-1628 2.3): annotate handlers from the
-        # controls[] plane BEFORE rows/embeddings are built
+        # controls[] plane BEFORE rows/embeddings are built; plan 260924 runs
+        # the anchor-plane resolution passes in the same window
         wired_handlers = 0
         for payload in payloads:
-            wired_handlers += match_event_handlers(
+            wired_handlers += len(match_event_handlers(
                 payload.get("controls") or [], payload["functions"]
-            )
+            ))
+            # public surface list per module (plan 260924 3.4): M1 exported
+            # rows already carry the flag; the summary makes it queryable
+            payload["parse_meta"]["public_surface"] = [
+                fn.name for fn in payload["functions"]
+                if not getattr(fn, "is_private", False)
+            ]
         if verbose:
             print(f"[vb6][events] wired handlers: {wired_handlers}", flush=True)
     else:
@@ -1081,6 +1559,7 @@ async def build_call_graph(
         enums_rows: List[Dict[str, Any]] = []
         constants_rows: List[Dict[str, Any]] = []
         variables_rows: List[Dict[str, Any]] = []
+        controls_rows: List[Dict[str, Any]] = []
 
         semantic_provider = "vb6_antlr_worker"
         if any(
@@ -1324,10 +1803,89 @@ async def build_call_graph(
                     end_line=0,
                     arity=-1,
                     code="",
+                    # placeholder stubs are not public API (review M3): without
+                    # this, exported=True leaks into public-surface queries
+                    is_private=True,
                 )
                 functions_rows.append(
                     asdict_function(placeholder, project_id, project_name, language, repo, build_system)
                 )
+
+            # --- anchor-graph write path (plan 260924 4.1) ----------------
+            # Pours the hydrated planes + resolver annotations into the P1
+            # builders. All builders are target-in-batch guarded: USES/
+            # WIRED_TO/INSTANTIATES/HAS_CONTROL rows pointing at a missing
+            # node abort the whole batch (red-team M4).
+            anchor_files_by_id: Dict[str, set] = {}
+
+            def _remember_node_file(node_id: str, file_path: str) -> None:
+                if node_id and file_path:
+                    anchor_files_by_id.setdefault(node_id, set()).add(file_path)
+
+            controls_rows = control_rows(
+                payloads,
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+            )
+            for row in controls_rows:
+                _remember_node_file(row["id"], row["file_path"])
+            control_ids_in_graph = {row["id"] for row in controls_rows}
+            if vb6_node_filter is not None:
+                # nodes of unchanged files still exist in the graph — only
+                # their re-write is filtered, never the edge guard set
+                controls_rows = [
+                    row for row in controls_rows if row["file_path"] in vb6_node_filter
+                ]
+
+            anchor_rel_rows: List[Dict[str, Any]] = []
+            anchor_rel_rows.extend(has_control_rows(payloads, control_ids=control_ids_in_graph))
+            anchor_rel_rows.extend(wiring_rows(payloads))
+
+            inst_type_rows, inst_rel_rows = instantiation_rows(
+                payloads,
+                project_id=project_id,
+                project_name=project_name,
+                language=language,
+                repo=repo,
+                build_system=build_system,
+            )
+            for row in inst_type_rows:
+                _remember_node_file(row["id"], row["file_path"])
+            # an external com node is SHARED by every module instantiating it
+            # (review M4): map all owning files so one owner's cleanup cannot
+            # permanently orphan another module's edges after incremental sync
+            for payload in payloads:
+                for row in payload.get("instantiations") or []:
+                    if str(row.get("target_kind") or "") == "external":
+                        _remember_node_file(
+                            str(row.get("target_id") or ""), _vb6_payload_file(payload)
+                        )
+            if vb6_node_filter is not None:
+                inst_type_rows = [
+                    row for row in inst_type_rows if row["file_path"] in vb6_node_filter
+                ]
+            types_rows.extend(inst_type_rows)
+            anchor_rel_rows.extend(inst_rel_rows)
+            anchor_rel_rows.extend(ui_access_rows(payloads))
+            anchor_rel_rows.extend(redim_rows(payloads))
+
+            # review C1 (Critical): a :Type target with no node in the batch
+            # graph — e.g. `As ADODB.Connection` never New'd anywhere, or a
+            # .bas pseudo-target — fails the typed-rel endpoint preflight and
+            # aborts the ENTIRE relations write. Drop such rows instead.
+            anchor_type_ids = {
+                cls.symbol_id
+                for payload in payloads
+                for cls in (payload.get("classes") or [])
+                if getattr(cls, "symbol_id", None)
+            } | {row["id"] for row in inst_type_rows}
+            anchor_rel_rows = [
+                row for row in anchor_rel_rows
+                if row["target_label"] != "Type" or row["target_id"] in anchor_type_ids
+            ]
 
             if vb6_node_filter is not None:
                 # AD-09 (red-team F1): re-publish every edge whose source OR
@@ -1348,6 +1906,23 @@ async def build_call_graph(
                     or _edge_file(row["callee_id"]) in vb6_node_filter
                 ]
 
+                def _anchor_edge_files(node_id: str) -> set:
+                    # control ids (`<Module>.<Name>@control`) and external
+                    # Type ids carry no file suffix — resolve via the node map
+                    owning = anchor_files_by_id.get(node_id)
+                    if owning:
+                        return owning
+                    suffix = _edge_file(node_id)
+                    return {suffix} if suffix else set()
+
+                anchor_rel_rows = [
+                    row for row in anchor_rel_rows
+                    if _anchor_edge_files(row["source_id"]) & vb6_node_filter
+                    or _anchor_edge_files(row["target_id"]) & vb6_node_filter
+                ]
+
+            relations_rows.extend(anchor_rel_rows)
+
         await code_writer.write_all(
             projects=projects,
             namespaces=namespaces_rows or None,
@@ -1360,6 +1935,7 @@ async def build_call_graph(
             enums=enums_rows or None,
             constants=constants_rows or None,
             variables=variables_rows or None,
+            controls=controls_rows or None,
             relations=relations_rows or None,
             calls=calls_rows or None,
             use_full_writers=True,
@@ -1423,6 +1999,8 @@ async def build_call_graph(
                                 # for non-handlers and regex-path functions
                                 "vb6_event": getattr(fn, "vb6_event", "") or "",
                                 "vb6_control_type": getattr(fn, "vb6_control_type", "") or "",
+                                # public surface (plan 260924 AD-04)
+                                "exported": not getattr(fn, "is_private", False),
                                 "project_id": project_id,
                                 "project_name": project_name,
                                 "language": language,
@@ -1495,6 +2073,41 @@ async def build_call_graph(
                     # designer control tree, compacted (plan 260917-1628 2.3)
                     cls_payload["controls"] = controls_summary
                 items.append((text, {"id": _stable_point_id(cls.symbol_id), "payload": cls_payload}))
+            if dialect == "vb6":
+                # control points (plan 260924 4.1): designer controls become
+                # searchable nodes mirroring the class-point pattern
+                for control in payload.get("controls") or []:
+                    if not isinstance(control, dict) or not control.get("name"):
+                        continue
+                    cname = str(control["name"])
+                    ctype = str(control.get("type") or "")
+                    control_id = f"{_vb6_payload_module(payload)}.{cname}@control"
+                    control_text = f"{cname} {ctype}".strip()
+                    items.append(
+                        (
+                            control_text,
+                            {
+                                "id": _stable_point_id(control_id),
+                                "payload": {
+                                    "node_type": "control",
+                                    "symbol_id": control_id,
+                                    "qualified_name": (
+                                        f"{_vb6_payload_module(payload)}.{cname}"
+                                    ),
+                                    "name": cname,
+                                    "kind": ctype,
+                                    "parent": str(control.get("parent") or ""),
+                                    "file_path": _vb6_payload_file(payload),
+                                    "line_number": int(control.get("line") or 0),
+                                    "project_id": project_id,
+                                    "project_name": project_name,
+                                    "language": language,
+                                    "repo": repo,
+                                    "build_system": build_system,
+                                },
+                            },
+                        )
+                    )
             for prop in payload.get("properties", []):
                 text = prop.note or prop.code or ""
                 items.append(
