@@ -169,3 +169,5 @@ compile_commands.json
 .mimosa/**
 .cortext-harness/sync-state/sync-code.lock
 doc-tiny/http:/.localhost:6333.cortex-owner.lock
+# YAKE dynamic entity-rule artifacts generated per project by doc sync
+doc-tiny/rules/from-yake/

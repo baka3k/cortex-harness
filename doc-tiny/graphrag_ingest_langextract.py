@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import re
 import sys
@@ -45,14 +46,29 @@ except Exception:
     load_dotenv = None
 
 from entity_extractors import (
+    _env_flag,
+    build_ruler_pipeline,
     build_spacy_pipeline,
     extract_entities_gemini,
     extract_entities_gliner,
     extract_entities_gliner_batch,
     extract_entities_langextract,
     build_gliner_model,
+    merge_ruler_gliner,
     parse_gliner_labels,
+    ruler_match,
 )
+
+# Dynamic YAKE rule generation (plan 260924-1642). Optional at import time:
+# a missing ``yake`` package only disables the dynamic-rules pre-pass with a
+# clear warn, it must never kill the sync (D4).
+try:
+    import yake_rules
+except Exception as _yake_import_exc:  # pragma: no cover - depends on venv
+    yake_rules = None
+    _YAKE_IMPORT_ERROR = _yake_import_exc
+else:
+    _YAKE_IMPORT_ERROR = None
 
 
 def _load_env() -> None:
@@ -180,6 +196,7 @@ def build_graph_components(
     merge_entities: bool = True,
     normalize_mode: str = "aggressive",
     project_id_normalized: str | None = None,
+    ruler_nlp=None,
 ) -> Tuple[Dict[str, Dict[str, str]], List[Dict[str, str]]]:
     if provider == "spacy":
         doc = nlp(text)
@@ -192,6 +209,8 @@ def build_graph_components(
             threshold=gliner_threshold,
             gliner_model=gliner_model,
         )
+        if ruler_nlp is not None:
+            entities = merge_ruler_gliner(ruler_match(ruler_nlp, text), entities)
     elif provider == "gemini":
         entities, relations = extract_entities_gemini(text)
     else:
@@ -692,6 +711,156 @@ def _read_input_text(file_path: Path) -> str:
     return read_text_file(file_path)
 
 
+def _first_ruler_json(ruler_json) -> str | None:
+    """--ruler-json is repeatable (plan M4); the spacy provider keeps its
+    historical single-file/dir semantics and consumes only the first entry."""
+    if not ruler_json:
+        return None
+    return ruler_json[0]
+
+
+def _default_yake_rules_dir(project_id: str | None) -> Path:
+    component = str(project_id or "default").strip() or "default"
+    component = component.replace("/", "__").replace("\\", "__")
+    return Path(__file__).resolve().parent / "rules" / "from-yake" / component
+
+
+def _env_int(name: str, default: int) -> int:
+    """Env-backed int default; a malformed value warns and falls back instead
+    of crashing argparse construction (the last unguarded yake config path)."""
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        print(f"[yake] ignoring invalid {name}={raw!r}; using {default}")
+        return default
+
+
+def ensure_yake_rules(raw_text: str, source_id: str, args: argparse.Namespace) -> dict | None:
+    """YAKE pre-pass on already-loaded text (plan D1) — no second document parse.
+
+    Returns a change descriptor consumed by ``_refresh_ruler_for_yake_change``:
+    ``{"status": "written", "path": Path, "patterns": list}`` when a rule file
+    was written, ``{"status": "removed"}`` when a stale file was removed, or
+    None when nothing changed / the pre-pass is disabled or degraded.
+    Never raises: any failure degrades to a one-line warn (D4).
+    """
+    if not getattr(args, "yake_rules", False):
+        return None
+    if yake_rules is None:
+        print(f"[yake] dynamic yake rules skipped: {_YAKE_IMPORT_ERROR}")
+        return None
+    try:
+        path = yake_rules.ensure_rule_file(
+            Path(args.yake_rules_dir),
+            source_id,
+            raw_text,
+            language=args.yake_language,
+            top=args.yake_top,
+            max_ngram=args.yake_max_ngram,
+        )
+        if path is None:
+            print(f"yake rules: 0 patterns (skipped) for {source_id}")
+            return {"status": "removed"}
+        patterns = json.loads(path.read_text(encoding="utf-8")).get("patterns", [])
+        print(f"yake rules: {len(patterns)} patterns -> {path}")
+        return {"status": "written", "path": path, "patterns": patterns}
+    except Exception as exc:
+        print(f"[yake] dynamic yake rules skipped for {source_id}: {exc}")
+        return None
+
+
+def _prune_yake_rules_for_folder(
+    folder_path: Path, file_paths: List[Path], args: argparse.Namespace
+) -> None:
+    """Folder/full-sync prune scoped to this project's rules dir (plan D2/C3)."""
+    if yake_rules is None or not getattr(args, "yake_rules", False):
+        return
+    try:
+        keep = set()
+        for file_path in file_paths:
+            source_id = _safe_source_id(folder_path, file_path)
+            if args.source_id:
+                source_id = f"{args.source_id}__{source_id}"
+            keep.add(source_id)
+        removed = yake_rules.prune_rule_files(Path(args.yake_rules_dir), keep)
+        if removed:
+            print(f"yake rules: pruned {len(removed)} stale rule file(s)")
+    except Exception as exc:
+        print(f"[yake] rule prune skipped: {exc}")
+
+
+def _ruler_sources_for(args: argparse.Namespace) -> List[str]:
+    """Effective ruler sources for the gliner path: user --ruler-json entries
+    UNION the dynamic yake rules dir (plan M4 — never an either/or)."""
+    sources = list(args.ruler_json or [])
+    rules_dir = Path(args.yake_rules_dir) if getattr(args, "yake_rules_dir", None) else None
+    if getattr(args, "yake_rules", False) and rules_dir is not None and rules_dir.is_dir():
+        sources.append(str(rules_dir))
+    return sources
+
+
+def _invalidate_ruler_nlp(args: argparse.Namespace) -> None:
+    """Force the ruler sidecar rebuild so freshly written rules apply to the
+    very source they were generated from."""
+    args._ruler_nlp_ready = False
+
+
+def _refresh_ruler_for_yake_change(args: argparse.Namespace, change: dict | None) -> None:
+    """Make freshly generated rules visible to the shared ruler sidecar.
+
+    A full rebuild per source made folder runs quadratic in files×patterns;
+    when the sidecar already exists we add just the new patterns and only
+    fall back to a rebuild when patterns were removed or the sidecar isn't
+    usable yet.
+    """
+    if not change:
+        return
+    ruler_nlp = getattr(args, "_ruler_nlp", None)
+    if (
+        change["status"] == "removed"
+        or not getattr(args, "_ruler_nlp_ready", False)
+        or ruler_nlp is None
+    ):
+        args._ruler_nlp_ready = False
+        return
+    try:
+        ruler_nlp.get_pipe("entity_ruler").add_patterns(change["patterns"])
+    except Exception:
+        args._ruler_nlp_ready = False
+
+
+def _get_ruler_nlp(args: argparse.Namespace):
+    """Lazy ruler-only sidecar for the gliner merge path (plan D3).
+
+    Built once before the first extraction and cached on ``args``; a folder
+    run refreshes it whenever a source's rule file changed. Guarded: any
+    build failure degrades to GLiNER-only with a warn (D4).
+    """
+    if getattr(args, "_ruler_nlp_ready", False):
+        return getattr(args, "_ruler_nlp", None)
+    args._ruler_nlp_ready = True
+    args._ruler_nlp = None
+    if args.entity_provider != "gliner":
+        return None
+    ruler_sources = _ruler_sources_for(args)
+    if not ruler_sources:
+        return None
+    try:
+        ruler_nlp = build_ruler_pipeline(ruler_sources)
+        if ruler_nlp is not None:
+            print(f"ruler merge: {len(ruler_sources)} source(s) [gliner]")
+        else:
+            print(f"[ruler] no patterns loaded from: {ruler_sources}")
+        args._ruler_nlp = ruler_nlp
+    except Exception as exc:
+        print(f"[ruler] EntityRuler merge disabled: {exc}")
+        args._ruler_nlp = None
+    return args._ruler_nlp
+
+
 def process_text(
     raw_text: str,
     source_id: str,
@@ -712,9 +881,10 @@ def process_text(
     print(f"Entity provider: {args.entity_provider}")
 
     if args.entity_provider == "spacy" and nlp is None:
-        nlp = build_spacy_pipeline(args.spacy_model, ruler_json=args.ruler_json)
+        nlp = build_spacy_pipeline(args.spacy_model, ruler_json=_first_ruler_json(args.ruler_json))
     if args.entity_provider == "gliner" and gliner_model is None:
         gliner_model = build_gliner_model(args.gliner_model_resolved)
+    ruler_nlp = _get_ruler_nlp(args)
     gliner_labels = parse_gliner_labels(args.gliner_labels)
     use_gliner_batch = args.entity_provider == "gliner" and not args.no_batch
     merge_entities = not args.no_entity_merge
@@ -789,6 +959,8 @@ def process_text(
                 gliner_model=gliner_model,
             )
             for (idx, paragraph), entities in zip(batch_items, batch_entities, strict=True):
+                if ruler_nlp is not None:
+                    entities = merge_ruler_gliner(ruler_match(ruler_nlp, paragraph), entities)
                 nodes, relations = build_graph_components_from_entities(
                     entities,
                     [],
@@ -829,6 +1001,7 @@ def process_text(
                 merge_entities=merge_entities,
                 normalize_mode=normalize_mode,
                 project_id_normalized=project_id_normalized,
+                ruler_nlp=ruler_nlp,
             )
             print(f"Extracted {len(nodes)} entities, {len(relations)} relations.")
             graph_batch.append(
@@ -947,7 +1120,7 @@ def process_xlsx_structured(
                     gliner_threshold=args.gliner_threshold,
                     gliner_model=args.gliner_model_resolved,
                     spacy_model=args.spacy_model,
-                    spacy_ruler=args.ruler_json,
+                    spacy_ruler=_first_ruler_json(args.ruler_json),
                     column_map=entity_column_map,
                     column_list=entity_columns,
                     column_default_type=args.xlsx_entity_column_type,
@@ -1114,7 +1287,58 @@ def main() -> None:
         help="Normalization strength for entity merging.",
     )
     parser.add_argument("--spacy-model", default="en_core_web_sm")
-    parser.add_argument("--ruler-json", default=None, help="Path to EntityRuler JSON patterns")
+    parser.add_argument(
+        "--ruler-json",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help=(
+            "EntityRuler JSON pattern file or directory (repeatable). The gliner "
+            "provider merges every entry (union with dynamic YAKE rules); the "
+            "spacy provider keeps its historical single-path behavior (first entry)."
+        ),
+    )
+    _yake_default = _env_flag("YAKE_ENABLED", True)
+    parser.add_argument(
+        "--yake-rules",
+        dest="yake_rules",
+        action="store_true",
+        default=_yake_default,
+        help="Generate per-source YAKE EntityRuler rules before extraction (default: env YAKE_ENABLED, on).",
+    )
+    parser.add_argument(
+        "--no-yake-rules",
+        dest="yake_rules",
+        action="store_false",
+        default=_yake_default,
+        help="Disable the YAKE dynamic-rules pre-pass.",
+    )
+    parser.add_argument(
+        "--yake-language",
+        default=os.getenv("YAKE_LANGUAGE", "en"),
+        help="YAKE stopword language (default: env YAKE_LANGUAGE or 'en').",
+    )
+    parser.add_argument(
+        "--yake-top",
+        type=int,
+        default=_env_int("YAKE_TOP", 150),
+        help="Max keywords per document (default: env YAKE_TOP or 150).",
+    )
+    parser.add_argument(
+        "--yake-max-ngram",
+        dest="yake_max_ngram",
+        type=int,
+        default=_env_int("YAKE_MAX_NGRAM", 3),
+        help="Max n-gram length for YAKE keywords (default: env YAKE_MAX_NGRAM or 3).",
+    )
+    parser.add_argument(
+        "--yake-rules-dir",
+        default=None,
+        help=(
+            "Directory for generated rule files "
+            "(default: <script dir>/rules/from-yake/<safe project id>)."
+        ),
+    )
     parser.add_argument(
         "--gliner-model-name",
         default=os.getenv("GLINER_MODEL_NAME", "urchade/gliner_large-v2.1"),
@@ -1227,6 +1451,9 @@ def main() -> None:
         gliner_model_choice = args.gliner_model_name
     args.gliner_model_resolved = gliner_model_choice
 
+    if not args.yake_rules_dir:
+        args.yake_rules_dir = str(_default_yake_rules_dir(raw_project_id or None))
+
     inputs = [
         bool(args.pdf),
         bool(args.text_file),
@@ -1271,10 +1498,13 @@ def main() -> None:
         if not file_paths:
             raise SystemExit("No supported files found in folder.")
         print(f"Found {len(file_paths)} files in folder.")
+        _prune_yake_rules_for_folder(folder_path, file_paths, args)
         shared_nlp = None
         shared_gliner = None
         if args.entity_provider == "spacy":
-            shared_nlp = build_spacy_pipeline(args.spacy_model, ruler_json=args.ruler_json)
+            shared_nlp = build_spacy_pipeline(
+                args.spacy_model, ruler_json=_first_ruler_json(args.ruler_json)
+            )
         if args.entity_provider == "gliner":
             shared_gliner = build_gliner_model(args.gliner_model_resolved)
         for idx, file_path in enumerate(file_paths, start=1):
@@ -1284,6 +1514,10 @@ def main() -> None:
             else:
                 source_id = _safe_source_id(folder_path, file_path)
             raw_text = _read_input_text(file_path)
+            if file_path.suffix.lower() != ".xlsx":
+                _refresh_ruler_for_yake_change(
+                    args, ensure_yake_rules(raw_text, source_id, args)
+                )
             process_text(
                 raw_text,
                 source_id,
@@ -1303,6 +1537,7 @@ def main() -> None:
             raise FileNotFoundError(pdf_path)
         raw_text = read_pdf_text(pdf_path)
         source_id = args.source_id or pdf_path.stem
+        _refresh_ruler_for_yake_change(args, ensure_yake_rules(raw_text, source_id, args))
         process_text(
             raw_text,
             source_id,
@@ -1320,6 +1555,7 @@ def main() -> None:
             raise FileNotFoundError(text_path)
         raw_text = read_text_file(text_path)
         source_id = args.source_id or text_path.stem
+        _refresh_ruler_for_yake_change(args, ensure_yake_rules(raw_text, source_id, args))
         process_text(
             raw_text,
             source_id,
@@ -1337,6 +1573,7 @@ def main() -> None:
             raise FileNotFoundError(md_path)
         raw_text = read_text_file(md_path)
         source_id = args.source_id or md_path.stem
+        _refresh_ruler_for_yake_change(args, ensure_yake_rules(raw_text, source_id, args))
         process_text(
             raw_text,
             source_id,
@@ -1354,6 +1591,7 @@ def main() -> None:
             raise FileNotFoundError(docx_path)
         raw_text = read_docx_text(docx_path)
         source_id = args.source_id or docx_path.stem
+        _refresh_ruler_for_yake_change(args, ensure_yake_rules(raw_text, source_id, args))
         process_text(
             raw_text,
             source_id,
@@ -1371,6 +1609,7 @@ def main() -> None:
             raise FileNotFoundError(pptx_path)
         raw_text = read_pptx_text(pptx_path)
         source_id = args.source_id or pptx_path.stem
+        _refresh_ruler_for_yake_change(args, ensure_yake_rules(raw_text, source_id, args))
         process_text(
             raw_text,
             source_id,
