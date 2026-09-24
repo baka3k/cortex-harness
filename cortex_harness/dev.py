@@ -1172,6 +1172,42 @@ def _build_file_hashes(folder_path: Path, extra_ignores: frozenset = frozenset()
     }
 
 
+def _prune_yake_rule_files(
+    python: str, rules_dir: Path, deleted_rel: list,
+    kept_stems: Optional[set] = None,
+) -> None:
+    """Delete YAKE rule files of removed docs (plan 260924-1642 D8).
+
+    Incremental deletion-only runs spawn zero ingestor subprocesses, so the
+    ingestor-side prune never sees them — dev.py owns this path. Two source-id
+    spellings exist: the folder-mode relpath id and the single-file-mode stem
+    id. The stem spelling is only pruned when no surviving file shares that
+    stem — deleting ``sub/gone.md`` must not remove the rules of a kept
+    top-level ``gone.md``. Failures warn, never fail the sync.
+    """
+    kept_stems = kept_stems or set()
+    source_ids: list = []
+    for rel in deleted_rel:
+        posix_rel = str(rel).replace(os.sep, "/")
+        source_ids.append(posix_rel.replace("/", "__").replace("\\", "__"))
+        stem = Path(posix_rel).stem
+        if stem not in kept_stems:
+            source_ids.append(stem)
+    cmd = [
+        python, str(DOC_TINY / "yake_rules.py"),
+        "--rules-dir", str(rules_dir),
+        "--prune-sources", *source_ids,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode == 0:
+            click.echo(f"  [yake] pruned rule files for {len(deleted_rel)} deleted doc(s)")
+        else:
+            click.echo(f"  [warn][yake] prune exited {proc.returncode}: {(proc.stderr or '').strip()}")
+    except Exception as exc:
+        click.echo(f"  [warn][yake] prune failed: {exc}")
+
+
 def _sync_doc_folder(
     *,
     project_path: Path,
@@ -1184,6 +1220,7 @@ def _sync_doc_folder(
     dry_run: bool,
     preview: bool,
     extra_ignores: frozenset = frozenset(),
+    yake: Optional[bool] = None,
 ) -> dict:
     """Sync one doc folder. Returns result summary dict."""
     folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
@@ -1202,6 +1239,17 @@ def _sync_doc_folder(
         or f"{project_id}_doc"
     )
 
+    # YAKE dynamic rules (plan 260924-1642): CLI override > doc.env YAKE_ENABLED > on.
+    yake_on = (
+        yake if yake is not None
+        else str(env.get("YAKE_ENABLED", "1")).strip().lower() not in {"0", "false", "no", "off"}
+    )
+    yake_lang = str(env.get("YAKE_LANGUAGE", "en"))
+    yake_top = str(env.get("YAKE_TOP", "150"))
+    # Per-project rules dir so one project's prune can never touch another's (C3).
+    yake_component = project_id.replace("/", "__").replace("\\", "__")
+    yake_rules_dir = DOC_TINY / "rules" / "from-yake" / yake_component
+
     base_cmd = [
         python, str(DOC_INGESTOR),
         *_env_to_neo4j_args(env),
@@ -1218,11 +1266,23 @@ def _sync_doc_folder(
         "--gliner-batch-size",   env.get("GLINER_BATCH_SIZE", "1"),
         "--neo4j-batch-size",    env.get("NEO4J_BATCH_SIZE", "1"),
         "--no-batch",
+        *(["--yake-rules"] if yake_on else ["--no-yake-rules"]),
+        "--yake-language",       yake_lang,
+        "--yake-top",            yake_top,
+        "--yake-rules-dir",      str(yake_rules_dir),
+        *(["--yake-max-ngram", str(env["YAKE_MAX_NGRAM"])] if env.get("YAKE_MAX_NGRAM") else []),
     ]
     click.echo(f"\n{'─' * 52}")
     click.echo(f" folder : {folder}")
     click.echo(f" mode   : {mode}")
     click.echo(f" provider: {entity_provider}")
+    if yake_on:
+        click.echo(
+            f" yake   : on (lang={yake_lang}, top={yake_top}, "
+            f"dir=rules/from-yake/{yake_component})"
+        )
+    else:
+        click.echo(" yake   : off")
 
     start_ts = time.time()
 
@@ -1311,6 +1371,14 @@ def _sync_doc_folder(
                 pass
         for rel in deleted_rel:
             new_hashes.pop(rel, None)
+
+        # D8: prune rule files of deleted docs even on deletion-only runs
+        # (which spawn zero ingestor subprocesses).
+        if yake_on and deleted_rel:
+            kept_stems = {f.stem for f in _find_doc_files(folder_path, extra_ignores)}
+            _prune_yake_rule_files(
+                python, yake_rules_dir, deleted_rel, kept_stems=kept_stems
+            )
 
         _save_state(project_path, f"doc:{folder}", {
             "folder":       folder,
@@ -3618,9 +3686,11 @@ def sync_code_stop(ctx):
 @click.option("--preview", is_flag=True, help="Preview changed files before syncing.")
 @click.option("--entity-provider", default="gliner", show_default=True,
               help="Entity extraction provider: gliner / langextract / spacy")
+@click.option("--yake/--no-yake", default=None,
+              help="Override YAKE dynamic rules (default: env YAKE_ENABLED).")
 @click.option("--dry-run", is_flag=True)
 @click.pass_context
-def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
+def sync_doc(ctx, project_dir, preview, entity_provider, yake, dry_run):
     """Interactive: pick doc folders, incremental if baseline exists.
 
     \b
@@ -3631,7 +3701,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
     """
     ctx.ensure_object(dict)
     ctx.obj.update(project_dir=project_dir, preview=preview,
-                   entity_provider=entity_provider, dry_run=dry_run)
+                   entity_provider=entity_provider, yake=yake, dry_run=dry_run)
 
     if ctx.invoked_subcommand is not None:
         return
@@ -3677,6 +3747,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, dry_run):
                 dry_run=dry_run,
                 preview=preview,
                 extra_ignores=extra_ignores,
+                yake=yake,
             )
             summaries.append(result)
 
@@ -3731,6 +3802,7 @@ def sync_doc_all(ctx):
                 dry_run=o["dry_run"],
                 preview=False,
                 extra_ignores=extra_ignores,
+                yake=o.get("yake"),
             )
             summaries.append(result)
 

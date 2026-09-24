@@ -17,3 +17,4 @@ python-dotenv
 lxml
 gliner
 pandas
+yake>=0.7

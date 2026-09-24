@@ -162,7 +162,7 @@ dev sync doc all
 
 ```
 
-This process duration varies depending on the project size. `code-tiny` parses ASTs, call graphs, and symbols, then indexes them into Neo4j + Qdrant. `doc-tiny` extracts entities and embeds paragraph vectors.
+This process duration varies depending on the project size. `code-tiny` parses ASTs, call graphs, and symbols, then indexes them into Neo4j + Qdrant. `doc-tiny` extracts entities and embeds paragraph vectors. Before extraction, doc sync also runs a YAKE pre-pass that generates dynamic entity rules per document (merged into GLiNER results).
 
 ### Subsequent Syncs (Incremental Sync)
 

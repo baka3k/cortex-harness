@@ -174,6 +174,98 @@ def build_spacy_pipeline(model: str, ruler_json: str | None = None):
     return nlp
 
 
+def build_ruler_pipeline(ruler_sources: List[str]):
+    """Ruler-only sidecar pipeline for the gliner merge path (plan 260924-1642 D3).
+
+    ``spacy.blank("en")`` + ``entity_ruler`` — no statistical NER model needed
+    (``en_core_web_sm`` is not installed in the effective venv) and no NER
+    entities can leak into the merge. Each source may be a JSON file or a
+    directory (top-level ``*.json`` merged). Unlike ``build_spacy_pipeline``,
+    empty or malformed rule files are skipped with a warn instead of raising,
+    so one bad generated file cannot disable the whole run (plan C2). Returns
+    None when no patterns could be loaded at all.
+    """
+    import spacy
+
+    all_patterns: List[dict] = []
+    for source in ruler_sources or []:
+        path = Path(source)
+        if not path.exists():
+            print(f"[ruler] Skipping missing ruler source: {path}")
+            continue
+        files = sorted(path.glob("*.json")) if path.is_dir() else [path]
+        for file_path in files:
+            try:
+                data = json.loads(file_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"[ruler] Skipping unreadable rule file {file_path}: {exc}")
+                continue
+            patterns = data.get("patterns") if isinstance(data, dict) else data
+            if not isinstance(patterns, list):
+                print(f"[ruler] Skipping malformed rule file (no patterns list): {file_path}")
+                continue
+            if not patterns:
+                print(f"[ruler] Skipping empty rule file: {file_path}")
+                continue
+            valid = [
+                item
+                for item in patterns
+                if isinstance(item, dict) and "label" in item and "pattern" in item
+            ]
+            dropped = len(patterns) - len(valid)
+            if dropped:
+                print(f"[ruler] Dropped {dropped} invalid pattern(s) in {file_path}")
+            all_patterns.extend(valid)
+    if not all_patterns:
+        return None
+    nlp = spacy.blank("en")
+    ruler = nlp.add_pipe("entity_ruler")
+    ruler.add_patterns(all_patterns)
+    return nlp
+
+
+def ruler_match(ruler_nlp, text: str) -> List[Dict[str, Any]]:
+    """Match ruler patterns against text; ents are pure ruler output (plan M2)."""
+    if ruler_nlp is None or not text:
+        return []
+    doc = ruler_nlp(text)
+    entities = [
+        {
+            "name": ent.text,
+            "type": ent.label_,
+            "start_char": ent.start_char,
+            "end_char": ent.end_char,
+            "confidence": 1.0,
+        }
+        for ent in doc.ents
+    ]
+    return _normalize_entities(entities)
+
+
+def merge_ruler_gliner(
+    ruler_entities: List[Dict[str, Any]] | None,
+    gliner_entities: List[Dict[str, Any]] | None,
+) -> List[Dict[str, Any]]:
+    """Union of ruler and GLiNER entities; ruler wins (name.casefold(), type) collisions.
+
+    Note (plan m3): this dedupe key differs from the downstream
+    ``_normalize_entity_name`` merge key, so ruler precedence is a property of
+    this merge layer only, not of the whole pipeline.
+    """
+    merged: List[Dict[str, Any]] = list(ruler_entities or [])
+    seen = {
+        (str(item.get("name", "")).casefold(), str(item.get("type", "")))
+        for item in merged
+    }
+    for ent in gliner_entities or []:
+        key = (str(ent.get("name", "")).casefold(), str(ent.get("type", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(ent)
+    return merged
+
+
 def parse_gliner_labels(raw: str | None) -> List[str]:
     if raw is None:
         return list(DEFAULT_GLINER_LABELS)
