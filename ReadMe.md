@@ -125,6 +125,7 @@ Works with: Claude Code, Qwen Code, OpenCode, GitHub Copilot, Cursor, Continue, 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/) (fast Python package manager)
 - Node.js ≥ 18 (only for ADLC skill pack)
+- *(optional)* .NET SDK 8+ and JDK 17+ — needed only for full-fidelity C#/VB.NET (Roslyn) and VB6 (ANTLR) parsing. See [Parser Environment Requirements](#parser-environment-requirements).
 
 ### Install & Sync
 
@@ -166,6 +167,24 @@ Compiler-grade parsers — not regex, not naive AST. Each analyzer uses the righ
 **Framework overlays**: Spring, Struts, MyBatis, Flutter, ASP.NET Core, ASP.NET Framework, Express.js, FastAPI/Django, Laravel
 
 **Document formats**: PDF, Markdown, DOCX, PPTX, XLSX, TXT
+
+### Parser Environment Requirements
+
+Some analyzers depend on an external toolchain. Prepare the ones below to get full-fidelity parsing:
+
+| Environment | Required By | Behavior When Missing |
+| --- | --- | --- |
+| **.NET SDK 8+** (`dotnet` on PATH) | **C# / VB.NET parsers** — Roslyn semantic engine | Falls back to tree-sitter (C#) / regex (VB.NET) parsing with a logged warning |
+| **JDK 17+** (`java` on PATH) | **VB6/VBA parser** — ANTLR engine (worker runs as a `java -jar` process) | Engine `auto` falls back to the regex engine with a one-line warning; forcing `engine=antlr` fails loudly |
+| **Maven 3.9+** | Rebuilding the VB6 ANTLR worker jar only | Optional at parse time — a prebuilt jar ships with the repo |
+| **ANTLR4** | **VB6/VBA** whole-program parse | Nothing to install separately — the grammar is bundled inside the vendored worker jar and runs on the JDK above |
+
+Notes:
+
+- **Roslyn workers self-build**: the first C#/VB.NET run executes `dotnet build` against the bundled worker projects (`code-tiny/tools/csharp/roslyn_worker/`, `code-tiny/tools/vb/roslyn_worker/`); a matching prebuilt DLL is reused when available.
+- **Java & Kotlin need no external toolchain**: Java sources are parsed with tree-sitter grammars installed via pip (`tree-sitter-java`, `tree-sitter-kotlin`). Parsing Java code does **not** require a JDK — the JDK above is consumed only by the VB6 ANTLR engine.
+
+**Default run vs. standalone runs.** The default sync (`dev sync code` / `dev sync code all`) scans every configured language analyzer, so a missing toolchain is reported as a warning or per-language error for exactly the parts that need it. When you run an individual analyzer standalone, you only need the toolchain for the languages that analyzer covers — e.g. syncing a Java-only repo requires none of the environments above.
 
 ---
 
