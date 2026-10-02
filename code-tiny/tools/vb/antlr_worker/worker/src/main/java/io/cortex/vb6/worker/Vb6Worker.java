@@ -24,6 +24,11 @@ package io.cortex.vb6.worker;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -113,6 +118,8 @@ public final class Vb6Worker {
 		String originalContent; // content of root/filePath (for file_def)
 		int syntaxErrors;
 		boolean designerStripped; // adapter blanked the designer block (strip fallback)
+		String loadError;       // set when the file could not be read/decoded at all
+		File batchFile;         // UTF-8 copy fed to the vendor parser for legacy bytes
 
 		FileEntry(final String filePath, final String parsePath) {
 			this.filePath = filePath;
@@ -221,11 +228,24 @@ public final class Vb6Worker {
 			final File parseFile = entry.parsePath != null
 					? new File(entry.parsePath)
 					: new File(root, entry.filePath);
-			entry.content = Files.readString(parseFile.toPath(), StandardCharsets.UTF_8);
-			final File originalFile = new File(root, entry.filePath);
-			entry.originalContent = originalFile.isFile()
-					? Files.readString(originalFile.toPath(), StandardCharsets.UTF_8)
-					: entry.content;
+			try {
+				final DecodedText decoded = readTextLenient(parseFile);
+				entry.content = decoded.text;
+				if (!StandardCharsets.UTF_8.equals(decoded.charset)) {
+					// legacy bytes (Shift-JIS, Windows-1252, ...): the vendor
+					// parser re-reads this same file with its own charset, so
+					// hand it a UTF-8 copy instead of the raw file
+					entry.batchFile = utf8CopyForBatch(parseFile, decoded.text);
+				}
+				final File originalFile = new File(root, entry.filePath);
+				entry.originalContent = originalFile.isFile()
+						? readTextLenient(originalFile).text
+						: entry.content;
+			} catch (final IOException unreadable) {
+				// one unreadable file must not sink the whole workspace batch
+				entry.loadError = rootMessage(unreadable);
+				continue;
+			}
 			entry.moduleName = declaredModuleName(entry.content, entry.filePath);
 			entry.syntaxErrors = countSyntaxErrors(entry.content);
 			final String moduleKey = entry.moduleName.toLowerCase(Locale.ROOT);
@@ -235,14 +255,19 @@ public final class Vb6Worker {
 			entriesByModuleName.put(moduleKey, entry);
 		}
 
-		// 2. whole-program batch: EVERY file goes in (AD-02) so cross-module
+		// 2. whole-program batch: EVERY parseable file goes in (AD-02) so cross-module
 		// resolution sees the complete project, regardless of parse cache state.
 		List<File> batch = new ArrayList<>();
 		final Map<FileEntry, File> parseFileByEntry = new LinkedHashMap<>();
 		for (final FileEntry entry : entries) {
-			final File file = entry.parsePath != null
-					? new File(entry.parsePath)
-					: new File(root, entry.filePath);
+			if (entry.loadError != null) {
+				continue;
+			}
+			final File file = entry.batchFile != null
+					? entry.batchFile
+					: entry.parsePath != null
+							? new File(entry.parsePath)
+							: new File(root, entry.filePath);
 			parseFileByEntry.put(entry, file);
 			batch.add(file);
 		}
@@ -260,7 +285,7 @@ public final class Vb6Worker {
 			final List<FileEntry> excluded = new ArrayList<>();
 			final List<File> retry = new ArrayList<>();
 			for (final FileEntry entry : entries) {
-				if (entry.syntaxErrors > 0) {
+				if (entry.loadError != null || entry.syntaxErrors > 0) {
 					excluded.add(entry);
 				} else {
 					retry.add(parseFileByEntry.get(entry));
@@ -316,6 +341,10 @@ public final class Vb6Worker {
 		final JsonArray filesOut = new JsonArray();
 		int okCount = 0;
 		for (final FileEntry entry : entries) {
+			if (entry.loadError != null) {
+				filesOut.add(fileError(entry, "read failed: " + entry.loadError));
+				continue;
+			}
 			if (entry.syntaxErrors == -1) {
 				filesOut.add(fileError(entry, "excluded after batch failure (syntax errors)"));
 				continue;
@@ -360,7 +389,101 @@ public final class Vb6Worker {
 		meta.add("implements_map", GSON.toJsonTree(implementsMap));
 		meta.addProperty("parse_cache_version", cacheVersion);
 		result.add("worker_meta", meta);
+		deleteBatchTempCopies(entries);
 		return result;
+	}
+
+	// ------------------------------------------------------------------
+	// lenient source decoding
+	// ------------------------------------------------------------------
+
+	/**
+	 * Legacy VB6 sources are frequently not UTF-8 (Shift-JIS on Japanese
+	 * systems, Windows-1252 elsewhere). Strict UTF-8 first, then a fallback
+	 * chain; ISO-8859-1 maps every byte, so the chain always terminates. Files
+	 * that needed a fallback are re-encoded to UTF-8 for the vendor parser,
+	 * whose params charset stays strict UTF-8.
+	 */
+	private static final Charset[] LEGACY_FALLBACKS = {
+			charsetOrNull("windows-31j"), // CP932 / Shift-JIS + NEC/IBM extensions
+			charsetOrNull("windows-1252"),
+			StandardCharsets.ISO_8859_1,
+	};
+
+	private static Charset charsetOrNull(final String name) {
+		try {
+			return Charset.forName(name);
+		} catch (final Exception unsupported) {
+			return null;
+		}
+	}
+
+	/** Decoded text plus the charset that produced it. */
+	private static final class DecodedText {
+		final String text;
+		final Charset charset;
+
+		DecodedText(final String text, final Charset charset) {
+			this.text = text;
+			this.charset = charset;
+		}
+	}
+
+	private static DecodedText readTextLenient(final File file) throws IOException {
+		final byte[] bytes = Files.readAllBytes(file.toPath());
+		try {
+			return new DecodedText(decodeStrict(bytes, StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+		} catch (final CharacterCodingException notUtf8) {
+			for (final Charset candidate : LEGACY_FALLBACKS) {
+				if (candidate == null) {
+					continue;
+				}
+				try {
+					return new DecodedText(decodeStrict(bytes, candidate), candidate);
+				} catch (final CharacterCodingException tryNext) {
+					// keep walking the fallback chain
+				}
+			}
+			throw new IOException("no supported charset could decode " + file.getName());
+		}
+	}
+
+	private static String decodeStrict(final byte[] bytes, final Charset charset)
+			throws CharacterCodingException {
+		final CharsetDecoder decoder = charset.newDecoder()
+				.onMalformedInput(CodingErrorAction.REPORT)
+				.onUnmappableCharacter(CodingErrorAction.REPORT);
+		return decoder.decode(ByteBuffer.wrap(bytes)).toString();
+	}
+
+	/**
+	 * Same-named UTF-8 copy in a temp dir: keeping the file name preserves the
+	 * vendor parser's extension-based module kind and its filename-stem
+	 * fallback for files without Attribute VB_Name.
+	 */
+	private static File utf8CopyForBatch(final File source, final String text) throws IOException {
+		final File dir = Files.createTempDirectory("vb6enc").toFile();
+		final File copy = new File(dir, source.getName());
+		Files.write(copy.toPath(), text.getBytes(StandardCharsets.UTF_8));
+		return copy;
+	}
+
+	private static void deleteBatchTempCopies(final List<FileEntry> entries) {
+		final java.util.Set<File> dirs = new java.util.HashSet<>();
+		for (final FileEntry entry : entries) {
+			if (entry.batchFile != null && entry.batchFile.getParentFile() != null) {
+				dirs.add(entry.batchFile.getParentFile());
+			}
+		}
+		for (final File dir : dirs) {
+			final File[] leftovers = dir.listFiles();
+			if (leftovers != null) {
+				for (final File leftover : leftovers) {
+					leftover.delete();
+				}
+			}
+			dir.delete();
+		}
 	}
 
 	private static Module lookupModule(final Program program, final String name) {
