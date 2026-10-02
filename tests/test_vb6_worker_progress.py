@@ -372,6 +372,53 @@ class AdapterRelayTest(unittest.TestCase):
         self.assertNotIn("111", out.split("[vb6][engine]")[1])
 
 
+@unittest.skipUnless(JAVA_AVAILABLE, "java not available")
+class CommentRunSllFenceTest(unittest.TestCase):
+    """A long full-line comment run is a newline run on the default channel.
+    LL ALL(*) on module's NEWLINE* chain is quadratic in that run (400 lines
+    ~4.7s, 800 lines does not finish). The fence must parse it with SLL even
+    when VB6_WORKER_SLL=0, and keep the procedure's line number."""
+
+    def test_long_comment_run_bounded_when_sll_disabled(self) -> None:
+        comment_lines = 400
+        sub_line = 4 + comment_lines  # VERSION, Attribute, Option Explicit, then comments
+        body = "\n".join(
+            ["VERSION 1.0 CLASS", 'Attribute VB_Name = "Fence"', "Option Explicit"]
+            + ["' commented-out procedure"] * comment_lines
+            + ["Public Sub Foo()", "End Sub", ""]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "Fence.cls"
+            source.write_text(body, encoding="utf-8")
+            manifest = {
+                "root": str(root),
+                "project": "",
+                "files": [{"file_path": "Fence.cls"}],
+            }
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            jar = ensure_worker_built()
+            env = dict(os.environ)
+            env["VB6_WORKER_SLL"] = "0"
+            proc = subprocess.run(
+                ["java", "-jar", jar, "--manifest", str(manifest_path),
+                 "--workspace-timeout-ms", "15000"],
+                capture_output=True, text=True, timeout=60, env=env, check=False,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-500:])
+        data = json.loads(proc.stdout)
+        item = data["files"][0]
+        self.assertTrue(item.get("ok"), item.get("error"))
+        functions = item["payload"]["functions"]
+        self.assertEqual([fn["name"] for fn in functions], ["Foo"])
+        self.assertEqual(functions[0]["start_line"], sub_line)
+        meta = data["worker_meta"]
+        self.assertGreaterEqual(meta["sll_fenced_files"], 1)
+        self.assertLess(meta["parse_slowest_ms"], 2000,
+                        "fenced file must stay on SLL; LL on 400 comment lines is ~5s")
+
+
 class AdapterSllDefaultTest(unittest.TestCase):
     """Go/no-go (plan 261002-1410 phase 03.2): measured 33% SLL-bail on the
     legacy corpus, so two-stage ships OFF through the adapter; an explicit

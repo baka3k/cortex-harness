@@ -428,6 +428,7 @@ public final class Vb6Worker {
 		meta.addProperty("parse_slowest_file", runner.getSlowestFile());
 		meta.addProperty("parse_slowest_ms", runner.getSlowestMs());
 		meta.addProperty("sll_fallback_files", runner.getSllFallbackFiles());
+		meta.addProperty("sll_fenced_files", runner.getSllFencedFiles());
 		if (batchRetried) {
 			meta.addProperty("batch_retried", true);
 		}
