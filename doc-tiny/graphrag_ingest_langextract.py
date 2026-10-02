@@ -90,7 +90,19 @@ def read_pdf_text(pdf_path: Path) -> str:
 
 
 def read_text_file(text_path: Path) -> str:
-    return text_path.read_text(encoding="utf-8").strip()
+    raw = text_path.read_bytes()
+    try:
+        return raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        # Legacy docs on Japanese systems are CP932 (plain shift_jis misses
+        # the NEC/IBM extension bytes); latin-1 maps every byte so the chain
+        # always terminates.
+        for encoding in ("cp932", "cp1252", "latin-1"):
+            try:
+                return raw.decode(encoding).strip()
+            except UnicodeDecodeError:
+                continue
+        raise
 
 
 def read_docx_text(docx_path: Path) -> str:
