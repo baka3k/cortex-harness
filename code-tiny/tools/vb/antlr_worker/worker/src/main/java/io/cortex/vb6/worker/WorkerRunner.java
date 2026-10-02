@@ -66,8 +66,21 @@ final class WorkerRunner extends VbParserRunnerImpl {
 	private String slowestFile = "";
 	private long slowestMs;
 	private long sllFallbackFiles;
+	private long sllFencedFiles;
 	private boolean lastParseFellBack;
 	private final Map<String, Long> parseMsByPath = new LinkedHashMap<>();
+
+	/**
+	 * LL ALL(*) on {@code module}'s chain of optional {@code NEWLINE*} sections
+	 * is quadratic in a run of comment/blank lines (each comment is hidden, so
+	 * the parser sees a raw newline run). Measured 2026-10-02, LL-only:
+	 * 160 lines 824ms, 240 lines 1.8s, 400 lines 4.7s, 800 lines timeout;
+	 * SampleForm.frm (6003-line comment run) still inside {@code closure_} at
+	 * 331 CPU-s. SLL commits the newline run to the earlier rule and the
+	 * payload matches LL where both finish (synthetic 240-line run, identical
+	 * function line numbers). At or above this run length, never enter LL.
+	 */
+	static final int LL_COMMENT_RUN_LIMIT = 128;
 
 	WorkerRunner(final int totalFiles, final Map<File, String> displayPaths) {
 		this.totalFiles = totalFiles;
@@ -95,6 +108,10 @@ final class WorkerRunner extends VbParserRunnerImpl {
 		return sllFallbackFiles;
 	}
 
+	long getSllFencedFiles() {
+		return sllFencedFiles;
+	}
+
 	/** Progress numbering and aggregates restart per batch run (R4). */
 	@Override
 	public Program analyzeFiles(final List<File> vbFiles, final VbParserParams params) throws IOException {
@@ -104,6 +121,7 @@ final class WorkerRunner extends VbParserRunnerImpl {
 		slowestFile = "";
 		slowestMs = 0;
 		sllFallbackFiles = 0;
+		sllFencedFiles = 0;
 		parseMsByPath.clear();
 		return super.analyzeFiles(vbFiles, params);
 	}
@@ -162,6 +180,8 @@ final class WorkerRunner extends VbParserRunnerImpl {
 	 * Two-stage parse (AD-04): SLL + BailErrorStrategy first; on bail, the
 	 * file is reparsed from scratch in full-LL mode with vendor-exact error
 	 * handling, so results are identical to an LL-only run (M4).
+	 * A comment/blank run at or above {@link #LL_COMMENT_RUN_LIMIT} never
+	 * enters that LL stage — the newline run is the quadratic cliff.
 	 */
 	@Override
 	protected void parseCode(final String vbCode, final String moduleName, final boolean isClazzModule,
@@ -170,7 +190,20 @@ final class WorkerRunner extends VbParserRunnerImpl {
 
 		StartRuleContext ctx;
 		CommonTokenStream tokens;
-		if (SLL_ENABLED) {
+		if (longestCommentOrBlankRun(vbCode) >= LL_COMMENT_RUN_LIMIT) {
+			// Fence: this file's newline run is the LL cliff. Stay in SLL
+			// even when VB6_WORKER_SLL=0, and do not fall back to LL on bail.
+			sllFencedFiles++;
+			try {
+				final ParseStage stage = parseStageSll(vbCode);
+				ctx = stage.ctx;
+				tokens = stage.tokens;
+			} catch (final ParseCancellationException bail) {
+				final ParseStage stage = parseStageSllRecover(vbCode);
+				ctx = stage.ctx;
+				tokens = stage.tokens;
+			}
+		} else if (SLL_ENABLED) {
 			try {
 				final ParseStage stage = parseStageSll(vbCode);
 				ctx = stage.ctx;
@@ -245,6 +278,22 @@ final class WorkerRunner extends VbParserRunnerImpl {
 		return new ParseStage(ctx, (CommonTokenStream) parser.getInputStream());
 	}
 
+	/**
+	 * SLL with the default error strategy. Used when a fenced file bails:
+	 * syntax errors still yield a tree, and prediction stays off the
+	 * full-context {@code closure_} path that LL would enter.
+	 */
+	private ParseStage parseStageSllRecover(final String vbCode) {
+		final VisualBasic6Lexer lexer = new VisualBasic6Lexer(CharStreams.fromString(vbCode));
+		lexer.removeErrorListeners();
+		final CommonTokenStream tokens = new CommonTokenStream(lexer);
+		final VisualBasic6Parser parser = new VisualBasic6Parser(tokens);
+		parser.getInterpreter().setPredictionMode(PredictionMode.SLL);
+		parser.removeErrorListeners();
+		final StartRuleContext ctx = parser.startRule();
+		return new ParseStage(ctx, tokens);
+	}
+
 	/** LL stage: vendor parity — DefaultErrorStrategy + listener handling. */
 	private ParseStage parseStageLl(final String vbCode, final VbParserParams params) throws IOException {
 		final VisualBasic6Lexer lexer = new VisualBasic6Lexer(CharStreams.fromString(vbCode));
@@ -266,6 +315,62 @@ final class WorkerRunner extends VbParserRunnerImpl {
 
 		final StartRuleContext ctx = parser.startRule();
 		return new ParseStage(ctx, tokens);
+	}
+
+	/**
+	 * Longest run of blank lines or full-line comments ({@code '} / {@code Rem}).
+	 * Those lines are hidden comments plus a default-channel newline, which is
+	 * what feeds the quadratic {@code NEWLINE*} decisions in {@code module}.
+	 */
+	static int longestCommentOrBlankRun(final String vbCode) {
+		int run = 0;
+		int max = 0;
+		int start = 0;
+		final int n = vbCode.length();
+		for (int i = 0; i <= n; i++) {
+			if (i == n || vbCode.charAt(i) == '\n') {
+				if (isCommentOrBlankLine(vbCode, start, i)) {
+					run++;
+					if (run > max) {
+						max = run;
+					}
+				} else {
+					run = 0;
+				}
+				start = i + 1;
+			}
+		}
+		return max;
+	}
+
+	private static boolean isCommentOrBlankLine(final String code, final int start, final int end) {
+		int stop = end;
+		if (stop > start && code.charAt(stop - 1) == '\r') {
+			stop--;
+		}
+		int i = start;
+		while (i < stop) {
+			final char c = code.charAt(i);
+			if (c != ' ' && c != '\t') {
+				break;
+			}
+			i++;
+		}
+		if (i >= stop) {
+			return true;
+		}
+		if (code.charAt(i) == '\'') {
+			return true;
+		}
+		final int rem = stop - i;
+		if (rem >= 3
+				&& (code.charAt(i) == 'R' || code.charAt(i) == 'r')
+				&& (code.charAt(i + 1) == 'E' || code.charAt(i + 1) == 'e')
+				&& (code.charAt(i + 2) == 'M' || code.charAt(i + 2) == 'm')
+				&& (rem == 3 || code.charAt(i + 3) == ' ' || code.charAt(i + 3) == '\t')) {
+			return true;
+		}
+		return false;
 	}
 
 	private static final class ParseStage {

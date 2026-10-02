@@ -80,6 +80,13 @@ mvn -q -f code-tiny/tools/vb/antlr_worker/pom.xml -DskipTests package
   byte-equal). Adapter mặc định TẮT (`VB6_WORKER_SLL=0`): đo trên corpus
   legacy 228-file cho 33% file bail (50% trong số file parse-ok) nên file
   bail bị parse 2 lần, chậm hơn LL-only; bật lại bằng `VB6_WORKER_SLL=1`.
+- Comment-run fence: một dải comment/dòng trống dài thành một dải token
+  `NEWLINE` (comment nằm kênh ẩn), và rule `module` có nhiều `NEWLINE*`
+  nên LL ALL(*) bậc hai — `SampleForm.frm` (dải 6003 dòng) kẹt ở
+  `parseCode` stage LL, 331 CPU-s vẫn chưa xong. File có dải ≥ 128 dòng
+  bị ép SLL (kể cả khi `VB6_WORKER_SLL=0`) và không rơi xuống LL; payload
+  khớp LL ở chỗ cả hai chạy xong. `worker_meta.sll_fenced_files` đếm số
+  file đi đường này.
 - Trạng thái engine: `dev doctor` mục `vb6 antlr ...` (report-only).
 - `.frm`/`.ctl`/`.pag` được materialize thành `.cls` tạm trước khi đưa vào
   worker. Mặc định (keep-designer) file được copy NGUYÊN VẸN — designer block
