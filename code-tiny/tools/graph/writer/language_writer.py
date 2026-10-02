@@ -2883,6 +2883,7 @@ class LanguageCodeWriter:
             Dict with counts per entity type
         """
         optional_unresolved_relations = 0
+        ambiguous_label_relations = 0
         if relations:
             project_ids = {
                 str(project["id"])
@@ -2967,6 +2968,15 @@ class LanguageCodeWriter:
                             optional_unresolved_relations += 1
                             skip_optional = True
                             break
+                        if len(candidates) > 1:
+                            # id registered under several lanes (e.g. a Private
+                            # Enum that another producer also emitted as Type):
+                            # dropping this row beats aborting the whole
+                            # workspace write — the node ambiguity is the
+                            # producer bug to report, not a reason to fail
+                            ambiguous_label_relations += 1
+                            skip_optional = True
+                            break
                         raise ValueError(
                             f"cannot infer {label_key} for relationship row {position} "
                             f"identity={identity!r}; candidates={sorted(candidates)}"
@@ -2987,6 +2997,13 @@ class LanguageCodeWriter:
                 "optional_unresolved",
                 "relations",
                 skipped=optional_unresolved_relations,
+            )
+        if ambiguous_label_relations:
+            counts["ambiguous_relations"] = ambiguous_label_relations
+            self._emit_progress(
+                "ambiguous_label",
+                "relations",
+                skipped=ambiguous_label_relations,
             )
 
         # --- Projects (always inline-Cypher) ---
