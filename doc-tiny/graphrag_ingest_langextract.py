@@ -95,7 +95,7 @@ def read_text_file(text_path: Path) -> str:
         return raw.decode("utf-8").strip()
     except UnicodeDecodeError:
         # Legacy docs on Japanese systems are CP932 (plain shift_jis misses
-        # the NEC/IBM extension bytes); latin-1 maps every byte so the chain
+        # the IBM extension bytes); latin-1 maps every byte so the chain
         # always terminates.
         for encoding in ("cp932", "cp1252", "latin-1"):
             try:
