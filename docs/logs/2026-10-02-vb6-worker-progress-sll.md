@@ -102,6 +102,39 @@ config, warm run reported; full tables in the plan's `verification-report.md`):
 - Verbose end-to-end on the corpus: live per-file progress, single summary
   line, verbose top-5.
 
+## Impact
+
+- Every sync using the ANTLR engine now shows live per-file parse progress
+  and a slowest-file summary without `--verbose`; `parse_meta.worker_elapsed_ms`
+  is real per-file data (was hardcoded 0) — risk: low (stdout contract
+  unchanged, stderr additive).
+- Operators on legacy-charset corpora: timed-out runs no longer leak
+  `vb6enc*` temp dirs (shutdown hook; ~2200 historical leak dirs remain in
+  the dev TMPDIR from pre-fix runs — safe to delete when no parse is live).
+- SLL is a no-op by default in the product path; direct-jar users keep the
+  worker-side default. No parse-result changes anywhere (parity byte-equal).
+
+## Decision
+
+- Go/no-go applied the plan's pre-registered R3 rule instead of judging the
+  −17% aggregate parse-time win: a 33% bail rate means real-world corpora
+  (which contain syntax-quirky files) pay double parses on exactly the files
+  that are slowest, and the measured corpus showed the original cost cliff
+  had already vanished (charset fix `c7ae172`). Alternative kept available:
+  `VB6_WORKER_SLL=1` re-enables with zero code change, and per-file progress
+  makes any future cliff observable the moment it returns.
+- Vendor untouched via a `WorkerRunner` subclass (AD-01) so the pinned
+  ProLeap commit stays resync-safe; the mirrored visitor tail is marked
+  "keep in sync" with the pinned commit.
+
+## References
+
+- plan: ./docs/plans/261002-1410-vb6-worker-progress-sll/plan.md
+- verification: ./docs/plans/261002-1410-vb6-worker-progress-sll/verification-report.md
+- commit: c99bb95
+- worker: code-tiny/tools/vb/antlr_worker/worker/src/main/java/io/cortex/vb6/worker/WorkerRunner.java
+- adapter: code-tiny/tools/vb/vb6_antlr_adapter.py:273-344 (Popen/drain/watchdog), :396-431 (summary)
+
 ## Follow-ups
 
 - Worker-side parse cache / incremental reparse (the ~1-2s/file assumption
