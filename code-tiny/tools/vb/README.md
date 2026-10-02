@@ -57,9 +57,29 @@ mvn -q -f code-tiny/tools/vb/antlr_worker/pom.xml -DskipTests package
 - Biến môi trường: `VB6_PARSER_ENGINE` (`auto|antlr|regex`),
   `VB6_ANTLR_TIMEOUT_SEC` (mặc định 600), `VB6_ANTLR_WORKSPACE_TIMEOUT_MS`
   (mặc định 300000), `VB6_ANTLR_STRIP_DESIGNER` (=`1` để quay lại fallback
-  strip designer block — mặc định là GIỮ nguyên designer, plan 260917-1628).
+  strip designer block — mặc định là GIỮ nguyên designer, plan 260917-1628),
+  `VB6_WORKER_SLL` (two-stage parse, plan 261002-1410 — adapter mặc định
+  `0` theo go/no-go đo trên corpus legacy 2026-10-02: 33% file bail SLL;
+  đặt `VB6_WORKER_SLL=1` để bật. Chạy jar trực tiếp thì worker mặc định bật).
   CLI: `--vb6-parser-engine`, `--vb6-antlr-timeout-sec`,
   `--vb6-antlr-workspace-timeout-ms`.
+- Parse progress (plan 261002-1410): worker in stderr mỗi file —
+  `[vb6][worker] parsing <i>/<N> file=<rel>` khi bắt đầu và
+  `[vb6][worker] parsed <i>/<N> file=<rel> ms=<ms>[ sll_fallback]` khi xong;
+  batch retry chèn thêm `[vb6][worker] retry <K>/<N> files after batch failure`
+  (adapter chỉ tổng hợp các dòng SAU marker cuối — run cuối thắng);
+  adapter relay live LUÔN (không cần `--verbose`), noise ANTLR
+  (`line x:y ...`) chỉ hiện khi `--verbose`, và sau parse luôn có 1 dòng
+  `[vb6][engine] parse: N files in Ts; slowest: <file> (<ms>ms)`
+  (+ top-5 file chậm nhất khi verbose). `worker_meta` thêm
+  `parse_ms_total` / `parse_slowest_file` / `parse_slowest_ms` /
+  `sll_fallback_files` / `batch_retried`, và `parse_meta.worker_elapsed_ms`
+  giờ là thời gian parse thật của từng file (trước đây hardcoded 0).
+- Two-stage parse (plan 261002-1410 AD-04): file parse SLL trước; lỗi →
+  reparse LL nguyên bản nên payload GIỐNG HỆT LL-only (parity test
+  byte-equal). Adapter mặc định TẮT (`VB6_WORKER_SLL=0`): đo trên corpus
+  legacy 228-file cho 33% file bail (50% trong số file parse-ok) nên file
+  bail bị parse 2 lần, chậm hơn LL-only; bật lại bằng `VB6_WORKER_SLL=1`.
 - Trạng thái engine: `dev doctor` mục `vb6 antlr ...` (report-only).
 - `.frm`/`.ctl`/`.pag` được materialize thành `.cls` tạm trước khi đưa vào
   worker. Mặc định (keep-designer) file được copy NGUYÊN VẸN — designer block

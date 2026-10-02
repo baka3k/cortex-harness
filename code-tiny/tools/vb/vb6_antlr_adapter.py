@@ -38,6 +38,14 @@ _WORKER_JAR = os.path.join(_WORKER_DIR, "worker", "target", "vb6-antlr-worker.ja
 
 _VB_NAME_LINE_RE = re.compile(r"^\s*Attribute\s+VB_Name\b", re.IGNORECASE)
 
+#: worker stderr progress line (plan 261002-1410): `[vb6][worker] parsed i/N
+#: file=<rel> ms=<ms>[ sll_fallback]` — `ms` is the final anchor so file
+#: names containing spaces survive the greedy capture. The `parsing i/N`
+#: start lines are relayed live but excluded from the summary aggregation.
+_PROGRESS_LINE_RE = re.compile(
+    r"^\[vb6\]\[worker\] parsed (?:\d+/\d+ )?file=(.*) ms=(\d+)( sll_fallback)?$"
+)
+
 #: extensions ProLeap's ASG accepts as real modules
 _DIRECT_EXTS = {".bas", ".cls"}
 #: extensions that must be materialized to temp .cls before parsing
@@ -262,35 +270,99 @@ def parse_vb6_files_with_antlr(
             manifest_file = handle.name
             json.dump(manifest, handle, ensure_ascii=True)
 
+        # A whole-program ANTLR parse costs roughly 1-2s per file (single
+        # thread over the full VB6 grammar), so a fixed ceiling is borderline
+        # for real batches (230+ files) and flips runs between "ok" and
+        # "every file failed". Scale the guardrail with the batch size.
+        effective_workspace_ms = max(
+            int(workspace_timeout_ms),
+            60_000 + 2_000 * max(0, len(rel_files)),
+        )
+        effective_timeout_sec = max(
+            float(timeout_sec),
+            effective_workspace_ms / 1000.0 + 120.0,
+        )
+        if effective_workspace_ms > int(workspace_timeout_ms):
+            print(
+                f"[vb6][engine] workspace timeout scaled to {effective_workspace_ms}ms "
+                f"for {len(rel_files)} file(s) (subprocess budget {effective_timeout_sec:.0f}s)",
+                flush=True,
+            )
+
         cmd = [
             "java", "-jar", jar_path,
             "--manifest", manifest_file,
-            "--workspace-timeout-ms", str(max(5000, int(workspace_timeout_ms))),
+            "--workspace-timeout-ms", str(max(5000, effective_workspace_ms)),
         ]
         if parse_cache_version:
             cmd += ["--parse-cache-version", parse_cache_version]
 
-        proc = subprocess.run(
+        # Popen + concurrent drain (plan 261002-1410): stdout MUST be drained
+        # on its own thread — if its pipe buffer filled while this thread
+        # blocks on stderr.readline(), the worker would deadlock (R2).
+        # SLL go/no-go (verification 2026-10-02): the legacy corpus showed a
+        # 33% SLL-bail rate (50% among successfully parsed files), so
+        # two-stage ships OFF here; VB6_WORKER_SLL=1 opts back in.
+        worker_env = dict(os.environ)
+        worker_env.setdefault("VB6_WORKER_SLL", "0")
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            timeout=max(1.0, float(timeout_sec)),
-            check=False,
+            env=worker_env,
         )
+        stdout_holder: List[str] = [""]
+        timed_out = threading.Event()
+
+        def _drain_stdout() -> None:
+            stdout_holder[0] = proc.stdout.read() or ""
+
+        def _enforce_deadline() -> None:
+            try:
+                proc.wait(timeout=effective_timeout_sec)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                timed_out.set()
+
+        stdout_thread = threading.Thread(target=_drain_stdout, daemon=True)
+        deadline_thread = threading.Thread(target=_enforce_deadline, daemon=True)
+        stdout_thread.start()
+        deadline_thread.start()
+
+        stderr_lines: List[str] = []
+        for raw_line in proc.stderr:
+            line = raw_line.rstrip("\n")
+            stderr_lines.append(line)
+            if verbose or line.startswith("[vb6][worker]"):
+                # progress lines relay live in EVERY run (plan 261002-1410,
+                # user override of AD-03: never swallow parse progress);
+                # ANTLR console noise stays verbose-only
+                print(line, flush=True)
+        stdout_thread.join(timeout=30)
+        deadline_thread.join(timeout=30)
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except OSError:
+                pass
+        if timed_out.is_set():
+            raise subprocess.TimeoutExpired(cmd, effective_timeout_sec)
+
+        stdout_text = stdout_holder[0]
 
         if proc.returncode != 0:
-            stderr_tail = "\n".join((proc.stderr or "").splitlines()[-80:])
-            stdout_tail = "\n".join((proc.stdout or "").splitlines()[-80:])
+            stderr_tail = "\n".join(stderr_lines[-80:])
+            stdout_tail = "\n".join(stdout_text.splitlines()[-80:])
             raise RuntimeError(
                 "vb6 antlr worker execution failed "
                 f"(code={proc.returncode})\nSTDERR:\n{stderr_tail}\nSTDOUT:\n{stdout_tail}"
             )
 
         try:
-            data = json.loads(proc.stdout or "{}")
+            data = json.loads(stdout_text or "{}")
         except json.JSONDecodeError as exc:
-            snippet = (proc.stdout or "")[:2000]
+            snippet = stdout_text[:2000]
             raise RuntimeError(f"invalid vb6 antlr worker json output: {exc}\n{snippet}") from exc
 
         payloads: Dict[str, Dict[str, Any]] = {}
@@ -309,6 +381,7 @@ def parse_vb6_files_with_antlr(
         meta["materialized_files"] = materialized
         meta["designer_stripped_files"] = stripped_files
         meta["designer_keep_mode"] = not strip_designer_requested()
+        _print_parse_summary(meta, stderr_lines, verbose)
         return payloads, errors, meta
     finally:
         if manifest_file and os.path.exists(manifest_file):
@@ -318,3 +391,45 @@ def parse_vb6_files_with_antlr(
                 pass
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _print_parse_summary(
+    meta: Dict[str, Any],
+    stderr_lines: List[str],
+    verbose: bool,
+) -> None:
+    """Summarize the per-file progress lines (plan 261002-1410, AD-03).
+
+    The one-line summary always prints (a sync operator should see the slow
+    file without remembering to pass --verbose); the top-5 list is verbose-only.
+    """
+
+    # A batch retry re-emits progress rows for the surviving files (the
+    # worker prints a `[vb6][worker] retry` marker before the second run);
+    # keep only rows of the LAST run so counts match worker_meta's last-run
+    # aggregation (R4).
+    retry_bound = -1
+    for index, line in enumerate(stderr_lines):
+        if line.startswith("[vb6][worker] retry"):
+            retry_bound = index
+    if retry_bound >= 0:
+        stderr_lines = stderr_lines[retry_bound + 1:]
+    rows = [match for match in (_PROGRESS_LINE_RE.match(line) for line in stderr_lines) if match]
+    if not rows and not meta.get("parse_slowest_file"):
+        return
+    # java-side aggregation (worker_meta) is authoritative; stderr rows fill in
+    total_ms = int(meta.get("parse_ms_total") or 0) or sum(int(row.group(2)) for row in rows)
+    slowest_name = str(meta.get("parse_slowest_file") or "")
+    slowest_ms = int(meta.get("parse_slowest_ms") or 0)
+    if not slowest_name and rows:
+        slowest = max(rows, key=lambda row: int(row.group(2)))
+        slowest_name = slowest.group(1).strip()
+        slowest_ms = int(slowest.group(2))
+    print(
+        f"[vb6][engine] parse: {len(rows) or meta.get('files', '?')} files "
+        f"in {total_ms / 1000.0:.1f}s; slowest: {slowest_name or '?'} ({slowest_ms}ms)",
+        flush=True,
+    )
+    if verbose and rows:
+        for row in sorted(rows, key=lambda item: int(item.group(2)), reverse=True)[:5]:
+            print(f"[vb6][engine]   {int(row.group(2)):>6}ms  {row.group(1).strip()}", flush=True)

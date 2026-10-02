@@ -18,6 +18,13 @@
  *     {"files": [{"file_path": ..., "ok": true, "payload": {...}} |
  *                {"file_path": ..., "ok": false, "error": "..."}],
  *      "worker_meta": {...}}
+ *   stderr: per-file progress lines, every line prefixed "[vb6][worker]"
+ *     (plan 261002-1410/261002-1511): "[vb6][worker] scanning <i>/<N>
+ *     file=<rel>" in the pre-pass, "[vb6][worker] parsing <i>/<N>
+ *     file=<rel>" when a batch parse starts and "[vb6][worker] parsed
+ *     <i>/<N> file=<rel> ms=<ms>[ sll_fallback]" when it ends. The prefix
+ *     is the adapter's filter key — nothing else must be printed to stderr
+ *     without it.
  */
 
 package io.cortex.vb6.worker;
@@ -46,11 +53,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.antlr.v4.runtime.BaseErrorListener;
-import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
-import org.antlr.v4.runtime.RecognitionException;
-import org.antlr.v4.runtime.Recognizer;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.misc.Interval;
@@ -86,8 +89,6 @@ import io.proleap.vb6.asg.metamodel.statement.property.set.PropertySet;
 import io.proleap.vb6.asg.metamodel.statement.sub.Sub;
 import io.proleap.vb6.asg.params.VbParserParams;
 import io.proleap.vb6.asg.params.impl.VbParserParamsImpl;
-import io.proleap.vb6.asg.runner.VbParserRunner;
-import io.proleap.vb6.asg.runner.impl.VbParserRunnerImpl;
 
 public final class Vb6Worker {
 
@@ -120,6 +121,7 @@ public final class Vb6Worker {
 		boolean designerStripped; // adapter blanked the designer block (strip fallback)
 		String loadError;       // set when the file could not be read/decoded at all
 		File batchFile;         // UTF-8 copy fed to the vendor parser for legacy bytes
+		long parseMs;           // vendor parseFile wall time (WorkerRunner timing map)
 
 		FileEntry(final String filePath, final String parsePath) {
 			this.filePath = filePath;
@@ -174,7 +176,14 @@ public final class Vb6Worker {
 			entries.add(entry);
 		}
 
-		final ExecutorService executor = Executors.newSingleThreadExecutor();
+		// Daemon thread: after a workspace timeout the main thread prints the
+		// allFailed JSON and returns — the JVM must exit right away instead of
+		// lingering until the interrupt-unresponsive ANTLR parse finishes.
+		final ExecutorService executor = Executors.newSingleThreadExecutor(r -> {
+			final Thread thread = new Thread(r, "vb6-analyze");
+			thread.setDaemon(true);
+			return thread;
+		});
 		final Future<JsonElement> future = executor.submit(
 				(Callable<JsonElement>) () -> analyze(root, project, cacheVersion, entries, startedAt));
 		JsonElement output;
@@ -224,6 +233,7 @@ public final class Vb6Worker {
 
 		// 1. load content + declared module names
 		final java.util.Set<String> duplicateModuleNames = new java.util.HashSet<>();
+		int scanned = 0;
 		for (final FileEntry entry : entries) {
 			final File parseFile = entry.parsePath != null
 					? new File(entry.parsePath)
@@ -247,6 +257,12 @@ public final class Vb6Worker {
 				continue;
 			}
 			entry.moduleName = declaredModuleName(entry.content, entry.filePath);
+			// plan 261002-1511 AD-03: name the file BEFORE the pre-scan
+			// parse — the pre-pass precedes the batch parse loop, so without
+			// this line a pre-pass stall is completely invisible.
+			scanned++;
+			System.err.println(WorkerRunner.PROGRESS_PREFIX + " scanning " + scanned + '/'
+					+ entries.size() + " file=" + entry.filePath);
 			entry.syntaxErrors = countSyntaxErrors(entry.content);
 			final String moduleKey = entry.moduleName.toLowerCase(Locale.ROOT);
 			if (entriesByModuleName.containsKey(moduleKey)) {
@@ -275,13 +291,21 @@ public final class Vb6Worker {
 		final VbParserParams params = new VbParserParamsImpl();
 		params.setIgnoreSyntaxErrors(true);
 
-		final VbParserRunner runner = new VbParserRunnerImpl();
+		// WorkerRunner (plan 261002-1410): per-file timing + stderr progress +
+		// two-stage SLL→LL parse. Progress lines report the rel path identity.
+		final Map<File, String> displayPaths = new LinkedHashMap<>();
+		for (final Map.Entry<FileEntry, File> mapped : parseFileByEntry.entrySet()) {
+			displayPaths.put(mapped.getValue(), mapped.getKey().filePath);
+		}
+		final WorkerRunner runner = new WorkerRunner(batch.size(), displayPaths);
+		boolean batchRetried = false;
 		Program program;
 		try {
 			program = runner.analyzeFiles(batch, params);
 		} catch (final Throwable batchFailure) {
 			// A single fatal file must not sink the batch: retry without the
 			// files that failed pre-validation; those report ok=false.
+			batchRetried = true;
 			final List<FileEntry> excluded = new ArrayList<>();
 			final List<File> retry = new ArrayList<>();
 			for (final FileEntry entry : entries) {
@@ -291,9 +315,21 @@ public final class Vb6Worker {
 					retry.add(parseFileByEntry.get(entry));
 				}
 			}
+			// stderr marker so the adapter's progress aggregation keeps only
+			// the last run's rows (R4: last run wins for timing AND counts)
+			System.err.println(WorkerRunner.PROGRESS_PREFIX + " retry "
+					+ retry.size() + '/' + entries.size() + " files after batch failure");
 			program = runner.analyzeFiles(retry, params);
 			for (final FileEntry entry : excluded) {
 				entry.syntaxErrors = -1; // marker: excluded from batch
+			}
+		}
+
+		// per-file parse timing from the runner's last batch run (R4)
+		for (final FileEntry entry : entries) {
+			final File batchFile = parseFileByEntry.get(entry);
+			if (batchFile != null) {
+				entry.parseMs = runner.parseMsFor(batchFile);
 			}
 		}
 
@@ -388,6 +424,13 @@ public final class Vb6Worker {
 		meta.addProperty("failed_files", entries.size() - okCount);
 		meta.add("implements_map", GSON.toJsonTree(implementsMap));
 		meta.addProperty("parse_cache_version", cacheVersion);
+		meta.addProperty("parse_ms_total", runner.getParseMsTotal());
+		meta.addProperty("parse_slowest_file", runner.getSlowestFile());
+		meta.addProperty("parse_slowest_ms", runner.getSlowestMs());
+		meta.addProperty("sll_fallback_files", runner.getSllFallbackFiles());
+		if (batchRetried) {
+			meta.addProperty("batch_retried", true);
+		}
 		result.add("worker_meta", meta);
 		deleteBatchTempCopies(entries);
 		return result;
@@ -461,8 +504,30 @@ public final class Vb6Worker {
 	 * vendor parser's extension-based module kind and its filename-stem
 	 * fallback for files without Attribute VB_Name.
 	 */
+	/**
+	 * UTF-8 batch copy dirs created this run. The daemon analyze thread dies
+	 * with the JVM on the workspace-timeout path BEFORE
+	 * {@link #deleteBatchTempCopies} runs, so a shutdown hook (SIGTERM from
+	 * the adapter's watchdog included) is the leak-proof backstop.
+	 */
+	private static final java.util.Set<File> TEMP_COPY_DIRS = new java.util.HashSet<>();
+
+	static {
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+			synchronized (TEMP_COPY_DIRS) {
+				for (final File dir : TEMP_COPY_DIRS) {
+					deleteDirTree(dir);
+				}
+				TEMP_COPY_DIRS.clear();
+			}
+		}, "vb6-temp-cleanup"));
+	}
+
 	private static File utf8CopyForBatch(final File source, final String text) throws IOException {
 		final File dir = Files.createTempDirectory("vb6enc").toFile();
+		synchronized (TEMP_COPY_DIRS) {
+			TEMP_COPY_DIRS.add(dir);
+		}
 		final File copy = new File(dir, source.getName());
 		Files.write(copy.toPath(), text.getBytes(StandardCharsets.UTF_8));
 		return copy;
@@ -475,15 +540,23 @@ public final class Vb6Worker {
 				dirs.add(entry.batchFile.getParentFile());
 			}
 		}
-		for (final File dir : dirs) {
-			final File[] leftovers = dir.listFiles();
-			if (leftovers != null) {
-				for (final File leftover : leftovers) {
-					leftover.delete();
-				}
-			}
-			dir.delete();
+		synchronized (TEMP_COPY_DIRS) {
+			dirs.addAll(TEMP_COPY_DIRS);
+			TEMP_COPY_DIRS.clear();
 		}
+		for (final File dir : dirs) {
+			deleteDirTree(dir);
+		}
+	}
+
+	private static void deleteDirTree(final File dir) {
+		final File[] leftovers = dir.listFiles();
+		if (leftovers != null) {
+			for (final File leftover : leftovers) {
+				leftover.delete();
+			}
+		}
+		dir.delete();
 	}
 
 	private static Module lookupModule(final Program program, final String name) {
@@ -636,10 +709,12 @@ public final class Vb6Worker {
 		parseMeta.addProperty("parser_engine", "antlr");
 		parseMeta.addProperty("parse_cache_version", cacheVersion);
 		parseMeta.addProperty("has_error", entry.syntaxErrors > 0);
+		// plan 261002-1511 AD-05: the pre-scan is SLL+bail, so this is 0/1
+		// ("has errors"), not an exact LL error count anymore
 		parseMeta.addProperty("error_nodes", Math.max(0, entry.syntaxErrors));
 		parseMeta.addProperty("line_count", Math.max(1, lineCount));
 		parseMeta.addProperty("fallback_reason", "");
-		parseMeta.addProperty("worker_elapsed_ms", 0);
+		parseMeta.addProperty("worker_elapsed_ms", Math.max(0L, entry.parseMs));
 		parseMeta.addProperty("workspace_kind", "vbp");
 		parseMeta.addProperty("solution_or_project_path", project);
 		parseMeta.addProperty("semantic_mode", "off");
@@ -2043,28 +2118,20 @@ public final class Vb6Worker {
 		return names;
 	}
 
+	/**
+	 * Pre-scan syntax-error verdict (plan 261002-1511 AD-01/AD-05): SLL +
+	 * bail via the shared recipe instead of the old full-LL parse — LL
+	 * prediction hung for minutes per pathological file (jstack 2026-10-02,
+	 * one 19.6k-line form exceeded a 120s budget alone). Consumers only
+	 * branch on 0 vs >0 (has_error, retry-exclusion, message strings), so
+	 * the exact LL count is traded for 0/1 semantics: SLL-clean → 0, any
+	 * bail (syntax error or full-context escalation) → 1.
+	 */
 	private static int countSyntaxErrors(final String content) {
 		try {
-			final VisualBasic6Lexer lexer = new VisualBasic6Lexer(CharStreams.fromString(content));
-			lexer.removeErrorListeners();
-			final CommonTokenStream tokens = new CommonTokenStream(lexer);
-			final VisualBasic6Parser parser = new VisualBasic6Parser(tokens);
-			parser.removeErrorListeners();
-			final int[] errors = {0};
-			parser.addErrorListener(new BaseErrorListener() {
-				@Override
-				public void syntaxError(
-						final Recognizer<?, ?> recognizer,
-						final Object offendingSymbol,
-						final int line,
-						final int charPositionInLine,
-						final String msg,
-						final RecognitionException e) {
-					errors[0]++;
-				}
-			});
+			final VisualBasic6Parser parser = WorkerRunner.createSllParser(content);
 			parser.startRule();
-			return errors[0];
+			return 0;
 		} catch (final Throwable failure) {
 			return 1;
 		}
