@@ -437,6 +437,101 @@ def test_query_graph_rag_keeps_entity_uuids_when_requested():
     assert data["relations"][0]["target_id"] == _MIND_EID_B
 
 
+def test_query_graph_rag_hides_keyword_by_default_and_reveals_by_rule():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(
+        _mind_payload_rows()
+    )
+    with embedder, qdrant, fetch_entities as entities_mock, fetch_relations:
+        fake.tools["query_graph_rag_langextract"](query="alpha", project_id="procsample")
+        default_types = entities_mock.call_args.kwargs["entity_types"]
+
+    # Default curated set keeps extractor noise (KEYWORD) out of the list...
+    assert "KEYWORD" not in default_types
+    assert default_types == mcp_graph_rag.ENTITY_TYPES_DEFAULT
+
+    with embedder, qdrant, fetch_entities as entities_mock, fetch_relations:
+        fake.tools["query_graph_rag_langextract"](
+            query="alpha", project_id="procsample", entity_types="KEYWORD"
+        )
+    # ...and the same parameter reveals it on demand.
+    assert entities_mock.call_args.kwargs["entity_types"] == ["KEYWORD"]
+
+
+def test_query_graph_rag_ranks_entities_by_passage_frequency_and_caps():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    eid_c = "cccccccc-4697-5415-9bbb-f2a2a57c91ff"
+    eid_d = "dddddddd-07d8-579d-84a4-242944a74446"
+    payloads = [
+        {
+            "text": "passage one",
+            "score": 0.9,
+            "source_id": "a.md",
+            "paragraph_id": 1,
+            "entity_ids": [_MIND_EID_A, eid_c],
+        },
+        {
+            "text": "passage two",
+            "score": 0.8,
+            "source_id": "a.md",
+            "paragraph_id": 2,
+            "entity_ids": [_MIND_EID_A, eid_d],
+        },
+    ]
+    all_entities = [
+        {"id": _MIND_EID_A, "name": "Alpha", "type": "TECH"},
+        {"id": _MIND_EID_B, "name": "Beta", "type": "TECH"},
+        {"id": eid_c, "name": "Gamma", "type": "ORG"},
+        {"id": eid_d, "name": "Delta", "type": "ORG"},
+    ]
+
+    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(payloads)
+    with embedder, qdrant, mock.patch.object(
+        mcp_graph_rag, "fetch_entities_by_ids", return_value=all_entities
+    ), fetch_relations:
+        result = fake.tools["query_graph_rag_langextract"](
+            query="alpha", project_id="procsample", max_entities=3
+        )
+
+    # Alpha appears in 2/2 passages; Gamma and Delta in 1 each (first-seen
+    # order); Beta appears in no passage and falls below the cap.
+    names = [entity["name"] for entity in result.structuredContent["data"]["entities"]]
+    assert names == ["Alpha", "Gamma", "Delta"]
+
+
+def test_fetch_entities_by_ids_filters_by_entity_types():
+    class FakeDriver:
+        database = "default_doc"
+
+        def __init__(self):
+            self.calls = []
+
+        def execute_query_sync(self, query, params, database):
+            self.calls.append((query, params, database))
+            return [{"id": "a", "name": "Alpha", "type": "TECH"}], ["id", "name", "type"], None
+
+        def close(self):
+            pass
+
+    driver = FakeDriver()
+    base = graph_store.FalkorDBGraphStore(driver)
+    with mock.patch.object(
+        mcp_graph_rag, "get_graph_store", return_value=base
+    ), mock.patch.object(
+        mcp_graph_rag, "list_registered_projects", return_value=[]
+    ):
+        rows = mcp_graph_rag.fetch_entities_by_ids(["a"], entity_types=["TECH", "ORG"])
+
+    assert rows == [{"id": "a", "name": "Alpha", "type": "TECH"}]
+    query, params, _ = driver.calls[0]
+    assert "e.type IN $types" in query
+    assert params["types"] == ["TECH", "ORG"]
+
+
 def test_unscoped_doc_qdrant_search_aggregates_registered_collections_bounded():
     class Hit:
         def __init__(self, score, payload):

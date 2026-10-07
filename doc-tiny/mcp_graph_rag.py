@@ -489,10 +489,13 @@ def qdrant_search_entity_payload(
 
 
 def fetch_entities_by_ids(
-    entity_ids: List[str], project_id: Optional[str] = None
+    entity_ids: List[str],
+    project_id: Optional[str] = None,
+    entity_types: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     if not entity_ids:
         return []
+    types = entity_types or []
     entities: List[Dict[str, Any]] = []
     seen = set()
     for store, owned in _graph_store_candidates(project_id):
@@ -502,11 +505,13 @@ def fetch_entities_by_ids(
                     """
                     MATCH (e:Entity)
                     WHERE e.id IN $ids
+                      AND ($types = [] OR e.type IN $types)
                       AND ($project_id_normalized IS NULL OR
                            e.project_id_normalized STARTS WITH $project_id_normalized)
                     RETURN e.id AS id, e.name AS name, e.type AS type
                     """,
                     ids=entity_ids,
+                    types=types,
                     project_id_normalized=(project_id.strip().casefold() if project_id else None),
                 )
                 for record in result:
@@ -576,6 +581,31 @@ def fetch_relations_by_entity_ids(
     return relations
 
 
+def _entity_occurrence_counts(payloads: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Count in how many retrieved passages each entity id appears."""
+    counts: Dict[str, int] = {}
+    for row in payloads:
+        for entity_id in row.get("entity_ids") or []:
+            counts[entity_id] = counts.get(entity_id, 0) + 1
+    return counts
+
+
+def _rank_entities_by_occurrence(
+    entities: List[Dict[str, Any]],
+    entity_ids: List[str],
+    counts: Dict[str, int],
+) -> List[Dict[str, Any]]:
+    """Order entities by passage frequency (desc); ties keep first-seen order."""
+    first_seen = {eid: idx for idx, eid in enumerate(entity_ids)}
+    unseen_rank = len(first_seen)
+
+    def sort_key(row: Dict[str, Any]) -> Tuple[int, int]:
+        eid = row.get("id")
+        return (-(counts.get(eid) or 0), first_seen.get(eid, unseen_rank))
+
+    return sorted(entities, key=sort_key)
+
+
 def _filter_entity_ids_for_expansion(
     entity_ids: List[str],
     payloads: List[Dict[str, Any]],
@@ -589,10 +619,7 @@ def _filter_entity_ids_for_expansion(
         if scores and max(scores) < min_score_to_expand:
             return []
     if min_entity_occurrences and min_entity_occurrences > 1:
-        counts: Dict[str, int] = {}
-        for row in payloads:
-            for entity_id in row.get("entity_ids") or []:
-                counts[entity_id] = counts.get(entity_id, 0) + 1
+        counts = _entity_occurrence_counts(payloads)
         return [eid for eid in entity_ids if counts.get(eid, 0) >= min_entity_occurrences]
     return entity_ids
 
@@ -951,6 +978,7 @@ def register_tools(mcp: FastMCP) -> None:
         rerank_length_penalty: float = 0.0002,
         project_id: Optional[str] = None,
         include_entity_ids: bool = False,
+        max_entities: int = 30,
     ) -> Dict[str, Any]:
         """
         Query Qdrant for top-k passages with entity_ids payload, then fetch related
@@ -961,6 +989,12 @@ def register_tools(mcp: FastMCP) -> None:
         ``target_id``) are stripped from the response by default to keep it
         compact; graph expansion still uses them internally. Set
         ``include_entity_ids=true`` to keep them for debugging.
+
+        The entities list honors ``entity_types`` (the default curated set
+        excludes extractor noise such as YAKE ``KEYWORD`` entries — pass the
+        type explicitly, e.g. ``entity_types="KEYWORD"``, to reveal it), is
+        ranked by retrieved-passage frequency, and is capped at
+        ``max_entities``.
         """
         # Type coercion to handle n8n passing strings
         query = str(query) if query else ""
@@ -978,6 +1012,7 @@ def register_tools(mcp: FastMCP) -> None:
         max_passage_chars = int(max_passage_chars) if max_passage_chars is not None else None
         min_score_to_expand = float(min_score_to_expand) if min_score_to_expand is not None else None
         min_entity_occurrences = int(min_entity_occurrences) if min_entity_occurrences is not None else None
+        max_entities = int(max_entities) if max_entities is not None else 30
         include_entity_ids = _coerce_bool(include_entity_ids, False)
 
         embedder = get_embedder()
@@ -1021,10 +1056,16 @@ def register_tools(mcp: FastMCP) -> None:
             min_entity_occurrences=min_entity_occurrences,
         )
 
-        entities = (
-            fetch_entities_by_ids(entity_ids, project_id=project_id)
-            if include_entities else []
-        )
+        entities = []
+        if include_entities:
+            entities = fetch_entities_by_ids(
+                entity_ids, project_id=project_id, entity_types=entity_types
+            )
+            # Most-referenced entities first, bounded — extractor noise (e.g.
+            # YAKE KEYWORDs) lives or dies by the entity_types filter above.
+            entities = _rank_entities_by_occurrence(
+                entities, entity_ids, _entity_occurrence_counts(payloads)
+            )[:max_entities]
         relations = []
         if include_relations and expand_related:
             relations = fetch_relations_with_depth(

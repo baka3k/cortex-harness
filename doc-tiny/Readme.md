@@ -116,7 +116,7 @@ http://127.0.0.1:8789/mcp
 
 ## MCP tools
 
-- `query_graph_rag_langextract(query, top_k, source_id, collection, include_entities, include_relations, expand_related, related_k, graph_depth, entity_types, max_passage_chars, min_score_to_expand, min_entity_occurrences, rerank, rerank_entity_weight, rerank_type_weight, rerank_confidence_weight, rerank_length_penalty, include_entity_ids=false)`
+- `query_graph_rag_langextract(query, top_k, source_id, collection, include_entities, include_relations, expand_related, related_k, graph_depth, entity_types, max_passage_chars, min_score_to_expand, min_entity_occurrences, rerank, rerank_entity_weight, rerank_type_weight, rerank_confidence_weight, rerank_length_penalty, include_entity_ids=false, max_entities=30)`
 - `semantic_search(query, top_k, source_id, collection, max_passage_chars, include_entity_ids=false, include_entity_mentions)`
 - `list_source_ids(limit)`
 - `list_qdrant_collections()`
@@ -462,6 +462,7 @@ Two main steps:
 - Uses `source_id` to link passages with Neo4j.
 - The bridge between Qdrant and Neo4j is **`entity_ids`** from LangExtract/GLiNER ingest.(you can choose another, such as spaCy)
 - Raw entity UUIDs are stripped from tool responses by default (`include_entity_ids=false`); expansion still uses them internally. Pass `include_entity_ids=true` to keep raw IDs for debugging.
+- The `entities` list honors `entity_types` (the default curated set excludes extractor noise such as YAKE `KEYWORD` entries), is ranked by retrieved-passage frequency, and is capped at `max_entities` (default 30). Pass the type explicitly (e.g. `entity_types="KEYWORD"`) to reveal it or raise `max_entities` for more.
 - `entity_mentions` in Qdrant payload contains span/metadata when available.
 - Relation expansion is optional to balance speed vs depth.
 - Gating expansion: use `min_score_to_expand` and `min_entity_occurrences` to reduce noisy graph expansions.
