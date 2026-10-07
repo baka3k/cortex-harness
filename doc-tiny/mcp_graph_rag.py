@@ -448,31 +448,31 @@ def qdrant_search_entity_payload(
                 logger.warning("Skipping unavailable doc collection %s: %s", collection_name, exc)
                 continue
 
-        for hit in hits:
-            if not hit.payload:
-                continue
-            key = (
-                hit.payload.get("project_id_normalized"),
-                hit.payload.get("source_id"),
-                hit.payload.get("paragraph_id"),
-                hit.payload.get("text"),
-            )
-            row = {
-                "score": getattr(hit, "score", None),
-                "text": hit.payload.get("text"),
-                "source_id": hit.payload.get("source_id"),
-                "paragraph_id": hit.payload.get("paragraph_id"),
-                "project_id": hit.payload.get("project_id"),
-                "project_id_normalized": hit.payload.get("project_id_normalized"),
-                "entity_ids": hit.payload.get("entity_ids") or [],
-                "entity_mentions": hit.payload.get("entity_mentions") or [],
-                "collection": collection_name,
-            }
-            existing = payloads_by_key.get(key)
-            if existing is None or float(row.get("score") or 0.0) > float(
-                existing.get("score") or 0.0
-            ):
-                payloads_by_key[key] = row
+            for hit in hits:
+                if not hit.payload:
+                    continue
+                key = (
+                    hit.payload.get("project_id_normalized"),
+                    hit.payload.get("source_id"),
+                    hit.payload.get("paragraph_id"),
+                    hit.payload.get("text"),
+                )
+                row = {
+                    "score": getattr(hit, "score", None),
+                    "text": hit.payload.get("text"),
+                    "source_id": hit.payload.get("source_id"),
+                    "paragraph_id": hit.payload.get("paragraph_id"),
+                    "project_id": hit.payload.get("project_id"),
+                    "project_id_normalized": hit.payload.get("project_id_normalized"),
+                    "entity_ids": hit.payload.get("entity_ids") or [],
+                    "entity_mentions": hit.payload.get("entity_mentions") or [],
+                    "collection": collection_name,
+                }
+                existing = payloads_by_key.get(key)
+                if existing is None or float(row.get("score") or 0.0) > float(
+                    existing.get("score") or 0.0
+                ):
+                    payloads_by_key[key] = row
     if not found_any and (project_id or collection):
         # Scoped query, but no reachable store had the requested collection.
         # Surface which stores were probed so a remote-only shard is not
@@ -864,7 +864,7 @@ def register_tools(mcp: FastMCP) -> None:
         collection: Optional[str] = None,
         project_id: Optional[str] = None,
         max_passage_chars: Optional[int] = None,
-        include_entity_ids: bool = True,
+        include_entity_ids: bool = False,
         include_entity_mentions: bool = False,
     ) -> Dict[str, Any]:
         """Vector-only search in Qdrant. Returns passages without graph expansion.
@@ -874,12 +874,17 @@ def register_tools(mcp: FastMCP) -> None:
         projects. The Qdrant collection is resolved through the registry when
         ``project_id`` is given; the explicit ``collection`` arg still wins as
         an escape hatch.
+
+        Raw entity UUIDs (``passages[].entity_ids`` and the ``id`` key of
+        ``entity_mentions`` entries) are stripped by default to keep the
+        response compact; set ``include_entity_ids=true`` to keep them for
+        debugging.
         """
         # Type coercion to handle n8n passing strings
         query = str(query) if query else ""
         top_k = int(top_k) if top_k is not None else 5
         max_passage_chars = int(max_passage_chars) if max_passage_chars is not None else None
-        include_entity_ids = _coerce_bool(include_entity_ids, True)
+        include_entity_ids = _coerce_bool(include_entity_ids, False)
         include_entity_mentions = _coerce_bool(include_entity_mentions, False)
 
         embedder = get_embedder()
@@ -907,7 +912,12 @@ def register_tools(mcp: FastMCP) -> None:
             if include_entity_ids:
                 passage["entity_ids"] = row.get("entity_ids") or []
             if include_entity_mentions:
-                passage["entity_mentions"] = row.get("entity_mentions") or []
+                mentions = []
+                for mention in row.get("entity_mentions") or []:
+                    if not include_entity_ids:
+                        mention = {k: v for k, v in mention.items() if k != "id"}
+                    mentions.append(mention)
+                passage["entity_mentions"] = mentions
             passages.append(passage)
 
         return {
@@ -940,11 +950,17 @@ def register_tools(mcp: FastMCP) -> None:
         rerank_confidence_weight: float = 0.3,
         rerank_length_penalty: float = 0.0002,
         project_id: Optional[str] = None,
+        include_entity_ids: bool = False,
     ) -> Dict[str, Any]:
         """
         Query Qdrant for top-k passages with entity_ids payload, then fetch related
         entity context from the graph store (FalkorDB by default). Returns context
         only (no LLM generation).
+
+        Raw entity UUIDs (``entities[].id`` and ``relations[].source_id``/
+        ``target_id``) are stripped from the response by default to keep it
+        compact; graph expansion still uses them internally. Set
+        ``include_entity_ids=true`` to keep them for debugging.
         """
         # Type coercion to handle n8n passing strings
         query = str(query) if query else ""
@@ -962,6 +978,7 @@ def register_tools(mcp: FastMCP) -> None:
         max_passage_chars = int(max_passage_chars) if max_passage_chars is not None else None
         min_score_to_expand = float(min_score_to_expand) if min_score_to_expand is not None else None
         min_entity_occurrences = int(min_entity_occurrences) if min_entity_occurrences is not None else None
+        include_entity_ids = _coerce_bool(include_entity_ids, False)
 
         embedder = get_embedder()
         q_vec = embedder.encode([query])[0].tolist()
@@ -1029,6 +1046,15 @@ def register_tools(mcp: FastMCP) -> None:
         else:
             for passage in passages:
                 passage.pop("_entity_mentions", None)
+
+        # Strip raw entity UUIDs last: relation dedupe and graph expansion above
+        # still key on source_id/target_id.
+        if not include_entity_ids:
+            for entity in entities:
+                entity.pop("id", None)
+            for relation in relations:
+                relation.pop("source_id", None)
+                relation.pop("target_id", None)
 
         return {
             "query": query,

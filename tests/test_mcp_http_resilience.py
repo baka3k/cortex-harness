@@ -31,23 +31,6 @@ def _constant_subscript_assignments(path: Path, mapping_name: str) -> dict[str, 
     return assignments
 
 
-def _fastmcp_constructor_keywords(path: Path) -> dict[str, object]:
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    calls = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "FastMCP"
-    ]
-    assert len(calls) == 1
-    return {
-        keyword.arg: keyword.value.value
-        for keyword in calls[0].keywords
-        if keyword.arg is not None and isinstance(keyword.value, ast.Constant)
-    }
-
-
 class McpHttpResilienceTests(unittest.TestCase):
     def test_falkor_mcp_startup_and_driver_never_import_neo4j(self):
         probe = textwrap.dedent(
@@ -185,7 +168,7 @@ class McpHttpResilienceTests(unittest.TestCase):
         self.assertIs(options.get("json_response"), True)
 
     def test_doc_mcp_avoids_sse_responses_for_local_streamable_http(self):
-        options = _fastmcp_constructor_keywords(DOC_MCP)
+        options = _constant_subscript_assignments(DOC_MCP, "run_kwargs")
 
         self.assertIs(options.get("stateless_http"), True)
         self.assertIs(options.get("json_response"), True)
