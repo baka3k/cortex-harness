@@ -355,7 +355,7 @@ def test_unscoped_doc_graph_search_reuses_one_driver_across_registered_graphs():
         "Alpha": SimpleNamespace(doc_graph="alpha_doc"),
         "Beta": SimpleNamespace(doc_graph="beta_doc"),
     }
-    with mock.patch.object(mcp_graph_rag, "get_neo4j", return_value=base), mock.patch.object(
+    with mock.patch.object(mcp_graph_rag, "get_graph_store", return_value=base), mock.patch.object(
         mcp_graph_rag, "list_registered_projects", return_value=list(targets)
     ), mock.patch.object(
         mcp_graph_rag,
@@ -377,7 +377,7 @@ def test_explicit_neo4j_project_keeps_request_scoped_store_behavior():
         mcp_graph_rag,
         "create_graph_store_for_project",
         return_value=scoped,
-    ) as create_scoped, mock.patch.object(mcp_graph_rag, "get_neo4j") as get_global:
+    ) as create_scoped, mock.patch.object(mcp_graph_rag, "get_graph_store") as get_global:
         store, owned = mcp_graph_rag._acquire_graph_store("Alpha")
 
     assert store is scoped
@@ -399,7 +399,7 @@ def test_project_falkordb_driver_is_wrapped_with_session_adapter():
         "tools.common.project_registry.resolve_project_targets",
         return_value=targets,
     ):
-        store = mcp_graph_rag.get_neo4j("stock")
+        store = mcp_graph_rag.get_graph_store("stock")
 
     assert isinstance(store, graph_store.FalkorDBGraphStore)
     assert store._driver is driver

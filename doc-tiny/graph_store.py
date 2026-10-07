@@ -1,8 +1,9 @@
 """
 Graph-store adapter for doc-tiny scripts.
 
-Neo4j remains the default provider. FalkorDB can be selected with
-``--graph-provider falkordb`` or ``DOC_GRAPH_PROVIDER=falkordb``; the embedded
+FalkorDB is the default provider (``DOC_GRAPH_PROVIDER``/``GRAPH_PROVIDER``,
+falling back to ``falkordb``). Neo4j can be selected with
+``--graph-provider neo4j`` or ``DOC_GRAPH_PROVIDER=neo4j``; the embedded
 LadybugDB provider with ``--graph-provider ladybug`` or
 ``DOC_GRAPH_PROVIDER=ladybug``.
 """
