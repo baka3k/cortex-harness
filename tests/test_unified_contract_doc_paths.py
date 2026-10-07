@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,14 +151,16 @@ def test_mind_tools_use_the_same_success_envelope_as_graph_tools():
     fake = _FakeMcp()
     mcp_graph_rag.register_tools(fake)
 
-    qdrant = SimpleNamespace(list_collection_names=lambda: ["procsample_doc"])
-    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=qdrant), mock.patch.object(
-        mcp_graph_rag, "_resolve_doc_collection", return_value="procsample_doc"
+    store = SimpleNamespace(list_collection_names=lambda: ["procsample_doc"])
+    with mock.patch.object(
+        mcp_graph_rag,
+        "_qdrant_search_targets",
+        return_value=[(store, ["procsample_doc"])],
     ):
         result = fake.tools["list_qdrant_collections"](project_id="procsample")
 
-    assert result.isError is False
-    assert result.structuredContent == {
+    assert result.is_error is False
+    assert result.structured_content == {
         "ok": True,
         "data": ["procsample_doc"],
         "error": None,
@@ -171,16 +174,18 @@ async def test_mind_sdk_protocol_boundary_does_not_rewrap_standard_envelope():
     mcp = FastMCP("mind-contract-test")
     mcp_graph_rag.register_tools(mcp)
 
-    qdrant = SimpleNamespace(list_collection_names=lambda: ["procsample_doc"])
-    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=qdrant), mock.patch.object(
-        mcp_graph_rag, "_resolve_doc_collection", return_value="procsample_doc"
+    store = SimpleNamespace(list_collection_names=lambda: ["procsample_doc"])
+    with mock.patch.object(
+        mcp_graph_rag,
+        "_qdrant_search_targets",
+        return_value=[(store, ["procsample_doc"])],
     ):
         result = await mcp.call_tool(
             "list_qdrant_collections", {"project_id": "procsample"}
         )
 
-    assert result.isError is False
-    assert result.structuredContent == {
+    assert result.is_error is False
+    assert result.structured_content == {
         "ok": True,
         "data": ["procsample_doc"],
         "error": None,
@@ -193,16 +198,16 @@ def test_mind_tool_execution_errors_are_structured_and_actionable():
 
     with mock.patch.object(
         mcp_graph_rag,
-        "get_qdrant",
+        "_qdrant_search_targets",
         side_effect=LookupError("procsample_doc is unavailable"),
     ):
         result = fake.tools["list_qdrant_collections"](project_id="procsample")
 
-    assert result.isError is True
-    assert result.structuredContent["ok"] is False
-    assert result.structuredContent["data"] is None
-    assert result.structuredContent["error"]["code"] == "collection_unavailable"
-    assert result.structuredContent["error"]["message"] == (
+    assert result.is_error is True
+    assert result.structured_content["ok"] is False
+    assert result.structured_content["data"] is None
+    assert result.structured_content["error"]["code"] == "collection_unavailable"
+    assert result.structured_content["error"]["message"] == (
         "procsample_doc is unavailable"
     )
 
@@ -247,18 +252,22 @@ def test_mind_qdrant_search_resolves_collection_and_filter_from_project():
     captured = {}
 
     class FakeQdrant:
+        def list_collection_names(self):
+            return ["cortext_doc"]
+
         def search(self, **kwargs):
             captured.update(kwargs)
             return []
 
     with mock.patch.object(
-        mcp_graph_rag, "get_qdrant", return_value=FakeQdrant()
-    ) as get_qdrant:
+        mcp_graph_rag, "get_document_qdrant_store", return_value=FakeQdrant()
+    ), mock.patch.object(
+        mcp_graph_rag, "resolve_doc_candidates", return_value=[]
+    ):
         result = mcp_graph_rag.qdrant_search_entity_payload(
             [0.1, 0.2], 3, None, project_id="cortext"
         )
     assert result == []
-    get_qdrant.assert_called_once_with("cortext")
     assert captured["collection_name"] == "cortext_doc"
     condition = captured["query_filter"].must[0]
     assert condition.key == "project_id_normalized"
@@ -272,7 +281,9 @@ def test_mind_qdrant_reports_missing_scoped_collection():
         def list_collection_names(self):
             return []
 
-    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=FakeQdrant()):
+    with mock.patch.object(
+        mcp_graph_rag, "get_document_qdrant_store", return_value=FakeQdrant()
+    ):
         with pytest.raises(LookupError, match="not ingested or unavailable"):
             mcp_graph_rag.qdrant_search_entity_payload(
                 [0.1, 0.2], 3, None, project_id="cortext"
@@ -286,6 +297,146 @@ def test_mind_boolean_string_coercion_is_not_python_truthiness():
         mcp_graph_rag._coerce_bool("sometimes", False)
 
 
+_MIND_EID_A = "76772b8f-4697-5415-9bbb-f2a2a57c91ff"
+_MIND_EID_B = "571b5faa-07d8-579d-84a4-242944a74446"
+
+
+def _mind_payload_rows():
+    return [
+        {
+            "text": "alpha paragraph",
+            "score": 0.9,
+            "source_id": "a.md",
+            "paragraph_id": 1,
+            "entity_ids": [_MIND_EID_A],
+            "entity_mentions": [
+                {
+                    "id": _MIND_EID_A,
+                    "name": "Alpha",
+                    "type": "TECH",
+                    "start_char": 0,
+                    "end_char": 5,
+                    "confidence": 0.9,
+                }
+            ],
+        }
+    ]
+
+
+def _patch_mind_query_backends(payloads):
+    entities = [
+        {"id": _MIND_EID_A, "name": "Alpha", "type": "TECH"},
+        {"id": _MIND_EID_B, "name": "Beta", "type": "TECH"},
+    ]
+    relations = [
+        {
+            "source_id": _MIND_EID_A,
+            "source": "Alpha",
+            "source_type": "TECH",
+            "relation": "RELATES_TO",
+            "target_id": _MIND_EID_B,
+            "target": "Beta",
+            "target_type": "TECH",
+        }
+    ]
+    return mock.patch.object(
+        mcp_graph_rag, "get_embedder", return_value=_Embedder()
+    ), mock.patch.object(
+        mcp_graph_rag, "qdrant_search_entity_payload", return_value=payloads
+    ), mock.patch.object(
+        mcp_graph_rag, "fetch_entities_by_ids", return_value=entities
+    ), mock.patch.object(
+        mcp_graph_rag, "fetch_relations_with_depth", return_value=relations
+    )
+
+
+def test_semantic_search_strips_entity_uuids_by_default():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    with mock.patch.object(
+        mcp_graph_rag, "get_embedder", return_value=_Embedder()
+    ), mock.patch.object(
+        mcp_graph_rag, "qdrant_search_entity_payload", return_value=_mind_payload_rows()
+    ):
+        result = fake.tools["semantic_search"](
+            query="alpha", project_id="procsample", include_entity_mentions="true"
+        )
+
+    data = result.structuredContent["data"]
+    passage = data["passages"][0]
+    assert "entity_ids" not in passage
+    assert "id" not in passage["entity_mentions"][0]
+    assert passage["entity_mentions"][0]["name"] == "Alpha"
+    assert _MIND_EID_A not in json.dumps(data)
+
+
+def test_semantic_search_keeps_entity_uuids_when_requested():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    with mock.patch.object(
+        mcp_graph_rag, "get_embedder", return_value=_Embedder()
+    ), mock.patch.object(
+        mcp_graph_rag, "qdrant_search_entity_payload", return_value=_mind_payload_rows()
+    ):
+        result = fake.tools["semantic_search"](
+            query="alpha",
+            project_id="procsample",
+            include_entity_ids="true",
+            include_entity_mentions="true",
+        )
+
+    data = result.structuredContent["data"]
+    passage = data["passages"][0]
+    assert passage["entity_ids"] == [_MIND_EID_A]
+    assert passage["entity_mentions"][0]["id"] == _MIND_EID_A
+
+
+def test_query_graph_rag_strips_entity_uuids_but_expands_with_them():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(
+        _mind_payload_rows()
+    )
+    with embedder, qdrant, fetch_entities as entities_mock, fetch_relations as relations_mock:
+        result = fake.tools["query_graph_rag_langextract"](
+            query="alpha", project_id="procsample"
+        )
+
+    # Expansion still runs on the raw ids internally.
+    assert entities_mock.call_args.args[0] == [_MIND_EID_A]
+    assert relations_mock.call_args.args[0] == [_MIND_EID_A]
+
+    data = result.structuredContent["data"]
+    assert "id" not in data["entities"][0]
+    assert data["entities"][0]["name"] == "Alpha"
+    assert "source_id" not in data["relations"][0]
+    assert "target_id" not in data["relations"][0]
+    assert data["relations"][0]["source"] == "Alpha"
+    assert data["relations"][0]["target"] == "Beta"
+    assert _MIND_EID_A not in json.dumps(data)
+
+
+def test_query_graph_rag_keeps_entity_uuids_when_requested():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(
+        _mind_payload_rows()
+    )
+    with embedder, qdrant, fetch_entities, fetch_relations:
+        result = fake.tools["query_graph_rag_langextract"](
+            query="alpha", project_id="procsample", include_entity_ids="true"
+        )
+
+    data = result.structuredContent["data"]
+    assert data["entities"][0]["id"] == _MIND_EID_A
+    assert data["relations"][0]["source_id"] == _MIND_EID_A
+    assert data["relations"][0]["target_id"] == _MIND_EID_B
+
+
 def test_unscoped_doc_qdrant_search_aggregates_registered_collections_bounded():
     class Hit:
         def __init__(self, score, payload):
@@ -293,39 +444,58 @@ def test_unscoped_doc_qdrant_search_aggregates_registered_collections_bounded():
             self.payload = payload
 
     class FakeQdrant:
-        def __init__(self):
+        def __init__(self, collections, hits):
+            self._collections = collections
+            self._hits = hits
             self.calls = []
 
         def list_collection_names(self):
-            return ["alpha_vectors", "beta_vectors"]
+            return list(self._collections)
 
         def search(self, **kwargs):
             self.calls.append(kwargs["collection_name"])
-            if kwargs["collection_name"] == "alpha_vectors":
-                return [Hit(0.8, {"text": "alpha", "source_id": "a", "paragraph_id": 1})]
-            return [
-                Hit(0.95, {"text": "alpha", "source_id": "a", "paragraph_id": 1}),
-                Hit(0.9, {"text": "beta", "source_id": "b", "paragraph_id": 1}),
-                Hit(0.7, {"text": "overflow", "source_id": "c", "paragraph_id": 1}),
-            ]
+            return list(self._hits)
+
+    alpha_store = FakeQdrant(["alpha_vectors"], [Hit(0.8, {"text": "alpha", "source_id": "a", "paragraph_id": 1})])
+    beta_store = FakeQdrant(
+        ["beta_vectors"],
+        [
+            Hit(0.95, {"text": "alpha", "source_id": "a", "paragraph_id": 1}),
+            Hit(0.9, {"text": "beta", "source_id": "b", "paragraph_id": 1}),
+            Hit(0.7, {"text": "overflow", "source_id": "c", "paragraph_id": 1}),
+        ],
+    )
+    # Harness-launched deployments keep the instance store empty; probes
+    # must still succeed on it.
+    instance_store = FakeQdrant([], [])
+
+    def store_for(project_id=None):
+        if project_id == "Alpha":
+            return alpha_store
+        if project_id == "Beta":
+            return beta_store
+        return instance_store
 
     targets = {
         "Alpha": SimpleNamespace(doc_qdrant_collection="alpha_vectors"),
         "Beta": SimpleNamespace(doc_qdrant_collection="beta_vectors"),
     }
-    qdrant = FakeQdrant()
-    with mock.patch.object(mcp_graph_rag, "get_qdrant", return_value=qdrant), mock.patch.object(
-        mcp_graph_rag, "list_registered_projects", return_value=list(targets)
+    with mock.patch.object(
+        mcp_graph_rag, "get_document_qdrant_store", side_effect=store_for
     ), mock.patch.object(
         mcp_graph_rag,
-        "resolve_project_targets",
-        side_effect=lambda project_id: targets[project_id],
+        "resolve_doc_candidates",
+        side_effect=lambda project_id: [targets[project_id]],
+    ), mock.patch.object(
+        mcp_graph_rag, "list_registered_projects", return_value=list(targets)
     ):
         rows = mcp_graph_rag.qdrant_search_entity_payload(
             [0.1, 0.2], 2, None
         )
 
-    assert qdrant.calls == ["alpha_vectors", "beta_vectors"]
+    assert alpha_store.calls == ["alpha_vectors"]
+    assert beta_store.calls == ["beta_vectors"]
+    assert instance_store.calls == []
     assert [row["text"] for row in rows] == ["alpha", "beta"]
     assert [row["collection"] for row in rows] == ["beta_vectors", "beta_vectors"]
 
@@ -393,10 +563,11 @@ def test_project_falkordb_driver_is_wrapped_with_session_adapter():
     targets = SimpleNamespace(doc_graph="stock_doc")
     mcp_graph_rag._graph_drivers.clear()
 
-    with mock.patch(
-        "cortex_harness.storage.create_storage", return_value=factory
-    ), mock.patch(
-        "tools.common.project_registry.resolve_project_targets",
+    with mock.patch.object(
+        mcp_graph_rag, "create_storage", return_value=factory
+    ), mock.patch.object(
+        mcp_graph_rag,
+        "_registry_resolve_project_targets",
         return_value=targets,
     ):
         store = mcp_graph_rag.get_graph_store("stock")
