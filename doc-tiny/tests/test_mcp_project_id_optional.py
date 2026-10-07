@@ -53,9 +53,14 @@ class _StubFastMCP:
 
 def _build_stubs():
     """Build isolated lightweight modules for importing ``mcp_graph_rag``."""
-    # FastMCP stub
+    # FastMCP stub. mcp_graph_rag imports the standalone ``fastmcp``
+    # distribution (FastMCP 4.x layout); keep both names covered because
+    # older revisions used ``mcp.server.fastmcp``.
     fastmcp_mod = type(sys)("mcp.server.fastmcp")
     fastmcp_mod.FastMCP = _StubFastMCP
+    top_fastmcp_mod = type(sys)("fastmcp")
+    top_fastmcp_mod.FastMCP = _StubFastMCP
+    top_fastmcp_mod.__version__ = "0.0.0-stub"
     mcp_mod = type(sys)("mcp")
     mcp_server_mod = type(sys)("mcp.server")
     mcp_types_mod = type(sys)("mcp.types")
@@ -107,6 +112,7 @@ def _build_stubs():
         "mcp": mcp_mod,
         "mcp.server": mcp_server_mod,
         "mcp.server.fastmcp": fastmcp_mod,
+        "fastmcp": top_fastmcp_mod,
         "mcp.types": mcp_types_mod,
         "qdrant_client": qdrant_mod,
         "qdrant_client.http": qdrant_mod.http,
@@ -291,6 +297,156 @@ class TestProjectIdOptional(unittest.TestCase):
             ):
                 targets = self.project_contract.resolve_project_targets("stock")
         self.assertEqual(targets.doc_graph, "stock_doc")
+
+
+class TestUnregisteredIdFallbackStores(unittest.TestCase):
+    """Regression tests for the unregistered-id fallback chain.
+
+    The storage layer raises the code-side registry sibling of
+    ``ProjectNotRegisteredError`` (same name, unrelated class), so the
+    fallbacks must catch both. The fallback store list must also probe the
+    launcher's remote vector backend before the local instance store —
+    out-of-band shards are ingested there, not locally.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._stub_modules = patch.dict(sys.modules, _build_stubs(), clear=False)
+        cls._stub_modules.start()
+        cls.addClassCleanup(cls._stub_modules.stop)
+        # Make the code-side registry importable so mcp_graph_rag's guarded
+        # import binds the sibling class into its except tuple.
+        repo_root = Path(__file__).resolve().parents[2]
+        cls._code_tiny_path = str(repo_root / "code-tiny")
+        sys.path.insert(0, cls._code_tiny_path)
+        cls.addClassCleanup(sys.path.remove, cls._code_tiny_path)
+        cls.project_contract = _load_module("project_contract", _PROJECT_CONTRACT_PATH)
+        cls.mcp = _load_module("mcp_graph_rag_dualclass_under_test", _MCP_GRAPH_RAG_PATH)
+        assert cls.mcp._RegistryProjectNotRegisteredError is not None, (
+            "code-side registry not importable; dual-class coverage lost"
+        )
+
+    def test_get_qdrant_fallback_catches_registry_sibling_class(self):
+        registry_error = self.mcp._RegistryProjectNotRegisteredError
+        local_store = object()
+
+        def fake_store(*args, **kwargs):
+            if kwargs.get("project_id"):
+                raise registry_error(kwargs["project_id"], ["cortext"])
+            return local_store
+
+        self.mcp._qdrant_stores.pop("client-alpha", None)
+        with patch.object(
+            self.mcp, "get_document_qdrant_store", side_effect=fake_store
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[local_store]
+        ):
+            result = self.mcp.get_qdrant("client-alpha")
+        self.assertIs(result, local_store)
+
+    def test_fallback_stores_probe_remote_before_local(self):
+        remote_store = object()
+        local_store = object()
+        created = {}
+
+        class _FakeRemote:
+            def __new__(cls, url, *args, **kwargs):
+                created["url"] = url
+                return remote_store
+
+        self.mcp._qdrant_stores.pop("__remote__:http://qdrant:6333", None)
+        with patch.object(
+            self.mcp, "RemoteQdrantStore", _FakeRemote
+        ), patch.object(
+            self.mcp, "get_document_qdrant_store", return_value=local_store
+        ), patch.dict(
+            os.environ, {"QDRANT_URL": "http://qdrant:6333"}
+        ):
+            stores = self.mcp._fallback_doc_qdrant_stores()
+        self.assertEqual(stores, [remote_store, local_store])
+        self.assertEqual(created["url"], "http://qdrant:6333")
+
+    def test_fallback_stores_local_only_without_remote_env(self):
+        local_store = object()
+        env_without_url = {
+            key: value for key, value in os.environ.items() if key != "QDRANT_URL"
+        }
+        with patch.object(
+            self.mcp, "get_document_qdrant_store", return_value=local_store
+        ), patch.dict(os.environ, env_without_url, clear=True):
+            stores = self.mcp._fallback_doc_qdrant_stores()
+        self.assertEqual(stores, [local_store])
+
+    def test_search_targets_unregistered_probes_both_stores_with_convention_names(self):
+        remote_store = object()
+        local_store = object()
+        registry_error = self.mcp._RegistryProjectNotRegisteredError
+
+        def fake_store(*args, **kwargs):
+            if kwargs.get("project_id"):
+                raise registry_error(kwargs["project_id"], ["cortext"])
+            return local_store
+
+        with patch.object(
+            self.mcp, "get_document_qdrant_store", side_effect=fake_store
+        ), patch.object(
+            self.mcp,
+            "_fallback_doc_qdrant_stores",
+            return_value=[remote_store, local_store],
+        ), patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[{"project_id": "cortext", "doc_env": {}}],
+        ):
+            targets = self.mcp._qdrant_search_targets("client-alpha", None)
+        self.assertEqual(
+            targets,
+            [(remote_store, ["client-alpha_doc"]), (local_store, ["client-alpha_doc"])],
+        )
+
+    def test_search_targets_registered_id_pins_registry_store(self):
+        local_store = object()
+        with patch.object(
+            self.mcp, "get_document_qdrant_store", return_value=local_store
+        ) as get_store, patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[{"project_id": "cortext", "doc_env": {}}],
+        ):
+            targets = self.mcp._qdrant_search_targets("cortext", None)
+        self.assertEqual(targets, [(local_store, ["cortext_doc"])])
+        get_store.assert_called_once_with(project_id="cortext")
+
+    def test_search_targets_collection_override_probes_fallback_stores(self):
+        remote_store = object()
+        local_store = object()
+        with patch.object(
+            self.mcp, "get_document_qdrant_store", return_value=local_store
+        ), patch.object(
+            self.mcp,
+            "_fallback_doc_qdrant_stores",
+            return_value=[remote_store, local_store],
+        ):
+            targets = self.mcp._qdrant_search_targets(None, "ishida_doc")
+        self.assertEqual(
+            targets,
+            [(remote_store, ["ishida_doc"]), (local_store, ["ishida_doc"])],
+        )
+
+    def test_search_targets_unscoped_fans_out_registered_plus_instance_store(self):
+        local_store = object()
+        with patch.object(
+            self.mcp, "get_document_qdrant_store", return_value=local_store
+        ), patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[{"project_id": "poc_main", "doc_env": {}}],
+        ):
+            targets = self.mcp._qdrant_search_targets(None, None)
+        self.assertEqual(
+            targets,
+            [(local_store, ["poc_main_doc"]), (local_store, None)],
+        )
 
 
 if __name__ == "__main__":

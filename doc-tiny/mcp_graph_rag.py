@@ -5,7 +5,7 @@ import logging
 import os
 import signal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
@@ -27,13 +27,40 @@ from project_contract import (
     resolve_doc_candidates,
     resolve_project_targets,
 )
-from cortex_harness.storage import StorageRole
+from cortex_harness.storage import (
+    QdrantStorageRole,
+    RemoteQdrantStore,
+    StorageRole,
+    create_storage,
+)
 from cortex_harness.mcp_contract import (
     normalize_error,
     normalize_success,
     result_meta,
     result_summary,
 )
+
+# The storage layer resolves per-project backends through the code-side
+# registry (tools.common.project_registry), whose ProjectNotRegisteredError
+# shares the doc-side name but is an unrelated KeyError sibling. Fallbacks
+# below must catch both or the naming-convention path stays dead: the store
+# layer raises the registry class while the except matched only the mirror.
+try:
+    from tools.common.project_registry import (  # type: ignore
+        ProjectNotRegisteredError as _RegistryProjectNotRegisteredError,
+        resolve_project_targets as _registry_resolve_project_targets,
+    )
+except Exception:  # standalone doc-tiny runtime without the code registry
+    _RegistryProjectNotRegisteredError = None  # type: ignore[assignment]
+    _registry_resolve_project_targets = None  # type: ignore[assignment]
+
+if _RegistryProjectNotRegisteredError is not None:
+    _PROJECT_RESOLVE_ERRORS: tuple = (
+        ProjectNotRegisteredError,
+        _RegistryProjectNotRegisteredError,
+    )
+else:
+    _PROJECT_RESOLVE_ERRORS = (ProjectNotRegisteredError,)
 
 
 MCP_NAME = os.getenv("MCP_SERVER_NAME", "mind_mcp")
@@ -102,21 +129,28 @@ def _coerce_bool(value: Any, default: bool) -> bool:
 
 
 def get_qdrant(project_id: Optional[str] = None) -> Any:
-    """Return the Qdrant store for ``project_id``.
+    """Return the primary Qdrant store for ``project_id``.
 
     Per-project cache replaces the previous module-level singleton
     (``_qdrant_client``). Passing ``project_id`` routes through
     :class:`StorageFactory` so a remote project's Qdrant server is honored
-    without restarting the MCP server.
+    without restarting the MCP server. An unregistered id falls back to
+    :func:`_fallback_doc_qdrant_stores` and keeps the best store (the
+    launcher's remote vector backend when one is declared, else the local
+    instance store); multi-store probing lives in
+    :func:`_qdrant_search_targets`.
     """
     if project_id:
         if project_id not in _qdrant_stores:
             try:
                 _qdrant_stores[project_id] = get_document_qdrant_store(project_id=project_id)
-            except ProjectNotRegisteredError:
-                # Unregistered id (naming-convention fallback): use the
-                # instance store; the collection name scopes the shard.
-                _qdrant_stores[project_id] = get_document_qdrant_store()
+            except _PROJECT_RESOLVE_ERRORS:
+                # Unregistered id (naming-convention fallback): the
+                # collection name scopes the shard on the fallback stores.
+                fallback_stores = _fallback_doc_qdrant_stores()
+                _qdrant_stores[project_id] = (
+                    fallback_stores[0] if fallback_stores else get_document_qdrant_store()
+                )
         return _qdrant_stores[project_id]
     # Legacy / global access for scripts that don't carry a project_id.
     return get_document_qdrant_store()
@@ -144,12 +178,23 @@ def get_graph_store(project_id: Optional[str] = None) -> Any:
     """
     if project_id:
         if project_id not in _graph_drivers:
-            from cortex_harness.storage import create_storage
-            from tools.common.project_registry import resolve_project_targets
-
-            try:
-                targets = resolve_project_targets(project_id)
-            except ProjectNotRegisteredError:
+            targets = None
+            if _registry_resolve_project_targets is not None:
+                try:
+                    targets = _registry_resolve_project_targets(project_id)
+                except _PROJECT_RESOLVE_ERRORS:
+                    targets = None
+            if targets is not None:
+                factory = create_storage(targets)
+                driver = factory.get_falkordb_driver(
+                    targets.doc_graph,
+                    role=StorageRole.DOCUMENT,
+                )
+                _graph_drivers[project_id] = FalkorDBGraphStore(
+                    driver,
+                    targets.doc_graph,
+                )
+            else:
                 # Unregistered id (naming-convention fallback): seed the
                 # env-based store and point it at the convention graph.
                 base = get_graph_store()
@@ -159,16 +204,6 @@ def get_graph_store(project_id: Optional[str] = None) -> Any:
                     )
                 else:
                     _graph_drivers[project_id] = base
-                return _graph_drivers[project_id]
-            factory = create_storage(targets)
-            driver = factory.get_falkordb_driver(
-                targets.doc_graph,
-                role=StorageRole.DOCUMENT,
-            )
-            _graph_drivers[project_id] = FalkorDBGraphStore(
-                driver,
-                targets.doc_graph,
-            )
         return _graph_drivers[project_id]
     return create_graph_store_from_env()
 
@@ -258,6 +293,68 @@ def _resolve_doc_collections(
     return collections or [QDRANT_COLLECTION]
 
 
+    return collections or [QDRANT_COLLECTION]
+
+
+def _fallback_doc_qdrant_stores() -> List[Any]:
+    """Stores an unregistered/override doc query must probe, best first.
+
+    Out-of-band shards (ingested without a registry entry) land on the
+    launcher's remote vector backend, so it is probed before the local
+    instance store — which is empty in harness-launched deployments.
+    """
+    stores: List[Any] = []
+    url = str(os.getenv("QDRANT_URL") or "").strip()
+    if url:
+        cache_key = f"__remote__:{url}"
+        if cache_key not in _qdrant_stores:
+            try:
+                _qdrant_stores[cache_key] = RemoteQdrantStore(
+                    url, role=QdrantStorageRole.DOCUMENT
+                )
+            except Exception as exc:
+                logger.warning("Remote doc store %s unavailable: %s", url, exc)
+                _qdrant_stores[cache_key] = None
+        if _qdrant_stores[cache_key] is not None:
+            stores.append(_qdrant_stores[cache_key])
+    stores.append(get_document_qdrant_store())
+    return stores
+
+
+def _qdrant_search_targets(
+    project_id: Optional[str], collection: Optional[str] = None
+) -> List[Tuple[Any, Optional[List[str]]]]:
+    """Resolve the ``(store, collection_names)`` pairs a doc query probes.
+
+    Implements the project_id query rule end to end: a registered id pins
+    its own backend through the storage factory; an unregistered id keeps
+    the ``{project_id}_doc`` naming convention reachable by probing the
+    launcher's remote vector backend first and the local instance store
+    second; no scope fans out over every registered project's backend plus
+    the instance store. An explicit ``collection`` overrides the names on
+    every probed store. ``None`` collection names mean "whatever the store
+    has" (instance-store tail of an unscoped query).
+    """
+    if project_id:
+        try:
+            store = get_document_qdrant_store(project_id=project_id)
+        except _PROJECT_RESOLVE_ERRORS:
+            names = _resolve_doc_collections(project_id, collection)
+            return [(store, names) for store in _fallback_doc_qdrant_stores()]
+        return [(store, _resolve_doc_collections(project_id, collection))]
+    if collection:
+        return [(store, [collection]) for store in _fallback_doc_qdrant_stores()]
+    pairs: List[Tuple[Any, Optional[List[str]]]] = []
+    for registered in list_registered_projects():
+        try:
+            store = get_document_qdrant_store(project_id=registered)
+        except _PROJECT_RESOLVE_ERRORS:
+            continue
+        pairs.append((store, _resolve_doc_collections(registered, None)))
+    pairs.append((get_document_qdrant_store(), None))
+    return pairs
+
+
 def qdrant_search_entity_payload(
     query_vector: List[float],
     top_k: int,
@@ -265,9 +362,6 @@ def qdrant_search_entity_payload(
     collection: Optional[str] = None,
     project_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    qdrant = get_qdrant(project_id)
-    collection_names = _resolve_doc_collections(project_id, collection)
-
     # Build the Qdrant filter. The project filter combines with the
     # ``source_id`` filter via AND. A missing ``project_id`` produces no
     # project predicate, so the search spans every project.
@@ -304,40 +398,55 @@ def qdrant_search_entity_payload(
                 )
     qdrant_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
 
-    available = None
-    if hasattr(qdrant, "list_collection_names"):
-        available = set(qdrant.list_collection_names())
-        missing = [name for name in collection_names if name not in available]
-        if missing and (project_id or collection):
-            raise LookupError(
-                "Requested document collection is not ingested or unavailable: "
-                + ", ".join(missing)
-            )
-
     payloads_by_key: Dict[Any, Dict[str, Any]] = {}
-    for collection_name in collection_names:
-        if available is not None and collection_name not in available:
-            continue
-        try:
-            if hasattr(qdrant, "search"):
-                hits = qdrant.search(
-                    collection_name=collection_name,
-                    query_vector=query_vector,
-                    limit=top_k,
-                    query_filter=qdrant_filter,
+    probed_stores: List[str] = []
+    found_any = False
+    for qdrant, collection_names in _qdrant_search_targets(project_id, collection):
+        available: Optional[set] = None
+        if hasattr(qdrant, "list_collection_names"):
+            try:
+                available = set(qdrant.list_collection_names())
+            except Exception as exc:
+                logger.warning(
+                    "Listing collections on %s failed: %s",
+                    getattr(qdrant, "url", None) or "local instance store",
+                    exc,
                 )
-            else:
-                hits = qdrant.query_points(
-                    collection_name=collection_name,
-                    query=query_vector,
-                    limit=top_k,
-                    query_filter=qdrant_filter,
-                ).points
-        except Exception as exc:
-            if len(collection_names) == 1:
-                raise
-            logger.warning("Skipping unavailable doc collection %s: %s", collection_name, exc)
+                continue
+            probed_stores.append(
+                getattr(qdrant, "url", None) or "local instance store"
+            )
+        if collection_names is None:
+            collection_names = sorted(available or [])
+        present = [
+            name for name in collection_names
+            if available is None or name in available
+        ]
+        if collection_names and not present:
             continue
+        if present:
+            found_any = True
+        for collection_name in present:
+            try:
+                if hasattr(qdrant, "search"):
+                    hits = qdrant.search(
+                        collection_name=collection_name,
+                        query_vector=query_vector,
+                        limit=top_k,
+                        query_filter=qdrant_filter,
+                    )
+                else:
+                    hits = qdrant.query_points(
+                        collection_name=collection_name,
+                        query=query_vector,
+                        limit=top_k,
+                        query_filter=qdrant_filter,
+                    ).points
+            except Exception as exc:
+                if len(present) == 1:
+                    raise
+                logger.warning("Skipping unavailable doc collection %s: %s", collection_name, exc)
+                continue
 
         for hit in hits:
             if not hit.payload:
@@ -364,6 +473,16 @@ def qdrant_search_entity_payload(
                 existing.get("score") or 0.0
             ):
                 payloads_by_key[key] = row
+    if not found_any and (project_id or collection):
+        # Scoped query, but no reachable store had the requested collection.
+        # Surface which stores were probed so a remote-only shard is not
+        # mistaken for missing data.
+        detail = ", ".join(_resolve_doc_collections(project_id, collection))
+        if probed_stores:
+            detail += f" (checked: {', '.join(probed_stores)})"
+        raise LookupError(
+            "Requested document collection is not ingested or unavailable: " + detail
+        )
     payloads = list(payloads_by_key.values())
     payloads.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
     return payloads[:top_k]
@@ -716,17 +835,26 @@ def register_tools(mcp: FastMCP) -> None:
 
         Per the unified ingest/query contract:
         - ``project_id`` is optional. When omitted (or empty), returns every
-          collection (``None`` semantics = full-search across all projects).
-        - When supplied AND registered, filters to that project's collection.
-        - When supplied but not registered, fails closed with the project
-          registry error instead of silently querying another project's data.
+          collection visible across the registered projects' backends plus
+          the local instance store (``None`` semantics = full-search).
+        - When supplied, narrows to that project's resolved doc collection:
+          the exact registry entry, or the ``{project_id}_doc`` naming
+          convention for unregistered ids.
         """
-        qdrant = get_qdrant(project_id)
-        names = qdrant.list_collection_names()
-        if not project_id:
-            return names
-        expected = _resolve_doc_collection(project_id)
-        return [name for name in names if name == expected]
+        names: List[str] = []
+        for qdrant, scope_names in _qdrant_search_targets(project_id, None):
+            if not hasattr(qdrant, "list_collection_names"):
+                continue
+            try:
+                available = qdrant.list_collection_names()
+            except Exception:
+                continue
+            for name in available:
+                if scope_names is not None and name not in scope_names:
+                    continue
+                if name not in names:
+                    names.append(name)
+        return names
 
     @_standard_tool(mcp)
     def semantic_search(

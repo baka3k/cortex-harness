@@ -51,9 +51,29 @@ def get_document_qdrant_store(
     """
 
     if project_id:
-        from tools.common.project_registry import resolve_project_targets
+        try:
+            from tools.common.project_registry import (
+                ProjectNotRegisteredError as _RegistryNotRegistered,
+                resolve_project_targets,
+            )
+        except ImportError:
+            # Standalone doc-tiny runtime without the code registry on
+            # sys.path: no registry can know this id — treat it as
+            # unregistered under the doc-side contract class.
+            from project_contract import ProjectNotRegisteredError as _DocNotRegistered
 
-        targets = resolve_project_targets(project_id)
+            raise _DocNotRegistered(project_id, []) from None
+
+        try:
+            targets = resolve_project_targets(project_id)
+        except _RegistryNotRegistered as exc:
+            # The registry error is a same-named sibling of the doc-side
+            # class, not a subclass — re-export under the doc-side contract
+            # class so callers see one error shape across the boundary.
+            from project_contract import ProjectNotRegisteredError as _DocNotRegistered
+
+            raise _DocNotRegistered(exc.project_id, exc.known) from exc
+
         factory = create_storage(targets, project_root=project_root)
         return factory.get_qdrant_store(QdrantStorageRole.DOCUMENT)
 
