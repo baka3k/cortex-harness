@@ -38,7 +38,7 @@ from cortex_harness.mcp_contract import (
 
 MCP_NAME = os.getenv("MCP_SERVER_NAME", "mind_mcp")
 
-# Load .env if present (for NEO4J_*/QDRANT_*/TEXT_EMBEDDING_MODEL).
+# Load .env if present (for DOC_GRAPH_PROVIDER/FALKORDB_*/QDRANT_*/TEXT_EMBEDDING_MODEL).
 try:
     from dotenv import load_dotenv
 
@@ -47,10 +47,6 @@ try:
         load_dotenv(dotenv_path=env_path)
 except Exception:
     pass
-
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_USER = os.getenv("NEO4J_USER") or os.getenv("NEO4J_USERNAME", "neo4j")
-NEO4J_PASS = os.getenv("NEO4J_PASS") or os.getenv("NEO4J_PASS", "password")
 
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION_DOC", "documents")
 
@@ -137,7 +133,7 @@ def get_embedder() -> SentenceTransformer:
     return _embedder
 
 
-def get_neo4j(project_id: Optional[str] = None) -> Any:
+def get_graph_store(project_id: Optional[str] = None) -> Any:
     """Return the graph driver for ``project_id``.
 
     Per-project cache replaces the previous module-level
@@ -156,7 +152,7 @@ def get_neo4j(project_id: Optional[str] = None) -> Any:
             except ProjectNotRegisteredError:
                 # Unregistered id (naming-convention fallback): seed the
                 # env-based store and point it at the convention graph.
-                base = get_neo4j()
+                base = get_graph_store()
                 if getattr(base, "provider", None) == "falkordb":
                     _graph_drivers[project_id] = base.for_graph(
                         f"{str(project_id).strip()}_doc"
@@ -182,8 +178,8 @@ def _acquire_graph_store(project_id: Optional[str]):
         # Preserve the legacy Neo4j request-scoped database session behavior.
         return create_graph_store_for_project(project_id), True
     if project_id:
-        return get_neo4j(project_id), False
-    base = get_neo4j()
+        return get_graph_store(project_id), False
+    base = get_graph_store()
     return base, False
 
 
@@ -211,7 +207,7 @@ def _graph_store_candidates(project_id: Optional[str]):
             store, owned = _acquire_graph_store(targets.project_id)
             stores.append((store, owned))
         return stores
-    base = get_neo4j()
+    base = get_graph_store()
     if getattr(base, "provider", None) != "falkordb":
         return [(base, False)]
 
@@ -680,7 +676,7 @@ def register_tools(mcp: FastMCP) -> None:
         limit: int = 50,
         project_id: Optional[str] = None,
     ) -> List[str]:
-        """List available source_id values from Neo4j (Paragraph nodes)."""
+        """List available source_id values from the graph store (Paragraph nodes)."""
         limit_val = max(0, int(limit))
         source_ids: List[str] = []
         seen = set()
@@ -819,7 +815,8 @@ def register_tools(mcp: FastMCP) -> None:
     ) -> Dict[str, Any]:
         """
         Query Qdrant for top-k passages with entity_ids payload, then fetch related
-        entity context from Neo4j. Returns context only (no LLM generation).
+        entity context from the graph store (FalkorDB by default). Returns context
+        only (no LLM generation).
         """
         # Type coercion to handle n8n passing strings
         query = str(query) if query else ""
@@ -927,7 +924,7 @@ def register_tools(mcp: FastMCP) -> None:
         paragraph_id: int,
         project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Fetch a paragraph's text by source_id + paragraph_id from Neo4j."""
+        """Fetch a paragraph's text by source_id + paragraph_id from the graph store."""
         # Type coercion to handle n8n passing strings
         source_id = str(source_id) if source_id else None
         paragraph_id = int(paragraph_id) if paragraph_id is not None else 0
