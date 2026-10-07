@@ -270,7 +270,7 @@ class TestProjectIdOptional(unittest.TestCase):
         )
         with patch.object(
             self.mcp, "resolve_doc_candidates", return_value=[targets]
-        ), patch.object(self.mcp, "get_neo4j", return_value=scoped) as get_graph:
+        ), patch.object(self.mcp, "get_graph_store", return_value=scoped) as get_graph:
             store, owned = self.mcp._acquire_graph_store("cortext")
         self.assertIs(store, scoped)
         get_graph.assert_called_once_with("cortext")
