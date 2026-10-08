@@ -1208,6 +1208,15 @@ def _prune_yake_rule_files(
         click.echo(f"  [warn][yake] prune failed: {exc}")
 
 
+def _doc_stage_flags(stage: str) -> list:
+    """Map a ``--stage`` value to the ingestor's store-skip flags."""
+    if stage == "graph":
+        return ["--skip-qdrant"]
+    if stage == "qdrant":
+        return ["--skip-graph"]
+    return []
+
+
 def _sync_doc_folder(
     *,
     project_path: Path,
@@ -1221,6 +1230,7 @@ def _sync_doc_folder(
     preview: bool,
     extra_ignores: frozenset = frozenset(),
     yake: Optional[bool] = None,
+    stage: str = "both",   # "both" | "graph" | "qdrant"
 ) -> dict:
     """Sync one doc folder. Returns result summary dict."""
     folder_path = Path(folder) if Path(folder).is_absolute() else project_path / folder
@@ -1272,9 +1282,11 @@ def _sync_doc_folder(
         "--yake-rules-dir",      str(yake_rules_dir),
         *(["--yake-max-ngram", str(env["YAKE_MAX_NGRAM"])] if env.get("YAKE_MAX_NGRAM") else []),
     ]
+    base_cmd.extend(_doc_stage_flags(stage))
     click.echo(f"\n{'─' * 52}")
     click.echo(f" folder : {folder}")
     click.echo(f" mode   : {mode}")
+    click.echo(f" stage  : {stage}")
     click.echo(f" provider: {entity_provider}")
     if yake_on:
         click.echo(
@@ -1301,7 +1313,9 @@ def _sync_doc_folder(
         )
         elapsed = time.time() - start_ts
 
-        if rc == 0 and not dry_run:
+        # A graph-stage run must not save the baseline: the vector stage that
+        # follows still needs to see every file as pending.
+        if rc == 0 and not dry_run and stage in ("both", "qdrant"):
             _save_state(project_path, f"doc:{folder}", {
                 "folder":       folder,
                 "last_sync":    datetime.now(timezone.utc).isoformat(),
@@ -1360,7 +1374,9 @@ def _sync_doc_folder(
     elapsed = time.time() - start_ts
     success = errors == 0
 
-    if success and not dry_run:
+    # Same staged-save rule as the full path: only a completing stage
+    # ("both"/"qdrant") may record the baseline.
+    if success and not dry_run and stage in ("both", "qdrant"):
         # Update stored hashes for changed files only
         new_hashes = dict(state.get("file_hashes", {}))
         for f in changed_files:
@@ -3689,19 +3705,27 @@ def sync_code_stop(ctx):
 @click.option("--yake/--no-yake", default=None,
               help="Override YAKE dynamic rules (default: env YAKE_ENABLED).")
 @click.option("--dry-run", is_flag=True)
+@click.option("--stage", type=click.Choice(["both", "graph", "qdrant"]), default="both",
+              show_default=True,
+              help="Staged ingestion: graph = graph store only (skip Qdrant/embeddings), "
+                   "qdrant = vector store only (skip graph writes), both = interleaved.")
 @click.pass_context
-def sync_doc(ctx, project_dir, preview, entity_provider, yake, dry_run):
+def sync_doc(ctx, project_dir, preview, entity_provider, yake, dry_run, stage):
     """Interactive: pick doc folders, incremental if baseline exists.
 
     \b
     First run   -> full sync (no baseline)
     Next runs   -> incremental (git diff > hash comparison > mtime)
+    Staged runs: sync the graph stage first (--stage graph), then the vector
+    stage (--stage qdrant) once the graph is verified complete. A graph-stage
+    run never saves the sync baseline; the vector/both stage does.
     Sub-command:
       all       Full sync for all configured doc folders.
     """
     ctx.ensure_object(dict)
     ctx.obj.update(project_dir=project_dir, preview=preview,
-                   entity_provider=entity_provider, yake=yake, dry_run=dry_run)
+                   entity_provider=entity_provider, yake=yake, dry_run=dry_run,
+                   stage=stage)
 
     if ctx.invoked_subcommand is not None:
         return
@@ -3748,6 +3772,7 @@ def sync_doc(ctx, project_dir, preview, entity_provider, yake, dry_run):
                 preview=preview,
                 extra_ignores=extra_ignores,
                 yake=yake,
+                stage=stage,
             )
             summaries.append(result)
 
@@ -3780,7 +3805,7 @@ def sync_doc_all(ctx):
         click.echo(f"[error] Ingestor not found: {DOC_INGESTOR}", err=True)
         sys.exit(1)
 
-    click.echo(f"\n[sync-doc all]  folders={len(folders)}")
+    click.echo(f"\n[sync-doc all]  folders={len(folders)}  stage={o.get('stage', 'both')}")
     _warn_scan_roots_matching_ignores(folders, extra_ignores)
 
     python      = _venv_python(DOC_TINY)
@@ -3803,6 +3828,7 @@ def sync_doc_all(ctx):
                 preview=False,
                 extra_ignores=extra_ignores,
                 yake=o.get("yake"),
+                stage=o.get("stage", "both"),
             )
             summaries.append(result)
 
