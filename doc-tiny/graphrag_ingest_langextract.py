@@ -662,7 +662,7 @@ def ingest_to_qdrant(
     payload["project_id"] = project_id
     payload["project_id_normalized"] = project_id_normalized
     point = qmodels.PointStruct(
-        id=str(uuid.uuid4()),
+        id=_point_id(project_id_normalized, source_id, paragraph_id),
         vector=vector.tolist(),
         payload=payload,
     )
@@ -675,6 +675,12 @@ def ingest_to_qdrant(
 def _safe_source_id(base: Path, file_path: Path) -> str:
     rel = file_path.relative_to(base).as_posix()
     return rel.replace("/", "__").replace("\\", "__")
+
+
+def _point_id(project_id_normalized: str | None, source_id: str, paragraph_id: int) -> str:
+    """Deterministic Qdrant point id so stage re-runs converge instead of duplicating."""
+    key = f"{project_id_normalized or ''}:{source_id}:{paragraph_id}"
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
 def _stringify_values(values: Dict[str, Any]) -> Dict[str, Any]:
@@ -912,6 +918,9 @@ def process_text(
     def flush_graph_batch() -> None:
         if not graph_batch:
             return
+        if driver is None:
+            graph_batch.clear()
+            return
         print(f"Ingesting {len(graph_batch)} paragraphs to graph store (batch)...")
         ingest_to_graph_batch(
             driver,
@@ -921,6 +930,17 @@ def process_text(
         )
         graph_batch.clear()
         print("Graph batch ingestion complete.")
+
+    def upsert_qdrant(paragraph: str, idx: int, nodes: Dict[str, Dict[str, str]]) -> None:
+        if qdrant is None:
+            return
+        print("Ingesting to Qdrant...")
+        ingest_to_qdrant(
+            qdrant, args.collection, paragraph, idx, embedder, nodes, source_id,
+            project_id=(args.project_id or args.source_id or None),
+            project_id_normalized=project_id_normalized,
+        )
+        print("Qdrant ingestion complete.")
 
     long_paragraphs: List[Tuple[int, str]] = []
     for idx, paragraph in enumerate(paragraphs):
@@ -943,13 +963,7 @@ def process_text(
                 )
                 if len(graph_batch) >= args.graph_batch_size:
                     flush_graph_batch()
-                print("Ingesting to Qdrant...")
-                ingest_to_qdrant(
-                    qdrant, args.collection, paragraph, idx, embedder, {}, source_id,
-                    project_id=(args.project_id or args.source_id or None),
-                    project_id_normalized=project_id_normalized,
-                )
-                print("Qdrant ingestion complete.")
+                upsert_qdrant(paragraph, idx, {})
             else:
                 print(f"Paragraph {idx + 1}/{len(paragraphs)}: skipped (len={len(paragraph)})")
             continue
@@ -993,13 +1007,7 @@ def process_text(
                 )
                 if len(graph_batch) >= args.graph_batch_size:
                     flush_graph_batch()
-                print("Ingesting to Qdrant...")
-                ingest_to_qdrant(
-                    qdrant, args.collection, paragraph, idx, embedder, nodes, source_id,
-                    project_id=(args.project_id or args.source_id or None),
-                    project_id_normalized=project_id_normalized,
-                )
-                print("Qdrant ingestion complete.")
+                upsert_qdrant(paragraph, idx, nodes)
     else:
         for idx, paragraph in long_paragraphs:
             print(f"Paragraph {idx + 1}/{len(paragraphs)}: extracting entities/relations...")
@@ -1028,13 +1036,7 @@ def process_text(
             )
             if len(graph_batch) >= args.graph_batch_size:
                 flush_graph_batch()
-            print("Ingesting to Qdrant...")
-            ingest_to_qdrant(
-                qdrant, args.collection, paragraph, idx, embedder, nodes, source_id,
-                project_id=(args.project_id or args.source_id or None),
-                project_id_normalized=project_id_normalized,
-            )
-            print("Qdrant ingestion complete.")
+            upsert_qdrant(paragraph, idx, nodes)
     flush_graph_batch()
 
 
@@ -1078,6 +1080,9 @@ def process_xlsx_structured(
 
     def flush_graph_batch() -> None:
         if not graph_batch:
+            return
+        if driver is None:
+            graph_batch.clear()
             return
         ingest_to_graph_batch(
             driver,
@@ -1168,18 +1173,19 @@ def process_xlsx_structured(
                     "values": row.values,
                     "raw_values": _stringify_values(row.raw_values),
                 }
-                ingest_to_qdrant(
-                    qdrant,
-                    args.collection,
-                    paragraph_text,
-                    row_counter,
-                    embedder,
-                    nodes,
-                    source_id,
-                    project_id=(args.project_id or args.source_id or None),
-                    project_id_normalized=project_id_normalized,
-                    extra_payload=extra_payload,
-                )
+                if qdrant is not None:
+                    ingest_to_qdrant(
+                        qdrant,
+                        args.collection,
+                        paragraph_text,
+                        row_counter,
+                        embedder,
+                        nodes,
+                        source_id,
+                        project_id=(args.project_id or args.source_id or None),
+                        project_id_normalized=project_id_normalized,
+                        extra_payload=extra_payload,
+                    )
                 graph_batch.append(
                     {
                         "source_id": source_id,
@@ -1400,6 +1406,18 @@ def main() -> None:
     parser.add_argument("--llm-retry-count", type=int, default=None)
     parser.add_argument("--llm-retry-backoff", type=float, default=None)
     parser.add_argument(
+        "--skip-qdrant",
+        action="store_true",
+        default=_env_flag("DOC_SKIP_QDRANT"),
+        help="Graph-only stage: skip Qdrant upserts and the embedding model load.",
+    )
+    parser.add_argument(
+        "--skip-graph",
+        action="store_true",
+        default=_env_flag("DOC_SKIP_GRAPH"),
+        help="Vector-only stage: skip graph-store writes and driver creation.",
+    )
+    parser.add_argument(
         "--graph-batch-size",
         "--neo4j-batch-size",
         dest="graph_batch_size",
@@ -1480,6 +1498,10 @@ def main() -> None:
         raise SystemExit(
             "Provide exactly one of --pdf, --text-file, --md, --docx, --pptx, --xlsx, --raw-text, or --folder."
         )
+    if args.skip_qdrant and args.skip_graph:
+        raise SystemExit(
+            "--skip-qdrant and --skip-graph are mutually exclusive: pick one stage."
+        )
 
     if args.llm_debug:
         os.environ["LLM_DEBUG"] = "1"
@@ -1489,18 +1511,27 @@ def main() -> None:
     if args.llm_retry_backoff is not None:
         os.environ["LLM_RETRY_BACKOFF_SECONDS"] = str(args.llm_retry_backoff)
     _set_langextract_overrides(args.langextract_model_id, args.langextract_model_url)
-    model_name, local_files_only = resolve_embedding_model(
-        args.embedding_model, "BAAI/bge-m3"
-    )
-    device = resolve_embedding_device(args.embedding_device)
-    embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
+    embedder = None
+    qdrant = None
+    if args.skip_qdrant:
+        print("Stage graph-only: skipping Qdrant upserts and embedding model load.")
+    else:
+        model_name, local_files_only = resolve_embedding_model(
+            args.embedding_model, "BAAI/bge-m3"
+        )
+        device = resolve_embedding_device(args.embedding_device)
+        embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
 
-    qdrant = get_document_qdrant_store(
-        args.qdrant_path, project_id=project_id_normalized
-    )
-    create_collection(qdrant, args.collection, vector_size=embedder.get_sentence_embedding_dimension())
+        qdrant = get_document_qdrant_store(
+            args.qdrant_path, project_id=project_id_normalized
+        )
+        create_collection(qdrant, args.collection, vector_size=embedder.get_sentence_embedding_dimension())
 
-    driver = create_graph_store_from_args(args)
+    if args.skip_graph:
+        print("Stage vector-only: skipping graph-store writes.")
+        driver = None
+    else:
+        driver = create_graph_store_from_args(args)
 
     if args.folder:
         folder_path = Path(args.folder)
