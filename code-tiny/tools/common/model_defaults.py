@@ -10,4 +10,16 @@ value — the flat doc tree cannot import from here.
 
 DEFAULT_CODE_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 
-__all__ = ["DEFAULT_CODE_EMBEDDING_MODEL"]
+# Legacy pipeline-default model literals: once stored by an older ``dev
+# init``, they must never be re-offered as the prompt default — re-init is
+# the runbook's migration path to the unified model. Only the exact
+# literals migrate; deliberate custom models / local paths are preserved.
+LEGACY_DEFAULT_EMBEDDING_MODELS = frozenset({
+    "jinaai/jina-embeddings-v3",
+    "baai/bge-m3",
+})
+
+__all__ = [
+    "DEFAULT_CODE_EMBEDDING_MODEL",
+    "LEGACY_DEFAULT_EMBEDDING_MODELS",
+]

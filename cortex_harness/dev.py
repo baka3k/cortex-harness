@@ -53,13 +53,10 @@ from tools.graph.journal.config import (
 from tools.graph.journal.models import RunStatus
 from tools.graph.journal.models import JournalError
 from tools.graph.journal.sqlite_store import SQLiteJournal, inspect_journal
-from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
-
-# Legacy pipeline-default model literals: once stored by an older `dev
-# init`, they must never be re-offered as the prompt default — re-init is
-# the runbook's migration path to the unified model. Only the exact
-# literals migrate; deliberate custom models / local paths are preserved.
-_LEGACY_DEFAULT_EMBEDDING_MODELS = {"jinaai/jina-embeddings-v3", "baai/bge-m3"}
+from tools.common.model_defaults import (
+    DEFAULT_CODE_EMBEDDING_MODEL,
+    LEGACY_DEFAULT_EMBEDDING_MODELS,
+)
 
 
 def _stored_folders_exist(folder_list: str) -> bool:
@@ -79,7 +76,7 @@ def _stored_folders_exist(folder_list: str) -> bool:
 
 def _migrated_model_default(stored: Optional[str]) -> str:
     value = str(stored or "").strip()
-    if value.lower() in _LEGACY_DEFAULT_EMBEDDING_MODELS:
+    if value.lower() in LEGACY_DEFAULT_EMBEDDING_MODELS:
         return DEFAULT_CODE_EMBEDDING_MODEL
     return value or DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.sync_scope import (
