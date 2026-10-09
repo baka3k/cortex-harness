@@ -33,7 +33,10 @@ hf download Qwen/Qwen3-Embedding-0.6B
 # embed_runtime fails fast with an actionable error when loading Qwen3
 # on an older transformers.
 
-# 3. Existing `dev init` configs keep the OLD model. Re-init, or export:
+# 3. Existing `dev init` configs keep the OLD model. Re-init now offers
+#    the unified model as the default for stored legacy literals
+#    (jinaai/jina-embeddings-v3, BAAI/bge-m3) — press Enter to migrate.
+#    Deliberate custom models / local paths are preserved. Or export:
 export EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
 ```
 
