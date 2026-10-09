@@ -20,10 +20,13 @@ Safety invariants (red-team F9/F2/D11):
 ## 0. Prepare
 
 ```bash
-# 1. Download the model snapshot once (hf-cli skill or huggingface-cli):
+# 1. `make build` / `make install` pre-download the model snapshot
+#    automatically (best-effort: offline hosts just get a WARN, the build
+#    still succeeds). Manual download if you prefer:
 hf download Qwen/Qwen3-Embedding-0.6B
-# Offline hosts: export CODE_EMBEDDING_MODEL_PATH / EMBEDDING_MODEL_PATH
-# to the snapshot directory instead.
+#    Opt out of the build-time prefetch: export CORTEX_SKIP_MODEL_PREFETCH=1
+#    Offline hosts: export CODE_EMBEDDING_MODEL_PATH / EMBEDDING_MODEL_PATH
+#    to the snapshot directory instead.
 
 # 2. Dependency floors must be installed (requirements.txt):
 #    transformers>=4.51,<4.56 ; sentence-transformers>=2.7.0
