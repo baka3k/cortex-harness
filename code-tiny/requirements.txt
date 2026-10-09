@@ -19,7 +19,7 @@ python-multipart
 requests
 gliner
 torch
-transformers>=4.41,<4.56 # FOR WINDOW
+transformers>=4.51,<4.56 # FOR WINDOW
 # transformers # FOR UBUNTU, MACOS...etc
 
 # Existing dependencies
@@ -43,7 +43,7 @@ tree-sitter-dart>=0.1.0,<0.2
 tree-sitter-perl==1.2.1
 # Deep learning librariespip
 einops
-sentence-transformers
+sentence-transformers>=2.7.0
 dotenv
 PyYAML>=6.0
 portalocker>=3.2,<4
