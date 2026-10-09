@@ -52,10 +52,10 @@ class _LoadCounters:
         self.encode_calls = 0
         self.fail_message: str | None = None
 
-    def tokenizer(self, model_name, trust_remote_code=False):  # noqa: ANN001
+    def tokenizer(self, model_name, trust_remote_code=False, local_files_only=False):  # noqa: ANN001
         return object()
 
-    def model(self, model_name, trust_remote_code=False):  # noqa: ANN001
+    def model(self, model_name, trust_remote_code=False, local_files_only=False):  # noqa: ANN001
         self.loads += 1
         counters = self
 
