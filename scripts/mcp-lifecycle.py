@@ -344,6 +344,61 @@ def invoke_build() -> None:
             file=sys.stderr,
         )
 
+    prefetch_embedding_model()
+
+
+def prefetch_embedding_model() -> None:
+    """Pre-download the unified embedding model snapshot (best-effort).
+
+    The dependency floors installed above guarantee the *libraries* can
+    load Qwen3-Embedding; this step also guarantees the *weights* are on
+    disk so the first ingest/query does not pay a ~1.2 GB download at
+    runtime. Offline hosts are never failed here — they pre-seed a local
+    snapshot and point ``CODE_EMBEDDING_MODEL_PATH`` / ``EMBEDDING_MODEL_PATH``
+    at it instead (see the plan runbook).
+    """
+    skip = str(os.environ.get("CORTEX_SKIP_MODEL_PREFETCH", "")).strip().lower()
+    if skip in {"1", "true", "yes", "on"}:
+        print("[build] Embedding-model prefetch skipped (CORTEX_SKIP_MODEL_PREFETCH).")
+        return
+    try:
+        from huggingface_hub import snapshot_download
+
+        from tools.common.embedding_runtime import resolve_embedding_cache
+        from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
+    except Exception as exc:  # noqa: BLE001 - deps missing → warn, don't fail build
+        print(
+            f"[build] WARN: cannot prefetch embedding model ({exc}).",
+            file=sys.stderr,
+        )
+        return
+
+    print(f"[build] Checking embedding model snapshot: {DEFAULT_CODE_EMBEDDING_MODEL}")
+    try:
+        snapshot, complete = resolve_embedding_cache(DEFAULT_CODE_EMBEDDING_MODEL)
+    except Exception as exc:  # noqa: BLE001 - completeness probe failed
+        print(
+            f"[build] WARN: embedding model snapshot check failed ({exc}). "
+            "First sync/query will retry.",
+            file=sys.stderr,
+        )
+        return
+    if complete:
+        print(f"[build] Embedding model snapshot already complete: {snapshot}")
+        return
+    try:
+        snapshot = snapshot_download(DEFAULT_CODE_EMBEDDING_MODEL)
+        print(f"[build] Embedding model ready: {snapshot}")
+    except Exception as exc:  # noqa: BLE001 - offline/failed download → warn
+        print(
+            f"[build] WARN: embedding model {DEFAULT_CODE_EMBEDDING_MODEL} was not "
+            f"downloaded ({exc}). First sync/query will try again; offline hosts "
+            "should pre-seed a snapshot and set CODE_EMBEDDING_MODEL_PATH / "
+            "EMBEDDING_MODEL_PATH "
+            "(docs/plans/261009-1304-unified-qwen3-embedding/runbook.md).",
+            file=sys.stderr,
+        )
+
 
 def user_bin_dir() -> Path:
     home = os.environ.get("HOME")

@@ -90,6 +90,19 @@ cycle adopted: fail-closed marker checks, PATH-aware stamping, TTL-bounded senti
 narrowed TypeError fallbacks; rejected: an encode error-guard in explore_service (acceptable
 under the sentence-transformers 2.7 floor).
 
+## Follow-up (same day) — build-time model prefetch
+
+`make build` / `make install` previously guaranteed the library floors only;
+the ~1.2 GB Qwen3 snapshot was a lazy first-load download. Added a best-effort
+`prefetch_embedding_model()` step at the end of `invoke_build()`
+(scripts/mcp-lifecycle.py:344): reuses `resolve_embedding_cache` completeness
+semantics, prints `already complete` when cached, downloads otherwise, and on
+failure WARNs with the runbook pointer instead of failing the build. Opt out
+with `CORTEX_SKIP_MODEL_PREFETCH=1`. Verified: skip / warn(404, no raise) /
+already-complete paths plus a real offline ST load (dim 1024, query prompt,
+norm 1.0). Windows `mcp-lifecycle.ps1` keeps its pre-existing parity gap
+(the ANTLR step was already .py-only).
+
 ## References
 
 - plan: `./docs/plans/261009-1304-unified-qwen3-embedding/plan.md`
