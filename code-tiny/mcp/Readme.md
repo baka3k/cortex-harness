@@ -355,7 +355,7 @@ export GRAPH_PROVIDER=falkordb
 export FALKORDB_HOST=127.0.0.1
 export FALKORDB_PORT=6380
 export QDRANT_URL=http://localhost:6333
-export CODE_EMBEDDING_MODEL=jinaai/jina-embeddings-v3
+export CODE_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
 export EMBED_DEVICE=auto
 ```
 

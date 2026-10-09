@@ -138,7 +138,7 @@ Biến môi trường và ý nghĩa:
 | `SUMMARY_PROPERTY` | `summary` | Property lưu summary |
 | `SUMMARY_STORE` | `string` | `string` hoặc `map` |
 | `CACHE_DIR` | `cache` | Thư mục cache |
-| `CODE_EMBEDDING_MODEL` | `BAAI/bge-m3` | Model embedding |
+| `CODE_EMBEDDING_MODEL` | `Qwen/Qwen3-Embedding-0.6B` | Model embedding (unified code + doc default) |
 | `EMBEDDING_DEVICE` | | Thiết bị (cpu/cuda) |
 | `EMBED_SLEEP` | `0` | Nghỉ giữa các embed |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
@@ -187,7 +187,7 @@ Biến môi trường và ý nghĩa:
 | `DOCUMENT_ID_FIELD` | `id` | Property id Document |
 | `DOCUMENT_ID_KEY` | `source_id` | Payload key Document |
 | `DOCUMENT_REL` | `IMPLEMENTS_DOCUMENT` | Relationship Document |
-| `CODE_EMBEDDING_MODEL` | `BAAI/bge-m3` | Model embedding |
+| `CODE_EMBEDDING_MODEL` | `Qwen/Qwen3-Embedding-0.6B` | Model embedding (unified code + doc default) |
 | `EMBEDDING_DEVICE` | | Thiết bị (cpu/cuda) |
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant endpoint |
 | `QDRANT_API_KEY` | | API key (nếu có) |
@@ -288,7 +288,7 @@ python livingdoc/living-doc-vectorize.py \
   --neo4j-user "neo4j" \
   --neo4j-pass "abcd1234" \
   --cache-dir cache \
-  --embed-model "BAAI/bge-m3" \
+  --embed-model "Qwen/Qwen3-Embedding-0.6B" \
   --qdrant-url http://localhost:6333 \
   --qdrant-create 1 \
   --skip-existing 0 \
@@ -308,7 +308,7 @@ python livingdoc/living-doc-link.py \
   --neo4j-pass "abcd1234" \
   --cache-dir cache \
   --collection graph_rag_entities \
-  --embed-model "BAAI/bge-m3" \
+  --embed-model "Qwen/Qwen3-Embedding-0.6B" \
   --embed-device "mps" \
   --qdrant-url "http://localhost:6333" \
   --top-k 3 \
@@ -373,7 +373,7 @@ python livingdoc/living-doc-vectorize-infra.py \
   --project-id digital_key_main \
   --infra-label InfraNode \
   --done-status summarized \
-  --embed-model "BAAI/bge-m3" \
+  --embed-model "Qwen/Qwen3-Embedding-0.6B" \
   --embed-device mps \
   --qdrant-url "http://localhost:6333" \
   --collection digital_key_main \

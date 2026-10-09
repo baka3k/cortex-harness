@@ -10,7 +10,7 @@ pypdf
 python-docx
 python-pptx
 openpyxl
-sentence-transformers
+sentence-transformers>=2.7.0
 spacy
 fastmcp
 python-dotenv

@@ -24,6 +24,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.harness_config import load_harness_config
 
 from tools.common.analyzer_cache import file_signature, load_parse_cache, safe_cache_root, write_parse_cache
@@ -2322,7 +2323,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--embed-model",
         default=os.environ.get("CODE_EMBEDDING_MODEL")
         or os.environ.get("JINA_MODEL_PATH")
-        or "jinaai/jina-embeddings-v3",
+        or DEFAULT_CODE_EMBEDDING_MODEL,
     )
     parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", 4000)))
     parser.add_argument("--chunk-embed", action="store_true")
@@ -2475,6 +2476,8 @@ async def main(argv: Optional[List[str]] = None) -> int:
             timeout=args.qdrant_timeout,
             retries=args.qdrant_retries,
             retry_sleep=args.qdrant_retry_sleep,
+            embedding_model=args.embed_model,
+            project_id=args.project_id,
         )
 
     effective_cache_dir = args.cache_dir

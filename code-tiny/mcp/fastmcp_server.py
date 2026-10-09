@@ -31,6 +31,7 @@ from tools.graph.core.provider_contract import (
 from tools.graph.core.shared_runtime import get_shared_graph_driver
 from tools.common.project_scope import prepare_project_scope_parameters, qdrant_project_filter
 from tools.common import embed_runtime
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common import qdrant_query_support
 from tools.common.local_qdrant import (
     collection_info_payload,
@@ -117,7 +118,7 @@ DEFAULT_MODEL = (
     os.environ.get("CODE_EMBEDDING_MODEL_PATH")
     or os.environ.get("CODE_EMBEDDING_MODEL")
     or os.environ.get("JINA_MODEL_PATH")
-    or "jinaai/jina-embeddings-v3"
+    or DEFAULT_CODE_EMBEDDING_MODEL
 )
 PRELOAD_EMBEDDER_ON_STARTUP = os.environ.get("MCP_PRELOAD_EMBEDDER", "1")
 DEFAULT_QDRANT_PATH = default_local_qdrant_path()
@@ -792,10 +793,12 @@ def _merge_qdrant_results(
     top_k: int,
     qdrant_url: str,
     project_id: Optional[str] = None,
+    embedding_model: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
     """Cross-collection merge with ``_collection`` provenance (shared helper)."""
     return qdrant_query_support.merge_collections(
-        get_code_qdrant_store(), collections, vector, top_k, project_id
+        get_code_qdrant_store(), collections, vector, top_k, project_id,
+        embedding_model=embedding_model,
     )
 def _parse_qdrant_collections(payload: Dict[str, Any]) -> List[str]:
     collections = payload.get("result", {}).get("collections", [])
@@ -1259,7 +1262,7 @@ async def tool_semantic_search(
     results: Dict[str, Any] = {"mode": mode, "query": query, "results": [], "content_mode": selected_mode}
     if mode == "comment":
         _timing_tq = time.perf_counter()
-        items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url, project_id)
+        items, errors = _merge_qdrant_results(comment_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
         _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = comment_errors + errors
@@ -1296,7 +1299,7 @@ async def tool_semantic_search(
         return results
     if mode == "code":
         _timing_tq = time.perf_counter()
-        items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url, project_id)
+        items, errors = _merge_qdrant_results(code_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
         _timing_qdrant = time.perf_counter() - _timing_tq
         results["results"] = items
         merged_errors = code_errors + errors
@@ -1336,7 +1339,7 @@ async def tool_semantic_search(
     combined_map.update(code_collections)
     combined_collections = list(combined_map)
     _timing_tq = time.perf_counter()
-    items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url, project_id)
+    items, errors = _merge_qdrant_results(combined_collections, vector, top_k, qdrant_url, project_id, embedding_model=model_name)
     _timing_qdrant = time.perf_counter() - _timing_tq
     results["results"] = items
     merged_errors = base_errors + comment_errors + code_errors + errors

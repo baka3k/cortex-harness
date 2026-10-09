@@ -733,7 +733,7 @@ def test_scoped_qdrant_reset_uses_project_filter_not_collection_delete():
     class Qdrant:
         def __init__(self):
             self.count_filter = None
-            self.delete_filter = None
+            self.delete_filters = []
             self.collection_deleted = False
 
         def count(self, *, collection_name, count_filter, exact):
@@ -745,7 +745,7 @@ def test_scoped_qdrant_reset_uses_project_filter_not_collection_delete():
         def delete(self, collection_name, *, filter_selector, wait):
             assert collection_name == "shared_docs"
             assert wait is True
-            self.delete_filter = filter_selector.filter
+            self.delete_filters.append(filter_selector.filter)
 
         def delete_collection(self, _collection):
             self.collection_deleted = True
@@ -759,7 +759,10 @@ def test_scoped_qdrant_reset_uses_project_filter_not_collection_delete():
         )
     assert count == 2
     assert qdrant.count_filter.must[0].match.value == "proj_alpha"
-    assert qdrant.delete_filter.must[0].match.value == "proj_alpha"
+    # Two scoped deletes: project points by filter, then the embedding-model
+    # sentinel (which carries no project scope and would deadlock re-ingest).
+    assert qdrant.delete_filters[0].must[0].match.value == "proj_alpha"
+    assert qdrant.delete_filters[1].must[0].key == "_embed_meta"
     assert qdrant.collection_deleted is False
 
 
@@ -777,7 +780,11 @@ def test_empty_scoped_qdrant_reset_keeps_shared_collection():
         )
 
     assert count == 0
-    qdrant.delete.assert_not_called()
+    # Zero project points still deletes the embedding-model sentinel —
+    # otherwise a stale marker deadlocks the next ingest (plan F2 corner).
+    assert qdrant.delete.call_count == 1
+    delete_filter = qdrant.delete.call_args.kwargs["filter_selector"].filter
+    assert delete_filter.must[0].key == "_embed_meta"
     qdrant.delete_collection.assert_not_called()
 
 

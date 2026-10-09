@@ -153,7 +153,7 @@ export NEO4J_DB=neo4j
 
 export QDRANT_URL=http://localhost:6333
 export QDRANT_COLLECTION=my_project
-export CODE_EMBEDDING_MODEL=jinaai/jina-embeddings-v3
+export CODE_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
 export EMBED_DEVICE=cpu
 ```
 

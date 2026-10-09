@@ -614,7 +614,7 @@ QDRANT_URL=http://localhost:6333
 QDRANT_COLLECTION_CODE=kotlin_functions
 
 # Embedding Model
-CODE_EMBEDDING_MODEL=jinaai/jina-embeddings-v3
+CODE_EMBEDDING_MODEL=Qwen/Qwen3-Embedding-0.6B
 JINA_MODEL_PATH=/path/to/local/model
 EMBEDDING_DEVICE=cpu
 

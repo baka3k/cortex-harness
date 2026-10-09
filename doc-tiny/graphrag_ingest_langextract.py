@@ -15,7 +15,7 @@ from openpyxl import load_workbook
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
-from embedding_utils import resolve_embedding_device, resolve_embedding_model
+from embedding_utils import resolve_embedding_device, resolve_embedding_model, DEFAULT_DOC_EMBEDDING_MODEL
 from graph_store import add_graph_store_args, create_graph_store_from_args
 from doc_local_qdrant import get_document_qdrant_store
 from project_contract import ProjectNotRegisteredError, resolve_project_targets
@@ -39,6 +39,20 @@ except Exception:
 
     def matches_extra_ignore(_name: str) -> bool:
         return False
+
+# Model-identity marker for the doc collection (reuses the code-tiny
+# sentinel so both pipelines stamp/check the same point format). When
+# doc-tiny runs standalone without the sibling checkout, the guard
+# degrades to the legacy behavior (no marker).
+try:
+    from tools.common import embedding_marker as _embedding_marker
+except Exception:  # standalone doc-tiny runtime
+    _embedding_marker = None
+
+_DOC_RESET_HINT = (
+    "Reset the collection first: python doc-tiny/0_reset_all.py --project-id "
+    "<project_id> --force, then re-run this ingest."
+)
 
 try:
     from dotenv import load_dotenv
@@ -608,16 +622,70 @@ def ingest_to_graph_batch(
             )
 
 
-def create_collection(client: Any, name: str, vector_size: int) -> None:
+def _doc_vector_size(info: Any) -> int | None:
+    vectors = getattr(getattr(getattr(info, "config", None), "params", None), "vectors", None)
+    size = getattr(vectors, "size", None)
+    if isinstance(size, (int, float)) and size > 0:
+        return int(size)
+    return None
+
+
+def create_collection(
+    client: Any,
+    name: str,
+    vector_size: int,
+    embedding_model: str | None = None,
+    project_id: str | None = None,
+) -> None:
+    """Reuse-or-create with a hard dim/marker guard (no silent mixing).
+
+    A legacy collection created before the marker era gets stamped on
+    first contact; a collection holding only the sentinel (post-reset)
+    re-stamps instead of deadlocking the pilot runbook.
+    """
     try:
-        client.get_collection_info(name)
-        return
+        info = client.get_collection_info(name)
     except Exception:
-        pass
+        info = None
+    if info is not None:
+        existing = _doc_vector_size(info)
+        if existing is not None and existing != int(vector_size):
+            raise ValueError(
+                f"Qdrant collection {name!r} has vector size {existing}, but this "
+                f"embedder produces {vector_size}. {_DOC_RESET_HINT}"
+            )
+        if embedding_model and _embedding_marker is not None:
+            try:
+                existing_count = int(getattr(client.count(name, count_filter=None, exact=True), "count", 0))
+            except Exception:
+                existing_count = 0
+            if _embedding_marker.check(client, name, use_cache=False) is None and existing_count > 1:
+                print(
+                    f"[embed-marker] {name!r} held {existing_count} points without a "
+                    f"model marker; stamping as {embedding_model!r}. If these are "
+                    f"legacy-model vectors, reset + re-ingest: {_DOC_RESET_HINT}"
+                )
+            _embedding_marker.enforce(
+                client,
+                name,
+                embedding_model=embedding_model,
+                vector_size=vector_size,
+                project_id=project_id,
+                reset_hint=_DOC_RESET_HINT,
+            )
+        return
     client.create_collection(
         name,
         vectors_config=qmodels.VectorParams(size=vector_size, distance=qmodels.Distance.COSINE),
     )
+    if embedding_model and _embedding_marker is not None:
+        _embedding_marker.stamp(
+            client,
+            name,
+            embedding_model=embedding_model,
+            vector_size=vector_size,
+            project_id=project_id,
+        )
 
 
 _PRINTED_COLLECTIONS: set[str] = set()
@@ -1517,7 +1585,7 @@ def main() -> None:
         print("Stage graph-only: skipping Qdrant upserts and embedding model load.")
     else:
         model_name, local_files_only = resolve_embedding_model(
-            args.embedding_model, "BAAI/bge-m3"
+            args.embedding_model, DEFAULT_DOC_EMBEDDING_MODEL
         )
         device = resolve_embedding_device(args.embedding_device)
         embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
@@ -1525,7 +1593,13 @@ def main() -> None:
         qdrant = get_document_qdrant_store(
             args.qdrant_path, project_id=project_id_normalized
         )
-        create_collection(qdrant, args.collection, vector_size=embedder.get_sentence_embedding_dimension())
+        create_collection(
+            qdrant,
+            args.collection,
+            vector_size=embedder.get_sentence_embedding_dimension(),
+            embedding_model=model_name,
+            project_id=(args.project_id or args.source_id or None),
+        )
 
     if args.skip_graph:
         print("Stage vector-only: skipping graph-store writes.")

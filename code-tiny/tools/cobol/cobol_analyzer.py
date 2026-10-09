@@ -14,6 +14,7 @@ from typing import Mapping, Optional, Sequence
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.cobol.parser_runtime import CobolRuntimeError, preflight  # noqa: E402
 from tools.cobol.pipeline import analyze_project, select_incremental_result, write_graph_facts  # noqa: E402
 from tools.cobol.qdrant import sync_qdrant  # noqa: E402
@@ -217,7 +218,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 result,
                 url=args.qdrant_url,
                 collection=args.qdrant_collection,
-                model_name=args.embed_model or "jinaai/jina-embeddings-v3",
+                model_name=args.embed_model or DEFAULT_CODE_EMBEDDING_MODEL,
                 device=args.device,
                 batch_size=args.batch_size,
                 max_chars=args.max_embed_chars,
