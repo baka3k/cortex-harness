@@ -72,13 +72,13 @@ def probe_falkordb(config: RemoteStorageConfig) -> ProbeResult:
             uri=config.falkordb_uri,
             password=config.falkordb_password,
             ssl=config.falkordb_ssl,
-            graph="__probe__",
             _suppress_deprecation=True,
         )
-        # Lifecycle probes are synchronous. Calling the async execute_query()
-        # without awaiting it reports a false positive and emits an un-awaited
-        # coroutine warning; use the driver's explicit synchronous boundary.
-        driver.execute_query_sync("RETURN 1 AS ok")
+        # Probe via GRAPH.LIST instead of a Cypher warm-up: FalkorDB
+        # auto-creates a graph on the first GRAPH.QUERY, so the old
+        # ``RETURN 1`` against a throwaway graph leaked a persistent
+        # '__probe__' graph onto the server on every probe.
+        driver.list_graphs()
         return ProbeResult("falkordb", config.falkordb_uri, True, "reachable")
     except Exception as exc:
         return ProbeResult("falkordb", config.falkordb_uri, False, str(exc), cause=exc)
