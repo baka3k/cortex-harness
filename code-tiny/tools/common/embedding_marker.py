@@ -90,6 +90,30 @@ def sentinel_exclusion() -> qmodels.FieldCondition:
     return qmodels.FieldCondition(key=EMBED_META_FLAG, match=qmodels.MatchValue(value=True))
 
 
+def sentinel_point(
+    collection: str,
+    *,
+    embedding_model: str,
+    vector_size: int,
+    project_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the sentinel ``{"id", "payload"}`` without writing it.
+
+    Transport-free so infra tooling holding a raw ``QdrantClient`` (which
+    wants ``PointStruct``, not dicts) can wrap it itself.
+    """
+    return {
+        "id": meta_point_id(collection),
+        "payload": {
+            EMBED_META_FLAG: True,
+            EMBEDDING_MODEL_FIELD: str(embedding_model),
+            VECTOR_SIZE_FIELD: int(vector_size),
+            PROJECT_ID_FIELD: str(project_id or ""),
+            STAMPED_AT_FIELD: datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        },
+    }
+
+
 def stamp(
     store: Any,
     collection: str,

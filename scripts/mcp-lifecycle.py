@@ -592,7 +592,6 @@ def _provision_remote_project(
     """Provision remote resources for one project."""
     from cortex_harness.storage.remote_probe import (
         provision_falkordb_graph,
-        provision_qdrant_collection,
         render_provision_line,
         setup_remote_falkordb_schema,
     )
@@ -607,9 +606,12 @@ def _provision_remote_project(
             "doc_graph": f"{project_id}_doc",
         }
     results = []
-    if remote_config.qdrant_url:
-        results.append(provision_qdrant_collection(remote_config, names["code_collection"]))
-        results.append(provision_qdrant_collection(remote_config, names["doc_collection"]))
+    # Qdrant collections are deliberately NOT provisioned here: infra-up
+    # brings up containers, while the ingest paths (ensure_collection /
+    # doc create_collection) own collection creation with the real
+    # embedding dim + identity marker. Pre-creating with a guessed size
+    # poisoned empty collections and blocked the first ingest/query
+    # (the 384-dim incident).
     if remote_config.falkordb_uri:
         results.append(provision_falkordb_graph(remote_config, names["code_graph"]))
         results.append(provision_falkordb_graph(remote_config, names["doc_graph"]))
