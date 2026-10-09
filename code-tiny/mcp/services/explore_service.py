@@ -181,8 +181,18 @@ def _make_embedder(model_name: str) -> Optional[Callable[[str], List[float]]]:
         _model = embed_runtime.get_sentence_transformer(
             model_name, device=embed_runtime.resolve_device()
         )
+        # Query side follows the model policy: last-token-pooling families
+        # (Qwen3) get their ``query`` prompt + normalized vectors; legacy
+        # models keep the bare encode.
+        _policy = embed_runtime.model_policy(model_name)
+        _encode_kwargs: Dict[str, Any] = {}
+        if _policy.get("query_prompt"):
+            _encode_kwargs["prompt_name"] = _policy["query_prompt"]
+        if _policy.get("normalize"):
+            _encode_kwargs["normalize_embeddings"] = True
+
         def _embed(text: str) -> List[float]:
-            return _model.encode([text])[0].tolist()  # type: ignore[return-value]
+            return _model.encode([text], **_encode_kwargs)[0].tolist()  # type: ignore[return-value]
         return _embed
     except Exception as exc:
         logger.warning(

@@ -53,6 +53,7 @@ from tools.graph.journal.config import (
 from tools.graph.journal.models import RunStatus
 from tools.graph.journal.models import JournalError
 from tools.graph.journal.sqlite_store import SQLiteJournal, inspect_journal
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.sync_scope import (
     LockBusyError as JournalLockBusyError,
     ProjectRunLock,
@@ -765,7 +766,8 @@ def _doc_env_for_process(
     if env.get("EMBEDDING_MODEL"):
         result.setdefault("DOC_EMBEDDING_MODEL", str(env["EMBEDDING_MODEL"]))
     if env.get("device"):
-        result.setdefault("EMBED_DEVICE", _normalize_embed_device(env["device"]))
+        # doc-tiny reads EMBEDDING_DEVICE (embedding_utils), not EMBED_DEVICE.
+        result.setdefault("EMBEDDING_DEVICE", _normalize_embed_device(env["device"]))
     # Per Phase 06 of the unified ingest/query contract plan, the doc
     # server's Qdrant collection is resolved through the ProjectRegistry
     # so it matches the doc graph name (``{project_id}_doc``) by default.
@@ -1267,7 +1269,7 @@ def _sync_doc_folder(
         "--project-id",          project_id,
         "--collection",          collection,
         "--entity-provider",     entity_provider,
-        "--embedding-model",     env.get("EMBEDDING_MODEL", "BAAI/bge-m3"),
+        "--embedding-model",     env.get("EMBEDDING_MODEL", DEFAULT_CODE_EMBEDDING_MODEL),
         "--embedding-device",    _embed_device_cli_arg(env),
         "--max-paragraph-chars", env.get("MAX_PARAGRAPH_CHARS", "500"),
         "--gliner-model-name",   env.get("GLINER_MODEL_NAME", "urchade/gliner_large-v2.1"),
@@ -1728,7 +1730,7 @@ def _run_analyzer(
         "--root",             str(folder_path),
         *_neo4j_args_code(env),
         "--qdrant-collection", qdrant_collection,
-        "--embed-model",       env.get("EMBEDDING_MODEL", "jinaai/jina-embeddings-v3"),
+        "--embed-model",       env.get("EMBEDDING_MODEL", DEFAULT_CODE_EMBEDDING_MODEL),
         "--device",            _embed_device_cli_arg(env),
         "--batch-size",        env.get("BATCH_SIZE", "1"),
         "--max-embed-chars",   env.get("MAX_EMBED_CHARS", "800"),
@@ -3029,7 +3031,7 @@ def init(env, project_dir, path):
     click.echo("\n─── Code — Graph + Qdrant + Embedding ──────")
     code_provider, code_graph_env = _prompt_graph_env("code", "CODE_GRAPH_PROVIDER", project_code)
     code_qdrant_collection = _p("QDRANT_COLLECTION", ["code", "env", "QDRANT_COLLECTION"], project_code)
-    code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], "jinaai/jina-embeddings-v3")
+    code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], DEFAULT_CODE_EMBEDDING_MODEL)
     code_batch_size  = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],      "8")
     code_max_chars   = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
     code_device      = _p("device",          ["code", "env", "device"],          "auto")
@@ -3050,7 +3052,7 @@ def init(env, project_dir, path):
         ["doc", "env", "QDRANT_COLLECTION_DOC"],
         f"{project_code}_doc",
     )
-    doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], "BAAI/bge-m3")
+    doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], DEFAULT_CODE_EMBEDDING_MODEL)
     doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],      "8")
     doc_max_chars   = _p("MAX_EMBED_CHARS", ["doc", "env", "MAX_EMBED_CHARS"], "500")
     doc_device      = _p("device",          ["doc", "env", "device"],          code_device)
@@ -3525,7 +3527,7 @@ def sync_code(
                 "--project-id", project_id,
                 "--project-name", project.get("name", "project"),
                 "--python-bin", python,
-                "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+                "--embed-model", str(env.get("EMBEDDING_MODEL") or DEFAULT_CODE_EMBEDDING_MODEL),
                 "--sync-mode", sync_mode,
                 "--change-detection", change_detection,
                 "--parsers", parsers,
@@ -3631,7 +3633,7 @@ def sync_code_all(ctx):
                 "--project-id", project_id,
                 "--project-name", project.get("name", "project"),
                 "--python-bin", python,
-                "--embed-model", str(env.get("EMBEDDING_MODEL") or "jinaai/jina-embeddings-v3"),
+                "--embed-model", str(env.get("EMBEDDING_MODEL") or DEFAULT_CODE_EMBEDDING_MODEL),
                 "--sync-mode", o["sync_mode"],
                 "--change-detection", o["change_detection"],
                 "--parsers", "auto",

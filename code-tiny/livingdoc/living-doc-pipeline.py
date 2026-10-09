@@ -29,6 +29,7 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.local_qdrant import default_local_qdrant_path
 from graph_runtime import add_graph_arguments, prepare_graph_arguments
 
@@ -64,7 +65,8 @@ def parse_args():
     parser.add_argument("--project-id",     default=get_env("PROJECT_ID",     "digital_key_main"))
 
     # ── Common: Embedding ─────────────────────────────────────────────────────
-    parser.add_argument("--embed-model",  default=get_env("CODE_EMBEDDING_MODEL",  "BAAI/bge-m3"))
+    # Unified model — keep doc-tiny/embedding_utils.DEFAULT_DOC_EMBEDDING_MODEL in sync.
+    parser.add_argument("--embed-model",  default=get_env("CODE_EMBEDDING_MODEL",  DEFAULT_CODE_EMBEDDING_MODEL))
     parser.add_argument("--embed-device", default=get_env("EMBEDDING_DEVICE", "mps"))
 
     # ── Common: Qdrant ───────────────────────────────────────────────────────

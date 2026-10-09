@@ -204,7 +204,16 @@ class PrimaryVectorSyncTests(unittest.TestCase):
         )
 
         self.assertEqual(count, 3)
-        point_upserts = [call for call in store.calls if call[0] == "upsert"]
+        # Document batches only: skip the embedding-model sentinel metadata
+        # upsert emitted by ensure_collection.
+        point_upserts = [
+            call for call in store.calls
+            if call[0] == "upsert"
+            and not any(
+                (point.get("payload") or {}).get("_embed_meta")
+                for point in call[2]["points"]
+            )
+        ]
         self.assertEqual([len(call[2]["points"]) for call in point_upserts], [2, 1])
         self.assertEqual(store.calls[-1][0], "delete")
         point_filter = store.calls[-1][2]["filter_selector"]["filter"]
@@ -290,10 +299,17 @@ class UpsertWaitPolicyTests(unittest.TestCase):
         )
 
     def _upsert_waits(self, store):
+        # The embedding-model sentinel (payload ``_embed_meta``) is a
+        # metadata write from ensure_collection, not a document batch —
+        # this contract is about document upsert batching only.
         return [
             (len(call[2]["points"]), call[2]["wait"])
             for call in store.calls
             if call[0] == "upsert"
+            and not any(
+                (point.get("payload") or {}).get("_embed_meta")
+                for point in call[2]["points"]
+            )
         ]
 
     def test_intermediate_batches_do_not_wait_last_does(self):

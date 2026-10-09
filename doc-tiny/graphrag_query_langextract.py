@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 from sentence_transformers import SentenceTransformer
 
-from embedding_utils import resolve_embedding_device, resolve_embedding_model
+from embedding_utils import resolve_embedding_device, resolve_embedding_model, st_query_encode_kwargs, DEFAULT_DOC_EMBEDDING_MODEL
 from graph_store import add_graph_store_args, create_graph_store_from_args
 from doc_local_qdrant import get_document_qdrant_store
 
@@ -173,11 +173,11 @@ def main() -> None:
     _set_langextract_overrides(args.langextract_model_id, args.langextract_model_url)
 
     model_name, local_files_only = resolve_embedding_model(
-        args.embedding_model, "BAAI/bge-m3"
+        args.embedding_model, DEFAULT_DOC_EMBEDDING_MODEL
     )
     device = resolve_embedding_device(args.embedding_device)
     embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
-    query_vector = embedder.encode([args.query])[0].tolist()
+    query_vector = embedder.encode([args.query], **st_query_encode_kwargs(model_name))[0].tolist()
 
     qdrant = get_document_qdrant_store(args.qdrant_path)
 

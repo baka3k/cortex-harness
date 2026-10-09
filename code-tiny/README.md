@@ -165,7 +165,7 @@ python tools/sync/incremental_sync.py `
   --falkordb-port 6379 `
   --falkordb-graph digital_key `
   --qdrant-url http://localhost:6333 `
-  --embed-model jinaai/jina-embeddings-v3 `
+  --embed-model Qwen/Qwen3-Embedding-0.6B `
   --embed-device cuda `
   --embed-batch-size 1 `
   --max-embed-chars 800 `
@@ -210,7 +210,7 @@ Rust example on Windows PowerShell:
 python -m tools.rust.rust_analyzer `
   --qdrant-url http://localhost:6333 `
   --qdrant-collection digital_key_rust `
-  --embed-model jinaai/jina-embeddings-v3 `
+  --embed-model Qwen/Qwen3-Embedding-0.6B `
   --device cuda `
   --root "C:\projects\digital_key" `
   --repo digital_key `
@@ -241,7 +241,7 @@ python -m tools.rust.rust_analyzer \
   --falkordb-graph digital_key \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection digital_key_rust \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device cpu \
   --batch-size 1 \
   --max-embed-chars 800 \
@@ -264,7 +264,7 @@ $graph = @(
 
 $vector = @(
   "--qdrant-url", "http://localhost:6333",
-  "--embed-model", "jinaai/jina-embeddings-v3",
+  "--embed-model", "Qwen/Qwen3-Embedding-0.6B",
   "--device", "cuda",
   "--batch-size", "1",
   "--max-embed-chars", "800"

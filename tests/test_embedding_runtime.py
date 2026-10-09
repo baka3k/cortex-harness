@@ -19,14 +19,17 @@ from tools.common import react_role_classifier
 
 class EmbeddingRuntimeTests(unittest.TestCase):
     def test_complete_snapshot_is_local_only(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            snapshot = Path(directory)
-            for name in ("config.json", "model.safetensors", "tokenizer.json"):
-                (snapshot / name).write_text("{}", encoding="utf-8")
-            with patch.object(embedding_runtime, "snapshot_download", return_value=str(snapshot)):
-                source, local_only = embedding_runtime.resolve_embedding_cache("jinaai/jina-embeddings-v3")
-        self.assertEqual(source, str(snapshot))
-        self.assertTrue(local_only)
+        # jina (legacy family) and Qwen3 (unified default) resolve identically.
+        for model_name in ("jinaai/jina-embeddings-v3", "Qwen/Qwen3-Embedding-0.6B"):
+            with self.subTest(model=model_name):
+                with tempfile.TemporaryDirectory() as directory:
+                    snapshot = Path(directory)
+                    for name in ("config.json", "model.safetensors", "tokenizer.json"):
+                        (snapshot / name).write_text("{}", encoding="utf-8")
+                    with patch.object(embedding_runtime, "snapshot_download", return_value=str(snapshot)):
+                        source, local_only = embedding_runtime.resolve_embedding_cache(model_name)
+                self.assertEqual(source, str(snapshot))
+                self.assertTrue(local_only)
 
     def test_cache_miss_installs_network_audit_before_fallback(self) -> None:
         with (

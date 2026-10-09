@@ -21,6 +21,7 @@ try:
 except Exception:  # pragma: no cover
     load_manifest_paths = None
 
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files
 from tools.common.primary_vector_sync import (
     documents_from_rows,
@@ -1267,7 +1268,7 @@ def _sync_vectors(args: argparse.Namespace, payloads: List[Dict[str, Any]]) -> i
         documents,
         url=args.qdrant_url,
         collection=args.qdrant_collection,
-        model_name=args.embed_model or "jinaai/jina-embeddings-v3",
+        model_name=args.embed_model or DEFAULT_CODE_EMBEDDING_MODEL,
         device=args.device,
         embed_batch_size=args.batch_size,
         qdrant_batch_size=args.qdrant_batch_size,

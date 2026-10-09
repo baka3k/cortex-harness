@@ -277,6 +277,41 @@ SKIP (registry: project_id 'proj_beta' is not registered. ...)
    called `activate_project(...)` passes `project_id` to scope one project, or
    omits it for an intentional cross-project query.
 
+### Embedding-model swap playbook (Qwen3-Embedding era)
+
+Both pipelines share one embedding model (default
+`Qwen/Qwen3-Embedding-0.6B`). Every code collection carries an
+embedding-model sentinel (payload `_embed_meta`, private-namespace point
+id) enforced at the writer chokepoints (`local_qdrant.ensure_collection`,
+cobol sync, livingdoc, doc `create_collection`), so a model switch against
+a stale collection is a **hard error** — never a silent 1024-dim mix. The
+full operator runbook lives in
+`docs/plans/261009-1304-unified-qwen3-embedding/runbook.md`; the short
+form:
+
+1. **Back up** every affected collection: `db_transfer export` (a drop is
+   unrecoverable without it — this is also the rollback path).
+2. **Pilot one small project** (doc first, then code):
+   `python doc-tiny/0_reset_all.py --project-id X --force` /
+   `python code-tiny/scripts/reset_code_collection.py --project-id X --force`
+   (both clear the sentinel; `_mess` hash collections survive), then
+   `dev sync doc all` / `dev sync code all`.
+3. **Gate before fleet roll-out**: A/B query sets (EN/VI/JA/identifiers)
+   must not regress vs. the old model, and cross-space cosine
+   (function ↔ doc paragraph) must be meaningful.
+4. **Roll out** to the remaining projects; `rm -rf
+   .cortext-harness/sync-state/` if incremental state wedges.
+5. **Rollback** (gate fail): `db_transfer import` the backups, set
+   `EMBEDDING_MODEL` / `CODE_EMBEDDING_MODEL` back to the old model and
+   restart — do **not** reset or re-embed after the import (that deletes
+   the restored vectors). Imported collections keep their legacy marker,
+   so legacy queries run clean and a future new-model ingest still raises
+   at the chokepoint.
+
+Operators with a pre-swap `dev init` config must re-init (or export
+`EMBEDDING_MODEL`) — old config JSONs keep the legacy model until changed;
+the marker hard-error will catch it at first ingest.
+
 ---
 
 ## References

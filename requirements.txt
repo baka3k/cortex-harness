@@ -12,7 +12,7 @@ pypdf
 python-docx
 python-pptx
 openpyxl
-sentence-transformers
+sentence-transformers>=2.7.0
 spacy
 fastmcp
 lxml
@@ -36,7 +36,7 @@ uvicorn[standard]
 python-multipart
 requests
 torch
-transformers>=4.41,<4.56
+transformers>=4.51,<4.56
 # Existing dependencies
 tree-sitter
 tree-sitter-rust

@@ -14,7 +14,7 @@ python tools/kotlin/kotlin_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection kotlin_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device auto \
   --verbose
 ```
@@ -28,7 +28,7 @@ python tools/java/java_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection java_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device cpu \
   --verbose
 ```
@@ -42,7 +42,7 @@ python tools/ts/ts_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection typescript_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device auto \
   --verbose
 ```
@@ -56,7 +56,7 @@ python tools/js/js_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection javascript_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device auto \
   --verbose
 ```
@@ -70,7 +70,7 @@ python tools/php/php_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection php_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device auto \
   --verbose
 ```
@@ -84,7 +84,7 @@ python tools/sql/sql_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection sql_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device auto \
   --verbose
 ```
@@ -98,7 +98,7 @@ python tools/plsql/plsql_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection plsql_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device auto \
   --verbose
 ```
@@ -112,7 +112,7 @@ python tools/csharp/csharp_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection csharp_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device cpu \
   --verbose
 ```
@@ -126,7 +126,7 @@ python tools/cplus/cplus_analyzer.py \
   --neo4j-pass password \
   --qdrant-url http://localhost:6333 \
   --qdrant-collection cplus_functions \
-  --embed-model jinaai/jina-embeddings-v3 \
+  --embed-model Qwen/Qwen3-Embedding-0.6B \
   --device cpu \
   --verbose
 ```

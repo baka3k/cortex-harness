@@ -29,6 +29,8 @@ if _repo_root not in sys.path:
 
 
 from sentence_transformers import SentenceTransformer
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
+from tools.common import embed_runtime
 from tools.common.local_qdrant import (
     default_local_qdrant_path,
     ensure_collection as _ensure_local_collection,
@@ -57,7 +59,8 @@ def parse_args():
         help="Only process InfraNodes with this status value.",
     )
 
-    parser.add_argument("--embed-model",  default=get_env("CODE_EMBEDDING_MODEL",  "BAAI/bge-m3"))
+    # Unified model — keep doc-tiny/embedding_utils.DEFAULT_DOC_EMBEDDING_MODEL in sync.
+    parser.add_argument("--embed-model",  default=get_env("CODE_EMBEDDING_MODEL",  DEFAULT_CODE_EMBEDDING_MODEL))
     parser.add_argument("--embed-device", default=get_env("EMBEDDING_DEVICE", "mps"))
     parser.add_argument("--embed-trust-remote-code", action="store_true")
 
@@ -140,11 +143,12 @@ def fetch_infra_nodes(session, infra_label, done_status, project_id):
 
 # ─── Qdrant ───────────────────────────────────────────────────────────────────
 
-def ensure_collection(qdrant_url, headers, collection, vector_size, create_enabled, timeout=30):
+def ensure_collection(qdrant_url, headers, collection, vector_size, create_enabled, embedding_model=None, timeout=30):
     del headers, timeout
     _ensure_local_collection(
         get_code_qdrant_store(qdrant_url), collection, vector_size,
         create=str(create_enabled) != "0",
+        embedding_model=embedding_model,
     )
     print(f"[vectorize-infra] Created Qdrant collection: {collection} dim={vector_size}")
 
@@ -193,6 +197,7 @@ def main():
     ensure_collection(
         args.qdrant_url, qdrant_headers, args.collection,
         vector_size, args.qdrant_create,
+        embedding_model=embed_runtime.effective_model_identity(model_name),
     )
 
     # Resume cache

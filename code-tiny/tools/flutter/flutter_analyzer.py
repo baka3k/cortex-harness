@@ -20,6 +20,7 @@ from tools.flutter.detector import detect_flutter_project, project_package_name 
 from tools.flutter.normalizer import normalize_facts, qdrant_payloads  # noqa: E402
 from tools.flutter.pipeline import write_canonical_batch  # noqa: E402
 from tools.flutter.protocol import ProtocolError, parse_jsonl, record_to_dict, serialize_records  # noqa: E402
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.primary_vector_sync import (  # noqa: E402
     documents_from_payloads,
     sync_vector_documents,
@@ -146,7 +147,7 @@ def sync_vectors(args: argparse.Namespace, facts, cleanup_paths: Sequence[str]) 
         documents,
         url=args.qdrant_url,
         collection=args.qdrant_collection,
-        model_name=args.embed_model or "jinaai/jina-embeddings-v3",
+        model_name=args.embed_model or DEFAULT_CODE_EMBEDDING_MODEL,
         device=args.device,
         embed_batch_size=args.batch_size,
         qdrant_batch_size=args.qdrant_batch_size,

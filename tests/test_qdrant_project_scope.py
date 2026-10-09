@@ -65,10 +65,14 @@ class QdrantProjectScopeTests(unittest.IsolatedAsyncioTestCase):
                 request = store.queries[0][1]
                 self.assertEqual(
                     request["query_filter"].model_dump(exclude_none=True),
-                    {"must": [{
-                        "key": "project_id_normalized",
-                        "match": {"any": ["project-a"]},
-                    }]},
+                    {
+                        "must": [{
+                            "key": "project_id_normalized",
+                            "match": {"any": ["project-a"]},
+                        }],
+                        # The embedding-model sentinel is excluded server-side.
+                        "must_not": [{"key": "_embed_meta", "match": {"value": True}}],
+                    },
                 )
 
     def test_semantic_backends_leave_unscoped_requests_unfiltered(self):
@@ -79,7 +83,12 @@ class QdrantProjectScopeTests(unittest.IsolatedAsyncioTestCase):
             ):
                 backend._qdrant_search("symbols", [0.1, 0.2], 5, "local-code-store")
 
-                self.assertIsNone(store.queries[0][1]["query_filter"])
+                # Unscoped queries carry no project predicate, but the
+                # embedding-model sentinel exclusion always applies.
+                self.assertEqual(
+                    store.queries[0][1]["query_filter"].model_dump(exclude_none=True),
+                    {"must_not": [{"key": "_embed_meta", "match": {"value": True}}]},
+                )
 
     async def test_collection_helpers_use_current_qdrant_store(self):
         for backend in (fastmcp_server, cplus_mcp, android_mcp, java_mcp):
@@ -276,10 +285,13 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
             request = store.queries[0][1]
             self.assertEqual(
                 request["query_filter"].model_dump(exclude_none=True),
-                {"must": [{
-                    "key": "project_id_normalized",
-                    "match": {"any": ["procsample"]},
-                }]},
+                {
+                    "must": [{
+                        "key": "project_id_normalized",
+                        "match": {"any": ["procsample"]},
+                    }],
+                    "must_not": [{"key": "_embed_meta", "match": {"value": True}}],
+                },
             )
 
     async def test_semantic_tools_forward_scope_in_every_mode(self):
@@ -317,10 +329,13 @@ class SemanticToolProjectScopeTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(
                     store.queries[-1][1]["query_filter"].model_dump(exclude_none=True),
-                    {"must": [{
-                        "key": "project_id_normalized",
-                        "match": {"any": ["project-a"]},
-                    }]},
+                    {
+                        "must": [{
+                            "key": "project_id_normalized",
+                            "match": {"any": ["project-a"]},
+                        }],
+                        "must_not": [{"key": "_embed_meta", "match": {"value": True}}],
+                    },
                 )
 
 

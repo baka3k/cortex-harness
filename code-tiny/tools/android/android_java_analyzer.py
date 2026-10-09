@@ -12,6 +12,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.harness_config import load_harness_config
 
 from tools.common.analyzer_cache import safe_cache_root
@@ -771,7 +772,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--embed-model",
         default=os.environ.get("CODE_EMBEDDING_MODEL")
         or os.environ.get("JINA_MODEL_PATH")
-        or "jinaai/jina-embeddings-v3",
+        or DEFAULT_CODE_EMBEDDING_MODEL,
     )
     parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", 4000)))
     parser.add_argument("--chunk-embed", action="store_true")

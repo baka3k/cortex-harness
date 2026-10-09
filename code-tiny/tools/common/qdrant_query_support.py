@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from qdrant_client.http import models as qmodels
 
+from tools.common import embedding_marker
 from tools.common import qdrant_layout_cache
 from tools.common.local_qdrant import (
     model_to_dict,
@@ -49,6 +50,23 @@ def hnsw_ef_from_env() -> Optional[int]:
         return None
 
 
+def _with_sentinel_exclusion(query_filter: Any) -> Any:
+    """Add a ``must_not`` clause so the embedding-model sentinel point can
+    never surface as a search hit (scoped or unscoped queries alike).
+
+    Always returns a fresh Filter — the caller's model object is never
+    mutated (reused filters would otherwise accumulate duplicate clauses).
+    """
+    base = normalize_filter(query_filter)
+    must_not = list(getattr(base, "must_not", None) or [])
+    must_not.append(embedding_marker.sentinel_exclusion())
+    if base is None:
+        return qmodels.Filter(must_not=must_not)
+    cloned = base.model_copy(deep=True)
+    cloned.must_not = must_not
+    return cloned
+
+
 def search_collection(
     store: Any,
     collection: str,
@@ -57,12 +75,20 @@ def search_collection(
     top_k: int,
     project_id: Optional[str] = None,
     query_filter: Any = None,
+    embedding_model: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """One narrowed, provenance-tagged vector search against a collection."""
+    """One narrowed, provenance-tagged vector search against a collection.
+
+    The embedding-model sentinel point is excluded from every query, and
+    when ``embedding_model`` is given, a collection stamped by a different
+    model yields a structured mismatch entry in ``errors`` (soft warning —
+    results are still returned).
+    """
     from tools.common.project_scope import qdrant_project_filter
 
     if query_filter is None:
         query_filter = qdrant_project_filter(project_id)
+    query_filter = _with_sentinel_exclusion(query_filter)
     kwargs: Dict[str, Any] = {}
     if vector_name:
         kwargs["using"] = vector_name
@@ -73,7 +99,7 @@ def search_collection(
         collection,
         query=list(vector),
         limit=int(top_k),
-        query_filter=normalize_filter(query_filter),
+        query_filter=query_filter,
         with_payload=PAYLOAD_EXCLUDE_SELECTOR,
         with_vectors=False,
         **kwargs,
@@ -81,6 +107,16 @@ def search_collection(
     hits = [model_to_dict(point) for point in getattr(response, "points", response)]
     for hit in hits:
         hit["_collection"] = collection
+    if embedding_model:
+        mismatch = embedding_marker.mismatch(store, collection, embedding_model)
+        if mismatch:
+            logger.warning(
+                "[semantic_search] embedding model mismatch on %r: indexed by %r, "
+                "query model %r (re-index the collection)",
+                collection,
+                mismatch["stamped_model"],
+                mismatch["query_model"],
+            )
     return hits
 
 
@@ -226,8 +262,14 @@ def merge_collections(
     vector: Sequence[float],
     top_k: int,
     project_id: Optional[str] = None,
+    embedding_model: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
-    """Search every (collection, vector_name) and merge to a single top_k."""
+    """Search every (collection, vector_name) and merge to a single top_k.
+
+    With ``embedding_model`` set, collections stamped by a different model
+    produce a structured ``embedding_model_mismatch`` entry in ``errors`` —
+    the search still returns results (soft warning, never a failure).
+    """
     per_collection: List[List[Dict[str, Any]]] = []
     errors: List[Dict[str, str]] = []
     for col, vector_name in collections:
@@ -235,6 +277,18 @@ def merge_collections(
             per_collection.append(
                 search_collection(store, col, vector, vector_name, top_k, project_id)
             )
+            mismatch = embedding_marker.mismatch(store, col, embedding_model)
+            if mismatch:
+                errors.append(
+                    {
+                        "collection": col,
+                        "embedding_model_mismatch": (
+                            f"collection indexed by {mismatch['stamped_model']!r} "
+                            f"but query model is {mismatch['query_model']!r}; "
+                            "re-index the collection or reset it and ingest again"
+                        ),
+                    }
+                )
         except Exception as exc:  # noqa: BLE001 - mirrors backend error contract
             errors.append({"collection": col, "error": str(exc)})
     return merge_hits(per_collection, top_k), errors

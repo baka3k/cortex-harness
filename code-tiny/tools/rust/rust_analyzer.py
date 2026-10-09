@@ -22,6 +22,7 @@ _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.git_diff import load_manifest_paths
 from tools.common.incremental_cleanup import cleanup_neo4j_for_files
 from tools.common.primary_vector_sync import (
@@ -1315,7 +1316,7 @@ def _sync_vectors(args: argparse.Namespace, payloads: List[Dict[str, Any]]) -> i
         documents,
         url=args.qdrant_url,
         collection=args.qdrant_collection,
-        model_name=args.embed_model or "jinaai/jina-embeddings-v3",
+        model_name=args.embed_model or DEFAULT_CODE_EMBEDDING_MODEL,
         device=args.device,
         embed_batch_size=args.batch_size,
         qdrant_batch_size=args.qdrant_batch_size,

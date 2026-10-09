@@ -45,7 +45,7 @@ GLINER_MODEL_NAME=urchade/gliner_large-v2.1
 If your environment blocks Hugging Face downloads, set a local path:
 
 ```bash
-export EMBEDDING_MODEL_PATH=/Users/youruser/tool/ai/bge-m3-local
+export EMBEDDING_MODEL_PATH=/Users/youruser/tool/ai/qwen3-embedding-0.6b-local
 ```
 
 When set, `mcp_graph_rag.py` will load embeddings from `EMBEDDING_MODEL_PATH`.
@@ -58,8 +58,10 @@ Create `.env` at the repo root:
 CORTEX_STORAGE_INSTANCE=default
 QDRANT_COLLECTION_DOC=graph_rag_entities
 
-TEXT_EMBEDDING_MODEL=BAAI/bge-m3 # 1024
-EMBEDDING_MODEL_PATH=/Users/xxx.xxx/tool/ai/bge-m3-local
+# The server reads EMBEDDING_MODEL (or DOC_EMBEDDING_MODEL, or
+# EMBEDDING_MODEL_PATH for local snapshots); default is Qwen/Qwen3-Embedding-0.6B.
+# TEXT_EMBEDDING_MODEL was never read by any script and has been removed.
+EMBEDDING_MODEL_PATH=/Users/xxx.xxx/tool/ai/qwen3-embedding-0.6b-local
 EMBEDDING_DEVICE=cpu # or cuda, mps
 GLINER_MODEL_NAME=urchade/gliner_large-v2.1
 GLINER_MODEL_PATH=/Users/youruser/tool/ai/gliner_large-v2.1

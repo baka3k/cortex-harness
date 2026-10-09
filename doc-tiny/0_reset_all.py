@@ -5,6 +5,10 @@ import sys
 from qdrant_client.http import models as qmodels
 
 from graph_store import add_graph_store_args, create_graph_store_from_args
+
+# Keep in sync with code-tiny/tools/common/embedding_marker.EMBED_META_FLAG
+# (doc-tiny is a flat tree and cannot import it unconditionally).
+_EMBED_META_FLAG = "_embed_meta"
 from doc_local_qdrant import get_document_qdrant_store
 from project_contract import (
     ProjectNotRegisteredError,
@@ -63,10 +67,27 @@ def reset_qdrant(
             exact=True,
         )
         count = int(getattr(count_result, "count", 0))
-        if not dry_run and normalized and count:
+        if not dry_run and normalized:
+            if count:
+                client.delete(
+                    collection,
+                    filter_selector=qmodels.FilterSelector(filter=project_filter),
+                    wait=True,
+                )
+            # The embedding-model sentinel carries no project scope, so the
+            # filter above never matches it — drop it unconditionally or a
+            # zero-match reset leaves a stale marker that deadlocks the next
+            # ingest (plan F2).
             client.delete(
                 collection,
-                filter_selector=qmodels.FilterSelector(filter=project_filter),
+                filter_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[qmodels.FieldCondition(
+                            key=_EMBED_META_FLAG,
+                            match=qmodels.MatchValue(value=True),
+                        )]
+                    )
+                ),
                 wait=True,
             )
         elif not dry_run and not normalized:

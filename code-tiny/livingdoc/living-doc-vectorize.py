@@ -12,6 +12,8 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from sentence_transformers import SentenceTransformer
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
+from tools.common import embed_runtime
 from tools.common.local_qdrant import (
     default_local_qdrant_path,
     ensure_collection as _ensure_local_collection,
@@ -205,11 +207,12 @@ def update_summary(session, node_id_field, node_id, summary_property, summary, s
         session.run(query, {"node_id": node_id, "summary": summary_str})
 
 
-def ensure_collection(qdrant_url, headers, collection, vector_size, create_enabled, timeout=30):
+def ensure_collection(qdrant_url, headers, collection, vector_size, create_enabled, embedding_model=None, timeout=30):
     del headers, timeout
     _ensure_local_collection(
         get_code_qdrant_store(qdrant_url), collection, vector_size,
         create=str(create_enabled) != "0",
+        embedding_model=embedding_model,
     )
 
 
@@ -254,7 +257,7 @@ def main():
     if args.qdrant_api_key:
         qdrant_headers["api-key"] = args.qdrant_api_key
 
-    model_name = args.embed_model or "BAAI/bge-m3"
+    model_name = args.embed_model or DEFAULT_CODE_EMBEDDING_MODEL  # unified with doc-tiny (embedding_utils)
     if args.verbose:
         print(f"Loading embedding model: {model_name} device={args.embed_device}")
     try:
@@ -280,6 +283,7 @@ def main():
         args.collection,
         vector_size,
         args.qdrant_create,
+        embedding_model=embed_runtime.effective_model_identity(model_name),
     )
 
     total_files = len(files)

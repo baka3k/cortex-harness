@@ -6,6 +6,7 @@ import re
 import uuid
 from typing import Any, Iterable
 
+from tools.common import embed_runtime
 from tools.common.local_qdrant import delete_by_filter, ensure_collection, get_code_qdrant_store
 
 from tools.common.project_scope import (
@@ -119,15 +120,18 @@ def sync_qdrant(
     """Embed first, then upsert and remove only stale points in the affected scope."""
     _validate_target(url, collection)
     try:
-        from sentence_transformers import SentenceTransformer
+        import sentence_transformers  # noqa: F401 - availability check keeps the legacy error contract
     except ImportError as exc:
         raise RuntimeError("Qdrant indexing requires sentence-transformers") from exc
 
     documents = semantic_documents(result, max_chars=max_chars)
     if not documents:
         return 0
-    trust_remote_code = "jina" in model_name.lower()
-    model = SentenceTransformer(model_name, device=device, trust_remote_code=trust_remote_code)
+    model = embed_runtime.get_sentence_transformer(
+        model_name,
+        device=device,
+        trust_remote_code=embed_runtime.model_policy(model_name)["trust_remote_code"],
+    )
     vectors = model.encode(
         [item["text"] for item in documents],
         batch_size=max(1, batch_size),
@@ -137,7 +141,13 @@ def sync_qdrant(
     )
     vector_size = int(vectors.shape[1])
     store = get_code_qdrant_store(url)
-    ensure_collection(store, collection, vector_size)
+    ensure_collection(
+        store,
+        collection,
+        vector_size,
+        embedding_model=embed_runtime.effective_model_identity(model_name),
+        project_id=result.project_id,
+    )
     points = [
         {"id": document["id"], "vector": vector.tolist(), "payload": document["payload"]}
         for document, vector in zip(documents, vectors)

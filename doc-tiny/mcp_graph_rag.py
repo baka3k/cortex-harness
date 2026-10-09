@@ -12,7 +12,12 @@ from mcp.types import CallToolResult, TextContent
 from qdrant_client.http import models as qmodels
 from sentence_transformers import SentenceTransformer
 
-from embedding_utils import resolve_embedding_device, resolve_embedding_model
+from embedding_utils import (
+    DEFAULT_DOC_EMBEDDING_MODEL,
+    resolve_embedding_device,
+    resolve_embedding_model,
+    st_query_encode_kwargs,
+)
 from graph_store import (
     FalkorDBGraphStore,
     create_graph_store_for_project,
@@ -65,7 +70,7 @@ else:
 
 MCP_NAME = os.getenv("MCP_SERVER_NAME", "mind_mcp")
 
-# Load .env if present (for DOC_GRAPH_PROVIDER/FALKORDB_*/QDRANT_*/TEXT_EMBEDDING_MODEL).
+# Load .env if present (for DOC_GRAPH_PROVIDER/FALKORDB_*/QDRANT_*/EMBEDDING_*).
 try:
     from dotenv import load_dotenv
 
@@ -77,7 +82,8 @@ except Exception:
 
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION_DOC", "documents")
 
-DEFAULT_TEXT_EMBEDDING_MODEL = "BAAI/bge-m3"
+# Unified default (kept as an alias name for the MCP tool docs).
+DEFAULT_TEXT_EMBEDDING_MODEL = DEFAULT_DOC_EMBEDDING_MODEL
 
 DEFAULT_ENTITY_TYPES = [
     "ORG",
@@ -110,6 +116,7 @@ ENTITY_TYPES_DEFAULT = _parse_entity_types(
 _qdrant_stores: dict[str, Any] = {}
 _graph_drivers: dict[str, Any] = {}
 _embedder: Optional[SentenceTransformer] = None
+_embedder_model_name: Optional[str] = None
 logger = logging.getLogger("graph_rag.mcp")
 
 
@@ -157,14 +164,54 @@ def get_qdrant(project_id: Optional[str] = None) -> Any:
 
 
 def get_embedder() -> SentenceTransformer:
-    global _embedder
+    global _embedder, _embedder_model_name
     if _embedder is None:
         model_name, local_files_only = resolve_embedding_model(None, DEFAULT_TEXT_EMBEDDING_MODEL)
         device = resolve_embedding_device(None)
         _embedder = SentenceTransformer(
             model_name, local_files_only=local_files_only, device=device
         )
+        _embedder_model_name = model_name
     return _embedder
+
+
+def _embedding_model_mismatch_note(
+    project_id: Optional[str] = None, collection: Optional[str] = None
+) -> Optional[str]:
+    """Soft query-side warning when a probed doc collection was indexed by
+    another embedding model (sentinel read; never fails the query)."""
+    try:
+        from tools.common import embedding_marker
+    except Exception:  # standalone doc-tiny runtime without code-tiny
+        return None
+    model = _embedder_model_name
+    if not model:
+        return None
+    notes: list[str] = []
+    for qdrant, collection_names in _qdrant_search_targets(project_id, collection):
+        for name in collection_names or []:
+            try:
+                mismatch = embedding_marker.mismatch(qdrant, name, model)
+            except Exception:
+                continue
+            if mismatch:
+                notes.append(
+                    f"{name}: indexed by {mismatch['stamped_model']!r} but the query "
+                    f"model is {mismatch['query_model']!r}; re-ingest this project"
+                )
+    return "; ".join(notes) or None
+
+
+def _query_encode(vector_input: str) -> list[float]:
+    """Embed one query with the model's query instruction when it has one.
+
+    Documents/paragraphs are embedded bare (ingest side); only queries get
+    the Qwen3 ``query`` prompt + normalization (see embedding_utils).
+    """
+    embedder = get_embedder()
+    kwargs = st_query_encode_kwargs(_embedder_model_name)
+    encoded = embedder.encode([vector_input], **kwargs) if kwargs else embedder.encode([vector_input])
+    return encoded[0].tolist()
 
 
 def get_graph_store(project_id: Optional[str] = None) -> Any:
@@ -914,8 +961,7 @@ def register_tools(mcp: FastMCP) -> None:
         include_entity_ids = _coerce_bool(include_entity_ids, False)
         include_entity_mentions = _coerce_bool(include_entity_mentions, False)
 
-        embedder = get_embedder()
-        q_vec = embedder.encode([query])[0].tolist()
+        q_vec = _query_encode(query)
 
         payloads = qdrant_search_entity_payload(
             q_vec,
@@ -947,7 +993,7 @@ def register_tools(mcp: FastMCP) -> None:
                 passage["entity_mentions"] = mentions
             passages.append(passage)
 
-        return {
+        response: Dict[str, Any] = {
             "query": query,
             "top_k": top_k,
             "source_id": source_id,
@@ -955,6 +1001,10 @@ def register_tools(mcp: FastMCP) -> None:
             "collections_searched": _resolve_doc_collections(project_id, collection),
             "passages": passages,
         }
+        mismatch_note = _embedding_model_mismatch_note(project_id, collection)
+        if mismatch_note:
+            response["embedding_model_mismatch"] = mismatch_note
+        return response
 
     @_standard_tool(mcp)
     def query_graph_rag_langextract(
@@ -1015,8 +1065,7 @@ def register_tools(mcp: FastMCP) -> None:
         max_entities = int(max_entities) if max_entities is not None else 30
         include_entity_ids = _coerce_bool(include_entity_ids, False)
 
-        embedder = get_embedder()
-        q_vec = embedder.encode([query])[0].tolist()
+        q_vec = _query_encode(query)
 
         if entity_types is None:
             entity_types = list(ENTITY_TYPES_DEFAULT)
@@ -1097,7 +1146,7 @@ def register_tools(mcp: FastMCP) -> None:
                 relation.pop("source_id", None)
                 relation.pop("target_id", None)
 
-        return {
+        response_hybrid: Dict[str, Any] = {
             "query": query,
             "top_k": top_k,
             "source_id": source_id,
@@ -1112,6 +1161,10 @@ def register_tools(mcp: FastMCP) -> None:
             "entities": entities,
             "relations": relations,
         }
+        mismatch_note = _embedding_model_mismatch_note(project_id, collection)
+        if mismatch_note:
+            response_hybrid["embedding_model_mismatch"] = mismatch_note
+        return response_hybrid
 
     @_standard_tool(mcp)
     def get_paragraph_text(
