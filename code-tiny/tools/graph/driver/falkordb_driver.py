@@ -624,6 +624,20 @@ class FalkorDBDriver(CypherGraphDriver):
         ]
         return records, keys, result
 
+    def list_graphs(self) -> List[str]:
+        """List graph names via GRAPH.LIST, touching no graph.
+
+        FalkorDB materializes a graph on the first GRAPH.QUERY, so
+        reachability probes must not run Cypher (a ``RETURN 1`` warm-up
+        used to leak a ``__probe__`` graph onto remote servers). GRAPH.LIST
+        exercises the connection, credentials, and the graph module with
+        no side effects.
+        """
+        return [
+            name.decode("utf-8") if isinstance(name, bytes) else str(name)
+            for name in self._client.list_graphs()
+        ]
+
     def _graph_for(self, database: Optional[str]) -> Any:
         graph_name = database or self._database
         client = self._graph_clients.get(graph_name)

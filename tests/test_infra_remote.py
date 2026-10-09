@@ -129,15 +129,19 @@ class TestProbeFalkordb:
         with mock.patch.object(fmod, "FalkorDBDriver", return_value=driver):
             result = REMOTE_PROBE.probe_falkordb(config)
         assert result.reachable is True
-        driver.execute_query_sync.assert_called_once_with("RETURN 1 AS ok")
+        # The probe must never run Cypher: FalkorDB auto-creates a graph on
+        # the first GRAPH.QUERY, which is how the junk '__probe__' graph
+        # appeared. GRAPH.LIST (list_graphs) is the side-effect-free probe.
+        driver.list_graphs.assert_called_once_with()
+        driver.execute_query_sync.assert_not_called()
         driver.execute_query.assert_not_called()
 
-    def test_query_failure_reports_unreachable(self):
+    def test_list_graphs_failure_reports_unreachable(self):
         from cortex_harness.storage.config import RemoteStorageConfig
 
         config = RemoteStorageConfig(falkordb_uri="redis://falkor.invalid:6379")
         driver = mock.Mock()
-        driver.execute_query_sync.side_effect = ConnectionError("connection closed")
+        driver.list_graphs.side_effect = ConnectionError("connection closed")
         from tools.graph.driver import falkordb_driver as fmod
 
         with mock.patch.object(fmod, "FalkorDBDriver", return_value=driver):
