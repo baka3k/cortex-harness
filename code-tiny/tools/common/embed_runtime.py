@@ -17,7 +17,9 @@ import os
 import sys
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 logger = logging.getLogger("tools.common.embed_runtime")
 
@@ -251,8 +253,15 @@ def get_embedder(model_name: str, device_name: Optional[str] = None) -> Tuple[An
         from transformers import AutoModel, AutoTokenizer
 
         trust_remote_code = policy["trust_remote_code"]
-        tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=trust_remote_code)
-        model = AutoModel.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+        # Complete cache → load fully offline; miss/partial → online resolve.
+        local_only = _st_local_files_only(model_name)
+        with _offline_hub_load_guard(local_only):
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name, trust_remote_code=trust_remote_code, local_files_only=local_only
+            )
+            model = AutoModel.from_pretrained(
+                model_name, trust_remote_code=trust_remote_code, local_files_only=local_only
+            )
         try:
             model.to(device)
         except RuntimeError as exc:
@@ -477,6 +486,57 @@ def embed_query(text: str, model_name: str, device_name: Optional[str] = None) -
     return list(vector)
 
 
+_TOKENIZER_FILE_CANDIDATES = (
+    "tokenizer.json", "tokenizer.model", "spiece.model", "vocab.txt", "vocab.json",
+)
+
+
+def _snapshot_complete(snapshot: str) -> bool:
+    """Whether a cached hub snapshot can serve a load without any download.
+
+    ``snapshot_download(local_files_only=True)`` only proves the revision
+    folder exists — an interrupted prefetch passes it with the weights
+    missing, and an offline load would then die mid-constructor instead of
+    falling back online. Gate the offline fast path on the files the
+    constructor hard-requires (config, weights, tokenizer).
+    """
+    root = Path(snapshot)
+    if not (root / "config.json").is_file():
+        return False
+    if not any(root.glob("*.safetensors")) and not any(root.glob("pytorch_model*.bin")):
+        return False
+    return any((root / name).is_file() for name in _TOKENIZER_FILE_CANDIDATES)
+
+
+@contextmanager
+def _offline_hub_load_guard(active: bool) -> Iterator[None]:
+    """Force hub-offline while loading a complete cached snapshot.
+
+    SentenceTransformer threads ``local_files_only`` into its own module
+    configs, but the transformers tokenizer/processor layer still probes
+    optional artifacts (tokenizer_config, preprocessor_config,
+    processor_config) online — turning every cached load on an offline
+    host into a HEAD-retry storm. Both libraries read offline mode once
+    at import, so flip their captured flags for the load only and
+    restore them afterwards.
+    """
+    if not active:
+        yield
+        return
+    import huggingface_hub.constants as hub_constants
+    import transformers.utils.hub as transformers_hub
+
+    hub_previous = getattr(hub_constants, "HF_HUB_OFFLINE", False)
+    transformers_previous = getattr(transformers_hub, "_is_offline_mode", False)
+    hub_constants.HF_HUB_OFFLINE = True
+    transformers_hub._is_offline_mode = True
+    try:
+        yield
+    finally:
+        hub_constants.HF_HUB_OFFLINE = hub_previous
+        transformers_hub._is_offline_mode = transformers_previous
+
+
 def _st_local_files_only(model_name: str) -> bool:
     """Offline-safe probe mirroring ``resolve_embedding_cache`` semantics.
 
@@ -492,10 +552,10 @@ def _st_local_files_only(model_name: str) -> bool:
     try:
         from huggingface_hub import snapshot_download
 
-        snapshot_download(str(model_name), local_files_only=True)
-        return True
+        snapshot = snapshot_download(str(model_name), local_files_only=True)
     except Exception:  # noqa: BLE001 - any miss/failure → let ST resolve remotely
         return False
+    return _snapshot_complete(str(snapshot))
 
 
 def get_sentence_transformer(
@@ -508,10 +568,13 @@ def get_sentence_transformer(
     """Return a cached ``SentenceTransformer`` keyed by ``(model, device)``.
 
     ``trust_remote_code=None`` follows :func:`model_policy`; an explicit
-    boolean wins. ``local_files_only`` and ``cache_folder`` are forwarded
-    to the constructor when provided (offline snapshot loads and the
-    analyzer HF-cache-permission fallback); ``None`` keeps
-    SentenceTransformer's own default. The cache ignores
+    boolean wins. ``local_files_only=None`` follows
+    :func:`_st_local_files_only`: a complete cached snapshot loads with zero
+    network traffic (a cached model must never ping huggingface.co), while a
+    miss or partial snapshot keeps the normal online resolve. An explicit
+    boolean wins. ``cache_folder`` is forwarded to the constructor when
+    provided (offline snapshot loads and the analyzer HF-cache-permission
+    fallback). The cache ignores
     ``trust_remote_code``/``local_files_only``/``cache_folder`` variations
     — the first load for a ``(model, device)`` key wins.
     """
@@ -528,16 +591,20 @@ def get_sentence_transformer(
 
         if trust_remote_code is None:
             trust_remote_code = model_policy(model_name)["trust_remote_code"]
-        kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code}
-        if local_files_only is not None:
-            kwargs["local_files_only"] = local_files_only
+        if local_files_only is None:
+            local_files_only = _st_local_files_only(model_name)
+        kwargs: Dict[str, Any] = {
+            "trust_remote_code": trust_remote_code,
+            "local_files_only": local_files_only,
+        }
         if cache_folder is not None:
             kwargs["cache_folder"] = cache_folder
-        model = SentenceTransformer(
-            model_name,
-            device=str(device) if device is not None else None,
-            **kwargs,
-        )
+        with _offline_hub_load_guard(local_files_only):
+            model = SentenceTransformer(
+                model_name,
+                device=str(device) if device is not None else None,
+                **kwargs,
+            )
         _SENTENCE_TRANSFORMER_CACHE[cache_key] = model
         return model
 
