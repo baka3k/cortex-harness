@@ -11,7 +11,7 @@
       "CODE_GRAPH_PROVIDER": "falkordb",
       "FALKORDB_GRAPH": "cortext",
       "QDRANT_COLLECTION": "cortext",
-      "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
+      "EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
       "device": "mps"
@@ -21,7 +21,7 @@
         {
           "git": "",
           "folder": [
-            "~/REDACTED_HOST/AI/cortex-harness"
+            "~/AI/cortex-harness"
           ]
         }
       ]
@@ -32,7 +32,8 @@
       "GRAPH_PROVIDER": "falkordb",
       "DOC_GRAPH_PROVIDER": "falkordb",
       "FALKORDB_GRAPH": "cortext_doc",
-      "EMBEDDING_MODEL": "BAAI/bge-m3",
+      "QDRANT_COLLECTION_DOC": "cortext_doc",
+      "EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
       "BATCH_SIZE": "1",
       "MAX_EMBED_CHARS": "500",
       "device": "mps"
@@ -42,7 +43,7 @@
         {
           "git": "",
           "folder": [
-            "~/REDACTED_HOST/AI/cortex-harness"
+            "~/AI/cortex-harness"
           ]
         }
       ]
