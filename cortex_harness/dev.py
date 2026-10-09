@@ -62,6 +62,21 @@ from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 _LEGACY_DEFAULT_EMBEDDING_MODELS = {"jinaai/jina-embeddings-v3", "baai/bge-m3"}
 
 
+def _stored_folders_exist(folder_list: str) -> bool:
+    """Whether every comma-separated stored folder resolves on disk.
+
+    Stored entries may carry ``~``; anything missing means a stale or
+    hand-edited config that must not be re-offered as a prompt default
+    (pressing Enter would persist a folder no sync can scan).
+    """
+    entries = [entry.strip() for entry in folder_list.split(",") if entry.strip()]
+    if not entries:
+        return False
+    return all(
+        Path(entry).expanduser().exists() for entry in entries
+    )
+
+
 def _migrated_model_default(stored: Optional[str]) -> str:
     value = str(stored or "").strip()
     if value.lower() in _LEGACY_DEFAULT_EMBEDDING_MODELS:
@@ -3089,6 +3104,12 @@ def init(env, project_dir, path):
         click.echo("  (Run 'dev sync code add' to add more; editing here updates project #1 only)")
 
     code_folders_default = ", ".join(f for f in first_code.get("folder", []) if f)
+    if code_folders_default and not _stored_folders_exist(code_folders_default):
+        click.echo(
+            f"  [info] Stored code folder(s) {code_folders_default!r} do not exist "
+            "on disk; defaulting to the project directory."
+        )
+        code_folders_default = ""
     if not code_folders_default and project_is_cwd:
         code_folders_default = str(project_path)
 
@@ -3110,6 +3131,12 @@ def init(env, project_dir, path):
         click.echo("  (Run 'dev sync doc add' to add more; editing here updates project #1 only)")
 
     doc_folders_default = ", ".join(f for f in first_doc.get("folder", []) if f)
+    if doc_folders_default and not _stored_folders_exist(doc_folders_default):
+        click.echo(
+            f"  [info] Stored doc folder(s) {doc_folders_default!r} do not exist "
+            "on disk; defaulting to the project directory."
+        )
+        doc_folders_default = ""
     if not doc_folders_default and project_is_cwd:
         doc_folders_default = str(project_path)
     doc_git      = click.prompt("  Git URL (blank = local)", default=first_doc.get("git", "") or "")
