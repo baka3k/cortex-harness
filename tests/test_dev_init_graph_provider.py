@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +75,61 @@ class DevInitModelDefaultMigrationTests(unittest.TestCase):
             self.assertEqual(saved["doc"]["env"]["EMBEDDING_MODEL"], QWEN3)
             # The legacy literals no longer appear as prompt defaults.
             self.assertNotIn("jinaai", result.output)
+
+    def test_reinit_heals_stored_folders_that_do_not_exist(self):
+        """A hand-edited/stale stored folder (e.g. ~/REDACTED_HOST/...) must
+        not be re-offered as the default — the project directory is."""
+        from click.testing import CliRunner
+
+        from cortex_harness.dev import cli
+
+        config = self._existing_config()
+        fake = "~/REDACTED_HOST/AI/cortex-harness"
+        config["code"]["source"] = {"projects": [{"git": "", "folder": [fake]}]}
+        config["doc"]["source"] = {"projects": [{"git": "", "folder": [fake]}]}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / ".cortext-harness" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "dev.json").write_text(json.dumps(config))
+            cwd = os.getcwd()
+            os.chdir(temp_dir)
+            try:
+                result = CliRunner().invoke(cli, ["init", "."], input="\n" * 30)
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(result.exit_code, 0, result.output)
+            # The fake path is announced and never persisted.
+            self.assertIn("do not exist on disk", result.output)
+            resolved = str(Path(temp_dir).resolve())
+            saved = json.loads((config_dir / "dev.json").read_text())
+            self.assertEqual(saved["code"]["source"]["projects"][0]["folder"], [resolved])
+            self.assertEqual(saved["doc"]["source"]["projects"][0]["folder"], [resolved])
+            self.assertNotIn("REDACTED_HOST", json.dumps(saved))
+
+    def test_reinit_preserves_existing_folders_that_do_exist(self):
+        """Healthy stored folders keep their default (no silent rewrite)."""
+        from click.testing import CliRunner
+
+        from cortex_harness.dev import cli
+
+        config = self._existing_config()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            src = Path(temp_dir) / "src"
+            src.mkdir()
+            config["code"]["source"] = {"projects": [{"git": "", "folder": [str(src)]}]}
+            config["doc"]["source"] = {"projects": [{"git": "", "folder": [str(src)]}]}
+            config_dir = Path(temp_dir) / ".cortext-harness" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "dev.json").write_text(json.dumps(config))
+            cwd = os.getcwd()
+            os.chdir(temp_dir)
+            try:
+                result = CliRunner().invoke(cli, ["init", "."], input="\n" * 30)
+            finally:
+                os.chdir(cwd)
+            self.assertEqual(result.exit_code, 0, result.output)
+            saved = json.loads((config_dir / "dev.json").read_text())
+            self.assertEqual(saved["code"]["source"]["projects"][0]["folder"], [str(src)])
 
     def test_reinit_preserves_custom_models(self):
         from click.testing import CliRunner
