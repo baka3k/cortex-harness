@@ -54,6 +54,19 @@ from tools.graph.journal.models import RunStatus
 from tools.graph.journal.models import JournalError
 from tools.graph.journal.sqlite_store import SQLiteJournal, inspect_journal
 from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
+
+# Legacy pipeline-default model literals: once stored by an older `dev
+# init`, they must never be re-offered as the prompt default — re-init is
+# the runbook's migration path to the unified model. Only the exact
+# literals migrate; deliberate custom models / local paths are preserved.
+_LEGACY_DEFAULT_EMBEDDING_MODELS = {"jinaai/jina-embeddings-v3", "baai/bge-m3"}
+
+
+def _migrated_model_default(stored: Optional[str]) -> str:
+    value = str(stored or "").strip()
+    if value.lower() in _LEGACY_DEFAULT_EMBEDDING_MODELS:
+        return DEFAULT_CODE_EMBEDDING_MODEL
+    return value or DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.sync_scope import (
     LockBusyError as JournalLockBusyError,
     ProjectRunLock,
@@ -2855,6 +2868,13 @@ def init(env, project_dir, path):
         cur_val = cur if isinstance(cur, str) else default
         return click.prompt(label, default=cur_val or default, **kwargs)
 
+    def _p_model(section: str) -> str:
+        env = existing.get(section, {}).get("env", {})
+        stored = env.get("EMBEDDING_MODEL") if isinstance(env, dict) else None
+        return click.prompt(
+            "EMBEDDING_MODEL", default=_migrated_model_default(stored)
+        )
+
     def _provider_default(section: str, scoped_key: str, default="falkordb") -> str:
         env_values = existing.get(section, {}).get("env", {})
         if isinstance(env_values, dict):
@@ -3031,7 +3051,7 @@ def init(env, project_dir, path):
     click.echo("\n─── Code — Graph + Qdrant + Embedding ──────")
     code_provider, code_graph_env = _prompt_graph_env("code", "CODE_GRAPH_PROVIDER", project_code)
     code_qdrant_collection = _p("QDRANT_COLLECTION", ["code", "env", "QDRANT_COLLECTION"], project_code)
-    code_embed_model = _p("EMBEDDING_MODEL", ["code", "env", "EMBEDDING_MODEL"], DEFAULT_CODE_EMBEDDING_MODEL)
+    code_embed_model = _p_model("code")
     code_batch_size  = _p("BATCH_SIZE",      ["code", "env", "BATCH_SIZE"],      "8")
     code_max_chars   = _p("MAX_EMBED_CHARS", ["code", "env", "MAX_EMBED_CHARS"], "500")
     code_device      = _p("device",          ["code", "env", "device"],          "auto")
@@ -3052,7 +3072,7 @@ def init(env, project_dir, path):
         ["doc", "env", "QDRANT_COLLECTION_DOC"],
         f"{project_code}_doc",
     )
-    doc_embed_model = _p("EMBEDDING_MODEL", ["doc", "env", "EMBEDDING_MODEL"], DEFAULT_CODE_EMBEDDING_MODEL)
+    doc_embed_model = _p_model("doc")
     doc_batch_size  = _p("BATCH_SIZE",      ["doc", "env", "BATCH_SIZE"],      "8")
     doc_max_chars   = _p("MAX_EMBED_CHARS", ["doc", "env", "MAX_EMBED_CHARS"], "500")
     doc_device      = _p("device",          ["doc", "env", "device"],          code_device)

@@ -20,6 +20,83 @@ from cortex_harness.dev import (
 from cortex_harness.storage.config import LegacyRemoteConfigurationError
 
 
+class DevInitModelDefaultMigrationTests(unittest.TestCase):
+    """Re-init must migrate stored legacy default models to the unified one.
+
+    The runbook's migration path is "re-init or set EMBEDDING_MODEL"; a
+    prompt that re-offers the stored jina/bge literal makes re-init unable
+    to migrate. Only exact legacy literals migrate — deliberate custom
+    models and local paths are preserved verbatim.
+    """
+
+    def test_migration_matrix(self):
+        from cortex_harness.dev import _migrated_model_default as migrate
+
+        self.assertEqual(migrate("jinaai/jina-embeddings-v3"), QWEN3)
+        self.assertEqual(migrate("BAAI/bge-m3"), QWEN3)
+        self.assertEqual(migrate("  jinaai/jina-embeddings-v3 "), QWEN3)
+        self.assertEqual(migrate("org/my-custom-model"), "org/my-custom-model")
+        self.assertEqual(migrate("/models/local-snapshot"), "/models/local-snapshot")
+        self.assertEqual(migrate(""), QWEN3)
+        self.assertEqual(migrate(None), QWEN3)
+
+    def _existing_config(self) -> dict:
+        return {
+            "active": True,
+            "project": {"code": "cortext", "name": "cortext"},
+            "storage_backend": "local",
+            "code": {"env": {
+                "EMBEDDING_MODEL": "jinaai/jina-embeddings-v3",
+                "GRAPH_PROVIDER": "falkordb",
+                "FALKORDB_GRAPH": "cortext",
+                "QDRANT_COLLECTION": "cortext",
+            }},
+            "doc": {"env": {
+                "EMBEDDING_MODEL": "BAAI/bge-m3",
+                "GRAPH_PROVIDER": "falkordb",
+                "FALKORDB_GRAPH": "cortext_doc",
+            }},
+        }
+
+    def test_reinit_migrates_legacy_stored_models(self):
+        from click.testing import CliRunner
+
+        from cortex_harness.dev import cli
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / ".cortext-harness" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "dev.json").write_text(json.dumps(self._existing_config()))
+            result = CliRunner().invoke(cli, ["init", temp_dir], input="\n" * 30)
+            self.assertEqual(result.exit_code, 0, result.output)
+            saved = json.loads((config_dir / "dev.json").read_text())
+            self.assertEqual(saved["code"]["env"]["EMBEDDING_MODEL"], QWEN3)
+            self.assertEqual(saved["doc"]["env"]["EMBEDDING_MODEL"], QWEN3)
+            # The legacy literals no longer appear as prompt defaults.
+            self.assertNotIn("jinaai", result.output)
+
+    def test_reinit_preserves_custom_models(self):
+        from click.testing import CliRunner
+
+        from cortex_harness.dev import cli
+
+        config = self._existing_config()
+        config["code"]["env"]["EMBEDDING_MODEL"] = "org/my-custom-model"
+        config["doc"]["env"]["EMBEDDING_MODEL"] = "/models/local-doc-snapshot"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / ".cortext-harness" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "dev.json").write_text(json.dumps(config))
+            result = CliRunner().invoke(cli, ["init", temp_dir], input="\n" * 30)
+            self.assertEqual(result.exit_code, 0, result.output)
+            saved = json.loads((config_dir / "dev.json").read_text())
+            self.assertEqual(saved["code"]["env"]["EMBEDDING_MODEL"], "org/my-custom-model")
+            self.assertEqual(saved["doc"]["env"]["EMBEDDING_MODEL"], "/models/local-doc-snapshot")
+
+
+QWEN3 = "Qwen/Qwen3-Embedding-0.6B"
+
+
 class DevInitGraphProviderTests(unittest.TestCase):
     def test_code_process_environment_normalizes_embedding_aliases(self):
         with tempfile.TemporaryDirectory() as temp_dir:
