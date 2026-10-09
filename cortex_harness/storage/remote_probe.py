@@ -12,7 +12,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .config import RemoteStorageConfig
 from .targets import environment_flag_enabled
@@ -89,14 +89,25 @@ def probe_all(config: RemoteStorageConfig) -> list[ProbeResult]:
     return [probe_qdrant(config), probe_falkordb(config)]
 
 
+# Both pipelines embed with the unified default (Qwen3-Embedding, 1024-dim);
+# provisioning with any other size poisons the empty collection and blocks
+# the first ingest/query with a dim mismatch (384 legacy default did exactly
+# that). See docs/UNIFIED_INGEST_QUERY_CONTRACT.md.
+DEFAULT_PROVISION_VECTOR_SIZE = 1024
+
+
 def provision_qdrant_collection(
     config: RemoteStorageConfig,
     collection_name: str,
     *,
-    vector_size: int = 384,
+    vector_size: int = DEFAULT_PROVISION_VECTOR_SIZE,
     distance: str = "COSINE",
 ) -> ProvisionResult:
-    """Create a Qdrant collection on the remote server if it doesn't exist."""
+    """Create a Qdrant collection on the remote server if it doesn't exist.
+
+    Created collections are stamped with the embedding-model sentinel so
+    they satisfy the same identity contract every writer enforces.
+    """
     if not config.qdrant_url:
         return ProvisionResult(
             f"qdrant:{collection_name}", "skipped", "no qdrant_url configured"
@@ -121,6 +132,7 @@ def provision_qdrant_collection(
                 size=vector_size, distance=distance_enum
             ),
         )
+        _stamp_marker_best_effort(client, collection_name, vector_size)
         return ProvisionResult(
             f"qdrant:{collection_name}", "created",
             f"collection '{collection_name}' created (dim={vector_size})",
@@ -129,6 +141,40 @@ def provision_qdrant_collection(
         return ProvisionResult(
             f"qdrant:{collection_name}", "failed", str(exc), cause=exc
         )
+
+
+def _stamp_marker_best_effort(client: Any, collection_name: str, vector_size: int) -> None:
+    """Best-effort sentinel stamp on a freshly provisioned collection.
+
+    ``get_remote_client`` returns a raw ``QdrantClient`` (PointStruct
+    transport), and code-tiny may be absent in standalone installs — a
+    marker-less provision degrades to the legacy behavior instead of
+    failing the infrastructure step.
+    """
+    try:
+        from qdrant_client.http import models as qmodels
+
+        from tools.common import embedding_marker
+        from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
+    except Exception:  # noqa: BLE001 - marker is a guard aid, not required
+        return
+    try:
+        point = embedding_marker.sentinel_point(
+            collection_name,
+            embedding_model=DEFAULT_CODE_EMBEDDING_MODEL,
+            vector_size=vector_size,
+        )
+        client.upsert(
+            collection_name=collection_name,
+            points=[qmodels.PointStruct(
+                id=point["id"],
+                vector=[0.0] * int(vector_size),
+                payload=point["payload"],
+            )],
+            wait=True,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def provision_falkordb_graph(

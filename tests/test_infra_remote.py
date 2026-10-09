@@ -202,6 +202,61 @@ class TestProvisionQdrant:
         assert result.action == "created"
         fake_client.create_collection.assert_called_once()
 
+    def test_infra_up_provision_does_not_create_collections(self):
+        """infra-up brings up containers only — collection creation belongs
+        to ingest (real dim + marker). A guessed-size pre-create poisoned
+        empty collections and blocked the first ingest/query."""
+        import importlib.util
+        from unittest import mock
+
+        spec = importlib.util.spec_from_file_location(
+            "mcp_lifecycle_guard", "scripts/mcp-lifecycle.py"
+        )
+        lifecycle = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(lifecycle)
+
+        from cortex_harness.storage.config import RemoteStorageConfig
+
+        remote_config = RemoteStorageConfig(
+            qdrant_url="http://localhost:6333",
+            falkordb_uri="redis://localhost:6379",
+        )
+        with mock.patch(
+            "cortex_harness.storage.remote_probe.provision_qdrant_collection"
+        ) as provision_collection, mock.patch(
+            "cortex_harness.storage.remote_probe.provision_falkordb_graph"
+        ), mock.patch(
+            "cortex_harness.storage.remote_probe.setup_remote_falkordb_schema"
+        ):
+            lifecycle._provision_remote_project("proj", remote_config)
+        provision_collection.assert_not_called()
+
+    def test_default_size_is_unified_contract_dim_and_stamps_marker(self):
+        """The 384 legacy default poisoned empty project collections and
+        blocked the first 1024-dim ingest/query (dim mismatch)."""
+        from qdrant_client.http import models as qmodels
+
+        from cortex_harness.storage.config import RemoteStorageConfig
+        from tools.common import embedding_marker
+
+        config = RemoteStorageConfig(qdrant_url="http://localhost:6333")
+        fake_client = mock.Mock()
+        fake_client.collection_exists.return_value = False
+        with mock.patch(
+            "cortex_harness.storage.qdrant_remote.get_remote_client",
+            return_value=fake_client,
+        ):
+            result = REMOTE_PROBE.provision_qdrant_collection(config, "proj")
+        assert result.action == "created"
+        # Contract dim, not the legacy 384.
+        params = fake_client.create_collection.call_args.kwargs["vectors_config"]
+        assert params.size == 1024
+        # The embedding-model sentinel is stamped on the fresh collection.
+        point = fake_client.upsert.call_args.kwargs["points"][0]
+        assert point.id == embedding_marker.meta_point_id("proj")
+        assert point.payload["_embed_meta"] is True
+        assert point.payload["embedding_model"] == "Qwen/Qwen3-Embedding-0.6B"
+
 
 class TestProvisionFalkordb:
     def test_skips_when_no_uri(self):
