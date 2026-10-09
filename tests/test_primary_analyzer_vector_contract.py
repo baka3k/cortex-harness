@@ -170,11 +170,11 @@ class PrimaryAnalyzerVectorContractTests(unittest.TestCase):
                     message_qdrant_collection=None,
                     incremental=False,
                     verbose=False,
-                    embed_model="jinaai/jina-embeddings-v3",
+                    embed_model="Qwen/Qwen3-Embedding-0.6B",
                 )
 
                 model_index = command.index("--embed-model")
-                self.assertEqual(command[model_index + 1], "jinaai/jina-embeddings-v3")
+                self.assertEqual(command[model_index + 1], "Qwen/Qwen3-Embedding-0.6B")
 
     def test_new_analyzers_accept_android_style_direct_vector_flags(self):
         cases = (
@@ -190,7 +190,7 @@ class PrimaryAnalyzerVectorContractTests(unittest.TestCase):
                     [
                         "--qdrant-url", "http://localhost:6333",
                         "--qdrant-collection", "digital_key",
-                        "--embed-model", "jinaai/jina-embeddings-v3",
+                        "--embed-model", "Qwen/Qwen3-Embedding-0.6B",
                         "--device", "cuda",
                         "--root", r"C:\android-projects\digital_key",
                         "--repo", r"C:\android-projects\digital_key",
@@ -205,7 +205,7 @@ class PrimaryAnalyzerVectorContractTests(unittest.TestCase):
 
                 self.assertEqual(args.qdrant_url, "http://localhost:6333")
                 self.assertEqual(args.qdrant_collection, "digital_key")
-                self.assertEqual(args.embed_model, "jinaai/jina-embeddings-v3")
+                self.assertEqual(args.embed_model, "Qwen/Qwen3-Embedding-0.6B")
                 self.assertEqual(args.device, "cuda")
                 self.assertEqual(args.language, language)
                 self.assertEqual(args.batch_size, 1)

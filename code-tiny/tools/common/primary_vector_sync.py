@@ -191,9 +191,17 @@ def _ensure_collection(
     timeout: float,
     retries: int,
     retry_sleep: float,
+    embedding_model: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> None:
     del url, timeout, retries, retry_sleep
-    ensure_collection(store, collection, vector_size)
+    ensure_collection(
+        store,
+        collection,
+        vector_size,
+        embedding_model=embedding_model,
+        project_id=project_id,
+    )
 
 
 # Fields the stale-point filter (``_delete_stale``) matches on; all of
@@ -306,7 +314,7 @@ def sync_vector_documents(
         model = embedder_factory(
             model_name,
             device=device,
-            trust_remote_code="jina" in model_name.lower(),
+            trust_remote_code=embed_runtime.model_policy(model_name)["trust_remote_code"],
         )
         vectors = model.encode(
             [document.text for document in documents],
@@ -328,6 +336,8 @@ def sync_vector_documents(
             timeout=timeout,
             retries=retries,
             retry_sleep=retry_sleep,
+            embedding_model=embed_runtime.effective_model_identity(model_name),
+            project_id=project_id,
         )
         _ensure_project_scope_index(
             store,

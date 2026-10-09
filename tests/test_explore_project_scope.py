@@ -56,12 +56,12 @@ class ExploreProjectScopeTests(unittest.TestCase):
             "cplus.cplus_mcp._embed_query",
             return_value=[0.1, 0.2],
         ) as backend_embed:
-            embedder = explore_service_module._make_embedder("jinaai/jina-embeddings-v3")
+            embedder = explore_service_module._make_embedder("Qwen/Qwen3-Embedding-0.6B")
 
             self.assertIsNotNone(embedder)
             self.assertEqual(embedder("orders"), [0.1, 0.2])
             backend_embed.assert_called_once_with(
-                "orders", "jinaai/jina-embeddings-v3",
+                "orders", "Qwen/Qwen3-Embedding-0.6B",
             )
 
     def test_keyword_search_filters_in_graph_query(self):

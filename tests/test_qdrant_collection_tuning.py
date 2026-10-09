@@ -93,6 +93,11 @@ class _IndexedLocalStore(_LocalStore):
         info.config.params.vectors = {"size": 2}
         return info
 
+    def retrieve(self, collection, ids, **kwargs):
+        # No embedding-model sentinel in this fixture (marker reads return
+        # "unstamped"; the sync then stamps via upsert like any write).
+        return []
+
 
 class ScopeIndexTests(unittest.TestCase):
     def test_all_filter_fields_indexed(self):

@@ -385,7 +385,9 @@ class ToolLevelOutputContractTests(unittest.IsolatedAsyncioTestCase):
         result = await self._search(store, include_raw_fields=True)
         hit = result["results"][0]
         self.assertEqual(len(hit["payload"]["text"]), 2000)
-        self.assertEqual(store.retrieve.call_count, 1)
+        # 1 lazy payload fetch + 1 embedding-model sentinel probe (the
+        # probe is cached per process/collection, so this is once ever).
+        self.assertEqual(store.retrieve.call_count, 2)
 
     async def test_lazy_fetch_failure_degrades_without_crash(self):
         store = self._store()

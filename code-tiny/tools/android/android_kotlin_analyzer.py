@@ -10,7 +10,6 @@ except Exception:  # standalone use outside code-tiny — no extra ignores
 import argparse
 import asyncio
 import gc
-import importlib.util
 import json
 import hashlib
 import fnmatch
@@ -25,14 +24,15 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import requests
 import torch
-from transformers import AutoModel, AutoTokenizer
 from tree_sitter import Language, Parser
 
 _ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT_DIR not in sys.path:
     sys.path.insert(0, _ROOT_DIR)
 
+from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.harness_config import load_harness_config
+from tools.common import embed_runtime
 from tools.common.embedding_runtime import resolve_embedding_cache
 
 from tools.common.analyzer_cache import (
@@ -1087,6 +1087,9 @@ class QdrantWriter(LocalQdrantWriter):
         timeout: float = 300.0,
         retries: int = 3,
         retry_sleep: float = 2.0,
+        *,
+        embedding_model: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> None:
         super().__init__(
             url,
@@ -1096,14 +1099,9 @@ class QdrantWriter(LocalQdrantWriter):
             retries,
             retry_sleep,
             point_transform=enrich_project_scope,
+            embedding_model=embedding_model,
+            project_id=project_id,
         )
-
-
-def _should_trust_remote_code(model_name: str) -> bool:
-    jina_path = os.environ.get("JINA_MODEL_PATH")
-    if jina_path and os.path.normpath(jina_path) == os.path.normpath(model_name):
-        return True
-    return "jina" in model_name.lower()
 
 
 def _resolve_embedding_model_source(model_name: str, *, verbose: bool = False) -> str:
@@ -1174,33 +1172,28 @@ class CodeEmbedder:
     ) -> None:
         model_source = _resolve_embedding_model_source(model_name, verbose=verbose)
         model_source, local_files_only = resolve_embedding_cache(model_source)
-        trust_remote_code = _should_trust_remote_code(model_name) or _should_trust_remote_code(model_source)
-        extra_tokenizer_kwargs = {"fix_mistral_regex": True} if trust_remote_code else {}
+        self.model_source = model_source
+        trust_remote_code = (
+            embed_runtime.model_policy(model_name)["trust_remote_code"]
+            or embed_runtime.model_policy(model_source)["trust_remote_code"]
+        )
+        # SentenceTransformer applies the model's own pooling config
+        # (last-token for Qwen3); the ingest side always embeds bare text.
 
-        def _load_pretrained(cache_dir: Optional[str]) -> Tuple[Any, Any]:
-            tokenizer_kwargs: Dict[str, Any] = {
-                "trust_remote_code": trust_remote_code,
-                "local_files_only": local_files_only,
-                **extra_tokenizer_kwargs,
-            }
-            model_kwargs: Dict[str, Any] = {"trust_remote_code": trust_remote_code, "local_files_only": local_files_only}
-            if (
-                "jina-embeddings-v3" in model_source.lower()
-                and (
-                    not str(device).lower().startswith("cuda")
-                    or importlib.util.find_spec("flash_attn") is None
-                )
-            ):
-                model_kwargs["use_flash_attn"] = False
-            if cache_dir:
-                tokenizer_kwargs["cache_dir"] = cache_dir
-                model_kwargs["cache_dir"] = cache_dir
-            tokenizer = AutoTokenizer.from_pretrained(model_source, **tokenizer_kwargs)
-            model = AutoModel.from_pretrained(model_source, **model_kwargs)
-            return tokenizer, model
+        def _load_st_model(cache_folder: Optional[str]) -> Any:
+            st_kwargs: Dict[str, Any] = {}
+            if cache_folder:
+                st_kwargs["cache_folder"] = cache_folder
+            return embed_runtime.get_sentence_transformer(
+                model_source,
+                device=device,
+                trust_remote_code=trust_remote_code,
+                local_files_only=local_files_only,
+                **st_kwargs,
+            )
 
         try:
-            self.tokenizer, self.model = _load_pretrained(cache_dir=None)
+            self.model = _load_st_model(None)
         except Exception as exc:
             if not _is_hf_cache_permission_error(exc):
                 raise
@@ -1215,10 +1208,8 @@ class CodeEmbedder:
                     "[embed] HuggingFace cache permission denied; retrying with local cache: %s"
                     % fallback_cache_dir
                 )
-            self.tokenizer, self.model = _load_pretrained(cache_dir=fallback_hub_cache)
+            self.model = _load_st_model(fallback_hub_cache)
         self.device = torch.device(device)
-        self.model.to(self.device)
-        self.model.eval()
         self.max_embed_chars = max_embed_chars if max_embed_chars > 0 else None
         self.chunk_embed = chunk_embed
         self.vector_size = self._infer_vector_size()
@@ -1241,37 +1232,29 @@ class CodeEmbedder:
     def _embed_texts(self, texts: List[str], batch_size: int, verbose: bool) -> List[List[float]]:
         vectors: List[List[float]] = []
         total = len(texts)
-        with torch.no_grad():
-            for idx in range(0, len(texts), batch_size):
-                batch = texts[idx : idx + batch_size]
-                if verbose:
-                    total_batches = max(1, (total + batch_size - 1) // batch_size)
-                    print(f"[embed] batch {idx // batch_size + 1} / {total_batches}")
-                if hasattr(self.model, "encode"):
-                    try:
-                        encoded = self.model.encode(batch, device=str(self.device))
-                    except TypeError:
-                        encoded = self.model.encode(batch)
-                    if isinstance(encoded, torch.Tensor):
-                        vectors.extend(encoded.detach().cpu().tolist())
-                    else:
-                        vectors.extend(encoded.tolist() if hasattr(encoded, "tolist") else [list(vec) for vec in encoded])
-                    del encoded
-                    self._clear_device_cache()
-                    continue
-                encoded = self.tokenizer(
-                    batch,
-                    padding=True,
-                    truncation=True,
-                    max_length=512,
-                    return_tensors="pt",
+        for idx in range(0, len(texts), batch_size):
+            batch = texts[idx : idx + batch_size]
+            if verbose:
+                total_batches = max(1, (total + batch_size - 1) // batch_size)
+                print(f"[embed] batch {idx // batch_size + 1} / {total_batches}")
+            # Ingest normalizes (same contract as primary_vector_sync).
+            try:
+                encoded = self.model.encode(
+                    batch, device=str(self.device), normalize_embeddings=True
                 )
-                encoded = {key: value.to(self.device) for key, value in encoded.items()}
-                outputs = self.model(**encoded)
-                embeddings = self._mean_pool(outputs.last_hidden_state, encoded["attention_mask"])
-                vectors.extend(embeddings.cpu().tolist())
-                del encoded, outputs, embeddings
-                self._clear_device_cache()
+            except TypeError as exc:
+                # Only a kwarg-support gap may skip normalization; a real
+                # bug inside encode must surface (silent un-normalized
+                # vectors would break the ingest contract).
+                if "unexpected keyword argument" not in str(exc).lower():
+                    raise
+                encoded = self.model.encode(batch, device=str(self.device))
+            if isinstance(encoded, torch.Tensor):
+                vectors.extend(encoded.detach().cpu().tolist())
+            else:
+                vectors.extend(encoded.tolist() if hasattr(encoded, "tolist") else [list(vec) for vec in encoded])
+            del encoded
+            self._clear_device_cache()
         return vectors
 
     def _clear_device_cache(self) -> None:
@@ -1280,13 +1263,6 @@ class CodeEmbedder:
         elif self.device.type == "mps":
             if hasattr(torch.mps, "empty_cache"):
                 torch.mps.empty_cache()
-
-    @staticmethod
-    def _mean_pool(last_hidden: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        mask = mask.unsqueeze(-1).type_as(last_hidden)
-        summed = (last_hidden * mask).sum(dim=1)
-        counts = mask.sum(dim=1).clamp(min=1)
-        return summed / counts
 
     def _truncate_text(self, text: str) -> str:
         if self.max_embed_chars is None:
@@ -1325,7 +1301,13 @@ class CodeEmbedder:
                 results.append([])
                 continue
             denom = max(counts[idx], 1)
-            results.append([value / denom for value in sums[idx]])
+            averaged = [value / denom for value in sums[idx]]
+            # Re-normalize the chunk average so chunked documents keep the
+            # same normalized-ingest contract as unchunked ones (D8).
+            norm = sum(value * value for value in averaged) ** 0.5
+            if norm > 0:
+                averaged = [value / norm for value in averaged]
+            results.append(averaged)
         return results
 
     def _infer_vector_size(self) -> int:
@@ -4390,7 +4372,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--embed-model",
         default=os.environ.get("CODE_EMBEDDING_MODEL")
         or os.environ.get("JINA_MODEL_PATH")
-        or "jinaai/jina-embeddings-v3",
+        or DEFAULT_CODE_EMBEDDING_MODEL,
     )
     parser.add_argument("--max-embed-chars", type=int, default=int(os.environ.get("MAX_EMBED_CHARS", 4000)))
     parser.add_argument("--chunk-embed", action="store_true")
@@ -4495,6 +4477,8 @@ async def main(argv: Optional[List[str]] = None) -> int:
             timeout=args.qdrant_timeout,
             retries=args.qdrant_retries,
             retry_sleep=args.qdrant_retry_sleep,
+            embedding_model=embedder.model_source,
+            project_id=args.project_id,
         )
 
     parse_cache = not args.disable_parse_cache

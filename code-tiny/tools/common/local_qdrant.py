@@ -29,9 +29,16 @@ from cortex_harness.storage import (  # noqa: E402
 )
 from qdrant_client.http import models as qmodels  # noqa: E402
 
+from tools.common import embedding_marker  # noqa: E402
+
 
 ENV_STORAGE_PROJECT_ID = "CORTEX_STORAGE_PROJECT_ID"
 ENV_HARNESS_CONFIG_PATH = "CORTEX_HARNESS_CONFIG_PATH"
+
+# Message-scan collections store hash vectors, not model embeddings — the
+# marker never applies to them (and every ``{base}_mess`` write routes
+# through :func:`ensure_collection` too).
+MESSAGE_COLLECTION_SUFFIX = "_mess"
 
 
 class RemoteQdrantUnsupportedError(ValueError):
@@ -215,13 +222,31 @@ def _tuning_kwargs(store: QdrantStore) -> dict[str, Any]:
     return kwargs
 
 
+CODE_RESET_HINT = (
+    "Reset the collection first: python code-tiny/scripts/reset_code_collection.py "
+    "--project-id <project_id> --force (add --include-messages to reset message "
+    "collections too), then re-ingest."
+)
+
+
 def ensure_collection(
     store: QdrantStore,
     collection: str,
     vector_size: int,
     *,
     create: bool = True,
+    embedding_model: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> None:
+    """Create-or-verify a collection; enforce the embedding-model marker.
+
+    Every code-side writer (12 analyzer ``LocalQdrantWriter``s,
+    ``primary_vector_sync``, cobol's sync, livingdoc) funnels through here,
+    so a model switch against a collection stamped by another model is a
+    hard error instead of silent 1024-dim vector mixing. Collections with
+    the ``_mess`` suffix (hash vectors) are exempt.
+    """
+    marker_exempt = collection.endswith(MESSAGE_COLLECTION_SUFFIX)
     if store.collection_exists(collection):
         sizes = vector_sizes(store.get_collection_info(collection))
         if sizes and vector_size not in sizes.values():
@@ -229,6 +254,15 @@ def ensure_collection(
             raise ValueError(
                 f"Qdrant collection {collection!r} has vector size {actual}, "
                 f"but the configured embedder produces {vector_size}"
+            )
+        if embedding_model and not marker_exempt:
+            embedding_marker.enforce(
+                store,
+                collection,
+                embedding_model=embedding_model,
+                vector_size=vector_size,
+                project_id=project_id,
+                reset_hint=CODE_RESET_HINT,
             )
         return
     if not create:
@@ -238,6 +272,14 @@ def ensure_collection(
         vectors_config=qmodels.VectorParams(size=int(vector_size), distance=qmodels.Distance.COSINE),
         **_tuning_kwargs(store),
     )
+    if embedding_model and not marker_exempt:
+        embedding_marker.stamp(
+            store,
+            collection,
+            embedding_model=embedding_model,
+            vector_size=vector_size,
+            project_id=project_id,
+        )
 
 
 def collection_info_payload(store: QdrantStore, collection: str) -> dict[str, Any]:
@@ -328,6 +370,8 @@ class LocalQdrantWriter:
         retry_sleep: float = 2.0,
         *,
         point_transform: Optional[Callable[[Iterable[Mapping[str, Any]]], list[dict[str, Any]]]] = None,
+        embedding_model: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> None:
         self.collection = collection
         self.vector_size = int(vector_size)
@@ -335,6 +379,8 @@ class LocalQdrantWriter:
         self.retries = retries
         self.retry_sleep = retry_sleep
         self._point_transform = point_transform
+        self.embedding_model = embedding_model
+        self.project_id = project_id
         # A URL-shaped locator (``http://``, ``https://``) means the project is
         # in remote mode and ``storage_overlay`` exposed the remote Qdrant
         # endpoint through ``QDRANT_CODE_PATH``. Use the shared remote store
@@ -359,7 +405,13 @@ class LocalQdrantWriter:
         self._store = get_code_qdrant_store(self.url)
 
     def ensure_collection(self) -> None:
-        ensure_collection(self._store, self.collection, self.vector_size)
+        ensure_collection(
+            self._store,
+            self.collection,
+            self.vector_size,
+            embedding_model=self.embedding_model,
+            project_id=self.project_id,
+        )
 
     def upsert(self, points: Sequence[Mapping[str, Any]]) -> None:
         if not points:
