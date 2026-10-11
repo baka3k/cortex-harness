@@ -538,7 +538,7 @@
           "expected_status": "SUCCESS"
         },
         {
-          "tool": "query_graph_rag_langextract",
+          "tool": "semantic_graph_search",
           "input": {
             "query": "batch job checkpoint commit restart behavior",
             "top_k": 5,

@@ -64,7 +64,7 @@ backward-compat shim, no deprecated no-op.
   `search_full` parameter and the
   `if collection is None and not project_id and not search_full: raise`
   guard.
-- `doc-tiny/mcp_graph_rag.py:518-520` — `query_graph_rag_langextract`'s
+- `doc-tiny/mcp_graph_rag.py:518-520` — `semantic_graph_search`'s
   call to `qdrant_search_entity_payload` updated to the new signature.
 
 **Phase 04 — tests, metadata, documentation:**
@@ -93,7 +93,7 @@ backward-compat shim, no deprecated no-op.
 
 ## Impact
 **Who/what is affected:** every project-scoped MCP tool in code-tiny (10
-tools) and doc-tiny (`semantic_search`, `query_graph_rag_langextract`),
+tools) and doc-tiny (`semantic_search`, `semantic_graph_search`),
 plus every helper that builds Qdrant filters or Cypher params. External
 callers that pass `search_full=true` will receive "unknown parameter" —
 identical to the hard removal of `activate_project`. Documented as

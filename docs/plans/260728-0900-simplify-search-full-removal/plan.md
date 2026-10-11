@@ -122,7 +122,7 @@ to how `activate_project` was removed. No transition period.
 **`mcp_graph_rag.py`**:
 - `semantic_search(..., search_full=False)`: requires `project_id` or
   `search_full=True` or explicit `collection`.
-- `query_graph_rag_langextract(..., search_full=False)`: same pattern.
+- `semantic_graph_search(..., search_full=False)`: same pattern.
 
 ## Target Contract
 

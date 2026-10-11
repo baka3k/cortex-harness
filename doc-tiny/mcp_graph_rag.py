@@ -1007,7 +1007,7 @@ def register_tools(mcp: FastMCP) -> None:
         return response
 
     @_standard_tool(mcp)
-    def query_graph_rag_langextract(
+    def semantic_graph_search(
         query: str,
         top_k: int = 5,
         source_id: Optional[str] = None,
