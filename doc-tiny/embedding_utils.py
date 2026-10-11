@@ -6,7 +6,7 @@ from typing import Dict, Tuple
 # The doc-side default embedding model. Keep this twin in sync with
 # code-tiny's ``tools/common/model_defaults.DEFAULT_CODE_EMBEDDING_MODEL``
 # (doc-tiny is a flat tree and cannot import from code-tiny).
-DEFAULT_DOC_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_DOC_EMBEDDING_MODEL = "BAAI/bge-m3"
 
 # Query-encode kwargs for the unified embedding model. Keep this marker in
 # sync with code-tiny's ``tools/common/embed_runtime.QWEN3_EMBEDDING_MARKER``

@@ -1,14 +1,16 @@
-"""Phase 01 — model policy + Qwen3 query-side encode parity (code + doc paths).
+"""Phase 01 — model policy + query-side encode parity (code + doc paths).
 
 Covers the unified-embedding plan's query-side contract: every query path
 (embed_query, explore_service fan-out, doc MCP query) encodes with the
-Qwen3 ``query`` prompt + normalized vectors, jina/unknown keep legacy
-behavior, and the CPU fallback for ST-policy models stays on the
-SentenceTransformer backend (never AutoModel mean-pooling).
+Qwen3 ``query`` prompt + normalized vectors, BGE-M3 with a bare normalized
+SentenceTransformer encode, jina/unknown keep legacy behavior, and the CPU
+fallback for ST-policy models stays on the SentenceTransformer backend
+(never AutoModel mean-pooling).
 """
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 import unittest
@@ -26,6 +28,7 @@ os.environ.setdefault("MCP_PRELOAD_EMBEDDER", "0")
 from tools.common import embed_runtime  # noqa: E402
 
 QWEN3 = "Qwen/Qwen3-Embedding-0.6B"
+BGE = "BAAI/bge-m3"
 JINA = "jinaai/jina-embeddings-v3"
 
 
@@ -69,12 +72,18 @@ class ModelPolicyTableTests(unittest.TestCase):
         cases = [
             (QWEN3, {"trust_remote_code": False, "backend": "st",
                      "query_prompt": "query", "normalize": True}),
+            (BGE, {"trust_remote_code": False, "backend": "st",
+                   "query_prompt": None, "normalize": True}),
             (JINA, {"trust_remote_code": True, "backend": "automodel",
                     "query_prompt": None, "normalize": False}),
             # local snapshot whose basename names the family → qwen3 policy
             ("/models/qwen3-embedding-0.6b-snapshot",
              {"trust_remote_code": False, "backend": "st",
               "query_prompt": "query", "normalize": True}),
+            # same for the bge-m3 family
+            ("/models/bge-m3-local-snapshot",
+             {"trust_remote_code": False, "backend": "st",
+              "query_prompt": None, "normalize": True}),
             # unrecognized name → ST default config, no prompt, no change
             ("some-unknown-model",
              {"trust_remote_code": False, "backend": "st",
@@ -133,6 +142,28 @@ class EmbedQueryParityTests(unittest.TestCase):
         ):
             embed_runtime.embed_query("q", QWEN3)
         self.assertFalse(load_mock.call_args.kwargs["local_files_only"])
+
+    def test_embed_query_bge_m3_bare_normalized_st_encode(self):
+        """BGE-M3 queries ride the ST path: no prompt, normalized, and the
+        Qwen3 transformers floor never gates a BGE-M3 load."""
+        stub = _RecordingST(vectors=[[0.7, 0.35]])
+        old_transformers = importlib.util.module_from_spec(
+            importlib.util.spec_from_loader("_old_transformers_bge", None)
+        )
+        old_transformers.__version__ = "4.41.0"
+        old_transformers.__spec__ = None
+        with patch.object(
+            embed_runtime, "get_sentence_transformer", return_value=stub
+        ), patch.object(
+            embed_runtime, "_st_local_files_only", return_value=True
+        ), patch.dict(sys.modules, {"transformers": old_transformers}):
+            vector = embed_runtime.embed_query("hello world", BGE)
+        self.assertEqual(vector, [0.7, 0.35])
+        # Bare encode (no prompt key), normalized to match the ingest
+        # contract.
+        self.assertEqual(stub.calls, [(["hello world"], {
+            "normalize_embeddings": True,
+        })])
 
     def test_embed_query_jina_keeps_legacy_automodel_path(self):
         stub = _RecordingST(vectors=[[1.0, 2.0]])
@@ -226,6 +257,7 @@ class ExploreServiceQueryPolicyTests(unittest.TestCase):
 
         cases = [
             (QWEN3, {"prompt_name": "query", "normalize_embeddings": True}),
+            (BGE, {"normalize_embeddings": True}),
             (JINA, {}),
             ("unknown-model-x", {}),
         ]

@@ -1,6 +1,6 @@
 ---
 title: "Thống nhất embedding model: Qwen/Qwen3-Embedding-0.6B cho cả code (graph_mcp) + doc (mind_mcp)"
-status: active
+status: completed (2026-10-11) — landed in 96d2149; embedding default switched back to BAAI/bge-m3 the same day (model-default revert, working tree) — follow-ups live in docs/plans/261011-hybrid-bge-m3/
 created: 2026-10-09
 mode: hi-plan --full
 scope: "Thay jinaai/jina-embeddings-v3 (code side) và BAAI/bge-m3 (doc side) bằng Qwen/Qwen3-Embedding-0.6B ở mọi tầng: (1) mọi query-side encode path — pooling last-token + query instruction; (2) 12 bản sao CodeEmbedder ingest — delegate sang SentenceTransformer; (3) model-identity marker ở writer chokepoints + size guard chống trộn vector 1024 im lặng; (4) sweep ~40 literal defaults code+doc+livingdoc + dependency floors; (5) reset tooling + backup/rollback + runbook re-index + A/B verification. KHÔNG đụng: collection {base}_mess (hash vectors), message_scan logic, graph schema/writer, MCP tool contracts, storage adapter API, sync code region của dev.py thuộc plan 260821-2115 (chỉ chung file, khác region)."

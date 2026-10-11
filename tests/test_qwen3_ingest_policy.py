@@ -140,6 +140,28 @@ class CodeEmbedderStBackendTests(unittest.TestCase):
             module.CodeEmbedder(JINA, "cpu", 0, False)
         self.assertTrue(_FakeST.last_instance.trust_remote_code)
 
+    def test_bge_m3_ingest_loads_st_without_trust_remote_code(self):
+        """BGE-M3 (the unified default) ingests through the same ST
+        runtime: model-config pooling, bare normalized encode."""
+        import importlib
+
+        module = importlib.import_module("tools.python.python_analyzer")
+        _FakeST.last_instance = None
+        with patch.object(
+            embed_runtime, "get_sentence_transformer", _fake_loader
+        ), patch.object(
+            embedding_runtime, "snapshot_download",
+            side_effect=LocalEntryNotFoundError("cache miss"),
+        ):
+            embedder = module.CodeEmbedder("BAAI/bge-m3", "cpu", 0, False)
+        stub = _FakeST.last_instance
+        self.assertIsNotNone(stub)
+        self.assertEqual(stub.trust_remote_code, False)
+        self.assertEqual(embedder.vector_size, 1024)
+        embedder.embed(["symbol text"], batch_size=2)
+        _, kwargs = stub.encode_calls[-1]
+        self.assertTrue(kwargs.get("normalize_embeddings"))
+
 
 class CodeEmbedderChunkBehaviorTests(unittest.TestCase):
     """AC3 — chunking/truncation/mean-pool-of-chunks behavior unchanged."""

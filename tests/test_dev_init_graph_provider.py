@@ -25,21 +25,24 @@ class DevInitModelDefaultMigrationTests(unittest.TestCase):
     """Re-init must migrate stored legacy default models to the unified one.
 
     The runbook's migration path is "re-init or set EMBEDDING_MODEL"; a
-    prompt that re-offers the stored jina/bge literal makes re-init unable
-    to migrate. Only exact legacy literals migrate — deliberate custom
-    models and local paths are preserved verbatim.
+    prompt that re-offers a stored legacy literal (jina/Qwen3) makes
+    re-init unable to migrate. Only exact legacy literals migrate — the
+    current default (BGE-M3) and deliberate custom models / local paths
+    are preserved verbatim.
     """
 
     def test_migration_matrix(self):
         from cortex_harness.dev import _migrated_model_default as migrate
 
-        self.assertEqual(migrate("jinaai/jina-embeddings-v3"), QWEN3)
-        self.assertEqual(migrate("BAAI/bge-m3"), QWEN3)
-        self.assertEqual(migrate("  jinaai/jina-embeddings-v3 "), QWEN3)
+        self.assertEqual(migrate("jinaai/jina-embeddings-v3"), BGE)
+        self.assertEqual(migrate("Qwen/Qwen3-Embedding-0.6B"), BGE)
+        self.assertEqual(migrate("  jinaai/jina-embeddings-v3 "), BGE)
+        # The current default is not legacy: stored bge-m3 stays verbatim.
+        self.assertEqual(migrate("BAAI/bge-m3"), BGE)
         self.assertEqual(migrate("org/my-custom-model"), "org/my-custom-model")
         self.assertEqual(migrate("/models/local-snapshot"), "/models/local-snapshot")
-        self.assertEqual(migrate(""), QWEN3)
-        self.assertEqual(migrate(None), QWEN3)
+        self.assertEqual(migrate(""), BGE)
+        self.assertEqual(migrate(None), BGE)
 
     def _existing_config(self) -> dict:
         return {
@@ -53,7 +56,7 @@ class DevInitModelDefaultMigrationTests(unittest.TestCase):
                 "QDRANT_COLLECTION": "cortext",
             }},
             "doc": {"env": {
-                "EMBEDDING_MODEL": "BAAI/bge-m3",
+                "EMBEDDING_MODEL": "Qwen/Qwen3-Embedding-0.6B",
                 "GRAPH_PROVIDER": "falkordb",
                 "FALKORDB_GRAPH": "cortext_doc",
             }},
@@ -71,8 +74,8 @@ class DevInitModelDefaultMigrationTests(unittest.TestCase):
             result = CliRunner().invoke(cli, ["init", temp_dir], input="\n" * 30)
             self.assertEqual(result.exit_code, 0, result.output)
             saved = json.loads((config_dir / "dev.json").read_text())
-            self.assertEqual(saved["code"]["env"]["EMBEDDING_MODEL"], QWEN3)
-            self.assertEqual(saved["doc"]["env"]["EMBEDDING_MODEL"], QWEN3)
+            self.assertEqual(saved["code"]["env"]["EMBEDDING_MODEL"], BGE)
+            self.assertEqual(saved["doc"]["env"]["EMBEDDING_MODEL"], BGE)
             # The legacy literals no longer appear as prompt defaults.
             self.assertNotIn("jinaai", result.output)
 
@@ -150,6 +153,7 @@ class DevInitModelDefaultMigrationTests(unittest.TestCase):
             self.assertEqual(saved["doc"]["env"]["EMBEDDING_MODEL"], "/models/local-doc-snapshot")
 
 
+BGE = "BAAI/bge-m3"
 QWEN3 = "Qwen/Qwen3-Embedding-0.6B"
 
 

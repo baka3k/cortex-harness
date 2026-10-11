@@ -182,8 +182,8 @@ def _make_embedder(model_name: str) -> Optional[Callable[[str], List[float]]]:
             model_name, device=embed_runtime.resolve_device()
         )
         # Query side follows the model policy: last-token-pooling families
-        # (Qwen3) get their ``query`` prompt + normalized vectors; legacy
-        # models keep the bare encode.
+        # (Qwen3) get their ``query`` prompt + normalized vectors, BGE-M3 a
+        # bare normalized encode; legacy models keep the bare encode.
         _policy = embed_runtime.model_policy(model_name)
         _encode_kwargs: Dict[str, Any] = {}
         if _policy.get("query_prompt"):
