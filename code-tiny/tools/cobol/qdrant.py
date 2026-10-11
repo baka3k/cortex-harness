@@ -7,7 +7,12 @@ import uuid
 from typing import Any, Iterable
 
 from tools.common import embed_runtime
-from tools.common.local_qdrant import delete_by_filter, ensure_collection, get_code_qdrant_store
+from tools.common.local_qdrant import (
+    collection_supports_sparse,
+    delete_by_filter,
+    ensure_collection,
+    get_code_qdrant_store,
+)
 
 from tools.common.project_scope import (
     PROJECT_ID_NORMALIZED_FIELD,
@@ -140,18 +145,41 @@ def sync_qdrant(
         normalize_embeddings=True,
     )
     vector_size = int(vectors.shape[1])
+    model_identity = embed_runtime.effective_model_identity(model_name)
     store = get_code_qdrant_store(url)
     ensure_collection(
         store,
         collection,
         vector_size,
-        embedding_model=embed_runtime.effective_model_identity(model_name),
+        embedding_model=model_identity,
         project_id=result.project_id,
     )
-    points = [
-        {"id": document["id"], "vector": vector.tolist(), "payload": document["payload"]}
-        for document, vector in zip(documents, vectors)
-    ]
+    # Hybrid: sparse weights for the exact embedded text (same contract as
+    # primary_vector_sync; ~2x embedding compute when enabled). Dense-only
+    # when the collection never declared the sparse vector.
+    sparse_pairs = None
+    if embed_runtime.hybrid_enabled(model_identity) and collection_supports_sparse(
+        store, collection
+    ):
+        from qdrant_client.http import models as qmodels
+
+        sparse_pairs = embed_runtime.encode_sparse(
+            model_identity,
+            [item["text"] for item in documents],
+            device=device,
+        )
+    points = []
+    for index, (document, vector) in enumerate(zip(documents, vectors)):
+        vector_value: Any = vector.tolist()
+        if sparse_pairs is not None:
+            indices, values = sparse_pairs[index]
+            vector_value = {
+                "": vector_value,
+                "sparse": qmodels.SparseVector(indices=list(indices), values=list(values)),
+            }
+        points.append(
+            {"id": document["id"], "vector": vector_value, "payload": document["payload"]}
+        )
     for start in range(0, len(points), max(1, batch_size)):
         store.upsert(collection, points[start:start + max(1, batch_size)], wait=True)
     _delete_stale(

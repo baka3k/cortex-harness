@@ -1,7 +1,7 @@
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 # The doc-side default embedding model. Keep this twin in sync with
 # code-tiny's ``tools/common/model_defaults.DEFAULT_CODE_EMBEDDING_MODEL``
@@ -12,6 +12,47 @@ DEFAULT_DOC_EMBEDDING_MODEL = "BAAI/bge-m3"
 # sync with code-tiny's ``tools/common/embed_runtime.QWEN3_EMBEDDING_MARKER``
 # (doc-tiny is a flat tree and cannot import from code-tiny).
 QWEN3_EMBEDDING_MARKER = "qwen3-embedding"
+
+# Hybrid retrieval (learned-sparse BGE-M3 lexical weights) twins. Keep in
+# sync with code-tiny's ``embed_runtime`` constants of the same names.
+BGE_M3_EMBEDDING_MARKER = "bge-m3"
+HYBRID_SPARSE_HEAD_FILE = "sparse_linear.pt"
+HYBRID_SPARSE_VECTOR_NAME = "sparse"
+
+
+def hybrid_enabled(model_name: str | None = None) -> bool:
+    """Whether hybrid (dense+sparse) applies for ``model_name``.
+
+    Same decision as code-tiny's ``embed_runtime.hybrid_enabled``: the
+    ``EMBED_HYBRID`` env flag must be on AND the model must be bge-m3 —
+    another family is a silent no-op (code side warns; this twin stays
+    dependency-light and does not).
+    """
+    flag = os.getenv("EMBED_HYBRID", "")
+    if str(flag).strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    if model_name is None:
+        return True
+    return BGE_M3_EMBEDDING_MARKER in str(model_name).lower()
+
+
+def sparse_lexical_weights_to_vector(
+    lexical_weights: Dict[str, float] | Dict[int, float],
+) -> Tuple[List[int], List[float]]:
+    """Convert ``{token_id: weight}`` (FlagEmbedding shape) to Qdrant's
+    ``(indices, values)`` SparseVector pair — positive weights only, sorted
+    by token id. Mirrors code-tiny's encode post-process contract.
+    """
+    best: dict[int, float] = {}
+    for token_id, weight in (lexical_weights or {}).items():
+        value = float(weight)
+        if value <= 0:
+            continue
+        key = int(token_id)
+        if value > best.get(key, 0.0):
+            best[key] = value
+    indices = sorted(best)
+    return indices, [best[index] for index in indices]
 
 
 def st_query_encode_kwargs(model_name: str | None) -> Dict[str, object]:

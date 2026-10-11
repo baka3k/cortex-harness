@@ -14,6 +14,7 @@ CortexHarness fixes this by building a **persistent, queryable knowledge layer**
 
 - **Structural truth** — call graphs, dependencies, type hierarchies, framework routes (not just text)
 - **Semantic understanding** — embeddings for similarity search across code and docs
+- **Hybrid retrieval (opt-in)** — `EMBED_HYBRID=1` adds BGE-M3 learned-sparse vectors fused with dense via RRF; see `docs/UNIFIED_INGEST_QUERY_CONTRACT.md` → "Hybrid retrieval enablement"
 - **Complete context** — one query returns the function, its callers, its framework role, and related documentation
 - **Less token waste** — agents ask the graph instead of stuffing entire files into prompts
 

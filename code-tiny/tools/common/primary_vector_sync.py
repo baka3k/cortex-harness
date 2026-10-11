@@ -11,6 +11,8 @@ from dataclasses import dataclass
 import re
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
+from qdrant_client.http import models as qmodels
+
 from tools.common.project_scope import (
     PROJECT_ID_NORMALIZED_FIELD,
     project_id_lookup_key,
@@ -20,6 +22,7 @@ import uuid
 from tools.common import embed_runtime
 from tools.common import qdrant_layout_cache
 from tools.common.local_qdrant import (
+    collection_supports_sparse,
     delete_by_filter,
     ensure_collection,
     get_code_qdrant_store,
@@ -328,6 +331,7 @@ def sync_vector_documents(
         vector_size = len(vectors[0])
         if vector_size <= 0:
             raise RuntimeError("Embedding model returned empty vectors")
+        model_identity = embed_runtime.effective_model_identity(model_name)
         _ensure_collection(
             store,
             url=url,
@@ -336,7 +340,7 @@ def sync_vector_documents(
             timeout=timeout,
             retries=retries,
             retry_sleep=retry_sleep,
-            embedding_model=embed_runtime.effective_model_identity(model_name),
+            embedding_model=model_identity,
             project_id=project_id,
         )
         _ensure_project_scope_index(
@@ -347,10 +351,38 @@ def sync_vector_documents(
             retries=retries,
             retry_sleep=retry_sleep,
         )
+        # Hybrid: sparse weights for the exact embedded text — the sync owns
+        # its document texts, so there is no payload-text reconstruction
+        # here. ~2x embedding compute when enabled (separate token-level
+        # forward; the dense path above is untouched). Capability probes the
+        # LIVE collection (after ensure: a first sync creates it WITH the
+        # sparse config); dense-only when it never declared sparse (local
+        # mode rejects unknown sparse slots with a hard error).
+        sparse_pairs: Optional[list] = None
+        if embed_runtime.hybrid_enabled(model_identity) and collection_supports_sparse(
+            store, collection
+        ):
+            sparse_pairs = embed_runtime.encode_sparse(
+                model_identity,
+                [document.text for document in documents],
+                device=device,
+            )
+            if len(sparse_pairs) != len(documents):
+                raise RuntimeError("Sparse embedding output count does not match vector documents")
         points = []
-        for document, vector in zip(documents, vectors):
+        for index, (document, vector) in enumerate(zip(documents, vectors)):
             values = vector.tolist() if hasattr(vector, "tolist") else list(vector)
-            points.append({"id": document.id, "vector": values, "payload": document.payload})
+            if sparse_pairs is not None:
+                indices, sparse_values = sparse_pairs[index]
+                vector_value: Any = {
+                    "": values,
+                    "sparse": qmodels.SparseVector(
+                        indices=list(indices), values=list(sparse_values)
+                    ),
+                }
+            else:
+                vector_value = values
+            points.append({"id": document.id, "vector": vector_value, "payload": document.payload})
         size = max(1, qdrant_batch_size)
         for start in range(0, len(points), size):
             # Only the final batch waits: the flush at the function boundary

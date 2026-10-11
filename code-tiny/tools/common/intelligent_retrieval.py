@@ -151,6 +151,8 @@ def _qdrant_search(
     top_k: int,
     timeout: float = 10.0,
     project_id: Optional[str] = None,
+    sparse_vector: Optional[Any] = None,
+    fusion: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Run a Qdrant vector search through the local client adapter.
@@ -159,6 +161,10 @@ def _qdrant_search(
     or named-vector (v2 ``-summaries`` collections). Uses the unified
     The adapter accepts both schemas via the ``using`` parameter.
 
+    ``sparse_vector`` + ``fusion=True`` run the dense+sparse RRF fusion
+    query instead (identical hit-dict shape; RRF-ranked scores). The
+    caller gates fusion on the all-or-none fan-out capability check.
+
     Returns a list of hit dicts:
       {"id": …, "score": …, "payload": {…}}
     """
@@ -166,8 +172,26 @@ def _qdrant_search(
     project_filter = qdrant_project_filter(project_id)
     try:
         del timeout
+        store = get_code_qdrant_store(qdrant_url)
+        if fusion and sparse_vector:
+            from tools.common import qdrant_query_support
+            from tools.common.local_qdrant import model_to_dict, normalize_filter
+
+            kwargs = qdrant_query_support.hybrid_fusion_query(
+                vector,
+                sparse_vector,
+                vector_name=named_vector,
+                top_k=top_k,
+                query_filter=qdrant_query_support._with_sentinel_exclusion(
+                    normalize_filter(project_filter)
+                ),
+            )
+            response = store.query_points(
+                collection, with_payload=True, with_vectors=False, **kwargs,
+            )
+            return [model_to_dict(point) for point in getattr(response, "points", response)]
         return query_points(
-            get_code_qdrant_store(qdrant_url),
+            store,
             collection,
             vector,
             limit=top_k,
@@ -484,10 +508,14 @@ class IntelligentRetrievalEngine:
         expand_limit: int = DEFAULT_EXPAND_LIMIT,
         bm25_ranker: Optional[Any] = None,
         bm25_weight: float = 0.15,
+        sparse_embedder: Optional[Callable[[str], Any]] = None,
     ) -> None:
         self._qdrant_url  = qdrant_url
         self._collection  = collection
         self._embedder    = embedder
+        # Hybrid retrieval: ``str → (indices, values) | None``; None disables
+        # the sparse half entirely (flag off / non-bge family / no bridge).
+        self._sparse_embedder = sparse_embedder
         self._graph       = graph_driver if graph_driver is not None else neo4j_driver
         self._database    = database
         self._freshness   = freshness_map or {}
@@ -645,10 +673,37 @@ class IntelligentRetrievalEngine:
         try:
             vector = self._embedder(query)
             collections = _resolve_qdrant_collections(self._qdrant_url, collection)
+            # Hybrid: sparse half + all-or-none fan-out capability. Any
+            # dense-only member downgrades the WHOLE fan-out so the
+            # cross-collection merge compares one score scale.
+            sparse: Optional[Any] = None
+            fusion = False
+            if self._sparse_embedder is not None and collections:
+                try:
+                    sparse = self._sparse_embedder(query)
+                except Exception as exc:  # noqa: BLE001 - degrade to dense-only
+                    logger.warning("[IR] sparse query encode failed: %s", exc)
+                    sparse = None
+                if sparse is not None:
+                    from tools.common.local_qdrant import get_code_qdrant_store
+                    from tools.common.qdrant_query_support import fanout_supports_sparse
+
+                    fusion = fanout_supports_sparse(
+                        get_code_qdrant_store(self._qdrant_url),
+                        [(col, None) for col in collections],
+                        qdrant_url=self._qdrant_url,
+                    )
+                    if not fusion:
+                        sparse = None
             merged: Dict[str, Dict[str, Any]] = {}
+            # Keep the legacy positional call shape when hybrid is off —
+            # stubs/tests patch ``_qdrant_search`` with the dense signature.
+            fusion_kwargs: Dict[str, Any] = (
+                {"sparse_vector": sparse, "fusion": True} if fusion else {}
+            )
             for col in collections:
                 if normalize_project_id(project_id) is None:
-                    hits = _qdrant_search(self._qdrant_url, col, vector, top_k)
+                    hits = _qdrant_search(self._qdrant_url, col, vector, top_k, **fusion_kwargs)
                 else:
                     hits = _qdrant_search(
                         self._qdrant_url,
@@ -656,6 +711,7 @@ class IntelligentRetrievalEngine:
                         vector,
                         top_k,
                         project_id=project_id,
+                        **fusion_kwargs,
                     )
                 for hit in hits:
                     payload = hit.get("payload") or {}

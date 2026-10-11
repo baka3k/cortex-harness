@@ -226,11 +226,40 @@ def qdrant_has_node(qdrant_url, headers, collection, node_id, timeout=30):
     return bool(points)
 
 
-def upsert_point(qdrant_url, headers, collection, point_id, vector, payload, timeout=30):
+def upsert_point(qdrant_url, headers, collection, point_id, vector, payload, timeout=30, sparse_pair=None):
     del headers, timeout
+    vector_value = vector
+    if sparse_pair is not None:
+        from qdrant_client.http import models as qmodels
+
+        indices, values = sparse_pair
+        vector_value = {
+            "": vector,
+            "sparse": qmodels.SparseVector(indices=list(indices), values=list(values)),
+        }
     get_code_qdrant_store(qdrant_url).upsert(
-        collection, [{"id": point_id, "vector": vector, "payload": payload}], wait=True,
+        collection, [{"id": point_id, "vector": vector_value, "payload": payload}], wait=True,
     )
+
+
+def hybrid_sparse_pair(embedder, model_name, text, qdrant_url, collection):
+    """Sparse lexical weights for the exact embedded text when hybrid is on.
+
+    Returns ``None`` when the flag is off or the collection never declared
+    the sparse vector (local mode rejects unknown sparse slots); raises
+    through when the head file is missing (fail-closed writer).
+    """
+    from tools.common import embed_runtime
+    from tools.common.local_qdrant import collection_supports_sparse
+
+    identity = embed_runtime.effective_model_identity(model_name)
+    if not embed_runtime.hybrid_enabled(identity):
+        return None
+    if not collection_supports_sparse(get_code_qdrant_store(qdrant_url), collection):
+        return None
+    return embed_runtime.encode_sparse(
+        identity, [text], device=str(embedder.device), model=embedder,
+    )[0]
 
 
 def main():
@@ -378,6 +407,9 @@ def main():
                     if args.verbose:
                         print(text)
                     vector = embedder.encode([text])[0].tolist()
+                    sparse_pair = hybrid_sparse_pair(
+                        embedder, model_name, text, args.qdrant_url, args.collection,
+                    )
                     if args.verbose:
                         print(f"Vector length for node_id={node_id}: {len(vector)}")
                     metadata = meta_map.get(node_id, {"node_id": node_id})
@@ -398,6 +430,7 @@ def main():
                         point_id,
                         vector,
                         metadata,
+                        sparse_pair=sparse_pair,
                     )
                     save_vectorized_id(vectorized_ids_path, node_id)
                     vectorized_ids.add(node_id)

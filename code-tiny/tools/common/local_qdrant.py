@@ -228,6 +228,69 @@ CODE_RESET_HINT = (
     "collections too), then re-ingest."
 )
 
+HYBRID_SPARSE_VECTOR_NAME = "sparse"
+
+# Local mode cannot add a sparse vector to an existing collection
+# (update_collection raises ValueError) — upgrade is recreate-only, via the
+# backfill script. Warn once per collection per process; never mutate.
+_HYBRID_BACKFILL_WARNED: set = set()
+
+HYBRID_BACKFILL_HINT = (
+    "python code-tiny/scripts/backfill_hybrid_sparse.py --project-id <project_id>"
+)
+
+
+def hybrid_active(embedding_model: Optional[str]) -> bool:
+    """Whether hybrid ingest applies for this writer's model identity.
+
+    ``_mess`` hash-vector collections never participate (no model policy),
+    mirroring the marker exemption.
+    """
+    if not embedding_model:
+        return False
+    try:
+        from tools.common import embed_runtime
+    except ImportError:  # pragma: no cover - code-tiny runtime required
+        return False
+    return embed_runtime.hybrid_enabled(
+        embed_runtime.effective_model_identity(embedding_model)
+    )
+
+
+def collection_has_sparse(info: Any) -> bool:
+    """Whether a collection-info model declares any named sparse vectors."""
+    sparse = getattr(getattr(getattr(info, "config", None), "params", None), "sparse_vectors", None)
+    if sparse is None:
+        raw = model_to_dict(info)
+        if isinstance(raw, Mapping):
+            sparse = (((raw or {}).get("config") or {}).get("params") or {}).get("sparse_vectors")
+    return bool(sparse)
+
+
+def collection_supports_sparse(store: QdrantStore, collection: str) -> bool:
+    """Whether ``collection`` accepts named-sparse point vectors.
+
+    Soft probe: a store error reads as "no sparse" so the writer degrades
+    to dense-only instead of failing the ingest (local mode rejects a
+    sparse slot the collection never declared with a hard ValueError).
+    """
+    try:
+        return collection_has_sparse(store.get_collection_info(collection))
+    except Exception:  # noqa: BLE001 - degraded dense-only write beats a crash
+        return False
+
+
+def _warn_hybrid_backfill_once(collection: str) -> None:
+    if collection in _HYBRID_BACKFILL_WARNED:
+        return
+    _HYBRID_BACKFILL_WARNED.add(collection)
+    print(
+        f"[hybrid] EMBED_HYBRID=1 but collection {collection!r} has no sparse "
+        f"vector config and local mode cannot add one in place. New points "
+        f"land dense-only here until you upgrade it (recreate + re-encode "
+        f"from payload text): {HYBRID_BACKFILL_HINT}"
+    )
+
 
 def ensure_collection(
     store: QdrantStore,
@@ -245,16 +308,26 @@ def ensure_collection(
     so a model switch against a collection stamped by another model is a
     hard error instead of silent 1024-dim vector mixing. Collections with
     the ``_mess`` suffix (hash vectors) are exempt.
+
+    With hybrid retrieval on (``EMBED_HYBRID=1``, bge-m3 family), a NEW
+    collection is created with a named ``sparse`` vector alongside the
+    unnamed dense default. An existing dense-only collection is never
+    mutated — local mode cannot add sparse vectors in place — the writer
+    gets a one-time warning pointing at the backfill script instead.
     """
     marker_exempt = collection.endswith(MESSAGE_COLLECTION_SUFFIX)
+    hybrid = (not marker_exempt) and hybrid_active(embedding_model)
     if store.collection_exists(collection):
-        sizes = vector_sizes(store.get_collection_info(collection))
+        info = store.get_collection_info(collection)
+        sizes = vector_sizes(info)
         if sizes and vector_size not in sizes.values():
             actual = ", ".join(f"{name}={size}" for name, size in sorted(sizes.items()))
             raise ValueError(
                 f"Qdrant collection {collection!r} has vector size {actual}, "
                 f"but the configured embedder produces {vector_size}"
             )
+        if hybrid and not collection_has_sparse(info):
+            _warn_hybrid_backfill_once(collection)
         if embedding_model and not marker_exempt:
             embedding_marker.enforce(
                 store,
@@ -263,13 +336,20 @@ def ensure_collection(
                 vector_size=vector_size,
                 project_id=project_id,
                 reset_hint=CODE_RESET_HINT,
+                hybrid=hybrid,
             )
         return
     if not create:
         raise LookupError(f"Qdrant collection not found: {collection}")
+    kwargs: dict[str, Any] = {}
+    if hybrid:
+        kwargs["sparse_vectors_config"] = {
+            HYBRID_SPARSE_VECTOR_NAME: qmodels.SparseVectorParams()
+        }
     store.create_collection(
         collection,
         vectors_config=qmodels.VectorParams(size=int(vector_size), distance=qmodels.Distance.COSINE),
+        **kwargs,
         **_tuning_kwargs(store),
     )
     if embedding_model and not marker_exempt:
@@ -279,6 +359,7 @@ def ensure_collection(
             embedding_model=embedding_model,
             vector_size=vector_size,
             project_id=project_id,
+            hybrid=hybrid,
         )
 
 
@@ -412,6 +493,9 @@ class LocalQdrantWriter:
             embedding_model=self.embedding_model,
             project_id=self.project_id,
         )
+        self._sparse_supported: Optional[bool] = collection_supports_sparse(
+            self._store, self.collection
+        )
 
     def upsert(self, points: Sequence[Mapping[str, Any]]) -> None:
         if not points:
@@ -419,4 +503,96 @@ class LocalQdrantWriter:
         normalized = list(points)
         if self._point_transform is not None:
             normalized = self._point_transform(normalized)
+        normalized = self._hybridize_points(normalized)
         self._store.upsert(self.collection, normalized, wait=True)
+
+    def _hybrid_active(self) -> bool:
+        if self.collection.endswith(MESSAGE_COLLECTION_SUFFIX):
+            return False
+        if not hybrid_active(self.embedding_model):
+            return False
+        # A dense-only collection rejects sparse slots with a hard client
+        # error — degrade to dense-only there (the ensure_collection
+        # warning points at the backfill script).
+        sparse_supported = getattr(self, "_sparse_supported", None)
+        if sparse_supported is None:
+            sparse_supported = collection_supports_sparse(self._store, self.collection)
+            self._sparse_supported = sparse_supported
+        return bool(sparse_supported)
+
+    def _hybridize_points(
+        self, points: list[Mapping[str, Any]]
+    ) -> list[Mapping[str, Any]]:
+        """Attach a named sparse vector to plain-list points when hybrid is on.
+
+        The analyzers hand-build their point dicts, so this is the one
+        funnel where their dense-only ``{"id", "vector": [...], "payload"}``
+        shapes gain the ``{"": dense, "sparse": SparseVector}`` map. Sparse
+        weights are computed from the payload's own document text (same
+        source the backfill uses), one batched encode per upsert batch;
+        points without extractable text stay dense-only (legal in a hybrid
+        collection — Qdrant treats a missing sparse slot as empty).
+        """
+        if not self._hybrid_active():
+            return points
+        candidates: list[tuple[int, str]] = []
+        for index, point in enumerate(points):
+            vector = point.get("vector")
+            if not isinstance(vector, (list, tuple)):
+                continue
+            text = hybrid_document_text(point.get("payload"))
+            if text:
+                candidates.append((index, text))
+        if not candidates:
+            return points
+        from tools.common import embed_runtime
+
+        pairs = embed_runtime.encode_sparse(
+            embed_runtime.effective_model_identity(self.embedding_model),
+            [text for _, text in candidates],
+            device=None,
+        )
+        sparse_by_index = {index: pair for (index, _), pair in zip(candidates, pairs)}
+        hybridized: list[Mapping[str, Any]] = []
+        for index, point in enumerate(points):
+            pair = sparse_by_index.get(index)
+            if pair is None:
+                hybridized.append(point)
+                continue
+            enriched = dict(point)
+            enriched["vector"] = {
+                "": list(point["vector"]),
+                HYBRID_SPARSE_VECTOR_NAME: qmodels.SparseVector(
+                    indices=list(pair[0]), values=list(pair[1])
+                ),
+            }
+            hybridized.append(enriched)
+        return hybridized
+
+
+def hybrid_document_text(payload: Any) -> str:
+    """The payload text a sparse vector represents (backfill-compatible).
+
+    Priority mirrors the analyzer embed conventions: the bounded ``text``
+    field (primary_vector_sync contract), then ``note``/``code`` (analyzer
+    function/class embeds), then summary+comment, then the qualified name.
+    """
+    if not isinstance(payload, Mapping):
+        return ""
+    for key in ("text", "note", "code"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    parts = [
+        str(payload.get(field) or "")
+        for field in ("summary", "comment")
+        if isinstance(payload.get(field), str)
+    ]
+    joined = "\n".join(part for part in parts if part.strip())
+    if joined.strip():
+        return joined
+    for key in ("qualified_name", "name", "file_path"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""

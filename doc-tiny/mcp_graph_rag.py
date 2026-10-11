@@ -214,6 +214,62 @@ def _query_encode(vector_input: str) -> list[float]:
     return encoded[0].tolist()
 
 
+def _query_sparse_encode(vector_input: str) -> tuple[list[int], list[float]] | None:
+    """Hybrid sparse half of the query pair, or ``None`` when not hybrid.
+
+    Rides the code-tiny bridge (embed_runtime), reusing the doc query
+    embedder instance so no second model load happens. Any failure
+    degrades to dense-only (soft reader side).
+    """
+    from embedding_utils import hybrid_enabled
+
+    if not hybrid_enabled(_embedder_model_name):
+        return None
+    try:
+        from tools.common import embed_runtime
+
+        dense_probe = get_embedder()
+        return embed_runtime.encode_sparse(
+            _embedder_model_name,
+            [vector_input],
+            device=str(getattr(dense_probe, "device", "")),
+            model=dense_probe,
+        )[0]
+    except Exception as exc:
+        logger.warning("[doc-query] sparse encode failed (%s); dense-only", exc)
+        return None
+
+
+def _fanout_supports_sparse(pairs: list) -> bool:
+    """All-or-none: every (store, collection) must declare sparse vectors.
+
+    RRF and cosine scores never mix in one doc fan-out — one dense-only
+    member downgrades the whole fan-out (mirrors the code-side rule).
+    ``None`` collection names mean "whatever the store has", so every
+    collection the store exposes gets probed.
+    """
+    if not pairs:
+        return False
+    for qdrant, collection_names in pairs:
+        names = collection_names
+        if names is None:
+            try:
+                names = sorted(qdrant.list_collection_names())
+            except Exception:
+                return False
+        for name in names:
+            try:
+                info = qdrant.get_collection_info(name)
+            except Exception:
+                return False
+            if not getattr(
+                getattr(getattr(info, "config", None), "params", None),
+                "sparse_vectors", None,
+            ):
+                return False
+    return True
+
+
 def _unregistered_doc_graph_name(base: Any, project_id: Any) -> str:
     """Graph name for an unregistered id, exact raw name first.
 
@@ -491,6 +547,7 @@ def qdrant_search_entity_payload(
     source_id: Optional[str],
     collection: Optional[str] = None,
     project_id: Optional[str] = None,
+    query_text: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     # Build the Qdrant filter. The project filter combines with the
     # ``source_id`` filter via AND. A missing ``project_id`` produces no
@@ -531,7 +588,22 @@ def qdrant_search_entity_payload(
     payloads_by_key: Dict[Any, Dict[str, Any]] = {}
     probed_stores: List[str] = []
     found_any = False
-    for qdrant, collection_names in _qdrant_search_targets(project_id, collection):
+    search_targets = _qdrant_search_targets(project_id, collection)
+    # Hybrid: one sparse encode for the whole fan-out, fused only when EVERY
+    # probed collection declares the sparse vector (all-or-none, so the
+    # score-based merge below always compares one scale).
+    sparse_vector: tuple[list[int], list[float]] | None = None
+    use_fusion = False
+    if query_text:
+        sparse_vector = _query_sparse_encode(query_text)
+        if sparse_vector is not None:
+            try:
+                use_fusion = _fanout_supports_sparse(search_targets)
+            except Exception:
+                use_fusion = False
+            if not use_fusion:
+                sparse_vector = None
+    for qdrant, collection_names in search_targets:
         available: Optional[set] = None
         if hasattr(qdrant, "list_collection_names"):
             try:
@@ -558,7 +630,24 @@ def qdrant_search_entity_payload(
             found_any = True
         for collection_name in present:
             try:
-                if hasattr(qdrant, "search"):
+                if sparse_vector is not None and hasattr(qdrant, "query_points"):
+                    # Fused dense+sparse RRF (same hit shape; rank-based scores).
+                    from tools.common.qdrant_query_support import hybrid_fusion_query
+
+                    fusion_kwargs = hybrid_fusion_query(
+                        query_vector,
+                        sparse_vector,
+                        vector_name=None,
+                        top_k=top_k,
+                        query_filter=qdrant_filter,
+                    )
+                    hits = qdrant.query_points(
+                        collection_name=collection_name,
+                        with_payload=True,
+                        with_vectors=False,
+                        **fusion_kwargs,
+                    ).points
+                elif hasattr(qdrant, "search"):
                     hits = qdrant.search(
                         collection_name=collection_name,
                         query_vector=query_vector,
@@ -1220,6 +1309,7 @@ def register_tools(mcp: FastMCP) -> None:
             source_id=source_id,
             collection=collection,
             project_id=project_id,
+            query_text=query,
         )
 
         passages = []
@@ -1345,6 +1435,7 @@ def register_tools(mcp: FastMCP) -> None:
             source_id=source_id,
             collection=collection,
             project_id=project_id,
+            query_text=query,
         )
 
         passages = []

@@ -1,0 +1,18 @@
+# Red Team — Hybrid Retrieval BGE-M3 pha 1
+
+> Adversarial pass sau khi plan + 4 phase hoàn thành và merge research-digest. Mode: inline (1 reviewer), ngày 2026-10-11.
+
+| # | Finding | Severity | Disposition |
+|---|---------|----------|-------------|
+| F1 | **merge_hits trộn scale RRF↔cosine**: fan-out nhiều collection, một cái fused (RRF score) một cái dense-only (cosine) → `merge_hits` so score khác ngữ nghĩa, ranking sai im lặng. Digest flag rõ. | High | **Chốt thiết kế all-or-none**: capability = AND trên fan-out (phase-03 §2). Không có trạng thái trộn scale khả dĩ. Test dispatch matrix bắt buộc hàng "≥1 dense-only → toàn fan-out dense". |
+| F2 | **In-place `update_collection` thêm sparse không tồn tại ở local mode** (digest smoke-test: `update_sparse_vectors_config` raise ValueError) — thiết kế ban đầu của phase-02 sai. | High | **Đã sửa plan trước red-team**: phase-02 chỉ tạo sparse cho collection mới; upgrade = recreate trong phase-04. `ensure_collection` trên collection cũ → warning chỉ đường, không mutate. Server-mode add-sparse đánh dấu `unverified` — không thiết kế trên đó. |
+| F3 | **Dense path bị đụng tay khi lấy hidden states**: ST `encode()` không expose token embeddings; n eager fix là forward lại trong encode → làm đổi dense vector (vi phạm AC1). | Medium | Phase-01 chốt: sparse đi **forward riêng tách bạch**, dense path byte-parallel; chi phí ~2× ingest compute được ghi nhận rõ trong runbook. Golden test bảo đảm dense không đổi bit. |
+| F4 | **Backfill recreate làm mất vector dense gốc**: re-encode trên MPS có nondeterminism low-bit → mọi test so sánh hash dense sẽ fail giả. | Medium | AC6 sửa: payload hash-ok, dense so bằng **top-k overlap** trên sample query; recreate luôn có `--yes` guard vì destructive; rollback = snapshot export trước drop (có trong script flow bước 1). |
+| F5 | **Flag bật giữa chừng trên config đang chạy**: `ensure_collection` collection tồn tại + flag mới bật → nếu xử lý nhầm là "cần tạo mới" sẽ drop dữ liệu. | Medium | Phase-02 AC3b: warning + pointer sang backfill; tuyệt đối không tự recreate. Test riêng cho trạng thái này. |
+| F6 | **Sparse query cho collection {base}_mess** (hash vectors): sparse vô nghĩa trên hash, và exempt rule hiện có chỉ nhận diện theo tên. | Low | Giữ exempt rule nguyên văn (phase-02 AC3d test); hybrid helper bỏ qua `_mess` ở cả query (phase-03 dispatch thêm điều kiện tên exempt vào capability AND). |
+| F7 | **Special-token post-process lệch reference** (cls/eos/pad/unk XLM-R ids, max-per-id): sai một chi tiết là sparse quality giảm im lặng. | Medium | Golden fixture test trong phase-01 là gate bắt buộc trước khi sang phase-02; fixture sinh 1 lần từ FlagEmbedding trên máy có mạng, commit vào `tests/fixtures/`. |
+| F8 | **fuse_k mặc định nhân khối lượng prefetch**: `4×top_k` mỗi channel × fan-out N collection → payload lớn ở top_k cao. | Low | Default `max(4×top_k, 64)` giới hạn thực tế (top_k điển hình ≤ 20); env `EMBED_FUSE_K` để operator can thiệp; đo latency trong verification (P4). |
+| F9 | **Devil's advocate còn lại từ prediction report**: giá trị sparse chưa được chứng minh trên corpus này; chi phí là 4 phase. | — | Đúng bản chất đề xuất enhancement — vì vậy plan giữ flag default OFF + A/B gate là điều kiện của mọi quyết định tiếp theo (AC7); rollback = tắt flag, zero data loss. |
+| F10 | **`EMBED_HYBRID` cho family không phải bge-m3** (user set Qwen3 + flag): hành vi chưa định nghĩa. | Low | Phase-01 AC3: hybrid là no-op + warning 1 lần cho non-bge-m3; test bảng flag × family. |
+
+**Kết luận red-team:** 0 Critical, 2 High (F1, F2 — cả hai đã có disposition chốt trong plan/phase trước khi pass này kết thúc). Không có finding nào buộc đổi scope hay verdict. Plan sẵn sàng cho hi-craft.
