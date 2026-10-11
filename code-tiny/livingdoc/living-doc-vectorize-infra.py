@@ -163,12 +163,37 @@ def qdrant_has_node(qdrant_url, headers, collection, node_id, timeout=30):
     return bool(points)
 
 
-def upsert_point(qdrant_url, headers, collection, vector, payload_data, timeout=30):
+def upsert_point(qdrant_url, headers, collection, vector, payload_data, timeout=30, sparse_pair=None):
     point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, payload_data["node_id"]))
     del headers, timeout
+    vector_value = vector
+    if sparse_pair is not None:
+        from qdrant_client.http import models as qmodels
+
+        indices, values = sparse_pair
+        vector_value = {
+            "": vector,
+            "sparse": qmodels.SparseVector(indices=list(indices), values=list(values)),
+        }
     get_code_qdrant_store(qdrant_url).upsert(
-        collection, [{"id": point_id, "vector": vector, "payload": payload_data}], wait=True,
+        collection, [{"id": point_id, "vector": vector_value, "payload": payload_data}], wait=True,
     )
+
+
+def hybrid_sparse_pair(embedder, model_name, text, qdrant_url, collection):
+    """Sparse lexical weights for the exact embedded text when hybrid is on
+    (see living-doc-vectorize.hybrid_sparse_pair — same contract)."""
+    from tools.common import embed_runtime
+    from tools.common.local_qdrant import collection_supports_sparse
+
+    identity = embed_runtime.effective_model_identity(model_name)
+    if not embed_runtime.hybrid_enabled(identity):
+        return None
+    if not collection_supports_sparse(get_code_qdrant_store(qdrant_url), collection):
+        return None
+    return embed_runtime.encode_sparse(
+        identity, [text], device=str(embedder.device), model=embedder,
+    )[0]
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -253,6 +278,10 @@ def main():
 
                 try:
                     vector = embedder.encode(embed_text, show_progress_bar=False).tolist()
+                    sparse_pair = hybrid_sparse_pair(
+                        embedder, model_name, embed_text,
+                        args.qdrant_url, args.collection,
+                    )
                 except Exception as exc:
                     print(f"  [ERROR] encode {node_id}: {exc}")
                     failed += 1
@@ -271,7 +300,7 @@ def main():
                 try:
                     upsert_point(
                         args.qdrant_url, qdrant_headers, args.collection,
-                        vector, payload_data,
+                        vector, payload_data, sparse_pair=sparse_pair,
                     )
                     save_vectorized_id(resume_path, node_id)
                     vectorized_ids.add(node_id)

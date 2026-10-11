@@ -314,6 +314,47 @@ the marker hard-error will catch it at first ingest.
 
 ---
 
+### Hybrid retrieval enablement (EMBED_HYBRID, pilot-gated)
+
+`EMBED_HYBRID=1` (bge-m3 family only) turns on learned-sparse vectors
+alongside the dense 1024-dim default, fused server-side with RRF. Default
+is **off** and stays off until the A/B gate below passes on a real corpus.
+Flag off = byte-parallel with the dense-only era; a hybrid collection
+queried with the flag off also works (dense channel only).
+
+1. **Prefetch the sparse head** (one-time, 3.5 KB, audited download):
+   `python code-tiny/scripts/prefetch_hybrid_heads.py`. A complete snapshot
+   then loads fully offline; with the flag on and the head missing, encode
+   fails fast pointing at this script (never a HEAD storm).
+2. **Pilot one project**: set `EMBED_HYBRID=1` (shell or `dev.json` env —
+   both flow to code + doc processes) for that project only.
+   **New** collections are created with the named `sparse` vector
+   automatically. An **existing dense-only collection cannot be mutated**
+   in local mode — the writer warns once and keeps writing dense-only
+   until you upgrade it:
+   `python code-tiny/scripts/backfill_hybrid_sparse.py --project-id X --yes`
+   (export payloads → drop + recreate with sparse → re-encode from payload
+   text → stamp `hybrid=true`; `--dry-run` previews, `--resume` continues
+   an interrupted re-upsert, `--doc-mode` targets a doc collection).
+3. **A/B gate** (EN/VI/JA + identifier sets — identifiers are where
+   dense-only is weakest): compare dense-only (flag off) vs fused on the
+   SAME collection. `docs/plans/261011-hybrid-bge-m3/ab_harness.py` is the
+   smoke-scale harness; repeat against a real project corpus before any
+   default flip. Gate: no ground-truth regression, top-k overlap stable.
+4. **Storage/latency expectations** (measured, smoke scale — refresh on
+   the pilot corpus): sparse adds ~0.5 KB/point raw (~11% of the dense
+   float32 payload); fused query latency ≈ 2–3× dense on local mode
+   (brute-force); RRF fusion is rank-based, so dense/sparse scales never
+   need calibration. `EMBED_FUSE_K` (default `max(4×top_k, 64)`) controls
+   prefetch depth per channel if operators need to tune.
+5. **Rollback = turn the flag off.** No reset needed: hybrid collections
+   stay queryable dense-only, and the sentinel's `hybrid` flag is
+   visibility only (capability is read from the collection's sparse
+   config). A model swap still follows the playbook above — hybrid does
+   not change model identity.
+
+---
+
 ## References
 
 * `docs/PROJECT_REGISTRY.md` — registry + naming contract details.

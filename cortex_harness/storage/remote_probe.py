@@ -106,7 +106,10 @@ def provision_qdrant_collection(
     """Create a Qdrant collection on the remote server if it doesn't exist.
 
     Created collections are stamped with the embedding-model sentinel so
-    they satisfy the same identity contract every writer enforces.
+    they satisfy the same identity contract every writer enforces. With
+    hybrid retrieval on (``EMBED_HYBRID=1``), the creation also declares
+    the named ``sparse`` vector so the collection accepts dual-vector
+    points from the first ingest.
     """
     if not config.qdrant_url:
         return ProvisionResult(
@@ -126,16 +129,24 @@ def provision_qdrant_collection(
                 f"collection '{collection_name}' already exists",
             )
 
+        create_kwargs: dict[str, Any] = {}
+        hybrid = _hybrid_flag_enabled()
+        if hybrid:
+            create_kwargs["sparse_vectors_config"] = {
+                "sparse": qmodels.SparseVectorParams()
+            }
         client.create_collection(
             collection_name=collection_name,
             vectors_config=qmodels.VectorParams(
                 size=vector_size, distance=distance_enum
             ),
+            **create_kwargs,
         )
-        _stamp_marker_best_effort(client, collection_name, vector_size)
+        _stamp_marker_best_effort(client, collection_name, vector_size, hybrid=hybrid)
         return ProvisionResult(
             f"qdrant:{collection_name}", "created",
-            f"collection '{collection_name}' created (dim={vector_size})",
+            f"collection '{collection_name}' created (dim={vector_size}"
+            + (", hybrid sparse" if hybrid else "") + ")",
         )
     except Exception as exc:
         return ProvisionResult(
@@ -143,7 +154,14 @@ def provision_qdrant_collection(
         )
 
 
-def _stamp_marker_best_effort(client: Any, collection_name: str, vector_size: int) -> None:
+def _hybrid_flag_enabled() -> bool:
+    raw = str(os.environ.get("EMBED_HYBRID", "")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _stamp_marker_best_effort(
+    client: Any, collection_name: str, vector_size: int, *, hybrid: bool = False,
+) -> None:
     """Best-effort sentinel stamp on a freshly provisioned collection.
 
     ``get_remote_client`` returns a raw ``QdrantClient`` (PointStruct
@@ -163,6 +181,7 @@ def _stamp_marker_best_effort(client: Any, collection_name: str, vector_size: in
             collection_name,
             embedding_model=DEFAULT_CODE_EMBEDDING_MODEL,
             vector_size=vector_size,
+            hybrid=hybrid,
         )
         client.upsert(
             collection_name=collection_name,

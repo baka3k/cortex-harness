@@ -2,7 +2,7 @@ import argparse
 import os
 import textwrap
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from sentence_transformers import SentenceTransformer
 
@@ -27,13 +27,36 @@ def _load_env() -> None:
 
 
 def qdrant_search(
-    client: Any, collection: str, query_vector: List[float], top_k: int
+    client: Any, collection: str, query_vector: List[float], top_k: int,
+    sparse_vector: Tuple[List[int], List[float]] | None = None,
 ) -> List[Dict[str, Any]]:
-    hits = client.search(
-        collection_name=collection,
-        query_vector=query_vector,
-        limit=top_k,
-    )
+    if sparse_vector is not None and hasattr(client, "query_points"):
+        # Fused dense+sparse RRF (only reached when the caller verified the
+        # collection declares the sparse vector).
+        try:
+            from tools.common.qdrant_query_support import hybrid_fusion_query
+
+            kwargs = hybrid_fusion_query(
+                query_vector, sparse_vector, vector_name=None,
+                top_k=top_k, query_filter=None,
+            )
+            hits = client.query_points(
+                collection_name=collection,
+                with_payload=True,
+                with_vectors=False,
+                **kwargs,
+            ).points
+        except Exception as exc:  # noqa: BLE001 - degrade to dense-only
+            print(f"[query] fusion failed ({exc}); dense-only retry")
+            hits = client.search(
+                collection_name=collection, query_vector=query_vector, limit=top_k,
+            )
+    else:
+        hits = client.search(
+            collection_name=collection,
+            query_vector=query_vector,
+            limit=top_k,
+        )
     results = []
     for hit in hits:
         if hit.payload is None:
@@ -181,7 +204,31 @@ def main() -> None:
 
     qdrant = get_document_qdrant_store(args.qdrant_path)
 
-    hits = qdrant_search(qdrant, args.collection, query_vector, args.top_k)
+    # Hybrid: sparse half + single-collection capability probe (all-or-none
+    # trivially reduces to this one collection).
+    sparse_vector = None
+    try:
+        from embedding_utils import hybrid_enabled
+
+        if hybrid_enabled(model_name):
+            from tools.common import embed_runtime
+
+            sparse_vector = embed_runtime.encode_sparse(
+                model_name, [args.query],
+                device=str(embedder.device), model=embedder,
+            )[0]
+            info = qdrant.get_collection_info(args.collection)
+            if not getattr(
+                getattr(getattr(info, "config", None), "params", None),
+                "sparse_vectors", None,
+            ):
+                sparse_vector = None
+    except Exception as exc:  # noqa: BLE001 - dense-only on any sparse failure
+        print(f"[query] hybrid sparse unavailable ({exc}); dense-only")
+        sparse_vector = None
+
+    hits = qdrant_search(qdrant, args.collection, query_vector, args.top_k,
+                         sparse_vector=sparse_vector)
     if not hits:
         print("No Qdrant hits found.")
         return

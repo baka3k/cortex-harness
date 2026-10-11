@@ -763,6 +763,10 @@ def _code_env_for_process(
         result.setdefault("EMBED_MODEL", str(env["EMBEDDING_MODEL"]))
     if env.get("device"):
         result.setdefault("EMBED_DEVICE", _normalize_embed_device(env["device"]))
+    # Hybrid retrieval flag: config env entries already flow through the
+    # dict copy above; a shell-exported EMBED_HYBRID reaches sync/pilot
+    # subprocesses too (subprocess env replaces os.environ).
+    _pass_through_embed_hybrid(result, env)
     if env.get("BATCH_SIZE"):
         result.setdefault("EMBED_BATCH_SIZE", str(env["BATCH_SIZE"]))
     if env.get("MAX_EMBED_CHARS"):
@@ -793,6 +797,7 @@ def _doc_env_for_process(
     if env.get("device"):
         # doc-tiny reads EMBEDDING_DEVICE (embedding_utils), not EMBED_DEVICE.
         result.setdefault("EMBEDDING_DEVICE", _normalize_embed_device(env["device"]))
+    _pass_through_embed_hybrid(result, env)
     # Per Phase 06 of the unified ingest/query contract plan, the doc
     # server's Qdrant collection is resolved through the ProjectRegistry
     # so it matches the doc graph name (``{project_id}_doc``) by default.
@@ -830,6 +835,13 @@ def _doc_env_for_process(
         result["FALKORDB_GRAPH"] = targets.doc_graph
     _isolate_graph_provider_environment(result, "DOC_GRAPH_PROVIDER")
     return result
+
+
+def _pass_through_embed_hybrid(result: dict, env: dict) -> None:
+    """Forward ``EMBED_HYBRID`` (config env or operator shell) to the child."""
+    hybrid = str(env.get("EMBED_HYBRID") or os.environ.get("EMBED_HYBRID") or "").strip()
+    if hybrid:
+        result.setdefault("EMBED_HYBRID", hybrid)
 
 
 def _mcp_env_from_config(project_dir: Path, service_name: str) -> dict:

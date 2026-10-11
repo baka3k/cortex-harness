@@ -32,6 +32,10 @@ EMBEDDING_MODEL_FIELD = "embedding_model"
 VECTOR_SIZE_FIELD = "vector_size"
 PROJECT_ID_FIELD = "project_id"
 STAMPED_AT_FIELD = "stamped_at"
+# Visibility flag: the collection's writer ran with hybrid retrieval on.
+# NOT a capability source of truth — query-side capability reads the
+# collection's sparse_vectors config (qdrant_layout_cache).
+HYBRID_FIELD = "hybrid"
 
 # Query-side sentinel read cache. Writers always re-probe (use_cache has no
 # effect on enforce); queries reuse the read for a short TTL so a reset in
@@ -96,6 +100,7 @@ def sentinel_point(
     embedding_model: str,
     vector_size: int,
     project_id: Optional[str] = None,
+    hybrid: bool = False,
 ) -> Dict[str, Any]:
     """Build the sentinel ``{"id", "payload"}`` without writing it.
 
@@ -109,6 +114,7 @@ def sentinel_point(
             EMBEDDING_MODEL_FIELD: str(embedding_model),
             VECTOR_SIZE_FIELD: int(vector_size),
             PROJECT_ID_FIELD: str(project_id or ""),
+            HYBRID_FIELD: bool(hybrid),
             STAMPED_AT_FIELD: datetime.now(timezone.utc).isoformat(timespec="seconds"),
         },
     }
@@ -121,6 +127,7 @@ def stamp(
     embedding_model: str,
     vector_size: int,
     project_id: Optional[str] = None,
+    hybrid: bool = False,
 ) -> Dict[str, Any]:
     """Write (or refresh) the sentinel point. Invalidates the read cache."""
     payload: Dict[str, Any] = {
@@ -128,6 +135,7 @@ def stamp(
         EMBEDDING_MODEL_FIELD: str(embedding_model),
         VECTOR_SIZE_FIELD: int(vector_size),
         PROJECT_ID_FIELD: str(project_id or ""),
+        HYBRID_FIELD: bool(hybrid),
         STAMPED_AT_FIELD: datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     store.upsert(
@@ -191,11 +199,13 @@ def enforce(
     vector_size: int,
     project_id: Optional[str] = None,
     reset_hint: str = "Re-index the collection (drop + re-ingest) before switching models.",
+    hybrid: bool = False,
 ) -> Dict[str, Any]:
     """Chokepoint gate: stamp, re-stamp, or raise.
 
     * no marker → stamp and proceed (fresh or pre-marker collection);
-    * marker matches → proceed;
+    * marker matches → proceed (re-stamp once when only the ``hybrid``
+      visibility flag changed, e.g. the operator flipped ``EMBED_HYBRID``);
     * marker differs but the collection holds *only* the sentinel (a reset
       that kept the collection) → re-stamp and proceed;
     * marker differs otherwise → :class:`EmbeddingModelMismatchError`.
@@ -208,9 +218,19 @@ def enforce(
             embedding_model=embedding_model,
             vector_size=vector_size,
             project_id=project_id,
+            hybrid=hybrid,
         )
     stamped = str(meta.get(EMBEDDING_MODEL_FIELD) or "")
     if stamped == str(embedding_model):
+        if bool(meta.get(HYBRID_FIELD, False)) != bool(hybrid):
+            return stamp(
+                store,
+                collection,
+                embedding_model=embedding_model,
+                vector_size=vector_size,
+                project_id=project_id,
+                hybrid=hybrid,
+            )
         return meta
     if _only_sentinel_left(store, collection):
         return stamp(
@@ -219,6 +239,7 @@ def enforce(
             embedding_model=embedding_model,
             vector_size=vector_size,
             project_id=project_id,
+            hybrid=hybrid,
         )
     mismatch = {
         "collection": collection,

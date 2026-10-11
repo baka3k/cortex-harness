@@ -49,6 +49,13 @@ try:
 except Exception:  # standalone doc-tiny runtime
     _embedding_marker = None
 
+# Sparse encode for hybrid retrieval rides the same code-tiny bridge.
+# Standalone doc-tiny stays dense-only (no bridge → hybrid unavailable).
+try:
+    from tools.common import embed_runtime as _embed_runtime
+except Exception:  # standalone doc-tiny runtime
+    _embed_runtime = None
+
 _DOC_RESET_HINT = (
     "Reset the collection first: python doc-tiny/0_reset_all.py --project-id "
     "<project_id> --force, then re-run this ingest."
@@ -630,6 +637,26 @@ def _doc_vector_size(info: Any) -> int | None:
     return None
 
 
+def _doc_hybrid_active(embedding_model: str | None) -> bool:
+    """Hybrid applies when the flag is on AND the bridge + model family say so."""
+    if not embedding_model or _embed_runtime is None:
+        return False
+    from embedding_utils import hybrid_enabled
+
+    return hybrid_enabled(embedding_model)
+
+
+def _collection_accepts_sparse(client: Any, name: str) -> bool:
+    """Whether the collection declared a named sparse vector (soft probe)."""
+    try:
+        info = client.get_collection_info(name)
+    except Exception:
+        return False
+    return bool(
+        getattr(getattr(getattr(info, "config", None), "params", None), "sparse_vectors", None)
+    )
+
+
 def create_collection(
     client: Any,
     name: str,
@@ -642,7 +669,13 @@ def create_collection(
     A legacy collection created before the marker era gets stamped on
     first contact; a collection holding only the sentinel (post-reset)
     re-stamps instead of deadlocking the pilot runbook.
+
+    With hybrid on, a NEW collection carries the named ``sparse`` vector
+    next to the dense default; an existing dense-only collection is never
+    mutated (local mode cannot add sparse in place) — the ingest prints a
+    one-time backfill pointer instead.
     """
+    hybrid = _doc_hybrid_active(embedding_model)
     try:
         info = client.get_collection_info(name)
     except Exception:
@@ -654,6 +687,18 @@ def create_collection(
                 f"Qdrant collection {name!r} has vector size {existing}, but this "
                 f"embedder produces {vector_size}. {_DOC_RESET_HINT}"
             )
+        if hybrid:
+            sparse_cfg = getattr(
+                getattr(getattr(info, "config", None), "params", None),
+                "sparse_vectors", None,
+            )
+            if not sparse_cfg:
+                print(
+                    f"[hybrid] EMBED_HYBRID=1 but collection {name!r} has no sparse "
+                    f"vector config and local mode cannot add one in place. Upgrade "
+                    f"it with: python code-tiny/scripts/backfill_hybrid_sparse.py "
+                    f"--doc-mode --project-id {project_id or '<project_id>'}"
+                )
         if embedding_model and _embedding_marker is not None:
             try:
                 existing_count = int(getattr(client.count(name, count_filter=None, exact=True), "count", 0))
@@ -672,11 +717,18 @@ def create_collection(
                 vector_size=vector_size,
                 project_id=project_id,
                 reset_hint=_DOC_RESET_HINT,
+                hybrid=hybrid,
             )
         return
+    create_kwargs: Dict[str, Any] = {}
+    if hybrid:
+        create_kwargs["sparse_vectors_config"] = {
+            "sparse": qmodels.SparseVectorParams()
+        }
     client.create_collection(
         name,
         vectors_config=qmodels.VectorParams(size=vector_size, distance=qmodels.Distance.COSINE),
+        **create_kwargs,
     )
     if embedding_model and _embedding_marker is not None:
         _embedding_marker.stamp(
@@ -685,6 +737,7 @@ def create_collection(
             embedding_model=embedding_model,
             vector_size=vector_size,
             project_id=project_id,
+            hybrid=hybrid,
         )
 
 
@@ -702,8 +755,20 @@ def ingest_to_qdrant(
     project_id: str | None = None,
     project_id_normalized: str | None = None,
     extra_payload: Dict[str, Any] | None = None,
+    embedding_model: str | None = None,
 ) -> None:
     vector = embedder.encode([paragraph])[0]
+    # Hybrid: sparse weights for the exact paragraph text, reusing the
+    # caller's SentenceTransformer instance (no second model load).
+    # Dense-only when the collection never declared the sparse vector.
+    sparse_pair = None
+    if _doc_hybrid_active(embedding_model) and _collection_accepts_sparse(client, collection):
+        assert _embed_runtime is not None
+        indices, values = _embed_runtime.encode_sparse(
+            embedding_model, [paragraph],
+            device=str(embedder.device), model=embedder,
+        )[0]
+        sparse_pair = qmodels.SparseVector(indices=list(indices), values=list(values))
     entity_ids = list({node["id"] for node in nodes.values()})
     entity_mentions: List[Dict[str, Any]] = []
     for node in nodes.values():
@@ -731,7 +796,7 @@ def ingest_to_qdrant(
     payload["project_id_normalized"] = project_id_normalized
     point = qmodels.PointStruct(
         id=_point_id(project_id_normalized, source_id, paragraph_id),
-        vector=vector.tolist(),
+        vector={"": vector.tolist(), "sparse": sparse_pair} if sparse_pair is not None else vector.tolist(),
         payload=payload,
     )
     if collection not in _PRINTED_COLLECTIONS:
@@ -1007,6 +1072,7 @@ def process_text(
             qdrant, args.collection, paragraph, idx, embedder, nodes, source_id,
             project_id=(args.project_id or args.source_id or None),
             project_id_normalized=project_id_normalized,
+            embedding_model=getattr(args, "_resolved_embed_model", None),
         )
         print("Qdrant ingestion complete.")
 
@@ -1253,6 +1319,7 @@ def process_xlsx_structured(
                         project_id=(args.project_id or args.source_id or None),
                         project_id_normalized=project_id_normalized,
                         extra_payload=extra_payload,
+                        embedding_model=getattr(args, "_resolved_embed_model", None),
                     )
                 graph_batch.append(
                     {
@@ -1587,6 +1654,9 @@ def main() -> None:
         model_name, local_files_only = resolve_embedding_model(
             args.embedding_model, DEFAULT_DOC_EMBEDDING_MODEL
         )
+        # The resolved identity (env chain + local path) feeds the hybrid
+        # decision at the upsert sites, which only see ``args``.
+        args._resolved_embed_model = model_name
         device = resolve_embedding_device(args.embedding_device)
         embedder = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
 
