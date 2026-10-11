@@ -7,7 +7,7 @@ step 3) requires dense-only (flag off) vs fused (flag on) on the SAME
 collection against a real project corpus before enabling ``EMBED_HYBRID``
 per project. Gate: no ground-truth regression, top-k overlap stable.
 
-Non-destructive: the target collection is CLONED under a ``_hybridab``
+Non-destructive: each target collection is CLONED under a ``_hybridab``
 suffix, the clone is recreated with the named sparse vector and re-encoded
 from its own payloads, and the original is never written. The clone is
 dropped when the run ends (success or failure). Both arms query the SAME
@@ -17,15 +17,23 @@ the production chokepoints (``get_code_qdrant_store`` / doc twin,
 ``qdrant_query_support.search_collection`` — sentinel exclusion and
 ``EMBED_FUSE_K`` included).
 
-Query set:
+Target resolution:
 
-* identifier queries are derived from the corpus itself (most-duplicated
-  names as duplicate stress + longest distinctive names), truth = every
-  point whose payload name matches — zero-config, works on any corpus;
-* paraphrase queries (EN/VI/JA or anything else) need corpus-specific
-  ground truth: pass ``--queries`` a JSON file of
-  ``{"name", "class", "text", "truth_name"}`` objects. The 2026-10-11 gate
-  run's set lives at ``docs/plans/261011-hybrid-ab-gate/ab_realcorpus_queries.json``.
+* ``--collection C`` gates exactly that collection;
+* ``--project-id X`` (code mode) discovers the project's physical
+  per-analyzer collections — ``X_<hash>__<parser>_functions`` as named by
+  incremental sync — and gates each in turn (overall verdict = worst);
+* ``--project-id X --doc-mode`` gates ``X_doc`` (plain name, as created).
+
+Corpus-derived identifier queries (most-duplicated names as duplicate
+stress + longest distinctive names; compiler-mangled ``$`` names skipped)
+work on any corpus without configuration. Paraphrase queries need
+corpus-specific ground truth: pass ``--queries`` a JSON file of
+``{"name", "class", "text", "truth_name"}`` objects.
+
+Large corpora: ``--max-points N`` subsamples evenly (deterministic stride)
+before encoding — a smoke gate in minutes instead of a full sweep in hours;
+``"sampled": true`` is stamped on the summary.
 
 Beyond the two production arms, measurement-only arms characterize a
 regression when one appears: weighted RRF (0.7/0.3 and 0.85/0.15, computed
@@ -33,8 +41,10 @@ client-side — the client wrapper rejects a raw ``Rrf`` query on local mode)
 and sparse-only.
 
 Usage:
+  python code-tiny/scripts/ab_hybrid_gate.py --project-id X
   python code-tiny/scripts/ab_hybrid_gate.py --collection C
-  python code-tiny/scripts/ab_hybrid_gate.py --project-id X [--doc-mode]
+  python code-tiny/scripts/ab_hybrid_gate.py --project-id X --doc-mode
+  python code-tiny/scripts/ab_hybrid_gate.py --project-id X --max-points 300
   python code-tiny/scripts/ab_hybrid_gate.py --collection C \
       --queries my_queries.json --top-k 10 --out-dir /tmp
 """
@@ -48,7 +58,7 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 CODE_TINY = Path(__file__).resolve().parents[1]
 REPO_ROOT = CODE_TINY.parent
@@ -61,20 +71,45 @@ from qdrant_client.http import models as qmodels  # noqa: E402
 
 from tools.common import embed_runtime, embedding_marker  # noqa: E402
 from tools.common.local_qdrant import (  # noqa: E402
+    discover_code_collections,
     hybrid_document_text,
 )
-from tools.common.qdrant_query_support import search_collection  # noqa: E402
+from tools.common.qdrant_query_support import (  # noqa: E402
+    HYBRID_SPARSE_VECTOR_NAME,
+    _with_sentinel_exclusion,
+    fuse_k_from_env,
+    search_collection,
+)
 
 CLONE_SUFFIX = "_hybridab"
 
+# Encode-time memory guard: attention memory scales with batch × seq², and
+# analyzer payloads (the ``code`` field) can be whole files that reach the
+# model's 8192-token truncation — a fixed batch of those blew 8 GB on MPS.
+# Pack batches by estimated token cost instead of a fixed row count.
+_EST_CHAR_PER_TOKEN = 3
+_TOKEN_BUDGET = 16000
 
-def _resolve_collection(args) -> str:
-    if args.collection:
-        return args.collection
-    project_id = (args.project_id or "").strip()
-    if not project_id:
-        raise SystemExit("Either --collection or --project-id is required.")
-    return f"{project_id}_doc" if args.doc_mode else project_id
+
+def _pack_batches(texts: List[str], max_size: int) -> List[List[int]]:
+    large_cost = _TOKEN_BUDGET // 4
+    batches: List[List[int]] = []
+    current: List[int] = []
+    estimated = 0
+    current_has_large = False
+    for index, text in enumerate(texts):
+        cost = max(1, len(text) // _EST_CHAR_PER_TOKEN)
+        is_large = cost >= large_cost
+        if current and (is_large or current_has_large
+                        or estimated + cost > _TOKEN_BUDGET or len(current) >= max_size):
+            batches.append(current)
+            current, estimated, current_has_large = [], 0, False
+        current.append(index)
+        estimated += cost
+        current_has_large = current_has_large or is_large
+    if current:
+        batches.append(current)
+    return batches
 
 
 def _resolve_store(args):
@@ -99,17 +134,32 @@ def _resolve_model(args) -> str:
     return os.environ.get("CODE_EMBEDDING_MODEL") or DEFAULT_CODE_EMBEDDING_MODEL
 
 
+def resolve_targets(args, store) -> List[str]:
+    if args.collection:
+        return [args.collection]
+    project_id = (args.project_id or "").strip()
+    if not project_id:
+        raise SystemExit("Either --collection or --project-id is required.")
+    if args.doc_mode:
+        return [f"{project_id}_doc"]
+    found = discover_code_collections(store, project_id)
+    if not found:
+        raise SystemExit(
+            f"No code collections found for project {project_id!r} "
+            f"(looked for {project_id}_*__*_functions in the resolved store). "
+            f"Sync first with 'dev sync code', or pass --collection explicitly."
+        )
+    return found
+
+
 def derive_identifier_queries(rows, limit: int) -> List[Tuple[str, str, str]]:
     """Corpus-derived identifier set: duplicate stress + distinctive names.
 
-    Identifiers are the class hybrid retrieval claims to help, so the gate
-    can always exercise it without a hand-written file: half the budget
-    goes to the most-duplicated names (routing disambiguation stress),
-    half to the longest unique names (exact-token lookup). Compiler-mangled
-    names (``$`` markers — lambda/inner-class synthetic ids) are skipped
-    unless the clean pool cannot fill the budget: nobody searches
-    ``foo$lambda@102:31`` on purpose, and a mangled default set would drag
-    the gate with unsearchable queries.
+    Half the budget goes to the most-duplicated names (routing
+    disambiguation stress), half to the longest unique names (exact-token
+    lookup). Compiler-mangled names (``$`` markers) are skipped unless the
+    clean pool cannot fill the budget — nobody searches
+    ``foo$lambda@102:31`` on purpose.
     """
     names = Counter(
         str(payload.get("name") or "").strip()
@@ -148,44 +198,7 @@ def rank_of_best_truth(hit_ids: List[str], truth: Set[str]) -> int:
     return 0
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--collection", default=None)
-    parser.add_argument("--project-id", default=None)
-    parser.add_argument("--doc-mode", action="store_true",
-                        help="Target the doc store + doc collection naming.")
-    parser.add_argument("--queries", default=None,
-                        help="JSON file of paraphrase queries "
-                             "[{name, class, text, truth_name}]; identifier "
-                             "queries are always derived from the corpus.")
-    parser.add_argument("--identifiers", type=int, default=10,
-                        help="How many corpus-derived identifier queries.")
-    parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--device", default=None,
-                        help="EMBED_DEVICE override (default: auto).")
-    parser.add_argument("--out-dir", default=".",
-                        help="Where results/failures JSON files are written.")
-    args = parser.parse_args()
-
-    collection = _resolve_collection(args)
-    top_k = max(1, args.top_k)
-    os.environ.setdefault("MCP_PRELOAD_EMBEDDER", "0")
-    os.environ["HF_HUB_OFFLINE"] = "1"          # snapshot + head must be cached
-    os.environ["EMBED_HYBRID"] = "1"            # gate under test: the flag-on arm
-    if args.device:
-        os.environ["EMBED_DEVICE"] = args.device
-
-    model_identity = embed_runtime.effective_model_identity(_resolve_model(args))
-    store = _resolve_store(args)
-    if not store.collection_exists(collection):
-        raise SystemExit(f"Collection not found: {collection!r}")
-    from tools.common.local_qdrant import collection_has_sparse
-
-    if collection_has_sparse(store.get_collection_info(collection)):
-        print(f"[ab] {collection!r} already declares sparse — measuring "
-              f"dense-vs-fused on a fresh re-encode anyway (clone).")
-
-    # ---- 1. scroll source payloads (original collection is never written)
+def scroll_rows(store, collection: str) -> List[Tuple[str, Dict[str, Any]]]:
     rows: List[Tuple[str, Dict[str, Any]]] = []
     offset = None
     while True:
@@ -201,31 +214,24 @@ def main() -> int:
             rows.append((str(pid), dict(payload or {})))
         if offset is None:
             break
+    return rows
+
+
+def gate_one(store, collection: str, model_identity: str, args) -> Tuple[dict, List[dict]]:
+    """Gate one collection; returns ``(summary, failures)``."""
+    top_k = max(1, args.top_k)
+    rows = scroll_rows(store, collection)
     if len(rows) < 2:
-        raise SystemExit(f"{collection!r} has {len(rows)} non-sentinel points; too small to gate on.")
-    print(f"[ab] source {collection}: {len(rows)} non-sentinel points")
+        return ({"collection": collection, "error": f"only {len(rows)} points"}, [])
+    sampled = False
+    if args.max_points and len(rows) > args.max_points:
+        stride = len(rows) / float(args.max_points)
+        rows = [rows[int(i * stride)] for i in range(args.max_points)]
+        sampled = True
+        print(f"[ab] {collection}: subsampled {len(rows)}/{args.max_points} "
+              f"evenly from the full scroll (sampled gate)")
 
-    # ---- 2. build the query set
-    by_name: Dict[str, Set[str]] = {}
-    for pid, payload in rows:
-        by_name.setdefault(str(payload.get("name") or ""), set()).add(pid)
-    id_to_name = {pid: str(payload.get("name") or "") for pid, payload in rows}
-
-    queries: List[Tuple[str, str, str, Set[str]]] = [
-        (name, qclass, identifier, by_name.get(identifier, set()))
-        for name, qclass, identifier in derive_identifier_queries(rows, args.identifiers)
-    ]
-    if args.queries:
-        for entry in json.loads(Path(args.queries).read_text(encoding="utf-8")):
-            queries.append((
-                str(entry["name"]), str(entry.get("class") or "custom"),
-                str(entry["text"]), by_name.get(str(entry["truth_name"]), set()),
-            ))
-    missing = [(name, text[:40]) for name, _, text, truth in queries if not truth]
-    if missing:
-        raise SystemExit(f"unresolvable ground truth: {missing}")
-
-    # ---- 3. clone with sparse schema + sentinel (same path as backfill)
+    # ---- clone with sparse schema + sentinel (same path as backfill)
     clone = collection + CLONE_SUFFIX
     store.recreate_collection(
         clone,
@@ -235,26 +241,44 @@ def main() -> int:
     embedding_marker.stamp(store, clone, embedding_model=model_identity,
                            vector_size=1024, hybrid=True)
     print(f"[ab] clone {clone} recreated (dense 1024 + named sparse)")
-    t_all = time.perf_counter()
+
     try:
-        # ---- 4. re-encode dense+sparse from the clone's own payloads
+        # ---- re-encode dense+sparse from the clone's own payloads
         model = embed_runtime.get_sentence_transformer(
             model_identity,
             trust_remote_code=embed_runtime.model_policy(model_identity)["trust_remote_code"],
         )
         texts = [hybrid_document_text(payload) or " " for _, payload in rows]
+        t_all = time.perf_counter()
         t0 = time.perf_counter()
         batch = 32
         upserted = 0
-        for start in range(0, len(rows), batch):
-            chunk_texts = texts[start:start + batch]
-            dense = model.encode(chunk_texts, batch_size=batch, convert_to_numpy=True,
-                                 normalize_embeddings=True, show_progress_bar=False)
+        from tools.common.embed_runtime import _is_accelerator_runtime_error
+
+        def encode_batch(batch_texts):
+            return model.encode(batch_texts, batch_size=len(batch_texts),
+                                convert_to_numpy=True,
+                                normalize_embeddings=True, show_progress_bar=False)
+
+        for index_batch in _pack_batches(texts, batch):
+            chunk_texts = [texts[i] for i in index_batch]
+            try:
+                dense = encode_batch(chunk_texts)
+            except RuntimeError as exc:
+                if not _is_accelerator_runtime_error(exc):
+                    raise
+                print(f"[ab] accelerator error on a batch ({str(exc)[:80]}…); "
+                      f"retrying rows one at a time")
+                dense_rows = []
+                for single in chunk_texts:
+                    dense_rows.append(encode_batch([single])[0])
+                dense = dense_rows
             sparse = embed_runtime.encode_sparse(model_identity, chunk_texts, model=model)
             points = []
-            for (pid, payload), vec, (indices, values) in zip(
-                rows[start:start + batch], dense, sparse
-            ):
+            for pos, row_index in enumerate(index_batch):
+                pid, payload = rows[row_index]
+                indices, values = sparse[pos]
+                vec = dense[pos]
                 points.append({
                     "id": pid,
                     "vector": {
@@ -270,7 +294,32 @@ def main() -> int:
         clone_count = int(store.count(clone, count_filter=None, exact=True).count)
         assert clone_count == len(rows) + 1, "clone population mismatch"
 
-        # ---- 5. run both production arms + measurement arms
+        # ---- ground truth resolved against this collection's payloads
+        by_name: Dict[str, Set[str]] = {}
+        for pid, payload in rows:
+            by_name.setdefault(str(payload.get("name") or ""), set()).add(pid)
+        id_to_name = {pid: str(payload.get("name") or "") for pid, payload in rows}
+
+        queries: List[Tuple[str, str, str, Set[str]]] = [
+            (name, qclass, identifier, by_name.get(identifier, set()))
+            for name, qclass, identifier in derive_identifier_queries(rows, args.identifiers)
+        ]
+        skipped: List[str] = []
+        for entry in args.parsed_queries:
+            truth = by_name.get(str(entry.get("truth_name")), set())
+            if truth:
+                queries.append((str(entry["name"]), str(entry.get("class") or "custom"),
+                                str(entry["text"]), truth))
+            else:
+                skipped.append(str(entry["name"]))
+        if skipped:
+            print(f"[ab] {collection}: {len(skipped)} paraphrase queries skipped "
+                  f"(truth_name not present in this collection): {skipped}")
+        queries = [(n, c, t, truth) for n, c, t, truth in queries if truth]
+        if not queries:
+            return ({"collection": collection, "error": "no resolvable queries"}, [])
+
+        # ---- both production arms + measurement arms
         results = []
         print(f"\n{'query':<26} {'cls':<10} {'dR':<4} {'fR':<4} {'ovl10':<6} {'d ms':<7} {'f ms':<7}")
         for name, qclass, text, truth in queries:
@@ -301,12 +350,7 @@ def main() -> int:
             # Measurement-only arms (NOT the production path): weighted RRF
             # client-side (the client wrapper rejects a raw Rrf object on
             # local mode) + sparse-only, to characterize any regression.
-            from tools.common.qdrant_query_support import (
-                HYBRID_SPARSE_VECTOR_NAME, _with_sentinel_exclusion, fuse_k_from_env,
-            )
-            from tools.common.project_scope import qdrant_project_filter
-
-            flt = _with_sentinel_exclusion(qdrant_project_filter(None))
+            flt = _with_sentinel_exclusion(None)
             fuse_k = fuse_k_from_env(top_k)
             dense_ch = store.query_points(
                 clone, query=list(dense_vec), using="", limit=fuse_k, query_filter=flt,
@@ -340,7 +384,7 @@ def main() -> int:
             print(f"{name:<26} {qclass:<10} {d_rank:<4} {f_rank:<4} "
                   f"{row['overlap@10']:<6} {dense_ms:<7.1f} {fused_ms:<7.1f}")
 
-        # ---- 6. aggregate + gate readout
+        # ---- aggregate + gate readout
         def agg(pred, subset=None):
             vals = [r for r in results if subset is None or r["class"] == subset]
             return round(100 * sum(1 for r in vals if pred(r)) / max(1, len(vals)), 1)
@@ -361,8 +405,12 @@ def main() -> int:
             }
 
         classes = sorted({r["class"] for r in results})
+        def median(rank_key, cls):
+            vals = sorted(r[rank_key] for r in results if r["class"] == cls)
+            return vals[len(vals) // 2]
         summary = {
-            "collection": collection, "clone": clone, "points": len(rows),
+            "collection": collection, "points": len(rows),
+            "sampled": sampled, "max_points": args.max_points or 0,
             "model": model_identity,
             "device": os.environ.get("EMBED_DEVICE", "auto"), "top_k": top_k,
             "queries": len(results),
@@ -381,12 +429,8 @@ def main() -> int:
                     "hit3_fused": agg(lambda r: r["fused_hit@3"], cls),
                     "hit10_dense": agg(lambda r: r["dense_hit@10"], cls),
                     "hit10_fused": agg(lambda r: r["fused_hit@10"], cls),
-                    "median_dense_rank": sorted(
-                        r["dense_rank"] for r in results if r["class"] == cls
-                    )[sum(1 for r in results if r["class"] == cls) // 2],
-                    "median_fused_rank": sorted(
-                        r["fused_rank"] for r in results if r["class"] == cls
-                    )[sum(1 for r in results if r["class"] == cls) // 2],
+                    "median_dense_rank": median("dense_rank", cls),
+                    "median_fused_rank": median("fused_rank", cls),
                 }
                 for cls in classes
             },
@@ -409,36 +453,93 @@ def main() -> int:
             if not r["fused_hit@10"]
             or (r["dense_rank"] and (r["fused_rank"] == 0 or r["fused_rank"] > r["dense_rank"]))
         ]
-        out_dir = Path(args.out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        results_path = out_dir / f"ab_gate_{collection}_results.json"
-        failures_path = out_dir / f"ab_gate_{collection}_failures.json"
-        results_path.write_text(
-            json.dumps({"summary": summary, "results": results}, indent=1, ensure_ascii=False),
-            encoding="utf-8")
-        failures_path.write_text(
-            json.dumps(failures, indent=1, ensure_ascii=False), encoding="utf-8")
-
-        gate_passed = (
+        summary["verdict"] = "PASS" if (
             summary["hit10_fused"] >= summary["hit10_dense"]
             and summary["hit3_fused"] >= summary["hit3_dense"]
             and not summary["regressions"]
-        )
-        print("\n===== GATE SUMMARY =====")
-        print(json.dumps(summary, indent=1, ensure_ascii=False))
-        print(f"\n[ab] gate verdict: {'PASS' if gate_passed else 'NOT PASSED'} "
-              f"(runbook: no ground-truth regression, top-k overlap stable)")
-        print(f"[ab] results → {results_path}")
-        print(f"[ab] failures → {failures_path}")
-        return 0
+        ) else "NOT PASSED"
+        results_path = Path(args.out_dir) / f"ab_gate_{collection}_results.json"
+        results_path.write_text(
+            json.dumps({"summary": summary, "results": results}, indent=1, ensure_ascii=False),
+            encoding="utf-8")
+        return (summary, failures)
     finally:
-        # ---- 7. always leave the real store clean; the clone is reproducible
         try:
             store.delete_collection(clone)
             print(f"[ab] clone {clone} dropped (original untouched)")
         except Exception as exc:  # noqa: BLE001 - cleanup best-effort
             print(f"[ab] WARNING: clone cleanup failed ({exc}); "
                   f"drop {clone!r} manually")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--collection", default=None)
+    parser.add_argument("--project-id", default=None)
+    parser.add_argument("--doc-mode", action="store_true",
+                        help="Target the doc collection ({project}_doc).")
+    parser.add_argument("--queries", default=None,
+                        help="JSON file of paraphrase queries "
+                             "[{name, class, text, truth_name}].")
+    parser.add_argument("--identifiers", type=int, default=10,
+                        help="Corpus-derived identifier queries per collection.")
+    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--device", default=None,
+                        help="EMBED_DEVICE override (default: auto).")
+    parser.add_argument("--max-points", type=int, default=0,
+                        help="Subsample the corpus to N points (even stride) "
+                             "before encoding — smoke gate for large corpora. "
+                             "0 = full corpus (default).")
+    parser.add_argument("--out-dir", default=".",
+                        help="Where results/failures JSON files are written.")
+    args = parser.parse_args()
+
+    os.environ.setdefault("MCP_PRELOAD_EMBEDDER", "0")
+    os.environ["HF_HUB_OFFLINE"] = "1"          # snapshot + head must be cached
+    os.environ["EMBED_HYBRID"] = "1"            # gate under test: the flag-on arm
+    if args.device:
+        os.environ["EMBED_DEVICE"] = args.device
+    if args.max_points < 0:
+        raise SystemExit("--max-points must be >= 0 (0 = full corpus).")
+    args.parsed_queries = (
+        json.loads(Path(args.queries).read_text(encoding="utf-8"))
+        if args.queries else []
+    )
+
+    model_identity = embed_runtime.effective_model_identity(_resolve_model(args))
+    store = _resolve_store(args)
+    targets = resolve_targets(args, store)
+    if len(targets) > 1:
+        print(f"[ab] project resolves to {len(targets)} code collections — "
+              f"gating each: {targets}")
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    all_summaries = []
+    all_failures = []
+    for collection in targets:
+        print(f"\n===== GATE {collection} =====")
+        summary, failures = gate_one(store, collection, model_identity, args)
+        all_summaries.append(summary)
+        all_failures.extend({"_collection": collection, **row} for row in failures)
+        if "error" in summary:
+            print(f"[ab] {collection}: SKIPPED — {summary['error']}")
+            continue
+        print(json.dumps(summary, indent=1, ensure_ascii=False))
+        print(f"[ab] gate verdict [{collection}]: {summary['verdict']} "
+              f"(runbook: no ground-truth regression, top-k overlap stable)")
+
+    verdicts = [s.get("verdict") for s in all_summaries if "verdict" in s]
+    overall = "PASS" if verdicts and all(v == "PASS" for v in verdicts) else "NOT PASSED"
+    print(f"\n===== OVERALL: {overall} ({len(verdicts)} collection(s) gated) =====")
+    if args.collection is None and len(targets) > 1:
+        per = {s.get("collection", "?"): s.get("verdict", "SKIPPED") for s in all_summaries}
+        print(json.dumps(per, indent=1, ensure_ascii=False))
+    failures_path = out_dir / "ab_gate_failures.json"
+    failures_path.write_text(json.dumps(all_failures, indent=1, ensure_ascii=False),
+                             encoding="utf-8")
+    print(f"[ab] failures → {failures_path}")
+    return 0
 
 
 if __name__ == "__main__":

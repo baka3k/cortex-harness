@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
-from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, List, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 
@@ -278,6 +278,27 @@ def collection_supports_sparse(store: QdrantStore, collection: str) -> bool:
         return collection_has_sparse(store.get_collection_info(collection))
     except Exception:  # noqa: BLE001 - degraded dense-only write beats a crash
         return False
+
+
+def discover_code_collections(store: Any, project_id: str) -> List[str]:
+    """Physical per-analyzer collections of a project (sync naming contract).
+
+    Incremental sync names code collections
+    ``{project}_{root_hash}__{parser}_functions`` (see
+    ``tools/sync/incremental_sync.py``); the bare project id is a logical
+    registry name, never a physical collection. Message-scan (``_mess``)
+    collections store hash vectors and never qualify.
+    """
+    from tools.common import qdrant_layout_cache
+
+    prefix = f"{str(project_id).strip()}_"
+    names = [
+        name for name in qdrant_layout_cache.list_collections("", loader=lambda: store)
+        if name.startswith(prefix)
+        and name.endswith("_functions")
+        and not name.endswith(MESSAGE_COLLECTION_SUFFIX)
+    ]
+    return sorted(names)
 
 
 def _warn_hybrid_backfill_once(collection: str) -> None:
