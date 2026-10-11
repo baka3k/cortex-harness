@@ -214,6 +214,30 @@ def _query_encode(vector_input: str) -> list[float]:
     return encoded[0].tolist()
 
 
+def _unregistered_doc_graph_name(base: Any, project_id: Any) -> str:
+    """Graph name for an unregistered id, exact raw name first.
+
+    FalkorDB materializes graphs on first query, so a wrong name fails
+    silently on the read path (empty results, never an error). Listing the
+    backend (GRAPH.LIST — no side effects) and preferring a graph actually
+    named after the raw id keeps an out-of-band shard named ``redacted_doc``
+    reachable instead of pointing at the invented ``redacted_doc_doc``.
+    Falls back to the naming convention when the backend cannot be listed.
+    """
+    stripped = str(project_id).strip()
+    convention = f"{stripped}_doc"
+    list_graphs = getattr(getattr(base, "_driver", None), "list_graphs", None)
+    if not callable(list_graphs):
+        return convention
+    try:
+        available = [str(name) for name in (list_graphs() or [])]
+    except Exception as exc:
+        logger.warning("Listing doc graphs failed: %s", exc)
+        return convention
+    lookup = {name.casefold(): name for name in available}
+    return lookup.get(stripped.casefold(), convention)
+
+
 def get_graph_store(project_id: Optional[str] = None) -> Any:
     """Return the graph driver for ``project_id``.
 
@@ -242,12 +266,12 @@ def get_graph_store(project_id: Optional[str] = None) -> Any:
                     targets.doc_graph,
                 )
             else:
-                # Unregistered id (naming-convention fallback): seed the
-                # env-based store and point it at the convention graph.
+                # Unregistered id: prefer a graph actually named after the
+                # raw id (out-of-band shard), else the naming convention.
                 base = get_graph_store()
                 if getattr(base, "provider", None) == "falkordb":
                     _graph_drivers[project_id] = base.for_graph(
-                        f"{str(project_id).strip()}_doc"
+                        _unregistered_doc_graph_name(base, project_id)
                     )
                 else:
                     _graph_drivers[project_id] = base
@@ -303,6 +327,66 @@ def _graph_store_candidates(project_id: Optional[str]):
     return [(base.for_graph(graph_name), False) for graph_name in graph_names]
 
 
+def _available_doc_collection_names() -> List[str]:
+    """Union of collection names visible on the fallback doc stores.
+
+    Best-effort by design: a store without ``list_collection_names`` (or one
+    that fails to answer) contributes nothing, so an unreachable backend
+    degrades resolution to the naming-convention name instead of failing
+    the query.
+    """
+    names: List[str] = []
+    for store in _fallback_doc_qdrant_stores():
+        list_names = getattr(store, "list_collection_names", None)
+        if not callable(list_names):
+            continue
+        try:
+            available = list_names() or []
+        except Exception as exc:
+            logger.warning(
+                "Listing collections on %s failed: %s",
+                getattr(store, "url", None) or "local instance store",
+                exc,
+            )
+            continue
+        for name in available:
+            if name and name not in names:
+                names.append(name)
+    return names
+
+
+def _unregistered_doc_collection_names(project_id: Any) -> List[str]:
+    """Collection names an unregistered ``project_id`` may target.
+
+    Backend-aware preference order (docs/PROJECT_ID_QUERY_RULES.md §3 tier 3):
+
+    1. A collection named exactly after the raw id (case-insensitive) wins —
+       out-of-band shards are created under the bare id, and appending the
+       ``_doc`` suffix over an exact match skews the caller's intent.
+    2. Otherwise every visible collection whose name casefold-starts-with the
+       id, convention name first — mirrors the registry prefix rule; the
+       payload filter still enforces the project scope on the hits.
+    3. Nothing visible matches — keep the ``{project_id}_doc`` convention name
+       so in-band shards stay reachable and the probe error names the shard
+       the contract expects.
+    """
+    stripped = str(project_id).strip()
+    convention = f"{stripped}_doc"
+    available = _available_doc_collection_names()
+    if not available:
+        return [convention]
+    lookup = {name.casefold(): name for name in available}
+    exact = lookup.get(stripped.casefold())
+    if exact:
+        return [exact]
+    query_key = stripped.casefold()
+    prefixed = sorted(
+        (name for name in available if name.casefold().startswith(query_key)),
+        key=lambda name: (name != convention, name.casefold()),
+    )
+    return prefixed or [convention]
+
+
 def _resolve_doc_collection(
     project_id: Optional[str], collection: Optional[str] = None
 ) -> str:
@@ -321,8 +405,8 @@ def _resolve_doc_collections(
     if project_id:
         # project_id rules: exact case-insensitive match wins, else every
         # registered project whose id casefold-starts-with the query. No
-        # registry match -> naming-convention fallback so out-of-band doc
-        # shards stay reachable.
+        # registry match -> backend-aware fallback so out-of-band doc
+        # shards stay reachable (exact name first, then the convention).
         names: List[str] = []
         for targets in resolve_doc_candidates(project_id):
             name = targets.doc_qdrant_collection
@@ -330,16 +414,13 @@ def _resolve_doc_collections(
                 names.append(name)
         if names:
             return names
-        return [f"{str(project_id).strip()}_doc"]
+        return _unregistered_doc_collection_names(project_id)
 
     collections: List[str] = []
     for registered_project in list_registered_projects():
         name = resolve_project_targets(registered_project).doc_qdrant_collection
         if name and name not in collections:
             collections.append(name)
-    return collections or [QDRANT_COLLECTION]
-
-
     return collections or [QDRANT_COLLECTION]
 
 
@@ -374,8 +455,10 @@ def _qdrant_search_targets(
     """Resolve the ``(store, collection_names)`` pairs a doc query probes.
 
     Implements the project_id query rule end to end: a registered id pins
-    its own backend through the storage factory; an unregistered id keeps
-    the ``{project_id}_doc`` naming convention reachable by probing the
+    its own backend through the storage factory; an unregistered id resolves
+    against what the fallback stores actually expose — a collection named
+    exactly after the raw id wins, then prefix matches, with the
+    ``{project_id}_doc`` naming convention as last resort — probing the
     launcher's remote vector backend first and the local instance store
     second; no scope fans out over every registered project's backend plus
     the instance store. An explicit ``collection`` overrides the names on
@@ -719,6 +802,173 @@ def fetch_relations_with_depth(
     return relations
 
 
+def fetch_related_entity_ids(
+    entity_ids: List[str],
+    related_k: int,
+    depth: int,
+    entity_types: Optional[List[str]] = None,
+    project_id: Optional[str] = None,
+) -> List[str]:
+    """Neighbor entity ids reached via ``RELATED`` edges within ``depth`` hops."""
+    if not entity_ids or related_k <= 0 or depth <= 0:
+        return []
+    neighbors: List[str] = []
+    seen = set(entity_ids)
+    frontier = list(entity_ids)
+    for _ in range(depth):
+        if not frontier or len(neighbors) >= related_k:
+            break
+        step = fetch_relations_by_entity_ids(
+            frontier, entity_types, related_k - len(neighbors), project_id=project_id
+        )
+        new_frontier: List[str] = []
+        for rel in step:
+            for key in ("source_id", "target_id"):
+                neighbor_id = rel.get(key)
+                if neighbor_id and neighbor_id not in seen:
+                    seen.add(neighbor_id)
+                    neighbors.append(neighbor_id)
+                    new_frontier.append(neighbor_id)
+        frontier = new_frontier
+    return neighbors[:related_k]
+
+
+def fetch_paragraphs_for_entities(
+    entity_ids: List[str],
+    entity_types: Optional[List[str]] = None,
+    exclude_types: Optional[List[str]] = None,
+    project_id: Optional[str] = None,
+    limit: int = 1000,
+) -> List[Dict[str, Any]]:
+    """Paragraph rows mentioning any of ``entity_ids`` (``HAS_ENTITY`` edges).
+
+    Returns flat rows of ``{source_id, paragraph_id, text, entity_id,
+    entity_name}``, one per (paragraph, entity) pair, capped at ``limit``.
+    ``entity_types`` whitelists entity types; ``exclude_types`` blacklists
+    them (e.g. YAKE ``KEYWORD`` noise) — an empty include list means all
+    types.
+    """
+    if not entity_ids or limit <= 0:
+        return []
+    types = entity_types or []
+    excludes = exclude_types or []
+    rows: List[Dict[str, Any]] = []
+    for store, owned in _graph_store_candidates(project_id):
+        remaining = limit - len(rows)
+        if remaining <= 0:
+            break
+        try:
+            with store.session() as session:
+                result = session.run(
+                    """
+                    UNWIND $ids AS id
+                    MATCH (p:Paragraph)-[:HAS_ENTITY]->(e:Entity {id: id})
+                    WHERE ($types = [] OR e.type IN $types)
+                      AND ($excludes = [] OR NOT e.type IN $excludes)
+                      AND ($project_id_normalized IS NULL OR
+                           (p.project_id_normalized STARTS WITH $project_id_normalized AND
+                            e.project_id_normalized STARTS WITH $project_id_normalized))
+                    RETURN p.source_id AS source_id, p.paragraph_id AS paragraph_id,
+                           p.text AS text, e.id AS entity_id, e.name AS entity_name
+                    LIMIT $limit
+                    """,
+                    ids=entity_ids,
+                    types=types,
+                    excludes=excludes,
+                    limit=remaining,
+                    project_id_normalized=(project_id.strip().casefold() if project_id else None),
+                )
+                for record in result:
+                    rows.append(dict(record))
+        finally:
+            if owned:
+                store.close()
+    return rows[:limit]
+
+
+def build_related_documents(
+    anchor_passages: List[Dict[str, Any]],
+    anchor_entity_ids: List[str],
+    neighbor_entity_ids: List[str],
+    entity_types: Optional[List[str]] = None,
+    exclude_types: Optional[List[str]] = None,
+    project_id: Optional[str] = None,
+    max_docs: int = 5,
+    paragraphs_per_doc: int = 2,
+    scan_limit: int = 1000,
+) -> List[Dict[str, Any]]:
+    """Group entity-linked paragraphs into documents related to the anchors.
+
+    A document's score is the sum of weights of the distinct expansion entities
+    it shares with the vector-search anchors (anchor entity 1.0, entity reached
+    via ``RELATED`` 0.5). Anchor passages themselves are excluded.
+    """
+    if not anchor_entity_ids and not neighbor_entity_ids:
+        return []
+    weights: Dict[str, float] = {eid: 1.0 for eid in anchor_entity_ids}
+    for eid in neighbor_entity_ids:
+        weights.setdefault(eid, 0.5)
+    anchor_pairs = {
+        (row.get("source_id"), row.get("paragraph_id"))
+        for row in anchor_passages
+    }
+    rows = fetch_paragraphs_for_entities(
+        list(weights),
+        entity_types=entity_types,
+        exclude_types=exclude_types,
+        project_id=project_id,
+        limit=scan_limit,
+    )
+
+    docs: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        source_id = row.get("source_id")
+        paragraph_id = row.get("paragraph_id")
+        if source_id is None or (source_id, paragraph_id) in anchor_pairs:
+            continue
+        doc = docs.setdefault(source_id, {
+            "matched_entity_ids": set(),
+            "linked_entities": [],
+            "paragraphs": {},
+        })
+        entity_id = row.get("entity_id")
+        counted = entity_id in weights
+        if counted and entity_id not in doc["matched_entity_ids"]:
+            doc["matched_entity_ids"].add(entity_id)
+            name = row.get("entity_name")
+            if name:
+                doc["linked_entities"].append(name)
+        para = doc["paragraphs"].get(paragraph_id)
+        if para is None:
+            doc["paragraphs"][paragraph_id] = {
+                "paragraph_id": paragraph_id,
+                "text": row.get("text"),
+                "matched_entity_count": 1 if counted else 0,
+            }
+        elif counted:
+            para["matched_entity_count"] += 1
+
+    ranked = []
+    for source_id, doc in docs.items():
+        score = sum(weights.get(eid, 0.0) for eid in doc["matched_entity_ids"])
+        ranked.append((score, len(doc["paragraphs"]), source_id, doc))
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+
+    results: List[Dict[str, Any]] = []
+    for score, _, source_id, doc in ranked[: max(0, max_docs)]:
+        paragraphs = sorted(
+            doc["paragraphs"].values(),
+            key=lambda p: (-p["matched_entity_count"], p["paragraph_id"] or 0),
+        )[: max(0, paragraphs_per_doc)]
+        results.append({
+            "source_id": source_id,
+            "score": round(score, 3),
+            "linked_entities": doc["linked_entities"],
+            "paragraphs": paragraphs,
+        })
+    return results
+
+
 def _compute_heuristic_rerank_score(
     passage: Dict[str, Any],
     entity_types: List[str],
@@ -912,8 +1162,9 @@ def register_tools(mcp: FastMCP) -> None:
           collection visible across the registered projects' backends plus
           the local instance store (``None`` semantics = full-search).
         - When supplied, narrows to that project's resolved doc collection:
-          the exact registry entry, or the ``{project_id}_doc`` naming
-          convention for unregistered ids.
+          the exact registry entry, or — for unregistered ids — the backend
+          names matching the raw id (exact first, then prefix), with the
+          ``{project_id}_doc`` naming convention as last resort.
         """
         names: List[str] = []
         for qdrant, scope_names in _qdrant_search_targets(project_id, None):
@@ -1012,7 +1263,7 @@ def register_tools(mcp: FastMCP) -> None:
         top_k: int = 5,
         source_id: Optional[str] = None,
         collection: Optional[str] = None,
-        include_entities: bool = True,
+        include_entities: bool = False,
         include_relations: bool = True,
         expand_related: bool = True,
         related_k: int = 50,
@@ -1029,22 +1280,31 @@ def register_tools(mcp: FastMCP) -> None:
         project_id: Optional[str] = None,
         include_entity_ids: bool = False,
         max_entities: int = 30,
+        expand_documents: bool = True,
+        related_docs: int = 5,
+        related_paragraphs_per_doc: int = 2,
     ) -> Dict[str, Any]:
         """
-        Query Qdrant for top-k passages with entity_ids payload, then fetch related
-        entity context from the graph store (FalkorDB by default). Returns context
-        only (no LLM generation).
+        Vector-search passages, then walk the entity graph to related documents.
+
+        Given ``query``, retrieves the top-k passages and collects the entities
+        those passages mention. It then finds documents that share those
+        entities via ``(Paragraph)-[:HAS_ENTITY]->(Entity)`` edges, optionally
+        widening the entity set through ``:RELATED`` edges first
+        (``graph_depth`` hops, capped by ``related_k``). The matched documents
+        are returned in ``related_documents`` (ranked by how many distinct
+        expansion entities they share with the anchors), so callers get related
+        documents without having to consume the entity graph themselves — the
+        entities stay internal unless ``include_entities=true``.
 
         Raw entity UUIDs (``entities[].id`` and ``relations[].source_id``/
         ``target_id``) are stripped from the response by default to keep it
         compact; graph expansion still uses them internally. Set
         ``include_entity_ids=true`` to keep them for debugging.
 
-        The entities list honors ``entity_types`` (the default curated set
+        The expansion honors ``entity_types`` (the default curated set
         excludes extractor noise such as YAKE ``KEYWORD`` entries — pass the
-        type explicitly, e.g. ``entity_types="KEYWORD"``, to reveal it), is
-        ranked by retrieved-passage frequency, and is capped at
-        ``max_entities``.
+        type explicitly, e.g. ``entity_types="KEYWORD"``, to reveal it).
         """
         # Type coercion to handle n8n passing strings
         query = str(query) if query else ""
@@ -1064,9 +1324,16 @@ def register_tools(mcp: FastMCP) -> None:
         min_entity_occurrences = int(min_entity_occurrences) if min_entity_occurrences is not None else None
         max_entities = int(max_entities) if max_entities is not None else 30
         include_entity_ids = _coerce_bool(include_entity_ids, False)
+        expand_documents = _coerce_bool(expand_documents, True)
+        related_docs = int(related_docs) if related_docs is not None else 5
+        related_paragraphs_per_doc = (
+            int(related_paragraphs_per_doc)
+            if related_paragraphs_per_doc is not None else 2
+        )
 
         q_vec = _query_encode(query)
 
+        types_explicit = entity_types is not None
         if entity_types is None:
             entity_types = list(ENTITY_TYPES_DEFAULT)
         elif isinstance(entity_types, str):
@@ -1122,6 +1389,30 @@ def register_tools(mcp: FastMCP) -> None:
                 project_id=project_id,
             )
 
+        # Document expansion: use the anchor entities (plus RELATED neighbors)
+        # to surface documents that share them, instead of returning the
+        # entity graph itself. By default every entity type counts toward
+        # relatedness except extractor noise (KEYWORD); an explicit
+        # entity_types argument narrows the expansion to those types.
+        related_documents: List[Dict[str, Any]] = []
+        if expand_documents and entity_ids:
+            neighbor_ids: List[str] = []
+            if expand_related and related_k > 0 and graph_depth > 0:
+                neighbor_ids = fetch_related_entity_ids(
+                    entity_ids, related_k, graph_depth,
+                    entity_types=entity_types, project_id=project_id,
+                )
+            related_documents = build_related_documents(
+                payloads,
+                entity_ids,
+                neighbor_ids,
+                entity_types=entity_types if types_explicit else None,
+                exclude_types=[] if types_explicit else ["KEYWORD"],
+                project_id=project_id,
+                max_docs=related_docs,
+                paragraphs_per_doc=related_paragraphs_per_doc,
+            )
+
         if rerank:
             passages = _apply_heuristic_rerank(
                 passages,
@@ -1158,8 +1449,10 @@ def register_tools(mcp: FastMCP) -> None:
             "rerank_applied": rerank,
             "rerank_strategy": "heuristic" if rerank else None,
             "passages": passages,
+            "related_documents": related_documents,
             "entities": entities,
             "relations": relations,
+            "expand_documents": expand_documents,
         }
         mismatch_note = _embedding_model_mismatch_note(project_id, collection)
         if mismatch_note:

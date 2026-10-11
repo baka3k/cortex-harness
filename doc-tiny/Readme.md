@@ -118,7 +118,7 @@ http://127.0.0.1:8789/mcp
 
 ## MCP tools
 
-- `semantic_graph_search(query, top_k, source_id, collection, include_entities, include_relations, expand_related, related_k, graph_depth, entity_types, max_passage_chars, min_score_to_expand, min_entity_occurrences, rerank, rerank_entity_weight, rerank_type_weight, rerank_confidence_weight, rerank_length_penalty, include_entity_ids=false, max_entities=30)`
+- `semantic_graph_search(query, top_k, source_id, collection, include_entities=false, include_relations, expand_related, related_k, graph_depth, entity_types, max_passage_chars, min_score_to_expand, min_entity_occurrences, rerank, rerank_entity_weight, rerank_type_weight, rerank_confidence_weight, rerank_length_penalty, include_entity_ids=false, max_entities=30, expand_documents=true, related_docs=5, related_paragraphs_per_doc=2)`
 - `semantic_search(query, top_k, source_id, collection, max_passage_chars, include_entity_ids=false, include_entity_mentions)`
 - `list_source_ids(limit)`
 - `list_qdrant_collections()`
@@ -443,20 +443,31 @@ python 0_reset_all.py --neo4j-pass neo4j_pass
 
 ### What does `semantic_graph_search` do?
 
-Two main steps:
+Three main steps:
 
 1. **Search Qdrant** with the query embedding to get top-k passages
-2. **Expand via Neo4j** using `entity_ids` from those passages
+2. **Expand via the graph** using `entity_ids` from those passages
+3. **Find related documents** that share those entities and return them in
+   `related_documents` — the entities themselves stay internal unless
+   `include_entities=true`
 
 ### Where does it query, what data comes from each DB?
 
 - **Qdrant**: embeddings + passages. The tool:
   - finds top-k passages,
   - reads payload fields `source_id`, `paragraph_id`, `entity_ids`, `entity_mentions`.
-- **Neo4j**: entities + relations. The tool:
+- **Graph store (FalkorDB/Neo4j)**: entities + relations. The tool:
   - resolves entities by `entity_ids`,
-  - optionally expands relations (`include_relations`, `expand_related`, `related_k`, `graph_depth`),
+  - optionally widens the entity set via `RELATED` edges (`expand_related`, `related_k`, `graph_depth`),
+  - matches `(Paragraph)-[:HAS_ENTITY]->(Entity)` to find every other
+    paragraph mentioning those entities, groups them by document, and ranks
+    the documents by how many distinct entities they share with the anchors
+    (anchor entity weight 1.0, `RELATED`-expanded entity weight 0.5) into
+    `related_documents` (`expand_documents`, `related_docs`,
+    `related_paragraphs_per_doc`),
   - can gate expansion using `min_score_to_expand` / `min_entity_occurrences`.
+  - By default every entity type counts toward relatedness except extractor
+    noise (`KEYWORD`); pass `entity_types` explicitly to narrow the expansion.
 - Optional heuristic rerank can re-order passages using entity counts, types, confidence, and length penalty.
 
 ### Special points
@@ -513,8 +524,8 @@ semantic_graph_search(
   top_k=5,
   collection="graphrag_entities",
   source_id="my_doc",
-  include_entities=true,
-  include_relations=true,
+  related_docs=5,
+  related_paragraphs_per_doc=2,
   graph_depth=1,
   min_score_to_expand=null,
   min_entity_occurrences=null,
@@ -529,8 +540,8 @@ semantic_graph_search(
   query="zero trust policy for device identity",
   top_k=8,
   collection="graphrag_entities",
-  include_entities=true,
-  include_relations=true,
+  related_docs=8,
+  related_paragraphs_per_doc=3,
   graph_depth=2,
   min_score_to_expand=0.25,
   min_entity_occurrences=2,
@@ -540,7 +551,8 @@ semantic_graph_search(
   rerank_confidence_weight=0.3,
   rerank_length_penalty=0.0002,
   related_k=80,
-  max_passage_chars=900
+  max_passage_chars=900,
+  include_entities=true
 )
 ```
 
