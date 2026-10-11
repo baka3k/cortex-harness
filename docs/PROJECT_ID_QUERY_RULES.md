@@ -49,9 +49,12 @@ Query `project_id="Bank"` ⇒ khớp `bank_android` + `bank_cplus`, **không** k
 project_id truyền vào
   1. Exact case-insensitive match trong registry  → 1 target duy nhất
   2. Không exact → prefix case-insensitive match  → N target (fan-out, merge)
-  3. Registry không có match nào                  → dùng raw id theo naming
-     convention (code_graph == project_id, doc = {project_id}_doc) để vẫn
-     với được shard ngoài registry
+  3. Registry không có match nào                  → backend-aware fallback cho
+     shard ngoài registry: nếu backend đang có collection/graph tên ĐÚNG raw id
+     (case-insensitive) thì dùng đúng tên đó — tuyệt đối không tự ghim thêm
+     `_doc` khi tên chính xác đã tồn tại; nếu không, quét mọi tên thực tế
+     bắt-đầu-bằng raw id (tên convention đứng trước); chỉ khi backend không có
+     tên nào khớp mới ghim naming convention (doc = {project_id}_doc)
   4. project_id rỗng/None                         → unscoped (R1)
 ```
 
@@ -114,7 +117,8 @@ Ngoại lệ giữ `=`: danh sách R6 ở mục 2, và
   chặn scope (một query stem phải xuyên qua nhiều collection `bank_android`,
   `bank_cplus`…).
 - Resolver fan-out collection phía doc: `mcp_graph_rag._resolve_doc_collections`
-  (exact → prefix → `{project_id}_doc`).
+  (registry exact → registry prefix → backend-aware tên thật: exact raw id →
+  prefix → `{project_id}_doc`).
 
 ## 6. Graph fan-out theo candidates
 
@@ -141,8 +145,9 @@ Tương tự: `mcp/services/explore_service.py::_resolve_search_targets`,
 3. Có đang thêm prefix vào đường GHI/XÓA/SYNC không? Nếu có → dừng (R6).
 4. Hành vi local và remote có giống nhau không (không dùng `match.text`,
    không dùng tính năng chỉ có trên server)?
-5. Unregistered id: read path phải fallback raw id (naming convention),
-   write path phải raise.
+5. Unregistered id: read path phải giữ raw id với được — ưu tiên
+   collection/graph tên đúng raw id đang tồn tại trên backend, rồi mới tới
+   naming convention; write path phải raise.
 6. Chạy test: `tools/common/test_project_scope.py`,
    `tools/common/test_project_registry.py` (`ScopeCandidatesTests`),
    `tests/test_qdrant_project_scope.py`, `tests/test_case_insensitive_project_scope.py`,

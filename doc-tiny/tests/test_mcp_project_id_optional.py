@@ -94,6 +94,8 @@ def _build_stubs():
     embedding_mod = type(sys)("embedding_utils")
     graph_store_mod = type(sys)("graph_store")
     doc_qdrant_mod = type(sys)("doc_local_qdrant")
+    embedding_mod.DEFAULT_DOC_EMBEDDING_MODEL = "stub-embedding-model"
+    embedding_mod.st_query_encode_kwargs = lambda *a, **k: None
     embedding_mod.resolve_embedding_device = lambda *a, **k: None
     embedding_mod.resolve_embedding_model = (
         lambda *a, **k: ("stub-model", False)
@@ -131,6 +133,40 @@ class _StubQdrant:
 
     def list_collection_names(self):
         return list(self._names)
+
+
+class _ExplodingStore:
+    def list_collection_names(self):
+        raise RuntimeError("qdrant down")
+
+
+class _FakeGraphDriver:
+    def __init__(self, graphs):
+        self._graphs = graphs
+
+    def list_graphs(self):
+        return list(self._graphs)
+
+
+class _FakeGraphBase:
+    """FalkorDB-shaped store: provider + a listable driver + for_graph."""
+
+    provider = "falkordb"
+
+    def __init__(self, graphs):
+        self._driver = _FakeGraphDriver(graphs)
+
+    def for_graph(self, database):
+        return ("store", database)
+
+
+class _UnlistableGraphBase:
+    """FalkorDB-shaped store whose driver cannot list graphs."""
+
+    provider = "falkordb"
+
+    def for_graph(self, database):
+        return ("store", database)
 
 
 class _RegisteredProject:
@@ -188,11 +224,15 @@ class TestProjectIdOptional(unittest.TestCase):
     def test_resolve_doc_collection_unregistered_falls_back_to_naming_convention(self):
         # Read paths keep an unregistered project_id reachable through the
         # naming convention ({project_id}_doc) instead of raising — see
-        # docs/PROJECT_ID_QUERY_RULES.md (R3/R4 fallback chain).
+        # docs/PROJECT_ID_QUERY_RULES.md (R3/R4 fallback chain). The
+        # fallback stores are stubbed so the test stays hermetic (the
+        # backend-aware resolver lists what the stores actually expose).
         with patch.object(
             self.project_contract,
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[object()]
         ):
             self.assertEqual(
                 self.mcp._resolve_doc_collection("client-alpha"),
@@ -204,6 +244,8 @@ class TestProjectIdOptional(unittest.TestCase):
             self.project_contract,
             "_read_project_entries",
             return_value=[],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[object()]
         ):
             self.assertEqual(
                 self.mcp._resolve_doc_collection("anything"),
@@ -228,6 +270,8 @@ class TestProjectIdOptional(unittest.TestCase):
             self.project_contract,
             "_read_project_entries",
             return_value=[{"project_id": "cortext", "doc_env": {}}],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[object()]
         ):
             self.assertEqual(
                 self.mcp._resolve_doc_collections("client-alpha"),
@@ -237,6 +281,151 @@ class TestProjectIdOptional(unittest.TestCase):
     def test_resolve_doc_collections_explicit_collection_wins(self):
         result = self.mcp._resolve_doc_collections(None, collection="explicit")
         self.assertEqual(result, ["explicit"])
+
+    # -- unregistered id: backend-aware collection names -------------------------
+    def test_unregistered_exact_collection_name_wins_over_convention(self):
+        # Out-of-band shard named after the raw id: the caller's exact name
+        # must be searched, the _doc suffix must not be invented over it.
+        store = _StubQdrant(["redacted_doc", "redacted_doc_doc"])
+        with patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[store]
+        ):
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("redacted_doc"),
+                ["redacted_doc"],
+            )
+            self.assertEqual(
+                self.mcp._resolve_doc_collection("redacted_doc"),
+                "redacted_doc",
+            )
+
+    def test_unregistered_exact_match_is_case_insensitive_and_keeps_backend_casing(self):
+        store = _StubQdrant(["Redacted_Doc"])
+        with patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[store]
+        ):
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("REDACTED_DOC"),
+                ["Redacted_Doc"],
+            )
+
+    def test_unregistered_convention_used_when_only_convention_collection_exists(self):
+        # In-band shard ({id}_doc): unchanged behavior.
+        store = _StubQdrant(["cortext_doc", "redacted_doc_doc"])
+        with patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[store]
+        ):
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("redacted_doc"),
+                ["redacted_doc_doc"],
+            )
+
+    def test_unregistered_prefix_candidates_fan_out_with_convention_first(self):
+        # Stem query: every visible collection whose name starts with the id
+        # is probed (mirrors the registry prefix rule), convention first.
+        store = _StubQdrant(["redacted_doc_full", "redacted_doc", "other_project"])
+        with patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[store]
+        ):
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("redacted"),
+                ["redacted_doc", "redacted_doc_full"],
+            )
+
+    def test_unregistered_no_matching_collection_keeps_convention_name(self):
+        # Nothing remotely close: the convention name rides along so the
+        # probe error names the shard the contract expects.
+        store = _StubQdrant(["unrelated_shard"])
+        with patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[store]
+        ):
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("redacted_doc"),
+                ["redacted_doc_doc"],
+            )
+
+    def test_unregistered_unlistable_stores_degrade_to_convention(self):
+        # A store without list_collection_names (or that raises) contributes
+        # nothing instead of failing resolution.
+        with patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[],
+        ), patch.object(
+            self.mcp, "_fallback_doc_qdrant_stores", return_value=[object()]
+        ):
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("redacted_doc"),
+                ["redacted_doc_doc"],
+            )
+
+    def test_unregistered_listing_error_degrades_to_convention(self):
+        with patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[],
+        ), patch.object(
+            self.mcp,
+            "_fallback_doc_qdrant_stores",
+            return_value=[_ExplodingStore()],
+        ):
+            self.assertEqual(
+                self.mcp._resolve_doc_collections("redacted_doc"),
+                ["redacted_doc_doc"],
+            )
+
+    # -- unregistered id: backend-aware graph names ------------------------------
+    def _graph_store_for_unregistered(self, base, project_id):
+        self.mcp._graph_drivers.clear()
+        self.addCleanup(self.mcp._graph_drivers.clear)
+        # Keep the real function for the outer call; only the recursive
+        # no-arg base lookup inside it resolves to the patched fake.
+        real_get_graph_store = self.mcp.get_graph_store
+        with patch.object(
+            self.mcp, "_registry_resolve_project_targets", None
+        ), patch.object(self.mcp, "get_graph_store", return_value=base):
+            return real_get_graph_store(project_id)
+
+    def test_unregistered_graph_name_prefers_exact_backend_graph(self):
+        base = _FakeGraphBase(["cortext_doc", "redacted_doc"])
+        self.assertEqual(
+            self._graph_store_for_unregistered(base, "redacted_doc"),
+            ("store", "redacted_doc"),
+        )
+
+    def test_unregistered_graph_name_falls_back_to_convention(self):
+        base = _FakeGraphBase(["cortext_doc"])
+        self.assertEqual(
+            self._graph_store_for_unregistered(base, "redacted_doc"),
+            ("store", "redacted_doc_doc"),
+        )
+
+    def test_unregistered_graph_name_convention_when_backend_unlistable(self):
+        base = _UnlistableGraphBase()
+        self.assertEqual(
+            self._graph_store_for_unregistered(base, "redacted_doc"),
+            ("store", "redacted_doc_doc"),
+        )
 
     # -- list_qdrant_collections -------------------------------------------------
     def test_list_qdrant_collections_no_project_id_returns_all(self):
@@ -402,6 +591,36 @@ class TestUnregisteredIdFallbackStores(unittest.TestCase):
         self.assertEqual(
             targets,
             [(remote_store, ["client-alpha_doc"]), (local_store, ["client-alpha_doc"])],
+        )
+
+    def test_search_targets_unregistered_prefers_exact_backend_collection(self):
+        # Regression for the redacted_doc incident: an out-of-band shard named
+        # after the raw id must be probed by that exact name on every
+        # fallback store, not by the invented {id}_doc convention name.
+        remote_store = _StubQdrant(["redacted_doc"])
+        local_store = _StubQdrant([])
+        registry_error = self.mcp._RegistryProjectNotRegisteredError
+
+        def fake_store(*args, **kwargs):
+            if kwargs.get("project_id"):
+                raise registry_error(kwargs["project_id"], ["cortext"])
+            return local_store
+
+        with patch.object(
+            self.mcp, "get_document_qdrant_store", side_effect=fake_store
+        ), patch.object(
+            self.mcp,
+            "_fallback_doc_qdrant_stores",
+            return_value=[remote_store, local_store],
+        ), patch.object(
+            self.project_contract,
+            "_read_project_entries",
+            return_value=[{"project_id": "cortext", "doc_env": {}}],
+        ):
+            targets = self.mcp._qdrant_search_targets("redacted_doc", None)
+        self.assertEqual(
+            targets,
+            [(remote_store, ["redacted_doc"]), (local_store, ["redacted_doc"])],
         )
 
     def test_search_targets_registered_id_pins_registry_store(self):

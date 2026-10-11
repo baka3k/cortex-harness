@@ -101,8 +101,12 @@ def test_doc_ingest_rejects_unregistered_projects_and_query_falls_back():
     assert "raise SystemExit(str(exc)) from exc" in source
     # ...while the query path keeps the raw id reachable through the
     # naming convention ({project_id}_doc) per the project_id query rules.
+    # Fallback stores are stubbed empty so resolution degrades straight to
+    # the convention name without touching a backend.
     with mock.patch.object(
         mcp_graph_rag, "resolve_doc_candidates", return_value=[]
+    ), mock.patch.object(
+        mcp_graph_rag, "_fallback_doc_qdrant_stores", return_value=[]
     ):
         assert mcp_graph_rag._resolve_doc_collection("missing") == "missing_doc"
 
@@ -347,6 +351,10 @@ def _patch_mind_query_backends(payloads):
         mcp_graph_rag, "fetch_entities_by_ids", return_value=entities
     ), mock.patch.object(
         mcp_graph_rag, "fetch_relations_with_depth", return_value=relations
+    ), mock.patch.object(
+        mcp_graph_rag, "fetch_relations_by_entity_ids", return_value=[]
+    ), mock.patch.object(
+        mcp_graph_rag, "fetch_paragraphs_for_entities", return_value=[]
     )
 
 
@@ -397,38 +405,121 @@ def test_query_graph_rag_strips_entity_uuids_but_expands_with_them():
     fake = _FakeMcp()
     mcp_graph_rag.register_tools(fake)
 
-    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(
-        _mind_payload_rows()
-    )
-    with embedder, qdrant, fetch_entities as entities_mock, fetch_relations as relations_mock:
+    (
+        embedder, qdrant, fetch_entities, fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(_mind_payload_rows())
+    with embedder, qdrant, fetch_entities, fetch_relations as relations_mock:
         result = fake.tools["semantic_graph_search"](
             query="alpha", project_id="procsample"
         )
 
     # Expansion still runs on the raw ids internally.
-    assert entities_mock.call_args.args[0] == [_MIND_EID_A]
     assert relations_mock.call_args.args[0] == [_MIND_EID_A]
 
     data = result.structuredContent["data"]
-    assert "id" not in data["entities"][0]
-    assert data["entities"][0]["name"] == "Alpha"
+    # Entities are now an internal mechanism: nothing by default, and the
+    # document expansion takes their place.
+    assert data["entities"] == []
+    assert data["related_documents"] == []
     assert "source_id" not in data["relations"][0]
     assert "target_id" not in data["relations"][0]
     assert data["relations"][0]["source"] == "Alpha"
     assert data["relations"][0]["target"] == "Beta"
     assert _MIND_EID_A not in json.dumps(data)
 
+    # Opting in still returns them, stripped of raw ids.
+    (
+        embedder, qdrant, fetch_entities, fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(_mind_payload_rows())
+    with embedder, qdrant, fetch_entities, fetch_relations:
+        result = fake.tools["semantic_graph_search"](
+            query="alpha", project_id="procsample", include_entities="true"
+        )
+    data = result.structuredContent["data"]
+    assert "id" not in data["entities"][0]
+    assert data["entities"][0]["name"] == "Alpha"
+    assert _MIND_EID_A not in json.dumps(data)
+
+
+def test_semantic_graph_search_returns_related_documents_by_default():
+    fake = _FakeMcp()
+    mcp_graph_rag.register_tools(fake)
+
+    payloads = [
+        {
+            "text": "anchor passage",
+            "score": 0.9,
+            "source_id": "a.md",
+            "paragraph_id": 1,
+            "entity_ids": [_MIND_EID_A],
+        },
+    ]
+    related_rows = [
+        # the anchor passage itself must be dropped
+        {"source_id": "a.md", "paragraph_id": 1, "text": "anchor passage",
+         "entity_id": _MIND_EID_A, "entity_name": "Alpha"},
+        # another paragraph of a different doc sharing the anchor entity
+        {"source_id": "b.md", "paragraph_id": 0, "text": "related text",
+         "entity_id": _MIND_EID_A, "entity_name": "Alpha"},
+    ]
+    (
+        embedder, qdrant, _fetch_entities, _fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(payloads)
+    with embedder, qdrant, mock.patch.object(
+        mcp_graph_rag, "fetch_paragraphs_for_entities",
+        return_value=related_rows,
+    ) as docs_mock:
+        result = fake.tools["semantic_graph_search"](
+            query="alpha", project_id="procsample"
+        )
+
+    # Default expansion excludes extractor noise but keeps every real type.
+    assert docs_mock.call_args.kwargs["exclude_types"] == ["KEYWORD"]
+    assert docs_mock.call_args.kwargs["entity_types"] is None
+
+    data = result.structuredContent["data"]
+    assert data["related_documents"] == [{
+        "source_id": "b.md",
+        "score": 1.0,
+        "linked_entities": ["Alpha"],
+        "paragraphs": [{
+            "paragraph_id": 0,
+            "text": "related text",
+            "matched_entity_count": 1,
+        }],
+    }]
+    assert _MIND_EID_A not in json.dumps(data)
+
+    # An explicit entity_types argument narrows the expansion instead.
+    (
+        embedder, qdrant, _fetch_entities, _fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(payloads)
+    with embedder, qdrant, mock.patch.object(
+        mcp_graph_rag, "fetch_paragraphs_for_entities", return_value=[]
+    ) as docs_mock:
+        fake.tools["semantic_graph_search"](
+            query="alpha", project_id="procsample", entity_types="TECH"
+        )
+    assert docs_mock.call_args.kwargs["entity_types"] == ["TECH"]
+    assert docs_mock.call_args.kwargs["exclude_types"] == []
+
 
 def test_query_graph_rag_keeps_entity_uuids_when_requested():
     fake = _FakeMcp()
     mcp_graph_rag.register_tools(fake)
 
-    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(
-        _mind_payload_rows()
-    )
+    (
+        embedder, qdrant, fetch_entities, fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(_mind_payload_rows())
     with embedder, qdrant, fetch_entities, fetch_relations:
         result = fake.tools["semantic_graph_search"](
-            query="alpha", project_id="procsample", include_entity_ids="true"
+            query="alpha", project_id="procsample",
+            include_entities="true", include_entity_ids="true",
         )
 
     data = result.structuredContent["data"]
@@ -441,20 +532,28 @@ def test_query_graph_rag_hides_keyword_by_default_and_reveals_by_rule():
     fake = _FakeMcp()
     mcp_graph_rag.register_tools(fake)
 
-    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(
-        _mind_payload_rows()
-    )
+    (
+        embedder, qdrant, fetch_entities, fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(_mind_payload_rows())
     with embedder, qdrant, fetch_entities as entities_mock, fetch_relations:
-        fake.tools["semantic_graph_search"](query="alpha", project_id="procsample")
+        fake.tools["semantic_graph_search"](
+            query="alpha", project_id="procsample", include_entities="true"
+        )
         default_types = entities_mock.call_args.kwargs["entity_types"]
 
     # Default curated set keeps extractor noise (KEYWORD) out of the list...
     assert "KEYWORD" not in default_types
     assert default_types == mcp_graph_rag.ENTITY_TYPES_DEFAULT
 
+    (
+        embedder, qdrant, fetch_entities, fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(_mind_payload_rows())
     with embedder, qdrant, fetch_entities as entities_mock, fetch_relations:
         fake.tools["semantic_graph_search"](
-            query="alpha", project_id="procsample", entity_types="KEYWORD"
+            query="alpha", project_id="procsample",
+            entity_types="KEYWORD", include_entities="true",
         )
     # ...and the same parameter reveals it on demand.
     assert entities_mock.call_args.kwargs["entity_types"] == ["KEYWORD"]
@@ -489,12 +588,16 @@ def test_query_graph_rag_ranks_entities_by_passage_frequency_and_caps():
         {"id": eid_d, "name": "Delta", "type": "ORG"},
     ]
 
-    embedder, qdrant, fetch_entities, fetch_relations = _patch_mind_query_backends(payloads)
+    (
+        embedder, qdrant, fetch_entities, fetch_relations,
+        _related_ids, _related_docs,
+    ) = _patch_mind_query_backends(payloads)
     with embedder, qdrant, mock.patch.object(
         mcp_graph_rag, "fetch_entities_by_ids", return_value=all_entities
     ), fetch_relations:
         result = fake.tools["semantic_graph_search"](
-            query="alpha", project_id="procsample", max_entities=3
+            query="alpha", project_id="procsample",
+            max_entities=3, include_entities="true",
         )
 
     # Alpha appears in 2/2 passages; Gamma and Delta in 1 each (first-seen
