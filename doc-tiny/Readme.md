@@ -118,7 +118,7 @@ http://127.0.0.1:8789/mcp
 
 ## MCP tools
 
-- `query_graph_rag_langextract(query, top_k, source_id, collection, include_entities, include_relations, expand_related, related_k, graph_depth, entity_types, max_passage_chars, min_score_to_expand, min_entity_occurrences, rerank, rerank_entity_weight, rerank_type_weight, rerank_confidence_weight, rerank_length_penalty, include_entity_ids=false, max_entities=30)`
+- `semantic_graph_search(query, top_k, source_id, collection, include_entities, include_relations, expand_related, related_k, graph_depth, entity_types, max_passage_chars, min_score_to_expand, min_entity_occurrences, rerank, rerank_entity_weight, rerank_type_weight, rerank_confidence_weight, rerank_length_penalty, include_entity_ids=false, max_entities=30)`
 - `semantic_search(query, top_k, source_id, collection, max_passage_chars, include_entity_ids=false, include_entity_mentions)`
 - `list_source_ids(limit)`
 - `list_qdrant_collections()`
@@ -137,7 +137,7 @@ This command:
   - **Qdrant**: passage + embedding (payload includes `source_id`, `paragraph_id`, `entity_ids`, `entity_mentions`).
   - **Neo4j**: `Document`, `Paragraph`, `Entity`, and their relationships (entities merge by normalized name+type). `HAS_ENTITY` includes confidence + span metadata when available.
 
-Result: after ingest, you can call `semantic_search` for vector-only retrieval, or `query_graph_rag_langextract` to expand context via Neo4j.
+Result: after ingest, you can call `semantic_search` for vector-only retrieval, or `semantic_graph_search` to expand context via Neo4j.
 
 Pipeline (ingest):
 
@@ -441,7 +441,7 @@ python 0_reset_all.py --neo4j-pass neo4j_pass
 
 ## Query flow (GraphRAG LangExtract)
 
-### What does `query_graph_rag_langextract` do?
+### What does `semantic_graph_search` do?
 
 Two main steps:
 
@@ -508,7 +508,7 @@ python graphrag_ingest_langextract.py \
 ```
 
 ```
-query_graph_rag_langextract(
+semantic_graph_search(
   query="Digital Key encryption info",
   top_k=5,
   collection="graphrag_entities",
@@ -525,7 +525,7 @@ query_graph_rag_langextract(
 ```
 
 ```
-query_graph_rag_langextract(
+semantic_graph_search(
   query="zero trust policy for device identity",
   top_k=8,
   collection="graphrag_entities",

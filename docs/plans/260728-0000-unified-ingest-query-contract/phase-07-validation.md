@@ -28,7 +28,7 @@ skew between servers.
     `search_full=true` and no `project_id`; assert rows from both `proj_alpha`
     and `proj_beta` appear; assert the `$search_full` Cypher param is `true`.
   - **mind_mcp queries**: for each project, call
-    `query_graph_rag_langextract`, `semantic_search`, `list_source_ids`,
+    `semantic_graph_search`, `semantic_search`, `list_source_ids`,
     `get_paragraph_text`; assert the same isolation property.
   - **search_full queries (mind_mcp)**: call the same tools with
     `search_full=true` and no `project_id`; assert docs from both projects

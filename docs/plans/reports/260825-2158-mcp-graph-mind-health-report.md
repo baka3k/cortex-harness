@@ -194,7 +194,7 @@ Sau khi MCP focused suite đã xanh, full repository suite vẫn còn lỗi rộ
 | 1 | `list_qdrant_collections` | PASS_DATA | Trả `stock_doc` |
 | 2 | `list_source_ids` | PASS_DATA | 7 source IDs |
 | 3 | `semantic_search` | PASS_DATA | 5 passages từ `stock_doc` |
-| 4 | `query_graph_rag_langextract` | PASS_DATA | 5 passages, 12 entities; 0 relation là trạng thái corpus hợp lệ |
+| 4 | `semantic_graph_search` | PASS_DATA | 5 passages, 12 entities; 0 relation là trạng thái corpus hợp lệ |
 | 5 | `get_paragraph_text` | PASS_DATA | Trả paragraph 15 của `deerflow_same_ec2_deploy.md`, 167 ký tự |
 
 ## Kiểm thử và trạng thái runtime

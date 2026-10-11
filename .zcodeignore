@@ -1,0 +1,203 @@
+.venv/
+__pycache__/
+*.pyc
+
+.env
+.env.*
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+build/
+dist/
+*.egg-info/
+
+.idea/
+.vscode/
+.DS_Store
+
+# Local cache/storage (vector db, temporary state). Anchor this to the
+# repository root so the tracked ``cortex_harness.storage`` package is not
+# accidentally excluded.
+/storage/
+
+# Allow the resources folder (screenshots, images) to be tracked
+!resources/
+!resources/**
+
+.DS_Store
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+*.log
+.serena
+testdata1/
+code-tiny/tools/vb/roslyn_worker/*
+.cache/dev-mcp-code-tiny.pid
+.cache/dev-mcp-doc-tiny.pid
+.cache/*
+# local scheduled tasks and local settings
+scheduled_tasks.json
+scheduled_tasks.lock
+settings.local.json
+uv.lock
+.cortext-harness/config/dev.json
+
+# Local Qdrant and FalkorDBLite persistent storage (Phase 01 cutover).
+local_qdrant_db/
+local_falkordb_db/
+# Qdrant local-mode lock files and sidecars (created next to the data dir).
+local_qdrant_db/**/.lock
+local_qdrant_db/**/storage_lock
+local_falkordb_db/**/*.lock
+local_falkordb_db/**/*.rdb.lock
+code-tiny/CLAUDE.md
+code-tiny/tools/android/CLAUDE.md
+code-tiny/tools/cplus/CLAUDE.md
+code-tiny/tools/php/CLAUDE.md
+code-tiny/tools/sql/CLAUDE.md
+code-tiny/tools/sync/CLAUDE.md
+code-tiny/tools/ts/CLAUDE.md
+code-tiny/tools/vb/CLAUDE.md
+cortex_harness/CLAUDE.md
+cortex_harness/CLAUDE.md
+
+# sensitive-guard
+.sensitive-terms
+.commandcode/taste/taste.md
+.claude/settings.local.json
+
+# Ignore local memory/context notes in app folders
+frontend/**/CLAUDE.md
+backendjs/**/CLAUDE.md
+tests/fixtures/**
+!tests/fixtures/cobol-application/
+!tests/fixtures/cobol-application/**
+!tests/fixtures/cobol-dialects/
+!tests/fixtures/cobol-dialects/**
+!tests/fixtures/flutter-app/
+!tests/fixtures/flutter-app/**
+!tests/fixtures/flutter-protocol-v1.jsonl
+!tests/fixtures/framework-java-app/
+!tests/fixtures/framework-java-app/**
+!tests/fixtures/shell-application/
+!tests/fixtures/shell-application/batch_entry.sh
+!tests/fixtures/aspnet-core-application/
+!tests/fixtures/aspnet-core-application/**
+!tests/fixtures/aspnet-framework-application/
+!tests/fixtures/aspnet-framework-application/**
+!tests/fixtures/perl-application/
+!tests/fixtures/perl-application/**
+!tests/fixtures/web-framework-application/
+!tests/fixtures/web-framework-application/**
+!tests/fixtures/database-schema-application/
+!tests/fixtures/database-schema-application/**
+!tests/fixtures/cplus_semantic_calls/
+!tests/fixtures/cplus_semantic_calls/**
+!tests/fixtures/proc_source_map/
+!tests/fixtures/proc_source_map/**
+!tests/fixtures/unified_contract/
+!tests/fixtures/unified_contract/proj_alpha/
+!tests/fixtures/unified_contract/proj_alpha/src/
+!tests/fixtures/unified_contract/proj_alpha/src/alpha.py
+!tests/fixtures/unified_contract/proj_alpha/docs/
+!tests/fixtures/unified_contract/proj_alpha/docs/overview.md
+!tests/fixtures/unified_contract/proj_beta/
+!tests/fixtures/unified_contract/proj_beta/src/
+!tests/fixtures/unified_contract/proj_beta/src/beta.py
+!tests/fixtures/unified_contract/proj_beta/docs/
+!tests/fixtures/unified_contract/proj_beta/docs/overview.md
+!tests/fixtures/unified_contract/config/
+!tests/fixtures/unified_contract/config/proj_alpha.json
+!tests/fixtures/unified_contract/config/proj_beta.json
+tests/fixtures/aspnet-core-application/**/bin/
+tests/fixtures/aspnet-core-application/**/obj/
+tests/fixtures/aspnet-framework-application/**/bin/
+tests/fixtures/aspnet-framework-application/**/obj/
+code-tiny/tools/common/aspnet/roslyn_worker/bin/
+code-tiny/tools/common/aspnet/roslyn_worker/obj/
+code-tiny/tools/csharp/roslyn_worker/bin/
+code-tiny/tools/csharp/roslyn_worker/obj/
+code-tiny/tools/csharp/roslyn_worker/*.user
+!code-tiny/tools/cobol/lib/cobol.cpython-310-darwin.so
+
+code-tiny/tools/common/aspnet
+code-tiny/tools/common/aspnet/roslyn_worker/bin/
+code-tiny/tools/common/aspnet/roslyn_worker/obj/
+code-tiny/tools/csharp/roslyn_worker/bin/
+code-tiny/tools/csharp/roslyn_worker/obj/
+# VB6 ANTLR worker (Maven aggregator) — ignore Maven build outputs.
+# Source-of-truth: pom.xml, src/main, VENDOR.md, LICENSE inside
+# code-tiny/tools/vb/antlr_worker/{vendor/proleap-vb6-parser,worker}/
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/target/**
+code-tiny/tools/vb/antlr_worker/worker/target/**
+# Eclipse IDE metadata (.project, .classpath, .settings) — local IDE
+# state from antlr_worker builds, never to be tracked.
+code-tiny/tools/vb/antlr_worker/.project
+code-tiny/tools/vb/antlr_worker/.classpath
+code-tiny/tools/vb/antlr_worker/.settings/**
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/.project
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/.classpath
+code-tiny/tools/vb/antlr_worker/vendor/proleap-vb6-parser/.settings/**
+code-tiny/tools/vb/antlr_worker/worker/.project
+code-tiny/tools/vb/antlr_worker/worker/.classpath
+code-tiny/tools/vb/antlr_worker/worker/.settings/**
+# Backup / swap files left by ad-hoc edits in the antlr_worker.
+code-tiny/tools/vb/antlr_worker/**/*.bak
+# Track the prebuilt shaded jar so fresh clones can run `engine=antlr`
+# without a Maven toolchain. `make build` re-stamps via ensure_worker_built()
+# when sources change. Other Maven outputs (classes/, original-*.jar,
+# generated-sources/) remain ignored.
+!code-tiny/tools/vb/antlr_worker/worker/target/vb6-antlr-worker.jar
+.cortext-harness/config/dev.json
+.cortex/flutter/
+.cortex/flutter/**
+.cortext-harness/config/dev.json
+compile_commands.json
+.cortex/flutter/dart-facts.json
+.cortext-harness/config/dev.json
+.qwen/tmp/**
+.mimosa/
+.mimosa/**
+.cortext-harness/sync-state/sync-code.lock
+doc-tiny/http:/.localhost:6333.cortex-owner.lock
+# YAKE dynamic entity-rule artifacts generated per project by doc sync
+doc-tiny/rules/from-yake/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

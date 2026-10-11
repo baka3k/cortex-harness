@@ -23,7 +23,7 @@ Same 3-step precedence as Phase 02 (no `active_project` state):
 - `doc-tiny/mcp_graph_rag.py`:
   - Remove the module-level `QDRANT_COLLECTION = os.getenv(...)` default; the
     collection is resolved per call via the registry.
-  - `query_graph_rag_langextract`, `semantic_search`, `list_source_ids`,
+  - `semantic_graph_search`, `semantic_search`, `list_source_ids`,
     `get_paragraph_text`, `list_qdrant_collections` all accept `project_id`
     **and** `search_full` (default `false`).
   - The Qdrant filter becomes
@@ -61,7 +61,7 @@ Same 3-step precedence as Phase 02 (no `active_project` state):
 
 ## Acceptance
 
-- `query_graph_rag_langextract(project_id="cortex", query="...")` resolves
+- `semantic_graph_search(project_id="cortex", query="...")` resolves
   graph `cortext` and collection `cortext_doc` regardless of server-boot env.
 - Querying project A never returns project B's entities or paragraphs.
 - All doc-tiny regression tests pass (with fixtures updated to provide

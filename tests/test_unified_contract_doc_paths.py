@@ -139,7 +139,7 @@ def test_every_registered_mind_tool_exposes_project_id():
         "list_source_ids",
         "list_qdrant_collections",
         "semantic_search",
-        "query_graph_rag_langextract",
+        "semantic_graph_search",
         "get_paragraph_text",
     }
     assert expected <= set(fake.tools)
@@ -401,7 +401,7 @@ def test_query_graph_rag_strips_entity_uuids_but_expands_with_them():
         _mind_payload_rows()
     )
     with embedder, qdrant, fetch_entities as entities_mock, fetch_relations as relations_mock:
-        result = fake.tools["query_graph_rag_langextract"](
+        result = fake.tools["semantic_graph_search"](
             query="alpha", project_id="procsample"
         )
 
@@ -427,7 +427,7 @@ def test_query_graph_rag_keeps_entity_uuids_when_requested():
         _mind_payload_rows()
     )
     with embedder, qdrant, fetch_entities, fetch_relations:
-        result = fake.tools["query_graph_rag_langextract"](
+        result = fake.tools["semantic_graph_search"](
             query="alpha", project_id="procsample", include_entity_ids="true"
         )
 
@@ -445,7 +445,7 @@ def test_query_graph_rag_hides_keyword_by_default_and_reveals_by_rule():
         _mind_payload_rows()
     )
     with embedder, qdrant, fetch_entities as entities_mock, fetch_relations:
-        fake.tools["query_graph_rag_langextract"](query="alpha", project_id="procsample")
+        fake.tools["semantic_graph_search"](query="alpha", project_id="procsample")
         default_types = entities_mock.call_args.kwargs["entity_types"]
 
     # Default curated set keeps extractor noise (KEYWORD) out of the list...
@@ -453,7 +453,7 @@ def test_query_graph_rag_hides_keyword_by_default_and_reveals_by_rule():
     assert default_types == mcp_graph_rag.ENTITY_TYPES_DEFAULT
 
     with embedder, qdrant, fetch_entities as entities_mock, fetch_relations:
-        fake.tools["query_graph_rag_langextract"](
+        fake.tools["semantic_graph_search"](
             query="alpha", project_id="procsample", entity_types="KEYWORD"
         )
     # ...and the same parameter reveals it on demand.
@@ -493,7 +493,7 @@ def test_query_graph_rag_ranks_entities_by_passage_frequency_and_caps():
     with embedder, qdrant, mock.patch.object(
         mcp_graph_rag, "fetch_entities_by_ids", return_value=all_entities
     ), fetch_relations:
-        result = fake.tools["query_graph_rag_langextract"](
+        result = fake.tools["semantic_graph_search"](
             query="alpha", project_id="procsample", max_entities=3
         )
 

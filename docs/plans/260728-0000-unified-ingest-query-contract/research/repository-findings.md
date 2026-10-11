@@ -96,7 +96,7 @@ backing the plan's "Verified Current Behavior" section.
 
 ## C. mind_mcp (port 8789) Query Path
 
-### C1. query_graph_rag_langextract targeting
+### C1. semantic_graph_search targeting
 
 - `doc-tiny/mcp_graph_rag.py:35`:
   `QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION_DOC", "documents")`.

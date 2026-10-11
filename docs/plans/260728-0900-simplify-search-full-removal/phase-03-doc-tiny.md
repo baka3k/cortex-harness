@@ -92,7 +92,7 @@ payloads = qdrant_search_entity_payload(
 
 Update the docstring: remove mentions of `search_full`.
 
-### 4. `mcp_graph_rag.py` — `query_graph_rag_langextract`
+### 4. `mcp_graph_rag.py` — `semantic_graph_search`
 
 Same pattern: remove `search_full` from signature, from the
 `qdrant_search_entity_payload` call, and from docstrings.

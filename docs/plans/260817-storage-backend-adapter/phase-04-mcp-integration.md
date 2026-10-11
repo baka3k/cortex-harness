@@ -75,7 +75,7 @@ store = factory.get_qdrant_store(QdrantStorageRole.DOCUMENT)
 
 **Key integration points:**
 
-1. **Qdrant queries** in `query_graph_rag_langextract`:
+1. **Qdrant queries** in `semantic_graph_search`:
    - Use factory for Qdrant store.
    - Graph queries use factory for FalkorDB driver.
 
