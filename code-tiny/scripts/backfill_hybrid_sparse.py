@@ -44,6 +44,7 @@ from tools.common import embed_runtime, embedding_marker  # noqa: E402
 from tools.common.local_qdrant import (  # noqa: E402
     collection_has_sparse,
     collection_supports_sparse,
+    discover_code_collections,
     hybrid_document_text,
 )
 
@@ -58,13 +59,34 @@ def _resolve_store(args):
     return get_code_qdrant_store(None)
 
 
-def _resolve_collection(args) -> str:
+def _resolve_collection(args, store=None) -> str:
     if args.collection:
         return args.collection
     project_id = (args.project_id or "").strip()
     if not project_id:
         raise SystemExit("Either --project-id or --collection is required.")
-    return f"{project_id}_doc" if args.doc_mode else project_id
+    if args.doc_mode:
+        return f"{project_id}_doc"
+    if store is None:
+        store = _resolve_store(args)
+    # The bare project id is a logical registry name — physical code
+    # collections are ``{project}_{hash}__{parser}_functions``. A backfill
+    # drops and recreates its target, so ambiguity is never resolved
+    # silently: exactly one match proceeds, several demand --collection.
+    found = discover_code_collections(store, project_id)
+    if not found:
+        raise SystemExit(
+            f"No code collections found for project {project_id!r} "
+            f"(looked for {project_id}_*__*_functions in the resolved store). "
+            f"Sync first with 'dev sync code', or pass --collection explicitly."
+        )
+    if len(found) > 1:
+        raise SystemExit(
+            f"Project {project_id!r} has {len(found)} code collections; "
+            f"backfill them one at a time with --collection:\n  "
+            + "\n  ".join(found)
+        )
+    return found[0]
 
 
 def _resolve_model(args) -> str:
@@ -229,10 +251,10 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    collection = _resolve_collection(args)
+    store = _resolve_store(args)
+    collection = _resolve_collection(args, store)
     model_identity = embed_runtime.effective_model_identity(_resolve_model(args))
     device = os.environ.get("EMBED_DEVICE") or "auto"
-    store = _resolve_store(args)
 
     exists = store.collection_exists(collection)
     if not exists:
