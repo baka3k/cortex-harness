@@ -49,7 +49,6 @@ scheduled_tasks.json
 scheduled_tasks.lock
 settings.local.json
 uv.lock
-.cortext-harness/config/dev.json
 
 # Local Qdrant and FalkorDBLite persistent storage (Phase 01 cutover).
 local_qdrant_db/
@@ -157,17 +156,19 @@ code-tiny/tools/vb/antlr_worker/**/*.bak
 # when sources change. Other Maven outputs (classes/, original-*.jar,
 # generated-sources/) remain ignored.
 !code-tiny/tools/vb/antlr_worker/worker/target/vb6-antlr-worker.jar
-.cortext-harness/config/dev.json
-.cortex/flutter/
-.cortex/flutter/**
-.cortext-harness/config/dev.json
 compile_commands.json
-.cortex/flutter/dart-facts.json
-.cortext-harness/config/dev.json
 .qwen/tmp/**
 .mimosa/
 .mimosa/**
-.cortext-harness/sync-state/sync-code.lock
 doc-tiny/http:/.localhost:6333.cortex-owner.lock
 # YAKE dynamic entity-rule artifacts generated per project by doc sync
 doc-tiny/rules/from-yake/
+
+# --- Local harness working state (never commit) -------------------------
+# Machine-local caches and generated facts produced by the harness itself.
+# Anchored to the repository root so tracked packages such as
+# ``cortex_harness.storage`` are never caught by these rules.
+/.cortex/
+/.cortex/**
+/.cortext-harness/
+/.cortext-harness/**
