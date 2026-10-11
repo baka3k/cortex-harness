@@ -1,8 +1,9 @@
-"""Phase 04 — default sweep: every entry point resolves Qwen3 by default.
+"""Default sweep: every entry point resolves BGE-M3 by default.
 
 Covers the env chain (arg → local path → EMBEDDING_MODEL →
-DOC_EMBEDDING_MODEL → default), doc device auto-detect, the dependency
-floor fail-fast, and the constants-twin rule between trees.
+DOC_EMBEDDING_MODEL → default), doc device auto-detect, the Qwen3
+dependency-floor fail-fast (Qwen3 stays a supported explicit model), and
+the constants-twin rule between trees.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ for entry in (CODE_TINY, DOC_TINY):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
+BGE = "BAAI/bge-m3"
 QWEN3 = "Qwen/Qwen3-Embedding-0.6B"
 JINA = "jinaai/jina-embeddings-v3"
 
@@ -43,7 +45,7 @@ class DefaultsConvergeTests(unittest.TestCase):
         import embedding_utils as doc_utils
 
         self.assertEqual(DEFAULT_CODE_EMBEDDING_MODEL, doc_utils.DEFAULT_DOC_EMBEDDING_MODEL)
-        self.assertEqual(DEFAULT_CODE_EMBEDDING_MODEL, QWEN3)
+        self.assertEqual(DEFAULT_CODE_EMBEDDING_MODEL, BGE)
 
     def test_source_defaults_reference_the_constant(self):
         # dev.py cannot be imported side-effect-free here; assert by source.
@@ -51,6 +53,7 @@ class DefaultsConvergeTests(unittest.TestCase):
         self.assertIn("DEFAULT_CODE_EMBEDDING_MODEL", dev_source)
         self.assertNotIn('"jinaai/jina-embeddings-v3"', dev_source)
         self.assertNotIn('"BAAI/bge-m3"', dev_source)
+        self.assertNotIn('"Qwen/Qwen3-Embedding-0.6B"', dev_source)
         # The MCP chains resolve the constant as the final fallback.
         for mcp in (
             "code-tiny/mcp/fastmcp_server.py",
@@ -61,14 +64,14 @@ class DefaultsConvergeTests(unittest.TestCase):
             source = (ROOT / mcp).read_text()
             self.assertIn("or DEFAULT_CODE_EMBEDDING_MODEL", source, mcp)
 
-    def test_doc_resolve_defaults_to_qwen3(self):
+    def test_doc_resolve_defaults_to_bge_m3(self):
         import embedding_utils as doc_utils
 
         with patch.dict(os.environ, {}, clear=False):
             for var in ("EMBEDDING_MODEL", "EMBEDDING_MODEL_PATH", "DOC_EMBEDDING_MODEL"):
                 os.environ.pop(var, None)
             model, local_only = doc_utils.resolve_embedding_model(None, doc_utils.DEFAULT_DOC_EMBEDDING_MODEL)
-        self.assertEqual(model, QWEN3)
+        self.assertEqual(model, BGE)
         self.assertFalse(local_only)
 
 

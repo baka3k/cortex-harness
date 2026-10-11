@@ -277,10 +277,10 @@ SKIP (registry: project_id 'proj_beta' is not registered. ...)
    called `activate_project(...)` passes `project_id` to scope one project, or
    omits it for an intentional cross-project query.
 
-### Embedding-model swap playbook (Qwen3-Embedding era)
+### Embedding-model swap playbook (BGE-M3 era)
 
 Both pipelines share one embedding model (default
-`Qwen/Qwen3-Embedding-0.6B`). Every code collection carries an
+`BAAI/bge-m3`). Every code collection carries an
 embedding-model sentinel (payload `_embed_meta`, private-namespace point
 id) enforced at the writer chokepoints (`local_qdrant.ensure_collection`,
 cobol sync, livingdoc, doc `create_collection`), so a model switch against

@@ -42,6 +42,7 @@ DEFAULT_QUERY_CACHE_SIZE = 512
 # model's own ST config and is never duplicated here.
 QWEN3_EMBEDDING_MARKER = "qwen3-embedding"
 QWEN3_QUERY_PROMPT_NAME = "query"
+BGE_M3_EMBEDDING_MARKER = "bge-m3"
 
 
 def model_policy(model_name: str) -> Dict[str, Any]:
@@ -53,6 +54,9 @@ def model_policy(model_name: str) -> Dict[str, Any]:
       their basename) → SentenceTransformer backend, last-token pooling comes
       from the model config, query side uses the ``query`` prompt and
       normalized vectors.
+    * ``bge-m3`` → SentenceTransformer backend with the model's own pooling
+      config, bare query encode (no prompt) normalized to match the ingest
+      contract.
     * ``jina`` (or an explicit ``JINA_MODEL_PATH`` match) → legacy AutoModel
       backend with ``trust_remote_code=True``; encoding behavior unchanged.
     * anything else → SentenceTransformer default config, no query prompt,
@@ -78,6 +82,13 @@ def model_policy(model_name: str) -> Dict[str, Any]:
             "query_prompt": QWEN3_QUERY_PROMPT_NAME,
             "normalize": True,
         }
+    if BGE_M3_EMBEDDING_MARKER in name:
+        return {
+            "trust_remote_code": False,
+            "backend": "st",
+            "query_prompt": None,
+            "normalize": True,
+        }
     return {
         "trust_remote_code": False,
         "backend": "st",
@@ -101,11 +112,14 @@ def effective_model_identity(model_name: str) -> str:
 def _policy_uses_st_query(policy: Dict[str, Any]) -> bool:
     """Whether a policy selects the SentenceTransformer query-encode path.
 
-    Only families that declare a query prompt are rerouted; unrecognized
-    names keep the legacy AutoModel query path so no existing behavior
-    changes silently.
+    Only families that declare a query prompt (Qwen3) or query-side
+    normalization (BGE-M3) are rerouted; unrecognized names keep the legacy
+    AutoModel query path so no existing behavior changes silently.
     """
-    return bool(policy.get("backend") == "st" and policy.get("query_prompt"))
+    return bool(
+        policy.get("backend") == "st"
+        and (policy.get("query_prompt") or policy.get("normalize"))
+    )
 
 
 _MIN_TRANSFORMERS_FOR_QWEN3 = (4, 51)
@@ -116,8 +130,12 @@ def _check_qwen3_transformers_floor(model_name: str) -> None:
 
     Qwen3-Embedding needs the Qwen3 architecture (transformers >= 4.51);
     an older install otherwise dies mid-load with a confusing architecture
-    error instead of this one.
+    error instead of this one. Non-Qwen3 names (bge-m3, local snapshots of
+    other families routed through the shared ST query path) pass through —
+    they predate the Qwen3 architecture and run on any supported version.
     """
+    if QWEN3_EMBEDDING_MARKER not in str(model_name or "").lower():
+        return
     try:
         import transformers
 
@@ -400,11 +418,12 @@ def _embed_query_st(
     device_name: Optional[str],
     policy: Dict[str, Any],
 ) -> List[float]:
-    """Query encode via SentenceTransformer (last-token pooling family).
+    """Query encode via SentenceTransformer (model-config pooling families).
 
     Accelerator failures evict the SentenceTransformer cache and reload on
     CPU with the same prompt/normalize policy; the AutoModel mean-pool path
-    is never entered for these models (their pooling differs).
+    is never entered for these models (Qwen3 last-token and BGE-M3 CLS
+    pooling differ from mean-pooling).
     """
     _check_qwen3_transformers_floor(model_name)
     encode_kwargs: Dict[str, Any] = {}
@@ -579,10 +598,10 @@ def get_sentence_transformer(
     — the first load for a ``(model, device)`` key wins.
     """
     cache_key = (model_name, str(device) if device is not None else None)
-    if QWEN3_EMBEDDING_MARKER in str(model_name).lower():
-        # Every ingest path loads through here, so the floor check must
-        # live at the loader, not only on the query reroute.
-        _check_qwen3_transformers_floor(model_name)
+    # Every ingest path loads through here, so the floor check must live at
+    # the loader, not only on the query reroute (non-Qwen3 names pass
+    # through the check untouched).
+    _check_qwen3_transformers_floor(model_name)
     with _ST_LOCK:
         cached = _SENTENCE_TRANSFORMER_CACHE.get(cache_key)
         if cached is not None:

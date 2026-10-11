@@ -8,7 +8,7 @@ re-index. Keep the doc-tiny twin
 value — the flat doc tree cannot import from here.
 """
 
-DEFAULT_CODE_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_CODE_EMBEDDING_MODEL = "BAAI/bge-m3"
 
 # Legacy pipeline-default model literals: once stored by an older ``dev
 # init``, they must never be re-offered as the prompt default — re-init is
@@ -16,7 +16,7 @@ DEFAULT_CODE_EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 # literals migrate; deliberate custom models / local paths are preserved.
 LEGACY_DEFAULT_EMBEDDING_MODELS = frozenset({
     "jinaai/jina-embeddings-v3",
-    "baai/bge-m3",
+    "qwen/qwen3-embedding-0.6b",
 })
 
 __all__ = [

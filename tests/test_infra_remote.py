@@ -242,6 +242,7 @@ class TestProvisionQdrant:
 
         from cortex_harness.storage.config import RemoteStorageConfig
         from tools.common import embedding_marker
+        from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 
         config = RemoteStorageConfig(qdrant_url="http://localhost:6333")
         fake_client = mock.Mock()
@@ -259,7 +260,7 @@ class TestProvisionQdrant:
         point = fake_client.upsert.call_args.kwargs["points"][0]
         assert point.id == embedding_marker.meta_point_id("proj")
         assert point.payload["_embed_meta"] is True
-        assert point.payload["embedding_model"] == "Qwen/Qwen3-Embedding-0.6B"
+        assert point.payload["embedding_model"] == DEFAULT_CODE_EMBEDDING_MODEL
 
 
 class TestProvisionFalkordb:

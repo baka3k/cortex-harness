@@ -89,7 +89,7 @@ def probe_all(config: RemoteStorageConfig) -> list[ProbeResult]:
     return [probe_qdrant(config), probe_falkordb(config)]
 
 
-# Both pipelines embed with the unified default (Qwen3-Embedding, 1024-dim);
+# Both pipelines embed with the unified default (BGE-M3, 1024-dim);
 # provisioning with any other size poisons the empty collection and blocks
 # the first ingest/query with a dim mismatch (384 legacy default did exactly
 # that). See docs/UNIFIED_INGEST_QUERY_CONTRACT.md.
