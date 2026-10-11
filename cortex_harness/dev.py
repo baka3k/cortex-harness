@@ -3907,6 +3907,82 @@ def sync_doc_stop(ctx):
     )
 
 
+# ── sync gate ────────────────────────────────────────────────────────────────
+
+@sync.command("gate")
+@click.option("--project-dir", default=".", show_default=True)
+@click.option("--collection", default=None,
+              help="Target collection override (default: the project's code "
+                   "collection from config, or <project>_doc with --doc).")
+@click.option("--doc", "doc_mode", is_flag=True,
+              help="Gate the doc collection instead of the code one.")
+@click.option("--queries", "queries_path", type=click.Path(exists=True, dir_okay=False),
+              default=None,
+              help="Paraphrase query-set JSON [{name, class, text, truth_name}]; "
+                   "identifier queries are always derived from the corpus.")
+@click.option("--identifiers", type=int, default=10, show_default=True,
+              help="Corpus-derived identifier queries in the set.")
+@click.option("--top-k", type=int, default=10, show_default=True)
+@click.option("--device", default=None,
+              help="EMBED_DEVICE override (auto/cpu/mps/cuda).")
+@click.option("--out-dir", type=click.Path(file_okay=False), default=None,
+              help="Results directory (default: <project-dir>/.cortext-harness/ab-gate).")
+def sync_gate(project_dir, collection, doc_mode, queries_path, identifiers,
+              top_k, device, out_dir):
+    """A/B quality gate for hybrid retrieval (EMBED_HYBRID) on the real corpus.
+
+    \b
+    Measures dense-only vs fused RRF on a THROWAWAY clone of the collection —
+    the original is never written and the clone is dropped afterwards — then
+    prints a PASS / NOT PASSED verdict per the enablement runbook
+    (docs/UNIFIED_INGEST_QUERY_CONTRACT.md → "Hybrid retrieval enablement").
+
+    Run this BEFORE flipping EMBED_HYBRID=1 for a project, and re-run it when
+    the corpus changes materially. Each run re-encodes the whole collection
+    (~2.5 min per 362 points on MPS) — a decision tool, not a sync step.
+    """
+    project_path = Path(project_dir).resolve()
+    cfg, _ = _load_active_config(project_path)
+    project = cfg.get("project", {})
+    if doc_mode:
+        process_env = _doc_env_for_process(cfg, project_path)
+        default_collection = "{}_doc".format(
+            str(project.get("doc") or project.get("name") or "project").strip()
+        )
+    else:
+        process_env = _code_env_for_process(cfg, project_path)
+        default_collection = _code_qdrant_collection(
+            dict(cfg.get("code", {}).get("env", {})), project
+        )
+    target = str(collection or default_collection).strip()
+    if not out_dir:
+        out_dir = str(project_path / HARNESS_CONFIG_DIR.replace("/config", "") / "ab-gate")
+
+    script = CODE_TINY / "scripts" / "ab_hybrid_gate.py"
+    cmd = [
+        _venv_python(CODE_TINY), str(script),
+        "--collection", target,
+        "--identifiers", str(identifiers),
+        "--top-k", str(top_k),
+        "--out-dir", out_dir,
+    ]
+    if doc_mode:
+        cmd.append("--doc-mode")
+    if queries_path:
+        cmd += ["--queries", str(Path(queries_path).resolve())]
+    if device:
+        cmd += ["--device", device]
+
+    click.echo(f"[gate] collection={target!r}  top_k={top_k}  out_dir={out_dir}")
+    click.echo("[gate] the clone re-encode runs per invocation; the original "
+               "collection is never written.")
+    run_env = dict(os.environ)
+    run_env.update({str(key): str(value) for key, value in process_env.items()})
+    proc = subprocess.run(cmd, env=run_env)
+    if proc.returncode != 0:
+        raise SystemExit(proc.returncode)
+
+
 # ── sync code add ─────────────────────────────────────────────────────────────
 
 @sync_code.command("add")
