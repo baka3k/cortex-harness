@@ -68,6 +68,11 @@ def st_query_encode_kwargs(model_name: str | None) -> Dict[str, object]:
     return {}
 
 
+_TOKENIZER_FILE_CANDIDATES = (
+    "tokenizer.json", "tokenizer.model", "spiece.model", "vocab.txt", "vocab.json",
+)
+
+
 def _offline_enabled() -> bool:
     offline = os.getenv("HF_HUB_OFFLINE") or os.getenv("TRANSFORMERS_OFFLINE")
     if offline and offline.strip().lower() not in {"0", "false", "no"}:
@@ -76,6 +81,60 @@ def _offline_enabled() -> bool:
     if local_only and local_only.strip().lower() not in {"0", "false", "no"}:
         return True
     return False
+
+
+def _snapshot_complete(snapshot: str) -> bool:
+    """A complete snapshot can serve the whole load without any download.
+
+    ``snapshot_download(local_files_only=True)`` only proves the revision
+    folder exists; an interrupted prefetch passes it with the weights
+    missing. Gate the offline fast path on the files the constructor
+    hard-requires (config, weights, tokenizer).
+    """
+    root = Path(snapshot)
+    if not (root / "config.json").is_file():
+        return False
+    if not any(root.glob("*.safetensors")) and not any(root.glob("pytorch_model*.bin")):
+        return False
+    return any((root / name).is_file() for name in _TOKENIZER_FILE_CANDIDATES)
+
+
+def _complete_cached_snapshot(model: str) -> bool:
+    """Whether a repo id resolves to a complete local HF-cache snapshot.
+
+    The probe always runs with ``local_files_only=True`` so a cache miss is
+    a cheap local answer — never a download and never a HEAD ping. A
+    downloaded model must load with zero network traffic.
+    """
+    if Path(model).exists():
+        return True
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot = snapshot_download(model, local_files_only=True)
+    except Exception:
+        return False
+    return _snapshot_complete(str(snapshot))
+
+
+def _enforce_offline() -> None:
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    # huggingface_hub/transformers read those env vars once at import; flip
+    # their captured flags too so a post-import call still takes effect and
+    # the tokenizer/processor layer cannot probe optional artifacts online.
+    try:
+        import huggingface_hub.constants as hub_constants
+
+        hub_constants.HF_HUB_OFFLINE = True
+    except Exception:
+        pass
+    try:
+        import transformers.utils.hub as transformers_hub
+
+        transformers_hub._is_offline_mode = True
+    except Exception:
+        pass
 
 
 def resolve_embedding_model(model: str | None, default: str) -> Tuple[str, bool]:
@@ -90,10 +149,9 @@ def resolve_embedding_model(model: str | None, default: str) -> Tuple[str, bool]
             or os.getenv("DOC_EMBEDDING_MODEL")
             or default
         )
-    local_files_only = Path(selected).exists()
+    local_files_only = Path(selected).exists() or _complete_cached_snapshot(selected)
     if local_files_only or _offline_enabled():
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
-        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+        _enforce_offline()
     return selected, local_files_only
 
 
