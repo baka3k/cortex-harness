@@ -115,6 +115,7 @@ ENTITY_TYPES_DEFAULT = _parse_entity_types(
 
 _qdrant_stores: dict[str, Any] = {}
 _graph_drivers: dict[str, Any] = {}
+_fallback_graph_store: Optional[Any] = None
 _embedder: Optional[SentenceTransformer] = None
 _embedder_model_name: Optional[str] = None
 logger = logging.getLogger("graph_rag.mcp")
@@ -470,7 +471,15 @@ def get_graph_store(project_id: Optional[str] = None) -> Any:
                 else:
                     _graph_drivers[project_id] = base
         return _graph_drivers[project_id]
-    return create_graph_store_from_env()
+    # Legacy / global access for scripts that don't carry a project_id.
+    # Cached for the process lifetime: with the embedded FalkorDBLite
+    # provider every construction acquires the cross-process store lease,
+    # so an uncached fallback makes every call after the first fail with
+    # "store is already owned" — against this server's own earlier lease.
+    global _fallback_graph_store
+    if _fallback_graph_store is None:
+        _fallback_graph_store = create_graph_store_from_env()
+    return _fallback_graph_store
 
 
 def _acquire_graph_store(project_id: Optional[str]):
