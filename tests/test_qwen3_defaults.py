@@ -70,7 +70,13 @@ class DefaultsConvergeTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             for var in ("EMBEDDING_MODEL", "EMBEDDING_MODEL_PATH", "DOC_EMBEDDING_MODEL"):
                 os.environ.pop(var, None)
-            model, local_only = doc_utils.resolve_embedding_model(None, doc_utils.DEFAULT_DOC_EMBEDDING_MODEL)
+            # The default repo id may be fully cached on this machine (the
+            # cache probe then legitimately reports local_only=True — see
+            # test_embed_offline_default.DocSideResolveTests). Pin the probe
+            # off so this test stays about the *default resolution*, not the
+            # machine's HF cache state.
+            with patch.object(doc_utils, "_complete_cached_snapshot", return_value=False):
+                model, local_only = doc_utils.resolve_embedding_model(None, doc_utils.DEFAULT_DOC_EMBEDDING_MODEL)
         self.assertEqual(model, BGE)
         self.assertFalse(local_only)
 
