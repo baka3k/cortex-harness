@@ -5,12 +5,11 @@ import os
 import sys
 import time
 
-from sentence_transformers import SentenceTransformer
-
 _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
+from tools.common import embed_runtime
 from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common.local_qdrant import default_local_qdrant_path, get_code_qdrant_store, query_points
 from graph_runtime import add_graph_arguments, open_graph_session, prepare_graph_arguments
@@ -201,7 +200,7 @@ def main():
         print(f"Loading embedding model: {model_name} device={args.embed_device}")
         print(f"Qdrant target: url={args.qdrant_url} collection={args.collection}")
         print(f"Doc id keys: {doc_id_keys} doc label: {args.doc_label}")
-    embedder = SentenceTransformer(
+    embedder = embed_runtime.get_sentence_transformer(
         model_name,
         device=args.embed_device,
         trust_remote_code=args.embed_trust_remote_code,

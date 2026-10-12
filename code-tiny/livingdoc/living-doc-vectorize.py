@@ -11,7 +11,6 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
-from sentence_transformers import SentenceTransformer
 from tools.common.model_defaults import DEFAULT_CODE_EMBEDDING_MODEL
 from tools.common import embed_runtime
 from tools.common.local_qdrant import (
@@ -290,7 +289,7 @@ def main():
     if args.verbose:
         print(f"Loading embedding model: {model_name} device={args.embed_device}")
     try:
-        embedder = SentenceTransformer(
+        embedder = embed_runtime.get_sentence_transformer(
             model_name,
             device=args.embed_device,
             trust_remote_code=args.embed_trust_remote_code,
