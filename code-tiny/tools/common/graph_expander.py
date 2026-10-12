@@ -45,6 +45,7 @@ when an async-compatible graph driver is provided.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set
 
@@ -64,6 +65,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_REL_TYPES: List[str] = [
     "CALLS", "USES_TYPE", "REFERENCES", "INHERITS", "ALIASES", "ALIAS_OF",
 ]
+
+
+def _max_expansion_seeds() -> int:
+    """Upper bound on seeds fed to one expansion query (MCP_GRAPH_EXPANSION_MAX_SEEDS).
+
+    The expansion enumerates every ``*1..depth`` path from every seed before
+    ``LIMIT`` applies; unbounded seed lists from broad retrieval starve the
+    single-threaded graph backend for the full query timeout.
+    """
+    try:
+        value = int(os.environ.get("MCP_GRAPH_EXPANSION_MAX_SEEDS", "12"))
+    except (TypeError, ValueError):
+        value = 12
+    return max(1, value)
 
 # Hop-count to proximity score decay table.
 # Entries beyond the table end use the extrapolation formula below.
@@ -132,36 +147,38 @@ def _rel_pattern(rel_types: List[str], depth: int, direction: str = "both") -> s
 
 def _expand_cypher(rel_types: List[str], depth: int) -> str:
     rel = "|".join(rel_types) if rel_types else "CALLS|USES_TYPE"
+    # NOTE: no min(length(p))/ORDER BY aggregation — that form enumerates
+    # every ``*1..depth`` path from every seed before LIMIT applies and
+    # starves single-threaded backends on dense graphs. DISTINCT + LIMIT
+    # terminates early; expand() keeps the shortest hop count per neighbor
+    # in Python instead.
     return f"""
 UNWIND $seed_ids AS sid
 MATCH (seed {{id: sid}})
 WHERE ($project_id IS NULL OR seed.project_id_normalized STARTS WITH $project_id_normalized)
-    MATCH p = (seed)-[:{rel}*1..{depth}]-(neighbor)
-    WHERE neighbor.id <> sid
-      AND ($project_id IS NULL OR neighbor.project_id_normalized STARTS WITH $project_id_normalized)
-    WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
-    RETURN
-        seed_ids,
-        seed_ids[0]             AS seed_id,
-        hops,
-        neighbor.id            AS node_id,
-    neighbor.name          AS name,
+MATCH p = (seed)-[:{rel}*1..{depth}]-(neighbor)
+WHERE neighbor.id <> sid
+  AND ($project_id IS NULL OR neighbor.project_id_normalized STARTS WITH $project_id_normalized)
+RETURN DISTINCT
+    sid                     AS seed_id,
+    neighbor.id             AS node_id,
+    neighbor.name           AS name,
     coalesce(neighbor.qualified_name, neighbor.name) AS qualified_name,
     coalesce(labels(neighbor)[0], 'Node') AS kind,
-    coalesce(neighbor.file_path, '')       AS file_path,
-    neighbor.doc_confidence                AS doc_confidence,
-    neighbor.intent                        AS intent,
-    neighbor.exported                      AS exported,
-        neighbor.side_effect                   AS side_effect,
-        neighbor.project_id                    AS project_id,
-        neighbor.target_name                   AS target_name,
-        neighbor.signature                     AS signature,
-        neighbor.language                      AS language,
-        neighbor.framework                     AS framework,
-        neighbor.resolution_status             AS resolution_status,
-        neighbor.start_line                    AS start_line,
-        neighbor.end_line                      AS end_line
-    ORDER BY hops ASC
+    coalesce(neighbor.file_path, '')      AS file_path,
+    neighbor.doc_confidence               AS doc_confidence,
+    neighbor.intent                       AS intent,
+    neighbor.exported                     AS exported,
+    neighbor.side_effect                  AS side_effect,
+    neighbor.project_id                   AS project_id,
+    neighbor.target_name                  AS target_name,
+    neighbor.signature                    AS signature,
+    neighbor.language                     AS language,
+    neighbor.framework                    AS framework,
+    neighbor.resolution_status            AS resolution_status,
+    neighbor.start_line                   AS start_line,
+    neighbor.end_line                     AS end_line,
+    length(p)               AS hops
 LIMIT $limit
 """
 
@@ -230,6 +247,14 @@ class GraphExpander:
         if not seed_ids:
             return nodes
 
+        # The expansion pattern enumerates every ``*1..depth`` path from
+        # every seed before ``LIMIT`` applies; an unbounded seed list from a
+        # broad retrieval starves the single-threaded graph backend for the
+        # full query timeout. Seeds are retrieval-ranked, so keep the first N.
+        max_seeds = _max_expansion_seeds()
+        if len(seed_ids) > max_seeds:
+            seed_ids = seed_ids[:max_seeds]
+
         cypher = _expand_cypher(rels, depth)
         records = self._run_query(cypher, {
             "seed_ids": seed_ids,
@@ -238,12 +263,19 @@ class GraphExpander:
         })
 
         seen: Set[str] = {n.node_id for n in nodes}
+        best: Dict[str, tuple] = {}
         for row in records:
             nid = str(row.get("node_id") or "")
             if not nid or nid in seen:
                 continue
-            seen.add(nid)
             hops = max(1, int(row.get("hops") or depth))
+            existing = best.get(nid)
+            if existing is not None and existing[0] <= hops:
+                continue
+            best[nid] = (hops, row)
+        for nid in sorted(best, key=lambda key: best[key][0]):
+            hops, row = best[nid]
+            seen.add(nid)
             nodes.append(GraphNode(
                 node_id=nid,
                 name=str(row.get("name") or ""),
@@ -259,7 +291,7 @@ class GraphExpander:
                     "side_effect":    bool(row.get("side_effect") or False),
                     "project_id":     str(row.get("project_id") or ""),
                     "seed_id":        str(row.get("seed_id") or ""),
-                    "seed_ids":       list(row.get("seed_ids") or []),
+                    "seed_ids":       [str(row.get("seed_id") or "")],
                     "target_name":    str(row.get("target_name") or ""),
                     "signature":      str(row.get("signature") or ""),
                     "language":       str(row.get("language") or ""),
