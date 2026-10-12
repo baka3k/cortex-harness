@@ -186,6 +186,25 @@ class FalkorDBDriverTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(driver.graph.timeouts[-1], 4321)
         driver.close()
 
+    async def test_mutations_keep_roomier_timeout_than_interactive_reads(self):
+        with patch("falkordb.FalkorDB", FakeFalkorDB), patch.dict(
+            os.environ, {"FALKORDB_WRITE_QUERY_TIMEOUT_MS": "45000"}
+        ):
+            driver = await GraphDriverFactory.create_driver(
+                GraphProvider.FALKORDB,
+                {
+                    "host": "localhost",
+                    "port": 6379,
+                    "database": "test_graph",
+                    "query_timeout_ms": 4000,
+                },
+            )
+        driver.execute_query_sync("UNWIND $ids AS id MATCH (n {id: id}) RETURN n", {"ids": ["a"]})
+        driver.execute_query_sync("MERGE (:Probe {id: $id})", {"id": "one"})
+        self.assertEqual(driver.graph.timeouts[-2], 4000)
+        self.assertEqual(driver.graph.timeouts[-1], 45000)
+        driver.close()
+
     async def test_mutating_timeout_is_typed_as_ambiguous_and_not_retried(self):
         from tools.graph.driver.falkordb_driver import AmbiguousWriteTimeoutError
 
