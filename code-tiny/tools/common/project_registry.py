@@ -384,6 +384,11 @@ def _resolve_targets(
     def _doc_qdrant() -> str:
         if doc_qdrant_override:
             return doc_qdrant_override
+        # Dual-key precedence: QDRANT_COLLECTION_DOC is what dev.json writes
+        # (docs/UNIFIED_INGEST_QUERY_CONTRACT.md env table); QDRANT_COLLECTION
+        # is the legacy reader key kept for backward compatibility.
+        if doc_env.get("QDRANT_COLLECTION_DOC"):
+            return str(doc_env["QDRANT_COLLECTION_DOC"])
         if doc_env.get("QDRANT_COLLECTION"):
             return str(doc_env["QDRANT_COLLECTION"])
         if env_allowed:

@@ -288,6 +288,65 @@ thành `string` trong `tools/list` chỉ để tiện coercion ở runtime.
   nội bộ dung lượng lớn.
 - `content_mode=summary` MUST có fallback về `name`/`id`, không trả string rỗng.
 
+### Scope block (`semantic_graph_search`, mind server)
+
+`semantic_graph_search` trả thêm trong `data`: block `scope` giải thích
+chính nó đã search ở đâu, và `warnings` (list string, mirror của
+`scope.warnings`). Envelope `{ok,data,error}` không đổi; các field là
+additive. `collections_searched` giữ nguyên ý nghĩa cũ (tên được yêu cầu
+theo target, `:285`) — chi tiết discovery nằm ở `scope.discovered_collections`,
+hit thật nằm ở `scope.per_collection_hits`.
+
+| Field | Kiểu | Ý nghĩa |
+|---|---|---|
+| `mode` | `"scoped" \| "collection" \| "unscoped" \| "fallback_all"` | Nhánh resolve nào đã chạy. |
+| `requested_project_id` | `string \| null` | `project_id` gốc của call. |
+| `resolved_project_id` | `string \| null` | Dạng canonical trong registry (single match). |
+| `registry_hit` | `bool` | Registry có biết id này không. |
+| `collections_searched` | `list[string]` | Tên collection được yêu cầu (giữ nghĩa cũ). |
+| `collections_present` | `list[string]` | Tên thực sự present trên store. |
+| `per_collection_hits` | `map[string, int]` | Số hit thô mỗi collection đóng góp. |
+| `discovered_collections` | `list[string]` | Shard `*_doc` tìm thấy bằng live listing (unscoped/fallback). |
+| `targets_total` / `targets_searched` | `int` | Fan-out trước/sau cap (`SCOPE_MAX_TARGETS`, mặc định 12). |
+| `graph_present` | `bool \| null` | Gate GRAPH.LIST cho shard convention; `null` = gate không trả lời được (fail-open). |
+| `warnings` | `list[string]` | Fallback, cap, store unreachable, found-but-empty… |
+
+Ví dụ — id lạ, mặc định (`strict_scope=false`):
+
+```json
+{
+  "ok": true,
+  "data": {
+    "query": "orders",
+    "scope": {
+      "mode": "fallback_all",
+      "requested_project_id": "typo_id",
+      "resolved_project_id": null,
+      "registry_hit": false,
+      "collections_searched": ["orders_doc"],
+      "collections_present": ["alpha_doc", "beta_doc"],
+      "per_collection_hits": {"alpha_doc": 1, "beta_doc": 1},
+      "discovered_collections": ["alpha_doc", "beta_doc"],
+      "targets_total": 3,
+      "targets_searched": 3,
+      "graph_present": false,
+      "warnings": ["project 'typo_id' not found in registry or stores; fell back to all projects"]
+    },
+    "warnings": ["project 'typo_id' not found in registry or stores; fell back to all projects"],
+    "passages": []
+  },
+  "error": null
+}
+```
+
+`strict_scope=true` + id lạ → `ok:false`, error code
+`project_not_registered` (query không bao giờ tự tạo shard rác). Unscoped
+sạch trả `mode:"unscoped"`, `warnings: []`. `semantic_search` (passage-only)
+dùng cùng cơ chế nội bộ nhưng chưa exposing block `scope` (follow-up).
+
+Toán tử: `dev doctor` có nhóm **scope drift** (warn-only) báo shard lạ /
+declared-but-absent / shard rỗng / config JSON hỏng.
+
 ### Pagination
 
 Tool có thể trả nhiều dữ liệu SHOULD dùng:

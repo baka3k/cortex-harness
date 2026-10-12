@@ -16,7 +16,7 @@ phải tuân thủ đầy đủ 4 rule sau:
 
 | # | Rule | Ý nghĩa |
 |---|------|---------|
-| R1 | **Không truyền `project_id` → search TẤT CẢ** | Filter scope phải bị loại bỏ hoàn toàn (`None`), graph fan-out mọi graph đã đăng ký + default graph. |
+| R1 | **Không truyền `project_id` → search TẤT CẢ** | Filter scope phải bị loại bỏ hoàn toàn (`None`). "Tất cả" = **discovery-based**: mọi registered graph + shard `*_doc` mà store thực sự đang list (FalkorDB `GRAPH.LIST`, Qdrant `list_collection_names`) + instance-store tail; fan-out có cap (`SCOPE_MAX_TARGETS`, mặc định 12) và luôn báo trong `scope.warnings` khi bị cắt. Kết quả **không phụ thuộc thư mục start server** (registry chỉ là hint map per-directory). |
 | R2 | **Có `project_id` → scope theo project** | Graph: chỉ đọc graph/candidates của project đó. Vector: phải có payload filter `project_id_normalized`. |
 | R3 | **Không phân biệt hoa/thường** | So sánh qua `casefold()`: `"Bank"` ≡ `"bank"` ≡ `"BANK"`. |
 | R4 | **Match dạng LIKE (prefix)** | Query `"bank"` phải khớp **mọi project id có casefold-bắt-đầu-bằng** `"bank"`: `bank_android`, `bank_Cplus`, `bank_ios`… vì lúc scan, project id được tạo tự động theo quy tắc `{stem}_{platform}`. Exact match chỉ là trường hợp đặc biệt (prefix = toàn bộ chuỗi). |
@@ -42,6 +42,20 @@ Query `project_id="Bank"` ⇒ khớp `bank_android` + `bank_cplus`, **không** k
   - `code-tiny/scripts/backfill_project_scope_keys.py`, `doc-tiny/graphrag_ingest_langextract.py`, `doc-tiny/0_reset_all.py`
   - Reject-at-ingest: ingest của project chưa đăng ký vẫn phải từ chối
     (`ProjectNotRegisteredError` / `SystemExit`) — chỉ READ path mới fallback.
+- **R6a — READ-side fallback có existence gating (2026-10).** Read path với
+  id chưa đăng ký chỉ chạm shard convention `{id}_doc` sau khi store **thực
+  sự list nó**: FalkorDB qua `GRAPH.LIST` (`list_graphs`, side-effect-free —
+  cấm probe Cypher vì GRAPH.QUERY đầu tiên sẽ materialize graph rác), Qdrant
+  qua listing filter hiện có. Convention shard không tồn tại ở đâu:
+  - mặc định → mode `fallback_all` + warning `"project '<id>' not found in
+    registry or stores; fell back to all projects"` (query chạy search-all,
+    response giải thích chính nó qua block `scope`);
+  - `strict_scope=true` (param của `semantic_graph_search`) → raise
+    `ProjectNotRegisteredError` → error code `project_not_registered`
+    (khuyến nghị cho parity/TC automation).
+  Kết quả: một query **không thể** tự tạo ra shard rác kiểu sự cố
+  `cortext_doc` nữa. Explicit `collection=` không bao giờ fallback — absent
+  vẫn raise `LookupError` (`collection_unavailable`) như cũ.
 
 ## 3. Thứ tự resolve cho một `project_id` scoped (READ)
 
@@ -54,8 +68,11 @@ project_id truyền vào
      (case-insensitive) thì dùng đúng tên đó — tuyệt đối không tự ghim thêm
      `_doc` khi tên chính xác đã tồn tại; nếu không, quét mọi tên thực tế
      bắt-đầu-bằng raw id (tên convention đứng trước); chỉ khi backend không có
-     tên nào khớp mới ghim naming convention (doc = {project_id}_doc)
-  4. project_id rỗng/None                         → unscoped (R1)
+     tên nào khớp mới ghim naming convention (doc = {project_id}_doc) — và tên
+     convention bị existence-gate (R6a): không store nào list nó (và graph gate
+     không xác nhận) → fallback_all + warning (mặc định) hoặc
+     ProjectNotRegisteredError (strict_scope=true)
+  4. project_id rỗng/None                         → unscoped (R1, discovery)
 ```
 
 Hàm chuẩn hóa trung tâm:
@@ -73,9 +90,13 @@ Hàm chuẩn hóa trung tâm:
   - `resolve_project_targets(v)` → exact match, raise nếu không thấy (dùng cho
     WRITE + resolve storage)
   - `resolve_project_scope_candidates(v)` → exact → prefix → `[]` (dùng cho READ)
-- Bản mirror phía doc: `doc-tiny/project_contract.py`
-  (`project_id_scope_keys`, `qdrant_project_filter`,
-  `resolve_doc_candidates`)
+- Bản doc: `doc-tiny/project_contract.py` giờ là **delegating facade** over
+  code-side registry — parsing file + candidate matching giữ ở doc-side
+  (`_read_project_entries`), còn rule đặt tên + dual-key env precedence chỉ
+  tồn tại một nơi (`project_registry._resolve_targets`): doc collection đọc
+  `doc.env.QDRANT_COLLECTION_DOC` trước, `doc.env.QDRANT_COLLECTION`
+  (legacy) sau, naming rule cuối. Cả hai cây trả về `ProjectTargets` bằng
+  nhau cho cùng config.
 
 ## 4. Quy ước Cypher (graph READ predicate)
 
@@ -145,13 +166,17 @@ Tương tự: `mcp/services/explore_service.py::_resolve_search_targets`,
 3. Có đang thêm prefix vào đường GHI/XÓA/SYNC không? Nếu có → dừng (R6).
 4. Hành vi local và remote có giống nhau không (không dùng `match.text`,
    không dùng tính năng chỉ có trên server)?
-5. Unregistered id: read path phải giữ raw id với được — ưu tiên
-   collection/graph tên đúng raw id đang tồn tại trên backend, rồi mới tới
-   naming convention; write path phải raise.
+5. Unregistered id: read path giữ raw id với được — ưu tiên collection/graph
+   tên đúng raw id đang tồn tại trên backend, rồi mới tới naming convention;
+   tên convention bị existence-gate trước khi chạm (R6a) — không có →
+   fallback_all + warning (mặc định) hoặc raise (strict_scope). Write path
+   vẫn raise.
 6. Chạy test: `tools/common/test_project_scope.py`,
    `tools/common/test_project_registry.py` (`ScopeCandidatesTests`),
    `tests/test_qdrant_project_scope.py`, `tests/test_case_insensitive_project_scope.py`,
-   `tests/test_unified_contract_doc_paths.py`, `doc-tiny/tests/test_project_contract.py`.
+   `tests/test_unified_contract_doc_paths.py`, `doc-tiny/tests/test_project_contract.py`,
+   `tests/test_semantic_graph_scope_block.py`, `tests/test_scope_existence_gating.py`,
+   `tests/test_unscoped_discovery.py`, `tests/test_registry_facade_agreement.py`.
 
 ## 8. Vì sao có rule R4 (bối cảnh)
 

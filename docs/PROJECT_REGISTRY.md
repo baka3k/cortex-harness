@@ -97,8 +97,12 @@ ordered list of matching `ProjectTargets` for a **read** query:
    id (`bank` → `bank_android`, `bank_Cplus`) — the scanner names per-target
    projects `{stem}_{platform}` off a shared stem.
 3. No registry match → `[]`; read callers fall back to the raw id via the
-   naming convention so out-of-band shards stay reachable. Blank/`None` input
-   also yields `[]` (unscoped query).
+   naming convention — but only after an **existence gate** (2026-10): the
+   `{project_id}_doc` convention shard is touched only when FalkorDB's
+   `GRAPH.LIST` or a Qdrant listing actually shows it. When nothing shows
+   it, the mind query degrades to `fallback_all` with a warning (or raises
+   under `strict_scope=true`); see `docs/PROJECT_ID_QUERY_RULES.md` R6a.
+   Blank/`None` input also yields `[]` (unscoped query).
 
 `resolve_project_targets` remains the exact-match resolver for write paths and
 storage provisioning.
@@ -125,13 +129,41 @@ The loader reuses the existing `dev.json` shape:
   to keep shard names short.
 * `code.env.FALKORDB_GRAPH` and `doc.env.FALKORDB_GRAPH` map directly to the
   graph fields on `ProjectTargets`. Omitting them triggers the naming rule.
-* `code.env.QDRANT_COLLECTION` and `doc.env.QDRANT_COLLECTION` map directly to
-  the Qdrant collection fields. Omitting them triggers the naming rule.
+* `doc.env.QDRANT_COLLECTION_DOC` (primary) or `doc.env.QDRANT_COLLECTION`
+  (legacy, still honored) names the doc Qdrant collection; when both are
+  set, `QDRANT_COLLECTION_DOC` wins. `code.env.QDRANT_COLLECTION` maps to
+  the code collection. Omitting them triggers the naming rule.
 * `code.env.GRAPH_PROVIDER` selects the backend (`"falkordb"`, `"neo4j"`, or the embedded `"ladybug"` option).
 
 The loader reads the entire `config/` directory on every call. There is no
 in-process cache. Config files are small (one project per file) and the cost
 is negligible; revisit if profiling shows a real bottleneck.
+
+### Doc-side facade (2026-10)
+
+`doc-tiny/project_contract.py` is a **delegating facade** over this
+registry: the doc side keeps its own config parser and exact/prefix
+candidate matching (the registry source stays patchable, and doc-tiny
+still runs standalone without `code-tiny` on `sys.path`), but matched
+entries are resolved through `project_registry._resolve_targets`, so the
+naming contract and the dual-key precedence exist in exactly one place.
+Both trees return equal `ProjectTargets` for the same config
+(`tests/test_registry_facade_agreement.py` pins this).
+
+### Registry is per-directory (by design)
+
+The registry is discovered by walking up from the current working
+directory (`CORTEX_HARNESS_CONFIG_PATH` overrides), and many projects each
+carry their own `dev.json` while the graph/Qdrant stores are shared.
+Consequences:
+
+* A shard can be **visible on a shared store but absent from this
+  directory's registry** — that is normal, not corruption. Unscoped
+  (search-all) queries are discovery-based and find it regardless;
+  `dev doctor`'s **scope drift** report lists such shards (`[doctor][warn]`)
+  so they can be registered or cleaned up deliberately.
+* Starting the MCP servers from different directories must not change
+  unscoped results — this is pinned by `tests/test_unscoped_discovery.py`.
 
 ---
 

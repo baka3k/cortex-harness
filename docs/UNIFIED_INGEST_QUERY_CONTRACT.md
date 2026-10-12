@@ -43,9 +43,13 @@ values always win.
 ## Project Registry
 
 The `ProjectRegistry` is the single source of truth. It lives in
-`code-tiny/tools/common/project_registry.py` (the code side) and is
-mirrored as `doc-tiny/project_contract.py` (the doc side — kept separate
-because doc-tiny is laid out as flat scripts).
+`code-tiny/tools/common/project_registry.py` (the code side); the doc side
+(`doc-tiny/project_contract.py`) is a **delegating facade** over it — the
+doc facade keeps its own file parser and candidate matching (so the
+registry source stays patchable and doc-tiny runs standalone), but the
+name-derivation rules (naming contract, doc-env key precedence) are
+resolved by the code-side registry. Both trees return equal
+`ProjectTargets` for the same config.
 
 ### Input format
 
@@ -101,9 +105,20 @@ targets = resolve_project_targets("cortex")
 Every project-scoped tool follows this amended precedence:
 
 1. **`project_id` present** → resolve the shard via the registry and
-   filter on `project_id_normalized`.
-2. **`project_id` absent** → query the env-default graph/collection with no
-   `project_id_normalized` filter (implicit full search).
+   filter on `project_id_normalized`. An id the registry does not know is
+   **existence-gated** (mind server): the `{project_id}_doc` convention
+   shard is only touched when a store actually lists it. When nothing
+   lists it, the query degrades to `fallback_all` (search-all + warning in
+   the response's `scope` block) — or raises `project_not_registered`
+   under `strict_scope=true`. A query can never materialize a junk shard.
+2. **`project_id` absent** → unscoped search-all with **no**
+   `project_id_normalized` filter (implicit full search). The target set
+   is **discovery-based**: every registered project's backend plus every
+   `*_doc` shard the shared stores actually list (FalkorDB `GRAPH.LIST`,
+   Qdrant `list_collection_names`) plus the instance-store tail, capped at
+   `SCOPE_MAX_TARGETS` (default 12, truncation reported in
+   `scope.warnings`). Results are identical no matter which project
+   directory the server was started from.
 
 ## `parser_type` Precedence (unified MCP, fan-out tools)
 
@@ -216,6 +231,14 @@ produce byte-identical env dicts for the same project:
 `PROJECT_ID` is set on both server envs so that the MCP servers can stamp
 every node with the right `project_id_normalized` even before the first
 call.
+
+Doc-collection config key (registry resolution, 2026-10): a project's
+`doc.env` may name its doc Qdrant collection with **either** key —
+`QDRANT_COLLECTION_DOC` (primary, what the launcher and dev.json write) or
+`QDRANT_COLLECTION` (legacy reader key, still honored). When both are set,
+`QDRANT_COLLECTION_DOC` wins. Before the dual-key fix, `dev.json`'s
+`QDRANT_COLLECTION_DOC` was read by neither resolver and only worked by
+accident of the naming rule.
 
 ---
 
