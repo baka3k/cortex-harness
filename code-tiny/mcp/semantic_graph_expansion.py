@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
 from framework_registry import servlet_active_generation_predicate
@@ -11,6 +12,18 @@ RunCypherFirst = Callable[[str, Dict[str, Any], List[str]], Awaitable[Tuple[str,
 DEFAULT_GRAPH_REL_TYPES = ["CALLS", "USES_TYPE", "REFERENCES", "INHERITS"]
 MAX_GRAPH_DEPTH = 5
 DEFAULT_GRAPH_LIMIT = 50
+
+
+def _max_expansion_seeds() -> int:
+    """Upper bound on seeds fed to one expansion query.
+
+    The expansion pattern enumerates every ``*1..depth`` path from every
+    seed before applying ``LIMIT``; with the full vector hit list as seeds
+    (top_k up to 100+) FalkorDB grinds to its query timeout while the
+    single-threaded Redis backend blocks every other query behind it.
+    Seeds arrive score-ranked, so the first N are the most relevant.
+    """
+    return _normalize_positive_int(os.environ.get("MCP_GRAPH_EXPANSION_MAX_SEEDS"), 12)
 
 
 def _normalize_positive_int(value: Any, default: int, max_value: Optional[int] = None) -> int:
@@ -131,11 +144,25 @@ async def expand_semantic_results(
     }
     results["graph_expansion"] = expansion
 
+    max_seeds = _max_expansion_seeds()
+    if len(seed_ids) > max_seeds:
+        expansion["seed_count"] = len(seed_ids)
+        expansion["seeds_truncated"] = True
+        seed_ids = seed_ids[:max_seeds]
+        expansion["seed_ids"] = seed_ids
+
     if not expand_graph or not seed_ids:
         return results
 
     rel_pattern = _build_rel_pattern(rel_types, depth, direction)
     edge_pattern = _build_edge_pattern(rel_types, direction)
+    # NOTE: deliberately no min(length(p))/ORDER BY aggregation — that form
+    # forces FalkorDB to enumerate every ``*1..depth`` path from every seed
+    # before LIMIT applies, which on dense call graphs runs to the query
+    # timeout while the single-threaded backend blocks all other clients.
+    # DISTINCT + LIMIT lets the engine stop as soon as $limit neighbors are
+    # found; hop_distance is the first discovered path length and Python
+    # below keeps the shortest per node.
     node_query = f"""
     UNWIND $seed_ids AS sid
     MATCH (seed {{id: sid}})
@@ -145,11 +172,8 @@ async def expand_semantic_results(
       AND NOT neighbor.id IN $seed_ids
       AND ($project_id IS NULL OR neighbor.project_id_normalized STARTS WITH $project_id_normalized)
       AND {servlet_active_generation_predicate('neighbor')}
-    WITH neighbor, min(length(p)) AS hops, collect(DISTINCT sid) AS seed_ids
-    ORDER BY hops ASC
-    LIMIT $limit
-    RETURN seed_ids[0] AS seed_id,
-           seed_ids AS seed_ids,
+    RETURN DISTINCT
+           sid AS seed_id,
            neighbor.id AS node_id,
            neighbor.name AS name,
            coalesce(neighbor.qualified_name, neighbor.name) AS qualified_name,
@@ -167,7 +191,8 @@ async def expand_semantic_results(
            neighbor.target_name AS target_name,
            neighbor.signature AS signature,
            neighbor.language AS language,
-           hops AS hop_distance
+           length(p) AS hop_distance
+    LIMIT $limit
     """
     params = prepare_project_scope_parameters(
         node_query,
@@ -181,40 +206,46 @@ async def expand_semantic_results(
         expansion["error"] = str(exc)
         return results
 
-    graph_nodes: List[Dict[str, Any]] = []
-    node_ids = list(seed_ids)
+    best_by_node: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         node_id = str(row.get("node_id") or "")
         if not node_id:
             continue
         hops = _normalize_positive_int(row.get("hop_distance"), depth)
-        graph_nodes.append(
-            {
-                "seed_id": row.get("seed_id"),
-                "seed_ids": list(row.get("seed_ids") or ([row.get("seed_id")] if row.get("seed_id") else [])),
-                "node_id": node_id,
-                "name": row.get("name") or "",
-                "qualified_name": row.get("qualified_name") or "",
-                "kind": row.get("kind") or "Node",
-                "framework": row.get("framework") or "",
-                "resolution_status": row.get("resolution_status") or "",
-                "file_path": row.get("file_path") or "",
-                "start_line": row.get("start_line"),
-                "end_line": row.get("end_line"),
-                "intent": row.get("intent") or "",
-                "exported": bool(row.get("exported") or False),
-                "side_effect": bool(row.get("side_effect") or False),
-                "doc_confidence": float(row.get("doc_confidence") or 0.0),
-                "project_id": row.get("project_id") or "",
-                "target_name": row.get("target_name") or "",
-                "signature": row.get("signature") or "",
-                "language": row.get("language") or "",
-                "hop_distance": hops,
-                "graph_proximity": _proximity(hops),
-            }
-        )
-        if node_id not in node_ids:
-            node_ids.append(node_id)
+        existing = best_by_node.get(node_id)
+        if existing is not None and existing["hop_distance"] <= hops:
+            continue
+        seed_id = row.get("seed_id")
+        best_by_node[node_id] = {
+            "seed_id": seed_id,
+            "seed_ids": [seed_id] if seed_id else [],
+            "node_id": node_id,
+            "name": row.get("name") or "",
+            "qualified_name": row.get("qualified_name") or "",
+            "kind": row.get("kind") or "Node",
+            "framework": row.get("framework") or "",
+            "resolution_status": row.get("resolution_status") or "",
+            "file_path": row.get("file_path") or "",
+            "start_line": row.get("start_line"),
+            "end_line": row.get("end_line"),
+            "intent": row.get("intent") or "",
+            "exported": bool(row.get("exported") or False),
+            "side_effect": bool(row.get("side_effect") or False),
+            "doc_confidence": float(row.get("doc_confidence") or 0.0),
+            "project_id": row.get("project_id") or "",
+            "target_name": row.get("target_name") or "",
+            "signature": row.get("signature") or "",
+            "language": row.get("language") or "",
+            "hop_distance": hops,
+            "graph_proximity": _proximity(hops),
+        }
+    graph_nodes: List[Dict[str, Any]] = sorted(
+        best_by_node.values(), key=lambda item: item["hop_distance"]
+    )
+    node_ids = list(seed_ids)
+    for item in graph_nodes:
+        if item["node_id"] not in node_ids:
+            node_ids.append(item["node_id"])
     expansion["results"] = graph_nodes
 
     if not graph_nodes:

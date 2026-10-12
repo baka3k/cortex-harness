@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,6 +99,43 @@ class SemanticGraphExpansionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expansion["results"][0]["seed_ids"], ["seed-function"])
         self.assertEqual(expansion["edges"][0]["type"], "CALLS")
         self.assertEqual(calls[0][1]["seed_ids"], ["seed-function"])
+
+    async def test_expansion_caps_seed_count_to_bound_query_cost(self):
+        seeds = [{"payload": {"symbol_id": f"seed-{i}"}} for i in range(30)]
+
+        async def fake_run_cypher_first(query, params, dbs):
+            return "cortext", []
+
+        with patch.dict("os.environ", {"MCP_GRAPH_EXPANSION_MAX_SEEDS": "12"}):
+            payload = {"results": seeds}
+            result = await expand_semantic_results(
+                payload,
+                run_cypher_first=fake_run_cypher_first,
+                db_candidates=["cortext"],
+                expand_graph=True,
+            )
+
+        expansion = result["graph_expansion"]
+        self.assertTrue(expansion["seeds_truncated"])
+        self.assertEqual(expansion["seed_count"], 30)
+        self.assertEqual(len(expansion["seed_ids"]), 12)
+        self.assertEqual(expansion["seed_ids"], [f"seed-{i}" for i in range(12)])
+
+    async def test_expansion_below_seed_cap_is_not_flagged_truncated(self):
+        async def fake_run_cypher_first(query, params, dbs):
+            return "cortext", []
+
+        result = await expand_semantic_results(
+            {"results": [{"payload": {"symbol_id": "seed-a"}}]},
+            run_cypher_first=fake_run_cypher_first,
+            db_candidates=["cortext"],
+            expand_graph=True,
+        )
+
+        expansion = result["graph_expansion"]
+        self.assertNotIn("seeds_truncated", expansion)
+        self.assertNotIn("seed_count", expansion)
+        self.assertEqual(expansion["seed_ids"], ["seed-a"])
 
     async def test_named_framework_queries_expand_from_primary_language_seeds(self):
         cases = (
