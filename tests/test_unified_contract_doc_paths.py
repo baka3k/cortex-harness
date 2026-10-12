@@ -268,7 +268,7 @@ def test_mind_qdrant_search_resolves_collection_and_filter_from_project():
     ), mock.patch.object(
         mcp_graph_rag, "resolve_doc_candidates", return_value=[]
     ):
-        result = mcp_graph_rag.qdrant_search_entity_payload(
+        result, _scope = mcp_graph_rag.qdrant_search_entity_payload(
             [0.1, 0.2], 3, None, project_id="cortext"
         )
     assert result == []
@@ -285,8 +285,17 @@ def test_mind_qdrant_reports_missing_scoped_collection():
         def list_collection_names(self):
             return []
 
+    registered = SimpleNamespace(
+        project_id="cortext", doc_qdrant_collection="cortext_doc"
+    )
     with mock.patch.object(
         mcp_graph_rag, "get_document_qdrant_store", return_value=FakeQdrant()
+    ), mock.patch.object(
+        # Registered id: a missing declared collection is an error (the
+        # fallback_all degradation only applies to unregistered ids).
+        mcp_graph_rag,
+        "resolve_doc_candidates",
+        return_value=[registered],
     ):
         with pytest.raises(LookupError, match="not ingested or unavailable"):
             mcp_graph_rag.qdrant_search_entity_payload(
@@ -346,7 +355,7 @@ def _patch_mind_query_backends(payloads):
     return mock.patch.object(
         mcp_graph_rag, "get_embedder", return_value=_Embedder()
     ), mock.patch.object(
-        mcp_graph_rag, "qdrant_search_entity_payload", return_value=payloads
+        mcp_graph_rag, "qdrant_search_entity_payload", return_value=(payloads, {"warnings": []})
     ), mock.patch.object(
         mcp_graph_rag, "fetch_entities_by_ids", return_value=entities
     ), mock.patch.object(
@@ -365,7 +374,9 @@ def test_semantic_search_strips_entity_uuids_by_default():
     with mock.patch.object(
         mcp_graph_rag, "get_embedder", return_value=_Embedder()
     ), mock.patch.object(
-        mcp_graph_rag, "qdrant_search_entity_payload", return_value=_mind_payload_rows()
+        mcp_graph_rag,
+        "qdrant_search_entity_payload",
+        return_value=(_mind_payload_rows(), {"warnings": []}),
     ):
         result = fake.tools["semantic_search"](
             query="alpha", project_id="procsample", include_entity_mentions="true"
@@ -386,7 +397,9 @@ def test_semantic_search_keeps_entity_uuids_when_requested():
     with mock.patch.object(
         mcp_graph_rag, "get_embedder", return_value=_Embedder()
     ), mock.patch.object(
-        mcp_graph_rag, "qdrant_search_entity_payload", return_value=_mind_payload_rows()
+        mcp_graph_rag,
+        "qdrant_search_entity_payload",
+        return_value=(_mind_payload_rows(), {"warnings": []}),
     ):
         result = fake.tools["semantic_search"](
             query="alpha",
@@ -687,7 +700,7 @@ def test_unscoped_doc_qdrant_search_aggregates_registered_collections_bounded():
     ), mock.patch.object(
         mcp_graph_rag, "list_registered_projects", return_value=list(targets)
     ):
-        rows = mcp_graph_rag.qdrant_search_entity_payload(
+        rows, _scope = mcp_graph_rag.qdrant_search_entity_payload(
             [0.1, 0.2], 2, None
         )
 

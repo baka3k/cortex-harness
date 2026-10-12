@@ -2,6 +2,7 @@
 
 Implementation and maintenance records, newest first:
 
+- [project_id scope mechanism for mind_mcp](2026-10-12-project-id-scope-mechanism.md)
 - [VB6 worker per-file parse progress + two-stage SLL→LL](2026-10-02-vb6-worker-progress-sll.md)
 - [YAKE dynamic entity rules for doc sync](2026-09-24-yake-dynamic-rules-doc-sync.md)
 - [VB6 anchor graph coverage: Control nodes, UI wiring, type/state edges](2026-09-24-vb6-anchor-graph-coverage.md)

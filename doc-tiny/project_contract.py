@@ -1,9 +1,12 @@
 """Project contract helpers for doc-tiny.
 
-Mirrors the subset of ``code-tiny/tools/common/project_registry.py`` and
-``code-tiny/tools/common/project_scope.py`` that doc-tiny needs. The two
-modules cannot import from each other because doc-tiny is laid out as flat
-scripts rather than a Python package.
+Delegating facade over ``code-tiny/tools/common/project_registry.py``: the
+name-derivation rules (naming contract, doc-env key precedence) live in one
+place, the code-side resolver. File parsing and candidate matching stay
+doc-side so ``_read_project_entries`` remains the patchable registry source
+for tests and standalone doc-tiny runtimes; when the code registry is
+importable, matched entries are resolved through ``project_registry`` and
+both trees return identical ``ProjectTargets``.
 
 Per Phase 04 / Phase 05 of the unified ingest/query contract plan, every
 project-scoped tool in doc-tiny accepts ``project_id`` per call and resolves
@@ -20,9 +23,11 @@ contract is:
   the code side; ``project_id`` is reused as the suffix.
 
 If a project is registered in ``.cortext-harness/config/*.json``, the
-config file's ``doc.env.FALKORDB_GRAPH`` and ``doc.env.QDRANT_COLLECTION``
-override the defaults. If no config file exists, the naming rule is
-applied.
+config file's ``doc.env.FALKORDB_GRAPH`` overrides the doc graph and the
+doc Qdrant collection is read with dual-key precedence —
+``doc.env.QDRANT_COLLECTION_DOC`` first (what dev.json writes), then the
+legacy ``doc.env.QDRANT_COLLECTION``. If no config file exists, the naming
+rule is applied.
 """
 
 from __future__ import annotations
@@ -32,6 +37,21 @@ import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
+
+
+# Delegation boundary: doc-tiny keeps its own file parser (above) but hands
+# matched entries to the code-side resolver so the naming/dual-key rules
+# cannot drift between the two trees. The public code-side
+# ``resolve_project_targets`` re-reads config files itself, which would
+# bypass the doc-side parse hook — hence the private entry-level resolver.
+try:
+    from tools.common.project_registry import (  # type: ignore
+        ProjectNotRegisteredError as _RegistryNotRegisteredError,
+        _resolve_targets as _registry_resolve_targets,
+    )
+except Exception:  # standalone doc-tiny runtime without the code registry
+    _RegistryNotRegisteredError = None  # type: ignore[assignment]
+    _registry_resolve_targets = None  # type: ignore[assignment]
 
 
 PROJECT_ID_NORMALIZED_FIELD = "project_id_normalized"
@@ -170,10 +190,25 @@ def _read_project_entries(config_dir: Path) -> List[Dict[str, Any]]:
         )
         if not project_id:
             continue
+        code_env = dict(payload.get("code", {}).get("env") or {})
         entries.append(
             {
                 "project_id": str(project_id),
+                "project_name": project_section.get("name"),
+                "parser_type": (
+                    project_section.get("parser_type")
+                    or project_section.get("parser")
+                    or code_env.get("PARSER_TYPE")
+                ),
+                "code_env": code_env,
                 "doc_env": dict(payload.get("doc", {}).get("env") or {}),
+                "active": bool(payload.get("active", False)),
+                "storage_backend": str(payload.get("storage_backend") or "local"),
+                "remote_config": (
+                    dict(payload["remote"])
+                    if isinstance(payload.get("remote"), Mapping)
+                    else None
+                ),
             }
         )
     variants: Dict[str, List[str]] = {}
@@ -191,6 +226,11 @@ def _resolve_doc_targets(
     project_id: str,
     entries: List[Dict[str, Any]],
 ) -> ProjectTargets:
+    """Standalone doc-side resolution (no code registry importable).
+
+    Must mirror the code-side rules: dual-key doc-collection precedence and
+    the ``{project_id}_doc`` naming contract.
+    """
     lookup = project_id_lookup_key(project_id)
     if lookup is None:
         raise ProjectNotRegisteredError(project_id, [e["project_id"] for e in entries])
@@ -213,7 +253,8 @@ def _resolve_doc_targets(
         or f"{canonical_project_id}_doc"
     )
     doc_qdrant = (
-        doc_env.get("QDRANT_COLLECTION")
+        doc_env.get("QDRANT_COLLECTION_DOC")
+        or doc_env.get("QDRANT_COLLECTION")
         or f"{canonical_project_id}_doc"
     )
     return ProjectTargets(
@@ -223,6 +264,39 @@ def _resolve_doc_targets(
         doc_qdrant_collection=doc_qdrant,
         source="registry",
     )
+
+
+def _targets_from_entries(
+    project_id: str,
+    entries: List[Dict[str, Any]],
+):
+    """Resolve one matched project through the delegating facade.
+
+    Registered-only: unlike the code-side registry, the doc facade never
+    seeds ad-hoc projects from env vars — read paths rely on
+    ``ProjectNotRegisteredError`` as the naming-convention fallback signal,
+    and an env-seeded ad-hoc graph name would silently mis-scope
+    multi-project queries.
+
+    Returns the code-side ``ProjectTargets`` (a superset of the doc-side
+    fields) so both trees resolve to equal targets for the same config.
+    """
+    lookup = project_id_lookup_key(project_id)
+    match = None
+    for entry in entries:
+        if project_id_lookup_key(entry.get("project_id")) == lookup:
+            match = entry
+            break
+    if match is None:
+        raise ProjectNotRegisteredError(
+            project_id, [e["project_id"] for e in entries]
+        )
+    if _registry_resolve_targets is not None:
+        try:
+            return _registry_resolve_targets(project_id, entries)
+        except _RegistryNotRegisteredError as exc:  # pragma: no cover - pre-checked
+            raise ProjectNotRegisteredError(exc.project_id, exc.known) from exc
+    return _resolve_doc_targets(project_id, entries)
 
 
 def resolve_project_targets(
@@ -241,7 +315,7 @@ def resolve_project_targets(
         raise ProjectNotRegisteredError(project_id, [])
     directory = Path(config_dir) if config_dir is not None else _default_config_dir()
     entries = _read_project_entries(directory)
-    return _resolve_doc_targets(normalized, entries)
+    return _targets_from_entries(normalized, entries)
 
 
 def resolve_doc_candidates(
@@ -277,7 +351,7 @@ def resolve_doc_candidates(
     if exact:
         matches = exact
     return [
-        _resolve_doc_targets(str(entry["project_id"]), entries)
+        _targets_from_entries(str(entry["project_id"]), entries)
         for entry in matches
     ]
 

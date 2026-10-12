@@ -135,6 +135,144 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     raise ValueError(f"invalid boolean value: {value!r}")
 
 
+# Fan-out ceiling for unscoped discovery targets (registry pins first, then
+# discovered shards). Env-overridable for large deployments; every
+# truncation is reported in ``scope.warnings``, never silent.
+MAX_SCOPE_TARGETS = 12
+
+
+def _scope_max_targets() -> int:
+    try:
+        return max(1, int(os.getenv("SCOPE_MAX_TARGETS") or MAX_SCOPE_TARGETS))
+    except ValueError:
+        return MAX_SCOPE_TARGETS
+
+
+def _is_doc_shard(name: Any) -> bool:
+    """Whether a store/graph name follows the ``{project_id}_doc`` convention."""
+    text = str(name or "")
+    return text.endswith("_doc") and len(text) > len("_doc")
+
+
+def _store_key(store: Any) -> Any:
+    """Stable identity for a store within one query.
+
+    ``id()`` is not enough: the registry pin and the fallback tail can be
+    two distinct objects over the same physical store (factory re-entry),
+    and treating them as different stores double-searches shards and
+    double-counts ``per_collection_hits``.
+    """
+    identity = getattr(store, "url", None) or getattr(store, "path", None)
+    return str(identity) if identity else id(store)
+
+
+def _store_label(store: Any) -> str:
+    return getattr(store, "url", None) or "local instance store"
+
+
+class _ListingFailed:
+    """Sentinel: the store has a listing method but it raised (unreachable)."""
+
+
+def _store_listing(store: Any, cache: Dict[int, Any]) -> Any:
+    """Per-call cached ``list_collection_names``.
+
+    Returns a ``set`` on success, ``_ListingFailed`` when the store is
+    unreachable (callers skip it and warn — partial results must never be
+    silently dropped), or ``None`` when the store cannot list at all
+    (requested names are then trusted blindly, the legacy behavior).
+    Listings are read live every call; only the per-call result is shared.
+    """
+    key = _store_key(store)
+    if key not in cache:
+        if hasattr(store, "list_collection_names"):
+            try:
+                cache[key] = set(store.list_collection_names())
+            except Exception as exc:
+                logger.warning("Listing collections on %s failed: %s", _store_label(store), exc)
+                cache[key] = _ListingFailed
+        else:
+            cache[key] = None
+    return cache[key]
+
+
+def _listed_graph_names(store: Any) -> Optional[set]:
+    """GRAPH.LIST through the store's driver; ``None`` when unavailable.
+
+    GRAPH.LIST is side-effect-free (``falkordb_driver.list_graphs``); a
+    Cypher existence probe would materialize the very junk shard the
+    existence gate exists to prevent.
+    """
+    driver = getattr(store, "_driver", None)
+    list_graphs = getattr(driver, "list_graphs", None)
+    if not callable(list_graphs):
+        return None
+    try:
+        return {str(name) for name in list_graphs()}
+    except Exception as exc:
+        logger.warning("GRAPH.LIST failed: %s", exc)
+        return None
+
+
+def _convention_graph_present(project_id: str) -> Optional[bool]:
+    """Whether ``{project_id}_doc`` is listed on the doc graph store.
+
+    ``None`` means the gate cannot answer (non-FalkorDB provider, driver
+    construction or the listing failed) — callers must fail open: no strict
+    error, only the fallback warning.
+    """
+    try:
+        base = get_graph_store()
+    except Exception as exc:
+        logger.warning("Graph store unavailable for existence gate: %s", exc)
+        return None
+    if getattr(base, "provider", None) != "falkordb":
+        return None
+    listed = _listed_graph_names(base)
+    if listed is None:
+        return None
+    return f"{str(project_id).strip()}_doc" in listed
+
+
+def _scope_context(
+    project_id: Optional[str], collection: Optional[str]
+) -> Dict[str, Any]:
+    """Classify the query scope once per call.
+
+    ``mode`` mirrors the ``_qdrant_search_targets`` branches 1:1. An
+    unregistered ``project_id`` starts as a convention-pending scoped query
+    (``registry_hit=False``); :func:`qdrant_search_entity_payload` refines
+    it to ``fallback_all`` when neither a store nor the graph lists the
+    convention shard.
+    """
+    scope: Dict[str, Any] = {
+        "mode": "unscoped",
+        "requested_project_id": project_id,
+        "resolved_project_id": None,
+        "registry_hit": False,
+        "collections_searched": [collection] if collection else [],
+        "collections_present": [],
+        "per_collection_hits": {},
+        "discovered_collections": [],
+        "targets_total": 0,
+        "targets_searched": 0,
+        "graph_present": None,
+        "warnings": [],
+    }
+    if collection:
+        scope["mode"] = "collection"
+    elif project_id:
+        candidates = resolve_doc_candidates(project_id)
+        scope["mode"] = "scoped"
+        if candidates:
+            scope["registry_hit"] = True
+            if len(candidates) == 1:
+                scope["resolved_project_id"] = candidates[0].project_id
+        else:
+            scope["graph_present"] = _convention_graph_present(project_id)
+    return scope
+
+
 def get_qdrant(project_id: Optional[str] = None) -> Any:
     """Return the primary Qdrant store for ``project_id``.
 
@@ -351,8 +489,10 @@ def _graph_store_candidates(project_id: Optional[str]):
     Scoped queries follow the project_id rules: an exact case-insensitive
     registry match (or a single prefix hit) pins one store; a multi-project
     prefix scope (``bank`` → ``bank_android``, ``bank_Cplus``) returns one
-    store per candidate; no registry match falls back to the raw id via the
-    naming convention.
+    store per candidate; an unregistered id is existence-gated — the
+    ``{project_id}_doc`` convention graph is only touched when GRAPH.LIST
+    lists it, so a typo can no longer materialize a junk FalkorDB graph
+    (the first GRAPH.QUERY on a name creates it).
     """
     if project_id:
         if env_graph_provider() == "neo4j":
@@ -361,9 +501,19 @@ def _graph_store_candidates(project_id: Optional[str]):
             return [_acquire_graph_store(project_id)]
         matched = resolve_doc_candidates(project_id)
         if len(matched) <= 1:
-            return [_acquire_graph_store(
-                matched[0].project_id if matched else project_id
-            )]
+            if matched:
+                return [_acquire_graph_store(matched[0].project_id)]
+            # Unregistered id: gate the convention graph on GRAPH.LIST.
+            # A failed/absent listing fails open ([] only when the store
+            # provably does not list the shard).
+            base = get_graph_store()
+            if getattr(base, "provider", None) == "falkordb":
+                listed = _listed_graph_names(base)
+                if listed is not None and (
+                    f"{str(project_id).strip()}_doc" not in listed
+                ):
+                    return []
+            return [_acquire_graph_store(project_id)]
         stores: List[Any] = []
         for targets in matched:
             store, owned = _acquire_graph_store(targets.project_id)
@@ -378,6 +528,23 @@ def _graph_store_candidates(project_id: Optional[str]):
         graph_name = resolve_project_targets(registered_project).doc_graph
         if graph_name and graph_name not in graph_names:
             graph_names.append(graph_name)
+    # Discovery mirrors the Qdrant side: unscoped spans every ``*_doc``
+    # graph the server actually lists, so results are identical no matter
+    # which project directory the server was started from. Listed names are
+    # existence-safe by construction; dedupe against the registry pins.
+    listed = _listed_graph_names(base)
+    if listed:
+        graph_names.extend(sorted(
+            name for name in listed
+            if _is_doc_shard(name) and name not in graph_names
+        ))
+    cap = _scope_max_targets()
+    if len(graph_names) > cap:
+        logger.warning(
+            "Graph fan-out capped at %d targets; %d graphs not searched",
+            cap, len(graph_names) - cap,
+        )
+        graph_names = graph_names[:cap]
     if not graph_names:
         return [(base, False)]
     return [(base.for_graph(graph_name), False) for graph_name in graph_names]
@@ -506,7 +673,10 @@ def _fallback_doc_qdrant_stores() -> List[Any]:
 
 
 def _qdrant_search_targets(
-    project_id: Optional[str], collection: Optional[str] = None
+    project_id: Optional[str],
+    collection: Optional[str] = None,
+    scope: Optional[Dict[str, Any]] = None,
+    listings: Optional[Dict[Any, Any]] = None,
 ) -> List[Tuple[Any, Optional[List[str]]]]:
     """Resolve the ``(store, collection_names)`` pairs a doc query probes.
 
@@ -517,9 +687,18 @@ def _qdrant_search_targets(
     ``{project_id}_doc`` naming convention as last resort — probing the
     launcher's remote vector backend first and the local instance store
     second; no scope fans out over every registered project's backend plus
-    the instance store. An explicit ``collection`` overrides the names on
-    every probed store. ``None`` collection names mean "whatever the store
-    has" (instance-store tail of an unscoped query).
+    a discovery pass over each fallback store — every ``*_doc`` shard the
+    stores actually list is searched, so unscoped results are identical no
+    matter which project directory the server was started from (the
+    registry is only a per-directory hint map). An explicit ``collection``
+    overrides the names on every probed store. ``None`` collection names
+    mean "whatever the store has" (the non-convention tail of an unscoped
+    query).
+
+    When ``scope`` is given, discovery facts are recorded on it:
+    ``discovered_collections``, ``warnings`` (unreachable store, fan-out
+    cap) and ``targets_total``/``targets_searched``. ``listings`` shares
+    one live listing per store across the verdict pass and the search loop.
     """
     if project_id:
         try:
@@ -531,13 +710,47 @@ def _qdrant_search_targets(
     if collection:
         return [(store, [collection]) for store in _fallback_doc_qdrant_stores()]
     pairs: List[Tuple[Any, Optional[List[str]]]] = []
+    pinned: set = set()
     for registered in list_registered_projects():
         try:
             store = get_document_qdrant_store(project_id=registered)
         except _PROJECT_RESOLVE_ERRORS:
             continue
-        pairs.append((store, _resolve_doc_collections(registered, None)))
-    pairs.append((get_document_qdrant_store(), None))
+        names = _resolve_doc_collections(registered, None)
+        pairs.append((store, names))
+        pinned.update(names)
+    listings = listings if listings is not None else {}
+    for store in _fallback_doc_qdrant_stores():
+        available = _store_listing(store, listings)
+        if available is _ListingFailed:
+            if scope is not None:
+                scope["warnings"].append(
+                    f"store '{_store_label(store)}' unavailable; its shards were skipped"
+                )
+            continue
+        discovered = sorted(
+            name for name in (available or set())
+            if _is_doc_shard(name) and name not in pinned
+        )
+        if scope is not None and discovered:
+            scope["discovered_collections"].extend(discovered)
+        # One pair per shard keeps the fan-out cap shard-exact.
+        for name in discovered:
+            pairs.append((store, [name]))
+        # Non-convention collections keep the "whatever the store has" tail.
+        pairs.append((store, None))
+    if scope is not None:
+        scope["targets_total"] = len(pairs)
+    cap = _scope_max_targets()
+    if len(pairs) > cap:
+        dropped = len(pairs) - cap
+        if scope is not None:
+            scope["warnings"].append(
+                f"fan-out capped at {cap} targets; {dropped} shards not searched"
+            )
+        pairs = pairs[:cap]
+    if scope is not None:
+        scope["targets_searched"] = len(pairs)
     return pairs
 
 
@@ -548,18 +761,39 @@ def qdrant_search_entity_payload(
     collection: Optional[str] = None,
     project_id: Optional[str] = None,
     query_text: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    strict_scope: bool = False,
+    scope: Optional[Dict[str, Any]] = None,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Search the resolved doc stores and return ``(rows, scope_info)``.
+
+    ``scope_info`` explains the query's own scope: mode, registry hit,
+    per-collection hit counts and any fallback/cap warnings. An unknown
+    ``project_id`` never creates junk: the ``{project_id}_doc`` convention
+    shard is only searched when a store actually lists it; when nothing
+    lists it (and the graph gate cannot prove it exists either), the query
+    degrades to ``fallback_all`` with a warning — or raises
+    ``ProjectNotRegisteredError`` under ``strict_scope``.
+
+    ``query_text`` enables hybrid retrieval: one sparse encode for the
+    whole fan-out, fused with the dense hits via RRF when every probed
+    collection declares the sparse vector.
+    """
+    scope = scope if scope is not None else _scope_context(project_id, collection)
+    scope.setdefault("warnings", [])
+    scope.setdefault("per_collection_hits", {})
+    scope.setdefault("collections_present", [])
+    scope.setdefault("discovered_collections", [])
+
     # Build the Qdrant filter. The project filter combines with the
     # ``source_id`` filter via AND. A missing ``project_id`` produces no
     # project predicate, so the search spans every project.
-    must_conditions: List[qmodels.FieldCondition] = []
+    source_condition: Optional[qmodels.FieldCondition] = None
     if source_id:
-        must_conditions.append(
-            qmodels.FieldCondition(
-                key="source_id",
-                match=qmodels.MatchValue(value=source_id),
-            )
+        source_condition = qmodels.FieldCondition(
+            key="source_id",
+            match=qmodels.MatchValue(value=source_id),
         )
+    project_conditions: List[qmodels.FieldCondition] = []
     project_filter = _pc_qdrant_project_filter(project_id)
     if project_filter and "must" in project_filter:
         for cond in project_filter["must"]:
@@ -570,56 +804,111 @@ def qdrant_search_entity_payload(
             # The project scope filter carries either an exact value or the
             # LIKE/prefix key set ("any") — map both onto Qdrant conditions.
             if "value" in match_spec:
-                must_conditions.append(
+                project_conditions.append(
                     qmodels.FieldCondition(
                         key=key,
                         match=qmodels.MatchValue(value=match_spec["value"]),
                     )
                 )
             elif "any" in match_spec:
-                must_conditions.append(
+                project_conditions.append(
                     qmodels.FieldCondition(
                         key=key,
                         match=qmodels.MatchAny(any=match_spec["any"]),
                     )
                 )
-    qdrant_filter = qmodels.Filter(must=must_conditions) if must_conditions else None
+
+    def _build_filter(include_project: bool) -> Optional[qmodels.Filter]:
+        conditions: List[qmodels.FieldCondition] = []
+        if source_condition is not None:
+            conditions.append(source_condition)
+        if include_project:
+            conditions.extend(project_conditions)
+        return qmodels.Filter(must=conditions) if conditions else None
+
+    qdrant_filter = _build_filter(True)
+    listings: Dict[Any, Any] = {}
+    targets = _qdrant_search_targets(project_id, collection, scope, listings)
+
+    # Convention-shard verdict for an unregistered id (existence gating):
+    # the shard is only searched when some store actually lists it. A graph
+    # hit alone (scope["graph_present"] is True) also keeps the scoped path.
+    # Strict raises only on a *definitive* absence — when the graph gate
+    # cannot answer (None), the verdict stays fail-open (fallback_all with
+    # a warning) even under strict_scope, so a GRAPH.LIST outage never
+    # fakes project_not_registered.
+    if project_id and not collection and scope.get("registry_hit") is False:
+        convention = f"{str(project_id).strip()}_doc"
+        present_anywhere = False
+        for store, _names in targets:
+            available = _store_listing(store, listings)
+            if available is not None and convention in available:
+                present_anywhere = True
+                break
+        if not present_anywhere and scope.get("graph_present") is not True:
+            # Provable resolves-to-nothing: no store lists the convention
+            # collection and the graph gate did not affirm existence.
+            # Strict raises only on definitive absence (graph_present is
+            # False); with the gate unable to answer (None) the verdict
+            # stays fail-open even under strict_scope, so a GRAPH.LIST
+            # outage never fakes project_not_registered.
+            if strict_scope and scope.get("graph_present") is False:
+                raise ProjectNotRegisteredError(
+                    project_id, list_registered_projects()
+                )
+            scope["mode"] = "fallback_all"
+            scope["warnings"].append(
+                f"project '{project_id}' not found in registry or stores; "
+                "fell back to all projects"
+            )
+            # Search-all de-scopes the project filter and rebuilds targets
+            # by live discovery. An explicit collection never lands here.
+            qdrant_filter = _build_filter(False)
+            targets = _qdrant_search_targets(None, None, scope, listings)
+
+    # Requested names across the final target pairs (``None`` tails carry no
+    # explicit name). ``collections_searched`` keeps its contract meaning —
+    # the names the query asked for — while discovery detail lives in
+    # ``discovered_collections`` and real hits in ``per_collection_hits``.
+    scope["collections_searched"] = list(dict.fromkeys(
+        name for _store, names in targets if names for name in names
+    )) or [QDRANT_COLLECTION]
 
     payloads_by_key: Dict[Any, Dict[str, Any]] = {}
     probed_stores: List[str] = []
     found_any = False
-    search_targets = _qdrant_search_targets(project_id, collection)
     # Hybrid: one sparse encode for the whole fan-out, fused only when EVERY
     # probed collection declares the sparse vector (all-or-none, so the
-    # score-based merge below always compares one scale).
+    # score-based merge below always compares one scale). Runs on the final
+    # targets — after the convention-shard verdict may have re-resolved them
+    # for a fallback_all.
     sparse_vector: tuple[list[int], list[float]] | None = None
     use_fusion = False
     if query_text:
         sparse_vector = _query_sparse_encode(query_text)
         if sparse_vector is not None:
             try:
-                use_fusion = _fanout_supports_sparse(search_targets)
+                use_fusion = _fanout_supports_sparse(targets)
             except Exception:
                 use_fusion = False
             if not use_fusion:
                 sparse_vector = None
-    for qdrant, collection_names in search_targets:
-        available: Optional[set] = None
-        if hasattr(qdrant, "list_collection_names"):
-            try:
-                available = set(qdrant.list_collection_names())
-            except Exception as exc:
-                logger.warning(
-                    "Listing collections on %s failed: %s",
-                    getattr(qdrant, "url", None) or "local instance store",
-                    exc,
-                )
-                continue
-            probed_stores.append(
-                getattr(qdrant, "url", None) or "local instance store"
-            )
+    covered: Dict[Any, set] = {}
+    per_collection_hits: Dict[str, int] = scope["per_collection_hits"]
+    for qdrant, collection_names in targets:
+        available = _store_listing(qdrant, listings)
+        if available is _ListingFailed:
+            continue
+        if available is not None:
+            probed_stores.append(_store_label(qdrant))
         if collection_names is None:
-            collection_names = sorted(available or [])
+            # "Whatever the store has" tail: skip collections this physical
+            # store already covered through an explicit pair earlier in the
+            # loop (the pin store and the tail can be distinct objects over
+            # the same backend, hence the stable-store key).
+            collection_names = sorted(
+                (available or set()) - covered.get(_store_key(qdrant), set())
+            )
         present = [
             name for name in collection_names
             if available is None or name in available
@@ -628,6 +917,8 @@ def qdrant_search_entity_payload(
             continue
         if present:
             found_any = True
+        covered.setdefault(_store_key(qdrant), set()).update(present)
+        scope["collections_present"].extend(present)
         for collection_name in present:
             try:
                 if sparse_vector is not None and hasattr(qdrant, "query_points"):
@@ -667,6 +958,9 @@ def qdrant_search_entity_payload(
                 logger.warning("Skipping unavailable doc collection %s: %s", collection_name, exc)
                 continue
 
+            per_collection_hits[collection_name] = (
+                per_collection_hits.get(collection_name, 0) + len(hits)
+            )
             for hit in hits:
                 if not hit.payload:
                     continue
@@ -692,7 +986,8 @@ def qdrant_search_entity_payload(
                     existing.get("score") or 0.0
                 ):
                     payloads_by_key[key] = row
-    if not found_any and (project_id or collection):
+    scope["collections_present"] = sorted(set(scope["collections_present"]))
+    if not found_any and scope.get("mode") != "fallback_all" and (project_id or collection):
         # Scoped query, but no reachable store had the requested collection.
         # Surface which stores were probed so a remote-only shard is not
         # mistaken for missing data.
@@ -702,9 +997,22 @@ def qdrant_search_entity_payload(
         raise LookupError(
             "Requested document collection is not ingested or unavailable: " + detail
         )
+    if (
+        scope.get("mode") == "scoped"
+        and project_id
+        and scope["collections_present"]
+        and not any(per_collection_hits.values())
+    ):
+        # Found-but-empty: the shard exists but nothing matched the project
+        # filter — distinguishable from a missing collection only if the
+        # response says so.
+        scope["warnings"].append(
+            "collection(s) " + ", ".join(scope["collections_present"])
+            + f" present but returned 0 hits for project filter '{project_id}'"
+        )
     payloads = list(payloads_by_key.values())
     payloads.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
-    return payloads[:top_k]
+    return payloads[:top_k], scope
 
 
 def fetch_entities_by_ids(
@@ -1303,13 +1611,15 @@ def register_tools(mcp: FastMCP) -> None:
 
         q_vec = _query_encode(query)
 
-        payloads = qdrant_search_entity_payload(
+        scope = _scope_context(project_id, collection)
+        payloads, _scope = qdrant_search_entity_payload(
             q_vec,
             top_k=top_k,
             source_id=source_id,
             collection=collection,
             project_id=project_id,
             query_text=query,
+            scope=scope,
         )
 
         passages = []
@@ -1373,6 +1683,7 @@ def register_tools(mcp: FastMCP) -> None:
         expand_documents: bool = True,
         related_docs: int = 5,
         related_paragraphs_per_doc: int = 2,
+        strict_scope: bool = False,
     ) -> Dict[str, Any]:
         """
         Vector-search passages, then walk the entity graph to related documents.
@@ -1394,7 +1705,16 @@ def register_tools(mcp: FastMCP) -> None:
 
         The expansion honors ``entity_types`` (the default curated set
         excludes extractor noise such as YAKE ``KEYWORD`` entries — pass the
-        type explicitly, e.g. ``entity_types="KEYWORD"``, to reveal it).
+        type explicitly, e.g. ``entity_types="KEYWORD"``, to reveal it), is
+        ranked by retrieved-passage frequency, and is capped at
+        ``max_entities``.
+
+        The response carries a ``scope`` block (mode, registry hit,
+        per-collection hits, warnings) that explains which collections were
+        actually searched. An unknown ``project_id`` falls back to
+        search-all with a warning by default; set ``strict_scope=true`` to
+        fail with ``project_not_registered`` instead (recommended for
+        parity/TC automation).
         """
         # Type coercion to handle n8n passing strings
         query = str(query) if query else ""
@@ -1420,6 +1740,7 @@ def register_tools(mcp: FastMCP) -> None:
             int(related_paragraphs_per_doc)
             if related_paragraphs_per_doc is not None else 2
         )
+        strict_scope = _coerce_bool(strict_scope, False)
 
         q_vec = _query_encode(query)
 
@@ -1429,13 +1750,16 @@ def register_tools(mcp: FastMCP) -> None:
         elif isinstance(entity_types, str):
             entity_types = [t.strip() for t in entity_types.split(",") if t.strip()]
 
-        payloads = qdrant_search_entity_payload(
+        scope = _scope_context(project_id, collection)
+        payloads, scope = qdrant_search_entity_payload(
             q_vec,
             top_k=top_k,
             source_id=source_id,
             collection=collection,
             project_id=project_id,
             query_text=query,
+            strict_scope=strict_scope,
+            scope=scope,
         )
 
         passages = []
@@ -1450,6 +1774,7 @@ def register_tools(mcp: FastMCP) -> None:
                     "score": row.get("score"),
                     "source_id": row.get("source_id"),
                     "paragraph_id": row.get("paragraph_id"),
+                    "collection": row.get("collection"),
                     "_entity_mentions": row.get("entity_mentions") or [],
                 }
             )
@@ -1539,6 +1864,8 @@ def register_tools(mcp: FastMCP) -> None:
             "min_entity_occurrences": min_entity_occurrences,
             "rerank_applied": rerank,
             "rerank_strategy": "heuristic" if rerank else None,
+            "scope": scope,
+            "warnings": list(scope.get("warnings") or []),
             "passages": passages,
             "related_documents": related_documents,
             "entities": entities,

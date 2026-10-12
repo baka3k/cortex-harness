@@ -494,23 +494,17 @@ def _collect_from_dir(
         })
 
 
-def _scan_project_backends(config_dir: Path | None = None) -> list[dict[str, object]]:
-    """Scan ``.cortext-harness/config/*.json`` and classify by backend mode.
+def _config_dirs(config_dir: Path | None = None) -> list[Path]:
+    """Config directories a registry scan covers, primary first.
 
-    Returns a list of dicts with keys ``project_id``, ``backend_mode``,
-    ``remote_config`` and ``config_path``. Malformed JSON files are silently
-    skipped so a single broken config never blocks ``infra-up``.
-
-    When ``config_dir`` is ``None`` (the default), the caller's project
-    directory (``Path.cwd()``) is also scanned alongside the ``ROOT``
-    configuration so ``dev doctor`` and ``make infra-up`` pick up the
-    project the user is currently working in.  Callers that pass an
-    explicit directory get deterministic single-directory behaviour.
+    When ``config_dir`` is ``None``, the caller's project directory
+    (``Path.cwd()``) is included alongside the ``ROOT`` configuration so
+    ``dev doctor`` and ``make infra-up`` pick up the project the user is
+    currently working in. Callers that pass an explicit directory get
+    deterministic single-directory behaviour.
     """
     base = config_dir if config_dir is not None else ROOT / ".cortext-harness" / "config"
-    projects: list[dict[str, object]] = []
-    _collect_from_dir(base, projects)
-
+    dirs = [base]
     if config_dir is None:
         # ``dev doctor`` and ``make infra-up`` set ``cwd`` to the caller's
         # project root, so Path.cwd() resolves to the user's working tree
@@ -521,14 +515,48 @@ def _scan_project_backends(config_dir: Path | None = None) -> list[dict[str, obj
             caller_resolved = caller_config.resolve()
             base_resolved = base.resolve()
             if caller_resolved != base_resolved:
-                _collect_from_dir(caller_config, projects)
+                dirs.append(caller_config)
         except (OSError, RuntimeError):
             # Path.cwd() raises FileNotFoundError when the working
             # directory was deleted; resolve() can raise OSError on
             # broken symlinks.  Neither should block the primary scan.
             pass
+    return dirs
 
+
+def _scan_project_backends(config_dir: Path | None = None) -> list[dict[str, object]]:
+    """Scan ``.cortext-harness/config/*.json`` and classify by backend mode.
+
+    Returns a list of dicts with keys ``project_id``, ``backend_mode``,
+    ``remote_config`` and ``config_path``. Malformed JSON files are silently
+    skipped so a single broken config never blocks ``infra-up`` (the doctor's
+    drift report surfaces them separately via ``_scan_malformed_configs``).
+    """
+    projects: list[dict[str, object]] = []
+    for directory in _config_dirs(config_dir):
+        _collect_from_dir(directory, projects)
     return projects
+
+
+def _scan_malformed_configs(config_dir: Path | None = None) -> list[str]:
+    """Config JSON files that fail to parse — projects invisible to the registry.
+
+    Same directory resolution as :func:`_scan_project_backends`; returns the
+    file paths (rendered, relative-ish) for the drift report.
+    """
+    malformed: list[str] = []
+    for directory in _config_dirs(config_dir):
+        if not directory.is_dir():
+            continue
+        for config_path in sorted(directory.glob("*.json")):
+            try:
+                document = json.loads(config_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                malformed.append(str(config_path))
+                continue
+            if not isinstance(document, dict):
+                malformed.append(str(config_path))
+    return malformed
 
 
 def _resolve_collection_names(
@@ -1366,6 +1394,356 @@ def doctor_remote_checks() -> int:
     return failures
 
 
+def _local_qdrant_label() -> str | None:
+    """Label of the local doc Qdrant store in the drift inventories.
+
+    ``None`` when the data directory does not exist yet (nothing to list,
+    and constructing a client must not create it).
+    """
+    try:
+        resolved = _resolved_storage()
+        path = Path(resolved.qdrant_doc_path)
+        return str(path) if path.is_dir() else None
+    except Exception:
+        return None
+
+
+def _local_graph_label() -> str | None:
+    """Label of the local embedded FalkorDB store when an owner is running.
+
+    ``None`` when idle — constructing an embedded driver would start a
+    server, a side effect a report must not have.
+    """
+    try:
+        resolved = _resolved_storage()
+        path = Path(resolved.falkordb_doc_path)
+        if path.exists() and embedded_falkordb_pids(path):
+            return str(path)
+    except Exception:
+        pass
+    return None
+
+
+def _drift_qdrant_stores() -> list[tuple[str, object]]:
+    """Qdrant stores the drift report inventories, as ``(label, store)``.
+
+    Remote vector backends from the registry scan, plus the local instance
+    store when its data directory already exists.
+    """
+    from cortex_harness.storage import LocalQdrantStore, QdrantStorageRole, RemoteQdrantStore
+
+    stores: list[tuple[str, object]] = []
+    seen: set[str] = set()
+    from cortex_harness.storage.config import validate_backend_config
+
+    for project in _scan_project_backends():
+        if project["backend_mode"] != "remote":
+            continue
+        try:
+            _, remote_config = validate_backend_config("remote", project["remote_config"])
+        except ValueError:
+            continue
+        url = str(getattr(remote_config, "qdrant_url", "") or "")
+        if not url or url in seen:
+            continue
+        try:
+            store = RemoteQdrantStore(
+                url,
+                api_key=getattr(remote_config, "qdrant_api_key", None),
+                role=QdrantStorageRole.DOCUMENT,
+            )
+        except Exception as error:
+            doctor_check(
+                f"drift qdrant:{url}", False, f"unavailable: {error}", required=False
+            )
+            continue
+        seen.add(url)
+        stores.append((url, store))
+
+    local_label = _local_qdrant_label()
+    if local_label:
+        try:
+            resolved = _resolved_storage()
+            stores.append(
+                (local_label, LocalQdrantStore(resolved, QdrantStorageRole.DOCUMENT))
+            )
+        except Exception as error:
+            # A running doc server owns the embedded store lease — its
+            # shards cannot be listed from here. Partial coverage, not a
+            # failure.
+            doctor_check(
+                "scope drift",
+                False,
+                f"local qdrant store not listable ({error}) — its shards were not scanned",
+                required=False,
+            )
+    return stores
+
+
+def _drift_graph_drivers() -> list[tuple[str, object]]:
+    """FalkorDB drivers the drift report lists graphs from, as ``(label, driver)``.
+
+    Remote FalkorDB URIs from the registry scan, plus the local embedded
+    store only when an owner process is already running.
+    """
+    from tools.graph.driver.falkordb_driver import FalkorDBDriver
+    from cortex_harness.storage.config import validate_backend_config
+
+    drivers: list[tuple[str, object]] = []
+    seen: set[str] = set()
+    for project in _scan_project_backends():
+        if project["backend_mode"] != "remote":
+            continue
+        try:
+            _, remote_config = validate_backend_config("remote", project["remote_config"])
+        except ValueError:
+            continue
+        uri = str(getattr(remote_config, "falkordb_uri", "") or "")
+        if not uri or uri in seen:
+            continue
+        # Credential plumbing goes through a kwargs dict — mirrors
+        # remote_probe.probe_falkordb's driver construction.
+        driver_options = {
+            "uri": uri,
+            "password": remote_config.falkordb_password,
+            "ssl": bool(getattr(remote_config, "falkordb_ssl", False)),
+            "graph": None,
+            "_suppress_deprecation": True,
+        }
+        try:
+            driver = FalkorDBDriver(**driver_options)
+        except Exception as error:
+            doctor_check(
+                f"drift falkordb:{uri}", False, f"unavailable: {error}", required=False
+            )
+            continue
+        seen.add(uri)
+        drivers.append((uri, driver))
+
+    local_label = _local_graph_label()
+    if local_label:
+        try:
+            drivers.append(
+                (local_label, FalkorDBDriver(path=local_label, graph=None, _suppress_deprecation=True))
+            )
+        except Exception as error:
+            doctor_check(
+                "scope drift",
+                False,
+                f"local falkordb store not listable ({error}) — its graphs were not scanned",
+                required=False,
+            )
+    return drivers
+
+
+def _graph_entity_count(driver: object, graph_name: str) -> int | None:
+    """Count entities on an *existing* graph; ``None`` when the count fails.
+
+    Only ever called with names ``list_graphs()`` returned, so the count
+    query materializes nothing — the graph already exists.
+    """
+    try:
+        records, _keys, _result = driver.execute_query_sync(
+            "MATCH (n) RETURN count(n) AS count", {}, graph_name
+        )
+        if records:
+            return int(records[0].get("count") or 0)
+    except Exception:
+        return None
+    return None
+
+
+def doctor_scope_drift_checks() -> int:
+    """Registry-vs-stores drift report (warn-only, report-only).
+
+    The operator-facing companion of the project_id scope mechanism: one
+    command answers "cái nào lệch?". Every finding is ``required=False``
+    (``[doctor][warn]``) so it never fails CI, and every warn line names the
+    copy-pasteable remediation — the doctor itself never deletes or creates
+    anything. Windows note: ``dev doctor`` runs ``mcp-lifecycle.ps1`` on
+    win32, which has no drift group — documented divergence.
+    """
+    from cortex_harness.storage.remote_probe import force_local_active
+    from cortex_harness.storage.config import validate_backend_config
+
+    if force_local_active():
+        doctor_check(
+            "scope drift",
+            True,
+            "bypassed (CORTEX_STORAGE_BACKEND_FORCE_LOCAL=1)",
+            required=False,
+        )
+        return 0
+
+    # Registry view: per-project declared doc targets, bound to the backend
+    # each project actually uses so declared-but-absent never compares a
+    # local project against a remote store (or vice versa).
+    declared: list[dict[str, object]] = []
+    legacy_key_projects: list[str] = []
+    for project in _scan_project_backends():
+        project_id = str(project["project_id"])
+        config_path = str(project.get("config_path") or "")
+        names = _resolve_collection_names(project_id, config_path)
+        qdrant_label = graph_label = None
+        if project["backend_mode"] == "remote":
+            try:
+                _, remote_config = validate_backend_config("remote", project["remote_config"])
+                qdrant_label = str(getattr(remote_config, "qdrant_url", "") or "") or None
+                graph_label = str(getattr(remote_config, "falkordb_uri", "") or "") or None
+            except ValueError:
+                pass
+        document = _read_config_document(config_path)
+        doc_env = (document or {}).get("doc", {}).get("env", {}) or {}
+        if doc_env.get("QDRANT_COLLECTION") and not doc_env.get("QDRANT_COLLECTION_DOC"):
+            legacy_key_projects.append(project_id)
+        declared.append({
+            "project_id": project_id,
+            "doc_collection": names["doc_collection"],
+            "doc_graph": names["doc_graph"],
+            "backend": str(project["backend_mode"]),
+            "qdrant_label": qdrant_label,
+            "graph_label": graph_label,
+        })
+
+    findings: list[str] = []
+
+    def note(message: str) -> None:
+        findings.append(message)
+        doctor_check("scope drift", False, message, required=False)
+
+    # ── Qdrant inventory (one live listing per store) ───────────────────
+    qdrant_inventories: dict[str, set] = {}
+    qdrant_stores: dict[str, object] = {}
+    for label, store in _drift_qdrant_stores():
+        try:
+            qdrant_inventories[label] = set(store.list_collection_names())
+        except Exception as error:
+            note(f"qdrant store '{label}' unreachable — drift report partial: {error}")
+            continue
+        qdrant_stores[label] = store
+    for label, inventory in sorted(qdrant_inventories.items()):
+        for shard in sorted(name for name in inventory if _is_doc_shard_name(name)):
+            points = _collection_points_count(qdrant_stores[label], shard)
+            registered_here = any(
+                entry["doc_collection"] == shard for entry in declared
+            )
+            if registered_here:
+                continue
+            if points is None:
+                note(
+                    f"shard '{shard}' exists on qdrant '{label}' but no registered "
+                    "project maps to it (run dev init / register)"
+                )
+            elif points == 0:
+                note(
+                    f"'{shard}' on qdrant '{label}' is empty — likely junk from "
+                    f"mis-scoped queries; safe to drop "
+                    f"(qdrant delete_collection '{shard}')"
+                )
+            else:
+                note(
+                    f"shard '{shard}' holds {points} points but no registered "
+                    f"project maps to it (run dev init / register)"
+                )
+
+    # ── FalkorDB inventory ──────────────────────────────────────────────
+    graph_inventories: dict[str, set] = {}
+    graph_drivers: dict[str, object] = {}
+    for label, driver in _drift_graph_drivers():
+        try:
+            graph_inventories[label] = set(
+                str(name) for name in driver.list_graphs()
+            )
+        except Exception as error:
+            note(f"falkordb '{label}' unreachable — drift report partial: {error}")
+            continue
+        graph_drivers[label] = driver
+    for label, inventory in sorted(graph_inventories.items()):
+        for graph in sorted(name for name in inventory if _is_doc_shard_name(name)):
+            if any(entry["doc_graph"] == graph for entry in declared):
+                continue
+            count = _graph_entity_count(graph_drivers[label], graph)
+            if count == 0:
+                note(
+                    f"'{graph}' on falkordb '{label}' is empty — likely junk from "
+                    f"mis-scoped queries; safe to drop (GRAPH.DELETE {graph})"
+                )
+            elif count is None:
+                note(
+                    f"graph '{graph}' exists on falkordb '{label}' but no registered "
+                    "project maps to it (run dev init / register)"
+                )
+            else:
+                note(
+                    f"graph '{graph}' holds {count} entities but no registered "
+                    f"project maps to it (run dev init / register)"
+                )
+
+    # ── Declared-but-absent: each project against its own backend only ──
+    local_qdrant = _local_qdrant_label()
+    local_graph = _local_graph_label()
+    for entry in declared:
+        project_id = str(entry["project_id"])
+        if entry["backend"] == "remote":
+            qdrant_label = entry["qdrant_label"]
+            graph_label = entry["graph_label"]
+        else:
+            qdrant_label = local_qdrant
+            graph_label = local_graph
+        inventory = qdrant_inventories.get(qdrant_label) if qdrant_label else None
+        if inventory is not None and entry["doc_collection"] not in inventory:
+            note(
+                f"registry declares '{entry['doc_collection']}' for project "
+                f"{project_id} but it does not exist on qdrant '{qdrant_label}'"
+            )
+        graphs = graph_inventories.get(graph_label) if graph_label else None
+        if graphs is not None and entry["doc_graph"] not in graphs:
+            note(
+                f"registry declares '{entry['doc_graph']}' for project "
+                f"{project_id} but it does not exist on falkordb '{graph_label}'"
+            )
+
+    # ── Config hygiene ──────────────────────────────────────────────────
+    for path in _scan_malformed_configs():
+        note(f"config file '{path}' is not a valid JSON config — project invisible to the registry")
+    for project_id in sorted(legacy_key_projects):
+        doctor_check(
+            "scope drift legacy key",
+            True,
+            f"project {project_id} sets only legacy doc.env.QDRANT_COLLECTION "
+            "(QDRANT_COLLECTION_DOC is the primary key; consider migrating)",
+            required=False,
+        )
+
+    if not findings:
+        doctor_check("scope drift", True, "registry and stores agree", required=False)
+    return 0
+
+
+def _is_doc_shard_name(name: str) -> bool:
+    text = str(name or "")
+    return text.endswith("_doc") and len(text) > len("_doc")
+
+
+def _collection_points_count(store: object, collection: str) -> int | None:
+    try:
+        info = store.get_collection_info(collection)
+        points = getattr(info, "points_count", None)
+        if points is None and isinstance(info, dict):
+            points = info.get("points_count")
+        return int(points) if points is not None else None
+    except Exception:
+        return None
+
+
+def _read_config_document(config_path: str) -> dict | None:
+    try:
+        document = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return document if isinstance(document, dict) else None
+
+
 def human_file_size(path_value: object) -> str:
     if not path_value:
         return "unknown"
@@ -1475,6 +1853,12 @@ def invoke_doctor() -> None:
         failures += doctor_remote_checks()
     except Exception as error:
         failures += doctor_check("remote backends", False, str(error))
+
+    # ── Scope drift report (warn-only; plan 261012-project-id-scope) ──
+    try:
+        doctor_scope_drift_checks()
+    except Exception as error:
+        failures += doctor_check("scope drift", False, str(error), required=False)
 
     with tempfile.TemporaryDirectory(prefix="cortex-doctor-") as temporary:
         try:
