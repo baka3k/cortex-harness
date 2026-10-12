@@ -263,7 +263,12 @@ class FalkorDBDriver(CypherGraphDriver):
         self._suppress_deprecation = bool(kwargs.pop("_suppress_deprecation", False))
         timeout_value = kwargs.pop("query_timeout_ms", None)
         if timeout_value in {None, ""}:
-            timeout_value = os.getenv("FALKORDB_QUERY_TIMEOUT_MS", "120000")
+            # Default must sit BELOW interactive MCP client timeouts: the
+            # backend is single-threaded, so a query running to the old
+            # 120s default blocked every other client behind it while the
+            # MCP caller had already timed out. Raise it explicitly (env or
+            # config) for batch ingest workloads that need longer.
+            timeout_value = os.getenv("FALKORDB_QUERY_TIMEOUT_MS", "30000")
         self._query_timeout_ms = int(timeout_value)
         if self._query_timeout_ms <= 0:
             raise ValueError("FALKORDB_QUERY_TIMEOUT_MS must be a positive integer")
