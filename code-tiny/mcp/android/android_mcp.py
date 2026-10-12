@@ -2640,7 +2640,7 @@ async def tool_search_functions(
         raise ValueError("query is required.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
-    qs = [t.lower().strip() for t in query.split("|") if t.strip()]
+    qs = [t.lower() for chunk in query.split("|") for t in chunk.split()]
     fanout = bool(payload.get("_fanout"))
     fallback_cypher = (
         f"MATCH (n) WHERE {_android_symbol_labels(fanout=fanout)} "
@@ -2719,7 +2719,7 @@ async def tool_search_by_code(
         raise ValueError("query is required.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
-    qs = [t.strip() for t in query.split("|") if t.strip()]
+    qs = [t for chunk in query.split("|") for t in chunk.split()]
     fallback_cypher = "MATCH (n) WHERE any(q IN $qs WHERE n.code CONTAINS q) AND ($project_id IS NULL OR n.project_id_normalized STARTS WITH $project_id_normalized) RETURN n LIMIT $limit"
     fulltext_query = " OR ".join(qs)
     fulltext_cypher = (
