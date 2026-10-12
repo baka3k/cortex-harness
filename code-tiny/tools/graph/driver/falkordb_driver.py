@@ -59,6 +59,10 @@ class NativeOperationInFlightError(RuntimeError):
 _CALL_IMPORTING_SUBQUERY_RE = re.compile(
     r"CALL\s+\(([A-Za-z_][A-Za-z0-9_]*)\)\s*\{",
 )
+# Neo4j 5 also accepts an empty importing list — ``CALL () { ... }`` is
+# equivalent to the plain subquery ``CALL { ... }``. FalkorDB rejects the
+# parenthesized form outright, so strip the empty parens too.
+_CALL_EMPTY_IMPORTING_SUBQUERY_RE = re.compile(r"CALL\s+\(\s*\)\s*\{")
 _MUTATING_CYPHER_RE = re.compile(
     r"\b(CREATE|MERGE|SET|DELETE|DETACH|REMOVE|DROP|ALTER|FOREACH|LOAD\s+CSV)\b",
     re.IGNORECASE,
@@ -69,12 +73,14 @@ def _normalize_query(query: str) -> str:
     """Rewrite Cypher constructs FalkorDB doesn't understand.
 
     Rewrites Neo4j 5 ``CALL (var) { ... }`` (importing-variable subquery)
-    to ``CALL { WITH var ... }`` which both FalkorDB and Neo4j accept.
+    to ``CALL { WITH var ... }`` which both FalkorDB and Neo4j accept, and
+    strips the empty-importing ``CALL () { ... }`` down to ``CALL { ... }``.
 
     Index creation must go through ``driver.create_indexes()`` — never raw
     ``CREATE INDEX`` Cypher — so each backend uses its native API.
     """
-    return _CALL_IMPORTING_SUBQUERY_RE.sub(r"CALL { WITH \1", query)
+    normalized = _CALL_EMPTY_IMPORTING_SUBQUERY_RE.sub("CALL {", query)
+    return _CALL_IMPORTING_SUBQUERY_RE.sub(r"CALL { WITH \1", normalized)
 
 
 def _is_retryable_read(query: str) -> bool:
@@ -263,15 +269,21 @@ class FalkorDBDriver(CypherGraphDriver):
         self._suppress_deprecation = bool(kwargs.pop("_suppress_deprecation", False))
         timeout_value = kwargs.pop("query_timeout_ms", None)
         if timeout_value in {None, ""}:
-            # Default must sit BELOW interactive MCP client timeouts: the
-            # backend is single-threaded, so a query running to the old
+            # Read timeout must sit BELOW interactive MCP client timeouts:
+            # the backend is single-threaded, so a query running to the old
             # 120s default blocked every other client behind it while the
-            # MCP caller had already timed out. Raise it explicitly (env or
-            # config) for batch ingest workloads that need longer.
+            # MCP caller had already timed out.
             timeout_value = os.getenv("FALKORDB_QUERY_TIMEOUT_MS", "30000")
         self._query_timeout_ms = int(timeout_value)
         if self._query_timeout_ms <= 0:
             raise ValueError("FALKORDB_QUERY_TIMEOUT_MS must be a positive integer")
+        # Mutations (ingest MERGE batches) share this driver but answer to no
+        # interactive client, so they keep the old, roomier server-side
+        # headroom instead of the bounded read timeout.
+        write_timeout_value = os.getenv("FALKORDB_WRITE_QUERY_TIMEOUT_MS", "120000")
+        self._write_query_timeout_ms = int(write_timeout_value)
+        if self._write_query_timeout_ms <= 0:
+            raise ValueError("FALKORDB_WRITE_QUERY_TIMEOUT_MS must be a positive integer")
 
         # Network-style fields are deprecated. We still accept them so call
         # sites keep compiling for one release, but log + warn, and ignore
@@ -597,7 +609,11 @@ class FalkorDBDriver(CypherGraphDriver):
                 result = graph.query(
                     query,
                     params=params,
-                    timeout=self._query_timeout_ms,
+                    timeout=(
+                        self._query_timeout_ms
+                        if _is_retryable_read(query)
+                        else self._write_query_timeout_ms
+                    ),
                 )
                 break
             except Exception as exc:
