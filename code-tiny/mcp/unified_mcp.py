@@ -2515,18 +2515,12 @@ async def tool_find_callers_of_endpoint(
     endpoint_match_lines: List[str] = []
     if method_filter and method_filter != "ALL":
         params["method"] = method_filter
-        exact_props = _format_props(ep_props + ["http_method: $method"])
-        all_props = _format_props(ep_props + ["http_method: 'ALL'"])
-        endpoint_match_lines.extend(
-            [
-                "CALL () {",
-                f"  MATCH (ep:ApiEndpoint {exact_props})",
-                "  RETURN ep",
-                "  UNION",
-                f"  MATCH (ep:ApiEndpoint {all_props})",
-                "  RETURN ep",
-                "}",
-            ]
+        # Portable across backends: FalkorDB rejects the Neo4j 5 empty
+        # importing subquery ``CALL () { ... UNION ... }``, so express the
+        # exact-or-ALL endpoint match as a plain WHERE predicate.
+        endpoint_match_lines.append(
+            "MATCH (ep:ApiEndpoint) "
+            "WHERE ep.path = $path AND ep.http_method IN [$method, 'ALL']"
         )
     elif method_filter == "ALL":
         all_props = _format_props(ep_props + ["http_method: 'ALL'"])

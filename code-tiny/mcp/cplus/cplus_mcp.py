@@ -2685,7 +2685,14 @@ async def tool_listup_symbols_matching_file_path(
     # Build node type filter
     if node_types_filter:
         types = _normalize_string_list(node_types_filter)
-        type_conditions = " OR ".join([f"n:{t}" for t in types])
+        # Graph labels are case-sensitive (``Function``, not ``function``);
+        # accept both the caller's spelling and its capitalized form.
+        label_variants: List[str] = []
+        for node_type in types:
+            for variant in (node_type, node_type[:1].upper() + node_type[1:]):
+                if variant and variant not in label_variants:
+                    label_variants.append(variant)
+        type_conditions = " OR ".join([f"n:{t}" for t in label_variants])
     else:
         type_conditions = _search_label_predicate(
             "n",
@@ -2817,17 +2824,33 @@ async def tool_list_up_entrypoint(
         raise ValueError("modules must be a non-empty list.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    # Module membership is path-segment aware: ``src/PCRS`` must not match
+    # ``src/PCRS_SPECIAL/...`` the way a bare CONTAINS would. Prefix/segment
+    # forms are precomputed here because FalkorDB rejects string concatenation
+    # inside STARTS WITH / CONTAINS expressions.
+    module_prefixes = [f"{m.lower()}/" for m in modules]
+    module_segments = [f"/{m.lower()}/" for m in modules]
+    def _in_module(alias: str) -> str:
+        return (
+            f"(any(p IN $module_prefixes WHERE toLower(coalesce({alias}.file_path, '')) STARTS WITH p) "
+            f"OR any(s IN $module_segments WHERE toLower(coalesce({alias}.file_path, '')) CONTAINS s))"
+        )
     cypher = (
         "MATCH (caller:Function)-[:CALLS]->(f:Function) "
-        "WHERE any(token IN $modules WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower(token)) "
-        "AND none(token IN $modules WHERE toLower(coalesce(caller.file_path, '')) CONTAINS toLower(token)) "
+        f"WHERE {_in_module('f')} "
+        f"AND NOT {_in_module('caller')} "
         "AND (f.kind IS NULL OR f.kind <> 'lambda') "
         "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN DISTINCT f LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         cypher,
-        {"modules": modules, "limit": int(limit), "project_id": project_id},
+        {
+            "module_prefixes": module_prefixes,
+            "module_segments": module_segments,
+            "limit": int(limit),
+            "project_id": project_id,
+        },
         db_candidates,
     )
     mode = _normalize_content_mode(content_mode)
