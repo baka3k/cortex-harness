@@ -605,13 +605,35 @@ def _record_node(
     }
 
 
-def _record_rel(rel: Any) -> Dict[str, Any]:
+def _record_rel(
+    rel: Any,
+    graph_node_ids: Optional[Dict[Any, str]] = None,
+) -> Dict[str, Any]:
     if isinstance(rel, dict):
+        # The FalkorDB driver normalizes Edge objects to a flat properties
+        # dict with underscore-prefixed meta keys (_type/_start_id/_end_id);
+        # other drivers use the plain keys. Accept both spellings.
+        raw_start = rel.get("start_id", rel.get("_start_id"))
+        raw_end = rel.get("end_id", rel.get("_end_id"))
+
+        def endpoint(value: Any) -> Any:
+            if isinstance(value, dict):
+                return value.get("id")
+            return (graph_node_ids or {}).get(value, value)
+
+        properties = rel.get("properties")
+        if not isinstance(properties, dict):
+            properties = {
+                key: value for key, value in rel.items()
+                if key not in {
+                    "type", "_type", "start_id", "_start_id", "end_id", "_end_id"
+                }
+            }
         return {
-            "type": rel.get("type"),
-            "properties": dict(rel.get("properties", {})),
-            "start_id": rel.get("start_id"),
-            "end_id": rel.get("end_id"),
+            "type": rel.get("type", rel.get("_type")),
+            "properties": properties,
+            "start_id": endpoint(raw_start),
+            "end_id": endpoint(raw_end),
         }
     # neo4j 6.x: record.data() serializes Relationship as (start_node_dict, type_str, end_node_dict)
     if isinstance(rel, (list, tuple)):
@@ -684,8 +706,15 @@ def _paths_to_graph(
             node_id = node.get("id")
             if node_id and node_id not in nodes:
                 nodes[node_id] = _record_node(node, mode, include_raw_fields=include_raw_fields)
+        graph_node_ids = {
+            node.get("_graph_id"): str(node.get("id"))
+            for node in path_nodes
+            if isinstance(node, dict)
+            and node.get("_graph_id") is not None
+            and node.get("id") is not None
+        }
         for rel in path_rels:
-            edges.append(_record_rel(rel))
+            edges.append(_record_rel(rel, graph_node_ids))
     return {"nodes": list(nodes.values()), "edges": edges}
 
 
@@ -2189,7 +2218,14 @@ async def tool_listup_symbols_matching_file_path(
     # Build node type filter
     if node_types_filter:
         types = _normalize_string_list(node_types_filter)
-        type_conditions = "(" + " OR ".join([f"n:{t}" for t in types]) + ")"
+        # Graph labels are case-sensitive (``Function``, not ``function``);
+        # accept both the caller's spelling and its capitalized form.
+        label_variants: List[str] = []
+        for node_type in types:
+            for variant in (node_type, node_type[:1].upper() + node_type[1:]):
+                if variant and variant not in label_variants:
+                    label_variants.append(variant)
+        type_conditions = "(" + " OR ".join([f"n:{t}" for t in label_variants]) + ")"
     else:
         type_conditions = _android_symbol_labels(fanout=bool(payload.get("_fanout")))
     
@@ -2315,17 +2351,33 @@ async def tool_list_up_entrypoint(
         raise ValueError("modules must be a non-empty list.")
     db_candidates = _resolve_db_candidates(project_id)
     _require(db_candidates[0] if db_candidates else None, "db")
+    # Module membership is path-segment aware: ``src/MOD_A`` must not match
+    # ``src/MOD_A_SPECIAL/...`` the way a bare CONTAINS would. Prefix/segment
+    # forms are precomputed here because FalkorDB rejects string concatenation
+    # inside STARTS WITH / CONTAINS expressions.
+    module_prefixes = [f"{m.lower()}/" for m in modules]
+    module_segments = [f"/{m.lower()}/" for m in modules]
+    def _in_module(alias: str) -> str:
+        return (
+            f"(any(p IN $module_prefixes WHERE toLower(coalesce({alias}.file_path, '')) STARTS WITH p) "
+            f"OR any(s IN $module_segments WHERE toLower(coalesce({alias}.file_path, '')) CONTAINS s))"
+        )
     cypher = (
         "MATCH (caller:Function)-[:CALLS]->(f:Function) "
-        "WHERE any(token IN $modules WHERE toLower(coalesce(f.file_path, '')) CONTAINS toLower(token)) "
-        "AND none(token IN $modules WHERE toLower(coalesce(caller.file_path, '')) CONTAINS toLower(token)) "
+        f"WHERE {_in_module('f')} "
+        f"AND NOT {_in_module('caller')} "
         "AND (f.kind IS NULL OR f.kind <> 'lambda') "
         "AND ($project_id IS NULL OR f.project_id_normalized STARTS WITH $project_id_normalized) "
         "RETURN DISTINCT f LIMIT $limit"
     )
     used_db, results = await _run_cypher_first(
         cypher,
-        {"modules": modules, "limit": int(limit), "project_id": project_id},
+        {
+            "module_prefixes": module_prefixes,
+            "module_segments": module_segments,
+            "limit": int(limit),
+            "project_id": project_id,
+        },
         db_candidates,
     )
     mode = _normalize_content_mode(content_mode)
