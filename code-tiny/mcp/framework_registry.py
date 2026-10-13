@@ -28,7 +28,8 @@ GENERIC_SEARCHABLE_PROPERTIES = (
     "descriptor_type", "role", "parse_depth", "protocol", "framework",
 )
 NON_TEXT_SEARCH_PROPERTIES = frozenset({
-    "is_public_api", "parse_depth", "declared", "start_line", "end_line",
+    "is_public_api", "is_async", "is_static", "is_development",
+    "parse_depth", "declared", "start_line", "end_line",
     "position", "line", "column", "ordinal", "count", "size", "index",
 })
 GENERIC_RELATIONSHIPS = (
@@ -872,6 +873,17 @@ def searchable_properties(parser_type: Optional[str] = None) -> Tuple[str, ...]:
     ))
 
 
+def _is_text_searchable_property(prop: str) -> bool:
+    """True when ``prop`` is safe inside ``toLower(coalesce(n.prop, ''))``.
+
+    Beyond the explicit blocklist, boolean-convention names (``is_*`` /
+    ``has_*``) are excluded: graph stores raise ``Type mismatch: expected
+    String or Null but was Boolean`` when ``toLower`` receives a boolean
+    property value (e.g. the ``is_static`` flag on VB6/C# variable nodes).
+    """
+    return prop not in NON_TEXT_SEARCH_PROPERTIES and not prop.startswith(("is_", "has_"))
+
+
 def text_search_properties(parser_type: Optional[str] = None) -> Tuple[str, ...]:
     """Searchable properties that are safe inside ``toLower(coalesce(...))`` predicates.
 
@@ -882,7 +894,7 @@ def text_search_properties(parser_type: Optional[str] = None) -> Tuple[str, ...]
     return tuple(
         prop
         for prop in searchable_properties(parser_type)
-        if prop not in NON_TEXT_SEARCH_PROPERTIES
+        if _is_text_searchable_property(prop)
     )
 
 
@@ -891,7 +903,7 @@ def backend_text_property_union(backend: Optional[str] = None) -> Tuple[str, ...
     return tuple(
         prop
         for prop in backend_property_union(backend)
-        if prop not in NON_TEXT_SEARCH_PROPERTIES
+        if _is_text_searchable_property(prop)
     )
 
 

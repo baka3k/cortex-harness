@@ -46,6 +46,21 @@ class TextSearchPropertiesTest(unittest.TestCase):
             self.assertIn("is_public_api", raw_union)
             self.assertLessEqual(set(text_union), set(raw_union))
 
+    def test_boolean_convention_properties_never_reach_to_lower_predicates(self):
+        # Regression: the cplus fan-out union includes the csharp profile, whose
+        # searchable_properties carry is_async/is_static/is_development. VB6 and
+        # C# variable/function nodes store those as real booleans, so a
+        # toLower(coalesce(n.<prop>, '')) predicate over them crashed FalkorDB
+        # with "Type mismatch: expected String or Null but was Boolean".
+        for union in (
+            text_search_properties("csharp"),
+            text_search_properties(),
+            backend_text_property_union("cplus"),
+            backend_text_property_union("android"),
+        ):
+            for prop in ("is_async", "is_static", "is_development"):
+                self.assertNotIn(prop, union)
+
     def test_unknown_parser_returns_empty_like_searchable_properties(self):
         self.assertEqual(searchable_properties("no-such-parser"), ())
         self.assertEqual(text_search_properties("no-such-parser"), ())
