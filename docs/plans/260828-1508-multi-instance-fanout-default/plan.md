@@ -15,6 +15,7 @@ relatedPlans:
   - 260807-1202-graph-ingest-write-path-hardening
   - make-mcp-lifecycle
   - 260829-2322-vector-search-query-optimization (shares fastmcp_server.py; its query-latency work leaves fan-out semantics untouched)
+  - 261013-0000-mcp-single-channel-json-contract (shares code-tiny/mcp/unified_mcp.py; its v2 envelope change in _wrap_dispatch_result leaves fan-out semantics untouched)
 ---
 
 # Multi-instance unscoped fan-out as the default MCP query behavior

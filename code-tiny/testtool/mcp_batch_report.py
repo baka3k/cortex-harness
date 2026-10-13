@@ -28,7 +28,17 @@ from testtool.mcp_client import MCPClient  # noqa: E402
 
 
 CONTRACT_NAME = "cortex.mcp.tool-result"
-CONTRACT_VERSION = "1.0"
+CONTRACT_VERSION = "2.0"
+V2_ENVELOPE_KEYS = {
+    "contract",
+    "contractVersion",
+    "tool",
+    "message",
+    "ok",
+    "data",
+    "error",
+    "truncation",
+}
 DEFAULT_SUITE = TESTTOOL_DIR / "suites" / "procsample-all-tools.json"
 DEFAULT_OUTPUT_DIR = TESTTOOL_DIR / "outputs"
 EXPECTED_STATUSES = {
@@ -208,12 +218,26 @@ def _result(response: Any) -> Mapping[str, Any] | None:
     return result if isinstance(result, Mapping) else None
 
 
-def _structured(response: Any) -> Mapping[str, Any] | None:
+def _envelope(response: Any) -> Mapping[str, Any] | None:
+    """Parse the v2 envelope from ``result.content[0].text``."""
+
     result = _result(response)
     if result is None:
         return None
-    structured = result.get("structuredContent")
-    return structured if isinstance(structured, Mapping) else None
+    content = result.get("content")
+    if not (isinstance(content, list) and content):
+        return None
+    first = content[0]
+    if not isinstance(first, Mapping) or first.get("type") != "text":
+        return None
+    text = first.get("text")
+    if not isinstance(text, str):
+        return None
+    try:
+        envelope = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return envelope if isinstance(envelope, Mapping) else None
 
 
 def _data_is_empty(data: Any) -> bool:
@@ -235,15 +259,15 @@ def _data_is_empty(data: Any) -> bool:
 
 def classify_response(response: Any) -> tuple[str, str | None]:
     result = _result(response)
-    structured = _structured(response)
-    if result is None or structured is None:
+    envelope = _envelope(response)
+    if result is None or envelope is None:
         return "PROTOCOL_ERROR", None
-    if result.get("isError") is True or structured.get("ok") is False:
-        error = structured.get("error")
+    if result.get("isError") is True or envelope.get("ok") is False:
+        error = envelope.get("error")
         code = error.get("code") if isinstance(error, Mapping) else None
         return "TOOL_ERROR", str(code) if code is not None else None
     return (
-        "SUCCESS_EMPTY" if _data_is_empty(structured.get("data")) else "SUCCESS_DATA",
+        "SUCCESS_EMPTY" if _data_is_empty(envelope.get("data")) else "SUCCESS_DATA",
         None,
     )
 
@@ -286,43 +310,60 @@ def validate_contract(response: Any, tool_name: str) -> list[str]:
     content = result.get("content")
     if not isinstance(content, list):
         errors.append("result.content must be an array")
+    elif len(content) != 1:
+        errors.append(
+            f"result.content must contain exactly one text block (got {len(content)})"
+        )
     else:
-        for index, item in enumerate(content):
-            if not isinstance(item, Mapping) or item.get("type") != "text":
-                errors.append(f"result.content[{index}] must be a text content object")
-                continue
-            text = item.get("text")
-            if not isinstance(text, str):
-                errors.append(f"result.content[{index}].text must be a string")
-            elif len(text) > 1000:
-                errors.append(
-                    f"result.content[{index}].text exceeds concise limit (1000 chars)"
-                )
+        item = content[0]
+        if not isinstance(item, Mapping) or item.get("type") != "text":
+            errors.append("result.content[0] must be a text content object")
+        elif not isinstance(item.get("text"), str):
+            errors.append("result.content[0].text must be a string")
 
-    structured = _structured(response)
-    if structured is None:
-        return errors + ["result.structuredContent must be an object"]
-    if not isinstance(structured.get("ok"), bool):
-        errors.append("structuredContent.ok must be boolean")
-    if "data" not in structured or "error" not in structured:
-        errors.append("structuredContent must contain data and error")
+    if "structuredContent" in result:
+        errors.append("v2 responses must not emit structuredContent")
 
     is_error = result.get("isError")
     if not isinstance(is_error, bool):
         errors.append("result.isError must be boolean")
-    ok = structured.get("ok")
-    if isinstance(is_error, bool) and isinstance(ok, bool) and is_error == ok:
-        errors.append("result.isError must be the inverse of structuredContent.ok")
 
-    error = structured.get("error")
+    envelope = _envelope(response)
+    if envelope is None:
+        return errors + [
+            "result.content[0].text must parse as the v2 cortex.mcp.tool-result envelope"
+        ]
+
+    missing = sorted(V2_ENVELOPE_KEYS - set(envelope))
+    if missing:
+        errors.append(f"envelope missing keys: {missing}")
+    if envelope.get("contract") != CONTRACT_NAME:
+        errors.append(f"envelope.contract must equal {CONTRACT_NAME!r}")
+    if envelope.get("contractVersion") != CONTRACT_VERSION:
+        errors.append(f"envelope.contractVersion must equal {CONTRACT_VERSION!r}")
+    if envelope.get("tool") != tool_name:
+        errors.append(f"envelope.tool must equal {tool_name!r}")
+    if not isinstance(envelope.get("message"), str):
+        errors.append("envelope.message must be a string")
+    truncation = envelope.get("truncation")
+    if truncation is not None and not isinstance(truncation, Mapping):
+        errors.append("envelope.truncation must be null or an object")
+
+    ok = envelope.get("ok")
+    if not isinstance(ok, bool):
+        errors.append("envelope.ok must be boolean")
+    if isinstance(is_error, bool) and isinstance(ok, bool) and is_error == ok:
+        errors.append("result.isError must be the inverse of envelope.ok")
+
+    error = envelope.get("error")
     if ok is True:
         if error is not None:
-            errors.append("successful structuredContent.error must be null")
+            errors.append("successful envelope.error must be null")
     elif ok is False:
-        if structured.get("data") is not None:
-            errors.append("failed structuredContent.data must be null")
+        if envelope.get("data") is not None:
+            errors.append("failed envelope.data must be null")
         if not isinstance(error, Mapping):
-            errors.append("failed structuredContent.error must be an object")
+            errors.append("failed envelope.error must be an object")
         else:
             for field, expected_type in (
                 ("code", str),
@@ -331,10 +372,10 @@ def validate_contract(response: Any, tool_name: str) -> list[str]:
                 ("details", Mapping),
             ):
                 if not isinstance(error.get(field), expected_type):
-                    errors.append(f"structuredContent.error.{field} has invalid type")
+                    errors.append(f"envelope.error.{field} has invalid type")
             details = error.get("details")
             if isinstance(details, Mapping):
-                for path in _find_forbidden_keys(details):
+                for path in _find_forbidden_keys(details, path="error.details"):
                     errors.append(f"error response exposes internal field {path}")
     return errors
 

@@ -94,10 +94,8 @@ from cortex_harness.storage import (  # noqa: E402
 )
 from cortex_harness.mcp_contract import (  # noqa: E402
     normalize_error,
-    normalize_success,
-    result_meta,
-    result_summary,
 )
+from tool_error_middleware import wrap_tool_result  # noqa: E402
 
 _UNIFIED_TOOL_NAMES: frozenset = frozenset(
     {
@@ -969,18 +967,6 @@ class _ProxyMiddleware(Middleware):
     any field accepted by the backend's signature is also accepted here.
     """
 
-    @staticmethod
-    def _content_text(content: Any) -> str:
-        if isinstance(content, str):
-            return content
-        parts: List[str] = []
-        if isinstance(content, list):
-            for block in content:
-                text = getattr(block, "text", None)
-                if isinstance(text, str) and text:
-                    parts.append(text)
-        return "\n".join(parts)
-
     @classmethod
     def _wrap_dispatch_result(
         cls,
@@ -995,46 +981,7 @@ class _ProxyMiddleware(Middleware):
         triggers ``AttributeError: 'dict' object has no attribute
         'to_mcp_result'`` at the protocol boundary.
         """
-        existing_meta: Dict[str, Any] = {}
-        is_error = False
-        if isinstance(result, ToolResult):
-            existing_meta = dict(result.meta or {})
-            structured = result.structured_content
-            is_error = bool(result.is_error) or (
-                isinstance(structured, dict) and structured.get("ok") is False
-            )
-            if structured is not None:
-                payload = structured
-            else:
-                raw_text = cls._content_text(result.content)
-                try:
-                    payload = json.loads(raw_text)
-                except (TypeError, json.JSONDecodeError):
-                    payload = raw_text or None
-        else:
-            payload = result
-            is_error = isinstance(payload, dict) and payload.get("ok") is False
-
-        meta = {**existing_meta, **result_meta(tool_name)}
-        if is_error:
-            envelope = normalize_error(payload)
-            message = envelope["error"]["message"]
-            return ToolResult(
-                content=result_summary(None, ok=False, message=message),
-                structured_content=envelope,
-                meta=meta,
-                is_error=True,
-            )
-
-        if isinstance(payload, dict) and payload.get("ok") is True:
-            payload = {key: value for key, value in payload.items() if key != "ok"}
-        envelope = normalize_success(payload)
-        return ToolResult(
-            content=result_summary(payload, ok=True),
-            structured_content=envelope,
-            meta=meta,
-            is_error=False,
-        )
+        return wrap_tool_result(result, tool_name=tool_name)
 
     async def on_call_tool(
         self,
@@ -1045,13 +992,22 @@ class _ProxyMiddleware(Middleware):
         name = getattr(message, "name", None)
         # ``message.arguments`` is a Mapping on CallToolRequestParams
         arguments = dict(getattr(message, "arguments", {}) or {})
-        if name in _PROXIED_TOOL_NAMES:
-            if name in _PLANNER_TOOL_NAMES:
-                result = await _dispatch_planner_tool(name, arguments)
+        try:
+            if name in _PROXIED_TOOL_NAMES:
+                if name in _PLANNER_TOOL_NAMES:
+                    result = await _dispatch_planner_tool(name, arguments)
+                else:
+                    result = await _dispatch_tool(name, arguments)
             else:
-                result = await _dispatch_tool(name, arguments)
-            return self._wrap_dispatch_result(result, tool_name=name)
-        return self._wrap_dispatch_result(await call_next(context), tool_name=name)
+                result = await call_next(context)
+        except Exception as exc:
+            # Direct tools raise (e.g. list_parsers input validation).
+            # Left uncaught, FastMCP converts the exception into a
+            # plain-text ToolError that never reaches the v2 envelope.
+            return self._wrap_dispatch_result(
+                normalize_error(exc), tool_name=name
+            )
+        return self._wrap_dispatch_result(result, tool_name=name)
 
 
 _proxy_middleware = _ProxyMiddleware()

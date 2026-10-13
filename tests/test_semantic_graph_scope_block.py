@@ -14,6 +14,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import json
+
 import pytest
 
 
@@ -24,6 +26,12 @@ for path in (str(DOC_TINY), str(ROOT)):
         sys.path.insert(0, path)
 
 import mcp_graph_rag
+
+
+def _envelope(result):
+    """v2 single channel: parse the envelope from ``content[0].text``."""
+
+    return json.loads(result.content[0].text)
 
 
 class _Vector:
@@ -129,7 +137,7 @@ def test_ac1_unscoped_response_reports_scope_and_real_hits():
         result = _graph_search(fake, top_k=5)
 
     assert result.is_error is False
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     scope = data["scope"]
     assert scope["mode"] == "unscoped"
     assert scope["registry_hit"] is False
@@ -164,7 +172,7 @@ def test_ac2_unknown_project_falls_back_to_all_with_warning(monkeypatch):
         result = _graph_search(fake, top_k=5, project_id="typo_id")
 
     assert result.is_error is False
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     scope = data["scope"]
     assert scope["mode"] == "fallback_all"
     assert scope["requested_project_id"] == "typo_id"
@@ -197,7 +205,7 @@ def test_ac3_unknown_project_raises_under_strict_scope(monkeypatch):
         result = _graph_search(fake, top_k=5, project_id="typo_id", strict_scope="true")
 
     assert result.is_error is True
-    error = result.structuredContent["error"]
+    error = _envelope(result)["error"]
     assert error["code"] == "project_not_registered"
     assert "typo_id" in error["message"]
 
@@ -225,7 +233,7 @@ def test_ac4_registered_id_reports_scoped_with_canonical_resolution():
         result = _graph_search(fake, top_k=5, project_id="cortex")
 
     assert result.is_error is False
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     scope = data["scope"]
     assert scope["mode"] == "scoped"
     assert scope["registry_hit"] is True
@@ -245,7 +253,7 @@ def test_ac5_explicit_collection_mode_and_absent_collection_still_errors():
     ):
         # Present collection: mode=collection, no fallback.
         result = _graph_search(fake, top_k=5, collection="other_coll")
-        data = result.structuredContent["data"]
+        data = _envelope(result)["data"]
         assert data["scope"]["mode"] == "collection"
         assert data["scope"]["collections_searched"] == ["other_coll"]
 
@@ -254,12 +262,12 @@ def test_ac5_explicit_collection_mode_and_absent_collection_still_errors():
         result = _graph_search(
             fake, top_k=5, collection="other_coll", project_id="cortex"
         )
-        assert result.structuredContent["data"]["scope"]["mode"] == "collection"
+        assert _envelope(result)["data"]["scope"]["mode"] == "collection"
 
         # Absent collection still errors (collection_unavailable), unchanged.
         result = _graph_search(fake, top_k=5, collection="missing_coll")
         assert result.is_error is True
-        assert result.structuredContent["error"]["code"] == "collection_unavailable"
+        assert _envelope(result)["error"]["code"] == "collection_unavailable"
 
 
 def test_ac6_found_but_empty_scoped_query_warns_and_names_the_collection():
@@ -276,7 +284,7 @@ def test_ac6_found_but_empty_scoped_query_warns_and_names_the_collection():
         result = _graph_search(fake, top_k=5, project_id="cortex")
 
     assert result.is_error is False
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     assert data["passages"] == []
     assert data["scope"]["per_collection_hits"] == {"cortex_doc": 0}
     assert any(

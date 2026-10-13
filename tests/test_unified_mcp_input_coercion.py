@@ -32,7 +32,9 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(result.is_error)
-        self.assertFalse(result.structured_content["ok"])
+        self.assertIsNone(result.structured_content)
+        envelope = json.loads(result.content[0].text)
+        self.assertFalse(envelope["ok"])
 
         direct_result = unified_mcp.ToolResult(
             content="graph unavailable",
@@ -40,7 +42,9 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         )
         normalized = unified_mcp._ProxyMiddleware._wrap_dispatch_result(direct_result)
         self.assertTrue(normalized.is_error)
-        self.assertFalse(normalized.structured_content["ok"])
+        self.assertIsNone(normalized.structured_content)
+        envelope = json.loads(normalized.content[0].text)
+        self.assertFalse(envelope["ok"])
 
     async def test_hybrid_explore_degrades_to_semantic_when_graph_is_unavailable(self):
         captured = {}
@@ -849,17 +853,16 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert result.is_error is False
-        assert result.structured_content == {
-            "ok": True,
-            "data": {
-                "db": "procsample",
-                "results": [{"id": "function-1"}],
-                "ids": ["function-1"],
-            },
-            "error": None,
+        assert result.structured_content is None
+        envelope = json.loads(result.content[0].text)
+        assert envelope["ok"] is True
+        assert envelope["data"] == {
+            "db": "procsample",
+            "results": [{"id": "function-1"}],
+            "ids": ["function-1"],
         }
+        assert envelope["error"] is None
         assert result.meta["tool"] == "search_functions"
-        assert "structuredContent.data" in str(result.content)
 
     def test_protocol_wrapper_marks_graph_error_and_keeps_it_structured(self):
         result = unified_mcp._ProxyMiddleware._wrap_dispatch_result(
@@ -875,10 +878,12 @@ class UnifiedMcpInputCoercionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         assert result.is_error is True
-        assert result.structured_content["ok"] is False
-        assert result.structured_content["data"] is None
-        assert result.structured_content["error"]["code"] == "capability_unavailable"
-        assert result.structured_content["error"]["details"] == {
+        assert result.structured_content is None
+        envelope = json.loads(result.content[0].text)
+        assert envelope["ok"] is False
+        assert envelope["data"] is None
+        assert envelope["error"]["code"] == "capability_unavailable"
+        assert envelope["error"]["details"] == {
             "missing_relationships": ["NAVIGATE"]
         }
 

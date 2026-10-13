@@ -40,6 +40,12 @@ def _load_reset_module():
 reset_module = _load_reset_module()
 
 
+def _envelope(result):
+    """v2 single channel: parse the envelope from ``content[0].text``."""
+
+    return json.loads(result.content[0].text)
+
+
 class _Vector:
     def tolist(self):
         return [0.1, 0.2]
@@ -164,13 +170,11 @@ def test_mind_tools_use_the_same_success_envelope_as_graph_tools():
         result = fake.tools["list_qdrant_collections"](project_id="procsample")
 
     assert result.is_error is False
-    assert result.structured_content == {
-        "ok": True,
-        "data": ["procsample_doc"],
-        "error": None,
-    }
+    envelope = _envelope(result)
+    assert envelope["ok"] is True
+    assert envelope["data"] == ["procsample_doc"]
+    assert envelope["error"] is None
     assert result.meta["tool"] == "list_qdrant_collections"
-    assert "structuredContent.data" in result.content[0].text
 
 
 @pytest.mark.asyncio
@@ -189,11 +193,10 @@ async def test_mind_sdk_protocol_boundary_does_not_rewrap_standard_envelope():
         )
 
     assert result.is_error is False
-    assert result.structured_content == {
-        "ok": True,
-        "data": ["procsample_doc"],
-        "error": None,
-    }
+    envelope = _envelope(result)
+    assert envelope["ok"] is True
+    assert envelope["data"] == ["procsample_doc"]
+    assert envelope["error"] is None
 
 
 def test_mind_tool_execution_errors_are_structured_and_actionable():
@@ -208,10 +211,11 @@ def test_mind_tool_execution_errors_are_structured_and_actionable():
         result = fake.tools["list_qdrant_collections"](project_id="procsample")
 
     assert result.is_error is True
-    assert result.structured_content["ok"] is False
-    assert result.structured_content["data"] is None
-    assert result.structured_content["error"]["code"] == "collection_unavailable"
-    assert result.structured_content["error"]["message"] == (
+    envelope = _envelope(result)
+    assert envelope["ok"] is False
+    assert envelope["data"] is None
+    assert envelope["error"]["code"] == "collection_unavailable"
+    assert envelope["error"]["message"] == (
         "procsample_doc is unavailable"
     )
 
@@ -229,8 +233,8 @@ def test_missing_paragraph_is_an_empty_success_without_warning_shape():
             project_id="procsample",
         )
 
-    assert result.isError is False
-    assert result.structuredContent["data"] == {
+    assert result.is_error is False
+    assert _envelope(result)["data"] == {
         "source_id": "missing.md",
         "paragraph_id": 7,
         "text": None,
@@ -248,8 +252,8 @@ def test_blank_paragraph_source_id_is_an_input_error():
         project_id="procsample",
     )
 
-    assert result.isError is True
-    assert result.structuredContent["error"]["code"] == "invalid_parameters"
+    assert result.is_error is True
+    assert _envelope(result)["error"]["code"] == "invalid_parameters"
 
 
 def test_mind_qdrant_search_resolves_collection_and_filter_from_project():
@@ -382,7 +386,7 @@ def test_semantic_search_strips_entity_uuids_by_default():
             query="alpha", project_id="procsample", include_entity_mentions="true"
         )
 
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     passage = data["passages"][0]
     assert "entity_ids" not in passage
     assert "id" not in passage["entity_mentions"][0]
@@ -408,7 +412,7 @@ def test_semantic_search_keeps_entity_uuids_when_requested():
             include_entity_mentions="true",
         )
 
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     passage = data["passages"][0]
     assert passage["entity_ids"] == [_MIND_EID_A]
     assert passage["entity_mentions"][0]["id"] == _MIND_EID_A
@@ -430,7 +434,7 @@ def test_query_graph_rag_strips_entity_uuids_but_expands_with_them():
     # Expansion still runs on the raw ids internally.
     assert relations_mock.call_args.args[0] == [_MIND_EID_A]
 
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     # Entities are now an internal mechanism: nothing by default, and the
     # document expansion takes their place.
     assert data["entities"] == []
@@ -450,7 +454,7 @@ def test_query_graph_rag_strips_entity_uuids_but_expands_with_them():
         result = fake.tools["semantic_graph_search"](
             query="alpha", project_id="procsample", include_entities="true"
         )
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     assert "id" not in data["entities"][0]
     assert data["entities"][0]["name"] == "Alpha"
     assert _MIND_EID_A not in json.dumps(data)
@@ -493,7 +497,7 @@ def test_semantic_graph_search_returns_related_documents_by_default():
     assert docs_mock.call_args.kwargs["exclude_types"] == ["KEYWORD"]
     assert docs_mock.call_args.kwargs["entity_types"] is None
 
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     assert data["related_documents"] == [{
         "source_id": "b.md",
         "score": 1.0,
@@ -535,7 +539,7 @@ def test_query_graph_rag_keeps_entity_uuids_when_requested():
             include_entities="true", include_entity_ids="true",
         )
 
-    data = result.structuredContent["data"]
+    data = _envelope(result)["data"]
     assert data["entities"][0]["id"] == _MIND_EID_A
     assert data["relations"][0]["source_id"] == _MIND_EID_A
     assert data["relations"][0]["target_id"] == _MIND_EID_B
@@ -615,7 +619,7 @@ def test_query_graph_rag_ranks_entities_by_passage_frequency_and_caps():
 
     # Alpha appears in 2/2 passages; Gamma and Delta in 1 each (first-seen
     # order); Beta appears in no passage and falls below the cap.
-    names = [entity["name"] for entity in result.structuredContent["data"]["entities"]]
+    names = [entity["name"] for entity in _envelope(result)["data"]["entities"]]
     assert names == ["Alpha", "Gamma", "Delta"]
 
 
